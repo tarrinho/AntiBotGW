@@ -1,0 +1,11 @@
+antibot.db
+antibot.db-shm
+antibot.db-wal
+.admin_key
+.session_key
+.pow_key
+.admin_key.stale-*
+.session_key.stale-*
+__pycache__
+*.pyc
+test_*.py
