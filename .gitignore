@@ -1,0 +1,43 @@
+# ── Local-only files (never pushed to GitHub) ───────────────────────────
+
+# git internals (defensive — git auto-excludes anyway)
+.git/
+.git*
+!.gitignore
+!.github/
+
+# Helper scripts that don't belong in the public repo
+copy-to-github.sh
+
+# ── Runtime state (live container DB + secrets) ─────────────────────────
+antibot.db
+antibot.db-shm
+antibot.db-wal
+.admin_key
+.session_key
+.pow_key
+.admin_key.stale-*
+.session_key.stale-*
+
+# ── Python cruft ────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# ── OS / editor ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# ── Local build outputs ─────────────────────────────────────────────────
+*.tar
+*.tgz
+dist/
+build/

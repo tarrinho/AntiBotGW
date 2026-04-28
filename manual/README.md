@@ -1,4 +1,4 @@
-# AppSecGW/1.3
+# AppSecGW/1.4
 
 **Hardened Reverse Proxy with Layered Anti-Automation Defenses**
 **Implementation, Hardening & CVE-Patching Report**
@@ -8,9 +8,9 @@
 | Author | Pedro Tarrinho |
 | Date | 2026-04-28 |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL / Chainguard Wolfi (distroless) |
-| Image | `appsec-antibot-gw:1.3` (79 MB, Trivy: 0 CVEs) |
+| Image | `appsec-antibot-gw:1.4` (79 MB, Trivy: 0 CVEs) |
 | Document version | 1.3 — supersedes 1.0 / 1.1 / 1.2 |
-| Print-ready PDF  | [AppSecGW-1.3-Report.pdf](AppSecGW-1.3-Report.pdf) |
+| Print-ready PDF  | [AppSecGW-1.4-Report.pdf](AppSecGW-1.4-Report.pdf) |
 
 ---
 
@@ -29,7 +29,7 @@
 
 ## 1. Executive summary
 
-**AppSecGW/1.3** is a hardened reverse HTTP proxy designed to sit in front of
+**AppSecGW/1.4** is a hardened reverse HTTP proxy designed to sit in front of
 arbitrary upstream applications. Version 1.3 adds full WebSocket bridging,
 SSO-aware redirect rewriting, edge-injected security response headers, IP-based
 admin gating, and a transition to a Chainguard Wolfi-based distroless container
@@ -65,7 +65,7 @@ that reports **zero CVEs** on Trivy scans.
                      │ HTTP loopback
                      ▼
        ┌─────────────────────────────────────┐
-       │  AppSecGW/1.3  (Chainguard Wolfi)   │
+       │  AppSecGW/1.4  (Chainguard Wolfi)   │
        │   • read-only, non-root, cap-drop ALL│
        │   • aiohttp 3.13 + SQLite WAL       │
        │   • 13 detection layers + WS bridge │
@@ -107,7 +107,7 @@ that reports **zero CVEs** on Trivy scans.
 ![AppSecGW main dashboard](../img/dashboard.png)
 
 > Figure 1 — `/__dashboard`. New in v1.3: the timeline now plots three series
-> (total / **permitidas** in green / bloqueios in red), and the Live Events
+> (total / **allowed** in green / blocked in red), and the Live Events
 > panel highlights allowed connections with a green left bar + green tag.
 > Top-row counters (Total / Allowed / Blocked / Uptime) and Block-reason
 > breakdown unchanged.
@@ -221,7 +221,43 @@ closing `</body>`. Now bails out if a `<script>` tag follows the chosen
 
 ---
 
-## 4. New in 1.3
+## 4. New in 1.4
+
+Five additions on top of the v1.3 hardening base.
+
+### 4.0.1 JS challenge (invisible CAPTCHA)
+
+When `JS_CHALLENGE=1`, the first HTML `GET` from a browser without a valid `chal` cookie receives a tiny self-executing JS page that hashes a server-issued nonce, POSTs the result to `/__challenge`, and is then redirected to the original URL. Server signs a 24 h cookie on success. Blocks pure-HTTP scrapers (curl, requests, httpx, Go default, AI agents reading raw HTML). Skips API clients (non-`text/html` Accept), static assets, `/__*` admin routes, and clients that already have a valid session cookie.
+
+### 4.0.2 Body pattern matching
+
+`BODY_PATTERN_MATCH=1` extends Layer 3's suspicious-path regex set to `POST/PUT/PATCH` bodies. Scans only text-ish content types (JSON / urlencoded / plain / XML), bounded at the first 64 KiB. Markers: SQLi (`UNION SELECT`, `OR 1=1`), XSS (`<script>`, `javascript:`, `onerror=`), SSTI (`{{...}}`, `{%...%}`), traversal, command injection.
+
+### 4.0.3 Bot-trap form fields
+
+`BOT_TRAP_FORMS=1` auto-injects a hidden `<input>` into every HTML `<form>` in proxied responses (`position:absolute;left:-9999px;visibility:hidden` + ARIA hidden + `tabindex=-1` + `autocomplete=off`). Field name is per-process random and rotates on every restart. On the matching POST, if that field is non-empty — humans cannot see or fill it — the identity is flagged with `risk += 50`.
+
+### 4.0.4 Slowloris guard
+
+Tightens the request-receive timeline: `HEADERS_TIMEOUT` (default 10 s) for full headers, `BODY_TIMEOUT` (default 30 s) for full body. Exceeded → `408 Request Timeout` + connection closed. Defends against attackers who hold sockets open with drip-fed bytes.
+
+### 4.0.5 Service Metrics dashboard (`/__service`)
+
+New admin dashboard with current values + 12 h history of:
+
+- **CPU %** + load average (1 / 5 / 15 min)
+- **Memory** (total / used / available / swap, plus cgroup container limit)
+- **Disk** (`/data` total / used / available / %)
+- **Processes** + open file-descriptor count
+- **Network** throughput (rx / tx bytes-per-second across non-loopback ifaces)
+- **SQLite size** — db, WAL, SHM files (sum + breakdown)
+- **App counters** — uptime, total requests, allowed / blocked, identities tracked, IP buckets
+
+Time-navigation controls (`‹ back / now / fwd ›` buttons + window selector 5 min – 12 h + bucket selector 5 s – 1 h) match the main dashboard's idiom. Sampling task runs every `SVC_METRICS_INTERVAL` seconds (default 5 s); ring buffer holds `SVC_METRICS_RETENTION` samples (default 8640 = 12 h). No `psutil` dependency — pure `/proc` + `os.statvfs()` reads.
+
+The Stealth Agent Hunter timeline (`/__agents`) gained the same time-navigation controls.
+
+## 5. Carry-overs from 1.3
 
 ### 4.1 WebSocket bridging
 
@@ -320,7 +356,7 @@ for laptop / VPN-roaming workflows.
 
 The Wolfi base ships fixes for HIGH-severity OS CVEs typically within 48 h
 of public disclosure (Chainguard's documented SLA). Re-run
-`trivy image appsec-antibot-gw:1.3` on every rebuild to verify the posture
+`trivy image appsec-antibot-gw:1.4` on every rebuild to verify the posture
 stays at zero.
 
 ---
@@ -381,6 +417,14 @@ Round-3 detail:
 | `SESSION_SECURE` | `1` | Set `0` for HTTP-only test envs. |
 | `INJECT_SECURITY_HEADERS` | `1` | Master switch for §4.5 headers. |
 | `DEBUG` | `0` | Set `1` to expose `/__xff`. |
+| `JS_CHALLENGE` | `0` | v1.4: invisible-CAPTCHA on first HTML hit. |
+| `JS_CHALLENGE_TTL` | `86400` | v1.4: chal cookie lifetime in seconds. |
+| `BODY_PATTERN_MATCH` | `0` | v1.4: SQLi/XSS/SSTI scan of POST/PUT/PATCH bodies. |
+| `BOT_TRAP_FORMS` | `0` | v1.4: hidden-field auto-injection in `<form>`s. |
+| `HEADERS_TIMEOUT` | `10` | v1.4: slowloris guard, max secs to receive headers. |
+| `BODY_TIMEOUT` | `30` | v1.4: slowloris guard, max secs to receive body. |
+| `SVC_METRICS_INTERVAL` | `5` | Seconds between samples on `/__service`. |
+| `SVC_METRICS_RETENTION` | `8640` | Samples kept (8640 × 5 s = 12 h). |
 
 ### 7.3 Production launch (Harbor)
 
@@ -421,6 +465,8 @@ docker run -d --name appsec-antibot-gw1.3 \
 | `/__agents` | admin | Stealth Agent Hunter dashboard |
 | `/__agents-data` | admin | Per-identity stealth-score JSON |
 | `/__agents-timeline` | admin | Detected vs missed timeline JSON |
+| `/__service` | admin | Service Metrics dashboard (CPU / mem / disk / procs / FDs / net / SQLite size) |
+| `/__service-data` | admin | Service-metrics JSON (with windowed range/bucket/end navigation) |
 | `/__pow` | admin | Mint a fresh PoW challenge bound to (method, path) |
 | `/__solver` | admin | Browser-side PoW solver |
 | `/__status` | admin | Per-identity bucket state snapshot |
@@ -480,4 +526,4 @@ timeline:
 
 — *End of report* —
 
-Image: `appsec-antibot-gw:1.3` · Author: Pedro Tarrinho · 2026-04-28
+Image: `appsec-antibot-gw:1.4` · Author: Pedro Tarrinho · 2026-04-28

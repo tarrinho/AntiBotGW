@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.3` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.4` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (any severity) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -25,7 +25,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.3 \
+docker run -d --name appsec-antibot-gw1.4 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -42,7 +42,7 @@ docker run -d --name appsec-antibot-gw1.3 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.3 \
+  appsec-antibot-gw:1.4 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -93,6 +93,8 @@ Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
 | `/__live` | Unauthenticated liveness probe (returns `ok`) |
 | `/__dashboard?key=…` | Real-time metrics, timeline (total / allowed / blocked) |
 | `/__agents?key=…` | **Stealth Agent Hunter** — identities that passed every block but exhibit stealth signals |
+| `/__service?key=…` | **Service Metrics** — CPU / memory / disk / processes / FDs / network / SQLite size with 12 h windowed history |
+| `/__service-data?key=…` | Service-metrics JSON feed (windowed) |
 | `/__metrics?key=…` | JSON feed |
 | `/__agents-data?key=…` | Per-identity stealth-score JSON |
 | `/__agents-timeline?key=…` | Detected-vs-missed timeline JSON |
@@ -169,6 +171,26 @@ those paths only.
 | `MAX_IDENTITIES` | `100000` |
 | `ENUM_THRESHOLD` | `300` (unique paths/identity before enum block) |
 
+### Service-metrics sampling
+
+| Variable | Default | Description |
+|---|---|---|
+| `SVC_METRICS_INTERVAL` | `5` | Seconds between samples on the service dashboard. |
+| `SVC_METRICS_RETENTION` | `8640` | Number of samples kept in memory (8640 × 5 s = 12 h). |
+
+Each sample includes: CPU %, load average (1/5/15), memory total/used/available, swap, cgroup memory, disk total/used/available for `/data`, process count, open FDs, network rx/tx bps, and SQLite file sizes (db + WAL + SHM). Dashboard supports `prev / now / fwd` navigation, window selector (5 min – 12 h), bucket selector (5 s – 1 h).
+
+### v1.4 controls (all opt-in / safe defaults)
+
+| Variable | Default | Description |
+|---|---|---|
+| `JS_CHALLENGE` | `0` | Invisible CAPTCHA — first HTML hit returns a tiny JS that POSTs back a server-issued nonce, then sets a 24 h cookie. Blocks pure-HTTP scrapers. |
+| `JS_CHALLENGE_TTL` | `86400` | Cookie lifetime in seconds. |
+| `BODY_PATTERN_MATCH` | `0` | Extends the suspicious-path regex set to POST/PUT/PATCH bodies (SQLi/XSS/SSTI/cmd-injection markers in form/JSON/XML). |
+| `BOT_TRAP_FORMS` | `0` | Auto-injects a hidden `<input>` into every `<form>` in HTML responses; flags POSTs that fill it. |
+| `HEADERS_TIMEOUT` | `10` | Slowloris: max seconds to receive full request headers. |
+| `BODY_TIMEOUT` | `30` | Slowloris: max seconds to receive full request body. |
+
 ### Session cookie
 
 | Variable | Default |
@@ -229,8 +251,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.3 .
-trivy image appsec-antibot-gw:1.3        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.4 .
+trivy image appsec-antibot-gw:1.4        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -287,6 +309,7 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| 1.4 | JS challenge · slowloris guard · bot-trap forms · body pattern matching · service-metrics dashboard (CPU/mem/disk/procs/FDs/net/SQLite size) · windowed time-navigation on agents + service charts |
 | 1.3 | Wolfi distroless (zero CVEs) · WebSocket bridge · SSO 302 rewriting · admin IP allowlist · edge security headers · stealth-agent hunter · streaming body fix |
 | 1.2 | hardening pass · 34/34 audit findings closed · timeline + agents dashboards · PoW replay protection |
 | 1.0 | initial 6-layer prototype |

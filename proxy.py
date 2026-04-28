@@ -15,10 +15,10 @@ Protections layered (each can be bypassed independently for testing):
 Run:
   python3 proxy.py
 
-Endpoints internas (não proxiadas):
-  GET /__pow      → emite um challenge para resolver
-  GET /__solver   → mini JS solver que resolve o PoW automaticamente
-  GET /__status   → estado do rate limiter
+Internal endpoints (not proxied to upstream):
+  GET /__pow      → issue a fresh challenge to be solved
+  GET /__solver   → in-browser JS PoW solver
+  GET /__status   → rate-limiter state snapshot
 """
 
 import asyncio
@@ -521,6 +521,190 @@ def db_init():
 db_queue: asyncio.Queue = None
 db_writer_task = None
 prune_task = None
+service_metrics_task = None
+
+# ── v1.4: Service-metrics collection (no psutil dep — pure /proc + os) ───
+SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
+SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "8640"))  # samples (8640 * 5s = 12 h)
+SERVICE_METRICS_HISTORY: deque = deque(maxlen=SERVICE_METRICS_RETENTION)
+_PROC = "/proc"
+_DATA_PATH = os.environ.get("DB_PATH", "/data/antibot.db")
+
+def _read_proc_stat():
+    try:
+        with open(f"{_PROC}/stat") as f:
+            line = f.readline().split()
+        # cpu user nice system idle iowait irq softirq steal guest guest_nice
+        nums = [int(x) for x in line[1:]]
+        idle = nums[3] + (nums[4] if len(nums) > 4 else 0)
+        total = sum(nums)
+        return total, idle
+    except Exception:
+        return None, None
+
+def _read_meminfo() -> dict:
+    out = {}
+    try:
+        with open(f"{_PROC}/meminfo") as f:
+            for line in f:
+                k, _, rest = line.partition(":")
+                v = rest.strip().split()
+                if v:
+                    out[k.strip()] = int(v[0]) * 1024   # kB → bytes
+    except Exception:
+        pass
+    return out
+
+def _read_cgroup_mem() -> dict:
+    """Try cgroup v2 first, then v1. Returns container memory (used / limit)."""
+    out = {}
+    for usage, limit in [
+        ("/sys/fs/cgroup/memory.current",      "/sys/fs/cgroup/memory.max"),
+        ("/sys/fs/cgroup/memory/memory.usage_in_bytes",
+         "/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+    ]:
+        try:
+            with open(usage) as f: u = int(f.read().strip())
+            with open(limit) as f:
+                lv = f.read().strip()
+                l = int(lv) if lv != "max" else -1
+            out["used"] = u
+            out["limit"] = l
+            return out
+        except Exception:
+            continue
+    return out
+
+def _db_file_sizes() -> dict:
+    """Return on-disk sizes of the SQLite database + its sidecars (WAL/SHM)."""
+    out = {"db": 0, "wal": 0, "shm": 0, "total": 0}
+    base = _DATA_PATH
+    for kind, path in [("db", base), ("wal", base + "-wal"), ("shm", base + "-shm")]:
+        try:
+            out[kind] = os.path.getsize(path)
+        except (OSError, FileNotFoundError):
+            pass
+    out["total"] = out["db"] + out["wal"] + out["shm"]
+    return out
+
+def _disk_usage(path: str) -> dict:
+    try:
+        s = os.statvfs(path)
+        total = s.f_frsize * s.f_blocks
+        avail = s.f_frsize * s.f_bavail
+        used  = total - avail
+        return {"total": total, "used": used, "avail": avail,
+                "pct": (used / total * 100) if total else 0.0}
+    except Exception:
+        return {}
+
+def _proc_count() -> int:
+    try:
+        return sum(1 for d in os.listdir(_PROC) if d.isdigit())
+    except Exception:
+        return 0
+
+def _fd_count() -> int:
+    try:
+        return len(os.listdir(f"{_PROC}/self/fd"))
+    except Exception:
+        return 0
+
+def _read_loadavg() -> tuple:
+    try:
+        return os.getloadavg()
+    except (OSError, AttributeError):
+        return (0.0, 0.0, 0.0)
+
+def _read_net_dev() -> dict:
+    """Per-interface RX/TX byte counters (cumulative since boot)."""
+    out = {}
+    try:
+        with open(f"{_PROC}/net/dev") as f:
+            lines = f.readlines()[2:]
+        for line in lines:
+            iface, _, vals = line.partition(":")
+            iface = iface.strip()
+            if iface in ("lo",):       # skip loopback for clarity
+                continue
+            parts = vals.split()
+            if len(parts) >= 16:
+                out[iface] = {"rx_bytes": int(parts[0]), "tx_bytes": int(parts[8])}
+    except Exception:
+        pass
+    return out
+
+async def _sample_service_metrics_loop():
+    last_total, last_idle = _read_proc_stat()
+    last_net = _read_net_dev()
+    last_ts = _t.time()
+    while True:
+        try:
+            await asyncio.sleep(SERVICE_METRICS_INTERVAL)
+            now_ts = _t.time()
+            elapsed = max(0.001, now_ts - last_ts)
+
+            total, idle = _read_proc_stat()
+            cpu_pct = 0.0
+            if total is not None and last_total is not None:
+                d_total = total - last_total
+                d_idle  = idle  - last_idle
+                if d_total > 0:
+                    cpu_pct = (d_total - d_idle) / d_total * 100.0
+            last_total, last_idle = total, idle
+
+            mem = _read_meminfo()
+            cg  = _read_cgroup_mem()
+            mem_total = mem.get("MemTotal", 0)
+            mem_avail = mem.get("MemAvailable", 0)
+            mem_used  = mem_total - mem_avail
+            swap_total = mem.get("SwapTotal", 0)
+            swap_used  = swap_total - mem.get("SwapFree", 0)
+            disk = _disk_usage(os.path.dirname(_DATA_PATH) or "/")
+
+            now_net = _read_net_dev()
+            net_rx_per_s = 0
+            net_tx_per_s = 0
+            for iface, cur in now_net.items():
+                prev = last_net.get(iface)
+                if prev:
+                    net_rx_per_s += max(0, (cur["rx_bytes"] - prev["rx_bytes"]) / elapsed)
+                    net_tx_per_s += max(0, (cur["tx_bytes"] - prev["tx_bytes"]) / elapsed)
+            last_net = now_net
+            last_ts = now_ts
+
+            l1, l5, l15 = _read_loadavg()
+            sample = {
+                "ts":            now_ts,
+                "cpu_pct":       round(cpu_pct, 1),
+                "load1":         round(l1, 2),
+                "load5":         round(l5, 2),
+                "load15":        round(l15, 2),
+                "mem_total":     mem_total,
+                "mem_used":      mem_used,
+                "mem_avail":     mem_avail,
+                "mem_pct":       round(mem_used / mem_total * 100, 1) if mem_total else 0,
+                "swap_total":    swap_total,
+                "swap_used":     swap_used,
+                "cg_used":       cg.get("used", 0),
+                "cg_limit":      cg.get("limit", -1),
+                "cg_pct":        round(cg.get("used", 0) / cg.get("limit", 1) * 100, 1)
+                                   if cg.get("limit", -1) > 0 else 0,
+                "disk_total":    disk.get("total", 0),
+                "disk_used":     disk.get("used", 0),
+                "disk_avail":    disk.get("avail", 0),
+                "disk_pct":      round(disk.get("pct", 0), 1),
+                "procs":         _proc_count(),
+                "open_fds":      _fd_count(),
+                "net_rx_bps":    int(net_rx_per_s),
+                "net_tx_bps":    int(net_tx_per_s),
+                **{f"db_{k}": v for k, v in _db_file_sizes().items()},
+            }
+            SERVICE_METRICS_HISTORY.append(sample)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[svc-metrics] sample error: {e}", flush=True)
 
 async def db_writer_loop():
     """Background coroutine: drains the queue and flushes to SQLite in batches."""
@@ -745,6 +929,9 @@ RISK_WEIGHTS = {
     "rate-limit-ip":          0,
     "rate-limit":             0,
     "host-not-allowed":      40,
+    "suspicious-body":       40,    # v1.4: body pattern match
+    "bot-trap":              50,    # v1.4: hidden form field filled
+    "js-challenge":           5,    # v1.4: each unsolved challenge bumps slightly
 }
 RISK_BAN_THRESHOLD       = 50    # ban when score crosses this for normal IPs
 RISK_BAN_THRESHOLD_NAT   = 100   # higher threshold when IP looks like NAT
@@ -1124,6 +1311,16 @@ async def protect(request: web.Request, handler):
                             headers={"Cache-Control": "no-store",
                                      "Content-Type": "text/plain; charset=utf-8"})
 
+    # v1.4 #1 — JS challenge: solver POSTs back here.
+    if request.path == "/__challenge":
+        return await js_challenge_endpoint(request)
+
+    # v1.4 #1 — JS challenge: serve the verification page on first HTML hit
+    # (no chal cookie yet). Gated by JS_CHALLENGE env, skip for static assets,
+    # admin routes and clients that are already known good (have a session).
+    if _js_challenge_applicable(request):
+        return _serve_js_challenge(request)
+
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
     # /__* routes accept any method (HEAD probes, OPTIONS preflight).
@@ -1166,6 +1363,8 @@ async def protect(request: web.Request, handler):
     request["_sid"]    = sid
     request["_is_new"] = is_new_session
     request["_id_mode"] = id_mode
+    request["_fp"]     = fp                   # v1.4: expose to proxy() body checks
+    request["_track_key"] = identity          # v1.4: same
 
     # Anti cookie-rotation: limit how many DISTINCT new identities one IP can
     # spawn per minute. Counts unique identities (not requests), so parallel
@@ -1594,7 +1793,7 @@ async def dashboard_endpoint(request: web.Request):
 
 DASHBOARD_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.3 · Dashboard</title>
+<title>AppSecGW_1.4 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -1661,11 +1860,17 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body>
-<h1>AppSecGW_1.3 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
-<div style="font-size:12px;margin-top:6px"><a id="agents-link" style="color:var(--blue)" href="#">→ Stealth Agent Hunter (allowed-but-suspicious)</a></div>
+<h1>AppSecGW_1.4 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<div style="font-size:12px;margin-top:6px">
+  <a id="agents-link"  style="color:var(--blue)" href="#">→ Stealth Agent Hunter</a>
+  <span class="dim">·</span>
+  <a id="service-link" style="color:var(--blue)" href="#">→ Service Metrics</a>
+</div>
 <script>
 (function(){const k=new URLSearchParams(location.search).get('key')||'';
- document.getElementById('agents-link').href='/__agents'+(k?('?key='+encodeURIComponent(k)):'');})();
+ const q=k?('?key='+encodeURIComponent(k)):'';
+ document.getElementById('agents-link').href='/__agents'+q;
+ document.getElementById('service-link').href='/__service'+q;})();
 </script>
 
 <div class="grid">
@@ -1683,7 +1888,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Timeline · total / permitidas / bloqueios <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span></h2>
+      <h2 style="margin:0">Timeline · total / allowed / blocked <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span></h2>
       <div style="display:flex;gap:6px;align-items:center;font-size:11px">
         <button id="prev"  class="ctrl">‹ back</button>
         <button id="now"   class="ctrl ctrl-now">now</button>
@@ -1779,10 +1984,10 @@ function ensureChart() {
         { label: 'total', data: [], borderColor: '#58a6ff',
           backgroundColor: 'rgba(88,166,255,0.06)', tension: 0.25, fill: false,
           borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
-        { label: 'permitidas (good)', data: [], borderColor: '#3fb950',
+        { label: 'allowed (good)', data: [], borderColor: '#3fb950',
           backgroundColor: 'rgba(63,185,80,0.18)', tension: 0.25, fill: true,
           borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
-        { label: 'bloqueios', data: [], borderColor: '#f85149',
+        { label: 'blocked', data: [], borderColor: '#f85149',
           backgroundColor: 'rgba(248,81,73,0.18)', tension: 0.25, fill: true,
           borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
       ],
@@ -1997,6 +2202,49 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
 </body></html>
 """
 
+def _serve_js_challenge(request: web.Request):
+    """Render the inline JS-challenge HTML for an unverified browser."""
+    nonce = _make_chal_nonce()
+    target = request.path_qs or "/"
+    # Sanitise target so we can safely embed in JS string + URL.
+    target_safe = re.sub(r'[^A-Za-z0-9_\-./?&=%:#]', '', target)[:512] or "/"
+    html = (JS_CHAL_HTML
+            .replace("__NONCE__", nonce)
+            .replace("__TARGET__", target_safe))
+    return web.Response(
+        status=200, text=html, content_type="text/html",
+        headers={"Cache-Control": "no-store",
+                 "X-Robots-Tag": "noindex"},
+    )
+
+async def js_challenge_endpoint(request: web.Request):
+    """Solver POSTs (n, h, t) here. We verify the nonce signature and (since
+    the hash check is just a 'did your JS run' marker, not a security boundary)
+    issue a 24-hour cookie."""
+    if request.method != "POST":
+        return web.Response(status=405)
+    try:
+        body = await asyncio.wait_for(request.read(), timeout=BODY_TIMEOUT)
+    except asyncio.TimeoutError:
+        return web.Response(status=408, text="timeout\n")
+    from urllib.parse import parse_qs
+    try:
+        params = parse_qs(body.decode("utf-8", errors="replace"))
+    except Exception:
+        return web.Response(status=400, text="bad form\n")
+    nonce = params.get("n", [""])[0]
+    if not _verify_chal_nonce(nonce):
+        return web.Response(status=400, text="bad nonce\n")
+    cookie = _make_chal_cookie()
+    resp = web.Response(status=200, text="ok",
+                        headers={"Cache-Control": "no-store"})
+    resp.set_cookie(CHAL_COOKIE, cookie,
+                    httponly=True,
+                    samesite=SESSION_SAMESITE,
+                    secure=SESSION_SECURE,
+                    path="/", max_age=CHAL_TTL)
+    return resp
+
 async def unban_endpoint(request: web.Request):
     """Admin: clear ban + risk score for an identity (or all). Useful when a
     false-positive pushed someone over threshold.
@@ -2096,6 +2344,175 @@ HOP_BY_HOP_RESPONSE = {
 
 UPSTREAM_MAX_BODY = int(os.environ.get("UPSTREAM_MAX_BODY", str(2 * 1024 * 1024)))  # 2 MiB
 UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(8 * 1024 * 1024)))  # 8 MiB
+
+# ── v1.4: Slowloris guard (default ON with sensible timeouts) ────────────
+HEADERS_TIMEOUT = float(os.environ.get("HEADERS_TIMEOUT", "10"))   # secs to receive full headers
+BODY_TIMEOUT    = float(os.environ.get("BODY_TIMEOUT",    "30"))   # secs to receive full body
+
+# ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────
+BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
+SUSPICIOUS_BODY_PATTERNS = (
+    re.compile(rb"(union[ +]+select|select[ +]+\*|or[ +]+1=1|--\s*$|\bxp_)", re.I),
+    re.compile(rb"<script\b|javascript:|onerror\s*=", re.I),
+    re.compile(rb"\{\{[^}]{1,40}\}\}|\{%[^%]{1,40}%\}"),       # SSTI
+    re.compile(rb"\.\.[\\/]|\bphp://|\bfile://|\bexpect://"),
+    re.compile(rb"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash)\b", re.I),
+)
+
+def is_suspicious_body(body: bytes, ctype: str) -> bool:
+    """Returns True if request body matches a known SQLi/XSS/SSTI/cmd-injection
+    pattern. Only scans text-ish content types and bounds at 64 KiB to keep
+    it cheap. Off by default — enable with BODY_PATTERN_MATCH=1."""
+    if not BODY_PATTERN_MATCH or not body:
+        return False
+    cl = ctype.lower()
+    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
+                                  "text/plain", "text/xml", "application/xml")):
+        return False
+    sample = body[:65536]
+    return any(p.search(sample) for p in SUSPICIOUS_BODY_PATTERNS)
+
+# ── v1.4: Bot-trap forms (auto-inject hidden field; flag bots that fill it) ─
+BOT_TRAP_FORMS = os.environ.get("BOT_TRAP_FORMS", "0") in ("1", "true", "yes")
+# Field name is per-process random — same for all forms in this container,
+# but rotates on every restart so static scrapers can't hard-code it.
+BOT_TRAP_FIELD = "ec_" + secrets.token_hex(4)
+_TRAP_INPUT_HTML = (
+    f'<input type="text" name="{BOT_TRAP_FIELD}" tabindex="-1" autocomplete="off" '
+    f'aria-hidden="true" '
+    f'style="position:absolute;left:-9999px;top:-9999px;opacity:0;'
+    f'width:0;height:0;visibility:hidden">'
+).encode()
+_FORM_OPEN_RX = re.compile(rb"(<form\b[^>]*>)", re.IGNORECASE)
+
+def _inject_bot_trap(body: bytes) -> bytes:
+    if not BOT_TRAP_FORMS or b"<form" not in body[:65536].lower():
+        return body
+    return _FORM_OPEN_RX.sub(rb"\1" + _TRAP_INPUT_HTML, body, count=20)
+
+def _bot_trap_triggered(body: bytes, ctype: str) -> bool:
+    """True iff the bot-trap field is non-empty in a form-encoded POST body."""
+    if not BOT_TRAP_FORMS or not body:
+        return False
+    if "x-www-form-urlencoded" not in ctype.lower():
+        return False
+    needle = (BOT_TRAP_FIELD + "=").encode()
+    if needle not in body[:65536]:
+        return False
+    try:
+        from urllib.parse import parse_qs
+        q = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=False)
+        v = q.get(BOT_TRAP_FIELD, [""])[0].strip()
+        return bool(v)
+    except Exception:
+        return False
+
+# ── v1.4: JS challenge (invisible CAPTCHA) ────────────────────────────────
+JS_CHALLENGE = os.environ.get("JS_CHALLENGE", "0") in ("1", "true", "yes")
+CHAL_COOKIE  = "chal"
+CHAL_TTL     = int(os.environ.get("JS_CHALLENGE_TTL", "86400"))   # 24 h
+CHAL_NONCE_TTL = 120  # nonce valid for 2 min after issue
+# Reuse SESSION_KEY for chal HMAC (same trust domain).
+
+def _make_chal_nonce() -> str:
+    nonce = secrets.token_hex(8)
+    issued = str(int(time.time()))
+    payload = f"{nonce}|{issued}"
+    sig = hmac.new(SESSION_KEY, payload.encode(), hashlib.sha256).hexdigest()[:32]
+    return f"{payload}|{sig}"
+
+def _verify_chal_nonce(token: str) -> bool:
+    if not token:
+        return False
+    parts = token.split("|")
+    if len(parts) != 3:
+        return False
+    nonce, issued, sig = parts
+    expected = hmac.new(SESSION_KEY, f"{nonce}|{issued}".encode(),
+                        hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        return False
+    try:
+        if int(time.time()) - int(issued) > CHAL_NONCE_TTL:
+            return False
+    except ValueError:
+        return False
+    return True
+
+def _make_chal_cookie() -> str:
+    issued = str(int(time.time()))
+    sig = hmac.new(SESSION_KEY, ("chal|" + issued).encode(),
+                   hashlib.sha256).hexdigest()
+    return f"{issued}|{sig}"
+
+def _verify_chal_cookie(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        issued, sig = value.split("|", 1)
+    except ValueError:
+        return False
+    expected = hmac.new(SESSION_KEY, ("chal|" + issued).encode(),
+                        hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return False
+    try:
+        if int(time.time()) - int(issued) > CHAL_TTL:
+            return False
+    except ValueError:
+        return False
+    return True
+
+JS_CHAL_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
+<title>Verifying...</title>
+<meta name=robots content=noindex>
+<style>html,body{margin:0;height:100%}body{display:flex;flex-direction:column;
+align-items:center;justify-content:center;font:14px/1.5 system-ui,sans-serif;
+color:#444;background:#fafafa}.spinner{width:24px;height:24px;border:3px solid #eee;
+border-top-color:#3fb950;border-radius:50%;animation:s 0.8s linear infinite;
+margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}</style>
+</head><body>
+<div class=spinner></div>
+<p>Verifying browser...</p>
+<noscript><p>JavaScript is required to access this site.</p></noscript>
+<script>
+(async()=>{
+  try{
+    const n="__NONCE__", t="__TARGET__";
+    const enc=new TextEncoder().encode(n+navigator.userAgent+screen.width+screen.height);
+    const buf=await crypto.subtle.digest('SHA-256',enc);
+    const h=Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+    const fd=new URLSearchParams({n,h,t});
+    const r=await fetch('/__challenge',{method:'POST',body:fd,credentials:'include',
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+    if(r.ok){location.replace(t)}
+    else{document.querySelector('p').textContent='Verification failed.'}
+  }catch(e){document.querySelector('p').textContent='Verification error: '+e.message}
+})();
+</script></body></html>"""
+
+# Static-asset extensions used by JS-challenge (to skip them).
+_STATIC_ASSET_SUFFIXES = (
+    ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+    ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf",
+    ".eot", ".map", ".mp4", ".webm", ".mp3", ".ogg",
+)
+
+def _js_challenge_applicable(request) -> bool:
+    """Return True iff this request should be challenged."""
+    if not JS_CHALLENGE:
+        return False
+    if request.method != "GET":
+        return False
+    if "text/html" not in request.headers.get("Accept", ""):
+        return False
+    if request.path.startswith("/__"):
+        return False
+    if request.path.endswith(_STATIC_ASSET_SUFFIXES):
+        return False
+    if _verify_chal_cookie(request.cookies.get(CHAL_COOKIE, "")):
+        return False
+    return True
 
 # ── Edge-injected security response headers (HTML only) ──────────────────
 # Each can be overridden / disabled via env. An empty value disables that one.
@@ -2327,20 +2744,55 @@ async def proxy(request: web.Request):
                     except Exception:
                         pass
 
-    # H6: stream the body and bound it. Reject if larger than UPSTREAM_MAX_BODY.
+    # H6+v1.4: stream the body, bound it, AND apply a slowloris timeout.
+    # Reject if larger than UPSTREAM_MAX_BODY or if it takes longer than
+    # BODY_TIMEOUT to fully arrive.
     body = None
     if request.body_exists and request.method in ("POST", "PUT", "PATCH", "DELETE"):
         try:
-            chunks = []
-            total = 0
-            async for c in request.content.iter_any():
-                total += len(c)
-                if total > UPSTREAM_MAX_BODY:
-                    return web.Response(status=413, text="payload too large\n")
-                chunks.append(c)
-            body = b"".join(chunks) if chunks else None
+            async def _drain():
+                chunks = []
+                total = 0
+                async for c in request.content.iter_any():
+                    total += len(c)
+                    if total > UPSTREAM_MAX_BODY:
+                        raise web.HTTPRequestEntityTooLarge(
+                            max_size=UPSTREAM_MAX_BODY, actual_size=total)
+                    chunks.append(c)
+                return b"".join(chunks) if chunks else None
+            body = await asyncio.wait_for(_drain(), timeout=BODY_TIMEOUT)
+        except asyncio.TimeoutError:
+            return web.Response(status=408, text="request body timeout\n")
+        except web.HTTPRequestEntityTooLarge:
+            return web.Response(status=413, text="payload too large\n")
         except Exception:
             return web.Response(status=400, text="bad request\n")
+
+    # v1.4 #4 — body pattern matching (extends Layer 3 to bodies).
+    if body is not None:
+        client_ctype = request.headers.get("Content-Type", "")
+        if is_suspicious_body(body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",
+                "suspicious-path", get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "suspicious-body",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+        # v1.4 #6 — bot-trap form fields.
+        if _bot_trap_triggered(body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",
+                "bot-trap", get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "bot-trap",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
 
     try:
         async with ClientSession(timeout=ClientTimeout(total=30)) as session:
@@ -2412,7 +2864,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.3"
+                response_headers["X-Proxy"] = "AppSecGW_1.4"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -2429,6 +2881,8 @@ async def proxy(request: web.Request):
                 # text/html (rejects `application/text/html-foo` substrings).
                 if ctype.startswith("text/html"):
                     resp_body = _inject_honey_links(resp_body)
+                    # v1.4 #6 — bot-trap form fields (no-op when disabled).
+                    resp_body = _inject_bot_trap(resp_body)
 
                 return web.Response(status=resp.status, body=resp_body, headers=response_headers)
     except aiohttp.ClientError:
@@ -2458,19 +2912,24 @@ async def debug_xff(request):
 
 async def on_startup(app):
     """Initialise SQLite DB + spawn the async writer + load saved state."""
-    global db_queue, db_writer_task, prune_task
+    global db_queue, db_writer_task, prune_task, service_metrics_task
     db_init()
     db_load_state()
     db_queue = asyncio.Queue(maxsize=10000)
     db_writer_task = asyncio.create_task(db_writer_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
+    service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
     print(f"[db] persistence active → {DB_PATH}")
+    print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
+          f"keeping {SERVICE_METRICS_RETENTION} samples")
 
 async def on_cleanup(app):
     """Flush queue and close DB writer cleanly."""
-    global prune_task
+    global prune_task, service_metrics_task
     if prune_task:
         prune_task.cancel()
+    if service_metrics_task:
+        service_metrics_task.cancel()
     if db_writer_task:
         # Final global counters flush
         if db_queue is not None:
@@ -2554,6 +3013,7 @@ AGENT_BLOCK_REASONS = (
     "suspicious-path", "session-flood",
     "rate-limit-ip", "rate-limit", "host-not-allowed",
     "admin-ip-blocked",
+    "suspicious-body", "bot-trap", "js-challenge",
 )
 
 async def agents_timeline_endpoint(request: web.Request):
@@ -2759,6 +3219,10 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .dim{color:var(--dim)}
 .ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
       border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
+.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.ctrl:disabled{opacity:.4;cursor:not-allowed}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.ctrl-now:hover:not(:disabled){background:#1c3d5a}
 .foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
 .expand{cursor:pointer;color:var(--blue)}
 .detail{display:none;background:#0a0e13;border-left:3px solid var(--orange);padding:8px 12px}
@@ -2797,9 +3261,14 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Detection vs Miss · Timeline</h2>
+      <h2 style="margin:0">Detection vs Miss · Timeline
+        <span id="t-window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span>
+      </h2>
       <div style="display:flex;gap:6px;align-items:center;font-size:11px">
-        <span class="dim">window:</span>
+        <button id="t-prev"  class="ctrl">‹ back</button>
+        <button id="t-now"   class="ctrl ctrl-now">now</button>
+        <button id="t-next"  class="ctrl" disabled>fwd ›</button>
+        <span class="dim" style="margin-left:6px">window:</span>
         <select id="t-range" class="ctrl">
           <option value="15">15 min</option>
           <option value="60" selected>1 h</option>
@@ -2985,6 +3454,7 @@ async function tickChart(){
       bucket: document.getElementById('t-bucket').value,
       min_score: MIN,
     });
+    if (tEndEpoch !== null) params.set('end', tEndEpoch.toString());
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     const r = await fetch('/__agents-timeline?'+params, {cache:'no-store', credentials:'include'});
     const d = await r.json();
@@ -3002,12 +3472,45 @@ async function tickChart(){
       `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} · stealth IPs=${d.stealth_ips_count}`;
   }catch(e){}
 }
-document.getElementById('t-range').addEventListener('change', tickChart);
+// Time-window navigation state for the timeline chart
+let tEndEpoch = null;   // null = live; epoch seconds = scrolled-back right edge
+function tGetRangeMin(){ return parseInt(document.getElementById('t-range').value||'60',10); }
+function tRefreshControls(){
+  document.getElementById('t-next').disabled = (tEndEpoch === null);
+  document.getElementById('t-now').disabled  = (tEndEpoch === null);
+  const lbl = document.getElementById('t-window-label');
+  if (tEndEpoch === null){
+    lbl.textContent = '(live)'; lbl.style.color = 'var(--green)';
+  } else {
+    const win = tGetRangeMin();
+    const start = new Date((tEndEpoch - win*60)*1000), end = new Date(tEndEpoch*1000);
+    const fmt = d => d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
+    lbl.style.color = 'var(--yellow)';
+  }
+}
+document.getElementById('t-prev').onclick = () => {
+  const win = tGetRangeMin()*60;
+  const cur = tEndEpoch || Math.floor(Date.now()/1000);
+  tEndEpoch = cur - win;
+  tRefreshControls(); tickChart();
+};
+document.getElementById('t-next').onclick = () => {
+  if (!tEndEpoch) return;
+  const win = tGetRangeMin()*60;
+  tEndEpoch = tEndEpoch + win;
+  if (tEndEpoch > Math.floor(Date.now()/1000)) tEndEpoch = null;
+  tRefreshControls(); tickChart();
+};
+document.getElementById('t-now').onclick = () => { tEndEpoch = null; tRefreshControls(); tickChart(); };
+document.getElementById('t-range').addEventListener('change', () => { tRefreshControls(); tickChart(); });
 document.getElementById('t-bucket').addEventListener('change', tickChart);
+tRefreshControls();
 
 tick(); tickChart();
 setInterval(tick, 3000);
-setInterval(tickChart, 5000);
+// Only auto-refresh the chart when in live mode.
+setInterval(()=>{ if (tEndEpoch === null) tickChart(); }, 5000);
 </script>
 </body></html>
 """
@@ -3019,6 +3522,571 @@ async def agents_dashboard_endpoint(request: web.Request):
         key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
     return web.Response(
         text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+
+# ── Service-metrics dashboard endpoints (admin-gated) ───────────────────
+async def service_metrics_data_endpoint(request: web.Request):
+    """JSON: latest sample + a windowed view of the retention buffer.
+    Query params (all optional):
+      ?range=N    — window length in minutes (5..720, default 60)
+      ?bucket=S   — bucket width in seconds (5,30,60,300,900,3600 — default 5)
+      ?end=EPOCH  — right edge of the window (default = now / live)
+    Samples within each bucket are averaged for cpu/mem/disk pct, max'd for
+    counters (procs/fds/db_size), summed for net throughput."""
+    raw = list(SERVICE_METRICS_HISTORY)
+    current = raw[-1] if raw else {}
+
+    try:
+        range_min = max(1, min(720, int(request.query.get("range", "60"))))
+    except ValueError:
+        range_min = 60
+    try:
+        bucket_secs = int(request.query.get("bucket",
+                                            str(int(SERVICE_METRICS_INTERVAL))))
+        if bucket_secs not in (5, 30, 60, 300, 900, 3600):
+            bucket_secs = int(SERVICE_METRICS_INTERVAL) or 5
+    except ValueError:
+        bucket_secs = int(SERVICE_METRICS_INTERVAL) or 5
+    try:
+        end_epoch = float(request.query.get("end", str(_t.time())))
+    except ValueError:
+        end_epoch = _t.time()
+
+    end_b   = (int(end_epoch) // bucket_secs) * bucket_secs
+    window  = range_min * 60
+    start_b = end_b - window + bucket_secs
+
+    # Bucketise: average pcts/loads, max for counters, sum/per-window for net.
+    AVG_KEYS  = ("cpu_pct", "mem_pct", "swap_used", "load1", "load5", "load15",
+                 "disk_pct", "cg_pct", "mem_used", "disk_used")
+    MAX_KEYS  = ("procs", "open_fds", "db_db", "db_wal", "db_shm", "db_total",
+                 "cg_used", "cg_limit", "mem_total", "disk_total", "disk_avail",
+                 "swap_total")
+    SUM_KEYS  = ("net_rx_bps", "net_tx_bps")
+
+    buckets = {}
+    for s in raw:
+        ts = int(s.get("ts", 0))
+        if ts < start_b or ts > end_b + bucket_secs:
+            continue
+        b = (ts // bucket_secs) * bucket_secs
+        slot = buckets.setdefault(b, {"_n": 0, "ts": b})
+        slot["_n"] += 1
+        for k in AVG_KEYS + MAX_KEYS + SUM_KEYS:
+            v = s.get(k, 0)
+            if k in MAX_KEYS:
+                slot[k] = max(slot.get(k, v), v)
+            else:
+                slot[k] = slot.get(k, 0) + v
+
+    history = []
+    for b in range(start_b, end_b + 1, bucket_secs):
+        slot = buckets.get(b)
+        if not slot:
+            history.append({"ts": b, **{k: 0 for k in AVG_KEYS + MAX_KEYS + SUM_KEYS}})
+            continue
+        n = slot.pop("_n") or 1
+        out = {"ts": b}
+        for k in AVG_KEYS:
+            out[k] = round(slot.get(k, 0) / n, 2)
+        for k in MAX_KEYS:
+            out[k] = slot.get(k, 0)
+        for k in SUM_KEYS:
+            out[k] = round(slot.get(k, 0) / n)   # avg per second within bucket
+        history.append(out)
+
+    async with state_lock:
+        identities = len(ip_state)
+        ip_buckets_n = len(ip_buckets)
+    app_info = {
+        "uptime_secs":     int(_t.time() - START_EPOCH),
+        "total_requests":  metrics["total_requests"],
+        "allowed":         metrics["allowed"],
+        "blocked":         metrics["blocked"],
+        "identities":      identities,
+        "ip_buckets":      ip_buckets_n,
+        "events_buffered": len(events),
+        "version":         "AppSecGW_1.4",
+    }
+    return web.json_response({
+        "current":          current,
+        "history":          history,
+        "app":              app_info,
+        "interval_secs":    SERVICE_METRICS_INTERVAL,
+        "range_min":        range_min,
+        "bucket_secs":      bucket_secs,
+        "end_epoch":        end_b,
+        "is_live":          end_epoch >= _t.time() - 30,
+        "samples_in_buffer": len(raw),
+        "buffer_oldest_ts": raw[0]["ts"] if raw else 0,
+    }, headers={"Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff"})
+
+
+SERVICE_DASHBOARD_HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · Service Metrics</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);padding:14px}
+h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.grid{display:grid;gap:14px;margin-top:14px}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.row5{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.metric{font-size:26px;font-weight:600;color:#fff;line-height:1}
+.metric.cpu{color:var(--blue)}
+.metric.mem{color:var(--purple)}
+.metric.disk{color:var(--orange)}
+.metric.proc{color:var(--green)}
+.metric.fd{color:var(--yellow)}
+.metric.net{color:#5fb3c0}
+.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}
+.bar>div{height:100%;background:var(--blue);transition:width 0.3s}
+.bar.mem>div{background:var(--purple)}
+.bar.cpu>div{background:var(--blue)}
+.bar.disk>div{background:var(--orange)}
+.bar.danger>div{background:var(--red)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+         text-transform:uppercase;letter-spacing:.5px;font-size:10px}
+table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:11.5px}
+.kv .k{color:var(--dim)}
+.kv .v{font-family:ui-monospace;color:#fff}
+.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
+.nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
+.nav a{color:var(--blue);text-decoration:none}
+.nav a:hover{text-decoration:underline}
+.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;
+      font-family:inherit;line-height:1.4}
+.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.ctrl:disabled{opacity:.4;cursor:not-allowed}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.ctrl-now:hover:not(:disabled){background:#1c3d5a}
+@media (max-width:1100px){.row,.row5{grid-template-columns:repeat(2,1fr)}}
+</style></head>
+<body>
+<h1>AppSecGW &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<div class="nav">
+  <a id="lnk-main"   href="#">← main dashboard</a>
+  <span class="dim">|</span>
+  <a id="lnk-agents" href="#">stealth agents</a>
+  <span class="dim">|</span>
+  <a id="lnk-self"   href="#">service metrics (this page)</a>
+</div>
+
+<div class="grid">
+
+  <!-- ── Top-row counters ────────────────────────────── -->
+  <div class="row5">
+    <div class="card"><h2>CPU</h2>
+      <div class="metric cpu" id="m-cpu">—</div>
+      <div class="metric-sub" id="m-load">load —</div>
+      <div class="bar cpu"><div id="b-cpu" style="width:0%"></div></div>
+    </div>
+    <div class="card"><h2>Memory</h2>
+      <div class="metric mem" id="m-mem">—</div>
+      <div class="metric-sub" id="m-mem-sub">— used / —</div>
+      <div class="bar mem"><div id="b-mem" style="width:0%"></div></div>
+    </div>
+    <div class="card"><h2>Disk (/data)</h2>
+      <div class="metric disk" id="m-disk">—</div>
+      <div class="metric-sub" id="m-disk-sub">— used / —</div>
+      <div class="bar disk"><div id="b-disk" style="width:0%"></div></div>
+    </div>
+    <div class="card"><h2>Processes</h2>
+      <div class="metric proc" id="m-procs">—</div>
+      <div class="metric-sub" id="m-procs-sub">— open FDs</div>
+    </div>
+    <div class="card"><h2>Network</h2>
+      <div class="metric net" id="m-net-rx">—</div>
+      <div class="metric-sub" id="m-net-tx">tx —</div>
+    </div>
+  </div>
+
+  <!-- ── Second row: extras incl. DB size ──────────── -->
+  <div class="row5">
+    <div class="card"><h2>SQLite DB</h2>
+      <div class="metric" style="color:#5fb3c0" id="m-db">—</div>
+      <div class="metric-sub" id="m-db-sub">db — wal — shm —</div>
+    </div>
+    <div class="card"><h2>cgroup memory</h2>
+      <div class="metric" style="color:var(--purple)" id="m-cg">—</div>
+      <div class="metric-sub" id="m-cg-sub">— / —</div>
+    </div>
+    <div class="card"><h2>Identities</h2>
+      <div class="metric" style="color:var(--blue)" id="m-id">—</div>
+      <div class="metric-sub" id="m-buckets">— IP buckets</div>
+    </div>
+    <div class="card"><h2>Requests</h2>
+      <div class="metric" style="color:#fff" id="m-req">—</div>
+      <div class="metric-sub" id="m-req-sub">— allowed / — blocked</div>
+    </div>
+    <div class="card"><h2>Uptime</h2>
+      <div class="metric" style="color:var(--green);font-size:18px" id="m-up">—</div>
+      <div class="metric-sub" id="m-version">AppSecGW —</div>
+    </div>
+  </div>
+
+  <!-- ── Time controls (above the line charts) ───────── -->
+  <div class="card" style="padding:8px 14px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+      <span class="dim" id="window-label" style="font-size:11px">live</span>
+      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+        <button id="prev"  class="ctrl">‹ back</button>
+        <button id="now"   class="ctrl ctrl-now">now</button>
+        <button id="next"  class="ctrl" disabled>fwd ›</button>
+        <span class="dim" style="margin-left:6px">window:</span>
+        <select id="range" class="ctrl">
+          <option value="5">5 min</option>
+          <option value="15">15 min</option>
+          <option value="60" selected>1 h</option>
+          <option value="180">3 h</option>
+          <option value="360">6 h</option>
+          <option value="720">12 h</option>
+        </select>
+        <span class="dim" style="margin-left:6px">bucket:</span>
+        <select id="bucket" class="ctrl">
+          <option value="5" selected>5 sec</option>
+          <option value="30">30 sec</option>
+          <option value="60">1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+          <option value="3600">1 hour</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Time-series charts ────────────────────────── -->
+  <div class="card">
+    <h2>CPU &amp; Memory · last hour</h2>
+    <div style="position:relative;height:240px"><canvas id="chart-cpu-mem"></canvas></div>
+  </div>
+
+  <div class="row" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <h2>Network throughput · last hour</h2>
+      <div style="position:relative;height:200px"><canvas id="chart-net"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Process &amp; FD count · last hour</h2>
+      <div style="position:relative;height:200px"><canvas id="chart-procs"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>SQLite size · evolution (stacked: db + wal + shm)</h2>
+    <div style="position:relative;height:220px"><canvas id="chart-db"></canvas></div>
+  </div>
+
+  <!-- ── Detail tables ─────────────────────────────── -->
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr">
+    <div class="card">
+      <h2>Memory detail</h2>
+      <div class="kv" id="kv-mem"><span class="dim">no sample yet</span></div>
+    </div>
+    <div class="card">
+      <h2>Container limits</h2>
+      <div class="kv" id="kv-cg"></div>
+    </div>
+    <div class="card">
+      <h2>App counters</h2>
+      <div class="kv" id="kv-app"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">refreshes every 5s · sampling every <span id="interval">5</span>s · <code id="ts"></code></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+        integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+['lnk-main','lnk-agents','lnk-self'].forEach((id,i)=>{
+  const tgt = ['/__dashboard','/__agents','/__service'][i];
+  document.getElementById(id).href = tgt + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : '');
+});
+
+const fmtBytes = b => {
+  if (!b && b !== 0) return '—';
+  if (b < 1024) return b + ' B';
+  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
+  return (b/1073741824).toFixed(2) + ' GB';
+};
+const fmtBps = b => fmtBytes(b) + '/s';
+
+let cpuMemChart=null, netChart=null, procChart=null, dbChart=null;
+
+function ensureCharts(){
+  if (cpuMemChart) return;
+  const opts = {
+    responsive:true, maintainAspectRatio:false,
+    animation:{duration:200}, interaction:{mode:'index',intersect:false},
+    plugins:{legend:{labels:{color:'#c9d1d9',font:{size:11}}}},
+    scales:{
+      x:{ticks:{color:'#8b949e',font:{size:10},maxRotation:0,autoSkipPadding:18},grid:{color:'#21262d'}},
+      y:{beginAtZero:true,ticks:{color:'#8b949e',font:{size:10}},grid:{color:'#21262d'}}
+    }
+  };
+  cpuMemChart = new Chart(document.getElementById('chart-cpu-mem').getContext('2d'),{
+    type:'line', data:{labels:[],datasets:[
+      {label:'CPU %',    data:[], borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,0.10)',
+        tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
+      {label:'Memory %', data:[], borderColor:'#bc8cff', backgroundColor:'rgba(188,140,255,0.10)',
+        tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
+    ]}, options:{...opts, scales:{...opts.scales,
+      y:{...opts.scales.y, max:100, title:{text:'%',color:'#8b949e',display:true}}}}
+  });
+  netChart = new Chart(document.getElementById('chart-net').getContext('2d'),{
+    type:'line', data:{labels:[],datasets:[
+      {label:'RX bytes/s', data:[], borderColor:'#3fb950', backgroundColor:'rgba(63,185,80,0.12)',
+        tension:0.25, fill:true, borderWidth:2, pointRadius:0},
+      {label:'TX bytes/s', data:[], borderColor:'#ff7b3a', backgroundColor:'rgba(255,123,58,0.12)',
+        tension:0.25, fill:true, borderWidth:2, pointRadius:0},
+    ]}, options:opts
+  });
+  procChart = new Chart(document.getElementById('chart-procs').getContext('2d'),{
+    type:'line', data:{labels:[],datasets:[
+      {label:'processes', data:[], borderColor:'#3fb950', tension:0.25,
+        borderWidth:2, pointRadius:0},
+      {label:'open FDs',  data:[], borderColor:'#d29922', tension:0.25,
+        borderWidth:2, pointRadius:0},
+    ]}, options:opts
+  });
+
+  // Stacked DB-size chart: db + wal + shm — sum is the total on disk.
+  const stackedY = {
+    ...opts.scales.y,
+    stacked: true,
+    ticks:{...opts.scales.y.ticks,
+      callback:v => v >= 1048576 ? (v/1048576).toFixed(1)+' MB'
+                  : v >= 1024 ? (v/1024).toFixed(0)+' KB' : v+' B'},
+  };
+  dbChart = new Chart(document.getElementById('chart-db').getContext('2d'),{
+    type:'line', data:{labels:[],datasets:[
+      {label:'db',  data:[], borderColor:'#5fb3c0',
+        backgroundColor:'rgba(95,179,192,0.55)', tension:0.25, fill:true,
+        borderWidth:1, pointRadius:0, stack:'sql'},
+      {label:'wal', data:[], borderColor:'#ff7b3a',
+        backgroundColor:'rgba(255,123,58,0.55)', tension:0.25, fill:true,
+        borderWidth:1, pointRadius:0, stack:'sql'},
+      {label:'shm', data:[], borderColor:'#bc8cff',
+        backgroundColor:'rgba(188,140,255,0.55)', tension:0.25, fill:true,
+        borderWidth:1, pointRadius:0, stack:'sql'},
+    ]}, options:{...opts,
+      scales:{...opts.scales, x:{...opts.scales.x, stacked:true}, y:stackedY},
+      plugins:{...opts.plugins,
+        tooltip:{
+          callbacks:{
+            label:(item) => {
+              const v = item.parsed.y || 0;
+              const fmt = v >= 1048576 ? (v/1048576).toFixed(2)+' MB'
+                        : v >= 1024 ? (v/1024).toFixed(1)+' KB' : v+' B';
+              return `${item.dataset.label}: ${fmt}`;
+            }
+          }
+        }
+      }
+    }
+  });
+}
+
+const fmtTime = ts => {
+  const d = new Date(ts*1000);
+  return d.getHours().toString().padStart(2,'0')+':'+
+         d.getMinutes().toString().padStart(2,'0')+':'+
+         d.getSeconds().toString().padStart(2,'0');
+};
+
+// ── Time-control state (mirrors main dashboard pattern) ─────────────────
+let endEpoch = null;   // null = live, otherwise number = scrolled-back right edge
+function getRangeMin(){ return parseInt(document.getElementById('range').value||'60',10); }
+function getBucketSec(){return parseInt(document.getElementById('bucket').value||'5',10); }
+function refreshControls(){
+  document.getElementById('next').disabled = (endEpoch === null);
+  document.getElementById('now').disabled  = (endEpoch === null);
+  const lbl = document.getElementById('window-label');
+  if (endEpoch === null){
+    lbl.textContent='live';   lbl.style.color='var(--green)';
+  } else {
+    const win = getRangeMin();
+    const start = new Date((endEpoch - win*60)*1000), end = new Date(endEpoch*1000);
+    const fmt = d => d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
+    lbl.style.color='var(--yellow)';
+  }
+}
+document.getElementById('prev').onclick = () => {
+  const win = getRangeMin()*60;
+  const cur = endEpoch || Math.floor(Date.now()/1000);
+  endEpoch = cur - win;
+  refreshControls(); tick();
+};
+document.getElementById('next').onclick = () => {
+  if (!endEpoch) return;
+  const win = getRangeMin()*60;
+  endEpoch = endEpoch + win;
+  if (endEpoch > Math.floor(Date.now()/1000)) endEpoch = null;
+  refreshControls(); tick();
+};
+document.getElementById('now').onclick = () => { endEpoch = null; refreshControls(); tick(); };
+document.getElementById('range').onchange  = () => { refreshControls(); tick(); };
+document.getElementById('bucket').onchange = () => { tick(); };
+refreshControls();
+
+async function tick(){
+  try{
+    const params = new URLSearchParams({
+      range:  getRangeMin().toString(),
+      bucket: getBucketSec().toString(),
+    });
+    if (endEpoch !== null) params.set('end', endEpoch.toString());
+    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+    const r = await fetch('/__service-data?'+params,{cache:'no-store',credentials:'include'});
+    const d = await r.json();
+    document.getElementById('live').style.background='var(--green)';
+    document.getElementById('live').textContent='● LIVE';
+    document.getElementById('interval').textContent = d.interval_secs;
+
+    const c = d.current || {};
+    document.getElementById('m-cpu').textContent     = (c.cpu_pct ?? 0).toFixed(1) + '%';
+    document.getElementById('b-cpu').style.width     = Math.min(100, c.cpu_pct ?? 0) + '%';
+    document.getElementById('m-load').textContent    = `load ${c.load1 ?? 0} · ${c.load5 ?? 0} · ${c.load15 ?? 0}`;
+
+    document.getElementById('m-mem').textContent     = (c.mem_pct ?? 0).toFixed(1) + '%';
+    document.getElementById('m-mem-sub').textContent = `${fmtBytes(c.mem_used)} / ${fmtBytes(c.mem_total)}`;
+    document.getElementById('b-mem').style.width     = Math.min(100, c.mem_pct ?? 0) + '%';
+
+    document.getElementById('m-disk').textContent     = (c.disk_pct ?? 0).toFixed(1) + '%';
+    document.getElementById('m-disk-sub').textContent = `${fmtBytes(c.disk_used)} used · ${fmtBytes(c.disk_avail)} free`;
+    document.getElementById('b-disk').style.width     = Math.min(100, c.disk_pct ?? 0) + '%';
+
+    document.getElementById('m-procs').textContent     = c.procs ?? '—';
+    document.getElementById('m-procs-sub').textContent = `${c.open_fds ?? 0} open FDs`;
+
+    document.getElementById('m-net-rx').textContent = 'rx ' + fmtBps(c.net_rx_bps ?? 0);
+    document.getElementById('m-net-tx').textContent = 'tx ' + fmtBps(c.net_tx_bps ?? 0);
+
+    // Second-row widgets
+    document.getElementById('m-db').textContent     = fmtBytes(c.db_total ?? 0);
+    document.getElementById('m-db-sub').textContent =
+      `db ${fmtBytes(c.db_db ?? 0)} · wal ${fmtBytes(c.db_wal ?? 0)} · shm ${fmtBytes(c.db_shm ?? 0)}`;
+    document.getElementById('m-cg').textContent =
+      (c.cg_pct ?? 0).toFixed(1) + '%';
+    document.getElementById('m-cg-sub').textContent =
+      `${fmtBytes(c.cg_used ?? 0)} / ${c.cg_limit > 0 ? fmtBytes(c.cg_limit) : '∞'}`;
+    const a2 = d.app || {};
+    document.getElementById('m-id').textContent     = (a2.identities ?? 0).toLocaleString();
+    document.getElementById('m-buckets').textContent = `${a2.ip_buckets ?? 0} IP buckets`;
+    document.getElementById('m-req').textContent     = (a2.total_requests ?? 0).toLocaleString();
+    document.getElementById('m-req-sub').innerHTML   =
+      `<span style="color:var(--green)">${a2.allowed ?? 0}</span> allowed · ` +
+      `<span style="color:var(--red)">${a2.blocked ?? 0}</span> blocked`;
+    const up = a2.uptime_secs || 0;
+    const uh = Math.floor(up/3600), um = Math.floor((up%3600)/60), us = up%60;
+    document.getElementById('m-up').textContent      = `${uh}h ${um}m ${us}s`;
+    document.getElementById('m-version').textContent = a2.version || 'AppSecGW';
+
+    // Memory detail table
+    document.getElementById('kv-mem').innerHTML = `
+      <span class="k">total</span><span class="v">${fmtBytes(c.mem_total)}</span>
+      <span class="k">used</span><span class="v">${fmtBytes(c.mem_used)}</span>
+      <span class="k">available</span><span class="v">${fmtBytes(c.mem_avail)}</span>
+      <span class="k">swap total</span><span class="v">${fmtBytes(c.swap_total)}</span>
+      <span class="k">swap used</span><span class="v">${fmtBytes(c.swap_used)}</span>
+    `;
+    // Container cgroup limits
+    document.getElementById('kv-cg').innerHTML = `
+      <span class="k">cgroup used</span><span class="v">${fmtBytes(c.cg_used)}</span>
+      <span class="k">cgroup limit</span><span class="v">${c.cg_limit > 0 ? fmtBytes(c.cg_limit) : 'unlimited'}</span>
+      <span class="k">cgroup %</span><span class="v">${(c.cg_pct ?? 0).toFixed(1)}%</span>
+      <span class="k">disk total</span><span class="v">${fmtBytes(c.disk_total)}</span>
+      <span class="k">disk free</span><span class="v">${fmtBytes(c.disk_avail)}</span>
+    `;
+    // App counters
+    const a = d.app || {};
+    const h = Math.floor((a.uptime_secs||0)/3600);
+    const m = Math.floor((a.uptime_secs||0)%3600/60);
+    document.getElementById('kv-app').innerHTML = `
+      <span class="k">version</span><span class="v">${a.version||'?'}</span>
+      <span class="k">uptime</span><span class="v">${h}h ${m}m</span>
+      <span class="k">requests</span><span class="v">${(a.total_requests||0).toLocaleString()}</span>
+      <span class="k">allowed</span><span class="v" style="color:var(--green)">${(a.allowed||0).toLocaleString()}</span>
+      <span class="k">blocked</span><span class="v" style="color:var(--red)">${(a.blocked||0).toLocaleString()}</span>
+      <span class="k">identities</span><span class="v">${(a.identities||0).toLocaleString()}</span>
+      <span class="k">IP buckets</span><span class="v">${(a.ip_buckets||0).toLocaleString()}</span>
+    `;
+
+    // Charts
+    ensureCharts();
+    const hist = d.history || [];
+    const labels = hist.map(s => fmtTime(s.ts));
+    const step = Math.max(1, Math.floor(labels.length / 12));
+    const labelsView = labels.map((l,i) => (i % step === 0 || i === labels.length-1) ? l : '');
+    cpuMemChart.data.labels = labelsView;
+    cpuMemChart.data.datasets[0].data = hist.map(s => s.cpu_pct);
+    cpuMemChart.data.datasets[1].data = hist.map(s => s.mem_pct);
+    cpuMemChart.update('none');
+
+    netChart.data.labels = labelsView;
+    netChart.data.datasets[0].data = hist.map(s => s.net_rx_bps);
+    netChart.data.datasets[1].data = hist.map(s => s.net_tx_bps);
+    netChart.update('none');
+
+    procChart.data.labels = labelsView;
+    procChart.data.datasets[0].data = hist.map(s => s.procs);
+    procChart.data.datasets[1].data = hist.map(s => s.open_fds);
+    procChart.update('none');
+
+    dbChart.data.labels = labelsView;
+    dbChart.data.datasets[0].data = hist.map(s => s.db_db  || 0);
+    dbChart.data.datasets[1].data = hist.map(s => s.db_wal || 0);
+    dbChart.data.datasets[2].data = hist.map(s => s.db_shm || 0);
+    dbChart.update('none');
+
+    document.getElementById('ts').textContent = new Date().toISOString();
+  }catch(e){
+    document.getElementById('live').style.background='var(--red)';
+    document.getElementById('live').textContent='○ ERR';
+  }
+}
+tick();
+// Only auto-refresh when in live mode (when scrolled back, the data is static)
+setInterval(()=>{ if (endEpoch === null) tick(); }, 5000);
+</script>
+</body></html>
+"""
+
+async def service_dashboard_endpoint(request: web.Request):
+    return web.Response(
+        text=SERVICE_DASHBOARD_HTML, content_type="text/html",
         headers={
             "Cache-Control": "no-store",
             "X-Frame-Options": "DENY",
@@ -3049,6 +4117,8 @@ def make_app() -> web.Application:
     app.router.add_get("/__agents", agents_dashboard_endpoint)
     app.router.add_get("/__agents-data", agents_data_endpoint)
     app.router.add_get("/__agents-timeline", agents_timeline_endpoint)
+    app.router.add_get("/__service",      service_dashboard_endpoint)
+    app.router.add_get("/__service-data", service_metrics_data_endpoint)
     app.router.add_get("/__xff", debug_xff)
     app.router.add_route("*", "/{path:.*}", proxy)
     return app
@@ -3059,7 +4129,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.3    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.4    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
