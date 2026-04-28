@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8">
+<title>AntiBot-GW/1.0 — Implementation Report</title>
+<style>
+  @page {
+    size: A4;
+    margin: 22mm 18mm;
+    @bottom-center {
+      content: counter(page) " / " counter(pages);
+      font-family: 'Helvetica', sans-serif;
+      font-size: 9pt;
+      color: #888;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Helvetica', 'Arial', sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    margin: 0;
+  }
+  h1 { font-size: 28pt; font-weight: 300; letter-spacing: -0.5px; margin: 0; }
+  h2 { font-size: 18pt; font-weight: 600; color: #0a3d62; border-bottom: 2px solid #0a3d62; padding-bottom: 6px; margin-top: 28px; page-break-after: avoid; }
+  h3 { font-size: 13pt; font-weight: 600; color: #1e5f9c; margin-top: 20px; page-break-after: avoid; }
+  h4 { font-size: 11pt; font-weight: 600; color: #333; margin-top: 14px; margin-bottom: 4px; }
+  p { margin: 8px 0; text-align: justify; }
+  code {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 9.5pt;
+    background: #f4f6f8;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #c0392b;
+  }
+  pre {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 8.5pt;
+    background: #1e272e;
+    color: #ecf0f1;
+    padding: 10px 14px;
+    border-radius: 5px;
+    line-height: 1.45;
+    overflow-x: auto;
+    page-break-inside: avoid;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.5pt; page-break-inside: avoid; }
+  th { background: #0a3d62; color: white; padding: 8px 10px; text-align: left; font-weight: 600; }
+  td { padding: 6px 10px; border-bottom: 1px solid #e1e5e9; vertical-align: top; }
+  tr:nth-child(even) td { background: #f8f9fa; }
+  ul, ol { padding-left: 24px; margin: 8px 0; }
+  li { margin: 3px 0; }
+  .cover {
+    page-break-after: always;
+    height: 240mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 30mm 10mm 0 10mm;
+  }
+  .cover-title {
+    border-left: 6px solid #0a3d62;
+    padding-left: 18px;
+  }
+  .cover-title .subtitle { font-size: 14pt; color: #555; margin-top: 8px; font-weight: 300; }
+  .cover-meta { font-size: 10pt; color: #555; line-height: 1.8; }
+  .cover-meta strong { color: #1a1a1a; display: inline-block; width: 110px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 9pt;
+    font-weight: 600;
+    color: white;
+  }
+  .badge-200 { background: #27ae60; }
+  .badge-403 { background: #e67e22; }
+  .badge-429 { background: #c0392b; }
+  .badge-402 { background: #8e44ad; }
+  .layer-box {
+    border: 1px solid #d4dce3;
+    border-left: 4px solid #1e5f9c;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    background: #fafbfc;
+    page-break-inside: avoid;
+  }
+  .layer-box h3 { margin-top: 0; }
+  .layer-num {
+    display: inline-block;
+    width: 24px; height: 24px;
+    line-height: 24px;
+    text-align: center;
+    background: #1e5f9c;
+    color: white;
+    border-radius: 50%;
+    font-weight: 600;
+    margin-right: 8px;
+  }
+  .ascii {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 7.5pt;
+    background: #f4f6f8;
+    padding: 12px;
+    border-radius: 4px;
+    line-height: 1.3;
+    white-space: pre;
+    border: 1px solid #d4dce3;
+    page-break-inside: avoid;
+  }
+  .footer-note { font-size: 8.5pt; color: #888; font-style: italic; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 6px; background: #e8eef4; color: #1e5f9c; border-radius: 3px; font-size: 9pt; font-family: 'Menlo', monospace; }
+  .alert {
+    background: #fff4e6;
+    border-left: 4px solid #e67e22;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 9.5pt;
+    border-radius: 3px;
+  }
+  .alert strong { color: #c44a00; }
+  figure { margin: 14px 0; page-break-inside: avoid; }
+  figure img { width: 100%; border: 1px solid #2a3340; border-radius: 4px; }
+  figure { margin: 14px 0; page-break-inside: avoid; }
+  figure img { width: 100%; border: 1px solid #2a3340; border-radius: 4px; }
+  figcaption { font-size: 9pt; color: #555; font-style: italic; text-align: center; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<!-- ───────────────────────── COVER ───────────────────────── -->
+<div class="cover">
+  <div class="cover-title">
+    <h1>AppSecGW/1.3</h1>
+    <div class="subtitle">Hardened Reverse Proxy with Layered Anti-Automation Defenses</div>
+    <div class="subtitle">Implementation, Hardening &amp; CVE-Patching Report</div>
+  </div>
+  <div class="cover-meta">
+    <p><strong>Author:</strong> Pedro Tarrinho</p>
+    <p><strong>Date:</strong> 2026-04-28</p>
+    <p><strong>Stack:</strong> Python 3.14 / aiohttp 3.13 / SQLite WAL / Chainguard Wolfi (distroless)</p>
+    <p><strong>Image:</strong> appsec-antibot-gw:1.3 (79 MB, Trivy: 0 CVEs)</p>
+    <p><strong>Document version:</strong> 1.3 &mdash; supersedes 1.0 / 1.1 / 1.2</p>
+  </div>
+</div>
+
+<!-- ───────────────────────── 1. EXECUTIVE SUMMARY ───────────────────────── -->
+<h2>1. Executive Summary</h2>
+
+<p>
+<strong>AppSecGW/1.3</strong> is a hardened reverse HTTP proxy designed to sit
+in front of arbitrary upstream applications. Version 1.3 adds full WebSocket
+bridging, SSO-aware redirect rewriting, edge-injected security response
+headers, IP-based admin gating, and a transition to a Chainguard Wolfi-based
+distroless container that reports <strong>zero CVEs</strong> on Trivy scans.
+</p>
+
+<table>
+<tr><th>Property</th><th>v1.2 (Debian-slim)</th><th>v1.3 (Chainguard Wolfi)</th></tr>
+<tr><td>Image size</td><td>168 MB</td><td><strong>79 MB</strong> (-53%)</td></tr>
+<tr><td>Trivy findings (any severity)</td><td>35 (6 HIGH, 29 MEDIUM)</td><td><strong>0</strong></td></tr>
+<tr><td>Python interpreter</td><td>3.13.13</td><td>3.14.4</td></tr>
+<tr><td>aiohttp</td><td>3.11</td><td>3.13.5</td></tr>
+<tr><td>OpenSSL</td><td>3.0.x</td><td>3.5.5</td></tr>
+<tr><td>Patch cadence</td><td>Debian release schedule</td><td>Chainguard SLA: HIGH &lt; 48 h</td></tr>
+<tr><td>WebSocket support</td><td>none</td><td>full bidirectional bridge</td></tr>
+<tr><td>SSO redirect rewriting</td><td>none</td><td>Location + redirect_uri + Set-Cookie Domain</td></tr>
+<tr><td>Admin IP allowlist</td><td>n/a</td><td><code>ADMIN_ALLOWED_IPS</code></td></tr>
+<tr><td>Edge security headers</td><td>none</td><td>9 headers injected on HTML</td></tr>
+<tr><td>Static-asset RL exemption</td><td>n/a</td><td>per-identity bucket exempt for asset GETs</td></tr>
+</table>
+
+<!-- ───────────────────────── 2. ARCHITECTURE ───────────────────────── -->
+<h2>2. Architecture</h2>
+
+<h3>2.1 Topology</h3>
+<div class="ascii">
+                  client (browser, HTTPS)
+                    │
+                    ▼
+       ┌───────────────────────────┐
+       │  TLS terminator           │   nginx / Cloudflared / Caddy
+       └─────────────┬─────────────┘
+                     │ HTTP loopback
+                     ▼
+       ┌─────────────────────────────────────┐
+       │  AppSecGW/1.3  (Chainguard Wolfi)   │
+       │   • read-only, non-root, cap-drop ALL│
+       │   • aiohttp 3.13 + SQLite WAL       │
+       │   • 13 detection layers + WS bridge │
+       │   • SSO redirect rewriting          │
+       │   • 9 edge-injected security hdrs   │
+       │   • 2 admin dashboards (IP-gated)   │
+       └─────────────┬───────────────────────┘
+                     │ HTTPS w/ verified cert
+                     ▼
+              upstream service
+       (configured exclusively via $UPSTREAM env)
+</div>
+
+<h3>2.2 Container hardening (verified)</h3>
+<table>
+<tr><th>Control</th><th>Value</th><th>Why</th></tr>
+<tr><td><code>USER 65532:65532</code></td><td>Chainguard <code>nonroot</code></td><td>RCE inside Python lands as unprivileged user</td></tr>
+<tr><td><code>--read-only</code></td><td>FS read-only</td><td>Tmpfs only on <code>/tmp</code> + named volume on <code>/data</code></td></tr>
+<tr><td><code>--cap-drop ALL</code></td><td>0 capabilities</td><td>No raw sockets, ptrace, mount, ...</td></tr>
+<tr><td><code>--security-opt no-new-privileges</code></td><td>true</td><td>Defeats setuid escalation</td></tr>
+<tr><td><code>--security-opt apparmor=docker-default</code></td><td>applied</td><td>MAC profile</td></tr>
+<tr><td><code>--init</code></td><td>tini PID 1</td><td>Signal handling + zombie reaping</td></tr>
+<tr><td><code>--ipc=private</code></td><td>own SHM/MQ namespace</td><td>No IPC leakage between containers</td></tr>
+<tr><td><code>--network antibot-net</code></td><td>user-defined bridge</td><td>Off the default bridge metadata</td></tr>
+<tr><td><code>--pids-limit</code></td><td>200</td><td>Fork-bomb resistance</td></tr>
+<tr><td><code>--memory / --memory-swap</code></td><td>256 M / 256 M</td><td>No swap; bounds memory exhaustion</td></tr>
+<tr><td><code>--cpus</code></td><td>1.0</td><td>Bounds CPU exhaustion</td></tr>
+<tr><td><code>--ulimit nofile</code></td><td>4096:4096</td><td>Bounds file-descriptor exhaustion</td></tr>
+<tr><td><code>--ulimit nproc</code></td><td>200:200</td><td>Defence-in-depth alongside pids-limit</td></tr>
+<tr><td><code>--ulimit core</code></td><td>0:0</td><td>No core dumps (no info leak via crash)</td></tr>
+<tr><td><code>--log-opt max-size, max-file</code></td><td>10 m, 3 files</td><td>Bounded log disk usage</td></tr>
+<tr><td><code>--tmpfs /tmp</code></td><td>8 m, nosuid, nodev, noexec</td><td>No exec from scratch dir</td></tr>
+<tr><td>HEALTHCHECK</td><td>unauth <code>/__live</code></td><td>Real liveness, not mistaken for decoy</td></tr>
+<tr><td>Trivy CVE scan</td><td>0 findings (any severity)</td><td>Wolfi base + active patching</td></tr>
+</table>
+
+<h3>2.3 Main metrics dashboard &mdash; example screenshot</h3>
+<figure>
+  <img src="../img/dashboard.png" alt="AppSecGW main dashboard">
+  <figcaption>
+    Figure 1 &mdash; <code>/__dashboard</code>. New in v1.3: the timeline now
+    plots three series (total / <strong>permitidas</strong> in green / bloqueios
+    in red), and the Live Events panel highlights allowed connections with a
+    green left bar + green tag. Top-row counters (Total / Allowed / Blocked /
+    Uptime) and Block-reason breakdown unchanged.
+  </figcaption>
+</figure>
+
+<h3>2.4 In-process state model</h3>
+<p>Per-identity tracking uses a hybrid key:</p>
+<ul>
+  <li>Browser with valid signed cookie &rarr; <code>HMAC(SESSION_KEY, "sess|"+sid+"|"+fingerprint)</code></li>
+  <li>Cookieless client &rarr; <code>HMAC(SESSION_KEY, "anon|"+fingerprint+"|"+ip)</code></li>
+</ul>
+<p>
+The fingerprint excludes <code>Sec-Ch-Ua*</code> Client Hints (browsers omit
+them on sub-resource fetches, which used to split a single browser into
+multiple identities and cause false-positive bans on JS-heavy SPAs). A
+periodic prune task evicts idle identities (&gt; 24 h) and caps the dictionary
+at <code>MAX_IDENTITIES</code> (default 100k) to bound memory.
+</p>
+
+<!-- ───────────────────────── 3. PROTECTION LAYERS ───────────────────────── -->
+<h2>3. Protection Layers</h2>
+
+<p>13 ordered detection &amp; mitigation layers. All non-PoW blocks return
+the silent decoy (upstream homepage as 200 OK) so an attacker cannot
+enumerate which layer fired.</p>
+
+<h3>3.1 Layer 0 &mdash; Path / method / host gating</h3>
+<ul>
+  <li>Reject control bytes (0x00&ndash;0x1F, 0x7F) in <code>request.path</code> / <code>query_string</code> &rarr; 400.</li>
+  <li>Method allowlist (env <code>ALLOWED_METHODS</code>, default <code>GET,HEAD,POST,OPTIONS</code>) &rarr; 405 outside it.</li>
+  <li>Optional Host allowlist (env <code>ALLOWED_HOSTS</code>) &rarr; silent decoy on mismatch.</li>
+  <li>Admin endpoints (<code>/__*</code> except <code>/__live</code>): require admin key + (when set) source IP in <code>ADMIN_ALLOWED_IPS</code>.</li>
+</ul>
+
+<h3>3.2 Layer 1 &mdash; Identity ban</h3>
+<p>Banned identity &rarr; silent decoy. Bans expire automatically (1 h default).</p>
+
+<h3>3.3 Layer 2 &mdash; Honeypot paths</h3>
+<p>40+ scanner targets (<code>/wp-admin</code>, <code>/.env</code>, <code>/.git/config</code>,
+cloud metadata IMDS, Spring <code>/actuator/*</code>, etc.). Hit &rarr; risk += 50.</p>
+
+<h3>3.4 Layer 3 &mdash; Suspicious-path patterns</h3>
+<p>26 boundary-anchored regex patterns. v1.3 tightened to file-only matches
+(e.g. <code>(^|/)passwd(\.[a-z0-9]+|$)</code>) so legitimate module names like
+<code>password-recovery</code> or <code>credentials-manager</code> no longer
+false-fire.</p>
+
+<h3>3.5 Layer 4 &mdash; User-Agent filter</h3>
+<p>UA empty / too short / blocklisted (60+ entries: HTTP libs, scanners,
+named AI agents, headless browsers) / lacking a known browser token (Mozilla,
+Safari, Chrome, ...).</p>
+
+<h3>3.6 Layer 5 &mdash; AI-probe paths</h3>
+<p>Direct denial of OpenAPI / Swagger / <code>llms.txt</code> / model-discovery probes.</p>
+
+<h3>3.7 Layer 6 &mdash; Header completeness scoring</h3>
+<p>Score 0&ndash;7 of <code>Accept-Language</code>, <code>Accept-Encoding</code>,
+<code>Accept</code>, <code>Sec-Fetch-Site/Mode/Dest</code>, <code>Sec-Ch-Ua</code>.
+Score 0 with browser UA &rarr; <code>ai-headers-empty</code>.</p>
+
+<h3>3.8 Layer 7 &mdash; Path-discipline</h3>
+<ul>
+  <li>Enumeration: more than <code>ENUM_THRESHOLD</code> (default 300) distinct paths from one identity &rarr; <code>ai-enumeration</code>.</li>
+  <li>No-asset agent: &ge; 25 HTML loads with 0 static fetches &rarr; <code>ai-no-assets</code>.</li>
+</ul>
+
+<h3>3.9 Layer 8 &mdash; Socket-IP rate limit</h3>
+<p>Token bucket keyed strictly by <code>request.remote</code> (kernel-observed peer
+IP). Default 60 burst / 8 tokens-per-sec. Static-asset GETs participate in
+this layer (defends against UA-rotation flood).</p>
+
+<h3>3.10 Layer 9 &mdash; Per-identity rate limit</h3>
+<p>Secondary token bucket. Default 30 burst / 2 tokens-per-sec.
+v1.3 <strong>exempts static-asset GETs</strong> (CSS/JS/img/font/media) so
+SPAs can burst-load 30+ assets without exhausting the bucket.</p>
+
+<h3>3.11 Layer 10 &mdash; Behavioural timing</h3>
+<p>Three orthogonal tests on the last 16 inter-request intervals: &sigma;/&mu; &lt;
+0.05, lag-1 autocorrelation &gt; 0.85, 50 ms-bin majority &gt; 70 %.
+v1.3 <strong>skips this check</strong> for sessions with valid cookies and
+for static-asset GETs (browsers queue asset fetches with very regular timing
+and used to trip this layer).</p>
+
+<h3>3.12 Layer 11 &mdash; Proof-of-Work</h3>
+<p>Bound to <code>METHOD:path</code>; replay-protected via seen-set.
+v1.3 makes PoW <strong>opt-in per path</strong>: <code>POW_REQUIRED_PATHS</code>
+env (default empty); legitimate JS/REST traffic is no longer challenged. Set
+<code>POW_REQUIRE_ALL_WRITES=1</code> to revert the previous "all writes need PoW"
+behaviour.</p>
+
+<h3>3.13 Layer 12 &mdash; Risk-score model</h3>
+<p>Weighted scoring; ban at threshold (50 normal, 100 NAT-like).
+v1.3 changed two weights: <code>behavior 25 &rarr; 10</code> (a single timing
+trip can no longer push to ban) and <code>rate-limit / rate-limit-ip 0</code>
+(throttling is mitigation, not evidence of malice). Score decays with 1 h
+half-life.</p>
+
+<h3>3.14 Layer 13 &mdash; Honey-link injection (post-flight)</h3>
+<p>Hidden <code>&lt;div&gt;</code> with three honeypot links inserted before
+the document's closing <code>&lt;/body&gt;</code>. Now bails out if a
+<code>&lt;script&gt;</code> tag follows the chosen <code>&lt;/body&gt;</code>
+position (avoids corrupting JS string literals).</p>
+
+<!-- ───────────────────────── 4. NEW IN 1.3 ───────────────────────── -->
+<h2>4. New in 1.3</h2>
+
+<h3>4.1 WebSocket bridging</h3>
+<p>Detects <code>Upgrade: websocket</code>, opens a server-side
+<code>WebSocketResponse</code>, dials the upstream with
+<code>ClientSession.ws_connect()</code> (<code>https</code>&rarr;<code>wss</code> /
+<code>http</code>&rarr;<code>ws</code> scheme conversion), and bridges messages
+with two concurrent pumps. Sub-protocols (<code>Sec-WebSocket-Protocol</code>)
+negotiated through. Cookies stripped of our <code>aid</code> session before
+forwarding. 30 s heartbeat + autoping on both sides.</p>
+
+<h3>4.2 SSO-aware redirect rewriting</h3>
+<p>Three coordinated rewrites on responses:</p>
+<ol>
+  <li><code>Location</code> headers in 3xx responses pointing at the upstream's host are rewritten to the gateway's public host so the browser keeps coming back through the gateway.</li>
+  <li>For <strong>external IdP redirects</strong> (different host), embedded references to the upstream URL inside query strings (typically <code>redirect_uri</code> / <code>state</code>) are rewritten too &mdash; with raw and percent-encoded forms &mdash; so the IdP sends the user back through the gateway. Requires the IdP to accept the gateway hostname as a valid redirect URI.</li>
+  <li><code>Set-Cookie</code> headers preserved in a <code>CIMultiDict</code> (no more silent dropping of duplicate <code>Set-Cookie</code>) and the <code>Domain=</code> attribute is stripped so the browser accepts upstream-domain-scoped cookies on the gateway hostname.</li>
+</ol>
+
+<h3>4.3 Streaming body forwarding</h3>
+<p>Replaced one-shot <code>resp.content.read(N)</code> (which returns whatever
+is buffered at that instant) with <code>iter_any()</code> chunk-loop and a hard
+size cap (<code>UPSTREAM_MAX_RESP=8 MiB</code>). Same fix on request body
+forwarding (<code>UPSTREAM_MAX_BODY=2 MiB</code>). Closes a truncation bug
+where chunked-transfer JPEGs and JSON came through partial.</p>
+
+<h3>4.4 Origin / Referer / Host rewriting on outbound</h3>
+<p>The proxy replaces the client's <code>Origin</code> and <code>Referer</code>
+with the upstream's canonical scheme://host before forwarding, and sets
+<code>Host</code> to the upstream's vhost. Closes upstream CORS / origin-validation
+403s that occur when the gateway hostname differs from the upstream's expected
+origin.</p>
+
+<h3>4.5 Edge-injected security response headers</h3>
+<p>HTML responses now carry the following defaults (each overridable via env;
+each only injected when the upstream did not already supply that header):</p>
+<table>
+<tr><th>Header</th><th>Default value</th><th>Env override</th></tr>
+<tr><td><code>X-Frame-Options</code></td><td>SAMEORIGIN</td><td><code>SEC_X_FRAME_OPTIONS</code></td></tr>
+<tr><td><code>X-Content-Type-Options</code></td><td>nosniff</td><td><code>SEC_X_CONTENT_TYPE_OPTIONS</code></td></tr>
+<tr><td><code>Referrer-Policy</code></td><td>strict-origin-when-cross-origin</td><td><code>SEC_REFERRER_POLICY</code></td></tr>
+<tr><td><code>Permissions-Policy</code></td><td>cam/mic/geo/etc. all off</td><td><code>SEC_PERMISSIONS_POLICY</code></td></tr>
+<tr><td><code>Strict-Transport-Security</code></td><td>max-age=31536000; includeSubDomains</td><td><code>SEC_HSTS</code></td></tr>
+<tr><td><code>Cross-Origin-Opener-Policy</code></td><td>same-origin</td><td><code>SEC_COOP</code></td></tr>
+<tr><td><code>Cross-Origin-Resource-Policy</code></td><td>same-site</td><td><code>SEC_CORP</code></td></tr>
+<tr><td><code>X-Permitted-Cross-Domain-Policies</code></td><td>none</td><td><code>SEC_X_PERMITTED_XDP</code></td></tr>
+<tr><td><code>Content-Security-Policy</code></td><td>(empty &mdash; opt-in)</td><td><code>SEC_CSP</code></td></tr>
+</table>
+<p>Master switch: <code>INJECT_SECURITY_HEADERS=0</code> disables them all.</p>
+
+<h3>4.6 Admin IP allowlist (<code>ADMIN_ALLOWED_IPS</code>)</h3>
+<p>Comma-separated IPs / CIDRs (IPv4 + IPv6). When set, source IP is matched
+in addition to the admin key on every <code>/__*</code> request other than
+<code>/__live</code>. Mismatch &rarr; silent decoy. Honors <code>TRUST_XFF=last</code>
+behind a trusted reverse proxy. Validated at startup &mdash; container fails
+fast on malformed entries.</p>
+
+<h3>4.7 Stealth Agent Hunter dashboard</h3>
+<figure>
+  <img src="../img/agents.png" alt="Stealth Agent Hunter">
+  <figcaption>
+    Figure 2 &mdash; <code>/__agents</code>. Surfaces identities that passed
+    every block but exhibit stealth-agent signals (low header completeness,
+    no static asset fetches, regular timing below the block threshold,
+    accumulated risk below ban threshold, etc.). The Detection-vs-Miss
+    timeline charts blocked agents (red), missed agents (orange), clean
+    allowed (green) per bucket.
+  </figcaption>
+</figure>
+
+<h3>4.8 Operator helper</h3>
+<p><code>myip.sh</code> &mdash; auto-detects the operator's current public IP
+(multi-provider fallback) and (re)launches the container with
+<code>ADMIN_ALLOWED_IPS=&lt;myip&gt;,127.0.0.1</code>. All hardening flags
+preserved. Useful for laptop / VPN-roaming workflows.</p>
+
+<!-- ───────────────────────── 5. CVE STATUS ───────────────────────── -->
+<h2>5. CVE Status (Trivy)</h2>
+
+<table>
+<tr><th>Image</th><th>HIGH</th><th>MEDIUM</th><th>LOW</th><th>Total</th><th>Fixable upstream</th></tr>
+<tr><td><strong>v1.0 (host-mode, Python 3.13)</strong></td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td><td>&mdash;</td></tr>
+<tr><td>v1.2 (Debian 13 slim)</td><td>6</td><td>29</td><td>(varied)</td><td>35</td><td>0</td></tr>
+<tr><td>v1.2 distroless (Debian 13)</td><td>27</td><td>78</td><td>~50</td><td>~155</td><td>0</td></tr>
+<tr><td><strong>v1.3 (Chainguard Wolfi)</strong></td><td><strong>0</strong></td><td><strong>0</strong></td><td><strong>0</strong></td><td><strong>0</strong></td><td>n/a</td></tr>
+</table>
+
+<p>The Wolfi base ships fixes for HIGH-severity OS CVEs typically within 48 h
+of public disclosure (Chainguard's documented SLA). Re-run
+<code>trivy image appsec-antibot-gw:1.3</code> on every rebuild to verify the
+posture stays at zero.</p>
+
+<!-- ───────────────────────── 6. SECURITY REVIEW HISTORY ───────────────────────── -->
+<h2>6. Security Review History</h2>
+
+<p>Three independent audits to date. All exploitable findings closed.</p>
+
+<table>
+<tr><th>Round</th><th>Findings</th><th>Verdict</th></tr>
+<tr><td>1 &mdash; pre-1.2</td><td>3 Critical / 7 High / 12 Medium / 12 Low</td><td>34 / 34 closed</td></tr>
+<tr><td>2 &mdash; mid-1.2</td><td>8 (mixed Low + DiD)</td><td>8 / 8 closed (N1&ndash;N8)</td></tr>
+<tr><td>3 &mdash; pre-1.3 pentest report</td><td>5 "Critical" / 2 Mitigated / 3 Protected</td><td>4 false-positive (stealth misclassified), 1 real (security headers) &rarr; fixed</td></tr>
+</table>
+
+<p>Round-3 detail:</p>
+<ul>
+  <li><strong>"No rate limiting"</strong> &mdash; FALSE POSITIVE. Stealth-mode returns 200 + decoy on blocks; <code>/__metrics</code> shows the <code>rate-limit*</code> counters firing on the same test traffic. Pentester only checked status codes.</li>
+  <li><strong>"No auth on admin endpoints"</strong> &mdash; FALSE POSITIVE. <code>/__*</code> requires both <code>ADMIN_KEY</code> and <code>ADMIN_ALLOWED_IPS</code>; <code>/__live</code> is the deliberately-open healthcheck.</li>
+  <li><strong>"Bearer not validated"</strong> &mdash; OUT OF SCOPE. The gateway is a reverse proxy, not an authentication proxy. JWT/Bearer validation belongs at the upstream auth server.</li>
+  <li><strong>"POST allowed on sensitive endpoints"</strong> &mdash; WORKING AS DESIGNED. POST is in the default allowlist for forms / APIs; operator can restrict via <code>ALLOWED_METHODS</code>.</li>
+  <li><strong>"Missing security headers"</strong> &mdash; REAL. Fixed (see &sect;4.5).</li>
+</ul>
+
+<!-- ───────────────────────── 7. CONFIGURATION ───────────────────────── -->
+<h2>7. Configuration</h2>
+
+<h3>7.1 Required env</h3>
+<table>
+<tr><th>Variable</th><th>Notes</th></tr>
+<tr><td><code>UPSTREAM</code></td><td><strong>Required.</strong> Fully-qualified URL of the backend to protect (e.g. <code>https://internal-app.svc</code>). Container fails fast if missing.</td></tr>
+</table>
+
+<h3>7.2 Optional env</h3>
+<table>
+<tr><th>Variable</th><th>Default</th><th>Notes</th></tr>
+<tr><td><code>ALLOWED_HOSTS</code></td><td>(empty)</td><td>Comma-sep public hostnames the gateway accepts as Host header.</td></tr>
+<tr><td><code>ADMIN_ALLOWED_IPS</code></td><td>(empty)</td><td>Comma-sep IPs/CIDRs that may reach <code>/__*</code>.</td></tr>
+<tr><td><code>ADMIN_KEY</code></td><td>auto-generated</td><td>Always mirrored to <code>/data/.admin_key</code>.</td></tr>
+<tr><td><code>TRUST_XFF</code></td><td><code>last</code></td><td><code>last</code> behind a trusted proxy / cloudflared.</td></tr>
+<tr><td><code>BURST</code> / <code>REFILL</code></td><td>30 / 2.0</td><td>Per-identity bucket.</td></tr>
+<tr><td><code>IP_BURST</code> / <code>IP_REFILL</code></td><td>60 / 8.0</td><td>Socket-IP bucket.</td></tr>
+<tr><td><code>ALLOWED_METHODS</code></td><td><code>GET,HEAD,POST,OPTIONS</code></td><td>Add PUT/PATCH/DELETE for REST APIs.</td></tr>
+<tr><td><code>POW_REQUIRED_PATHS</code></td><td>(empty)</td><td>Path prefixes that demand a PoW solution.</td></tr>
+<tr><td><code>POW_REQUIRE_ALL_WRITES</code></td><td><code>0</code></td><td>Set <code>1</code> to demand PoW on all POST/PUT/DELETE.</td></tr>
+<tr><td><code>UPSTREAM_MAX_BODY</code></td><td>2 MiB</td><td>Request body cap.</td></tr>
+<tr><td><code>UPSTREAM_MAX_RESP</code></td><td>8 MiB</td><td>Response body cap.</td></tr>
+<tr><td><code>MAX_IDENTITIES</code></td><td>100 000</td><td>Memory bound.</td></tr>
+<tr><td><code>SESSION_SAMESITE</code></td><td><code>Lax</code></td><td><code>Lax | Strict | None</code></td></tr>
+<tr><td><code>SESSION_SECURE</code></td><td><code>1</code></td><td>Set <code>0</code> for HTTP-only test envs.</td></tr>
+<tr><td><code>INJECT_SECURITY_HEADERS</code></td><td><code>1</code></td><td>Master switch for &sect;4.5 headers.</td></tr>
+<tr><td><code>DEBUG</code></td><td><code>0</code></td><td>Set <code>1</code> to expose <code>/__xff</code>.</td></tr>
+</table>
+
+<h3>7.3 Production launch (Harbor)</h3>
+<pre>docker network create --driver bridge antibot-net 2>/dev/null
+docker volume  create antibot-data 2>/dev/null
+
+KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
+MYIP="$(curl -s --max-time 4 https://api.ipify.org)"
+
+docker run -d --name appsec-antibot-gw1.3 \
+  --restart unless-stopped --init \
+  --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
+  --cap-drop ALL \
+  --security-opt no-new-privileges:true \
+  --security-opt apparmor=docker-default \
+  --pids-limit 200 --memory 256m --memory-swap 256m --cpus 1.0 \
+  --ulimit nofile=4096:4096 --ulimit nproc=200:200 --ulimit core=0:0 \
+  --ipc=private --network antibot-net \
+  --log-opt max-size=10m --log-opt max-file=3 \
+  -p 8443:8443 \
+  -e UPSTREAM="https://internal-app.example.com" \
+  -e ALLOWED_HOSTS="www.example.com" \
+  -e ADMIN_ALLOWED_IPS="$MYIP,127.0.0.1" \
+  -e ADMIN_KEY="$KEY" -e TRUST_XFF=last \
+  -v antibot-data:/data \
+  >harbor</antibotappsecgw/antibotappsecgw:1.3 \
+&& echo "ADMIN_KEY: $KEY"</pre>
+
+<h3>7.4 Operator endpoints</h3>
+<table>
+<tr><th>Path</th><th>Auth</th><th>Purpose</th></tr>
+<tr><td><code>/__live</code></td><td>none</td><td>Liveness probe (returns <code>ok</code>)</td></tr>
+<tr><td><code>/__dashboard</code></td><td>admin</td><td>Main metrics dashboard</td></tr>
+<tr><td><code>/__metrics</code></td><td>admin</td><td>JSON feed (clients, events, timeline)</td></tr>
+<tr><td><code>/__agents</code></td><td>admin</td><td>Stealth Agent Hunter dashboard</td></tr>
+<tr><td><code>/__agents-data</code></td><td>admin</td><td>Per-identity stealth-score JSON</td></tr>
+<tr><td><code>/__agents-timeline</code></td><td>admin</td><td>Detected vs missed timeline JSON</td></tr>
+<tr><td><code>/__pow</code></td><td>admin</td><td>Mint a fresh PoW challenge bound to (method, path)</td></tr>
+<tr><td><code>/__solver</code></td><td>admin</td><td>Browser-side PoW solver</td></tr>
+<tr><td><code>/__status</code></td><td>admin</td><td>Per-identity bucket state snapshot</td></tr>
+<tr><td><code>/__report</code></td><td>admin</td><td>This implementation report (PDF)</td></tr>
+<tr><td><code>/__unban</code></td><td>admin</td><td>Clear ban + risk for an identity / IP / all</td></tr>
+<tr><td><code>/__xff</code></td><td>admin + DEBUG=1</td><td>Header debug (redacted)</td></tr>
+</table>
+
+<!-- ───────────────────────── 8. APPENDIX ───────────────────────── -->
+<h2>8. Appendix</h2>
+
+<h3>8.1 Risk weights (current)</h3>
+<pre>RISK_WEIGHTS = {
+    "honeypot":              50,    "honeypot-silent":     50,
+    "suspicious-path":       40,    "host-not-allowed":    40,
+    "ai-probe":              30,    "ai-enumeration":      30,
+    "ua-empty":              25,    "ua-blocked":          20,
+    "ua-non-browser":        20,    "ai-headers-empty":    15,
+    "ua-too-short":          15,    "behavior":            10,
+    "ai-headers-incomplete":  8,    "ai-no-assets":         5,
+    "session-flood":          5,    "upstream-404":         4,
+    "rate-limit":             0,    "rate-limit-ip":        0,
+    "admin-ip-blocked":       0,
+}
+RISK_BAN_THRESHOLD       = 50
+RISK_BAN_THRESHOLD_NAT   = 100
+RISK_DECAY_HALFLIFE_SECS = 3600
+RISK_BAN_DURATION_SECS   = 3600</pre>
+
+<h3>8.2 Files in <code>/data</code> volume</h3>
+<table>
+<tr><th>File</th><th>Purpose</th><th>UID</th></tr>
+<tr><td><code>antibot.db</code></td><td>SQLite events / clients / timeline / bans (WAL)</td><td>65532</td></tr>
+<tr><td><code>.admin_key</code></td><td>Operator key (mode 0600). Always mirrored from env or generated.</td><td>65532</td></tr>
+<tr><td><code>.session_key</code></td><td>32-byte HMAC key for session cookie signing</td><td>65532</td></tr>
+<tr><td><code>.pow_key</code></td><td>32-byte HMAC key for PoW challenge signing</td><td>65532</td></tr>
+</table>
+
+<h3>8.3 Detected-vs-missed reasons set</h3>
+<p>Events whose reason is in the set below count as <em>detected</em> in the
+agents timeline:</p>
+<pre>{ ua-blocked, ua-empty, ua-too-short, ua-non-browser,
+  ai-probe, ai-headers-empty, ai-headers-incomplete,
+  ai-enumeration, ai-no-assets, behavior,
+  banned, banned-silent, honeypot, honeypot-silent,
+  suspicious-path, session-flood,
+  rate-limit, rate-limit-ip, host-not-allowed,
+  admin-ip-blocked }</pre>
+
+<p class="footer-note">
+&mdash; End of report &mdash;
+<br>Image: <code>appsec-antibot-gw:1.3</code> &middot;
+Author: Pedro Tarrinho &middot; 2026-04-28
+</p>
+
+</body>
+</html>

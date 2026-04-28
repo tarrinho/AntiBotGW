@@ -10,6 +10,7 @@
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL / Chainguard Wolfi (distroless) |
 | Image | `appsec-antibot-gw:1.3` (79 MB, Trivy: 0 CVEs) |
 | Document version | 1.3 — supersedes 1.0 / 1.1 / 1.2 |
+| Print-ready PDF  | [AppSecGW-1.3-Report.pdf](AppSecGW-1.3-Report.pdf) |
 
 ---
 
@@ -423,7 +424,6 @@ docker run -d --name appsec-antibot-gw1.3 \
 | `/__pow` | admin | Mint a fresh PoW challenge bound to (method, path) |
 | `/__solver` | admin | Browser-side PoW solver |
 | `/__status` | admin | Per-identity bucket state snapshot |
-| `/__report` | admin | This implementation report (PDF) |
 | `/__unban` | admin | Clear ban + risk for an identity / IP / all |
 | `/__xff` | admin + DEBUG=1 | Header debug (redacted) |
 

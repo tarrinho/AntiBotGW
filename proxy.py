@@ -1997,17 +1997,6 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
 </body></html>
 """
 
-async def report_endpoint(request: web.Request):
-    """Serve the implementation report PDF."""
-    pdf_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                            "AntiBot-GW-Implementation-Report.pdf")
-    if not os.path.exists(pdf_path):
-        return web.Response(status=404, text="report PDF not found\n")
-    return web.FileResponse(pdf_path, headers={
-        "Content-Type": "application/pdf",
-        "Content-Disposition": 'inline; filename="AntiBot-GW-Implementation-Report.pdf"',
-    })
-
 async def unban_endpoint(request: web.Request):
     """Admin: clear ban + risk score for an identity (or all). Useful when a
     false-positive pushed someone over threshold.
@@ -3054,8 +3043,6 @@ def make_app() -> web.Application:
     app.router.add_get("/__pow", pow_endpoint)
     app.router.add_get("/__solver", solver_endpoint)
     app.router.add_get("/__status", status_endpoint)
-    app.router.add_get("/__report", report_endpoint)
-    app.router.add_get("/__report.pdf", report_endpoint)
     app.router.add_get("/__dashboard", dashboard_endpoint)
     app.router.add_get("/__metrics", metrics_endpoint)
     app.router.add_get("/__unban", unban_endpoint)

@@ -99,7 +99,6 @@ Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
 | `/__pow?key=…` | Mint a PoW challenge bound to (method, path) |
 | `/__solver?key=…` | Browser-side PoW solver |
 | `/__status?key=…` | Per-identity bucket state |
-| `/__report?key=…` | Implementation report PDF |
 | `/__unban?key=…&id=… \| ip=… \| all=1` | Clear ban + risk for an identity / IP / all |
 
 ---
@@ -265,7 +264,7 @@ All owned by UID 65532 (`nonroot`).
 ├── docker-compose.yml                          example compose deployment
 ├── myip.sh                                     auto-detect-IP launcher
 ├── README.md                                   this file
-├── report-1.3.html                             implementation report (HTML source)
+├── manual/manual-report-1.3.html               implementation report (HTML source)
 ├── AppSecGW-1.3-Report.pdf                     implementation report (PDF)
 ├── img/
 │   ├── dashboard.png                           main dashboard screenshot

@@ -19,8 +19,6 @@ RUN mkdir -p /rootfs/app /rootfs/data \
  && ln -sf /data/.pow_key     /rootfs/app/.pow_key
 
 COPY proxy.py /rootfs/app/proxy.py
-COPY AntiBot-GW-Implementation-Report.pdf /rootfs/app/AntiBot-GW-Implementation-Report.pdf
-COPY report.html /rootfs/app/report.html
 
 # ─── Stage 2: Chainguard's distroless python runtime (Wolfi). No shell, no
 # apt, no systemd, no ncurses, no util-linux, no expat-side-tools. Built
