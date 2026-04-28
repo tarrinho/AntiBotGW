@@ -84,6 +84,18 @@ Plus protocol-level support:
 
 ---
 
+## Screenshots
+
+### Main dashboard — `/__dashboard`
+Real-time overview with live counters, the timeline (total / allowed / blocked), block-reason breakdown and the live event log.
+
+![Main dashboard](img/dashboard.png)
+
+### Stealth Agent Hunter — `/__agents`
+Identities that passed every block but exhibit stealth signals. Per-identity stealth score 0–100 with component bars, plus the detection-vs-miss timeline.
+
+![Stealth Agent Hunter](img/agents.png)
+
 ## Operator dashboards
 
 Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
