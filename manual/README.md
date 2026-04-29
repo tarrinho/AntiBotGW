@@ -1,4 +1,4 @@
-# AppSecGW/1.4.2
+# AppSecGW/1.4.3
 
 **Hardened Reverse Proxy with Layered Anti-Automation Defenses**
 **Implementation, Hardening & CVE-Patching Report**
@@ -8,7 +8,7 @@
 | Author | Pedro Tarrinho |
 | Date | 2026-04-28 |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL / Chainguard Wolfi (distroless) |
-| Image | `appsec-antibot-gw:1.4.2` (79 MB, Trivy: 0 CVEs) |
+| Image | `appsec-antibot-gw:1.4.3` (79 MB, Trivy: 0 CVEs) |
 | Document version | 1.3 — supersedes 1.0 / 1.1 / 1.2 |
 | Print-ready PDF  | [AppSecGW-1.4-Report.pdf](AppSecGW-1.4-Report.pdf) |
 
@@ -29,7 +29,7 @@
 
 ## 1. Executive summary
 
-**AppSecGW/1.4.2** is a hardened reverse HTTP proxy designed to sit in front of
+**AppSecGW/1.4.3** is a hardened reverse HTTP proxy designed to sit in front of
 arbitrary upstream applications. Version 1.3 adds full WebSocket bridging,
 SSO-aware redirect rewriting, edge-injected security response headers, IP-based
 admin gating, and a transition to a Chainguard Wolfi-based distroless container
@@ -65,7 +65,7 @@ that reports **zero CVEs** on Trivy scans.
                      │ HTTP loopback
                      ▼
        ┌─────────────────────────────────────┐
-       │  AppSecGW/1.4.2  (Chainguard Wolfi)   │
+       │  AppSecGW/1.4.3  (Chainguard Wolfi)   │
        │   • read-only, non-root, cap-drop ALL│
        │   • aiohttp 3.13 + SQLite WAL       │
        │   • 13 detection layers + WS bridge │
@@ -401,7 +401,7 @@ for laptop / VPN-roaming workflows.
 
 The Wolfi base ships fixes for HIGH-severity OS CVEs typically within 48 h
 of public disclosure (Chainguard's documented SLA). Re-run
-`trivy image appsec-antibot-gw:1.4.2` on every rebuild to verify the posture
+`trivy image appsec-antibot-gw:1.4.3` on every rebuild to verify the posture
 stays at zero.
 
 ---
@@ -571,4 +571,4 @@ timeline:
 
 — *End of report* —
 
-Image: `appsec-antibot-gw:1.4.2` · Author: Pedro Tarrinho · 2026-04-28
+Image: `appsec-antibot-gw:1.4.3` · Author: Pedro Tarrinho · 2026-04-28

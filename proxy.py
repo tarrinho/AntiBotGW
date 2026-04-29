@@ -62,7 +62,15 @@ LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8443"))
 
 RATE_LIMIT_BURST  = int(os.environ.get("BURST", "5"))     # tokens
 RATE_LIMIT_REFILL = float(os.environ.get("REFILL", "1.0")) # tokens / second
-HONEYPOT_BAN_SECS = 3600    # 1 hour
+HONEYPOT_BAN_SECS = int(os.environ.get("HONEYPOT_BAN_SECS", "3600"))  # 1 h default
+# R8: longer-TTL "hostile pool" — once an identity has crossed the
+# canary-echo / honeypot threshold, keep it silent-decoyed for HOSTILE_BAN_SECS
+# (default 24 h). Generic bans stay at HONEYPOT_BAN_SECS; only the
+# AI-agent-specific signals (canary-echo, honeypot-silent, honeypot)
+# upgrade to hostile-pool duration.
+HOSTILE_BAN_SECS  = int(os.environ.get("HOSTILE_BAN_SECS", "86400"))   # 24 h
+_HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
+                     "ai-probe", "suspicious-path"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)
 POW_VALID_SECS    = 300     # 5 minutes
 BEHAVIOR_WINDOW   = 30      # seconds
@@ -1034,6 +1042,8 @@ RISK_WEIGHTS = {
     "host-not-allowed":      40,
     "suspicious-body":       40,    # v1.4: body pattern match
     "bot-trap":              50,    # v1.4: hidden form field filled
+    "canary-echo":           80,    # R7 (1.4.3): AI-canary echoed back —
+                                    # near-zero false positive; one hit = ban
     "js-challenge":           5,    # v1.4: each unsolved challenge bumps slightly
     "tls-fingerprint":       30,    # v1.4.2: JA3/JA4 deny-list hit
     "origin-mismatch":       20,    # v1.4.2: STRICT_ORIGIN failure
@@ -1084,15 +1094,22 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
             else RISK_BAN_THRESHOLD
         )
         if s.risk_score >= threshold and s.banned_until <= n:
-            s.banned_until = n + RISK_BAN_DURATION_SECS
+            # R8: AI-agent-specific reasons land the identity in the
+            # "hostile pool" — kept silent-decoyed for HOSTILE_BAN_SECS
+            # (default 24 h). Generic bans stay at the shorter duration.
+            ban_secs = (HOSTILE_BAN_SECS if reason in _HOSTILE_REASONS
+                        else RISK_BAN_DURATION_SECS)
+            s.banned_until = n + ban_secs
             triggered = True
+            ban_dur = ban_secs
         else:
             triggered = False
+            ban_dur = 0
     if triggered and db_queue is not None:
         try:
             db_queue.put_nowait(("ban",
-                (track_key, _t.time() + RISK_BAN_DURATION_SECS,
-                 f"risk-score:{int(s.risk_score)}", _t.time())))
+                (track_key, _t.time() + ban_dur,
+                 f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
         except asyncio.QueueFull:
             pass
     return triggered
@@ -1608,6 +1625,20 @@ async def protect(request: web.Request, handler):
             ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4
         )
 
+    # 2c. R7 — AI-canary echo. The agent has quoted our prior response back
+    # at us (URL, header, or body), which is something only an LLM-driven
+    # client does (it summarises the previous page into its prompt context
+    # and re-emits fragments). Big risk bump + immediate silent decoy.
+    # Body scanning is deferred to the proxy() function for POSTs since the
+    # body isn't read yet here; the URL + headers cover the common case.
+    if CANARY_ECHO_DETECTION:
+        echoed = _scan_request_for_canary(request)
+        if echoed:
+            await update_risk_and_maybe_ban(track_key, "canary-echo", ip)
+            return await _silent_decoy_response(
+                ip, ua, path, "canary-echo",
+                track_key=track_key, sid=sid, fp=fp, ja4=ja4)
+
     # 3a. Empty / suspiciously short User-Agent
     ua_stripped = ua.strip()
     if not ua_stripped:
@@ -1986,11 +2017,15 @@ def _serve_js_challenge(request: web.Request):
             .replace('"__NONCE__"',         nonce_json)
             .replace('"__TARGET__"',        target_json)
             .replace('"__TURNSTILE_KEY__"', ts_key_json))
-    return web.Response(
-        status=200, text=html, content_type="text/html",
-        headers={"Cache-Control": "no-store",
-                 "X-Robots-Tag": "noindex"},
-    )
+    # R7: plant a canary on the challenge page too — the LLM summariser
+    # reads the gateway's HTML before it ever reaches upstream content.
+    headers = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
+    if CANARY_ECHO_DETECTION:
+        canary = _new_canary()
+        html = _inject_canary(html.encode(), canary).decode("utf-8")
+        headers["X-Trace-Id"] = canary
+    return web.Response(status=200, text=html, content_type="text/html",
+                        headers=headers)
 
 async def js_challenge_endpoint(request: web.Request):
     """Turnstile-backed cookie minter.
@@ -2718,6 +2753,75 @@ def _strip_own_session_cookie(cookie_header: str) -> str:
     kept = [p for p in parts if p and not p.lower().startswith(SESSION_COOKIE.lower() + "=")]
     return "; ".join(kept)
 
+# ── R7: AI-agent canary echo detection ───────────────────────────────────
+# LLM-driven agents summarise the response into the model's context window
+# and re-emit fragments of that text in subsequent prompts. So a unique
+# token planted in the HTML comes back to us in the next request from the
+# same identity — something a real browser will never do, and a generic
+# scraper has no reason to do either. Pentester L8 (round-7 lab finding).
+CANARY_ECHO_DETECTION = os.environ.get(
+    "CANARY_ECHO_DETECTION", "1") not in ("", "0", "false", "False", "no")
+CANARY_TTL_S    = int(os.environ.get("CANARY_TTL_S", "600"))   # 10 min
+_CANARY_PREFIX  = "agw-c-"
+_canary_tokens: dict = {}      # token -> expiry_epoch
+_CANARY_USED_MAX = 50000
+_CANARY_RE = re.compile(r"agw-c-[0-9a-f]{16}")
+
+def _new_canary() -> str:
+    tok = f"{_CANARY_PREFIX}{secrets.token_hex(8)}"
+    now_ts = time.time()
+    if len(_canary_tokens) > _CANARY_USED_MAX:
+        for k in [k for k, exp in _canary_tokens.items() if exp < now_ts]:
+            _canary_tokens.pop(k, None)
+        if len(_canary_tokens) > _CANARY_USED_MAX:
+            drop_n = max(1, _CANARY_USED_MAX // 10)
+            for k in list(_canary_tokens.keys())[:drop_n]:
+                _canary_tokens.pop(k, None)
+    _canary_tokens[tok] = now_ts + CANARY_TTL_S
+    return tok
+
+def _inject_canary(body: bytes, token: str) -> bytes:
+    """Plant the canary token as an HTML comment so the LLM's summariser
+    reads it as part of the document. Prefers </head>, falls back to
+    </body>, then to prepending. Pages without any HTML structure still
+    receive the canary so the X-Trace-Id header isn't the only carrier."""
+    blob = f"<!-- {token} -->".encode()
+    if not body:
+        return blob
+    lower = body.lower()
+    for needle in (b"</head>", b"</body>", b"</html>"):
+        idx = lower.find(needle)
+        if idx >= 0:
+            return body[:idx] + blob + body[idx:]
+    return blob + body
+
+def _scan_request_for_canary(request: web.Request, body_bytes: bytes = b"") -> str:
+    """Return the first canary token that appears on the incoming request
+    (URL, headers, or body), only counting tokens we previously issued and
+    that haven't expired. Empty string if none."""
+    if not CANARY_ECHO_DETECTION or not _canary_tokens:
+        return ""
+    now_ts = time.time()
+    candidates = []
+    candidates.append(request.path_qs or "")
+    for k, v in request.headers.items():
+        # Skip our own session/chal/admin cookies — never contain canaries
+        # unless echoed, but the cookies themselves shouldn't false-match
+        # the regex anyway. Skip Cookie header to avoid scanning irrelevant
+        # large blobs.
+        if k.lower() == "cookie":
+            continue
+        candidates.append(v[:512])
+    if body_bytes:
+        candidates.append(body_bytes[:8192].decode("utf-8", errors="replace"))
+    for blob in candidates:
+        for m in _CANARY_RE.findall(blob):
+            exp = _canary_tokens.get(m)
+            if exp and exp > now_ts:
+                return m
+    return ""
+
+
 def _inject_honey_links(body: bytes) -> bytes:
     """Insert honey-link block before the LAST `</body>` (document terminator).
     Skips injection if the chosen position would land inside a `<script>` block
@@ -2948,6 +3052,22 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
+        # R7: also scan POST/PUT bodies for echoed canaries — LLM agents
+        # frequently splice prior-response text into the new prompt, which
+        # then becomes the request body.
+        if CANARY_ECHO_DETECTION:
+            echoed = _scan_request_for_canary(request, body_bytes=body)
+            if echoed:
+                await update_risk_and_maybe_ban(
+                    request.get("_track_key") or request.remote or "0.0.0.0",
+                    "canary-echo", get_ip(request))
+                return await _silent_decoy_response(
+                    get_ip(request), request.headers.get("User-Agent", ""),
+                    request.path, "canary-echo",
+                    track_key=request.get("_track_key"),
+                    sid=request.get("_sid", ""),
+                    fp=request.get("_fp", ""))
+
         # v1.4 #6 — bot-trap form fields.
         if _bot_trap_triggered(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -3030,7 +3150,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.4.2"
+                response_headers["X-Proxy"] = "AppSecGW_1.4.3"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -3049,6 +3169,12 @@ async def proxy(request: web.Request):
                     resp_body = _inject_honey_links(resp_body)
                     # v1.4 #6 — bot-trap form fields (no-op when disabled).
                     resp_body = _inject_bot_trap(resp_body)
+                    # R7: plant a unique canary so we can detect LLM-agent
+                    # echo behaviour on subsequent requests from this client.
+                    if CANARY_ECHO_DETECTION:
+                        canary = _new_canary()
+                        resp_body = _inject_canary(resp_body, canary)
+                        response_headers["X-Trace-Id"] = canary
 
                 return web.Response(status=resp.status, body=resp_body, headers=response_headers)
     except aiohttp.ClientError:
@@ -3463,7 +3589,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.4.2",
+        "version":         "AppSecGW_1.4.3",
     }
     return web.json_response({
         "current":          current,
@@ -3527,7 +3653,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.4.2    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.4.3    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")

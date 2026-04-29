@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.4.2` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.4.3` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (any severity) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -25,7 +25,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.4.2 \
+docker run -d --name appsec-antibot-gw1.4.3 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -42,7 +42,7 @@ docker run -d --name appsec-antibot-gw1.4.2 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.4.2 \
+  appsec-antibot-gw:1.4.3 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -238,6 +238,9 @@ Each sample includes: CPU %, load average (1/5/15), memory total/used/available,
 | `TURNSTILE_SECRET` | _(empty)_ | Cloudflare Turnstile secret. Used by `/__challenge` to call `siteverify`. |
 | `JS_CHAL_BIND_JA4` | `1` | Bind the chal cookie to the JA4 fingerprint (opaque hash, never the raw value) when one is injected by a trusted peer. Cookie replay across TLS stacks fails. Opportunistic — clients with no JA4 still work. |
 | `JS_CHAL_REQUIRE_JA4` | `0` | Hard requirement: `/__challenge` rejects (`403`) any submission without a JA4 from a trusted peer. Use only behind a JA4-injecting terminator (cloudflared / nginx-JA4). |
+| `CANARY_ECHO_DETECTION` | `1` | **R7 (1.4.3)** — plant unique `agw-c-<16hex>` tokens in every HTML response (HTML comment + `X-Trace-Id` header). Any subsequent request from any identity that quotes one of those tokens back is silent-decoyed and ban-pooled. Targets LLM agents that summarise the page into the model's context and re-emit fragments in the next prompt. Near-zero false-positive on browser traffic. |
+| `CANARY_TTL_S` | `600` | How long an issued canary stays valid for echo detection (sliding window). |
+| `HOSTILE_BAN_SECS` | `86400` | **R8 (1.4.3)** — duration to keep AI-agent-flagged identities (canary-echo, honeypot, suspicious-path, ai-probe) silent-decoyed. Generic bans still use the shorter `RISK_BAN_DURATION_SECS`. |
 | `BODY_PATTERN_MATCH` | `0` | Extends the suspicious-path regex set to POST/PUT/PATCH bodies (SQLi/XSS/SSTI/cmd-injection markers in form/JSON/XML). |
 | `BOT_TRAP_FORMS` | `0` | Auto-injects a hidden `<input>` into every `<form>` in HTML responses; flags POSTs that fill it. |
 | `HEADERS_TIMEOUT` | `10` | Slowloris: max seconds to receive full request headers. |
@@ -303,8 +306,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.4.2 .
-trivy image appsec-antibot-gw:1.4.2        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.4.3 .
+trivy image appsec-antibot-gw:1.4.3        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -361,6 +364,7 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| 1.4.3 | **AI-canary echo detection (R7) + 24 h hostile pool (R8).** Every HTML response (challenge page included) is stamped with a unique `agw-c-<16hex>` token in an HTML comment and the `X-Trace-Id` header. Subsequent requests from any identity that quotes one of those tokens back at the gateway — in URL, header, or POST body — are silent-decoyed and the identity is added to the hostile pool for `HOSTILE_BAN_SECS` (default 24 h). Pentester-confirmed: this catches LLM-driven agents whose model context treats server-issued strings as actionable text and re-emits them in subsequent prompts. Near-zero false-positive on browser traffic. |
 | 1.4.2 | **JS challenge is now Turnstile-only.** PoW + browser-API probe + anchor-fetch proof + timing window were empirically bypassable in pure Python in ~1 s/session and have been removed. The cookie gate engages only when `TURNSTILE_SITEKEY` + `TURNSTILE_SECRET` are configured; the chal cookie is then minted by Cloudflare-server-validated tokens and bound to (UA + IP-tier-hash + JA4-hash). Cross-version pentest matrix and per-iteration verdicts published in this README. |
 | 1.4.1 | slowloris guard · bot-trap forms · body pattern matching · service-metrics dashboard (CPU/mem/disk/procs/FDs/net/SQLite size) · windowed time-navigation on agents + service charts · TLS / JA4 fingerprint deny-list (`JA4_TRUSTED_PEERS` for source pinning) · `STRICT_ORIGIN` enforcement on state-changing methods · `REQUIRED_HEADERS` operator-defined header presence check · dashboard HTML extracted to `dashboards/` · service-metrics samples persisted to SQLite (restart-survivable) · **V8/F1-F4** chal cookie required on every non-static path (closes API bypass via Mozilla UA) · static-suffix bypass tightened against `/api/...css` style probes (`JS_CHAL_STRICT_STATIC`) · `/__challenge` rate-limited · stealth-block precedence (host/TLS/origin checks fire before challenge gate) · chal cookie bound to socket-IP /24 (v4) or /48 (v6) tier (opaque HMAC hash, no RFC1918 leak) · XFF-aware client-IP source · chal cookie bound to JA4 TLS fingerprint hash (`JS_CHAL_BIND_JA4`) when injected by a trusted peer · per-request JA4 surfaced in event log so operators can populate `JA4_DENY_LIST` from telemetry · cookie gate exposed across V9 → R3 iterations to be a bot-cost amplifier, not a hard wall (replaced in 1.4.2) |
 | 1.3 | Wolfi distroless (zero CVEs) · WebSocket bridge · SSO 302 rewriting · admin IP allowlist · edge security headers · stealth-agent hunter · streaming body fix |
@@ -389,6 +393,8 @@ Each row is a recorded post-release pentest of the deployed image. The "honest v
 | 1.4.2 (Turnstile, T1) | same | Cookie replay under a different `User-Agent` | Silent-decoyed | UA-binding works |
 | 1.4.2 (Turnstile, T2) | always-fail test secret (`2x00…AA`) — mimics real-key rejection of fabricated tokens | Dummy non-empty token | **403 `turnstile rejected`** by Cloudflare `siteverify` | Bypass closed; only legitimately-solved widget tokens validate |
 | 1.4.2 (Turnstile, T2) | same | Direct API without cookie | Silent-decoyed | Gate forwards nothing without a valid cookie |
+| 1.4.3 (R7) | `CANARY_ECHO_DETECTION=1` (default), `+ Turnstile keys` | Pentester R5/R6 lab — built attacker C11 (110 LoC + `time.sleep(2)`) that bypasses 16 layers of pure-protocol checks | C11 still bypasses generic bot defenses; **but L7 honeypot caught their C5 and L8 canary-echo caught their C6** because LLM-driven agents follow `display:none` links and quote prior-response strings into next prompt | Built into 1.4.3 as the canary-echo detector. Targets only AI agents (low-FP); does NOT claim to stop a determined script-only attacker — that ceiling is the pure-HTTP protocol limit |
+| 1.4.3 (R8) | `HOSTILE_BAN_SECS=86400` (default) | Trigger any of the AI-agent reasons (canary-echo, honeypot-silent, ai-probe, suspicious-path) | Identity is added to the hostile pool for 24 h | Generalisation of the existing risk-score ban so AI-flagged clients stay banned long enough to be uneconomic to retry |
 
 ### Cross-version effectiveness matrix
 
