@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.4.7 · Dashboard</title>
+<title>AppSecGW_1.5.2 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -9,6 +9,15 @@ body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
 h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;
+        padding:6px 0;border-bottom:1px solid var(--line)}
+.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px;transition:color .1s}
+.topnav a:hover{color:var(--fg);background:#1f2730}
+.topnav a.active{color:var(--fg);background:#1f2730}
+.btn-unban{background:var(--yellow);color:#000;border:none;padding:3px 9px;
+  border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
+.btn-unban:hover{background:#e6ad29}
+.btn-unban:disabled{opacity:.5;cursor:not-allowed}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
@@ -66,18 +75,13 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body>
-<h1>AppSecGW_1.4.7 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
-<div style="font-size:12px;margin-top:6px">
-  <a id="agents-link"  style="color:var(--blue)" href="#">→ Stealth Agent Hunter</a>
-  <span class="dim">·</span>
-  <a id="service-link" style="color:var(--blue)" href="#">→ Service Metrics</a>
-</div>
-<script>
-(function(){const k=new URLSearchParams(location.search).get('key')||'';
- const q=k?('?key='+encodeURIComponent(k)):'';
- document.getElementById('agents-link').href='/__agents'+q;
- document.getElementById('service-link').href='/__service'+q;})();
-</script>
+<h1>AppSecGW_1.5.2 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<nav class="topnav" id="topnav">
+  <a href="/__dashboard?key=__KEY__" class="active">Dashboard</a>
+  <a href="/__agents?key=__KEY__">Agents</a>
+  <a href="/__service?key=__KEY__">Service</a>
+  <a href="/__controls?key=__KEY__">Controls</a>
+</nav>
 
 <div class="grid">
 
@@ -125,6 +129,39 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
     </div>
   </div>
 
+  <!-- 1.5.1: live throughput + operator-controlled global RPS limit -->
+  <div class="card" id="rps-card" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+    <div style="min-width:180px">
+      <h2 style="margin:0 0 4px 0">Throughput cap</h2>
+      <div style="font-size:11px;color:var(--dim)">
+        Live req/s vs operator-set limit. 0 = disabled.
+      </div>
+    </div>
+    <div style="display:flex;gap:18px;align-items:baseline;flex:1;min-width:260px">
+      <div>
+        <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">live</div>
+        <div id="live-rps" style="font:600 22px ui-monospace,Menlo,monospace;color:var(--fg)">—</div>
+      </div>
+      <div>
+        <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">limit</div>
+        <div id="rps-limit-badge" style="font:600 22px ui-monospace,Menlo,monospace;color:var(--fg)">—</div>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input id="rps-input" type="number" min="0" max="100000" step="10"
+             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;width:130px;font-family:ui-monospace,Menlo,monospace;font-size:13px">
+      <button id="rps-apply"
+              style="background:var(--blue);color:#fff;border:none;padding:7px 14px;border-radius:5px;font-weight:600;cursor:pointer">
+        Apply
+      </button>
+      <button id="rps-disable"
+              style="background:#30363d;color:var(--fg);border:none;padding:7px 12px;border-radius:5px;cursor:pointer">
+        Disable
+      </button>
+    </div>
+    <span id="rps-msg" style="color:var(--dim);font-size:11.5px"></span>
+  </div>
+
   <div class="row" style="grid-template-columns:1fr 1fr">
     <div class="card">
       <h2>Block reasons</h2>
@@ -142,6 +179,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
       <thead><tr>
         <th>Identity</th><th>Last IP</th><th>Total</th><th>Allowed</th><th>Blocked</th>
         <th>Risk</th><th>Banned</th><th>Tokens</th><th>Last seen</th><th>Last UA</th><th>Last path</th>
+        <th>Action</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -337,6 +375,11 @@ async function tick() {
       const lastIp = c.last_ip || '?';
       const risk = c.risk_score || 0;
       const riskColor = risk >= 50 ? 'var(--red)' : risk >= 25 ? 'var(--yellow)' : 'var(--dim)';
+      // 1.5.1: inline unban action; only meaningful for currently-banned
+      // identities. The button calls /__unban?id=… (admin-gated).
+      const action = c.banned_secs > 0
+        ? `<button class="btn-unban" data-id="${escapeHtml(id)}" title="Clear ban + reset risk score for this identity">Unban</button>`
+        : `<span class="dim">—</span>`;
       return `<tr>
         <td title="${escapeHtml(id)}"><b>${escapeHtml(id.slice(0,16))}</b></td>
         <td class="dim">${escapeHtml(lastIp)}</td>
@@ -349,8 +392,9 @@ async function tick() {
         <td class="dim">${c.last_seen_secs_ago}s ago</td>
         <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
         <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
+        <td>${action}</td>
       </tr>`;
-    }).join('') || '<tr><td colspan=11 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+    }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
 
     // Top paths
     const pBody = document.querySelector('#paths-tbl tbody');
@@ -405,5 +449,92 @@ tick();
 // Auto-refresh — but ONLY when in live mode. When user has scrolled back,
 // the data is static and refreshing would just repaint the same window.
 setInterval(() => { if (endEpoch === null) tick(); }, 2000);
+
+// ── 1.5.1: throughput cap + unban actions ──────────────────────────
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const k_q       = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
+  const liveEl    = document.getElementById('live-rps');
+  const limEl     = document.getElementById('rps-limit-badge');
+  const inputEl   = document.getElementById('rps-input');
+  const applyEl   = document.getElementById('rps-apply');
+  const disEl     = document.getElementById('rps-disable');
+  const msgEl     = document.getElementById('rps-msg');
+
+  function fmt(n){ return n == null ? '—' : Number(n).toLocaleString(); }
+  function showMsg(text, ok){
+    msgEl.textContent = text;
+    msgEl.style.color = ok ? 'var(--green)' : 'var(--red)';
+    setTimeout(()=>{ msgEl.textContent=''; }, 3000);
+  }
+
+  async function refreshRps(){
+    try{
+      const r = await fetch('/__metrics' + k_q, {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      liveEl.textContent = fmt(d.live_rps);
+      const lim = d.global_rps_limit || 0;
+      limEl.textContent = lim > 0 ? fmt(lim) : 'off';
+      limEl.style.color = lim > 0 ? 'var(--yellow)' : 'var(--dim)';
+      // Tint live red when over limit
+      if (lim > 0 && d.live_rps >= lim) liveEl.style.color = 'var(--red)';
+      else liveEl.style.color = 'var(--fg)';
+      if (document.activeElement !== inputEl) inputEl.value = lim;
+    } catch(e){}
+  }
+  async function postLimit(n){
+    applyEl.disabled = true;
+    try{
+      const r = await fetch('/__config' + k_q, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({GLOBAL_RPS_LIMIT: n}),
+        credentials:'include',
+      });
+      const b = await r.json();
+      if (r.ok && b.applied && 'GLOBAL_RPS_LIMIT' in b.applied){
+        showMsg('Limit set to ' + fmt(b.applied.GLOBAL_RPS_LIMIT), true);
+        refreshRps();
+      } else {
+        const why = b.rejected && b.rejected.GLOBAL_RPS_LIMIT || 'rejected';
+        showMsg('Failed: ' + why, false);
+      }
+    } catch(e){ showMsg('Network error', false); }
+    applyEl.disabled = false;
+  }
+  applyEl.onclick   = () => postLimit(parseInt(inputEl.value, 10) || 0);
+  disEl.onclick     = () => postLimit(0);
+  inputEl.addEventListener('keydown', e => { if (e.key==='Enter') applyEl.click(); });
+  refreshRps();
+  setInterval(refreshRps, 2000);
+
+  // Unban buttons inside the clients table.
+  document.addEventListener('click', async (e) => {
+    const btn = e.target.closest('.btn-unban');
+    if (!btn) return;
+    const id = btn.dataset.id;
+    if (!id) return;
+    if (!confirm('Unban + reset risk score for\n' + id + '?')) return;
+    btn.disabled = true; btn.textContent = '...';
+    try{
+      const r = await fetch('/__unban' + k_q + '&id=' + encodeURIComponent(id),
+                            {credentials:'include'});
+      const b = await r.json().catch(()=>({}));
+      if (r.ok && b.cleared){
+        btn.textContent = 'Unbanned';
+        btn.style.background = 'var(--green)';
+        // Force a refresh of the clients table.
+        if (typeof tick === 'function') setTimeout(tick, 200);
+      } else {
+        btn.disabled = false; btn.textContent = 'Unban';
+        alert('Unban failed (' + r.status + ')');
+      }
+    } catch(err){
+      btn.disabled = false; btn.textContent = 'Unban';
+      alert('Network error: ' + err.message);
+    }
+  });
+})();
 </script>
 </body></html>

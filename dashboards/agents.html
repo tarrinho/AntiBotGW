@@ -22,6 +22,13 @@ table{width:100%;border-collapse:collapse;font-size:12px}
 table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
+.ban-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.ban-track{position:relative;width:34px;height:18px;background:#30363d;border-radius:9px;transition:background .15s;display:inline-block;vertical-align:middle}
+.ban-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s}
+.ban-switch.on .ban-track{background:var(--red)}
+.ban-switch.on .ban-knob{left:18px}
+.ban-label{font:600 9.5px ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--dim);text-transform:uppercase}
+.ban-switch.on .ban-label{color:var(--red)}
 .bar{height:10px;background:#0a0e13;border-radius:4px;overflow:hidden;display:flex}
 .bar>div{height:100%}
 .bar .h{background:#a78bfa}
@@ -52,12 +59,20 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .nav a:hover{text-decoration:underline}
 </style></head>
 <body>
-<h1>AppSecGW · Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
-<div class="nav">
-  <a href="/__dashboard?key=__KEY__">← main dashboard</a>
-  <span class="dim">|</span>
-  <a href="/__agents?key=__KEY__">stealth agents (this page)</a>
-</div>
+<style>
+.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;
+        padding:6px 0;border-bottom:1px solid var(--line)}
+.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px;transition:color .1s}
+.topnav a:hover{color:var(--fg);background:#1f2730}
+.topnav a.active{color:var(--fg);background:#1f2730}
+</style>
+<h1>AppSecGW_1.5.2 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<nav class="topnav" id="topnav">
+  <a href="/__dashboard?key=__KEY__">Dashboard</a>
+  <a href="/__agents?key=__KEY__" class="active">Agents</a>
+  <a href="/__service?key=__KEY__">Service</a>
+  <a href="/__controls?key=__KEY__">Controls</a>
+</nav>
 
 <div class="grid">
 
@@ -127,7 +142,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
         <th>Score</th><th>Identity</th><th>UA</th><th>IP</th>
         <th>Allowed</th><th>Blocked</th><th>Headers avg</th>
         <th>HTML/Static</th><th>Paths/req</th><th>Timing σ/μ</th>
-        <th>404s</th><th>Risk</th><th>Last path</th><th></th>
+        <th>404s</th><th>Risk</th><th>Last path</th><th>Status</th><th></th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -188,7 +203,7 @@ async function tick(){
     // Suspect table
     const tbody = document.querySelector('#sus-tbl tbody');
     if (!d.suspects.length){
-      tbody.innerHTML = `<tr><td colspan=14 class=dim style="text-align:center;padding:14px">no suspicious agents at threshold ${MIN}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan=15 class=dim style="text-align:center;padding:14px">no suspicious agents at threshold ${MIN}</td></tr>`;
     } else {
       tbody.innerHTML = d.suspects.map((s,i)=>{
         const m = s.metrics, c = s.components;
@@ -202,6 +217,14 @@ async function tick(){
         const recentRows = (s.recent_paths||[]).slice(-5).reverse().map(p=>
           `<div class="path-row">${new Date(p.ts*1000).toLocaleTimeString()} · ${p.status} · ${escapeHtml(p.path)} · hdr=${p.header_score}</div>`
         ).join('') || '<span class=dim>—</span>';
+        const isBanned = (s.banned_secs || 0) > 0;
+        const switchHtml = `
+          <div class="ban-switch ${isBanned?'on':''}"
+               data-id="${escapeHtml(s.id)}"
+               title="${isBanned?('banned for ~'+s.banned_secs+'s — click to unban'):'click to ban for 24h'}">
+            <span class="ban-track"><span class="ban-knob"></span></span>
+            <span class="ban-label">${isBanned?'BANNED':'allow'}</span>
+          </div>`;
         return `
           <tr>
             <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
@@ -217,11 +240,34 @@ async function tick(){
             <td style="color:${m.upstream_404_count>5?'var(--red)':'var(--dim)'}">${m.upstream_404_count}</td>
             <td>${m.risk_score}</td>
             <td class="dim">${escapeHtml((s.last_path||'').slice(0,30))}</td>
+            <td>${switchHtml}</td>
             <td><span class="expand" data-i="${i}">▸ paths</span></td>
           </tr>
-          <tr id="d-${i}" class="detail-row" style="display:none"><td colspan=14>
+          <tr id="d-${i}" class="detail-row" style="display:none"><td colspan=15>
             <div class="detail show"><b>Recent allowed paths</b>${recentRows}</div></td></tr>`;
       }).join('');
+      // Wire ban/unban switches.
+      tbody.querySelectorAll('.ban-switch').forEach(el => {
+        el.onclick = async () => {
+          const id = el.dataset.id;
+          const banning = !el.classList.contains('on');
+          el.style.opacity = '0.5';
+          const k_q = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
+          const url = (banning ? '/__ban' : '/__unban') + k_q + '&id=' + encodeURIComponent(id);
+          try {
+            const r = await fetch(url, {credentials:'include'});
+            const b = await r.json().catch(()=>({}));
+            if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
+              el.classList.toggle('on', banning);
+              el.querySelector('.ban-label').textContent = banning ? 'BANNED' : 'allow';
+              setTimeout(tick, 300);
+            } else {
+              alert((banning?'Ban':'Unban') + ' failed (' + r.status + ')');
+            }
+          } catch(e) { alert('Network error: ' + e.message); }
+          el.style.opacity = '1';
+        };
+      });
       tbody.querySelectorAll('.expand').forEach(el=>el.onclick=()=>{
         const r = document.getElementById('d-'+el.dataset.i);
         r.style.display = (r.style.display==='none')?'table-row':'none';

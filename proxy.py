@@ -69,8 +69,16 @@ HONEYPOT_BAN_SECS = int(os.environ.get("HONEYPOT_BAN_SECS", "3600"))  # 1 h defa
 # AI-agent-specific signals (canary-echo, honeypot-silent, honeypot)
 # upgrade to hostile-pool duration.
 HOSTILE_BAN_SECS  = int(os.environ.get("HOSTILE_BAN_SECS", "86400"))   # 24 h
+# 1.5.1 — operator-controlled global throughput limit. When > 0, ANY request
+# arriving while the rolling 1-second count exceeds this value is silent-
+# decoyed with reason `traffic-threshold`. Hot-reloadable via /__config or
+# the main dashboard's threshold slider. Default 0 = disabled (no global cap;
+# per-identity / per-socket-IP buckets still apply).
+GLOBAL_RPS_LIMIT = int(os.environ.get("GLOBAL_RPS_LIMIT", "0"))
+_global_rps_window: deque = deque(maxlen=20000)   # timestamps within the
+                                                  # last 1 s; trimmed lazily
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
-                     "ai-probe", "suspicious-path"}
+                     "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)
 POW_VALID_SECS    = 300     # 5 minutes
 BEHAVIOR_WINDOW   = 30      # seconds
@@ -1035,22 +1043,250 @@ def get_ip(request: web.Request) -> str:
         return parts[0] if TRUST_XFF == "first" else parts[-1]
     return request.remote or "0.0.0.0"
 
+# ── 1.5.0 — optional Redis-backed shared state across N instances ────────
+# When REDIS_URL is set, bans + canary tokens are shared so ALL gateway
+# instances see them (key insight for "every challenge behind its own
+# gateway" topology — a bot banned on challenge #3 is silent-decoyed on
+# every other challenge instantly). When REDIS_URL is empty, the gateway
+# stays purely in-process + SQLite (backward compatible, single-host).
+REDIS_URL          = os.environ.get("REDIS_URL", "").strip()
+REDIS_NS           = os.environ.get("REDIS_NS", "appsecgw").strip() or "appsecgw"
+REDIS_TIMEOUT      = float(os.environ.get("REDIS_TIMEOUT", "0.5"))
+_redis = None  # lazy-initialised singleton; None if disabled or unavailable
+
+async def _shared_init():
+    """Lazy-import redis.asyncio at startup if REDIS_URL is configured.
+    Failures degrade to no-op (we never block traffic on a Redis outage)."""
+    global _redis
+    if not REDIS_URL or _redis is not None:
+        return
+    try:
+        import redis.asyncio as _r
+        client = _r.from_url(REDIS_URL, decode_responses=True,
+                             socket_timeout=REDIS_TIMEOUT,
+                             socket_connect_timeout=REDIS_TIMEOUT)
+        await asyncio.wait_for(client.ping(), timeout=REDIS_TIMEOUT * 2)
+        _redis = client
+        slog("shared_store", level="info", backend="redis", url=REDIS_URL,
+             namespace=REDIS_NS)
+    except Exception as e:
+        slog("shared_store_unavailable", level="warn",
+             url=REDIS_URL, error=str(e)[:120])
+        _redis = None
+
+async def _shared_ban_set(track_key: str, until_epoch: float, reason: str):
+    """Write-through ban entry to Redis (best-effort; never raises)."""
+    if _redis is None or not track_key:
+        return
+    ttl = max(1, int(until_epoch - _t.time()))
+    try:
+        await asyncio.wait_for(
+            _redis.set(f"{REDIS_NS}:ban:{track_key}",
+                       f"{int(until_epoch)}|{reason[:32]}", ex=ttl),
+            timeout=REDIS_TIMEOUT)
+    except Exception as e:
+        slog("shared_ban_set_failed", level="warn",
+             track_key=track_key[:32], error=str(e)[:80])
+
+async def _shared_ban_get(track_key: str) -> float:
+    """Read-through. Returns 0.0 if not banned or Redis unreachable."""
+    if _redis is None or not track_key:
+        return 0.0
+    try:
+        v = await asyncio.wait_for(
+            _redis.get(f"{REDIS_NS}:ban:{track_key}"),
+            timeout=REDIS_TIMEOUT)
+        if not v:
+            return 0.0
+        return float(v.split("|", 1)[0])
+    except Exception:
+        return 0.0
+
+# 1.5.0 — webhook fan-out (operator awareness across N challenge gateways)
+WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").strip()
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "").strip()
+
+async def _post_webhook(event: dict) -> None:
+    """Fire-and-forget POST to the operator's webhook (Slack-/Discord-/
+    PagerDuty-/custom-shaped consumer). Includes an HMAC-SHA-256 of the
+    body in `X-AppSecGW-Signature` when WEBHOOK_SECRET is set so the
+    receiver can authenticate the gateway. Best-effort: failures are
+    logged but never block the request path."""
+    if not WEBHOOK_URL:
+        return
+    try:
+        body = json.dumps(event, separators=(",", ":"),
+                          default=str, ensure_ascii=False).encode()
+    except Exception:
+        return
+    headers = {"Content-Type": "application/json"}
+    if WEBHOOK_SECRET:
+        headers["X-AppSecGW-Signature"] = hmac.new(
+            WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    # Cross-instance dedup: the same ban observed from N gateways shouldn't
+    # spam the channel N times. SETNX with a short TTL = first-instance-wins.
+    if _redis is not None:
+        try:
+            dedup_key = (f"{REDIS_NS}:wh:{event.get('reason','')}:"
+                         f"{event.get('track_key','')}")
+            ok = await asyncio.wait_for(
+                _redis.set(dedup_key, "1", ex=300, nx=True),
+                timeout=REDIS_TIMEOUT)
+            if not ok:
+                return  # another instance already fired this webhook
+        except Exception:
+            pass
+    try:
+        async with ClientSession(
+                timeout=ClientTimeout(total=5)) as session:
+            async with session.post(WEBHOOK_URL, data=body,
+                                     headers=headers) as r:
+                await r.read()
+    except Exception as e:
+        slog("webhook_failed", level="warn", url=WEBHOOK_URL,
+             error=str(e)[:120])
+
+
+# 1.5.0 — auto-add-to-JA4-deny-list. When the same TLS fingerprint is
+# observed on >= JA4_AUTODENY_THRESHOLD distinct ban events, add it to the
+# in-memory JA4_DENY_LIST (and to the shared Redis set so every instance
+# picks it up via the periodic refresh loop). Real users behind a shared
+# CDN/JA4 will not generate this many banned identities; agents using the
+# same Python / Go / curl stack across many fresh sessions will.
+JA4_AUTODENY_THRESHOLD = int(os.environ.get("JA4_AUTODENY_THRESHOLD", "3"))
+JA4_AUTODENY_WINDOW_S  = int(os.environ.get("JA4_AUTODENY_WINDOW_S", "86400"))
+_JA4_BAN_COUNTS: dict = {}        # local fallback when no Redis
+
+async def _observe_ja4_ban(ja4: str) -> None:
+    if not ja4:
+        return
+    if _redis is not None:
+        try:
+            key = f"{REDIS_NS}:ja4-bans:{ja4}"
+            n = await asyncio.wait_for(_redis.incr(key),
+                                        timeout=REDIS_TIMEOUT)
+            await asyncio.wait_for(_redis.expire(key, JA4_AUTODENY_WINDOW_S),
+                                    timeout=REDIS_TIMEOUT)
+            if int(n) >= JA4_AUTODENY_THRESHOLD:
+                await asyncio.wait_for(
+                    _redis.sadd(f"{REDIS_NS}:ja4-denylist", ja4),
+                    timeout=REDIS_TIMEOUT)
+                if ja4 not in JA4_DENY_LIST:
+                    JA4_DENY_LIST.add(ja4)
+                    slog("ja4_auto_denied", level="warn", ja4=ja4,
+                         observed_bans=int(n))
+        except Exception as e:
+            slog("ja4_observe_failed", level="warn", ja4=ja4,
+                 error=str(e)[:80])
+        return
+    # Single-instance fallback: count locally with sliding window pruning.
+    now_ts = _t.time()
+    pruned = [(ts) for (j, ts) in _JA4_BAN_COUNTS.items()
+              if ts > now_ts - JA4_AUTODENY_WINDOW_S]
+    bucket = _JA4_BAN_COUNTS.setdefault(ja4, [])
+    bucket.append(now_ts)
+    bucket[:] = [ts for ts in bucket if ts > now_ts - JA4_AUTODENY_WINDOW_S]
+    if len(bucket) >= JA4_AUTODENY_THRESHOLD and ja4 not in JA4_DENY_LIST:
+        JA4_DENY_LIST.add(ja4)
+        slog("ja4_auto_denied", level="warn", ja4=ja4,
+             observed_bans=len(bucket), backend="local")
+
+
+async def _refresh_ja4_denylist_loop():
+    """Pull the shared JA4_DENY_LIST from Redis every 30 s and merge into
+    the local set. Lets a JA4 banned on instance A propagate to B/C/...
+    within half a minute, and keeps any locally-added entries."""
+    while True:
+        try:
+            await asyncio.sleep(30)
+            if _redis is None:
+                continue
+            shared = await asyncio.wait_for(
+                _redis.smembers(f"{REDIS_NS}:ja4-denylist"),
+                timeout=REDIS_TIMEOUT)
+            new = {j for j in shared if j and j not in JA4_DENY_LIST}
+            if new:
+                JA4_DENY_LIST.update(new)
+                slog("ja4_denylist_refreshed", level="info",
+                     added=sorted(new))
+        except asyncio.CancelledError:
+            return
+        except Exception:
+            pass
+
+
+# 1.5.0 — session-churn detector. The Sporting CTF attacker pattern
+# ("fresh warmed session per heavy SQL payload") generates many distinct
+# chal cookies from the same (UA + IP-tier + JA4) fingerprint in a short
+# window. Real users mint one cookie per visit; an automation tool minting
+# > SESSION_CHURN_MAX cookies in SESSION_CHURN_WINDOW_S seconds is the
+# strongest agent signature available without inspecting application
+# semantics. On hit: silent-decoy + risk += 75 (single-hit ≥ ban) +
+# 24 h hostile-pool (R8) — and via the shared store the ban propagates
+# across every other gateway instance.
+SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S", "60"))
+SESSION_CHURN_MAX      = int(os.environ.get("SESSION_CHURN_MAX",      "6"))
+_fp_session_creations: dict = defaultdict(lambda: deque(maxlen=64))
+
+def _fp_hash(ua: str, ip_tier: str, ja4: str) -> str:
+    """Opaque hash of the request's (UA + IP-tier + JA4) — used as the
+    ban-keying identity for fingerprints that are minting many cookies."""
+    return hmac.new(SESSION_KEY,
+                    f"fp|{ua[:200]}|{ip_tier}|{ja4}".encode(),
+                    hashlib.sha256).hexdigest()[:24]
+
+async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
+                              rid: str = "") -> bool:
+    """Track a chal-cookie mint. Returns True if the fingerprint just
+    crossed the churn threshold (caller should propagate the verdict)."""
+    fp_h = _fp_hash(ua, ip_tier, ja4)
+    n = _t.time()
+    q = _fp_session_creations[fp_h]
+    q.append(n)
+    while q and q[0] < n - SESSION_CHURN_WINDOW_S:
+        q.popleft()
+    if len(q) > SESSION_CHURN_MAX:
+        slog("session_churn", level="warn", rid=rid, fp_hash=fp_h,
+             ip_tier=ip_tier, ja4=ja4, count=len(q),
+             window_s=SESSION_CHURN_WINDOW_S)
+        # Reuse the existing risk-and-ban path — same fp_hash will be the
+        # banned key. Future requests with the same UA+IP-tier+JA4 will
+        # compute the same fp_hash and hit `is_banned(fp_hash)`.
+        await update_risk_and_maybe_ban(fp_h, "session-churn", ip)
+        return True
+    return False
+
+
 async def is_banned(ip: str) -> tuple[bool, float]:
+    """Fast local check first (zero-RTT for the hot path), Redis only when
+    local says 'no'. The Redis check piggy-backs the operator's intent of
+    sharing bans across instances; an instance that didn't observe the
+    original block still silent-decoys repeat offenders."""
     async with state_lock:
         s = ip_state[ip]
         n = now()
         if s.banned_until > n:
             return True, s.banned_until - n
+    # 1.5.0: ask the shared store.
+    until = await _shared_ban_get(ip)
+    if until > _t.time():
+        # Cache locally so subsequent checks are zero-RTT.
+        async with state_lock:
+            ip_state[ip].banned_until = max(ip_state[ip].banned_until, until)
+        return True, until - _t.time()
     return False, 0.0
 
 async def ban(ip: str, secs: int = HONEYPOT_BAN_SECS, reason: str = "honeypot"):
+    until = now() + secs
     async with state_lock:
-        ip_state[ip].banned_until = now() + secs
+        ip_state[ip].banned_until = until
     if db_queue is not None:
         try:
             db_queue.put_nowait(("ban", (ip, _t.time() + secs, reason, _t.time())))
         except asyncio.QueueFull:
             pass
+    # 1.5.0: propagate to shared store (best-effort, never blocks).
+    await _shared_ban_set(ip, _t.time() + secs, reason)
 
 # ── Risk-score model ───────────────────────────────────────────────────────
 # Each bad behaviour contributes points; ban only when score crosses threshold.
@@ -1083,6 +1319,13 @@ RISK_WEIGHTS = {
     "bot-trap":              50,    # v1.4: hidden form field filled
     "canary-echo":           80,    # R7 (1.4.3): AI-canary echoed back —
                                     # near-zero false positive; one hit = ban
+    "session-churn":         75,    # 1.5.0: same UA+IP-tier+JA4 minted N
+                                    # cookies in a short window — agent
+                                    # rotating sessions per payload
+    "fp-banned":              0,    # 1.5.0: an already-banned fingerprint
+                                    # hit us; counter only, no extra risk
+    "traffic-threshold":      0,    # 1.5.1: operator-set global RPS cap;
+                                    # not a malicious signal, just a cap
     "js-challenge":           5,    # v1.4: each unsolved challenge bumps slightly
     "tls-fingerprint":       30,    # v1.4.2: JA3/JA4 deny-list hit
     "origin-mismatch":       20,    # v1.4.2: STRICT_ORIGIN failure
@@ -1151,6 +1394,30 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
                  f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
         except asyncio.QueueFull:
             pass
+    # 1.5.0: propagate risk-driven bans to the shared store too. Cross-
+    # instance: a bot canary-echo'd on gateway-A is silent-decoyed on
+    # gateway-B without B ever seeing the offending request. Also feed
+    # the ban into the auto-JA4-deny observer + the operator webhook.
+    if triggered:
+        await _shared_ban_set(
+            track_key, _t.time() + ban_dur,
+            f"risk-score:{int(s.risk_score)}:{reason}")
+        last_ja4 = (s.last_ja4 or "")
+        if last_ja4:
+            asyncio.create_task(_observe_ja4_ban(last_ja4))
+        if WEBHOOK_URL:
+            asyncio.create_task(_post_webhook({
+                "event":      "ban",
+                "ts":         int(_t.time()),
+                "reason":     reason,
+                "risk_score": int(s.risk_score),
+                "track_key":  track_key[:32],
+                "ip":         ip,
+                "ja4":        last_ja4,
+                "ua":         (s.last_user_agent or "")[:120],
+                "duration_s": ban_dur,
+                "hostile":    reason in _HOSTILE_REASONS,
+            }))
     return triggered
 
 # H4: socket-IP secondary bucket — runs BEFORE per-identity bucket so an
@@ -1533,6 +1800,25 @@ async def protect(request: web.Request, handler):
     # silent-decoy without revealing the gateway, and the challenge gate
     # must not preempt them with an explicit response.
 
+    # 1.5.1: operator-controlled global throughput limit. When the rolling
+    # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
+    # request. /__live and /__* paths are exempt so health-checks and
+    # admin tools keep working under load. Operator drives this via the
+    # main dashboard slider (or /__config POST GLOBAL_RPS_LIMIT=N).
+    if GLOBAL_RPS_LIMIT > 0 and not request.path.startswith("/__"):
+        n_ts = _t.time()
+        cutoff = n_ts - 1.0
+        # Lazy-trim
+        while _global_rps_window and _global_rps_window[0] < cutoff:
+            _global_rps_window.popleft()
+        if len(_global_rps_window) >= GLOBAL_RPS_LIMIT:
+            ip = get_ip(request)
+            ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(
+                ip, ua, request.path, "traffic-threshold",
+                ja4=_request_ja4(request), request_id=rid)
+        _global_rps_window.append(n_ts)
+
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
     # /__* routes accept any method (HEAD probes, OPTIONS preflight).
@@ -1694,6 +1980,18 @@ async def protect(request: web.Request, handler):
         return await _silent_decoy_response(
             ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
+
+    # 1b. 1.5.0 — fingerprint-level ban check. The session-churn detector
+    # bans by `_fp_hash(ua,ip_tier,ja4)`, not by track_key — because the
+    # offender's pattern is to rotate cookies (and therefore track_keys)
+    # while keeping the fingerprint stable. Future requests with the same
+    # fingerprint hit this gate even if they carry a fresh chal cookie.
+    fp_hash_key = _fp_hash(ua, _ip_tier(ip), ja4)
+    fp_banned, _ = await is_banned(fp_hash_key)
+    if fp_banned:
+        return await _silent_decoy_response(
+            ip, ua, path, "fp-banned", track_key=track_key, sid=sid,
+            fp=fp, ja4=ja4, request_id=rid)
 
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
     #    Threshold-based: at NAT-like IPs, requires accumulated badness.
@@ -1892,15 +2190,20 @@ async def protect(request: web.Request, handler):
     # gate is a friction layer that combined with the heuristic stack
     # raises bot cost without any third-party dependency.
     if request.get("_auto_mint_chal"):
-        ip_tier = _ip_tier(get_ip(request))
+        ip_tier_h = _ip_tier(get_ip(request))
         bind_ja4 = ja4 if (JS_CHAL_BIND_JA4 and ja4) else ""
-        cookie = _make_chal_cookie(ua, "", ip_tier, bind_ja4)
+        cookie = _make_chal_cookie(ua, "", ip_tier_h, bind_ja4)
         response.set_cookie(
             CHAL_COOKIE, cookie,
             httponly=True,
             samesite=SESSION_SAMESITE,
             secure=SESSION_SECURE,
             path="/", max_age=CHAL_TTL)
+        # 1.5.0: log this mint into the per-fingerprint churn detector. If
+        # the same UA+IP-tier+JA4 has minted > SESSION_CHURN_MAX cookies in
+        # the last SESSION_CHURN_WINDOW_S seconds, the fingerprint enters
+        # the hostile pool (24 h shared ban).
+        await _record_chal_mint(ua, ip_tier_h, ja4, ip, rid=rid)
 
     await record(ip, ua, path, response.status, "",
                  track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
@@ -2062,6 +2365,11 @@ async def metrics_endpoint(request: web.Request):
                     agg["blocked"] += d["blocked"]
             timeline_out.append({"t": slot, **agg})
 
+        # 1.5.1: live throughput from the rolling 1-second window. Used by
+        # the main-dashboard threshold slider to show current load vs limit.
+        cur_n = _t.time()
+        live_rps = sum(1 for ts in _global_rps_window if ts > cur_n - 1.0)
+
         return web.json_response({
             "uptime_secs": int(_t.time() - START_EPOCH),
             "total": metrics["total_requests"],
@@ -2072,6 +2380,8 @@ async def metrics_endpoint(request: web.Request):
             "top_paths": [{"path": p, "count": c} for p, c in top_paths],
             "clients": clients,
             "events": recent_events,
+            "live_rps": live_rps,
+            "global_rps_limit": GLOBAL_RPS_LIMIT,
             "timeline": timeline_out,
             "timeline_range_min": range_min,
             "timeline_bucket_secs": bucket_secs,
@@ -2089,9 +2399,16 @@ async def metrics_endpoint(request: web.Request):
                     "X-Content-Type-Options": "nosniff"})
 
 async def dashboard_endpoint(request: web.Request):
-    """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics)."""
+    """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics).
+    1.5.1: pre-fills the top-nav __KEY__ placeholders so admin auth threads
+    cleanly when the user clicks across to the agents / service / controls
+    dashboards."""
+    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
+    body = DASHBOARD_HTML.replace(
+        "__KEY__",
+        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
     return web.Response(
-        text=DASHBOARD_HTML,
+        text=body,
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -2214,6 +2531,12 @@ async def js_challenge_endpoint(request: web.Request):
                     samesite=SESSION_SAMESITE,
                     secure=SESSION_SECURE,
                     path="/", max_age=CHAL_TTL)
+    # 1.5.0: same churn check on the Turnstile path. Even though Turnstile
+    # itself raises the cost, an attacker that can solve Turnstile (e.g.
+    # via a paid CAPTCHA-farm) and then mints many cookies still trips this.
+    await _record_chal_mint(
+        ua, ip_tier, ja4, get_ip(request),
+        rid=request.get("_rid", ""))
     return resp
 
 async def unban_endpoint(request: web.Request):
@@ -2259,6 +2582,67 @@ async def unban_endpoint(request: web.Request):
     return web.json_response({"cleared": cleared, "scope":
         "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
         headers={"Cache-Control": "no-store"})
+
+async def ban_endpoint(request: web.Request):
+    """Admin: ban a single identity (track-key) or all identities behind an
+    IP for `secs` seconds. Mirror of /__unban so the controls/agents
+    dashboards can drive bans without restarting or rewriting state.
+
+    Query params:
+      ?id=<identity>   — ban one identity (track_key)
+      ?ip=<ip>         — ban every identity whose last_ip matches
+      &secs=<int>      — ban duration (default HOSTILE_BAN_SECS, max 31 d)
+      &reason=<text>   — recorded in audit log + risk-score reasons
+    """
+    target_id = request.query.get("id")
+    target_ip = request.query.get("ip")
+    try:
+        secs = int(request.query.get("secs", str(HOSTILE_BAN_SECS)))
+    except ValueError:
+        secs = HOSTILE_BAN_SECS
+    secs = max(60, min(secs, 31 * 86400))
+    reason = (request.query.get("reason", "manual-ban") or "manual-ban")[:64]
+    if not target_id and not target_ip:
+        return web.json_response({"error": "provide id= or ip="},
+                                  status=400,
+                                  headers={"Cache-Control": "no-store"})
+    banned_count = 0
+    async with state_lock:
+        n = now()
+        for k, s in ip_state.items():
+            if (target_id and k == target_id) or (
+                    target_ip and s.last_ip == target_ip):
+                s.banned_until = n + secs
+                banned_count += 1
+    # Propagate to shared store + write to DB.
+    ts = _t.time()
+    if target_id and banned_count:
+        await _shared_ban_set(target_id, ts + secs, reason)
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("ban", (target_id, ts + secs, reason, ts)))
+            except asyncio.QueueFull:
+                pass
+    elif target_ip and banned_count:
+        # ip-scoped: write a row per matched identity. Best effort.
+        async with state_lock:
+            matched_ids = [k for k, s in ip_state.items()
+                           if s.last_ip == target_ip]
+        for tk in matched_ids:
+            await _shared_ban_set(tk, ts + secs, reason)
+            if db_queue is not None:
+                try:
+                    db_queue.put_nowait(("ban", (tk, ts + secs, reason, ts)))
+                except asyncio.QueueFull:
+                    pass
+    slog("manual_ban", level="warn", rid=request.get("_rid", ""),
+         id=target_id or "", ip=target_ip or "", secs=secs,
+         reason=reason, count=banned_count)
+    return web.json_response(
+        {"banned": banned_count, "secs": secs, "reason": reason,
+         "scope": ("id=" + target_id if target_id else "ip=" + target_ip)},
+        headers={"Cache-Control": "no-store"})
+
 
 async def rotate_keys_endpoint(request: web.Request):
     """1.4.5: rotate the SESSION_KEY (and optionally POW key) atomically.
@@ -2373,6 +2757,10 @@ _HOT_RELOAD_KNOBS = {
     "IP_REFILL":              (float, lambda v: 0.0 < v <= 10000.0),
     "HOSTILE_BAN_SECS":       (int,   lambda v: 60 <= v <= 31 * 86400),
     "CANARY_TTL_S":           (int,   lambda v: 30 <= v <= 86400),
+    "GLOBAL_RPS_LIMIT":       (int,   lambda v: 0 <= v <= 1000000),
+    "SESSION_CHURN_WINDOW_S": (int,   lambda v: 5 <= v <= 86400),
+    "SESSION_CHURN_MAX":      (int,   lambda v: 1 <= v <= 10000),
+    "JA4_AUTODENY_THRESHOLD": (int,   lambda v: 1 <= v <= 1000),
     # Lists (comma-separated str → list/set)
     "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
@@ -3449,7 +3837,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.4.7"
+                response_headers["X-Proxy"] = "AppSecGW_1.5.2"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -3510,6 +3898,11 @@ async def on_startup(app):
     db_writer_task = asyncio.create_task(db_writer_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
     service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
+    # 1.5.0: optional shared-state connect. Failures degrade to no-op so
+    # an unreachable Redis never prevents the gateway from coming up.
+    await _shared_init()
+    # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
+    asyncio.create_task(_refresh_ja4_denylist_loop())
     print(f"[db] persistence active → {DB_PATH}")
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
@@ -3888,7 +4281,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.4.7",
+        "version":         "AppSecGW_1.5.2",
     }
     return web.json_response({
         "current":          current,
@@ -3906,10 +4299,32 @@ async def service_metrics_data_endpoint(request: web.Request):
 
 
 SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="utf-8")
+CONTROLS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
+
+async def controls_dashboard_endpoint(request: web.Request):
+    """1.5.1: ops dashboard with on/off switches + thresholds for every
+    hot-reloadable knob. Uses /__config under the hood; admin-IP +
+    admin-key gated like every other /__* route."""
+    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
+    body = CONTROLS_DASHBOARD_HTML.replace(
+        "__KEY__",
+        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        })
 
 async def service_dashboard_endpoint(request: web.Request):
+    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
+    body = SERVICE_DASHBOARD_HTML.replace(
+        "__KEY__",
+        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
     return web.Response(
-        text=SERVICE_DASHBOARD_HTML, content_type="text/html",
+        text=body, content_type="text/html",
         headers={
             "Cache-Control": "no-store",
             "X-Frame-Options": "DENY",
@@ -3937,6 +4352,7 @@ def make_app() -> web.Application:
     app.router.add_get("/__dashboard", dashboard_endpoint)
     app.router.add_get("/__metrics", metrics_endpoint)
     app.router.add_get("/__unban", unban_endpoint)
+    app.router.add_get("/__ban",   ban_endpoint)
     app.router.add_post("/__rotate-keys", rotate_keys_endpoint)
     app.router.add_get("/__config",  config_endpoint)
     app.router.add_post("/__config", config_endpoint)
@@ -3945,6 +4361,7 @@ def make_app() -> web.Application:
     app.router.add_get("/__agents-timeline", agents_timeline_endpoint)
     app.router.add_get("/__service",      service_dashboard_endpoint)
     app.router.add_get("/__service-data", service_metrics_data_endpoint)
+    app.router.add_get("/__controls",     controls_dashboard_endpoint)
     app.router.add_get("/__xff", debug_xff)
     app.router.add_route("*", "/{path:.*}", proxy)
     return app
@@ -3955,7 +4372,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.4.7    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.5.2    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")

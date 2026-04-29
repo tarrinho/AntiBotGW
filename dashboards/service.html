@@ -48,14 +48,20 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 @media (max-width:1100px){.row,.row5{grid-template-columns:repeat(2,1fr)}}
 </style></head>
 <body>
-<h1>AppSecGW &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
-<div class="nav">
-  <a id="lnk-main"   href="#">← main dashboard</a>
-  <span class="dim">|</span>
-  <a id="lnk-agents" href="#">stealth agents</a>
-  <span class="dim">|</span>
-  <a id="lnk-self"   href="#">service metrics (this page)</a>
-</div>
+<style>
+.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;
+        padding:6px 0;border-bottom:1px solid var(--line)}
+.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px;transition:color .1s}
+.topnav a:hover{color:var(--fg);background:#1f2730}
+.topnav a.active{color:var(--fg);background:#1f2730}
+</style>
+<h1>AppSecGW_1.5.2 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<nav class="topnav" id="topnav">
+  <a href="/__dashboard?key=__KEY__">Dashboard</a>
+  <a href="/__agents?key=__KEY__">Agents</a>
+  <a href="/__service?key=__KEY__" class="active">Service</a>
+  <a href="/__controls?key=__KEY__">Controls</a>
+</nav>
 
 <div class="grid">
 
