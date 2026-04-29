@@ -135,7 +135,7 @@
 <!-- ───────────────────────── COVER ───────────────────────── -->
 <div class="cover">
   <div class="cover-title">
-    <h1>AppSecGW/1.4.3</h1>
+    <h1>AppSecGW/1.4.5</h1>
     <div class="subtitle">Hardened Reverse Proxy with Layered Anti-Automation Defenses</div>
     <div class="subtitle">Implementation, Hardening &amp; CVE-Patching Report</div>
   </div>
@@ -143,7 +143,7 @@
     <p><strong>Author:</strong> Pedro Tarrinho</p>
     <p><strong>Date:</strong> 2026-04-28</p>
     <p><strong>Stack:</strong> Python 3.14 / aiohttp 3.13 / SQLite WAL / Chainguard Wolfi (distroless)</p>
-    <p><strong>Image:</strong> appsec-antibot-gw:1.4.3 (79 MB, Trivy: 0 CVEs)</p>
+    <p><strong>Image:</strong> appsec-antibot-gw:1.4.5 (79 MB, Trivy: 0 CVEs)</p>
     <p><strong>Document version:</strong> 1.3 &mdash; supersedes 1.0 / 1.1 / 1.2</p>
   </div>
 </div>
@@ -152,7 +152,7 @@
 <h2>1. Executive Summary</h2>
 
 <p>
-<strong>AppSecGW/1.4.3</strong> is a hardened reverse HTTP proxy designed to sit
+<strong>AppSecGW/1.4.5</strong> is a hardened reverse HTTP proxy designed to sit
 in front of arbitrary upstream applications. Version 1.3 adds full WebSocket
 bridging, SSO-aware redirect rewriting, edge-injected security response
 headers, IP-based admin gating, and a transition to a Chainguard Wolfi-based
@@ -188,7 +188,7 @@ distroless container that reports <strong>zero CVEs</strong> on Trivy scans.
                      │ HTTP loopback
                      ▼
        ┌─────────────────────────────────────┐
-       │  AppSecGW/1.4.3  (Chainguard Wolfi)   │
+       │  AppSecGW/1.4.5  (Chainguard Wolfi)   │
        │   • read-only, non-root, cap-drop ALL│
        │   • aiohttp 3.13 + SQLite WAL       │
        │   • 13 detection layers + WS bridge │
@@ -546,7 +546,7 @@ preserved. Useful for laptop / VPN-roaming workflows.</p>
 
 <p>The Wolfi base ships fixes for HIGH-severity OS CVEs typically within 48 h
 of public disclosure (Chainguard's documented SLA). Re-run
-<code>trivy image appsec-antibot-gw:1.4.3</code> on every rebuild to verify the
+<code>trivy image appsec-antibot-gw:1.4.5</code> on every rebuild to verify the
 posture stays at zero.</p>
 
 <!-- ───────────────────────── 6. SECURITY REVIEW HISTORY ───────────────────────── -->
@@ -688,7 +688,7 @@ agents timeline:</p>
 
 <p class="footer-note">
 &mdash; End of report &mdash;
-<br>Image: <code>appsec-antibot-gw:1.4.3</code> &middot;
+<br>Image: <code>appsec-antibot-gw:1.4.5</code> &middot;
 Author: Pedro Tarrinho &middot; 2026-04-28
 </p>
 

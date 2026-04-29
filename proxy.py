@@ -1362,7 +1362,11 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         })
 
 # ── Silent decoy: serves upstream / contents to banned attackers ───────────
-_decoy_cache = {"body": None, "ctype": None, "fetched_at": 0.0}
+# Cache also stores the upstream's HTTP status so the decoy mirrors it. A
+# previous design hard-coded 200 OK while serving the upstream's 404 body —
+# that status/content mismatch was a clean fingerprint for an agent to
+# detect blocked vs forwarded responses. We now match upstream verbatim.
+_decoy_cache = {"body": None, "ctype": None, "status": 200, "fetched_at": 0.0}
 _DECOY_TTL = 60.0  # cache the homepage for 60s
 _decoy_fetch_lock = asyncio.Lock()
 
@@ -1371,9 +1375,11 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                                   fp: str = "", ja4: str = ""):
     """
     Stealth response for blocked clients.
-    Returns upstream's `/` content as a 200 OK. The block IS still recorded
-    under the hybrid identity (track_key), keyed on the cookie+fingerprint
-    so a single bad actor in a NAT pool doesn't poison all peers.
+    Returns upstream's `/` content with upstream's actual status code, so a
+    blocked request looks indistinguishable from a forwarded request that
+    happened to land on `/`. The block IS still recorded under the hybrid
+    identity (track_key), keyed on the cookie+fingerprint so a single bad
+    actor in a NAT pool doesn't poison all peers.
     """
     n = _t.time()
     # N2: serialize the upstream fetch — many concurrent blocked requests
@@ -1387,6 +1393,7 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                         async with session.get(UPSTREAM + "/", allow_redirects=False) as resp:
                             _decoy_cache["body"] = await resp.read()
                             _decoy_cache["ctype"] = resp.headers.get("Content-Type", "text/html; charset=utf-8")
+                            _decoy_cache["status"] = resp.status
                             _decoy_cache["fetched_at"] = n
                 except Exception:
                     _decoy_cache["body"] = (
@@ -1394,11 +1401,13 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                         b"<body><h1>Welcome</h1><p>Service operational.</p></body></html>"
                     )
                     _decoy_cache["ctype"] = "text/html; charset=utf-8"
+                    _decoy_cache["status"] = 200
                     _decoy_cache["fetched_at"] = n
-    await record(ip, ua, path, 200, reason, track_key=track_key, sid=sid,
+    decoy_status = int(_decoy_cache.get("status") or 200)
+    await record(ip, ua, path, decoy_status, reason, track_key=track_key, sid=sid,
                  fp=fp, ja4=ja4)
     return web.Response(
-        status=200,
+        status=decoy_status,
         body=_decoy_cache["body"],
         headers={
             "Content-Type": _decoy_cache["ctype"],
@@ -1527,11 +1536,24 @@ async def protect(request: web.Request, handler):
     if _js_challenge_required(request):
         if _js_challenge_applicable(request):
             return _serve_js_challenge(request)
-        ip = get_ip(request)
-        ua = request.headers.get("User-Agent", "")
-        return await _silent_decoy_response(ip, ua, request.path,
-                                            "chal-required",
-                                            ja4=_request_ja4(request))
+        # 1.4.4: heuristic auto-mint mode (no Turnstile). HTML GETs are
+        # allowed through; the response gets the cookie set after the
+        # request completes the rest of the layered checks. Non-HTML or
+        # non-GET requests without a cookie still silent-decoy so APIs
+        # cannot be used directly without first visiting an HTML page.
+        if (not TURNSTILE_ENABLED
+                and request.method == "GET"
+                and "text/html" in request.headers.get("Accept", "")):
+            request["_auto_mint_chal"] = True
+            # fall through to the rest of the middleware so UA filter,
+            # header completeness, behavioural, body-pattern, canary echo
+            # etc. still apply before we hand back a cookie.
+        else:
+            ip = get_ip(request)
+            ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(ip, ua, request.path,
+                                                "chal-required",
+                                                ja4=_request_ja4(request))
 
     # Internal endpoints: only authenticated operator gets through.
     # Anyone else sees the silent decoy — they don't even learn that /__* exist.
@@ -1795,6 +1817,27 @@ async def protect(request: web.Request, handler):
 
     # Allowed → forward upstream and record under the identity
     response = await handler(request)
+
+    # 1.4.4: heuristic auto-mint of the chal cookie. The request reached
+    # this point because (a) JS_CHALLENGE=1, (b) Turnstile is OFF, (c) it
+    # was an HTML GET without a valid chal cookie, and (d) every layer
+    # above (UA filter, header completeness, behavioural, body pattern,
+    # canary echo, rate limits, ...) has waved it through. Issue a cookie
+    # bound to UA + IP-tier-hash + JA4-hash so subsequent API/XHR calls
+    # from this client carry a session marker. NOT a hard wall — the
+    # gate is a friction layer that combined with the heuristic stack
+    # raises bot cost without any third-party dependency.
+    if request.get("_auto_mint_chal"):
+        ip_tier = _ip_tier(get_ip(request))
+        bind_ja4 = ja4 if (JS_CHAL_BIND_JA4 and ja4) else ""
+        cookie = _make_chal_cookie(ua, "", ip_tier, bind_ja4)
+        response.set_cookie(
+            CHAL_COOKIE, cookie,
+            httponly=True,
+            samesite=SESSION_SAMESITE,
+            secure=SESSION_SECURE,
+            path="/", max_age=CHAL_TTL)
+
     await record(ip, ua, path, response.status, "",
                  track_key=track_key, sid=sid, fp=fp, ja4=ja4)
     # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
@@ -2147,6 +2190,69 @@ async def unban_endpoint(request: web.Request):
             print(f"[unban] db error: {e}")
     return web.json_response({"cleared": cleared, "scope":
         "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
+        headers={"Cache-Control": "no-store"})
+
+async def rotate_keys_endpoint(request: web.Request):
+    """1.4.5: rotate the SESSION_KEY (and optionally POW key) atomically.
+
+    Every cookie HMAC-signed under the old key fails verification immediately
+    after this returns. Useful after upgrading the gateway, after an
+    incident, or on a schedule via cron. The new key is persisted to disk
+    (`.session_key` / `.pow_key`) so subsequent restarts pick it up.
+
+    Query params:
+      ?scope=session  (default) — rotate SESSION_KEY only (chal + session
+                                  cookies invalidated; PoW challenges still
+                                  validate against existing pow key).
+      ?scope=pow                — rotate POW_HMAC_KEY only (PoW challenges
+                                  in flight invalidated).
+      ?scope=all                — rotate both.
+    """
+    global SESSION_KEY, POW_HMAC_KEY
+    scope = request.query.get("scope", "session").lower()
+    rotated = []
+    if scope in ("session", "all"):
+        new_sess = secrets.token_bytes(32)
+        try:
+            with open(_SESS_KEY_FILE, "w") as f:
+                f.write(new_sess.hex())
+            try:
+                os.chmod(_SESS_KEY_FILE, 0o600)
+            except OSError:
+                pass
+        except OSError as e:
+            return web.json_response(
+                {"error": f"persist failed: {e}"}, status=500,
+                headers={"Cache-Control": "no-store"})
+        SESSION_KEY = new_sess
+        rotated.append("session")
+    if scope in ("pow", "all"):
+        new_pow = secrets.token_bytes(32)
+        try:
+            with open(_POW_KEY_FILE, "w") as f:
+                f.write(new_pow.hex())
+            try:
+                os.chmod(_POW_KEY_FILE, 0o600)
+            except OSError:
+                pass
+        except OSError as e:
+            return web.json_response(
+                {"error": f"persist failed: {e}"}, status=500,
+                headers={"Cache-Control": "no-store"})
+        POW_HMAC_KEY = new_pow
+        rotated.append("pow")
+    if not rotated:
+        return web.json_response(
+            {"error": "scope must be one of: session, pow, all"},
+            status=400, headers={"Cache-Control": "no-store"})
+    print(f"[rotate-keys] rotated: {','.join(rotated)} "
+          f"(every cookie issued before this point now fails HMAC)",
+          flush=True)
+    return web.json_response(
+        {"rotated": rotated,
+         "note": "all chal/session cookies issued before this call now fail "
+                 "HMAC verification. The next legitimate visitor will be "
+                 "issued a fresh cookie."},
         headers={"Cache-Control": "no-store"})
 
 async def status_endpoint(request: web.Request):
@@ -2682,12 +2788,15 @@ JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
 
 def _js_challenge_required(request) -> bool:
     """True iff the JS challenge gate is on AND this request must carry a
-    valid chal cookie but doesn't. The gate is on only when JS_CHALLENGE=1
-    AND Turnstile keys are configured — without Turnstile the cookie has
-    no real boundary behind it (PoW + probe were empirically bypassable
-    in pure Python), so the feature is disabled to avoid the false sense
-    of security a no-op gate would create."""
-    if not (JS_CHALLENGE and TURNSTILE_ENABLED):
+    valid chal cookie but doesn't. The gate engages whenever JS_CHALLENGE=1.
+    Cookie minting depends on configuration:
+      • TURNSTILE_SITEKEY/SECRET set → Turnstile siteverify mints the cookie
+        (production-grade boundary; only widget-solved tokens validate).
+      • Otherwise → cookie auto-minted at the end of any allowed HTML GET
+        (heuristic friction layer — clients must pass UA/header/behavioural
+        screens AND complete one round trip before reaching API paths,
+        without requiring any third-party service)."""
+    if not JS_CHALLENGE:
         return False
     if request.path == "/__challenge" or request.path.startswith("/__"):
         return False  # admin / challenge-solver have their own auth
@@ -2707,9 +2816,13 @@ def _js_challenge_required(request) -> bool:
 
 def _js_challenge_applicable(request) -> bool:
     """True iff we should serve the interactive JS challenge HTML page.
-    Only navigation-style HTML GETs see the page — everything else gets a
-    401 JSON response (handled in the middleware)."""
+    Only fires in Turnstile mode — without Turnstile, HTML GETs are
+    forwarded normally and the cookie is auto-minted on the response.
+    Only navigation-style HTML GETs see the page — non-HTML / non-GET
+    requests without the cookie are silent-decoyed instead."""
     if not _js_challenge_required(request):
+        return False
+    if not TURNSTILE_ENABLED:
         return False
     if request.method != "GET":
         return False
@@ -3150,7 +3263,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.4.3"
+                response_headers["X-Proxy"] = "AppSecGW_1.4.5"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -3215,12 +3328,12 @@ async def on_startup(app):
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
     if JS_CHALLENGE and not TURNSTILE_ENABLED:
-        print("[js-challenge] WARNING: JS_CHALLENGE=1 but TURNSTILE_SITEKEY/"
-              "TURNSTILE_SECRET not configured — gate is DISABLED. The "
-              "Turnstile token is the only check on this endpoint that "
-              "scripted clients cannot fabricate locally; without it the "
-              "feature would be theatre. Other layers remain active.",
-              flush=True)
+        print("[js-challenge] active (heuristic mint, no third-party). "
+              "Cookie gate engages on every non-static path; cookie is "
+              "auto-issued on the first qualifying HTML GET. Bypass cost "
+              "vs determined script: ~1 RTT — combine with R7 canary "
+              "echo, body-pattern, UA filter, hostile pool. For a hard "
+              "boundary set TURNSTILE_SITEKEY/SECRET.", flush=True)
     elif JS_CHALLENGE and TURNSTILE_ENABLED:
         print("[js-challenge] active (Turnstile-backed cookie gate)",
               flush=True)
@@ -3589,7 +3702,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.4.3",
+        "version":         "AppSecGW_1.4.5",
     }
     return web.json_response({
         "current":          current,
@@ -3638,6 +3751,7 @@ def make_app() -> web.Application:
     app.router.add_get("/__dashboard", dashboard_endpoint)
     app.router.add_get("/__metrics", metrics_endpoint)
     app.router.add_get("/__unban", unban_endpoint)
+    app.router.add_post("/__rotate-keys", rotate_keys_endpoint)
     app.router.add_get("/__agents", agents_dashboard_endpoint)
     app.router.add_get("/__agents-data", agents_data_endpoint)
     app.router.add_get("/__agents-timeline", agents_timeline_endpoint)
@@ -3653,7 +3767,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.4.3    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.4.5    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
