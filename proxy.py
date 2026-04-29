@@ -984,6 +984,45 @@ def now() -> float:
 # ── Helpers ────────────────────────────────────────────────────────────────
 TRUST_XFF = os.environ.get("TRUST_XFF", "first").lower()  # first | last | none
 
+# 1.4.6 — structured logging + request correlation IDs.
+# When LOG_FORMAT=json, every log line is a one-line JSON document so it can
+# be ingested by Loki / Splunk / CloudWatch / etc. unchanged. The default
+# stays text for human-readable single-host runs. Each request gets a short
+# request_id that threads through the middleware, every decision (allow /
+# silent-decoy / explicit deny), the events deque, the dashboard live log,
+# and the response's X-Request-ID header — enabling end-to-end forensics.
+LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").lower()
+LOG_LEVEL  = os.environ.get("LOG_LEVEL",  "info").lower()
+_LOG_LEVELS = {"debug": 10, "info": 20, "warn": 30, "warning": 30,
+               "error": 40, "critical": 50}
+_LOG_LEVEL_N = _LOG_LEVELS.get(LOG_LEVEL, 20)
+_REQUEST_ID_HEADER = "X-Request-ID"
+_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_\-:.]{1,64}$")
+
+def _new_request_id() -> str:
+    """Short, sortable-by-time, easy to grep request id."""
+    return f"r{int(time.time())%100000:05d}{secrets.token_hex(4)}"
+
+def slog(event: str, level: str = "info", **fields) -> None:
+    """Structured log line. In `text` mode prints a compact key=value form;
+    in `json` mode emits one JSON document per line (no embedded newlines)."""
+    if _LOG_LEVELS.get(level, 20) < _LOG_LEVEL_N:
+        return
+    ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if LOG_FORMAT == "json":
+        try:
+            line = json.dumps({"ts": ts, "level": level, "event": event,
+                               **fields}, separators=(",", ":"),
+                              default=str, ensure_ascii=False)
+        except (TypeError, ValueError):
+            # Defensive: never raise from a log call.
+            line = json.dumps({"ts": ts, "level": level, "event": event,
+                               "_log_error": "unserialisable_field"})
+        print(line, flush=True)
+    else:
+        kv = " ".join(f"{k}={v!r}" for k, v in fields.items())
+        print(f"[{ts}] {level} {event} {kv}", flush=True)
+
 def get_ip(request: web.Request) -> str:
     """
     TRUST_XFF=first  → vulnerable: attacker-controlled (default, for bypass demos)
@@ -1281,7 +1320,7 @@ def needs_pow(request: web.Request) -> bool:
 # ── Metrics helpers ────────────────────────────────────────────────────────
 async def record(ip: str, ua: str, path: str, status: int, reason: str,
                  track_key: str = None, sid: str = "", fp: str = "",
-                 ja4: str = ""):
+                 ja4: str = "", request_id: str = ""):
     """Record one request decision into global metrics + per-identity state + event log + DB.
     track_key (identity) is the primary key. ip is stored on IpState for display only.
     `ja4` (R0): TLS handshake fingerprint observed by the trusted upstream
@@ -1359,7 +1398,16 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
             "status": status,
             "reason": reason or "OK",
             "ja4": ja4[:64] if ja4 else "",
+            "rid": request_id[:32] if request_id else "",
         })
+        # 1.4.6: emit one structured log line per recorded request so the
+        # full forensic record (request_id, verdict, ja4, identity) lands
+        # in stdout for downstream ingestion.
+        slog("request",
+             level="info" if not reason else "warn",
+             rid=request_id, ip=ip, ja4=ja4 or "", ua=ua[:120],
+             method="", path=path[:200], status=status,
+             reason=reason or "ok", track_key=(track_key or "")[:32])
 
 # ── Silent decoy: serves upstream / contents to banned attackers ───────────
 # Cache also stores the upstream's HTTP status so the decoy mirrors it. A
@@ -1372,7 +1420,8 @@ _decoy_fetch_lock = asyncio.Lock()
 
 async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                                   track_key: str = None, sid: str = "",
-                                  fp: str = "", ja4: str = ""):
+                                  fp: str = "", ja4: str = "",
+                                  request_id: str = ""):
     """
     Stealth response for blocked clients.
     Returns upstream's `/` content with upstream's actual status code, so a
@@ -1405,14 +1454,17 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                     _decoy_cache["fetched_at"] = n
     decoy_status = int(_decoy_cache.get("status") or 200)
     await record(ip, ua, path, decoy_status, reason, track_key=track_key, sid=sid,
-                 fp=fp, ja4=ja4)
+                 fp=fp, ja4=ja4, request_id=request_id)
+    headers = {
+        "Content-Type": _decoy_cache["ctype"],
+        "Cache-Control": "no-store",
+    }
+    if request_id:
+        headers[_REQUEST_ID_HEADER] = request_id
     return web.Response(
         status=decoy_status,
         body=_decoy_cache["body"],
-        headers={
-            "Content-Type": _decoy_cache["ctype"],
-            "Cache-Control": "no-store",
-        },
+        headers=headers,
     )
 
 # ── Cookie finalizer: outer middleware. Sets the session cookie on every
@@ -1438,6 +1490,14 @@ async def session_cookie_finalizer(request: web.Request, handler):
 # ── Middleware ─────────────────────────────────────────────────────────────
 @web.middleware
 async def protect(request: web.Request, handler):
+    # 1.4.6 — request correlation. Honour an inbound X-Request-ID if it's
+    # safe-looking (so a CDN / front-proxy / load balancer that already
+    # tagged the request keeps its trace), otherwise mint a fresh short id.
+    inbound_rid = request.headers.get(_REQUEST_ID_HEADER, "").strip()
+    rid = (inbound_rid if inbound_rid and _REQUEST_ID_RE.match(inbound_rid)
+           else _new_request_id())
+    request["_rid"] = rid
+
     # L3+N5: reject paths/query with ANY ASCII control byte (0x00-0x1F or 0x7F).
     # CR/LF would enable header injection on legacy backends; NUL truncates
     # in C parsers; other control chars confuse normalisers. Whitespace stays
@@ -1445,13 +1505,15 @@ async def protect(request: web.Request, handler):
     def _has_ctrl(s: str) -> bool:
         return any(ord(c) < 0x20 or ord(c) == 0x7F for c in s)
     if _has_ctrl(request.path) or _has_ctrl(request.query_string or ""):
-        return web.Response(status=400, text="bad request\n")
+        return web.Response(status=400, text="bad request\n",
+                            headers={_REQUEST_ID_HEADER: rid})
 
     # Unauthenticated liveness probe — used by the container HEALTHCHECK.
     if request.path == "/__live":
         return web.Response(text="ok",
                             headers={"Cache-Control": "no-store",
-                                     "Content-Type": "text/plain; charset=utf-8"})
+                                     "Content-Type": "text/plain; charset=utf-8",
+                                     _REQUEST_ID_HEADER: rid})
 
     # v1.4 #1 — JS challenge: solver POSTs back here. Rate-limit by socket-IP
     # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
@@ -1491,7 +1553,7 @@ async def protect(request: web.Request, handler):
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(ip, ua, request.path,
                                                 "host-not-allowed",
-                                                ja4=_request_ja4(request))
+                                                ja4=_request_ja4(request), request_id=rid)
 
     # ── v1.4.2 Layer 0.5: TLS fingerprint deny-list (JA3/JA4) ─────────────
     # The upstream TLS terminator (cloudflared, nginx, ALB) injects the
@@ -1502,7 +1564,7 @@ async def protect(request: web.Request, handler):
         ua = request.headers.get("User-Agent", "")
         return await _silent_decoy_response(ip, ua, request.path,
                                             "tls-fingerprint",
-                                            ja4=_request_ja4(request))
+                                            ja4=_request_ja4(request), request_id=rid)
 
     # ── v1.4.2 Layer 0.6: Strict Origin / Referer enforcement ─────────────
     # On state-changing methods, require the Origin header to match
@@ -1512,7 +1574,7 @@ async def protect(request: web.Request, handler):
         ua = request.headers.get("User-Agent", "")
         return await _silent_decoy_response(ip, ua, request.path,
                                             "origin-mismatch",
-                                            ja4=_request_ja4(request))
+                                            ja4=_request_ja4(request), request_id=rid)
 
     # ── v1.4.2 Layer 0.7: Required custom-header presence ───────────────
     # Operator-defined headers (REQUIRED_HEADERS=X-Client-Version,...) must
@@ -1522,7 +1584,7 @@ async def protect(request: web.Request, handler):
         ua = request.headers.get("User-Agent", "")
         return await _silent_decoy_response(ip, ua, request.path,
                                             "missing-required-header",
-                                            ja4=_request_ja4(request))
+                                            ja4=_request_ja4(request), request_id=rid)
 
     # ── v1.4 #1 — JS challenge gate (V8 fix) ────────────────────────────
     # The chal cookie is REQUIRED on every non-static, non-admin, non-opted-
@@ -1553,7 +1615,7 @@ async def protect(request: web.Request, handler):
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(ip, ua, request.path,
                                                 "chal-required",
-                                                ja4=_request_ja4(request))
+                                                ja4=_request_ja4(request), request_id=rid)
 
     # Internal endpoints: only authenticated operator gets through.
     # Anyone else sees the silent decoy — they don't even learn that /__* exist.
@@ -1566,7 +1628,8 @@ async def protect(request: web.Request, handler):
         ua = request.headers.get("User-Agent", "")
         reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)
                   else "internal-probe")
-        return await _silent_decoy_response(ip, ua, request.path, reason)
+        return await _silent_decoy_response(ip, ua, request.path, reason,
+                                            request_id=rid)
 
     # ── Hybrid identity (primary tracking key) ──
     # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,
@@ -1615,20 +1678,21 @@ async def protect(request: web.Request, handler):
         await update_risk_and_maybe_ban(track_key, reason, ip)
         if reason == "pow-required":
             await record(ip, ua, path, status, reason,
-                         track_key=track_key, sid=sid, fp=fp, ja4=ja4)
+                         track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
             return web.json_response(
                 body, status=status,
-                headers={**(extra_headers or {}), "Cache-Control": "no-store"},
+                headers={**(extra_headers or {}), "Cache-Control": "no-store",
+                         _REQUEST_ID_HEADER: rid},
             )
         return await _silent_decoy_response(
-            ip, ua, path, reason, track_key=track_key, sid=sid, fp=fp, ja4=ja4
+            ip, ua, path, reason, track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
 
     # 1. Banned check (per-identity, not per-IP) → SILENT decoy
     banned, remaining = await is_banned(track_key)
     if banned:
         return await _silent_decoy_response(
-            ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4
+            ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
 
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
@@ -1636,7 +1700,7 @@ async def protect(request: web.Request, handler):
     if request.path in HONEYPOT_PATHS:
         await update_risk_and_maybe_ban(track_key, "honeypot-silent", ip)
         return await _silent_decoy_response(
-            ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4
+            ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
 
     # 2b. Suspicious path PATTERN (flag-hunting, file-hunting, CTF recon).
@@ -1644,7 +1708,7 @@ async def protect(request: web.Request, handler):
     if is_suspicious_path(request.path):
         await update_risk_and_maybe_ban(track_key, "suspicious-path", ip)
         return await _silent_decoy_response(
-            ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4
+            ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
 
     # 2c. R7 — AI-canary echo. The agent has quoted our prior response back
@@ -1659,7 +1723,7 @@ async def protect(request: web.Request, handler):
             await update_risk_and_maybe_ban(track_key, "canary-echo", ip)
             return await _silent_decoy_response(
                 ip, ua, path, "canary-echo",
-                track_key=track_key, sid=sid, fp=fp, ja4=ja4)
+                track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
 
     # 3a. Empty / suspiciously short User-Agent
     ua_stripped = ua.strip()
@@ -1839,7 +1903,7 @@ async def protect(request: web.Request, handler):
             path="/", max_age=CHAL_TTL)
 
     await record(ip, ua, path, response.status, "",
-                 track_key=track_key, sid=sid, fp=fp, ja4=ja4)
+                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
     # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
     async with state_lock:
         st = ip_state[track_key]
@@ -1860,6 +1924,10 @@ async def protect(request: web.Request, handler):
                                       ".svg", ".css", ".js", ".webp",
                                       ".woff", ".woff2", ".ttf", ".map")):
             await update_risk_and_maybe_ban(track_key, "upstream-404", ip)
+    # 1.4.6: stamp the response with the request id so the client can grep
+    # logs from this side using the same id.
+    if rid and _REQUEST_ID_HEADER not in response.headers:
+        response.headers[_REQUEST_ID_HEADER] = rid
     return response
 
 # ── Internal endpoints ─────────────────────────────────────────────────────
@@ -3263,7 +3331,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.4.5"
+                response_headers["X-Proxy"] = "AppSecGW_1.4.6"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -3702,7 +3770,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.4.5",
+        "version":         "AppSecGW_1.4.6",
     }
     return web.json_response({
         "current":          current,
@@ -3767,7 +3835,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.4.5    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.4.6    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
