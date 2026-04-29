@@ -457,6 +457,78 @@ gains normal HTML/JS tooling. No runtime behaviour change.</p>
 re-hydrates the in-memory deque so container restarts no longer wipe the
 chart history.</p>
 
+<h3>4.0.9 R7 — AI-canary echo detection (1.4.3)</h3>
+<p>LLM-driven agents summarise the page they fetched into the model's
+context window and re-emit fragments of that text in subsequent prompts.
+A unique token planted in the HTML therefore comes back to the gateway
+in the next request from the same identity — something a real browser
+will never do. Every HTML response (challenge page included) is stamped
+with <code>agw-c-&lt;16hex&gt;</code> in an HTML comment near
+<code>&lt;/head&gt;</code> and in the <code>X-Trace-Id</code> response
+header. Server-side, every incoming request is scanned (URL, headers,
+POST body up to 8&nbsp;KiB) for any previously-issued token. Match →
+silent-decoy, <code>risk += 80</code> (single hit ≥ ban threshold), and
+the identity is added to the hostile pool (R8). Pentester-confirmed
+(R5/R6 lab): catches LLM agents that 16&nbsp;layers of pure-protocol
+checks could not. Toggled via <code>CANARY_ECHO_DETECTION</code>
+(default <code>1</code>); window length tuned by
+<code>CANARY_TTL_S</code> (default 600&nbsp;s).</p>
+
+<h3>4.0.10 R8 — 24-hour hostile pool (1.4.3)</h3>
+<p>Generalisation of the existing risk-score ban. AI-agent-specific
+reasons (<code>canary-echo</code>, <code>honeypot-silent</code>,
+<code>honeypot</code>, <code>ai-probe</code>,
+<code>suspicious-path</code>) trigger a longer ban duration
+(<code>HOSTILE_BAN_SECS</code>, default 86&nbsp;400&nbsp;s = 24&nbsp;h)
+instead of the standard <code>RISK_BAN_DURATION_SECS</code>. Generic
+bot bans stay at the shorter duration. Asymmetric by design: short
+bans for accidental floods, long bans for confirmed automation.</p>
+
+<h3>4.0.11 No third-party dependency + silent-decoy status mirroring (1.4.4)</h3>
+<p>Earlier 1.4 builds tied the cookie gate to Turnstile. 1.4.4
+decouples the two: the gate engages whenever
+<code>JS_CHALLENGE=1</code>, with two automatic minting modes:</p>
+<ul>
+<li><strong>Turnstile mode</strong> (when keys present) — only
+Cloudflare-server-validated tokens reach <code>/__challenge</code>'s
+mint path. Production-grade boundary; nothing the attacker computes
+locally satisfies it.</li>
+<li><strong>Heuristic mode</strong> (no keys) — cookie is auto-issued
+at the end of any allowed HTML GET that passed every other layer.
+Bypass cost vs determined script: ~1&nbsp;RTT; combined with the rest
+of the stack it raises bot cost without third-party dependencies.</li>
+</ul>
+<p>The silent-decoy response now caches and <strong>mirrors the
+upstream <code>/</code>'s actual HTTP status code</strong> instead of
+hard-coding <code>200</code>. Closes the 200-with-404-page fingerprint
+that an agent could use to distinguish a blocked path from a forwarded
+one when upstream's <code>/</code> returns 404.</p>
+
+<h3>4.0.12 R10 — HMAC key rotation lever (1.4.5)</h3>
+<p>Closes the pentester finding "old chal cookie still works after
+upgrade — HMAC secret not rotated". New admin endpoint
+<code>POST /__rotate-keys?key=…&amp;scope=session|pow|all</code>
+regenerates <code>SESSION_KEY</code> (and/or
+<code>POW_HMAC_KEY</code>) atomically, persists the new bytes to
+<code>/data/.session_key</code> / <code>.pow_key</code>, and takes
+effect immediately. Every chal/session cookie issued before the call
+fails HMAC verification on the very next request. Recommended
+operator triggers: after upgrading the image, after a credential
+incident, or on a scheduled cron job. Note: rotating while live
+browser tabs hold cookies will silent-decoy those tabs until they
+reload <code>/</code> (auto-mint mode) or solve Turnstile (Turnstile
+mode).</p>
+
+<h3>4.0.13 SPA-friendly open paths (1.4.5)</h3>
+<p>The cookie gate is appropriate for navigation routes but breaks
+Single-Page-App XHRs against data-layer prefixes that authenticate via
+their own session (Keycloak, OAuth, JWT). <code>JS_CHAL_OPEN_PATHS</code>
+(comma-separated path prefixes) opts those prefixes out of the cookie
+gate while keeping every other layer (UA filter, header completeness,
+body-pattern, canary echo, rate limits, hostile pool) active. Example
+for the Spring Boot UFE stack used in the lab:</p>
+<pre><code>JS_CHAL_OPEN_PATHS=/bin/mvc.do/,/release-management/,/entity-management/,/content/</code></pre>
+
 <h2>5. Carry-overs from 1.3</h2>
 
 <h3>4.1 WebSocket bridging</h3>
