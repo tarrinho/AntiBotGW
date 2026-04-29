@@ -193,9 +193,13 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+// Legacy nav links removed in 1.5.1 (replaced by server-rendered topnav).
+// Defensively patch any matching IDs that might still exist.
 ['lnk-main','lnk-agents','lnk-self'].forEach((id,i)=>{
+  const el = document.getElementById(id);
+  if (!el) return;
   const tgt = ['/__dashboard','/__agents','/__service'][i];
-  document.getElementById(id).href = tgt + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : '');
+  el.href = tgt + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : '');
 });
 
 const fmtBytes = b => {
