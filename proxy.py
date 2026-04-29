@@ -2323,6 +2323,124 @@ async def rotate_keys_endpoint(request: web.Request):
                  "issued a fresh cookie."},
         headers={"Cache-Control": "no-store"})
 
+# ── 1.4.7 — hot-reload admin endpoint ─────────────────────────────────────
+# A small whitelist of runtime knobs that ops can read or update without
+# bouncing the container. Each entry is (parser, validator). Anything not
+# on this list is rejected explicitly so the endpoint can never be used to
+# clobber the SESSION_KEY, alter the upstream URL, or otherwise reach into
+# state that is intentionally bound at startup.
+
+def _to_bool(v) -> bool:
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "on"):
+        return True
+    if s in ("0", "false", "no", "off", ""):
+        return False
+    raise ValueError(f"not a boolean: {v!r}")
+
+def _to_path_list(v) -> list:
+    """Comma-separated → list of stripped non-empty path prefixes."""
+    if isinstance(v, list):
+        return [str(p).strip() for p in v if str(p).strip()]
+    return [p.strip() for p in str(v).split(",") if p.strip()]
+
+def _to_ja4_set(v) -> set:
+    if isinstance(v, list):
+        return {str(p).strip() for p in v if str(p).strip()}
+    return {p.strip() for p in str(v).split(",") if p.strip()}
+
+# name → (parser, optional validator returning bool)
+_HOT_RELOAD_KNOBS = {
+    # Toggles (booleans)
+    "JS_CHALLENGE":            (_to_bool, None),
+    "BOT_TRAP_FORMS":          (_to_bool, None),
+    "BODY_PATTERN_MATCH":      (_to_bool, None),
+    "CANARY_ECHO_DETECTION":   (_to_bool, None),
+    "STRICT_ORIGIN":           (_to_bool, None),
+    "INJECT_SECURITY_HEADERS": (_to_bool, None),
+    "JS_CHAL_BIND_JA4":        (_to_bool, None),
+    "JS_CHAL_REQUIRE_JA4":     (_to_bool, None),
+    "JS_CHAL_STRICT_STATIC":   (_to_bool, None),
+    # Numeric thresholds (with sane bounds)
+    "RISK_BAN_THRESHOLD":     (int,   lambda v: 1 <= v <= 100000),
+    "RATE_LIMIT_BURST":       (int,   lambda v: 1 <= v <= 100000),
+    "RATE_LIMIT_REFILL":      (float, lambda v: 0.0 < v <= 10000.0),
+    "IP_BURST":               (int,   lambda v: 1 <= v <= 100000),
+    "IP_REFILL":              (float, lambda v: 0.0 < v <= 10000.0),
+    "HOSTILE_BAN_SECS":       (int,   lambda v: 60 <= v <= 31 * 86400),
+    "CANARY_TTL_S":           (int,   lambda v: 30 <= v <= 86400),
+    # Lists (comma-separated str → list/set)
+    "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
+    "JA4_DENY_LIST":          (_to_ja4_set,   None),
+    # Logging
+    "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
+}
+
+def _read_hot_reload_state() -> dict:
+    out = {}
+    g = globals()
+    for k in _HOT_RELOAD_KNOBS:
+        if k not in g:
+            continue
+        v = g[k]
+        # Sets are not JSON-serialisable directly.
+        if isinstance(v, set):
+            v = sorted(v)
+        out[k] = v
+    return out
+
+async def config_endpoint(request: web.Request):
+    """GET  /__config?key=…              → current state of all hot-reloadable knobs.
+    POST /__config?key=…  + JSON body → apply updates, return {applied,rejected,state}.
+    POST body must be a JSON object whose keys are knob names; values are
+    type-coerced and bounds-checked. Anything not in the whitelist is
+    rejected (explicit allowlist — never an attribute-write attack)."""
+    if request.method == "GET":
+        return web.json_response({"state": _read_hot_reload_state()},
+                                  headers={"Cache-Control": "no-store"})
+    if request.method != "POST":
+        return web.json_response({"error": "method not allowed"}, status=405,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        raw = await asyncio.wait_for(request.content.read(64 * 1024),
+                                      timeout=BODY_TIMEOUT)
+        updates = json.loads(raw.decode("utf-8") or "{}")
+        if not isinstance(updates, dict):
+            raise ValueError("body must be a JSON object")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    applied, rejected = {}, {}
+    g = globals()
+    for k, raw_v in updates.items():
+        spec = _HOT_RELOAD_KNOBS.get(k)
+        if spec is None:
+            rejected[k] = "not-hot-reloadable"
+            continue
+        parser, validator = spec
+        try:
+            value = parser(raw_v)
+            if validator is not None and not validator(value):
+                rejected[k] = "validation failed"
+                continue
+            g[k] = value
+            applied[k] = sorted(value) if isinstance(value, set) else value
+        except (ValueError, TypeError) as e:
+            rejected[k] = str(e)[:120]
+    if applied:
+        slog("config_changed", level="warn",
+             rid=request.get("_rid", ""), applied=list(applied.keys()),
+             rejected=list(rejected.keys()))
+    return web.json_response(
+        {"applied": applied, "rejected": rejected,
+         "state": _read_hot_reload_state()},
+        headers={"Cache-Control": "no-store"})
+
+
 async def status_endpoint(request: web.Request):
     async with state_lock:
         out = {}
@@ -3331,7 +3449,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.4.6"
+                response_headers["X-Proxy"] = "AppSecGW_1.4.7"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -3770,7 +3888,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.4.6",
+        "version":         "AppSecGW_1.4.7",
     }
     return web.json_response({
         "current":          current,
@@ -3820,6 +3938,8 @@ def make_app() -> web.Application:
     app.router.add_get("/__metrics", metrics_endpoint)
     app.router.add_get("/__unban", unban_endpoint)
     app.router.add_post("/__rotate-keys", rotate_keys_endpoint)
+    app.router.add_get("/__config",  config_endpoint)
+    app.router.add_post("/__config", config_endpoint)
     app.router.add_get("/__agents", agents_dashboard_endpoint)
     app.router.add_get("/__agents-data", agents_data_endpoint)
     app.router.add_get("/__agents-timeline", agents_timeline_endpoint)
@@ -3835,7 +3955,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.4.6    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.4.7    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
