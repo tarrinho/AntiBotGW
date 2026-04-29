@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.4` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.4.2` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (any severity) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -25,7 +25,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.4 \
+docker run -d --name appsec-antibot-gw1.4.2 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -42,7 +42,7 @@ docker run -d --name appsec-antibot-gw1.4 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.4 \
+  appsec-antibot-gw:1.4.2 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -50,6 +50,29 @@ Put TLS in front (`nginx`, `cloudflared`, `caddy` …). The proxy itself
 listens HTTP-only on `:8443`.
 
 ---
+
+## Threat model & honest posture
+
+Earlier iterations of this gateway shipped an in-process "JS challenge" that stacked client-computed primitives — SHA-256 Proof-of-Work, browser-API probe with cross-validation, anchor-fetch proof, sub-second timing windows — to try to distinguish real browsers from scripted clients. Empirically every one of those layers was bypassable in pure Python in ~1 s. They were *bot-cost amplifiers*, not security boundaries; they have been removed.
+
+What remains:
+- **Layered heuristics** — UA filter, header-completeness scoring, behavioral timing, rate limits (per-identity + per-socket-IP), risk-score model, bot-trap forms, body-pattern matching, slowloris guard, suspicious-path patterns, AI-probe path detection, honey-link injection. These are still cost amplifiers, but they're light-weight and they don't claim to be a hard wall.
+- **Cookie-bound access (V8) + Turnstile minter** — opt-in via `JS_CHALLENGE=1` *and* `TURNSTILE_SITEKEY`/`TURNSTILE_SECRET`. The chal cookie is bound to (UA + IP-tier + opaque-hashed JA4 when present). The minter accepts only a Cloudflare Turnstile success token, which is generated server-side by Cloudflare and verified against `siteverify`; nothing the attacker computes locally satisfies it. Without Turnstile keys configured, this feature is disabled and a startup banner says so.
+- **JA4 telemetry** — the per-request log records the TLS handshake fingerprint observed by a trusted upstream (`JA4_HEADER`, default `CF-JA4`), so operators can drive `JA4_DENY_LIST` from real traffic rather than heuristic guesses.
+
+The cookie is therefore **also bound to the JA4 TLS fingerprint** when one is observed (V9.2). JA4 is the one signal in the stack the client *doesn't compute* — the network observes it during the TLS handshake. A cookie issued under one handshake cannot be replayed under another, so an attacker switching TLS stacks (e.g. Python urllib → curl → Chrome impersonate) loses every cookie they just paid PoW for. To use JA4 binding the gateway must sit behind a JA4-injecting front (cloudflared injects `CF-JA4`; nginx with the JA4 module also works); operator pins the trusted source via `JA4_TRUSTED_PEERS`.
+
+For the strongest defense, **enable Cloudflare Turnstile** — `TURNSTILE_SITEKEY` + `TURNSTILE_SECRET`. The success token is minted by Cloudflare server-side and verified against `siteverify`; nothing the attacker computes locally satisfies it.
+
+| Threat | Heuristics only (no Turnstile) | With Turnstile |
+|---|---|---|
+| Bare-UA `curl`/short UA | Blocked (UA filter) | Blocked |
+| Empty `Accept-*` / no `Sec-Fetch-*` | Blocked (header completeness) | Blocked |
+| Honey-pot path probe | Risk-score → ban + silent decoy | Same |
+| Bot-trap form fill | Risk-score → ban | Same |
+| Suspicious POST body (SQLi/XSS/SSTI) | Body-pattern match → silent decoy | Same |
+| Single-host scripted bypass on API | Not blocked — gate is OFF | **Blocked** — Turnstile token required to mint cookie |
+| Cookie replay across handshakes | n/a | Blocked (cookie bound to UA + IP-tier + JA4 hash) |
 
 ## What it does
 
@@ -192,12 +215,29 @@ those paths only.
 
 Each sample includes: CPU %, load average (1/5/15), memory total/used/available, swap, cgroup memory, disk total/used/available for `/data`, process count, open FDs, network rx/tx bps, and SQLite file sizes (db + WAL + SHM). Dashboard supports `prev / now / fwd` navigation, window selector (5 min – 12 h), bucket selector (5 s – 1 h).
 
+### v1.4.2/3 header-based controls (all opt-in)
+
+| Variable | Default | Description |
+|---|---|---|
+| `JA4_HEADER` | `CF-JA4` | Name of the header carrying the TLS fingerprint (cloudflared injects `CF-JA4` since 2024.x) |
+| `JA4_DENY_LIST` | _(empty)_ | Comma-separated TLS fingerprints to block (e.g. `t13d_curl_8x,t13d_python_requests`) |
+| `JA4_TRUSTED_PEERS` | _(empty)_ | Comma-separated IPs/CIDRs allowed to inject the JA4 header (the TLS terminator). Empty = trust all (assumes firewall blocks direct port access). |
+| `STRICT_ORIGIN` | `0` | When `1`, POST/PUT/PATCH/DELETE requires `Origin` header host to match `ALLOWED_HOSTS` |
+| `OPEN_ORIGIN_PATHS` | _(empty)_ | Path prefixes that bypass the Origin check (e.g. `/api/webhook`) |
+| `REQUIRED_HEADERS` | _(empty)_ | Comma-separated header names that must be present on every non-`/__/` non-static request |
+
 ### v1.4 controls (all opt-in / safe defaults)
 
 | Variable | Default | Description |
 |---|---|---|
-| `JS_CHALLENGE` | `0` | Invisible CAPTCHA — first HTML hit returns a tiny JS that POSTs back a server-issued nonce, then sets a 24 h cookie. Blocks pure-HTTP scrapers. |
-| `JS_CHALLENGE_TTL` | `86400` | Cookie lifetime in seconds. |
+| `JS_CHALLENGE` | `0` | Turnstile-backed cookie gate. Active only when this is `1` AND both `TURNSTILE_SITEKEY` and `TURNSTILE_SECRET` are set; otherwise a startup banner notes the feature is disabled. When active, every non-static, non-admin, non-opted-out request must carry a valid `chal` cookie minted via Turnstile; cookieless API/XHR/POST hits are silent-decoyed. |
+| `JS_CHALLENGE_TTL` | `3600` | Cookie lifetime in seconds. |
+| `JS_CHAL_OPEN_PATHS` | _(empty)_ | Comma-separated path prefixes that bypass the cookie gate. Use for legit non-browser clients (S2S, mobile apps, webhooks, e.g. `/webhook/,/s2s/`). |
+| `JS_CHAL_STRICT_STATIC` | `1` | When ON, the static-asset bypass refuses paths containing API hints (`/api/`, `/graphql`, `/v1/`, ...). Closes `/api/v1/users.css` style probes against permissive backends. |
+| `TURNSTILE_SITEKEY` | _(empty)_ | Cloudflare Turnstile public site key. Required to enable the gate. |
+| `TURNSTILE_SECRET` | _(empty)_ | Cloudflare Turnstile secret. Used by `/__challenge` to call `siteverify`. |
+| `JS_CHAL_BIND_JA4` | `1` | Bind the chal cookie to the JA4 fingerprint (opaque hash, never the raw value) when one is injected by a trusted peer. Cookie replay across TLS stacks fails. Opportunistic — clients with no JA4 still work. |
+| `JS_CHAL_REQUIRE_JA4` | `0` | Hard requirement: `/__challenge` rejects (`403`) any submission without a JA4 from a trusted peer. Use only behind a JA4-injecting terminator (cloudflared / nginx-JA4). |
 | `BODY_PATTERN_MATCH` | `0` | Extends the suspicious-path regex set to POST/PUT/PATCH bodies (SQLi/XSS/SSTI/cmd-injection markers in form/JSON/XML). |
 | `BOT_TRAP_FORMS` | `0` | Auto-injects a hidden `<input>` into every `<form>` in HTML responses; flags POSTs that fill it. |
 | `HEADERS_TIMEOUT` | `10` | Slowloris: max seconds to receive full request headers. |
@@ -263,8 +303,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.4 .
-trivy image appsec-antibot-gw:1.4        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.4.2 .
+trivy image appsec-antibot-gw:1.4.2        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -321,7 +361,77 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
-| 1.4 | JS challenge · slowloris guard · bot-trap forms · body pattern matching · service-metrics dashboard (CPU/mem/disk/procs/FDs/net/SQLite size) · windowed time-navigation on agents + service charts |
+| 1.4.2 | **JS challenge is now Turnstile-only.** PoW + browser-API probe + anchor-fetch proof + timing window were empirically bypassable in pure Python in ~1 s/session and have been removed. The cookie gate engages only when `TURNSTILE_SITEKEY` + `TURNSTILE_SECRET` are configured; the chal cookie is then minted by Cloudflare-server-validated tokens and bound to (UA + IP-tier-hash + JA4-hash). Cross-version pentest matrix and per-iteration verdicts published in this README. |
+| 1.4.1 | slowloris guard · bot-trap forms · body pattern matching · service-metrics dashboard (CPU/mem/disk/procs/FDs/net/SQLite size) · windowed time-navigation on agents + service charts · TLS / JA4 fingerprint deny-list (`JA4_TRUSTED_PEERS` for source pinning) · `STRICT_ORIGIN` enforcement on state-changing methods · `REQUIRED_HEADERS` operator-defined header presence check · dashboard HTML extracted to `dashboards/` · service-metrics samples persisted to SQLite (restart-survivable) · **V8/F1-F4** chal cookie required on every non-static path (closes API bypass via Mozilla UA) · static-suffix bypass tightened against `/api/...css` style probes (`JS_CHAL_STRICT_STATIC`) · `/__challenge` rate-limited · stealth-block precedence (host/TLS/origin checks fire before challenge gate) · chal cookie bound to socket-IP /24 (v4) or /48 (v6) tier (opaque HMAC hash, no RFC1918 leak) · XFF-aware client-IP source · chal cookie bound to JA4 TLS fingerprint hash (`JS_CHAL_BIND_JA4`) when injected by a trusted peer · per-request JA4 surfaced in event log so operators can populate `JA4_DENY_LIST` from telemetry · cookie gate exposed across V9 → R3 iterations to be a bot-cost amplifier, not a hard wall (replaced in 1.4.2) |
 | 1.3 | Wolfi distroless (zero CVEs) · WebSocket bridge · SSO 302 rewriting · admin IP allowlist · edge security headers · stealth-agent hunter · streaming body fix |
 | 1.2 | hardening pass · 34/34 audit findings closed · timeline + agents dashboards · PoW replay protection |
 | 1.0 | initial 6-layer prototype |
+
+## Pentest results per version
+
+Each row is a recorded post-release pentest of the deployed image. The "honest verdict" column is what the pentester (and we) *empirically observed* — not what the marketing claimed.
+
+| Version | Configuration | Probe / scenario | Result | Honest verdict |
+|---|---|---|---|---|
+| 1.0 — 1.3 | n/a | Layered heuristics only (UA filter, header completeness, behavioral, rate-limits) | Bare-bot UAs (`curl`, short UA, `python-requests`) silent-decoyed; full-Chrome scripted clients forwarded | Bot-cost amplifier — never claimed to stop a determined scripted client |
+| 1.4.1 (V8) | `JS_CHALLENGE=1`, no Turnstile | `Mozilla/5.0` + `Accept: application/json` straight to `/api/v1/users` | **Forwarded — bypass works** (V8 finding) | Cookie gate only checked HTML routes; API paths sailed through on a UA substring |
+| 1.4.1 (V8 fix) | same, post-fix | Same as above | Silent-decoyed | Cookie now required on every non-static path |
+| 1.4.1 (V9) | `+ CHAL_PROBE_STRICT=1`, `JS_CHAL_DIFFICULTY=5` | Solve PoW in Python, build matching probe, POST `/__challenge` | **Cookie issued in ~1.2 s** (V9 finding) | PoW + probe are client-computed → fully scriptable |
+| 1.4.1 (V9.1) | + opaque tier-hash | inspect cookie wire format | No `172.17.0.0` / RFC1918 leak | Earlier V9.0 had leaked the docker bridge IP |
+| 1.4.1 (V9.2) | + `JS_CHAL_BIND_JA4=1` | Cookie minted under Python urllib JA4 → replayed under different JA4 | Replay silent-decoyed; same-JA4 single-stack attacker still passes after 1.2 s PoW | Handshake binding closes cross-stack replay; doesn't stop a determined single-stack attacker |
+| 1.4.1 (R1) | as V9.2, direct connection (no JA4 header) | Same Python PoC | **Cookie issued in 1.16 s** | JA4 binding disengages without a JA4-injecting front |
+| 1.4.1 (R2) | + `JS_CHAL_REQUIRE_ANCHOR=1` (anchor-fetch proof) | Naïve Python script (no anchor) | Rejected `anchor missing` | Naïve bypass dies |
+| 1.4.1 (R2 adapted) | same | Script parses HTML, fetches anchor, then POSTs | **Cookie issued in ~1.0 s** | +1 RTT cost; bypass scriptable in 4 lines |
+| 1.4.1 (R3) | + dual anchor (`<img>` + `<script src=…&j=1>`) + 400 ms timing window | Script that fetches both anchors | **Cookie issued in ~1.4 s** | +1 more RTT; bypass scriptable in 1 more line |
+| **1.4.2** | PoW + probe + anchor + timing **removed**; `JS_CHALLENGE=1` requires Turnstile keys to engage | Pure-Python `Mozilla/5.0` on `/api/...` | Forwarded (gate intentionally OFF without TS keys) | Pre-V8 layers active; honest about the gap |
+| 1.4.2 (Turnstile, T1) | `TURNSTILE_SITEKEY=1x00…AA` + always-pass test secret | Empty token | 403 `missing turnstile` | Token-required check works |
+| 1.4.2 (Turnstile, T1) | same | Dummy non-empty token | **Cookie issued** | Test sitekey is "always pass" by Cloudflare contract — not a finding |
+| 1.4.2 (Turnstile, T1) | same | Cookie replay under a different `User-Agent` | Silent-decoyed | UA-binding works |
+| 1.4.2 (Turnstile, T2) | always-fail test secret (`2x00…AA`) — mimics real-key rejection of fabricated tokens | Dummy non-empty token | **403 `turnstile rejected`** by Cloudflare `siteverify` | Bypass closed; only legitimately-solved widget tokens validate |
+| 1.4.2 (Turnstile, T2) | same | Direct API without cookie | Silent-decoyed | Gate forwards nothing without a valid cookie |
+
+### Cross-version effectiveness matrix
+
+Same attack battery executed against every locally-available image (`1.1`, `1.2`, `1.3`, `1.4` with `JS_CHALLENGE=1`, `1.4.2` without Turnstile keys, `1.4.2` with Cloudflare always-fail test keys), each container started fresh on port 8444 with a controlled local upstream that returns distinguishable markers. Verdicts:
+
+- **forwarded** — request reached the upstream (no block)
+- **silent_decoy** — gateway substituted its cached `/` decoy (200 OK, stealth block)
+- **challenge_page** — gateway served the JS-challenge HTML (browser-recoverable block)
+- **bad_request** — explicit 400 (control-byte / open-redirect filter)
+- **rate_limited** — 429
+
+| Attack | 1.1 | 1.2 | 1.3 | 1.4 | 1.4.2 (no TS) | 1.4.2 (TS) |
+|---|---|---|---|---|---|---|
+| T01 baseline: full-Chrome on `/landing` | forwarded | forwarded | forwarded | challenge_page | forwarded | challenge_page |
+| T02 bare `curl/8.0` UA | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy |
+| T03 empty UA | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy |
+| T04 `python-requests` UA | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy |
+| T05 Mozilla UA, no `Sec-Fetch-*` (header score = 0) | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy |
+| T06 Mozilla on `/api/v1/users`, Accept `text/html,json` | forwarded | forwarded | forwarded | challenge_page | forwarded | challenge_page |
+| T07 SQLi `UNION SELECT` in form body | silent_decoy | **forwarded** | **forwarded** | silent_decoy | silent_decoy | silent_decoy |
+| T08 `<script>` XSS in JSON body | silent_decoy | **forwarded** | **forwarded** | silent_decoy | silent_decoy | silent_decoy |
+| T09 honey-pot path `/.git/HEAD` | silent_decoy | silent_decoy | silent_decoy | challenge_page | silent_decoy | challenge_page |
+| T10 AI-probe path `/openapi.json` | silent_decoy | silent_decoy | silent_decoy | challenge_page | silent_decoy | challenge_page |
+| T11 open-redirect target `//evil.example.com/x` | silent_decoy | silent_decoy | silent_decoy | challenge_page | silent_decoy | challenge_page |
+| T12 control byte: NUL in path | silent_decoy | bad_request | bad_request | bad_request | bad_request | bad_request |
+| T13 honey-pot `/admin.php` | silent_decoy | silent_decoy | silent_decoy | challenge_page | silent_decoy | challenge_page |
+| T14 `Mozilla/5.0 (compatible; Googlebot/2.1)` | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy | silent_decoy |
+| T15 V8-sharp: API-only `Accept` on `/api/v1/...` ‡ | forwarded | forwarded | forwarded | **forwarded** | **forwarded** | silent_decoy |
+| T16 browser HTML GET on `/landing` | silent_decoy | silent_decoy | silent_decoy | challenge_page | silent_decoy | challenge_page |
+
+‡ T15 was re-tested in **fresh state** for 1.4 and 1.4.2 because risk-score accumulation from T01-T14 silent-decoyed late attacks during the in-order sweep. Fresh state is the honest verdict; the in-order matrix would show silent_decoy for these cells, masking the V8 leak.
+
+**Control effectiveness, summarized:**
+
+| Control | Introduced | Effective from | Notable gap |
+|---|---|---|---|
+| UA blocklist + length filter | 1.0 | 1.0 | None visible in test set |
+| Header-completeness scoring | 1.0 | 1.0 | None visible in test set |
+| Honey-pot path list | 1.0 | 1.0 | None |
+| AI-probe path list | 1.0 | 1.0 | None |
+| Control-byte path filter (`%00`, CR/LF) | 1.2 | 1.2 | 1.1 silent-decoyed instead of explicit `400` |
+| Body-pattern matching (`BODY_PATTERN_MATCH`) | 1.4 | 1.4 | **1.2 + 1.3 forwarded SQLi/XSS payloads** — not regressed in 1.4+ |
+| Cookie gate on HTML routes | 1.4 | 1.4 (HTML only) | **V8: API-only `Accept` paths slipped through** until 1.4.1 |
+| Cookie gate on every non-static path | 1.4.1 | **1.4.2 (with Turnstile)** | Without Turnstile keys the gate is OFF in 1.4.2 — closes only when `TURNSTILE_*` configured |
+| Turnstile minter | 1.4.2 | 1.4.2 (when configured) | Test keys are always-pass / always-fail by Cloudflare contract; production keys reject fabricated tokens |
+| JA4 cookie binding | 1.4.1 | 1.4.2 (when JA4 header injected by trusted upstream) | Disengages on direct connections; only protects against cross-stack cookie replay |

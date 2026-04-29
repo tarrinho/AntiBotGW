@@ -1,0 +1,334 @@
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · Stealth Agent Hunter</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);padding:14px}
+h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+h1 .pill{font-size:10px;background:var(--orange);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.grid{display:grid;gap:14px;margin-top:14px}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
+.metric.crit{color:var(--red)}
+.metric.high{color:var(--orange)}
+.metric.med{color:var(--yellow)}
+.metric.low{color:var(--blue)}
+.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+         text-transform:uppercase;letter-spacing:.5px;font-size:10px}
+table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
+.bar{height:10px;background:#0a0e13;border-radius:4px;overflow:hidden;display:flex}
+.bar>div{height:100%}
+.bar .h{background:#a78bfa}
+.bar .a{background:#5fb3c0}
+.bar .e{background:#3fb950}
+.bar .t{background:#d29922}
+.bar .r{background:#f85149}
+.bar .f{background:#ff7b3a}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
+.tag.crit{background:#4a1a1a;color:var(--red)}
+.tag.high{background:#3d2a1a;color:var(--orange)}
+.tag.med{background:#4a3a1a;color:var(--yellow)}
+.tag.low{background:#1a3a4a;color:var(--blue)}
+.dim{color:var(--dim)}
+.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
+.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.ctrl:disabled{opacity:.4;cursor:not-allowed}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.ctrl-now:hover:not(:disabled){background:#1c3d5a}
+.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
+.expand{cursor:pointer;color:var(--blue)}
+.detail{display:none;background:#0a0e13;border-left:3px solid var(--orange);padding:8px 12px}
+.detail.show{display:block}
+.path-row{font-family:ui-monospace;font-size:11px;color:var(--dim);padding:2px 0}
+.nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
+.nav a{color:var(--blue);text-decoration:none}
+.nav a:hover{text-decoration:underline}
+</style></head>
+<body>
+<h1>AppSecGW · Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<div class="nav">
+  <a href="/__dashboard?key=__KEY__">← main dashboard</a>
+  <span class="dim">|</span>
+  <a href="/__agents?key=__KEY__">stealth agents (this page)</a>
+</div>
+
+<div class="grid">
+
+  <div class="row">
+    <div class="card"><h2>Identities w/ allowed traffic</h2>
+         <div class="metric low" id="m-total">0</div>
+         <div class="metric-sub">total ever passed gate</div></div>
+    <div class="card"><h2>Suspicious now</h2>
+         <div class="metric high" id="m-susp">0</div>
+         <div class="metric-sub" id="m-susp-pct">—</div></div>
+    <div class="card"><h2>Critical (≥80)</h2>
+         <div class="metric crit" id="m-crit">0</div>
+         <div class="metric-sub">strong stealth signals</div></div>
+    <div class="card"><h2>Threshold</h2>
+         <div class="metric med" id="m-thresh">20</div>
+         <div class="metric-sub">
+           <input id="thresh-input" type="number" min="0" max="100" value="20"
+                  class="ctrl" style="width:60px"> apply</div></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Detection vs Miss · Timeline
+        <span id="t-window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span>
+      </h2>
+      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+        <button id="t-prev"  class="ctrl">‹ back</button>
+        <button id="t-now"   class="ctrl ctrl-now">now</button>
+        <button id="t-next"  class="ctrl" disabled>fwd ›</button>
+        <span class="dim" style="margin-left:6px">window:</span>
+        <select id="t-range" class="ctrl">
+          <option value="15">15 min</option>
+          <option value="60" selected>1 h</option>
+          <option value="180">3 h</option>
+          <option value="720">12 h</option>
+          <option value="1440">24 h</option>
+          <option value="10080">7 days</option>
+        </select>
+        <span class="dim">bucket:</span>
+        <select id="t-bucket" class="ctrl">
+          <option value="60" selected>1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+          <option value="3600">1 hour</option>
+          <option value="86400">1 day</option>
+        </select>
+        <span class="dim" id="t-totals"></span>
+      </div>
+    </div>
+    <div style="position:relative;height:240px"><canvas id="agent-chart"></canvas></div>
+    <div class="dim" style="font-size:11px;margin-top:6px">
+      <span style="color:var(--red)">●</span> detected = blocked because tripped an agent layer
+      &nbsp;·&nbsp; <span style="color:var(--orange)">●</span> missed = allowed but identity now scores ≥ threshold
+      &nbsp;·&nbsp; <span style="color:var(--green)">●</span> clean = allowed, no stealth signal
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Score distribution among allowed identities</h2>
+    <div id="dist"></div>
+  </div>
+
+  <div class="card">
+    <h2>Suspicious agents (passed all blocks but exhibit stealth signals)</h2>
+    <table id="sus-tbl">
+      <thead><tr>
+        <th>Score</th><th>Identity</th><th>UA</th><th>IP</th>
+        <th>Allowed</th><th>Blocked</th><th>Headers avg</th>
+        <th>HTML/Static</th><th>Paths/req</th><th>Timing σ/μ</th>
+        <th>404s</th><th>Risk</th><th>Last path</th><th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+</div>
+
+<div class="foot">refreshes every 3 s · <code id="ts"></code></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+        integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+<script>
+const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g,
+  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+function bandClass(s){return s>=80?'crit':s>=60?'high':s>=40?'med':'low'}
+
+let MIN = 20;
+document.getElementById('thresh-input').addEventListener('change', e=>{
+  MIN = Math.max(0, Math.min(100, parseInt(e.target.value)||20));
+  document.getElementById('m-thresh').textContent = MIN; tick();
+});
+
+async function tick(){
+  try{
+    const params = new URLSearchParams({min_score: MIN, limit: 200});
+    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+    const r = await fetch('/__agents-data?' + params, {cache:'no-store', credentials:'include'});
+    const d = await r.json();
+    document.getElementById('live').textContent='● LIVE';
+    document.getElementById('live').style.background='var(--orange)';
+
+    const sum = d.summary;
+    document.getElementById('m-total').textContent = sum.total_with_allowed;
+    document.getElementById('m-susp').textContent  = sum.suspicious;
+    const pct = sum.total_with_allowed
+      ? ((sum.suspicious/sum.total_with_allowed)*100).toFixed(1) + '% of allowed'
+      : '—';
+    document.getElementById('m-susp-pct').textContent = pct;
+    const crits = d.suspects.filter(s=>s.stealth_score>=80).length;
+    document.getElementById('m-crit').textContent = crits;
+    document.getElementById('m-thresh').textContent = sum.min_score;
+
+    // Distribution bars
+    const dist = d.buckets;
+    const total = Math.max(1, Object.values(dist).reduce((a,b)=>a+b,0));
+    const distEl = document.getElementById('dist');
+    distEl.innerHTML = Object.entries(dist).map(([k,v])=>{
+      const pct=(v/total*100).toFixed(1);
+      const cls = k.startsWith('crit')?'crit':k.startsWith('high')?'high':k.startsWith('med')?'med':'low';
+      return `<div style="display:grid;grid-template-columns:120px 1fr 50px;gap:8px;align-items:center;margin:4px 0">
+        <span class="tag ${cls}">${escapeHtml(k)}</span>
+        <div class="bar"><div class="${cls=='crit'?'r':cls=='high'?'f':cls=='med'?'t':'a'}" style="width:${pct}%"></div></div>
+        <span class="dim" style="text-align:right">${v}</span></div>`;
+    }).join('');
+
+    // Suspect table
+    const tbody = document.querySelector('#sus-tbl tbody');
+    if (!d.suspects.length){
+      tbody.innerHTML = `<tr><td colspan=14 class=dim style="text-align:center;padding:14px">no suspicious agents at threshold ${MIN}</td></tr>`;
+    } else {
+      tbody.innerHTML = d.suspects.map((s,i)=>{
+        const m = s.metrics, c = s.components;
+        const compBar = `<div class="bar" title="headers:${c.headers} assets:${c.assets} enum:${c.enum} timing:${c.timing} risk:${c.risk} 404s:${c['404s']}">
+          <div class="h" style="width:${c.headers}%"></div>
+          <div class="a" style="width:${c.assets}%"></div>
+          <div class="e" style="width:${c.enum}%"></div>
+          <div class="t" style="width:${c.timing}%"></div>
+          <div class="r" style="width:${c.risk}%"></div>
+          <div class="f" style="width:${c['404s']}%"></div></div>`;
+        const recentRows = (s.recent_paths||[]).slice(-5).reverse().map(p=>
+          `<div class="path-row">${new Date(p.ts*1000).toLocaleTimeString()} · ${p.status} · ${escapeHtml(p.path)} · hdr=${p.header_score}</div>`
+        ).join('') || '<span class=dim>—</span>';
+        return `
+          <tr>
+            <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
+            <td title="${escapeHtml(s.id)}"><b>${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim">${m.samples} samples</div></td>
+            <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
+            <td>${escapeHtml(s.ip)}</td>
+            <td style="color:var(--green)">${s.allowed}</td>
+            <td style="color:${s.blocked?'var(--red)':'var(--dim)'}">${s.blocked}</td>
+            <td>${m.avg_header_score}/7</td>
+            <td>${m.html_loads}/${m.static_loads}</td>
+            <td>${m.unique_paths}/${s.allowed} (${m.path_diversity})</td>
+            <td>${m.behavioral_cov!==null?m.behavioral_cov:'—'}</td>
+            <td style="color:${m.upstream_404_count>5?'var(--red)':'var(--dim)'}">${m.upstream_404_count}</td>
+            <td>${m.risk_score}</td>
+            <td class="dim">${escapeHtml((s.last_path||'').slice(0,30))}</td>
+            <td><span class="expand" data-i="${i}">▸ paths</span></td>
+          </tr>
+          <tr id="d-${i}" class="detail-row" style="display:none"><td colspan=14>
+            <div class="detail show"><b>Recent allowed paths</b>${recentRows}</div></td></tr>`;
+      }).join('');
+      tbody.querySelectorAll('.expand').forEach(el=>el.onclick=()=>{
+        const r = document.getElementById('d-'+el.dataset.i);
+        r.style.display = (r.style.display==='none')?'table-row':'none';
+      });
+    }
+    document.getElementById('ts').textContent = new Date().toISOString();
+  }catch(e){
+    document.getElementById('live').style.background='var(--red)';
+    document.getElementById('live').textContent='○ ERR';
+  }
+}
+// Detection-vs-miss timeline chart
+let agentChart = null;
+function ensureAgentChart(){
+  if (agentChart) return agentChart;
+  const ctx = document.getElementById('agent-chart').getContext('2d');
+  agentChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label:'detected (blocked agent)', data:[], borderColor:'#f85149',
+        backgroundColor:'rgba(248,81,73,0.20)', tension:0.25, fill:true,
+        borderWidth:2, pointRadius:0, pointHoverRadius:4 },
+      { label:'missed (allowed but stealth)', data:[], borderColor:'#ff7b3a',
+        backgroundColor:'rgba(255,123,58,0.18)', tension:0.25, fill:true,
+        borderWidth:2, pointRadius:0, pointHoverRadius:4 },
+      { label:'clean allowed', data:[], borderColor:'#3fb950',
+        backgroundColor:'rgba(63,185,80,0.10)', tension:0.25, fill:true,
+        borderWidth:2, pointRadius:0, pointHoverRadius:4 },
+    ]},
+    options: { responsive:true, maintainAspectRatio:false,
+      animation:{duration:200}, interaction:{mode:'index',intersect:false},
+      plugins:{ legend:{ labels:{ color:'#c9d1d9', font:{size:11} } } },
+      scales:{
+        x:{ ticks:{color:'#8b949e',font:{size:10},maxRotation:0,autoSkipPadding:18}, grid:{color:'#21262d'} },
+        y:{ beginAtZero:true, ticks:{color:'#8b949e',font:{size:10},precision:0}, grid:{color:'#21262d'} } } }
+  });
+  return agentChart;
+}
+function fmtTimeBucket(epochSec, bucketSec){
+  const d = new Date(epochSec*1000);
+  if (bucketSec >= 86400) return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  if (bucketSec >= 3600)  return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
+}
+async function tickChart(){
+  try{
+    const params = new URLSearchParams({
+      range: document.getElementById('t-range').value,
+      bucket: document.getElementById('t-bucket').value,
+      min_score: MIN,
+    });
+    if (tEndEpoch !== null) params.set('end', tEndEpoch.toString());
+    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+    const r = await fetch('/__agents-timeline?'+params, {cache:'no-store', credentials:'include'});
+    const d = await r.json();
+    const c = ensureAgentChart();
+    const bs = d.bucket_secs || 60;
+    const labels = d.timeline.map(b=>fmtTimeBucket(b.t, bs));
+    const step = Math.max(1, Math.floor(labels.length/12));
+    c.data.labels = labels.map((l,i)=>(i%step===0||i===labels.length-1)?l:'');
+    c.data.datasets[0].data = d.timeline.map(b=>b.detected);
+    c.data.datasets[1].data = d.timeline.map(b=>b.missed);
+    c.data.datasets[2].data = d.timeline.map(b=>b.clean_allowed);
+    c.update('none');
+    const t = d.totals;
+    document.getElementById('t-totals').textContent =
+      `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} · stealth IPs=${d.stealth_ips_count}`;
+  }catch(e){}
+}
+// Time-window navigation state for the timeline chart
+let tEndEpoch = null;   // null = live; epoch seconds = scrolled-back right edge
+function tGetRangeMin(){ return parseInt(document.getElementById('t-range').value||'60',10); }
+function tRefreshControls(){
+  document.getElementById('t-next').disabled = (tEndEpoch === null);
+  document.getElementById('t-now').disabled  = (tEndEpoch === null);
+  const lbl = document.getElementById('t-window-label');
+  if (tEndEpoch === null){
+    lbl.textContent = '(live)'; lbl.style.color = 'var(--green)';
+  } else {
+    const win = tGetRangeMin();
+    const start = new Date((tEndEpoch - win*60)*1000), end = new Date(tEndEpoch*1000);
+    const fmt = d => d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
+    lbl.style.color = 'var(--yellow)';
+  }
+}
+document.getElementById('t-prev').onclick = () => {
+  const win = tGetRangeMin()*60;
+  const cur = tEndEpoch || Math.floor(Date.now()/1000);
+  tEndEpoch = cur - win;
+  tRefreshControls(); tickChart();
+};
+document.getElementById('t-next').onclick = () => {
+  if (!tEndEpoch) return;
+  const win = tGetRangeMin()*60;
+  tEndEpoch = tEndEpoch + win;
+  if (tEndEpoch > Math.floor(Date.now()/1000)) tEndEpoch = null;
+  tRefreshControls(); tickChart();
+};
+document.getElementById('t-now').onclick = () => { tEndEpoch = null; tRefreshControls(); tickChart(); };
+document.getElementById('t-range').addEventListener('change', () => { tRefreshControls(); tickChart(); });
+document.getElementById('t-bucket').addEventListener('change', tickChart);
+tRefreshControls();
+
+tick(); tickChart();
+setInterval(tick, 3000);
+// Only auto-refresh the chart when in live mode.
+setInterval(()=>{ if (tEndEpoch === null) tickChart(); }, 5000);
+</script>
+</body></html>

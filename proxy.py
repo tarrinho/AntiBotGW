@@ -38,6 +38,11 @@ from aiohttp import web, ClientSession, ClientTimeout
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
+from pathlib import Path
+# resolve() so we follow symlinks back to the real proxy.py location — tests
+# import via a symlink in a tmp dir, the real dashboards/ lives next to the
+# original file.
+_DASHBOARDS_DIR = Path(__file__).resolve().parent / "dashboards"
 _upstream_raw = os.environ.get("UPSTREAM", "").strip()
 if not _upstream_raw:
     print("FATAL: UPSTREAM env var is required and must be a fully-qualified URL", flush=True)
@@ -384,6 +389,7 @@ class IpState:
     last_ip: str = ""
     last_session: str = ""
     last_fingerprint: str = ""
+    last_ja4: str = ""        # R0: TLS handshake fingerprint (telemetry only)
     # Behavioral risk score — drives ban decision
     risk_score: float = 0.0
     last_risk_update: float = field(default_factory=time.monotonic)
@@ -455,6 +461,7 @@ metrics = {
     "by_reason": defaultdict(int),    # {"banned":N, "honeypot":N, "ua-blocked":N, ...}
     "by_status": defaultdict(int),    # {200:N, 403:N, 429:N, 402:N, 502:N}
     "by_path":   defaultdict(int),    # top requested paths
+    "by_ja4":    defaultdict(int),    # R0: TLS handshake fingerprints seen
     "rps_buckets": deque(maxlen=60),  # one entry per second (last 60s)
 }
 events = deque(maxlen=200)            # last 200 events for the live log
@@ -513,6 +520,19 @@ def db_init():
         reason        TEXT,
         ts            REAL
     );
+
+    CREATE TABLE IF NOT EXISTS svc_metrics (
+        ts          REAL PRIMARY KEY,
+        cpu_pct     REAL,
+        load1       REAL, load5 REAL, load15 REAL,
+        mem_used    INTEGER, mem_total INTEGER, mem_avail INTEGER, mem_pct REAL,
+        swap_used   INTEGER, swap_total INTEGER,
+        cg_used     INTEGER, cg_limit INTEGER, cg_pct REAL,
+        disk_used   INTEGER, disk_total INTEGER, disk_avail INTEGER, disk_pct REAL,
+        procs       INTEGER, open_fds INTEGER,
+        net_rx_bps  INTEGER, net_tx_bps INTEGER,
+        db_db       INTEGER, db_wal INTEGER, db_shm INTEGER, db_total INTEGER
+    );
     """)
     conn.commit()
     conn.close()
@@ -525,7 +545,8 @@ service_metrics_task = None
 
 # ── v1.4: Service-metrics collection (no psutil dep — pure /proc + os) ───
 SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
-SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "8640"))  # samples (8640 * 5s = 12 h)
+SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "8640"))  # in-mem samples (8640 * 5s = 12 h)
+SVC_DB_RETENTION_HOURS = int(os.environ.get("SVC_DB_RETENTION_HOURS", "168"))    # on-disk retention (default 7 days)
 SERVICE_METRICS_HISTORY: deque = deque(maxlen=SERVICE_METRICS_RETENTION)
 _PROC = "/proc"
 _DATA_PATH = os.environ.get("DB_PATH", "/data/antibot.db")
@@ -701,16 +722,51 @@ async def _sample_service_metrics_loop():
                 **{f"db_{k}": v for k, v in _db_file_sizes().items()},
             }
             SERVICE_METRICS_HISTORY.append(sample)
+
+            # Persist to SQLite via the async writer so chart history survives
+            # container restarts. Tuple matches the svc_metrics column order.
+            if db_queue is not None:
+                row = (
+                    sample["ts"], sample["cpu_pct"],
+                    sample["load1"], sample["load5"], sample["load15"],
+                    sample["mem_used"], sample["mem_total"], sample["mem_avail"],
+                    sample["mem_pct"],
+                    sample["swap_used"], sample["swap_total"],
+                    sample["cg_used"], sample["cg_limit"], sample["cg_pct"],
+                    sample["disk_used"], sample["disk_total"],
+                    sample["disk_avail"], sample["disk_pct"],
+                    sample["procs"], sample["open_fds"],
+                    sample["net_rx_bps"], sample["net_tx_bps"],
+                    sample.get("db_db", 0), sample.get("db_wal", 0),
+                    sample.get("db_shm", 0), sample.get("db_total", 0),
+                )
+                try:
+                    db_queue.put_nowait(("svc_metric", row))
+                except asyncio.QueueFull:
+                    pass
+                # Prune older than retention every ~120 samples (~10 min).
+                if int(now_ts) % (120 * int(SERVICE_METRICS_INTERVAL or 5)) < SERVICE_METRICS_INTERVAL:
+                    try:
+                        db_queue.put_nowait(("svc_metric_prune",
+                                             (now_ts - SVC_DB_RETENTION_HOURS * 3600,)))
+                    except asyncio.QueueFull:
+                        pass
         except asyncio.CancelledError:
             break
         except Exception as e:
             print(f"[svc-metrics] sample error: {e}", flush=True)
 
+WAL_CHECKPOINT_EVERY_SECS = float(os.environ.get("WAL_CHECKPOINT_EVERY_SECS", "60"))
+
 async def db_writer_loop():
-    """Background coroutine: drains the queue and flushes to SQLite in batches."""
+    """Background coroutine: drains the queue and flushes to SQLite in batches.
+    Periodically runs `wal_checkpoint(TRUNCATE)` so the WAL file stays small
+    instead of inflating between auto-checkpoints (cosmetic + reduces the
+    'shrinkage' visible in the SQLite-size chart at every restart)."""
     conn = sqlite3.connect(DB_PATH)
     conn.execute("PRAGMA journal_mode=WAL")  # better concurrency
     conn.execute("PRAGMA synchronous=NORMAL")
+    last_checkpoint = _t.time()
     while True:
         try:
             batch = [await db_queue.get()]
@@ -758,9 +814,40 @@ async def db_writer_loop():
                           ON CONFLICT(ip) DO UPDATE SET banned_until=excluded.banned_until,
                                                         reason=excluded.reason, ts=excluded.ts
                         """, args)
+                    elif op == "svc_metric":
+                        # args is a tuple of values matching the column order.
+                        conn.execute("""
+                          INSERT OR REPLACE INTO svc_metrics
+                          (ts, cpu_pct, load1, load5, load15,
+                           mem_used, mem_total, mem_avail, mem_pct,
+                           swap_used, swap_total, cg_used, cg_limit, cg_pct,
+                           disk_used, disk_total, disk_avail, disk_pct,
+                           procs, open_fds, net_rx_bps, net_tx_bps,
+                           db_db, db_wal, db_shm, db_total)
+                          VALUES (?, ?, ?, ?, ?,
+                                  ?, ?, ?, ?,
+                                  ?, ?, ?, ?, ?,
+                                  ?, ?, ?, ?,
+                                  ?, ?, ?, ?,
+                                  ?, ?, ?, ?)
+                        """, args)
+                    elif op == "svc_metric_prune":
+                        # args = (cutoff_ts,)
+                        conn.execute("DELETE FROM svc_metrics WHERE ts < ?", args)
                 except Exception as e:
                     print(f"[db] write failed: {e} args={args!r}")
             conn.commit()
+
+            # Truncate the WAL on a timer so it doesn't accumulate between
+            # auto-checkpoints. PASSIVE first (no locking); only TRUNCATE if
+            # we get the chance.
+            now_ts = _t.time()
+            if now_ts - last_checkpoint > WAL_CHECKPOINT_EVERY_SECS:
+                try:
+                    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                except sqlite3.OperationalError:
+                    pass    # readers active, retry next tick
+                last_checkpoint = now_ts
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -837,9 +924,25 @@ def db_load_state():
             "path": row["path"] or "", "method": row["method"] or "",
             "status": row["status"] or 0, "reason": row["reason"] or "OK",
         })
+
+    # Re-hydrate the service-metrics history (last RETENTION samples in time
+    # order). Skips silently if the table doesn't exist yet (first boot
+    # against an old DB).
+    svc_loaded = 0
+    try:
+        cur = conn.execute(
+            "SELECT * FROM svc_metrics ORDER BY ts DESC LIMIT ?",
+            (SERVICE_METRICS_RETENTION,))
+        rows_svc = cur.fetchall()
+        for row in reversed(rows_svc):       # oldest-first into the deque
+            SERVICE_METRICS_HISTORY.append({k: row[k] for k in row.keys()})
+        svc_loaded = len(rows_svc)
+    except Exception as e:
+        print(f"[db] svc_metrics not loaded: {e}")
     conn.close()
     print(f"[db] loaded: {len(rows)} clients, {len(timeline)} timeline buckets, "
-          f"{metrics['total_requests']} total requests")
+          f"{metrics['total_requests']} total requests, "
+          f"{svc_loaded} svc-metrics samples")
 
 # ── Timeline: per-minute buckets, last 24h ─────────────────────────────────
 TIMELINE_RETAIN_SECS = 86400  # 24 hours
@@ -932,6 +1035,9 @@ RISK_WEIGHTS = {
     "suspicious-body":       40,    # v1.4: body pattern match
     "bot-trap":              50,    # v1.4: hidden form field filled
     "js-challenge":           5,    # v1.4: each unsolved challenge bumps slightly
+    "tls-fingerprint":       30,    # v1.4.2: JA3/JA4 deny-list hit
+    "origin-mismatch":       20,    # v1.4.2: STRICT_ORIGIN failure
+    "missing-required-header": 15,  # v1.4.2: REQUIRED_HEADERS absent
 }
 RISK_BAN_THRESHOLD       = 50    # ban when score crosses this for normal IPs
 RISK_BAN_THRESHOLD_NAT   = 100   # higher threshold when IP looks like NAT
@@ -1157,15 +1263,21 @@ def needs_pow(request: web.Request) -> bool:
 
 # ── Metrics helpers ────────────────────────────────────────────────────────
 async def record(ip: str, ua: str, path: str, status: int, reason: str,
-                 track_key: str = None, sid: str = "", fp: str = ""):
+                 track_key: str = None, sid: str = "", fp: str = "",
+                 ja4: str = ""):
     """Record one request decision into global metrics + per-identity state + event log + DB.
     track_key (identity) is the primary key. ip is stored on IpState for display only.
+    `ja4` (R0): TLS handshake fingerprint observed by the trusted upstream
+    terminator — surfaced in the event log so the operator can see what
+    fingerprints bots are using and populate JA4_DENY_LIST from telemetry.
     """
     async with state_lock:
         metrics["total_requests"] += 1
         metrics["by_status"][status] += 1
         metrics["by_path"][path] += 1
         _timeline_bump(reason)
+        if ja4:
+            metrics["by_ja4"][ja4[:64]] += 1
         # Default to ip if no track_key (back-compat for internal/probe paths)
         key = track_key or ip
         s = ip_state[key]
@@ -1175,6 +1287,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         s.last_ip = ip
         if sid: s.last_session = sid[:24]
         if fp:  s.last_fingerprint = fp
+        if ja4: s.last_ja4 = ja4[:64]
         if reason:
             metrics["blocked"] += 1
             metrics["by_reason"][reason] += 1
@@ -1228,6 +1341,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
             "method": "",   # filled by caller via closure (kept simple here)
             "status": status,
             "reason": reason or "OK",
+            "ja4": ja4[:64] if ja4 else "",
         })
 
 # ── Silent decoy: serves upstream / contents to banned attackers ───────────
@@ -1236,7 +1350,8 @@ _DECOY_TTL = 60.0  # cache the homepage for 60s
 _decoy_fetch_lock = asyncio.Lock()
 
 async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
-                                  track_key: str = None, sid: str = "", fp: str = ""):
+                                  track_key: str = None, sid: str = "",
+                                  fp: str = "", ja4: str = ""):
     """
     Stealth response for blocked clients.
     Returns upstream's `/` content as a 200 OK. The block IS still recorded
@@ -1263,7 +1378,8 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                     )
                     _decoy_cache["ctype"] = "text/html; charset=utf-8"
                     _decoy_cache["fetched_at"] = n
-    await record(ip, ua, path, 200, reason, track_key=track_key, sid=sid, fp=fp)
+    await record(ip, ua, path, 200, reason, track_key=track_key, sid=sid,
+                 fp=fp, ja4=ja4)
     return web.Response(
         status=200,
         body=_decoy_cache["body"],
@@ -1311,15 +1427,23 @@ async def protect(request: web.Request, handler):
                             headers={"Cache-Control": "no-store",
                                      "Content-Type": "text/plain; charset=utf-8"})
 
-    # v1.4 #1 — JS challenge: solver POSTs back here.
+    # v1.4 #1 — JS challenge: solver POSTs back here. Rate-limit by socket-IP
+    # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
+    # ops) hammering /__challenge with bogus solutions.
     if request.path == "/__challenge":
+        socket_ip = request.remote or "0.0.0.0"
+        sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
+        if not sip_ok:
+            return web.Response(
+                status=429, text="rate limit\n",
+                headers={"Retry-After": str(int(sip_retry) + 1),
+                         "Cache-Control": "no-store"})
         return await js_challenge_endpoint(request)
 
-    # v1.4 #1 — JS challenge: serve the verification page on first HTML hit
-    # (no chal cookie yet). Gated by JS_CHALLENGE env, skip for static assets,
-    # admin routes and clients that are already known good (have a session).
-    if _js_challenge_applicable(request):
-        return _serve_js_challenge(request)
+    # NOTE: JS challenge gate moved BELOW the stealth-block checks (host /
+    # TLS / origin / required-headers). Reason: on those checks we already
+    # silent-decoy without revealing the gateway, and the challenge gate
+    # must not preempt them with an explicit response.
 
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
@@ -1340,7 +1464,57 @@ async def protect(request: web.Request, handler):
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(ip, ua, request.path,
-                                                "host-not-allowed")
+                                                "host-not-allowed",
+                                                ja4=_request_ja4(request))
+
+    # ── v1.4.2 Layer 0.5: TLS fingerprint deny-list (JA3/JA4) ─────────────
+    # The upstream TLS terminator (cloudflared, nginx, ALB) injects the
+    # client's handshake fingerprint as a header. Off by default — operator
+    # opts in via JA4_DENY_LIST.
+    if _tls_fingerprint_blocked(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "tls-fingerprint",
+                                            ja4=_request_ja4(request))
+
+    # ── v1.4.2 Layer 0.6: Strict Origin / Referer enforcement ─────────────
+    # On state-changing methods, require the Origin header to match
+    # ALLOWED_HOSTS. Off by default (STRICT_ORIGIN=1 to enable).
+    if _origin_check_failed(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "origin-mismatch",
+                                            ja4=_request_ja4(request))
+
+    # ── v1.4.2 Layer 0.7: Required custom-header presence ───────────────
+    # Operator-defined headers (REQUIRED_HEADERS=X-Client-Version,...) must
+    # be present on every non-/__/  /  non-static request.
+    if _missing_required_header(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "missing-required-header",
+                                            ja4=_request_ja4(request))
+
+    # ── v1.4 #1 — JS challenge gate (V8 fix) ────────────────────────────
+    # The chal cookie is REQUIRED on every non-static, non-admin, non-opted-
+    # -out path — not only HTML. Browsers carry the cookie on XHR/fetch
+    # transparently; pure-HTTP bots don't and get blocked.
+    #   - HTML GET without cookie → serve interactive challenge page.
+    #   - Everything else without cookie → silent decoy (preserves stealth;
+    #     does NOT leak that the gateway exists by returning 401).
+    # Placed AFTER host/TLS/origin/required-header stealth checks so those
+    # block paths take precedence and remain undetectable.
+    if _js_challenge_required(request):
+        if _js_challenge_applicable(request):
+            return _serve_js_challenge(request)
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "chal-required",
+                                            ja4=_request_ja4(request))
 
     # Internal endpoints: only authenticated operator gets through.
     # Anyone else sees the silent decoy — they don't even learn that /__* exist.
@@ -1387,6 +1561,8 @@ async def protect(request: web.Request, handler):
 
     ua = request.headers.get("User-Agent", "")
     path = request.path
+    # R0: capture JA4 once for the whole decision path (telemetry only).
+    ja4 = _request_ja4(request)
     # From here on, all per-client tracking uses 'identity' as the key.
     # 'ip' is recorded as the last-seen IP for dashboard display only.
     track_key = identity
@@ -1400,20 +1576,20 @@ async def protect(request: web.Request, handler):
         await update_risk_and_maybe_ban(track_key, reason, ip)
         if reason == "pow-required":
             await record(ip, ua, path, status, reason,
-                         track_key=track_key, sid=sid, fp=fp)
+                         track_key=track_key, sid=sid, fp=fp, ja4=ja4)
             return web.json_response(
                 body, status=status,
                 headers={**(extra_headers or {}), "Cache-Control": "no-store"},
             )
         return await _silent_decoy_response(
-            ip, ua, path, reason, track_key=track_key, sid=sid, fp=fp
+            ip, ua, path, reason, track_key=track_key, sid=sid, fp=fp, ja4=ja4
         )
 
     # 1. Banned check (per-identity, not per-IP) → SILENT decoy
     banned, remaining = await is_banned(track_key)
     if banned:
         return await _silent_decoy_response(
-            ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp
+            ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4
         )
 
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
@@ -1421,7 +1597,7 @@ async def protect(request: web.Request, handler):
     if request.path in HONEYPOT_PATHS:
         await update_risk_and_maybe_ban(track_key, "honeypot-silent", ip)
         return await _silent_decoy_response(
-            ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp
+            ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4
         )
 
     # 2b. Suspicious path PATTERN (flag-hunting, file-hunting, CTF recon).
@@ -1429,7 +1605,7 @@ async def protect(request: web.Request, handler):
     if is_suspicious_path(request.path):
         await update_risk_and_maybe_ban(track_key, "suspicious-path", ip)
         return await _silent_decoy_response(
-            ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp
+            ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4
         )
 
     # 3a. Empty / suspiciously short User-Agent
@@ -1589,7 +1765,7 @@ async def protect(request: web.Request, handler):
     # Allowed → forward upstream and record under the identity
     response = await handler(request)
     await record(ip, ua, path, response.status, "",
-                 track_key=track_key, sid=sid, fp=fp)
+                 track_key=track_key, sid=sid, fp=fp, ja4=ja4)
     # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
     async with state_lock:
         st = ip_state[track_key]
@@ -1791,426 +1967,25 @@ async def dashboard_endpoint(request: web.Request):
         },
     )
 
-DASHBOARD_HTML = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.4 · Dashboard</title>
-<style>
-:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
-     background:var(--bg);color:var(--fg);padding:14px}
-h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
-h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
-.grid{display:grid;gap:14px;margin-top:14px}
-.row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
-.metric.allowed{color:var(--green)}
-.metric.blocked{color:var(--red)}
-.metric.total{color:var(--blue)}
-.metric.uptime{color:var(--yellow);font-size:18px}
-.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
-table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
-         text-transform:uppercase;letter-spacing:.5px;font-size:10px}
-table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
-.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
-.tag.OK{background:#1f4830;color:var(--green)}
-.tag.banned{background:#4a1a1a;color:var(--red)}
-.tag.honeypot{background:#3d1a4a;color:var(--purple)}
-.tag.ua-blocked{background:#4a3a1a;color:var(--yellow)}
-.tag.rate-limit{background:#4a1a1a;color:var(--red)}
-.tag.behavior{background:#1a3a4a;color:#5fb3c0}
-.tag.pow-required{background:#3d1a4a;color:var(--purple)}
-.tag.ua-empty{background:#4a3a1a;color:var(--yellow)}
-.tag.ua-too-short{background:#4a3a1a;color:var(--yellow)}
-.tag.ua-non-browser{background:#4a3a1a;color:var(--yellow)}
-.tag.ai-probe{background:#3d1a4a;color:var(--purple)}
-.tag.ai-headers-incomplete{background:#3d2a4a;color:#dab8ff}
-.tag.ai-headers-empty{background:#3d2a4a;color:#dab8ff}
-.tag.ai-enumeration{background:#4a1a3d;color:#ff8acc}
-.tag.ai-no-assets{background:#4a1a3d;color:#ff8acc}
-.tag.banned-silent{background:#2d1a4a;color:#a78bfa}
-.tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
-.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:4px}
-.bar>div{height:100%;background:var(--blue)}
-.reasons{display:grid;grid-template-columns:1fr auto;gap:4px 8px;font-size:11.5px}
-.reasons .lbl{color:var(--dim)}
-.reasons .val{font-family:ui-monospace;color:#fff;font-weight:600;text-align:right}
-code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
-.dim{color:var(--dim)}
-.evt{font-size:11px;display:grid;grid-template-columns:80px 90px 130px 1fr;gap:8px;
-     padding:3px 6px;border-bottom:1px solid var(--line);font-family:ui-monospace;
-     border-left:3px solid transparent}
-.evt:nth-child(even){background:#0a0e13}
-.evt.evt-ok{border-left-color:var(--green);background:rgba(63,185,80,0.06)}
-.evt.evt-ok:nth-child(even){background:rgba(63,185,80,0.10)}
-.evt.evt-block{border-left-color:var(--red)}
-.evt.evt-warn{border-left-color:var(--yellow)}
-.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
-.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
-      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;
-      font-family:inherit;line-height:1.4}
-.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
-.ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
-.ctrl-now:hover{background:#1c3d5a}
-@media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
-</style></head>
-<body>
-<h1>AppSecGW_1.4 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
-<div style="font-size:12px;margin-top:6px">
-  <a id="agents-link"  style="color:var(--blue)" href="#">→ Stealth Agent Hunter</a>
-  <span class="dim">·</span>
-  <a id="service-link" style="color:var(--blue)" href="#">→ Service Metrics</a>
-</div>
-<script>
-(function(){const k=new URLSearchParams(location.search).get('key')||'';
- const q=k?('?key='+encodeURIComponent(k)):'';
- document.getElementById('agents-link').href='/__agents'+q;
- document.getElementById('service-link').href='/__service'+q;})();
-</script>
-
-<div class="grid">
-
-  <div class="row">
-    <div class="card"><h2>Total requests</h2><div class="metric total" id="total">0</div>
-         <div class="metric-sub" id="rps">— req/s</div></div>
-    <div class="card"><h2>Allowed</h2><div class="metric allowed" id="allowed">0</div>
-         <div class="metric-sub" id="allowed-pct">—</div></div>
-    <div class="card"><h2>Blocked</h2><div class="metric blocked" id="blocked">0</div>
-         <div class="metric-sub" id="blocked-pct">—</div></div>
-    <div class="card"><h2>Uptime</h2><div class="metric uptime" id="uptime">—</div>
-         <div class="metric-sub" id="config">—</div></div>
-  </div>
-
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Timeline · total / allowed / blocked <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span></h2>
-      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
-        <button id="prev"  class="ctrl">‹ back</button>
-        <button id="now"   class="ctrl ctrl-now">now</button>
-        <button id="next"  class="ctrl" disabled>fwd ›</button>
-        <span class="dim" style="margin-left:6px">window:</span>
-        <select id="range" class="ctrl">
-          <option value="15">15 min</option>
-          <option value="60" selected>1 h</option>
-          <option value="180">3 h</option>
-          <option value="360">6 h</option>
-          <option value="720">12 h</option>
-          <option value="1440">24 h</option>
-          <option value="4320">3 days</option>
-          <option value="10080">7 days</option>
-        </select>
-        <span class="dim" style="margin-left:6px">bucket:</span>
-        <select id="bucket" class="ctrl">
-          <option value="60" selected>1 min</option>
-          <option value="300">5 min</option>
-          <option value="900">15 min</option>
-          <option value="3600">1 hour</option>
-          <option value="86400">1 day</option>
-        </select>
-      </div>
-    </div>
-    <div style="position:relative;height:240px">
-      <canvas id="chart"></canvas>
-    </div>
-  </div>
-
-  <div class="row" style="grid-template-columns:1fr 1fr">
-    <div class="card">
-      <h2>Block reasons</h2>
-      <div class="reasons" id="reasons"><span class="dim">no blocks yet</span></div>
-    </div>
-    <div class="card">
-      <h2>HTTP status distribution</h2>
-      <div class="reasons" id="statuses"></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Clients (top by request count)</h2>
-    <table id="clients-tbl">
-      <thead><tr>
-        <th>Identity</th><th>Last IP</th><th>Total</th><th>Allowed</th><th>Blocked</th>
-        <th>Risk</th><th>Banned</th><th>Tokens</th><th>Last seen</th><th>Last UA</th><th>Last path</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <div class="row" style="grid-template-columns:1fr 1fr">
-    <div class="card">
-      <h2>Top paths</h2>
-      <table id="paths-tbl"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
-    </div>
-    <div class="card">
-      <h2>Live events (last 50)</h2>
-      <div id="events"></div>
-    </div>
-  </div>
-
-</div>
-
-<div class="foot">refreshes every 2s · <code id="ts"></code></div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-        integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
-        crossorigin="anonymous"
-        referrerpolicy="no-referrer"></script>
-<script>
-let lastTotal = 0, lastTime = Date.now();
-let chart = null;
-
-function getRangeMin() {
-  return parseInt(document.getElementById('range').value || '60', 10);
-}
-
-function fmtTime(epochSec) {
-  const d = new Date(epochSec * 1000);
-  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-}
-
-function ensureChart() {
-  if (chart) return chart;
-  const ctx = document.getElementById('chart').getContext('2d');
-  chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-      labels: [],
-      datasets: [
-        { label: 'total', data: [], borderColor: '#58a6ff',
-          backgroundColor: 'rgba(88,166,255,0.06)', tension: 0.25, fill: false,
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
-        { label: 'allowed (good)', data: [], borderColor: '#3fb950',
-          backgroundColor: 'rgba(63,185,80,0.18)', tension: 0.25, fill: true,
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
-        { label: 'blocked', data: [], borderColor: '#f85149',
-          backgroundColor: 'rgba(248,81,73,0.18)', tension: 0.25, fill: true,
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
-      ],
-    },
-    options: {
-      responsive: true, maintainAspectRatio: false,
-      animation: { duration: 250 },
-      interaction: { mode: 'index', intersect: false },
-      plugins: {
-        legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
-        tooltip: {
-          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
-          titleColor: '#c9d1d9', bodyColor: '#c9d1d9',
-          callbacks: { title: items => items[0].label }
-        },
-      },
-      scales: {
-        x: { ticks: { color: '#8b949e', font: { size: 10 }, maxRotation: 0, autoSkipPadding: 18 },
-             grid: { color: '#21262d' } },
-        y: { beginAtZero: true, ticks: { color: '#8b949e', font: { size: 10 }, precision: 0 },
-             grid: { color: '#21262d' } },
-      },
-    },
-  });
-  return chart;
-}
-
-// Forward the admin key to subsequent /__metrics calls so the dashboard works
-// when accessed via the protected URL (?key=...)
-const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-
-// Timeline navigation state
-let endEpoch = null;   // null = live (now); number = scrolled-back epoch (right edge of window)
-
-function getRangeMin() { return parseInt(document.getElementById('range').value || '60', 10); }
-function getBucketSec() { return parseInt(document.getElementById('bucket').value || '60', 10); }
-
-function fmtTime(epochSec, bucketSec) {
-  const d = new Date(epochSec * 1000);
-  if (bucketSec >= 86400) {
-    return d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
-  } else if (bucketSec >= 3600) {
-    return d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
-  }
-  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-}
-
-document.getElementById('prev').onclick = () => {
-  const win = getRangeMin() * 60;
-  const cur = endEpoch || Math.floor(Date.now()/1000);
-  endEpoch = cur - win;
-  refreshControls(); tick();
-};
-document.getElementById('next').onclick = () => {
-  if (!endEpoch) return;
-  const win = getRangeMin() * 60;
-  endEpoch = endEpoch + win;
-  if (endEpoch > Math.floor(Date.now()/1000)) endEpoch = null;
-  refreshControls(); tick();
-};
-document.getElementById('now').onclick = () => { endEpoch = null; refreshControls(); tick(); };
-
-function refreshControls() {
-  document.getElementById('next').disabled = (endEpoch === null);
-  document.getElementById('now').disabled  = (endEpoch === null);
-  const lbl = document.getElementById('window-label');
-  if (endEpoch === null) {
-    lbl.textContent = '(live)';
-    lbl.style.color = 'var(--green)';
-  } else {
-    const win = getRangeMin();
-    const start = new Date((endEpoch - win*60) * 1000);
-    const end   = new Date(endEpoch * 1000);
-    const fmt = d => d.toLocaleString(undefined, {
-      month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'
-    });
-    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
-    lbl.style.color = 'var(--yellow)';
-  }
-}
-refreshControls();
-
-async function tick() {
-  try {
-    const params = new URLSearchParams({
-      range:  getRangeMin().toString(),
-      bucket: getBucketSec().toString(),
-    });
-    if (endEpoch !== null) params.set('end', endEpoch.toString());
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
-    const d = await r.json();
-    document.getElementById('live').style.background='var(--green)';
-    document.getElementById('live').textContent='● LIVE';
-
-    document.getElementById('total').textContent = d.total.toLocaleString();
-    document.getElementById('allowed').textContent = d.allowed.toLocaleString();
-    document.getElementById('blocked').textContent = d.blocked.toLocaleString();
-    const totalPct = d.total ? ((d.allowed/d.total)*100).toFixed(1) : 0;
-    document.getElementById('allowed-pct').textContent = `${totalPct}% pass-through`;
-    document.getElementById('blocked-pct').textContent = d.total ? `${(100-totalPct).toFixed(1)}% rejected` : '—';
-
-    // RPS over last 2s
-    const now = Date.now();
-    const dt = (now - lastTime) / 1000;
-    const rps = dt > 0 ? ((d.total - lastTotal) / dt).toFixed(1) : '0.0';
-    document.getElementById('rps').textContent = `${rps} req/s (last 2s)`;
-    lastTotal = d.total; lastTime = now;
-
-    const h = Math.floor(d.uptime_secs/3600), m = Math.floor((d.uptime_secs%3600)/60), s = d.uptime_secs%60;
-    document.getElementById('uptime').textContent = `${h}h ${m}m ${s}s`;
-    const c = d.config;
-    document.getElementById('config').textContent = `burst=${c.burst} refill=${c.refill}/s xff=${c.trust_xff}`;
-
-    // Reasons
-    const reasonOrder = ['banned-silent','honeypot-silent','banned','honeypot',
-                         'ua-empty','ua-too-short','ua-blocked','ua-non-browser',
-                         'ai-probe','ai-headers-incomplete','ai-headers-empty',
-                         'ai-enumeration','ai-no-assets',
-                         'rate-limit','behavior','pow-required'];
-    const reasons = d.by_reason || {};
-    const rEl = document.getElementById('reasons');
-    if (Object.keys(reasons).length === 0) {
-      rEl.innerHTML = '<span class="dim">no blocks yet</span>';
-    } else {
-      rEl.innerHTML = reasonOrder.filter(k => reasons[k])
-        .map(k => `<span class="lbl"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></span><span class="val">${reasons[k]|0}</span>`).join('');
-    }
-
-    // Statuses
-    const statuses = d.by_status || {};
-    const sEl = document.getElementById('statuses');
-    sEl.innerHTML = Object.entries(statuses).sort()
-      .map(([k,v]) => `<span class="lbl">HTTP ${k}</span><span class="val">${v}</span>`).join('');
-
-    // Clients
-    const tbody = document.querySelector('#clients-tbl tbody');
-    tbody.innerHTML = (d.clients || []).slice(0, 25).map(c => {
-      const banned = c.banned_secs > 0 ? `<span class="tag banned">${c.banned_secs}s</span>` : '<span class="dim">—</span>';
-      const id = (c.id || c.ip || '');
-      const lastIp = c.last_ip || '?';
-      const risk = c.risk_score || 0;
-      const riskColor = risk >= 50 ? 'var(--red)' : risk >= 25 ? 'var(--yellow)' : 'var(--dim)';
-      return `<tr>
-        <td title="${escapeHtml(id)}"><b>${escapeHtml(id.slice(0,16))}</b></td>
-        <td class="dim">${escapeHtml(lastIp)}</td>
-        <td>${c.requests}</td>
-        <td style="color:var(--green)">${c.allowed}</td>
-        <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
-        <td style="color:${riskColor};font-weight:600">${risk.toFixed(1)}</td>
-        <td>${banned}</td>
-        <td>${c.tokens}</td>
-        <td class="dim">${c.last_seen_secs_ago}s ago</td>
-        <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
-        <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan=11 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
-
-    // Top paths
-    const pBody = document.querySelector('#paths-tbl tbody');
-    pBody.innerHTML = (d.top_paths || []).map(p =>
-      `<tr><td>${escapeHtml(p.path)}</td><td>${p.count}</td></tr>`
-    ).join('') || '<tr><td colspan=2 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
-
-    // Events
-    const eEl = document.getElementById('events');
-    eEl.innerHTML = (d.events || []).map(e => {
-      const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
-      const isOk = (e.reason === 'OK' || e.reason === '');
-      const evtCls = isOk ? 'evt-ok' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
-      return `<div class="evt ${evtCls}">
-        <span class="dim">${escapeHtml(time)}</span>
-        <span><span class="tag ${safeClass(e.reason)}">${escapeHtml(isOk ? 'OK' : e.reason)}</span></span>
-        <span>${escapeHtml(e.ip)}</span>
-        <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
-      </div>`;
-    }).join('') || '<span class="dim">no events yet</span>';
-
-    // Timeline chart
-    if (d.timeline && d.timeline.length) {
-      const c = ensureChart();
-      const bucketSec = d.timeline_bucket_secs || 60;
-      const labels = d.timeline.map(b => fmtTime(b.t, bucketSec));
-      const totals = d.timeline.map(b => b.total);
-      const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
-      const blocks = d.timeline.map(b => b.blocked);
-      // Dynamic decimation: aim at ~12 labels regardless of how many points
-      const step = Math.max(1, Math.floor(labels.length / 12));
-      const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
-      c.data.labels = labelsView;
-      c.data.datasets[0].data = totals;
-      c.data.datasets[1].data = allowed;
-      c.data.datasets[2].data = blocks;
-      c.update('none');
-    }
-
-    document.getElementById('ts').textContent = new Date().toISOString();
-  } catch (err) {
-    document.getElementById('live').style.background='var(--red)';
-    document.getElementById('live').textContent='○ ERR';
-  }
-}
-function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
-function safeClass(s){return (s||'').replace(/[^a-zA-Z0-9_-]/g,'')}
-document.getElementById('range').addEventListener('change', () => { refreshControls(); tick(); });
-document.getElementById('bucket').addEventListener('change', tick);
-tick();
-// Auto-refresh — but ONLY when in live mode. When user has scrolled back,
-// the data is static and refreshing would just repaint the same window.
-setInterval(() => { if (endEpoch === null) tick(); }, 2000);
-</script>
-</body></html>
-"""
+DASHBOARD_HTML         = (_DASHBOARDS_DIR / "main.html").read_text(encoding="utf-8")
 
 def _serve_js_challenge(request: web.Request):
-    """Render the inline JS-challenge HTML for an unverified browser."""
+    """Render the Turnstile-only challenge page. Only invoked when
+    JS_CHALLENGE is enabled AND Turnstile is configured."""
     nonce = _make_chal_nonce()
     target = request.path_qs or "/"
-    # Sanitise target so we can safely embed in JS string + URL.
     target_safe = re.sub(r'[^A-Za-z0-9_\-./?&=%:#]', '', target)[:512] or "/"
+    if (not target_safe.startswith("/")
+            or target_safe.startswith("//")
+            or "\\" in target_safe):
+        target_safe = "/"
+    nonce_json   = json.dumps(nonce)
+    target_json  = json.dumps(target_safe)
+    ts_key_json  = json.dumps(TURNSTILE_SITEKEY)
     html = (JS_CHAL_HTML
-            .replace("__NONCE__", nonce)
-            .replace("__TARGET__", target_safe))
+            .replace('"__NONCE__"',         nonce_json)
+            .replace('"__TARGET__"',        target_json)
+            .replace('"__TURNSTILE_KEY__"', ts_key_json))
     return web.Response(
         status=200, text=html, content_type="text/html",
         headers={"Cache-Control": "no-store",
@@ -2218,13 +1993,29 @@ def _serve_js_challenge(request: web.Request):
     )
 
 async def js_challenge_endpoint(request: web.Request):
-    """Solver POSTs (n, h, t) here. We verify the nonce signature and (since
-    the hash check is just a 'did your JS run' marker, not a security boundary)
-    issue a 24-hour cookie."""
+    """Turnstile-backed cookie minter.
+
+    Every input on this endpoint that is computed by the client (PoW,
+    browser-API probe, anchor-fetch proof, timing window) was empirically
+    bypassable in pure Python — see the Threat-model section in README.md.
+    Those layers are removed: the only check that the attacker cannot
+    fabricate locally is the Cloudflare Turnstile token, which is minted
+    server-side by Cloudflare and verified at /turnstile/v0/siteverify.
+
+    Without `TURNSTILE_SITEKEY` + `TURNSTILE_SECRET` configured, the
+    JS-challenge feature is a no-op (the middleware never routes here);
+    operators rely on the gateway's other layers (UA filter, header
+    completeness, behavioral, rate-limits, risk-score model)."""
     if request.method != "POST":
         return web.Response(status=405)
+    if not TURNSTILE_ENABLED:
+        # Defensive: middleware is supposed to disable the gate when
+        # Turnstile is unconfigured, but if anyone hits us directly bail
+        # rather than mint a free cookie.
+        return web.Response(status=503, text="challenge unavailable\n")
     try:
-        body = await asyncio.wait_for(request.read(), timeout=BODY_TIMEOUT)
+        body = await asyncio.wait_for(request.content.read(16384),
+                                      timeout=BODY_TIMEOUT)
     except asyncio.TimeoutError:
         return web.Response(status=408, text="timeout\n")
     from urllib.parse import parse_qs
@@ -2232,10 +2023,44 @@ async def js_challenge_endpoint(request: web.Request):
         params = parse_qs(body.decode("utf-8", errors="replace"))
     except Exception:
         return web.Response(status=400, text="bad form\n")
+
     nonce = params.get("n", [""])[0]
     if not _verify_chal_nonce(nonce):
         return web.Response(status=400, text="bad nonce\n")
-    cookie = _make_chal_cookie()
+
+    # Cloudflare Turnstile siteverify — the only real boundary.
+    ts_token = (params.get("cf-turnstile-response", [""])[0] or "").strip()
+    if not ts_token:
+        return web.Response(status=403, text="missing turnstile\n")
+    try:
+        verify_data = {
+            "secret":   TURNSTILE_SECRET,
+            "response": ts_token,
+            "remoteip": request.remote or "",
+        }
+        async with ClientSession(
+                timeout=ClientTimeout(total=5)) as session:
+            async with session.post(TURNSTILE_VERIFY_URL,
+                                     data=verify_data) as ts_resp:
+                ts_json = await ts_resp.json(content_type=None)
+    except Exception:
+        return web.Response(status=502, text="turnstile verify failed\n")
+    if not ts_json.get("success"):
+        return web.Response(status=403, text="turnstile rejected\n")
+
+    # JA4 cookie-binding (opportunistic; opt-in hard requirement).
+    ja4 = _request_ja4(request)
+    if JS_CHAL_REQUIRE_JA4 and not ja4:
+        return web.Response(status=403, text="ja4 required\n")
+
+    ua = request.headers.get("User-Agent", "")
+    ip_tier = _ip_tier(get_ip(request))
+    bind_ja4 = ja4 if (JS_CHAL_BIND_JA4 and ja4) else ""
+    # `probe_hash` is reused as a non-replayable per-session salt — we
+    # take it from the (server-generated) Turnstile token so the cookie
+    # is tied to a specific verification.
+    sess_salt = hashlib.sha256(ts_token.encode()).hexdigest()[:16]
+    cookie = _make_chal_cookie(ua, sess_salt, ip_tier, bind_ja4)
     resp = web.Response(status=200, text="ok",
                         headers={"Cache-Control": "no-store"})
     resp.set_cookie(CHAL_COOKIE, cookie,
@@ -2349,6 +2174,103 @@ UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(8 * 1024 * 1024)
 HEADERS_TIMEOUT = float(os.environ.get("HEADERS_TIMEOUT", "10"))   # secs to receive full headers
 BODY_TIMEOUT    = float(os.environ.get("BODY_TIMEOUT",    "30"))   # secs to receive full body
 
+# ── v1.4.2/3: TLS / HTTP/2 fingerprint deny-list (JA3 / JA4) ────────────
+# The TLS terminator (cloudflared, nginx + lua-nginx-ja3, AWS ALB ja3) injects
+# the client's TLS handshake fingerprint as a header.
+# v1.4.3 / TLS-1 fix: the header is client-spoofable when the gateway is
+# reachable directly. JA4_TRUSTED_PEERS pins the source IPs (the TLS
+# terminator) that are allowed to inject this header. When unset, we trust
+# all peers (back-compat — assumes the operator has firewalled direct access).
+JA4_HEADER     = os.environ.get("JA4_HEADER", "CF-JA4")
+JA4_DENY_LIST  = {
+    e.strip() for e in os.environ.get("JA4_DENY_LIST", "").split(",")
+    if e.strip()
+}
+_ja4_trusted_raw = os.environ.get("JA4_TRUSTED_PEERS", "").strip()
+JA4_TRUSTED_NETS: list = []
+if _ja4_trusted_raw:
+    for _entry in _ja4_trusted_raw.split(","):
+        _entry = _entry.strip()
+        if not _entry:
+            continue
+        try:
+            JA4_TRUSTED_NETS.append(_ipaddress.ip_network(_entry, strict=False))
+        except ValueError as _e:
+            print(f"FATAL: invalid JA4_TRUSTED_PEERS entry {_entry!r} — {_e}",
+                  flush=True)
+            raise SystemExit(2)
+
+def _ja4_peer_trusted(request) -> bool:
+    """True if the kernel-observed peer IP may inject the JA4 header."""
+    if not JA4_TRUSTED_NETS:
+        return True   # operator did not pin — trust all (firewall assumed)
+    try:
+        ip = _ipaddress.ip_address(request.remote or "")
+    except (ValueError, TypeError):
+        return False
+    return any(ip in net for net in JA4_TRUSTED_NETS)
+
+def _tls_fingerprint_blocked(request) -> bool:
+    """Apply the deny-list ONLY when the JA4 header arrives from a trusted
+    peer (the TLS terminator). Untrusted sources are ignored so a direct
+    attacker cannot bypass by forging a 'good' fingerprint."""
+    if not JA4_DENY_LIST:
+        return False
+    if not _ja4_peer_trusted(request):
+        return False
+    fp = (request.headers.get(JA4_HEADER) or "").strip()
+    return bool(fp) and fp in JA4_DENY_LIST
+
+# ── v1.4.2: Strict Origin / Referer check on state-changing methods ─────
+# When STRICT_ORIGIN=1, POST/PUT/PATCH/DELETE require an Origin header whose
+# host matches one of ALLOWED_HOSTS. Off by default — many legitimate API /
+# server-to-server clients don't send Origin. Operator can also list paths
+# that bypass the check (e.g. webhooks) via OPEN_ORIGIN_PATHS.
+STRICT_ORIGIN     = os.environ.get("STRICT_ORIGIN", "0") in ("1", "true", "yes")
+_OPEN_ORIGIN_PATHS_RAW = os.environ.get("OPEN_ORIGIN_PATHS", "").strip()
+OPEN_ORIGIN_PATHS = [p.strip() for p in _OPEN_ORIGIN_PATHS_RAW.split(",")
+                    if p.strip()]
+
+def _origin_check_failed(request) -> bool:
+    """Returns True iff STRICT_ORIGIN is on AND the request fails the check."""
+    if not STRICT_ORIGIN:
+        return False
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return False
+    if any(request.path.startswith(p) for p in OPEN_ORIGIN_PATHS):
+        return False
+    origin = request.headers.get("Origin", "").strip()
+    if not origin:
+        return True   # missing Origin on a state-change → reject
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(origin).netloc or "").split(":", 1)[0].lower()
+    except Exception:
+        return True
+    if not ALLOWED_HOSTS:
+        return False  # nothing to compare against; let it through
+    return host not in ALLOWED_HOSTS
+
+# ── v1.4.2: Operator-required headers (e.g. X-Client-Version) ───────────
+# Comma-separated list of headers that MUST be present on EVERY non-/__/ /
+# non-static request. Empty by default. Useful when the operator's first-party
+# client always sends a custom marker.
+_REQUIRED_HEADERS_RAW = os.environ.get("REQUIRED_HEADERS", "").strip()
+REQUIRED_HEADERS = [h.strip() for h in _REQUIRED_HEADERS_RAW.split(",")
+                    if h.strip()]
+
+def _missing_required_header(request) -> bool:
+    if not REQUIRED_HEADERS:
+        return False
+    if request.path.startswith("/__"):
+        return False
+    if request.path.endswith((
+            ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif",
+            ".svg", ".webp", ".avif", ".ico", ".woff", ".woff2",
+            ".ttf", ".otf", ".eot", ".map")):
+        return False
+    return any(h not in request.headers for h in REQUIRED_HEADERS)
+
 # ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────
 BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
 SUSPICIOUS_BODY_PATTERNS = (
@@ -2361,8 +2283,9 @@ SUSPICIOUS_BODY_PATTERNS = (
 
 def is_suspicious_body(body: bytes, ctype: str) -> bool:
     """Returns True if request body matches a known SQLi/XSS/SSTI/cmd-injection
-    pattern. Only scans text-ish content types and bounds at 64 KiB to keep
-    it cheap. Off by default — enable with BODY_PATTERN_MATCH=1."""
+    pattern. Only scans text-ish content types and bounds at 64 KiB.
+    L3: form-encoded bodies are percent-decoded before matching so payloads
+    like name=%27+OR+1%3D1 are caught (matched as `' OR 1=1`)."""
     if not BODY_PATTERN_MATCH or not body:
         return False
     cl = ctype.lower()
@@ -2370,6 +2293,9 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
                                   "text/plain", "text/xml", "application/xml")):
         return False
     sample = body[:65536]
+    if "x-www-form-urlencoded" in cl:
+        from urllib.parse import unquote_to_bytes
+        sample = unquote_to_bytes(sample)
     return any(p.search(sample) for p in SUSPICIOUS_BODY_PATTERNS)
 
 # ── v1.4: Bot-trap forms (auto-inject hidden field; flag bots that fill it) ─
@@ -2407,12 +2333,56 @@ def _bot_trap_triggered(body: bytes, ctype: str) -> bool:
     except Exception:
         return False
 
-# ── v1.4: JS challenge (invisible CAPTCHA) ────────────────────────────────
+# ── v1.4: JS challenge (Turnstile-backed cookie gate) ────────────────────
+# Earlier iterations of this feature stacked client-computed primitives —
+# SHA-256 Proof-of-Work, browser-API probe with cross-validation,
+# anchor-fetch proof, sub-second timing windows — to try to distinguish
+# real browsers from scripted clients. Empirically every one of those
+# layers was bypassable in pure Python in ~1 s (see Threat-model section
+# in README.md). The honest replacement is this: the gate exists ONLY
+# when Cloudflare Turnstile is configured. The Turnstile success token is
+# minted by Cloudflare server-side, so a scripted client cannot satisfy
+# it without solving the actual CAPTCHA. Without Turnstile keys, the
+# JS-challenge feature is a no-op and the gateway relies on its other
+# layers (UA filter, header completeness, behavioral, rate-limits,
+# risk-score, bot-trap forms, body-pattern matching, slowloris guard).
 JS_CHALLENGE = os.environ.get("JS_CHALLENGE", "0") in ("1", "true", "yes")
 CHAL_COOKIE  = "chal"
-CHAL_TTL     = int(os.environ.get("JS_CHALLENGE_TTL", "86400"))   # 24 h
-CHAL_NONCE_TTL = 120  # nonce valid for 2 min after issue
+CHAL_TTL     = int(os.environ.get("JS_CHALLENGE_TTL", "3600"))    # 1 h
+CHAL_NONCE_TTL = 120          # nonce valid for 2 min after issue
 # Reuse SESSION_KEY for chal HMAC (same trust domain).
+
+TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "").strip()
+TURNSTILE_SECRET  = os.environ.get("TURNSTILE_SECRET", "").strip()
+TURNSTILE_ENABLED = bool(TURNSTILE_SITEKEY and TURNSTILE_SECRET)
+TURNSTILE_VERIFY_URL = (
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify")
+
+# v1.4.1 V9.2: JA4 TLS-fingerprint binding for the chal cookie. Unlike PoW
+# / probe (computed by the attacker), the JA4 fingerprint is observed by
+# the network during the TLS handshake — the attacker would have to
+# replace their entire TLS stack (curl-impersonate, undetected-chromedriver)
+# to forge a Chrome-like JA4. Require / bind only when configured AND a
+# trusted peer is injecting the header.
+#   JS_CHAL_REQUIRE_JA4=1  → /__challenge MUST receive a non-empty JA4
+#                             from a trusted peer; reject otherwise.
+#   JS_CHAL_BIND_JA4=1     → bind chal cookie to JA4-hash (default: ON
+#                             when JA4 header is present from a trusted
+#                             peer; opportunistic — does not break flows
+#                             that lack the header).
+JS_CHAL_REQUIRE_JA4 = os.environ.get(
+    "JS_CHAL_REQUIRE_JA4", "0") in ("1", "true", "yes")
+JS_CHAL_BIND_JA4 = os.environ.get(
+    "JS_CHAL_BIND_JA4", "1") not in ("", "0", "false", "False", "no")
+
+# NOTE: there is no built-in JA4 deny-list. Real JA4 fingerprints depend on
+# the OpenSSL / TLS-stack version of each client and on the upstream JA4
+# extractor (cloudflared, nginx-JA4, Fastly emit slightly different forms).
+# Hard-coding fingerprints here would be a footgun: prefixes go stale and
+# false-positive on real users. The operator must populate JA4_DENY_LIST
+# from observation — the per-request JA4 is now visible in the dashboard
+# and recorded in events so blocking can be driven by actual telemetry,
+# not heuristics.
 
 def _make_chal_nonce() -> str:
     nonce = secrets.token_hex(8)
@@ -2439,23 +2409,155 @@ def _verify_chal_nonce(token: str) -> bool:
         return False
     return True
 
-def _make_chal_cookie() -> str:
-    issued = str(int(time.time()))
-    sig = hmac.new(SESSION_KEY, ("chal|" + issued).encode(),
-                   hashlib.sha256).hexdigest()
-    return f"{issued}|{sig}"
+def _ip_tier(ip: str) -> str:
+    """V9: collapse client IP to a coarse network tier (v4 /24, v6 /48) so
+    the chal cookie can be IP-bound without breaking ordinary mobile / NAT
+    rebinds. Returns empty string for unparseable input. Note: this is the
+    *raw* tier (e.g. "203.0.113.0") used only inside the HMAC payload — the
+    cookie carries an opaque tier hash, never the raw value."""
+    try:
+        import ipaddress
+        ip_obj = ipaddress.ip_address(ip.strip())
+        if isinstance(ip_obj, ipaddress.IPv4Address):
+            return str(ipaddress.ip_network(f"{ip}/24", strict=False).network_address)
+        return str(ipaddress.ip_network(f"{ip}/48", strict=False).network_address)
+    except Exception:
+        return ""
 
-def _verify_chal_cookie(value: str) -> bool:
+def _tier_hash(raw_tier: str) -> str:
+    """V9.1: convert the raw network tier into an opaque 16-char hex digest
+    so the cookie value never carries an RFC1918 / internal IP. Server-side
+    only — verification re-derives this from the request-side raw tier."""
+    if not raw_tier:
+        return ""
+    return hmac.new(SESSION_KEY, b"tier|" + raw_tier.encode(),
+                    hashlib.sha256).hexdigest()[:16]
+
+def _is_hex16(s: str) -> bool:
+    return len(s) == 16 and all(c in "0123456789abcdef" for c in s)
+
+def _request_ja4(request) -> str:
+    """V9.2: return the JA4 fingerprint observed by the trusted TLS
+    terminator for this request, or "" if absent / untrusted. Pure read
+    of an upstream-injected header; the attacker can't fabricate it from
+    a direct connection because JA4_TRUSTED_PEERS pins the source."""
+    if not _ja4_peer_trusted(request):
+        return ""
+    return (request.headers.get(JA4_HEADER) or "").strip()
+
+def _ja4_hash(ja4: str) -> str:
+    """Opaque hash of the JA4 fingerprint for the cookie value (same
+    pattern as `_tier_hash`). Empty input → empty output (no binding)."""
+    if not ja4:
+        return ""
+    return hmac.new(SESSION_KEY, b"ja4|" + ja4.encode(),
+                    hashlib.sha256).hexdigest()[:16]
+
+def _make_chal_cookie(ua: str, probe_hash: str = "", ip_tier: str = "",
+                      ja4: str = "") -> str:
+    """V9.2: cookie is bound to (UA + probe-hash + tier-HASH + JA4-HASH).
+    The HMAC payload uses the raw tier + raw JA4 (cryptographically strong),
+    but the cookie value carries only opaque hashes — no internal IP /
+    network leak, and the JA4 fingerprint isn't disclosed either."""
+    issued = str(int(time.time()))
+    payload = (f"chal|{ua[:200]}|{probe_hash}|{ip_tier}|{ja4}|{issued}")
+    sig = hmac.new(SESSION_KEY, payload.encode(),
+                   hashlib.sha256).hexdigest()
+    return (f"{issued}|{probe_hash}|{_tier_hash(ip_tier)}"
+            f"|{_ja4_hash(ja4)}|{sig}")
+
+def _verify_chal_cookie(value: str, ua: str, ip_tier: str = "",
+                         ja4: str = "") -> bool:
     if not value:
         return False
-    try:
-        issued, sig = value.split("|", 1)
-    except ValueError:
+    parts = value.split("|")
+    # V9.2 format: issued|probe_hash|tier_hash|ja4_hash|sig  (5 parts)
+    # V9.1 format: issued|probe_hash|tier_hash|sig           (4 parts, hex16)
+    # V9.0 legacy: issued|probe_hash|raw_tier|sig            (4 parts, raw IP)
+    # V1  format: issued|probe_hash|sig                      (3 parts)
+    # Old format: issued|sig                                 (2 parts)
+    # `payload_tier` / `payload_ja4` are what were hashed into the HMAC at
+    # mint time. Older cookies omitted these — must reproduce that exact
+    # construction or the signature comparison breaks for legacy users.
+    legacy_v9_raw = False
+    cookie_ja4_hash = ""
+    payload_ja4     = ""
+    if len(parts) == 5:
+        # V9.2 — tier_hash + ja4_hash in wire; raw tier + raw ja4 in HMAC.
+        issued, probe_hash, third, fourth, sig = parts
+        # 3rd field (tier_hash). Empty = minted without IP binding.
+        if _is_hex16(third):
+            cookie_tier_hash = third
+            payload_tier     = ip_tier
+        elif third == "":
+            cookie_tier_hash = ""
+            payload_tier     = ""
+        else:
+            return False                   # raw IPs aren't valid in V9.2
+        # 4th field (ja4_hash). Empty = minted without JA4 binding.
+        if _is_hex16(fourth):
+            cookie_ja4_hash = fourth
+            payload_ja4     = ja4
+        elif fourth == "":
+            cookie_ja4_hash = ""
+            payload_ja4     = ""
+        else:
+            return False
+    elif len(parts) == 4:
+        issued, probe_hash, third, sig = parts
+        if _is_hex16(third):
+            # V9.1 cookie — tier_hash in the wire format, raw tier in the
+            # HMAC payload. Verifier re-derives raw tier from the request.
+            cookie_tier_hash = third
+            payload_tier     = ip_tier
+        elif third == "":
+            # 4-part with empty 3rd field — minted without IP binding (e.g.
+            # by tests calling _make_chal_cookie(ua) with no ip_tier). Treat
+            # like V1: HMAC payload also used empty tier.
+            cookie_tier_hash = ""
+            payload_tier     = ""
+        else:
+            # V9.0 cookie — raw tier baked into both wire format and payload.
+            cookie_tier_hash = ""
+            payload_tier     = third
+            legacy_v9_raw    = True
+    elif len(parts) == 3:
+        issued, probe_hash, sig = parts
+        cookie_tier_hash = ""
+        payload_tier     = ""        # V1 cookies had no tier in payload
+    elif len(parts) == 2:
+        issued, sig = parts
+        probe_hash       = ""
+        cookie_tier_hash = ""
+        payload_tier     = ""        # pre-V1 cookies had no probe + no tier
+    else:
         return False
-    expected = hmac.new(SESSION_KEY, ("chal|" + issued).encode(),
+    if len(parts) == 5:
+        sig_payload = (f"chal|{ua[:200]}|{probe_hash}|{payload_tier}"
+                       f"|{payload_ja4}|{issued}")
+    else:
+        sig_payload = (f"chal|{ua[:200]}|{probe_hash}|{payload_tier}"
+                       f"|{issued}")
+    expected = hmac.new(SESSION_KEY, sig_payload.encode(),
                         hashlib.sha256).hexdigest()
     if not hmac.compare_digest(sig, expected):
         return False
+    # V9.1: tier-hash binding. If the cookie carries a tier_hash, the
+    # request-side tier must hash to the same value. Empty cookie_tier_hash
+    # means legacy 3- / 2-part / V9.0 — no tier check on the wire field.
+    if cookie_tier_hash and ip_tier:
+        if not hmac.compare_digest(cookie_tier_hash, _tier_hash(ip_tier)):
+            return False
+    # V9.0 legacy raw-tier cookie: also enforce match against current tier
+    # (the sig already binds it via payload_tier=third, but tighten anyway).
+    if legacy_v9_raw and ip_tier and payload_tier != ip_tier:
+        return False
+    # V9.2: JA4-hash binding. If the cookie carries a ja4_hash, the
+    # request-side JA4 must hash to the same value. Empty cookie_ja4_hash
+    # means cookie was minted without JA4 visible — no enforcement.
+    if cookie_ja4_hash and ja4:
+        if not hmac.compare_digest(cookie_ja4_hash, _ja4_hash(ja4)):
+            return False
     try:
         if int(time.time()) - int(issued) > CHAL_TTL:
             return False
@@ -2470,24 +2572,45 @@ JS_CHAL_HTML = """<!doctype html><html lang=en><head><meta charset=utf-8>
 align-items:center;justify-content:center;font:14px/1.5 system-ui,sans-serif;
 color:#444;background:#fafafa}.spinner{width:24px;height:24px;border:3px solid #eee;
 border-top-color:#3fb950;border-radius:50%;animation:s 0.8s linear infinite;
-margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}</style>
+margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8px}</style>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head><body>
 <div class=spinner></div>
 <p>Verifying browser...</p>
+<div id=cf-ts></div>
 <noscript><p>JavaScript is required to access this site.</p></noscript>
 <script>
 (async()=>{
+  const n = "__NONCE__", t = "__TARGET__", TS_KEY = "__TURNSTILE_KEY__";
+  function waitForTurnstile(){
+    return new Promise((resolve, reject)=>{
+      const t0 = Date.now();
+      function tick(){
+        if(window.turnstile){
+          window.turnstile.render('#cf-ts',{
+            sitekey: TS_KEY,
+            callback: tok => resolve(tok),
+            'error-callback': () => reject(new Error('turnstile error')),
+          });
+        } else if (Date.now()-t0 < 30000) { setTimeout(tick, 200); }
+        else { reject(new Error('turnstile load timeout')); }
+      }
+      tick();
+    });
+  }
   try{
-    const n="__NONCE__", t="__TARGET__";
-    const enc=new TextEncoder().encode(n+navigator.userAgent+screen.width+screen.height);
-    const buf=await crypto.subtle.digest('SHA-256',enc);
-    const h=Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-    const fd=new URLSearchParams({n,h,t});
-    const r=await fetch('/__challenge',{method:'POST',body:fd,credentials:'include',
-      headers:{'Content-Type':'application/x-www-form-urlencoded'}});
-    if(r.ok){location.replace(t)}
-    else{document.querySelector('p').textContent='Verification failed.'}
-  }catch(e){document.querySelector('p').textContent='Verification error: '+e.message}
+    const tsToken = await waitForTurnstile();
+    const fd = new URLSearchParams({n, t, 'cf-turnstile-response': tsToken});
+    const r = await fetch('/__challenge', {
+      method: 'POST', body: fd, credentials: 'include',
+      headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    });
+    if (r.ok) { location.replace(t); }
+    else { document.querySelector('p').textContent =
+              'Verification failed (' + r.status + ').'; }
+  } catch(e) {
+    document.querySelector('p').textContent = 'Verification error: ' + e.message;
+  }
 })();
 </script></body></html>"""
 
@@ -2498,21 +2621,64 @@ _STATIC_ASSET_SUFFIXES = (
     ".eot", ".map", ".mp4", ".webm", ".mp3", ".ogg",
 )
 
+# v1.4.1 (post-V8 hardening): when JS_CHAL_STRICT_STATIC=1, the static-asset
+# bypass refuses to skip anything that LOOKS like an API path (so a bot can't
+# slip past the cookie gate via /api/v1/users.css). Default ON.
+JS_CHAL_STRICT_STATIC = os.environ.get(
+    "JS_CHAL_STRICT_STATIC", "1") not in ("", "0", "false", "False", "no")
+_API_PATH_HINTS = ("/api/", "/graphql", "/rest/", "/rpc/", "/v1/", "/v2/",
+                   "/v3/", "/admin/", "/internal/")
+
+def _looks_like_api(path: str) -> bool:
+    """Conservative heuristic: any path containing a typical API segment is
+    NOT a static asset, even if it endswith('.css'). Prevents the
+    `/api/v1/users.css` style bypass on permissive backends."""
+    p = path.lower()
+    return any(h in p for h in _API_PATH_HINTS)
+
+# v1.4.1 (post-V8 fix): chal cookie is required on EVERY non-static,
+# non-admin, non-opted-out request — not just HTML. Browsers carry the
+# cookie on XHR transparently; pure-HTTP bots don't and get blocked.
+# Operator-controlled escape hatch for legit non-browser clients (S2S,
+# mobile apps, webhooks). Comma-separated path prefixes.
+_JS_CHAL_OPEN_PATHS_RAW = os.environ.get("JS_CHAL_OPEN_PATHS", "").strip()
+JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
+                      if p.strip()]
+
+def _js_challenge_required(request) -> bool:
+    """True iff the JS challenge gate is on AND this request must carry a
+    valid chal cookie but doesn't. The gate is on only when JS_CHALLENGE=1
+    AND Turnstile keys are configured — without Turnstile the cookie has
+    no real boundary behind it (PoW + probe were empirically bypassable
+    in pure Python), so the feature is disabled to avoid the false sense
+    of security a no-op gate would create."""
+    if not (JS_CHALLENGE and TURNSTILE_ENABLED):
+        return False
+    if request.path == "/__challenge" or request.path.startswith("/__"):
+        return False  # admin / challenge-solver have their own auth
+    if request.path.endswith(_STATIC_ASSET_SUFFIXES):
+        # V8 hardening: don't trust a `.css` suffix on what looks like an API
+        # path. Permissive backends (Spring suffix matching, Express trailing
+        # tokens) would otherwise return JSON for `/api/v1/users.css`.
+        if not (JS_CHAL_STRICT_STATIC and _looks_like_api(request.path)):
+            return False  # public assets
+    if any(request.path.startswith(p) for p in JS_CHAL_OPEN_PATHS):
+        return False  # operator-defined non-browser paths
+    return not _verify_chal_cookie(
+        request.cookies.get(CHAL_COOKIE, ""),
+        request.headers.get("User-Agent", ""),
+        _ip_tier(get_ip(request)),
+        _request_ja4(request))
+
 def _js_challenge_applicable(request) -> bool:
-    """Return True iff this request should be challenged."""
-    if not JS_CHALLENGE:
+    """True iff we should serve the interactive JS challenge HTML page.
+    Only navigation-style HTML GETs see the page — everything else gets a
+    401 JSON response (handled in the middleware)."""
+    if not _js_challenge_required(request):
         return False
     if request.method != "GET":
         return False
-    if "text/html" not in request.headers.get("Accept", ""):
-        return False
-    if request.path.startswith("/__"):
-        return False
-    if request.path.endswith(_STATIC_ASSET_SUFFIXES):
-        return False
-    if _verify_chal_cookie(request.cookies.get(CHAL_COOKIE, "")):
-        return False
-    return True
+    return "text/html" in request.headers.get("Accept", "")
 
 # ── Edge-injected security response headers (HTML only) ──────────────────
 # Each can be overridden / disabled via env. An empty value disables that one.
@@ -2774,7 +2940,7 @@ async def proxy(request: web.Request):
         if is_suspicious_body(body, client_ctype):
             await update_risk_and_maybe_ban(
                 request.get("_track_key") or request.remote or "0.0.0.0",
-                "suspicious-path", get_ip(request))
+                "suspicious-body", get_ip(request))   # L1: was "suspicious-path"
             return await _silent_decoy_response(
                 get_ip(request), request.headers.get("User-Agent", ""),
                 request.path, "suspicious-body",
@@ -2864,7 +3030,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.4"
+                response_headers["X-Proxy"] = "AppSecGW_1.4.2"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -2922,6 +3088,16 @@ async def on_startup(app):
     print(f"[db] persistence active → {DB_PATH}")
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
+    if JS_CHALLENGE and not TURNSTILE_ENABLED:
+        print("[js-challenge] WARNING: JS_CHALLENGE=1 but TURNSTILE_SITEKEY/"
+              "TURNSTILE_SECRET not configured — gate is DISABLED. The "
+              "Turnstile token is the only check on this endpoint that "
+              "scripted clients cannot fabricate locally; without it the "
+              "feature would be theatre. Other layers remain active.",
+              flush=True)
+    elif JS_CHALLENGE and TURNSTILE_ENABLED:
+        print("[js-challenge] active (Turnstile-backed cookie gate)",
+              flush=True)
 
 async def on_cleanup(app):
     """Flush queue and close DB writer cleanly."""
@@ -3014,6 +3190,7 @@ AGENT_BLOCK_REASONS = (
     "rate-limit-ip", "rate-limit", "host-not-allowed",
     "admin-ip-blocked",
     "suspicious-body", "bot-trap", "js-challenge",
+    "tls-fingerprint", "origin-mismatch", "missing-required-header",
 )
 
 async def agents_timeline_endpoint(request: web.Request):
@@ -3178,342 +3355,7 @@ async def agents_data_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
-AGENTS_DASHBOARD_HTML = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW · Stealth Agent Hunter</title>
-<style>
-:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
-     background:var(--bg);color:var(--fg);padding:14px}
-h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--orange);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
-h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
-.grid{display:grid;gap:14px;margin-top:14px}
-.row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
-.metric.crit{color:var(--red)}
-.metric.high{color:var(--orange)}
-.metric.med{color:var(--yellow)}
-.metric.low{color:var(--blue)}
-.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
-table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
-         text-transform:uppercase;letter-spacing:.5px;font-size:10px}
-table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
-.bar{height:10px;background:#0a0e13;border-radius:4px;overflow:hidden;display:flex}
-.bar>div{height:100%}
-.bar .h{background:#a78bfa}
-.bar .a{background:#5fb3c0}
-.bar .e{background:#3fb950}
-.bar .t{background:#d29922}
-.bar .r{background:#f85149}
-.bar .f{background:#ff7b3a}
-.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
-.tag.crit{background:#4a1a1a;color:var(--red)}
-.tag.high{background:#3d2a1a;color:var(--orange)}
-.tag.med{background:#4a3a1a;color:var(--yellow)}
-.tag.low{background:#1a3a4a;color:var(--blue)}
-.dim{color:var(--dim)}
-.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
-      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
-.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
-.ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
-.ctrl-now:hover:not(:disabled){background:#1c3d5a}
-.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
-.expand{cursor:pointer;color:var(--blue)}
-.detail{display:none;background:#0a0e13;border-left:3px solid var(--orange);padding:8px 12px}
-.detail.show{display:block}
-.path-row{font-family:ui-monospace;font-size:11px;color:var(--dim);padding:2px 0}
-.nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
-.nav a{color:var(--blue);text-decoration:none}
-.nav a:hover{text-decoration:underline}
-</style></head>
-<body>
-<h1>AppSecGW · Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
-<div class="nav">
-  <a href="/__dashboard?key=__KEY__">← main dashboard</a>
-  <span class="dim">|</span>
-  <a href="/__agents?key=__KEY__">stealth agents (this page)</a>
-</div>
-
-<div class="grid">
-
-  <div class="row">
-    <div class="card"><h2>Identities w/ allowed traffic</h2>
-         <div class="metric low" id="m-total">0</div>
-         <div class="metric-sub">total ever passed gate</div></div>
-    <div class="card"><h2>Suspicious now</h2>
-         <div class="metric high" id="m-susp">0</div>
-         <div class="metric-sub" id="m-susp-pct">—</div></div>
-    <div class="card"><h2>Critical (≥80)</h2>
-         <div class="metric crit" id="m-crit">0</div>
-         <div class="metric-sub">strong stealth signals</div></div>
-    <div class="card"><h2>Threshold</h2>
-         <div class="metric med" id="m-thresh">20</div>
-         <div class="metric-sub">
-           <input id="thresh-input" type="number" min="0" max="100" value="20"
-                  class="ctrl" style="width:60px"> apply</div></div>
-  </div>
-
-  <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Detection vs Miss · Timeline
-        <span id="t-window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span>
-      </h2>
-      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
-        <button id="t-prev"  class="ctrl">‹ back</button>
-        <button id="t-now"   class="ctrl ctrl-now">now</button>
-        <button id="t-next"  class="ctrl" disabled>fwd ›</button>
-        <span class="dim" style="margin-left:6px">window:</span>
-        <select id="t-range" class="ctrl">
-          <option value="15">15 min</option>
-          <option value="60" selected>1 h</option>
-          <option value="180">3 h</option>
-          <option value="720">12 h</option>
-          <option value="1440">24 h</option>
-          <option value="10080">7 days</option>
-        </select>
-        <span class="dim">bucket:</span>
-        <select id="t-bucket" class="ctrl">
-          <option value="60" selected>1 min</option>
-          <option value="300">5 min</option>
-          <option value="900">15 min</option>
-          <option value="3600">1 hour</option>
-          <option value="86400">1 day</option>
-        </select>
-        <span class="dim" id="t-totals"></span>
-      </div>
-    </div>
-    <div style="position:relative;height:240px"><canvas id="agent-chart"></canvas></div>
-    <div class="dim" style="font-size:11px;margin-top:6px">
-      <span style="color:var(--red)">●</span> detected = blocked because tripped an agent layer
-      &nbsp;·&nbsp; <span style="color:var(--orange)">●</span> missed = allowed but identity now scores ≥ threshold
-      &nbsp;·&nbsp; <span style="color:var(--green)">●</span> clean = allowed, no stealth signal
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>Score distribution among allowed identities</h2>
-    <div id="dist"></div>
-  </div>
-
-  <div class="card">
-    <h2>Suspicious agents (passed all blocks but exhibit stealth signals)</h2>
-    <table id="sus-tbl">
-      <thead><tr>
-        <th>Score</th><th>Identity</th><th>UA</th><th>IP</th>
-        <th>Allowed</th><th>Blocked</th><th>Headers avg</th>
-        <th>HTML/Static</th><th>Paths/req</th><th>Timing σ/μ</th>
-        <th>404s</th><th>Risk</th><th>Last path</th><th></th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-</div>
-
-<div class="foot">refreshes every 3 s · <code id="ts"></code></div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-        integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script>
-const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g,
-  c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
-function bandClass(s){return s>=80?'crit':s>=60?'high':s>=40?'med':'low'}
-
-let MIN = 20;
-document.getElementById('thresh-input').addEventListener('change', e=>{
-  MIN = Math.max(0, Math.min(100, parseInt(e.target.value)||20));
-  document.getElementById('m-thresh').textContent = MIN; tick();
-});
-
-async function tick(){
-  try{
-    const params = new URLSearchParams({min_score: MIN, limit: 200});
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__agents-data?' + params, {cache:'no-store', credentials:'include'});
-    const d = await r.json();
-    document.getElementById('live').textContent='● LIVE';
-    document.getElementById('live').style.background='var(--orange)';
-
-    const sum = d.summary;
-    document.getElementById('m-total').textContent = sum.total_with_allowed;
-    document.getElementById('m-susp').textContent  = sum.suspicious;
-    const pct = sum.total_with_allowed
-      ? ((sum.suspicious/sum.total_with_allowed)*100).toFixed(1) + '% of allowed'
-      : '—';
-    document.getElementById('m-susp-pct').textContent = pct;
-    const crits = d.suspects.filter(s=>s.stealth_score>=80).length;
-    document.getElementById('m-crit').textContent = crits;
-    document.getElementById('m-thresh').textContent = sum.min_score;
-
-    // Distribution bars
-    const dist = d.buckets;
-    const total = Math.max(1, Object.values(dist).reduce((a,b)=>a+b,0));
-    const distEl = document.getElementById('dist');
-    distEl.innerHTML = Object.entries(dist).map(([k,v])=>{
-      const pct=(v/total*100).toFixed(1);
-      const cls = k.startsWith('crit')?'crit':k.startsWith('high')?'high':k.startsWith('med')?'med':'low';
-      return `<div style="display:grid;grid-template-columns:120px 1fr 50px;gap:8px;align-items:center;margin:4px 0">
-        <span class="tag ${cls}">${escapeHtml(k)}</span>
-        <div class="bar"><div class="${cls=='crit'?'r':cls=='high'?'f':cls=='med'?'t':'a'}" style="width:${pct}%"></div></div>
-        <span class="dim" style="text-align:right">${v}</span></div>`;
-    }).join('');
-
-    // Suspect table
-    const tbody = document.querySelector('#sus-tbl tbody');
-    if (!d.suspects.length){
-      tbody.innerHTML = `<tr><td colspan=14 class=dim style="text-align:center;padding:14px">no suspicious agents at threshold ${MIN}</td></tr>`;
-    } else {
-      tbody.innerHTML = d.suspects.map((s,i)=>{
-        const m = s.metrics, c = s.components;
-        const compBar = `<div class="bar" title="headers:${c.headers} assets:${c.assets} enum:${c.enum} timing:${c.timing} risk:${c.risk} 404s:${c['404s']}">
-          <div class="h" style="width:${c.headers}%"></div>
-          <div class="a" style="width:${c.assets}%"></div>
-          <div class="e" style="width:${c.enum}%"></div>
-          <div class="t" style="width:${c.timing}%"></div>
-          <div class="r" style="width:${c.risk}%"></div>
-          <div class="f" style="width:${c['404s']}%"></div></div>`;
-        const recentRows = (s.recent_paths||[]).slice(-5).reverse().map(p=>
-          `<div class="path-row">${new Date(p.ts*1000).toLocaleTimeString()} · ${p.status} · ${escapeHtml(p.path)} · hdr=${p.header_score}</div>`
-        ).join('') || '<span class=dim>—</span>';
-        return `
-          <tr>
-            <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
-            <td title="${escapeHtml(s.id)}"><b>${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim">${m.samples} samples</div></td>
-            <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
-            <td>${escapeHtml(s.ip)}</td>
-            <td style="color:var(--green)">${s.allowed}</td>
-            <td style="color:${s.blocked?'var(--red)':'var(--dim)'}">${s.blocked}</td>
-            <td>${m.avg_header_score}/7</td>
-            <td>${m.html_loads}/${m.static_loads}</td>
-            <td>${m.unique_paths}/${s.allowed} (${m.path_diversity})</td>
-            <td>${m.behavioral_cov!==null?m.behavioral_cov:'—'}</td>
-            <td style="color:${m.upstream_404_count>5?'var(--red)':'var(--dim)'}">${m.upstream_404_count}</td>
-            <td>${m.risk_score}</td>
-            <td class="dim">${escapeHtml((s.last_path||'').slice(0,30))}</td>
-            <td><span class="expand" data-i="${i}">▸ paths</span></td>
-          </tr>
-          <tr id="d-${i}" class="detail-row" style="display:none"><td colspan=14>
-            <div class="detail show"><b>Recent allowed paths</b>${recentRows}</div></td></tr>`;
-      }).join('');
-      tbody.querySelectorAll('.expand').forEach(el=>el.onclick=()=>{
-        const r = document.getElementById('d-'+el.dataset.i);
-        r.style.display = (r.style.display==='none')?'table-row':'none';
-      });
-    }
-    document.getElementById('ts').textContent = new Date().toISOString();
-  }catch(e){
-    document.getElementById('live').style.background='var(--red)';
-    document.getElementById('live').textContent='○ ERR';
-  }
-}
-// Detection-vs-miss timeline chart
-let agentChart = null;
-function ensureAgentChart(){
-  if (agentChart) return agentChart;
-  const ctx = document.getElementById('agent-chart').getContext('2d');
-  agentChart = new Chart(ctx, {
-    type: 'line',
-    data: { labels: [], datasets: [
-      { label:'detected (blocked agent)', data:[], borderColor:'#f85149',
-        backgroundColor:'rgba(248,81,73,0.20)', tension:0.25, fill:true,
-        borderWidth:2, pointRadius:0, pointHoverRadius:4 },
-      { label:'missed (allowed but stealth)', data:[], borderColor:'#ff7b3a',
-        backgroundColor:'rgba(255,123,58,0.18)', tension:0.25, fill:true,
-        borderWidth:2, pointRadius:0, pointHoverRadius:4 },
-      { label:'clean allowed', data:[], borderColor:'#3fb950',
-        backgroundColor:'rgba(63,185,80,0.10)', tension:0.25, fill:true,
-        borderWidth:2, pointRadius:0, pointHoverRadius:4 },
-    ]},
-    options: { responsive:true, maintainAspectRatio:false,
-      animation:{duration:200}, interaction:{mode:'index',intersect:false},
-      plugins:{ legend:{ labels:{ color:'#c9d1d9', font:{size:11} } } },
-      scales:{
-        x:{ ticks:{color:'#8b949e',font:{size:10},maxRotation:0,autoSkipPadding:18}, grid:{color:'#21262d'} },
-        y:{ beginAtZero:true, ticks:{color:'#8b949e',font:{size:10},precision:0}, grid:{color:'#21262d'} } } }
-  });
-  return agentChart;
-}
-function fmtTimeBucket(epochSec, bucketSec){
-  const d = new Date(epochSec*1000);
-  if (bucketSec >= 86400) return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
-  if (bucketSec >= 3600)  return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-  return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
-}
-async function tickChart(){
-  try{
-    const params = new URLSearchParams({
-      range: document.getElementById('t-range').value,
-      bucket: document.getElementById('t-bucket').value,
-      min_score: MIN,
-    });
-    if (tEndEpoch !== null) params.set('end', tEndEpoch.toString());
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__agents-timeline?'+params, {cache:'no-store', credentials:'include'});
-    const d = await r.json();
-    const c = ensureAgentChart();
-    const bs = d.bucket_secs || 60;
-    const labels = d.timeline.map(b=>fmtTimeBucket(b.t, bs));
-    const step = Math.max(1, Math.floor(labels.length/12));
-    c.data.labels = labels.map((l,i)=>(i%step===0||i===labels.length-1)?l:'');
-    c.data.datasets[0].data = d.timeline.map(b=>b.detected);
-    c.data.datasets[1].data = d.timeline.map(b=>b.missed);
-    c.data.datasets[2].data = d.timeline.map(b=>b.clean_allowed);
-    c.update('none');
-    const t = d.totals;
-    document.getElementById('t-totals').textContent =
-      `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} · stealth IPs=${d.stealth_ips_count}`;
-  }catch(e){}
-}
-// Time-window navigation state for the timeline chart
-let tEndEpoch = null;   // null = live; epoch seconds = scrolled-back right edge
-function tGetRangeMin(){ return parseInt(document.getElementById('t-range').value||'60',10); }
-function tRefreshControls(){
-  document.getElementById('t-next').disabled = (tEndEpoch === null);
-  document.getElementById('t-now').disabled  = (tEndEpoch === null);
-  const lbl = document.getElementById('t-window-label');
-  if (tEndEpoch === null){
-    lbl.textContent = '(live)'; lbl.style.color = 'var(--green)';
-  } else {
-    const win = tGetRangeMin();
-    const start = new Date((tEndEpoch - win*60)*1000), end = new Date(tEndEpoch*1000);
-    const fmt = d => d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
-    lbl.style.color = 'var(--yellow)';
-  }
-}
-document.getElementById('t-prev').onclick = () => {
-  const win = tGetRangeMin()*60;
-  const cur = tEndEpoch || Math.floor(Date.now()/1000);
-  tEndEpoch = cur - win;
-  tRefreshControls(); tickChart();
-};
-document.getElementById('t-next').onclick = () => {
-  if (!tEndEpoch) return;
-  const win = tGetRangeMin()*60;
-  tEndEpoch = tEndEpoch + win;
-  if (tEndEpoch > Math.floor(Date.now()/1000)) tEndEpoch = null;
-  tRefreshControls(); tickChart();
-};
-document.getElementById('t-now').onclick = () => { tEndEpoch = null; tRefreshControls(); tickChart(); };
-document.getElementById('t-range').addEventListener('change', () => { tRefreshControls(); tickChart(); });
-document.getElementById('t-bucket').addEventListener('change', tickChart);
-tRefreshControls();
-
-tick(); tickChart();
-setInterval(tick, 3000);
-// Only auto-refresh the chart when in live mode.
-setInterval(()=>{ if (tEndEpoch === null) tickChart(); }, 5000);
-</script>
-</body></html>
-"""
+AGENTS_DASHBOARD_HTML  = (_DASHBOARDS_DIR / "agents.html").read_text(encoding="utf-8")
 
 async def agents_dashboard_endpoint(request: web.Request):
     # Pre-fill the admin key into the in-page links so navigation keeps auth.
@@ -3621,7 +3463,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.4",
+        "version":         "AppSecGW_1.4.2",
     }
     return web.json_response({
         "current":          current,
@@ -3638,451 +3480,7 @@ async def service_metrics_data_endpoint(request: web.Request):
                 "X-Content-Type-Options": "nosniff"})
 
 
-SERVICE_DASHBOARD_HTML = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW · Service Metrics</title>
-<style>
-:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
-*{box-sizing:border-box;margin:0;padding:0}
-body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
-     background:var(--bg);color:var(--fg);padding:14px}
-h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
-h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
-.grid{display:grid;gap:14px;margin-top:14px}
-.row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
-.row5{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.metric{font-size:26px;font-weight:600;color:#fff;line-height:1}
-.metric.cpu{color:var(--blue)}
-.metric.mem{color:var(--purple)}
-.metric.disk{color:var(--orange)}
-.metric.proc{color:var(--green)}
-.metric.fd{color:var(--yellow)}
-.metric.net{color:#5fb3c0}
-.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
-.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}
-.bar>div{height:100%;background:var(--blue);transition:width 0.3s}
-.bar.mem>div{background:var(--purple)}
-.bar.cpu>div{background:var(--blue)}
-.bar.disk>div{background:var(--orange)}
-.bar.danger>div{background:var(--red)}
-table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
-         text-transform:uppercase;letter-spacing:.5px;font-size:10px}
-table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
-.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:11.5px}
-.kv .k{color:var(--dim)}
-.kv .v{font-family:ui-monospace;color:#fff}
-.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
-.nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
-.nav a{color:var(--blue);text-decoration:none}
-.nav a:hover{text-decoration:underline}
-.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
-      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;
-      font-family:inherit;line-height:1.4}
-.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
-.ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
-.ctrl-now:hover:not(:disabled){background:#1c3d5a}
-@media (max-width:1100px){.row,.row5{grid-template-columns:repeat(2,1fr)}}
-</style></head>
-<body>
-<h1>AppSecGW &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
-<div class="nav">
-  <a id="lnk-main"   href="#">← main dashboard</a>
-  <span class="dim">|</span>
-  <a id="lnk-agents" href="#">stealth agents</a>
-  <span class="dim">|</span>
-  <a id="lnk-self"   href="#">service metrics (this page)</a>
-</div>
-
-<div class="grid">
-
-  <!-- ── Top-row counters ────────────────────────────── -->
-  <div class="row5">
-    <div class="card"><h2>CPU</h2>
-      <div class="metric cpu" id="m-cpu">—</div>
-      <div class="metric-sub" id="m-load">load —</div>
-      <div class="bar cpu"><div id="b-cpu" style="width:0%"></div></div>
-    </div>
-    <div class="card"><h2>Memory</h2>
-      <div class="metric mem" id="m-mem">—</div>
-      <div class="metric-sub" id="m-mem-sub">— used / —</div>
-      <div class="bar mem"><div id="b-mem" style="width:0%"></div></div>
-    </div>
-    <div class="card"><h2>Disk (/data)</h2>
-      <div class="metric disk" id="m-disk">—</div>
-      <div class="metric-sub" id="m-disk-sub">— used / —</div>
-      <div class="bar disk"><div id="b-disk" style="width:0%"></div></div>
-    </div>
-    <div class="card"><h2>Processes</h2>
-      <div class="metric proc" id="m-procs">—</div>
-      <div class="metric-sub" id="m-procs-sub">— open FDs</div>
-    </div>
-    <div class="card"><h2>Network</h2>
-      <div class="metric net" id="m-net-rx">—</div>
-      <div class="metric-sub" id="m-net-tx">tx —</div>
-    </div>
-  </div>
-
-  <!-- ── Second row: extras incl. DB size ──────────── -->
-  <div class="row5">
-    <div class="card"><h2>SQLite DB</h2>
-      <div class="metric" style="color:#5fb3c0" id="m-db">—</div>
-      <div class="metric-sub" id="m-db-sub">db — wal — shm —</div>
-    </div>
-    <div class="card"><h2>cgroup memory</h2>
-      <div class="metric" style="color:var(--purple)" id="m-cg">—</div>
-      <div class="metric-sub" id="m-cg-sub">— / —</div>
-    </div>
-    <div class="card"><h2>Identities</h2>
-      <div class="metric" style="color:var(--blue)" id="m-id">—</div>
-      <div class="metric-sub" id="m-buckets">— IP buckets</div>
-    </div>
-    <div class="card"><h2>Requests</h2>
-      <div class="metric" style="color:#fff" id="m-req">—</div>
-      <div class="metric-sub" id="m-req-sub">— allowed / — blocked</div>
-    </div>
-    <div class="card"><h2>Uptime</h2>
-      <div class="metric" style="color:var(--green);font-size:18px" id="m-up">—</div>
-      <div class="metric-sub" id="m-version">AppSecGW —</div>
-    </div>
-  </div>
-
-  <!-- ── Time controls (above the line charts) ───────── -->
-  <div class="card" style="padding:8px 14px">
-    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
-      <span class="dim" id="window-label" style="font-size:11px">live</span>
-      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
-        <button id="prev"  class="ctrl">‹ back</button>
-        <button id="now"   class="ctrl ctrl-now">now</button>
-        <button id="next"  class="ctrl" disabled>fwd ›</button>
-        <span class="dim" style="margin-left:6px">window:</span>
-        <select id="range" class="ctrl">
-          <option value="5">5 min</option>
-          <option value="15">15 min</option>
-          <option value="60" selected>1 h</option>
-          <option value="180">3 h</option>
-          <option value="360">6 h</option>
-          <option value="720">12 h</option>
-        </select>
-        <span class="dim" style="margin-left:6px">bucket:</span>
-        <select id="bucket" class="ctrl">
-          <option value="5" selected>5 sec</option>
-          <option value="30">30 sec</option>
-          <option value="60">1 min</option>
-          <option value="300">5 min</option>
-          <option value="900">15 min</option>
-          <option value="3600">1 hour</option>
-        </select>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Time-series charts ────────────────────────── -->
-  <div class="card">
-    <h2>CPU &amp; Memory · last hour</h2>
-    <div style="position:relative;height:240px"><canvas id="chart-cpu-mem"></canvas></div>
-  </div>
-
-  <div class="row" style="grid-template-columns:1fr 1fr">
-    <div class="card">
-      <h2>Network throughput · last hour</h2>
-      <div style="position:relative;height:200px"><canvas id="chart-net"></canvas></div>
-    </div>
-    <div class="card">
-      <h2>Process &amp; FD count · last hour</h2>
-      <div style="position:relative;height:200px"><canvas id="chart-procs"></canvas></div>
-    </div>
-  </div>
-
-  <div class="card">
-    <h2>SQLite size · evolution (stacked: db + wal + shm)</h2>
-    <div style="position:relative;height:220px"><canvas id="chart-db"></canvas></div>
-  </div>
-
-  <!-- ── Detail tables ─────────────────────────────── -->
-  <div class="row" style="grid-template-columns:1fr 1fr 1fr">
-    <div class="card">
-      <h2>Memory detail</h2>
-      <div class="kv" id="kv-mem"><span class="dim">no sample yet</span></div>
-    </div>
-    <div class="card">
-      <h2>Container limits</h2>
-      <div class="kv" id="kv-cg"></div>
-    </div>
-    <div class="card">
-      <h2>App counters</h2>
-      <div class="kv" id="kv-app"></div>
-    </div>
-  </div>
-
-</div>
-
-<div class="foot">refreshes every 5s · sampling every <span id="interval">5</span>s · <code id="ts"></code></div>
-
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-        integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
-        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-<script>
-const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-['lnk-main','lnk-agents','lnk-self'].forEach((id,i)=>{
-  const tgt = ['/__dashboard','/__agents','/__service'][i];
-  document.getElementById(id).href = tgt + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : '');
-});
-
-const fmtBytes = b => {
-  if (!b && b !== 0) return '—';
-  if (b < 1024) return b + ' B';
-  if (b < 1048576) return (b/1024).toFixed(1) + ' KB';
-  if (b < 1073741824) return (b/1048576).toFixed(1) + ' MB';
-  return (b/1073741824).toFixed(2) + ' GB';
-};
-const fmtBps = b => fmtBytes(b) + '/s';
-
-let cpuMemChart=null, netChart=null, procChart=null, dbChart=null;
-
-function ensureCharts(){
-  if (cpuMemChart) return;
-  const opts = {
-    responsive:true, maintainAspectRatio:false,
-    animation:{duration:200}, interaction:{mode:'index',intersect:false},
-    plugins:{legend:{labels:{color:'#c9d1d9',font:{size:11}}}},
-    scales:{
-      x:{ticks:{color:'#8b949e',font:{size:10},maxRotation:0,autoSkipPadding:18},grid:{color:'#21262d'}},
-      y:{beginAtZero:true,ticks:{color:'#8b949e',font:{size:10}},grid:{color:'#21262d'}}
-    }
-  };
-  cpuMemChart = new Chart(document.getElementById('chart-cpu-mem').getContext('2d'),{
-    type:'line', data:{labels:[],datasets:[
-      {label:'CPU %',    data:[], borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,0.10)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
-      {label:'Memory %', data:[], borderColor:'#bc8cff', backgroundColor:'rgba(188,140,255,0.10)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
-    ]}, options:{...opts, scales:{...opts.scales,
-      y:{...opts.scales.y, max:100, title:{text:'%',color:'#8b949e',display:true}}}}
-  });
-  netChart = new Chart(document.getElementById('chart-net').getContext('2d'),{
-    type:'line', data:{labels:[],datasets:[
-      {label:'RX bytes/s', data:[], borderColor:'#3fb950', backgroundColor:'rgba(63,185,80,0.12)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0},
-      {label:'TX bytes/s', data:[], borderColor:'#ff7b3a', backgroundColor:'rgba(255,123,58,0.12)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0},
-    ]}, options:opts
-  });
-  procChart = new Chart(document.getElementById('chart-procs').getContext('2d'),{
-    type:'line', data:{labels:[],datasets:[
-      {label:'processes', data:[], borderColor:'#3fb950', tension:0.25,
-        borderWidth:2, pointRadius:0},
-      {label:'open FDs',  data:[], borderColor:'#d29922', tension:0.25,
-        borderWidth:2, pointRadius:0},
-    ]}, options:opts
-  });
-
-  // Stacked DB-size chart: db + wal + shm — sum is the total on disk.
-  const stackedY = {
-    ...opts.scales.y,
-    stacked: true,
-    ticks:{...opts.scales.y.ticks,
-      callback:v => v >= 1048576 ? (v/1048576).toFixed(1)+' MB'
-                  : v >= 1024 ? (v/1024).toFixed(0)+' KB' : v+' B'},
-  };
-  dbChart = new Chart(document.getElementById('chart-db').getContext('2d'),{
-    type:'line', data:{labels:[],datasets:[
-      {label:'db',  data:[], borderColor:'#5fb3c0',
-        backgroundColor:'rgba(95,179,192,0.55)', tension:0.25, fill:true,
-        borderWidth:1, pointRadius:0, stack:'sql'},
-      {label:'wal', data:[], borderColor:'#ff7b3a',
-        backgroundColor:'rgba(255,123,58,0.55)', tension:0.25, fill:true,
-        borderWidth:1, pointRadius:0, stack:'sql'},
-      {label:'shm', data:[], borderColor:'#bc8cff',
-        backgroundColor:'rgba(188,140,255,0.55)', tension:0.25, fill:true,
-        borderWidth:1, pointRadius:0, stack:'sql'},
-    ]}, options:{...opts,
-      scales:{...opts.scales, x:{...opts.scales.x, stacked:true}, y:stackedY},
-      plugins:{...opts.plugins,
-        tooltip:{
-          callbacks:{
-            label:(item) => {
-              const v = item.parsed.y || 0;
-              const fmt = v >= 1048576 ? (v/1048576).toFixed(2)+' MB'
-                        : v >= 1024 ? (v/1024).toFixed(1)+' KB' : v+' B';
-              return `${item.dataset.label}: ${fmt}`;
-            }
-          }
-        }
-      }
-    }
-  });
-}
-
-const fmtTime = ts => {
-  const d = new Date(ts*1000);
-  return d.getHours().toString().padStart(2,'0')+':'+
-         d.getMinutes().toString().padStart(2,'0')+':'+
-         d.getSeconds().toString().padStart(2,'0');
-};
-
-// ── Time-control state (mirrors main dashboard pattern) ─────────────────
-let endEpoch = null;   // null = live, otherwise number = scrolled-back right edge
-function getRangeMin(){ return parseInt(document.getElementById('range').value||'60',10); }
-function getBucketSec(){return parseInt(document.getElementById('bucket').value||'5',10); }
-function refreshControls(){
-  document.getElementById('next').disabled = (endEpoch === null);
-  document.getElementById('now').disabled  = (endEpoch === null);
-  const lbl = document.getElementById('window-label');
-  if (endEpoch === null){
-    lbl.textContent='live';   lbl.style.color='var(--green)';
-  } else {
-    const win = getRangeMin();
-    const start = new Date((endEpoch - win*60)*1000), end = new Date(endEpoch*1000);
-    const fmt = d => d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
-    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
-    lbl.style.color='var(--yellow)';
-  }
-}
-document.getElementById('prev').onclick = () => {
-  const win = getRangeMin()*60;
-  const cur = endEpoch || Math.floor(Date.now()/1000);
-  endEpoch = cur - win;
-  refreshControls(); tick();
-};
-document.getElementById('next').onclick = () => {
-  if (!endEpoch) return;
-  const win = getRangeMin()*60;
-  endEpoch = endEpoch + win;
-  if (endEpoch > Math.floor(Date.now()/1000)) endEpoch = null;
-  refreshControls(); tick();
-};
-document.getElementById('now').onclick = () => { endEpoch = null; refreshControls(); tick(); };
-document.getElementById('range').onchange  = () => { refreshControls(); tick(); };
-document.getElementById('bucket').onchange = () => { tick(); };
-refreshControls();
-
-async function tick(){
-  try{
-    const params = new URLSearchParams({
-      range:  getRangeMin().toString(),
-      bucket: getBucketSec().toString(),
-    });
-    if (endEpoch !== null) params.set('end', endEpoch.toString());
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__service-data?'+params,{cache:'no-store',credentials:'include'});
-    const d = await r.json();
-    document.getElementById('live').style.background='var(--green)';
-    document.getElementById('live').textContent='● LIVE';
-    document.getElementById('interval').textContent = d.interval_secs;
-
-    const c = d.current || {};
-    document.getElementById('m-cpu').textContent     = (c.cpu_pct ?? 0).toFixed(1) + '%';
-    document.getElementById('b-cpu').style.width     = Math.min(100, c.cpu_pct ?? 0) + '%';
-    document.getElementById('m-load').textContent    = `load ${c.load1 ?? 0} · ${c.load5 ?? 0} · ${c.load15 ?? 0}`;
-
-    document.getElementById('m-mem').textContent     = (c.mem_pct ?? 0).toFixed(1) + '%';
-    document.getElementById('m-mem-sub').textContent = `${fmtBytes(c.mem_used)} / ${fmtBytes(c.mem_total)}`;
-    document.getElementById('b-mem').style.width     = Math.min(100, c.mem_pct ?? 0) + '%';
-
-    document.getElementById('m-disk').textContent     = (c.disk_pct ?? 0).toFixed(1) + '%';
-    document.getElementById('m-disk-sub').textContent = `${fmtBytes(c.disk_used)} used · ${fmtBytes(c.disk_avail)} free`;
-    document.getElementById('b-disk').style.width     = Math.min(100, c.disk_pct ?? 0) + '%';
-
-    document.getElementById('m-procs').textContent     = c.procs ?? '—';
-    document.getElementById('m-procs-sub').textContent = `${c.open_fds ?? 0} open FDs`;
-
-    document.getElementById('m-net-rx').textContent = 'rx ' + fmtBps(c.net_rx_bps ?? 0);
-    document.getElementById('m-net-tx').textContent = 'tx ' + fmtBps(c.net_tx_bps ?? 0);
-
-    // Second-row widgets
-    document.getElementById('m-db').textContent     = fmtBytes(c.db_total ?? 0);
-    document.getElementById('m-db-sub').textContent =
-      `db ${fmtBytes(c.db_db ?? 0)} · wal ${fmtBytes(c.db_wal ?? 0)} · shm ${fmtBytes(c.db_shm ?? 0)}`;
-    document.getElementById('m-cg').textContent =
-      (c.cg_pct ?? 0).toFixed(1) + '%';
-    document.getElementById('m-cg-sub').textContent =
-      `${fmtBytes(c.cg_used ?? 0)} / ${c.cg_limit > 0 ? fmtBytes(c.cg_limit) : '∞'}`;
-    const a2 = d.app || {};
-    document.getElementById('m-id').textContent     = (a2.identities ?? 0).toLocaleString();
-    document.getElementById('m-buckets').textContent = `${a2.ip_buckets ?? 0} IP buckets`;
-    document.getElementById('m-req').textContent     = (a2.total_requests ?? 0).toLocaleString();
-    document.getElementById('m-req-sub').innerHTML   =
-      `<span style="color:var(--green)">${a2.allowed ?? 0}</span> allowed · ` +
-      `<span style="color:var(--red)">${a2.blocked ?? 0}</span> blocked`;
-    const up = a2.uptime_secs || 0;
-    const uh = Math.floor(up/3600), um = Math.floor((up%3600)/60), us = up%60;
-    document.getElementById('m-up').textContent      = `${uh}h ${um}m ${us}s`;
-    document.getElementById('m-version').textContent = a2.version || 'AppSecGW';
-
-    // Memory detail table
-    document.getElementById('kv-mem').innerHTML = `
-      <span class="k">total</span><span class="v">${fmtBytes(c.mem_total)}</span>
-      <span class="k">used</span><span class="v">${fmtBytes(c.mem_used)}</span>
-      <span class="k">available</span><span class="v">${fmtBytes(c.mem_avail)}</span>
-      <span class="k">swap total</span><span class="v">${fmtBytes(c.swap_total)}</span>
-      <span class="k">swap used</span><span class="v">${fmtBytes(c.swap_used)}</span>
-    `;
-    // Container cgroup limits
-    document.getElementById('kv-cg').innerHTML = `
-      <span class="k">cgroup used</span><span class="v">${fmtBytes(c.cg_used)}</span>
-      <span class="k">cgroup limit</span><span class="v">${c.cg_limit > 0 ? fmtBytes(c.cg_limit) : 'unlimited'}</span>
-      <span class="k">cgroup %</span><span class="v">${(c.cg_pct ?? 0).toFixed(1)}%</span>
-      <span class="k">disk total</span><span class="v">${fmtBytes(c.disk_total)}</span>
-      <span class="k">disk free</span><span class="v">${fmtBytes(c.disk_avail)}</span>
-    `;
-    // App counters
-    const a = d.app || {};
-    const h = Math.floor((a.uptime_secs||0)/3600);
-    const m = Math.floor((a.uptime_secs||0)%3600/60);
-    document.getElementById('kv-app').innerHTML = `
-      <span class="k">version</span><span class="v">${a.version||'?'}</span>
-      <span class="k">uptime</span><span class="v">${h}h ${m}m</span>
-      <span class="k">requests</span><span class="v">${(a.total_requests||0).toLocaleString()}</span>
-      <span class="k">allowed</span><span class="v" style="color:var(--green)">${(a.allowed||0).toLocaleString()}</span>
-      <span class="k">blocked</span><span class="v" style="color:var(--red)">${(a.blocked||0).toLocaleString()}</span>
-      <span class="k">identities</span><span class="v">${(a.identities||0).toLocaleString()}</span>
-      <span class="k">IP buckets</span><span class="v">${(a.ip_buckets||0).toLocaleString()}</span>
-    `;
-
-    // Charts
-    ensureCharts();
-    const hist = d.history || [];
-    const labels = hist.map(s => fmtTime(s.ts));
-    const step = Math.max(1, Math.floor(labels.length / 12));
-    const labelsView = labels.map((l,i) => (i % step === 0 || i === labels.length-1) ? l : '');
-    cpuMemChart.data.labels = labelsView;
-    cpuMemChart.data.datasets[0].data = hist.map(s => s.cpu_pct);
-    cpuMemChart.data.datasets[1].data = hist.map(s => s.mem_pct);
-    cpuMemChart.update('none');
-
-    netChart.data.labels = labelsView;
-    netChart.data.datasets[0].data = hist.map(s => s.net_rx_bps);
-    netChart.data.datasets[1].data = hist.map(s => s.net_tx_bps);
-    netChart.update('none');
-
-    procChart.data.labels = labelsView;
-    procChart.data.datasets[0].data = hist.map(s => s.procs);
-    procChart.data.datasets[1].data = hist.map(s => s.open_fds);
-    procChart.update('none');
-
-    dbChart.data.labels = labelsView;
-    dbChart.data.datasets[0].data = hist.map(s => s.db_db  || 0);
-    dbChart.data.datasets[1].data = hist.map(s => s.db_wal || 0);
-    dbChart.data.datasets[2].data = hist.map(s => s.db_shm || 0);
-    dbChart.update('none');
-
-    document.getElementById('ts').textContent = new Date().toISOString();
-  }catch(e){
-    document.getElementById('live').style.background='var(--red)';
-    document.getElementById('live').textContent='○ ERR';
-  }
-}
-tick();
-// Only auto-refresh when in live mode (when scrolled back, the data is static)
-setInterval(()=>{ if (endEpoch === null) tick(); }, 5000);
-</script>
-</body></html>
-"""
+SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="utf-8")
 
 async def service_dashboard_endpoint(request: web.Request):
     return web.Response(
@@ -4129,7 +3527,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.4    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.4.2    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
@@ -4140,4 +3538,5 @@ if __name__ == "__main__":
     else:
         print(f"  ║ Admin IPs: any (set ADMIN_ALLOWED_IPS to restrict)    ║")
     print(f"  ╚══════════════════════════════════════════════════════════╝")
-    web.run_app(make_app(), host=LISTEN_HOST, port=LISTEN_PORT, print=None)
+    web.run_app(make_app(), host=LISTEN_HOST, port=LISTEN_PORT, print=None,
+                keepalive_timeout=HEADERS_TIMEOUT)

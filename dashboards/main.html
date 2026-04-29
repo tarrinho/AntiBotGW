@@ -1,0 +1,408 @@
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW_1.4.1 · Dashboard</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);padding:14px}
+h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.grid{display:grid;gap:14px;margin-top:14px}
+.row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
+.metric.allowed{color:var(--green)}
+.metric.blocked{color:var(--red)}
+.metric.total{color:var(--blue)}
+.metric.uptime{color:var(--yellow);font-size:18px}
+.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
+table{width:100%;border-collapse:collapse;font-size:12px}
+table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+         text-transform:uppercase;letter-spacing:.5px;font-size:10px}
+table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
+.tag.OK{background:#1f4830;color:var(--green)}
+.tag.banned{background:#4a1a1a;color:var(--red)}
+.tag.honeypot{background:#3d1a4a;color:var(--purple)}
+.tag.ua-blocked{background:#4a3a1a;color:var(--yellow)}
+.tag.rate-limit{background:#4a1a1a;color:var(--red)}
+.tag.behavior{background:#1a3a4a;color:#5fb3c0}
+.tag.pow-required{background:#3d1a4a;color:var(--purple)}
+.tag.ua-empty{background:#4a3a1a;color:var(--yellow)}
+.tag.ua-too-short{background:#4a3a1a;color:var(--yellow)}
+.tag.ua-non-browser{background:#4a3a1a;color:var(--yellow)}
+.tag.ai-probe{background:#3d1a4a;color:var(--purple)}
+.tag.ai-headers-incomplete{background:#3d2a4a;color:#dab8ff}
+.tag.ai-headers-empty{background:#3d2a4a;color:#dab8ff}
+.tag.ai-enumeration{background:#4a1a3d;color:#ff8acc}
+.tag.ai-no-assets{background:#4a1a3d;color:#ff8acc}
+.tag.banned-silent{background:#2d1a4a;color:#a78bfa}
+.tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:4px}
+.bar>div{height:100%;background:var(--blue)}
+.reasons{display:grid;grid-template-columns:1fr auto;gap:4px 8px;font-size:11.5px}
+.reasons .lbl{color:var(--dim)}
+.reasons .val{font-family:ui-monospace;color:#fff;font-weight:600;text-align:right}
+code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
+.dim{color:var(--dim)}
+.evt{font-size:11px;display:grid;grid-template-columns:80px 90px 130px 1fr;gap:8px;
+     padding:3px 6px;border-bottom:1px solid var(--line);font-family:ui-monospace;
+     border-left:3px solid transparent}
+.evt:nth-child(even){background:#0a0e13}
+.evt.evt-ok{border-left-color:var(--green);background:rgba(63,185,80,0.06)}
+.evt.evt-ok:nth-child(even){background:rgba(63,185,80,0.10)}
+.evt.evt-block{border-left-color:var(--red)}
+.evt.evt-warn{border-left-color:var(--yellow)}
+.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
+.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;
+      font-family:inherit;line-height:1.4}
+.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.ctrl:disabled{opacity:.4;cursor:not-allowed}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.ctrl-now:hover{background:#1c3d5a}
+@media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
+</style></head>
+<body>
+<h1>AppSecGW_1.4.1 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<div style="font-size:12px;margin-top:6px">
+  <a id="agents-link"  style="color:var(--blue)" href="#">→ Stealth Agent Hunter</a>
+  <span class="dim">·</span>
+  <a id="service-link" style="color:var(--blue)" href="#">→ Service Metrics</a>
+</div>
+<script>
+(function(){const k=new URLSearchParams(location.search).get('key')||'';
+ const q=k?('?key='+encodeURIComponent(k)):'';
+ document.getElementById('agents-link').href='/__agents'+q;
+ document.getElementById('service-link').href='/__service'+q;})();
+</script>
+
+<div class="grid">
+
+  <div class="row">
+    <div class="card"><h2>Total requests</h2><div class="metric total" id="total">0</div>
+         <div class="metric-sub" id="rps">— req/s</div></div>
+    <div class="card"><h2>Allowed</h2><div class="metric allowed" id="allowed">0</div>
+         <div class="metric-sub" id="allowed-pct">—</div></div>
+    <div class="card"><h2>Blocked</h2><div class="metric blocked" id="blocked">0</div>
+         <div class="metric-sub" id="blocked-pct">—</div></div>
+    <div class="card"><h2>Uptime</h2><div class="metric uptime" id="uptime">—</div>
+         <div class="metric-sub" id="config">—</div></div>
+  </div>
+
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Timeline · total / allowed / blocked <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span></h2>
+      <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+        <button id="prev"  class="ctrl">‹ back</button>
+        <button id="now"   class="ctrl ctrl-now">now</button>
+        <button id="next"  class="ctrl" disabled>fwd ›</button>
+        <span class="dim" style="margin-left:6px">window:</span>
+        <select id="range" class="ctrl">
+          <option value="15">15 min</option>
+          <option value="60" selected>1 h</option>
+          <option value="180">3 h</option>
+          <option value="360">6 h</option>
+          <option value="720">12 h</option>
+          <option value="1440">24 h</option>
+          <option value="4320">3 days</option>
+          <option value="10080">7 days</option>
+        </select>
+        <span class="dim" style="margin-left:6px">bucket:</span>
+        <select id="bucket" class="ctrl">
+          <option value="60" selected>1 min</option>
+          <option value="300">5 min</option>
+          <option value="900">15 min</option>
+          <option value="3600">1 hour</option>
+          <option value="86400">1 day</option>
+        </select>
+      </div>
+    </div>
+    <div style="position:relative;height:240px">
+      <canvas id="chart"></canvas>
+    </div>
+  </div>
+
+  <div class="row" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <h2>Block reasons</h2>
+      <div class="reasons" id="reasons"><span class="dim">no blocks yet</span></div>
+    </div>
+    <div class="card">
+      <h2>HTTP status distribution</h2>
+      <div class="reasons" id="statuses"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Clients (top by request count)</h2>
+    <table id="clients-tbl">
+      <thead><tr>
+        <th>Identity</th><th>Last IP</th><th>Total</th><th>Allowed</th><th>Blocked</th>
+        <th>Risk</th><th>Banned</th><th>Tokens</th><th>Last seen</th><th>Last UA</th><th>Last path</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+  <div class="row" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <h2>Top paths</h2>
+      <table id="paths-tbl"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="card">
+      <h2>Live events (last 50)</h2>
+      <div id="events"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="foot">refreshes every 2s · <code id="ts"></code></div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+        integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
+        crossorigin="anonymous"
+        referrerpolicy="no-referrer"></script>
+<script>
+let lastTotal = 0, lastTime = Date.now();
+let chart = null;
+
+function getRangeMin() {
+  return parseInt(document.getElementById('range').value || '60', 10);
+}
+
+function fmtTime(epochSec) {
+  const d = new Date(epochSec * 1000);
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+function ensureChart() {
+  if (chart) return chart;
+  const ctx = document.getElementById('chart').getContext('2d');
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: [],
+      datasets: [
+        { label: 'total', data: [], borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.06)', tension: 0.25, fill: false,
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+        { label: 'allowed (good)', data: [], borderColor: '#3fb950',
+          backgroundColor: 'rgba(63,185,80,0.18)', tension: 0.25, fill: true,
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+        { label: 'blocked', data: [], borderColor: '#f85149',
+          backgroundColor: 'rgba(248,81,73,0.18)', tension: 0.25, fill: true,
+          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+      ],
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 250 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
+          titleColor: '#c9d1d9', bodyColor: '#c9d1d9',
+          callbacks: { title: items => items[0].label }
+        },
+      },
+      scales: {
+        x: { ticks: { color: '#8b949e', font: { size: 10 }, maxRotation: 0, autoSkipPadding: 18 },
+             grid: { color: '#21262d' } },
+        y: { beginAtZero: true, ticks: { color: '#8b949e', font: { size: 10 }, precision: 0 },
+             grid: { color: '#21262d' } },
+      },
+    },
+  });
+  return chart;
+}
+
+// Forward the admin key to subsequent /__metrics calls so the dashboard works
+// when accessed via the protected URL (?key=...)
+const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+
+// Timeline navigation state
+let endEpoch = null;   // null = live (now); number = scrolled-back epoch (right edge of window)
+
+function getRangeMin() { return parseInt(document.getElementById('range').value || '60', 10); }
+function getBucketSec() { return parseInt(document.getElementById('bucket').value || '60', 10); }
+
+function fmtTime(epochSec, bucketSec) {
+  const d = new Date(epochSec * 1000);
+  if (bucketSec >= 86400) {
+    return d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
+  } else if (bucketSec >= 3600) {
+    return d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
+  }
+  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
+}
+
+document.getElementById('prev').onclick = () => {
+  const win = getRangeMin() * 60;
+  const cur = endEpoch || Math.floor(Date.now()/1000);
+  endEpoch = cur - win;
+  refreshControls(); tick();
+};
+document.getElementById('next').onclick = () => {
+  if (!endEpoch) return;
+  const win = getRangeMin() * 60;
+  endEpoch = endEpoch + win;
+  if (endEpoch > Math.floor(Date.now()/1000)) endEpoch = null;
+  refreshControls(); tick();
+};
+document.getElementById('now').onclick = () => { endEpoch = null; refreshControls(); tick(); };
+
+function refreshControls() {
+  document.getElementById('next').disabled = (endEpoch === null);
+  document.getElementById('now').disabled  = (endEpoch === null);
+  const lbl = document.getElementById('window-label');
+  if (endEpoch === null) {
+    lbl.textContent = '(live)';
+    lbl.style.color = 'var(--green)';
+  } else {
+    const win = getRangeMin();
+    const start = new Date((endEpoch - win*60) * 1000);
+    const end   = new Date(endEpoch * 1000);
+    const fmt = d => d.toLocaleString(undefined, {
+      month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'
+    });
+    lbl.textContent = `${fmt(start)} → ${fmt(end)} (paused)`;
+    lbl.style.color = 'var(--yellow)';
+  }
+}
+refreshControls();
+
+async function tick() {
+  try {
+    const params = new URLSearchParams({
+      range:  getRangeMin().toString(),
+      bucket: getBucketSec().toString(),
+    });
+    if (endEpoch !== null) params.set('end', endEpoch.toString());
+    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+    const r = await fetch('/__metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
+    const d = await r.json();
+    document.getElementById('live').style.background='var(--green)';
+    document.getElementById('live').textContent='● LIVE';
+
+    document.getElementById('total').textContent = d.total.toLocaleString();
+    document.getElementById('allowed').textContent = d.allowed.toLocaleString();
+    document.getElementById('blocked').textContent = d.blocked.toLocaleString();
+    const totalPct = d.total ? ((d.allowed/d.total)*100).toFixed(1) : 0;
+    document.getElementById('allowed-pct').textContent = `${totalPct}% pass-through`;
+    document.getElementById('blocked-pct').textContent = d.total ? `${(100-totalPct).toFixed(1)}% rejected` : '—';
+
+    // RPS over last 2s
+    const now = Date.now();
+    const dt = (now - lastTime) / 1000;
+    const rps = dt > 0 ? ((d.total - lastTotal) / dt).toFixed(1) : '0.0';
+    document.getElementById('rps').textContent = `${rps} req/s (last 2s)`;
+    lastTotal = d.total; lastTime = now;
+
+    const h = Math.floor(d.uptime_secs/3600), m = Math.floor((d.uptime_secs%3600)/60), s = d.uptime_secs%60;
+    document.getElementById('uptime').textContent = `${h}h ${m}m ${s}s`;
+    const c = d.config;
+    document.getElementById('config').textContent = `burst=${c.burst} refill=${c.refill}/s xff=${c.trust_xff}`;
+
+    // Reasons
+    const reasonOrder = ['banned-silent','honeypot-silent','banned','honeypot',
+                         'ua-empty','ua-too-short','ua-blocked','ua-non-browser',
+                         'ai-probe','ai-headers-incomplete','ai-headers-empty',
+                         'ai-enumeration','ai-no-assets',
+                         'rate-limit','behavior','pow-required'];
+    const reasons = d.by_reason || {};
+    const rEl = document.getElementById('reasons');
+    if (Object.keys(reasons).length === 0) {
+      rEl.innerHTML = '<span class="dim">no blocks yet</span>';
+    } else {
+      rEl.innerHTML = reasonOrder.filter(k => reasons[k])
+        .map(k => `<span class="lbl"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></span><span class="val">${reasons[k]|0}</span>`).join('');
+    }
+
+    // Statuses
+    const statuses = d.by_status || {};
+    const sEl = document.getElementById('statuses');
+    sEl.innerHTML = Object.entries(statuses).sort()
+      .map(([k,v]) => `<span class="lbl">HTTP ${k}</span><span class="val">${v}</span>`).join('');
+
+    // Clients
+    const tbody = document.querySelector('#clients-tbl tbody');
+    tbody.innerHTML = (d.clients || []).slice(0, 25).map(c => {
+      const banned = c.banned_secs > 0 ? `<span class="tag banned">${c.banned_secs}s</span>` : '<span class="dim">—</span>';
+      const id = (c.id || c.ip || '');
+      const lastIp = c.last_ip || '?';
+      const risk = c.risk_score || 0;
+      const riskColor = risk >= 50 ? 'var(--red)' : risk >= 25 ? 'var(--yellow)' : 'var(--dim)';
+      return `<tr>
+        <td title="${escapeHtml(id)}"><b>${escapeHtml(id.slice(0,16))}</b></td>
+        <td class="dim">${escapeHtml(lastIp)}</td>
+        <td>${c.requests}</td>
+        <td style="color:var(--green)">${c.allowed}</td>
+        <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
+        <td style="color:${riskColor};font-weight:600">${risk.toFixed(1)}</td>
+        <td>${banned}</td>
+        <td>${c.tokens}</td>
+        <td class="dim">${c.last_seen_secs_ago}s ago</td>
+        <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
+        <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
+      </tr>`;
+    }).join('') || '<tr><td colspan=11 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+
+    // Top paths
+    const pBody = document.querySelector('#paths-tbl tbody');
+    pBody.innerHTML = (d.top_paths || []).map(p =>
+      `<tr><td>${escapeHtml(p.path)}</td><td>${p.count}</td></tr>`
+    ).join('') || '<tr><td colspan=2 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
+
+    // Events
+    const eEl = document.getElementById('events');
+    eEl.innerHTML = (d.events || []).map(e => {
+      const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
+      const isOk = (e.reason === 'OK' || e.reason === '');
+      const evtCls = isOk ? 'evt-ok' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
+      return `<div class="evt ${evtCls}">
+        <span class="dim">${escapeHtml(time)}</span>
+        <span><span class="tag ${safeClass(e.reason)}">${escapeHtml(isOk ? 'OK' : e.reason)}</span></span>
+        <span>${escapeHtml(e.ip)}</span>
+        <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
+      </div>`;
+    }).join('') || '<span class="dim">no events yet</span>';
+
+    // Timeline chart
+    if (d.timeline && d.timeline.length) {
+      const c = ensureChart();
+      const bucketSec = d.timeline_bucket_secs || 60;
+      const labels = d.timeline.map(b => fmtTime(b.t, bucketSec));
+      const totals = d.timeline.map(b => b.total);
+      const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
+      const blocks = d.timeline.map(b => b.blocked);
+      // Dynamic decimation: aim at ~12 labels regardless of how many points
+      const step = Math.max(1, Math.floor(labels.length / 12));
+      const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
+      c.data.labels = labelsView;
+      c.data.datasets[0].data = totals;
+      c.data.datasets[1].data = allowed;
+      c.data.datasets[2].data = blocks;
+      c.update('none');
+    }
+
+    document.getElementById('ts').textContent = new Date().toISOString();
+  } catch (err) {
+    document.getElementById('live').style.background='var(--red)';
+    document.getElementById('live').textContent='○ ERR';
+  }
+}
+function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+function safeClass(s){return (s||'').replace(/[^a-zA-Z0-9_-]/g,'')}
+document.getElementById('range').addEventListener('change', () => { refreshControls(); tick(); });
+document.getElementById('bucket').addEventListener('change', tick);
+tick();
+// Auto-refresh — but ONLY when in live mode. When user has scrolled back,
+// the data is static and refreshing would just repaint the same window.
+setInterval(() => { if (endEpoch === null) tick(); }, 2000);
+</script>
+</body></html>

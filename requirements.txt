@@ -1,0 +1,5 @@
+# Runtime dependency (matches Dockerfile pin).
+aiohttp>=3.11.11,<4
+
+# Test-only dependencies. Used by GitHub Actions and `pytest tests/`.
+pytest>=8,<9

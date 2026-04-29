@@ -135,7 +135,7 @@
 <!-- ───────────────────────── COVER ───────────────────────── -->
 <div class="cover">
   <div class="cover-title">
-    <h1>AppSecGW/1.4</h1>
+    <h1>AppSecGW/1.4.2</h1>
     <div class="subtitle">Hardened Reverse Proxy with Layered Anti-Automation Defenses</div>
     <div class="subtitle">Implementation, Hardening &amp; CVE-Patching Report</div>
   </div>
@@ -143,7 +143,7 @@
     <p><strong>Author:</strong> Pedro Tarrinho</p>
     <p><strong>Date:</strong> 2026-04-28</p>
     <p><strong>Stack:</strong> Python 3.14 / aiohttp 3.13 / SQLite WAL / Chainguard Wolfi (distroless)</p>
-    <p><strong>Image:</strong> appsec-antibot-gw:1.4 (79 MB, Trivy: 0 CVEs)</p>
+    <p><strong>Image:</strong> appsec-antibot-gw:1.4.2 (79 MB, Trivy: 0 CVEs)</p>
     <p><strong>Document version:</strong> 1.3 &mdash; supersedes 1.0 / 1.1 / 1.2</p>
   </div>
 </div>
@@ -152,7 +152,7 @@
 <h2>1. Executive Summary</h2>
 
 <p>
-<strong>AppSecGW/1.4</strong> is a hardened reverse HTTP proxy designed to sit
+<strong>AppSecGW/1.4.2</strong> is a hardened reverse HTTP proxy designed to sit
 in front of arbitrary upstream applications. Version 1.3 adds full WebSocket
 bridging, SSO-aware redirect rewriting, edge-injected security response
 headers, IP-based admin gating, and a transition to a Chainguard Wolfi-based
@@ -188,7 +188,7 @@ distroless container that reports <strong>zero CVEs</strong> on Trivy scans.
                      │ HTTP loopback
                      ▼
        ┌─────────────────────────────────────┐
-       │  AppSecGW/1.4  (Chainguard Wolfi)   │
+       │  AppSecGW/1.4.2  (Chainguard Wolfi)   │
        │   • read-only, non-root, cap-drop ALL│
        │   • aiohttp 3.13 + SQLite WAL       │
        │   • 13 detection layers + WS bridge │
@@ -342,15 +342,43 @@ position (avoids corrupting JS string literals).</p>
 defaults so existing deployments are unaffected unless the operator
 explicitly enables them.</p>
 
-<h3>4.0.1 JS challenge (invisible CAPTCHA)</h3>
-<p>When <code>JS_CHALLENGE=1</code>, the first HTML <code>GET</code> from a
-browser without a valid <code>chal</code> cookie receives a tiny
-self-executing JS page that hashes a server-issued nonce, POSTs the result
-to <code>/__challenge</code>, and is redirected to the original URL after
-the server signs a 24 h cookie. Blocks pure-HTTP scrapers (curl, requests,
-httpx, Go default, AI agents reading raw HTML). Skips API clients
-(non-text/html Accept), static assets, <code>/__*</code> admin routes, and
-clients that already have a valid session.</p>
+<h3>4.0.1 JS challenge (Turnstile-backed cookie gate)</h3>
+<p>Earlier iterations of this control stacked client-computed primitives
+— SHA-256 Proof-of-Work, browser-API probe with cross-validation,
+anchor-fetch proof, sub-second timing windows — to try to distinguish
+real browsers from scripted clients. Empirically every one of those
+layers was bypassable in pure Python in roughly one second per session.
+They were <em>bot-cost amplifiers</em>, not security boundaries; they
+have been removed.</p>
+
+<p>The replacement is a Turnstile-backed cookie gate. Active only when
+<code>JS_CHALLENGE=1</code> AND both <code>TURNSTILE_SITEKEY</code> and
+<code>TURNSTILE_SECRET</code> are configured; without those keys the
+feature is a no-op (a startup banner notes the disabled state).</p>
+
+<p>When the gate is active, every non-static, non-admin, non-opted-out
+request must carry a valid <code>chal</code> cookie. The first HTML
+<code>GET</code> from a browser without one receives a small
+challenge page that renders the Cloudflare Turnstile widget; on
+success the widget posts <code>cf-turnstile-response</code> to
+<code>/__challenge</code>, the gateway verifies it against Cloudflare's
+<code>siteverify</code> endpoint together with the source IP, and a 1 h
+cookie bound to <strong>(UA + IP-tier + JA4 hash)</strong> is issued.
+The Turnstile token is the only check on this endpoint that scripted
+clients cannot fabricate locally — it is minted server-side by
+Cloudflare. Cookieless API / XHR / POST hits are silent-decoyed
+(200&nbsp;OK with the cached upstream homepage), keeping the gateway
+invisible to scanners.</p>
+
+<p>The cookie's IP-tier (v4 /24, v6 /48) is carried as an opaque HMAC
+hash so the wire format never leaks RFC1918 / internal-pod IPs. The
+JA4 binding (<code>JS_CHAL_BIND_JA4=1</code>, opportunistic) ties the
+cookie to the TLS handshake observed by a trusted upstream
+(<code>JA4_TRUSTED_PEERS</code>); a leaked cookie cannot be replayed
+under a different TLS stack. <code>JS_CHAL_REQUIRE_JA4=1</code> turns
+the JA4 presence into a hard requirement at <code>/__challenge</code>.
+The per-request JA4 is recorded in the event log so operators can
+populate <code>JA4_DENY_LIST</code> from real traffic.</p>
 
 <h3>4.0.2 Body pattern matching</h3>
 <p><code>BODY_PATTERN_MATCH=1</code> extends Layer 3's suspicious-path regex
@@ -390,6 +418,44 @@ the main dashboard's idiom. Sampling task runs every
 <code>os.statvfs()</code> reads.</p>
 <p>The Stealth Agent Hunter timeline gained the same time-navigation
 controls.</p>
+
+<h3>4.0.6 Header-based controls (TLS fingerprint, Origin, custom headers)</h3>
+<p>Three opt-in checks added in v1.4.1:</p>
+<ul>
+  <li><code>JA4_DENY_LIST</code> &mdash; operator-curated set of TLS handshake
+    fingerprints (JA3 / JA4) to block. Requires the upstream TLS terminator
+    (cloudflared from 2024.x; nginx via <code>lua-resty-tls-fingerprint</code>;
+    AWS ALB) to inject the fingerprint as a header.
+    <code>JA4_TRUSTED_PEERS</code> pins the source IPs allowed to inject
+    the header so a direct-port attacker cannot forge it.</li>
+  <li><code>STRICT_ORIGIN=1</code> &mdash; on <code>POST/PUT/PATCH/DELETE</code>,
+    require the <code>Origin</code> header host to match <code>ALLOWED_HOSTS</code>.
+    Off by default (server-to-server clients often don't send Origin).
+    <code>OPEN_ORIGIN_PATHS</code> provides per-path opt-out for webhooks.</li>
+  <li><code>REQUIRED_HEADERS</code> &mdash; comma-separated list of headers
+    that must be present on every non-<code>/__/</code> non-static request
+    (e.g. <code>X-Client-Version</code>). Skips admin and asset paths
+    automatically.</li>
+</ul>
+<table>
+<tr><th>Reason</th><th>Risk weight</th></tr>
+<tr><td><code>tls-fingerprint</code></td><td>30</td></tr>
+<tr><td><code>origin-mismatch</code></td><td>20</td></tr>
+<tr><td><code>missing-required-header</code></td><td>15</td></tr>
+</table>
+
+<h3>4.0.7 Code-layout refactor</h3>
+<p>Dashboard HTML extracted from <code>proxy.py</code> into stand-alone files
+under <code>dashboards/</code> (loaded once at module init).
+<code>proxy.py</code> dropped from ~4,250 lines to ~3,100 lines; dashboard JS
+gains normal HTML/JS tooling. No runtime behaviour change.</p>
+
+<h3>4.0.8 Service-metrics persistence</h3>
+<p>Samples now write to a new <code>svc_metrics</code> SQLite table every
+<code>SVC_METRICS_INTERVAL</code> seconds, pruned to
+<code>SVC_DB_RETENTION_HOURS</code> (default 7 days) on disk. Startup
+re-hydrates the in-memory deque so container restarts no longer wipe the
+chart history.</p>
 
 <h2>5. Carry-overs from 1.3</h2>
 
@@ -480,7 +546,7 @@ preserved. Useful for laptop / VPN-roaming workflows.</p>
 
 <p>The Wolfi base ships fixes for HIGH-severity OS CVEs typically within 48 h
 of public disclosure (Chainguard's documented SLA). Re-run
-<code>trivy image appsec-antibot-gw:1.4</code> on every rebuild to verify the
+<code>trivy image appsec-antibot-gw:1.4.2</code> on every rebuild to verify the
 posture stays at zero.</p>
 
 <!-- ───────────────────────── 6. SECURITY REVIEW HISTORY ───────────────────────── -->
@@ -622,7 +688,7 @@ agents timeline:</p>
 
 <p class="footer-note">
 &mdash; End of report &mdash;
-<br>Image: <code>appsec-antibot-gw:1.4</code> &middot;
+<br>Image: <code>appsec-antibot-gw:1.4.2</code> &middot;
 Author: Pedro Tarrinho &middot; 2026-04-28
 </p>
 
