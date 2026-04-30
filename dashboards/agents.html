@@ -57,6 +57,31 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
 .nav a{color:var(--blue);text-decoration:none}
 .nav a:hover{text-decoration:underline}
+
+/* 1.5.4 — click-to-popover for identity details + risk breakdown */
+.cell-click{cursor:pointer;border-bottom:1px dotted var(--blue)}
+.cell-click:hover{color:var(--blue)}
+.pop-back{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:90;display:none}
+.pop-back.show{display:block}
+.popover{position:fixed;z-index:100;background:var(--card);border:1px solid var(--line);
+        border-radius:8px;padding:14px 16px;min-width:340px;max-width:560px;
+        box-shadow:0 8px 32px rgba(0,0,0,.6);font-size:12px;display:none}
+.popover.show{display:block}
+.popover h3{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;
+        margin-bottom:8px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+.popover .x{cursor:pointer;color:var(--dim);font-size:16px;line-height:1;font-weight:400}
+.popover .x:hover{color:var(--red)}
+.popover .kv{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.popover .kv .k{color:var(--dim);text-align:right}
+.popover .kv .v{color:var(--fg);word-break:break-all}
+.popover .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:8px;align-items:center;
+        padding:3px 0;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.popover .rsn:last-child{border-bottom:0}
+.popover .rsn-name{color:var(--fg)}
+.popover .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
+.popover .rsn-bar>div{height:100%;background:var(--red)}
+.popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
+.popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
 </style></head>
 <body>
 <style>
@@ -66,12 +91,13 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.5.3 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.5.4 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__" class="active">Agents</a>
   <a href="/__service?key=__KEY__">Service</a>
   <a href="/__controls?key=__KEY__">Controls</a>
+  <a href="/__geo?key=__KEY__">GeoMap</a>
 </nav>
 
 <div class="grid">
@@ -88,9 +114,13 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
          <div class="metric-sub">strong stealth signals</div></div>
     <div class="card"><h2>Threshold</h2>
          <div class="metric med" id="m-thresh">20</div>
-         <div class="metric-sub">
-           <input id="thresh-input" type="number" min="0" max="100" value="20"
-                  class="ctrl" style="width:60px"> apply</div></div>
+         <div class="metric-sub" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:6px">
+           <button id="thresh-down" class="ctrl" style="width:24px;padding:2px 0" title="-1">▼</button>
+           <button id="thresh-up"   class="ctrl" style="width:24px;padding:2px 0" title="+1">▲</button>
+           <input id="thresh-slider" type="range" min="0" max="100" value="20"
+                  style="flex:1;min-width:80px;accent-color:var(--blue);height:18px;cursor:pointer">
+           <span id="thresh-input-readout" class="dim" style="font-family:ui-monospace;min-width:24px;text-align:right">20</span>
+         </div></div>
   </div>
 
   <div class="card">
@@ -152,6 +182,13 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
 <div class="foot">refreshes every 3 s · <code id="ts"></code></div>
 
+<!-- 1.5.4 popover overlay (identity details + risk breakdown) -->
+<div class="pop-back" id="pop-back"></div>
+<div class="popover" id="pop">
+  <h3 id="pop-title">Details <span class="x" id="pop-close">×</span></h3>
+  <div id="pop-body"></div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
         integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
@@ -162,10 +199,21 @@ function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g,
 function bandClass(s){return s>=80?'crit':s>=60?'high':s>=40?'med':'low'}
 
 let MIN = 20;
-document.getElementById('thresh-input').addEventListener('change', e=>{
-  MIN = Math.max(0, Math.min(100, parseInt(e.target.value)||20));
-  document.getElementById('m-thresh').textContent = MIN; tick();
+function setThreshold(v, refresh){
+  MIN = Math.max(0, Math.min(100, parseInt(v) || 0));
+  document.getElementById('m-thresh').textContent = MIN;
+  document.getElementById('thresh-slider').value = MIN;
+  document.getElementById('thresh-input-readout').textContent = MIN;
+  if (refresh) tick();
+}
+document.getElementById('thresh-slider').addEventListener('input', e=>{
+  setThreshold(e.target.value, false);    // live preview during drag
 });
+document.getElementById('thresh-slider').addEventListener('change', e=>{
+  setThreshold(e.target.value, true);     // refresh table on release
+});
+document.getElementById('thresh-up').onclick   = ()=>setThreshold(MIN + 1, true);
+document.getElementById('thresh-down').onclick = ()=>setThreshold(MIN - 1, true);
 
 async function tick(){
   try{
@@ -225,10 +273,11 @@ async function tick(){
             <span class="ban-track"><span class="ban-knob"></span></span>
             <span class="ban-label">${isBanned?'BANNED':'allow'}</span>
           </div>`;
+        const hasRiskBreakdown = (s.risk_breakdown||[]).length > 0;
         return `
           <tr>
             <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
-            <td title="${escapeHtml(s.id)}"><b>${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim">${m.samples} samples</div></td>
+            <td><b class="cell-click" data-pop="id" data-i="${i}" title="click for full identity details">${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim">${m.samples} samples</div></td>
             <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
             <td>${escapeHtml(s.ip)}</td>
             <td style="color:var(--green)">${s.allowed}</td>
@@ -238,7 +287,9 @@ async function tick(){
             <td>${m.unique_paths}/${s.allowed} (${m.path_diversity})</td>
             <td>${m.behavioral_cov!==null?m.behavioral_cov:'—'}</td>
             <td style="color:${m.upstream_404_count>5?'var(--red)':'var(--dim)'}">${m.upstream_404_count}</td>
-            <td>${m.risk_score}</td>
+            <td>${hasRiskBreakdown
+                  ? `<span class="cell-click" data-pop="risk" data-i="${i}" title="click for reason breakdown">${m.risk_score}</span>`
+                  : `<span class="dim">${m.risk_score}</span>`}</td>
             <td class="dim">${escapeHtml((s.last_path||'').slice(0,30))}</td>
             <td>${switchHtml}</td>
             <td><span class="expand" data-i="${i}">▸ paths</span></td>
@@ -272,6 +323,14 @@ async function tick(){
         const r = document.getElementById('d-'+el.dataset.i);
         r.style.display = (r.style.display==='none')?'table-row':'none';
       });
+      // 1.5.4 — click identity / risk to open popover
+      tbody.querySelectorAll('.cell-click').forEach(el=>{
+        el.onclick = (ev)=>{
+          const i = +el.dataset.i;
+          const s = d.suspects[i]; if(!s) return;
+          openPopover(el.dataset.pop, s, ev.clientX, ev.clientY);
+        };
+      });
     }
     document.getElementById('ts').textContent = new Date().toISOString();
   }catch(e){
@@ -300,6 +359,17 @@ function ensureAgentChart(){
     options: { responsive:true, maintainAspectRatio:false,
       animation:{duration:200}, interaction:{mode:'index',intersect:false},
       plugins:{ legend:{ labels:{ color:'#c9d1d9', font:{size:11} } } },
+      // 1.5.4 — click-to-drill: open modal with IPs in the clicked bucket
+      onClick: (ev, items) => {
+        if (!items || !items.length) return;
+        const idx = items[0].index;
+        const lastTimeline = window._lastAgentTimeline || [];
+        if (!lastTimeline[idx]) return;
+        openBucketDetail(lastTimeline[idx], window._lastAgentBucketSecs || 60, items[0].datasetIndex);
+      },
+      onHover: (ev, items) => {
+        ev.native && (ev.native.target.style.cursor = items.length ? 'pointer' : 'default');
+      },
       scales:{
         x:{ ticks:{color:'#8b949e',font:{size:10},maxRotation:0,autoSkipPadding:18}, grid:{color:'#21262d'} },
         y:{ beginAtZero:true, ticks:{color:'#8b949e',font:{size:10},precision:0}, grid:{color:'#21262d'} } } }
@@ -331,6 +401,9 @@ async function tickChart(){
     c.data.datasets[0].data = d.timeline.map(b=>b.detected);
     c.data.datasets[1].data = d.timeline.map(b=>b.missed);
     c.data.datasets[2].data = d.timeline.map(b=>b.clean_allowed);
+    // 1.5.4 — stash for click-to-drill-down handler
+    window._lastAgentTimeline   = d.timeline;
+    window._lastAgentBucketSecs = bs;
     c.update('none');
     const t = d.totals;
     document.getElementById('t-totals').textContent =
@@ -376,5 +449,181 @@ tick(); tickChart();
 setInterval(tick, 3000);
 // Only auto-refresh the chart when in live mode.
 setInterval(()=>{ if (tEndEpoch === null) tickChart(); }, 5000);
+
+// ── 1.5.4 — Click on Detection-vs-Miss timeline → IPs in bucket ──────
+async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
+  const t      = bucketEntry.t;
+  const kind   = ['detected','missed','clean'][datasetIndex] || 'all';
+  const params = new URLSearchParams({ t, bucket_secs: bucketSecs, min_score: MIN });
+  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+  const r = await fetch('/__agents-bucket?' + params, {credentials:'include'});
+  const d = await r.json();
+  const fmt = epoch => new Date(epoch*1000).toLocaleString();
+  const list = d[kind] || [];
+  const clrMap = {detected:'var(--red)', missed:'var(--orange,#ff7b3a)', clean:'var(--green)'};
+  let body;
+  if (!list.length){
+    body = `<div class="empty">no <b style="color:${clrMap[kind]}">${kind}</b> entries in this bucket</div>`;
+  } else if (kind === 'detected'){
+    body = `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th>
+    </tr></thead><tbody>` +
+      list.map(e => {
+        const top = Object.entries(e.reasons).sort((a,b)=>b[1]-a[1])[0]||['—',0];
+        const idents = e.identities || [];
+        const identCell = idents.length === 0
+          ? '<span class="dim">—</span>'
+          : idents.length === 1
+            ? `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`
+            : `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
+        return `<tr>
+          <td>${identCell}</td>
+          <td>${escapeHtml(e.ip)}</td>
+          <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
+          <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml(e.ua.slice(0,40))}</td>
+          <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
+          <td class="dim">${escapeHtml(e.last_path.slice(0,40))}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  } else if (kind === 'missed'){
+    body = `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th>Allowed</th><th>Blocked</th><th style="text-align:left">Last path</th>
+    </tr></thead><tbody>` +
+      list.map(e => `<tr>
+        <td title="${escapeHtml(e.id)}"><b>${escapeHtml(e.id.slice(0,12))}</b></td>
+        <td>${escapeHtml(e.ip)}</td>
+        <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
+        <td style="text-align:right">${e.risk_score}</td>
+        <td style="color:var(--green)">${e.allowed}</td>
+        <td style="color:${e.blocked?'var(--red)':'var(--dim)'}">${e.blocked}</td>
+        <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      </tr>`).join('') + '</tbody></table>';
+  } else {
+    body = `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Last path</th>
+    </tr></thead><tbody>` +
+      list.map(e => {
+        const idents = e.identities || [];
+        const identCell = idents.length === 0
+          ? '<span class="dim">—</span>'
+          : idents.length === 1
+            ? `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`
+            : `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
+        return `<tr>
+          <td>${identCell}</td>
+          <td>${escapeHtml(e.ip)}</td>
+          <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
+          <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml(e.ua.slice(0,40))}</td>
+          <td class="dim">${escapeHtml(e.last_path.slice(0,40))}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+  }
+  POP.style.maxWidth = '720px';
+  document.getElementById('pop-title').innerHTML =
+    `<b style="color:${clrMap[kind]}">${kind.toUpperCase()}</b> · ${fmt(t)} +${bucketSecs}s · ${list.length} entries
+     <span class="x" id="pop-close">×</span>`;
+  document.getElementById('pop-close').onclick = closePopover;
+  document.getElementById('pop-body').innerHTML = body;
+  POP.style.left = '50%'; POP.style.top = '50%';
+  POP.style.transform = 'translate(-50%, -50%)';
+  POP.classList.add('show'); POP_BACK.classList.add('show'); POP.style.display='block';
+}
+
+// ── 1.5.4 popover (identity details + risk breakdown) ────────────────
+const POP = document.getElementById('pop');
+const POP_BACK = document.getElementById('pop-back');
+function closePopover(){
+  POP.classList.remove('show');
+  POP_BACK.classList.remove('show');
+  // 1.5.4 — clear inline overrides set by openBucketDetail() so the next
+  // openPopover() / openBucketDetail() starts clean and the close button
+  // actually hides the modal (CSS .show=display:block was being overridden
+  // by inline style.display='block').
+  POP.style.display = '';
+  POP.style.transform = '';
+  POP.style.maxWidth = '';
+}
+POP_BACK.onclick = closePopover;
+document.getElementById('pop-close').onclick = closePopover;
+document.addEventListener('keydown', e => { if (e.key==='Escape') closePopover(); });
+
+function fmtSecs(s){
+  if (s == null) return '—';
+  if (s < 60)   return Math.round(s)+'s ago';
+  if (s < 3600) return Math.round(s/60)+'m ago';
+  if (s < 86400)return (s/3600).toFixed(1)+'h ago';
+  return (s/86400).toFixed(1)+'d ago';
+}
+
+function openPopover(kind, s, x, y){
+  let title, body;
+  if (kind === 'id'){
+    title = 'Identity details';
+    const banLine = s.banned_secs > 0
+      ? `<span style="color:var(--red);font-weight:600">BANNED · ~${s.banned_secs}s remaining</span>`
+      : `<span style="color:var(--green)">allowed</span>`;
+    const blocksRows = (s.blocks_breakdown||[]).map(([r,c]) =>
+      `<div class="rsn"><span class="rsn-name">${escapeHtml(r)}</span>
+       <div class="rsn-bar"><div style="width:${Math.min(100,c*10)}%"></div></div>
+       <span class="rsn-val">${c}×</span></div>`).join('');
+    body = `
+      <div class="kv">
+        <span class="k">id</span>          <span class="v">${escapeHtml(s.id||'')}</span>
+        <span class="k">status</span>      <span class="v">${banLine}</span>
+        <span class="k">ip</span>          <span class="v">${escapeHtml(s.ip||'')}</span>
+        <span class="k">user-agent</span>  <span class="v">${escapeHtml(s.ua||'')}</span>
+        <span class="k">session</span>     <span class="v">${escapeHtml(s.session||'—')}</span>
+        <span class="k">fingerprint</span> <span class="v">${escapeHtml(s.fingerprint||'—')}</span>
+        <span class="k">JA4 (TLS)</span>   <span class="v">${escapeHtml(s.ja4||'—')}</span>
+        <span class="k">first seen</span>  <span class="v">${fmtSecs(s.first_seen_secs_ago)}</span>
+        <span class="k">last seen</span>   <span class="v">${fmtSecs(s.last_seen_secs_ago)}</span>
+        <span class="k">requests</span>    <span class="v">${s.requests} (${s.allowed} ok / ${s.blocked} blocked)</span>
+        <span class="k">last path</span>   <span class="v">${escapeHtml(s.last_path||'—')}</span>
+        <span class="k">stealth</span>     <span class="v">${s.stealth_score}/100</span>
+        <span class="k">risk score</span>  <span class="v">${s.metrics.risk_score}</span>
+      </div>
+      ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3>${blocksRows}` : ''}`;
+  } else if (kind === 'risk'){
+    title = 'Risk score breakdown';
+    const breakdown = s.risk_breakdown || [];
+    const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
+    const rows = breakdown.length
+      ? breakdown.map(([reason, weighted])=>{
+          const pct = (weighted/total*100).toFixed(0);
+          return `<div class="rsn">
+            <span class="rsn-name">${escapeHtml(reason)}</span>
+            <div class="rsn-bar"><div style="width:${pct}%"></div></div>
+            <span class="rsn-val">+${weighted}</span></div>`;
+        }).join('')
+      : `<div class="empty">no contributing signals (score may be from already-decayed events)</div>`;
+    body = `
+      <div class="dim" style="margin-bottom:8px">
+        Live risk: <b style="color:var(--red)">${s.metrics.risk_score}</b> ·
+        decays at half-life 1h ·
+        ban threshold ≥ 50 (≥100 for NAT)
+      </div>
+      ${rows}`;
+  } else { return; }
+  document.getElementById('pop-title').innerHTML =
+    `${title} <span class="x" id="pop-close">×</span>`;
+  document.getElementById('pop-close').onclick = closePopover;
+  document.getElementById('pop-body').innerHTML = body;
+  // Position near click, clamp to viewport.
+  POP.style.display = 'block';
+  POP.classList.add('show');
+  POP_BACK.classList.add('show');
+  // 1.5.4 — clear any centered transform left over from openBucketDetail()
+  POP.style.transform = '';
+  POP.style.maxWidth = '';
+  const rect = POP.getBoundingClientRect();
+  let px = x + 10, py = y + 10;
+  if (px + rect.width  > window.innerWidth - 10) px = window.innerWidth - rect.width - 10;
+  if (py + rect.height > window.innerHeight - 10) py = window.innerHeight - rect.height - 10;
+  if (px < 10) px = 10; if (py < 10) py = 10;
+  POP.style.left = px+'px';
+  POP.style.top  = py+'px';
+}
 </script>
 </body></html>

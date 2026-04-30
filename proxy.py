@@ -523,6 +523,9 @@ class IpState:
     # Behavioral risk score — drives ban decision
     risk_score: float = 0.0
     last_risk_update: float = field(default_factory=time.monotonic)
+    # 1.5.4: per-reason contribution to risk_score (decays in lockstep). Used by
+    # the agents dashboard to show "what controls produced this score" on click.
+    risk_by_reason: dict = field(default_factory=lambda: defaultdict(float))
     # Stealth-agent telemetry (allowed traffic only — used by /__agents)
     header_scores: deque = field(default_factory=lambda: deque(maxlen=20))
     upstream_404_count: int = 0
@@ -641,6 +644,7 @@ def db_init():
         total         INTEGER DEFAULT 0,
         allowed       INTEGER DEFAULT 0,
         blocked       INTEGER DEFAULT 0,
+        missed        INTEGER DEFAULT 0,  -- 1.5.4: allowed but score in medium band
         by_reason     TEXT  -- JSON
     );
 
@@ -687,6 +691,13 @@ def db_init():
             conn.execute("ALTER TABLE admin_ips ADD COLUMN description TEXT")
     except Exception as _e:
         print(f"[migrate] admin_ips description: {_e}", flush=True)
+    # 1.5.4: idempotent migration — add `missed` column to timeline
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(timeline)")}
+        if "missed" not in cols:
+            conn.execute("ALTER TABLE timeline ADD COLUMN missed INTEGER DEFAULT 0")
+    except Exception as _e:
+        print(f"[migrate] timeline missed: {_e}", flush=True)
     conn.commit()
     conn.close()
 
@@ -801,7 +812,10 @@ async def _abuseipdb_lookup(ip: str):
 # avoid hammering LAPI; the recommended pattern is short TTL since CrowdSec
 # is meant to be queried live.
 CROWDSEC_LAPI_URL  = os.environ.get("CROWDSEC_LAPI_URL", "").rstrip("/")
-CROWDSEC_API_KEY   = os.environ.get("CROWDSEC_API_KEY", "").strip()
+# 1.5.4 — accept both CROWDSEC_API_KEY (our original name) and
+# CROWDSEC_LAPI_KEY (the name CrowdSec's own docs use). Either works.
+CROWDSEC_API_KEY   = (os.environ.get("CROWDSEC_API_KEY", "").strip()
+                      or os.environ.get("CROWDSEC_LAPI_KEY", "").strip())
 CROWDSEC_ENABLED   = bool(CROWDSEC_LAPI_URL and CROWDSEC_API_KEY)
 CROWDSEC_CACHE_SECS = int(os.environ.get("CROWDSEC_CACHE_SECS", "60"))
 CROWDSEC_TIMEOUT_S = float(os.environ.get("CROWDSEC_TIMEOUT_S", "1.0"))
@@ -849,12 +863,13 @@ async def _crowdsec_check(ip: str):
                     _crowdsec_stats["last_error"] = f"HTTP {resp.status}"
                     return None, "error"
                 data = await resp.json()
-        # data is None when no active decisions
-        if not data:
+        # data is None / [] / {} when no active decisions
+        if not data or not isinstance(data, list):
             _crowdsec_cache[ip] = (None, n + CROWDSEC_CACHE_SECS)
             return None, "api"
         # take first decision (CrowdSec returns priority-sorted)
-        decision_type = (data[0] or {}).get("type", "ban")
+        first = data[0] if isinstance(data[0], dict) else {}
+        decision_type = first.get("type", "ban")
         _crowdsec_cache[ip] = (decision_type, n + CROWDSEC_CACHE_SECS)
         return decision_type, "api"
     except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as e:
@@ -880,6 +895,8 @@ async def _crowdsec_check(ip: str):
 # Operator drops `GeoLite2-ASN.mmdb` into /data and points MAXMIND_ASN_DB_PATH
 # at it (default /data/GeoLite2-ASN.mmdb). Pure local lookup ~0.1ms per call.
 MAXMIND_ASN_DB_PATH = os.environ.get("MAXMIND_ASN_DB_PATH", "/data/GeoLite2-ASN.mmdb")
+# 1.5.4 — optional GeoLite2-City for the geo-map dashboard (lat/lng/country/city).
+MAXMIND_CITY_DB_PATH = os.environ.get("MAXMIND_CITY_DB_PATH", "/data/GeoLite2-City.mmdb")
 HOSTING_ASN_KEYWORDS = tuple(
     s.strip().lower() for s in os.environ.get(
         "HOSTING_ASN_KEYWORDS",
@@ -890,7 +907,9 @@ HOSTING_ASN_KEYWORDS = tuple(
     ).split(",") if s.strip())
 
 _asn_reader = None
+_city_reader = None     # 1.5.4 — GeoLite2-City reader (lat/lng for geo dashboard)
 MAXMIND_ENABLED = False
+MAXMIND_CITY_ENABLED = False
 _asn_stats = {
     "lookups_total": 0, "hits_hosting": 0, "errors": 0, "last_error": "",
     "last_latency_ms": 0.0, "avg_latency_ms": 0.0,
@@ -900,17 +919,47 @@ _asn_recent_latencies: deque = deque(maxlen=200)
 def _init_maxmind():
     """Lazy-load the mmdb. Called at startup; logs and stays disabled if
     the file is missing or malformed."""
-    global _asn_reader, MAXMIND_ENABLED
-    if not os.path.exists(MAXMIND_ASN_DB_PATH):
-        return
+    global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
     try:
         import maxminddb
-        _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
-        MAXMIND_ENABLED = True
-        print(f"[maxmind] ASN DB loaded from {MAXMIND_ASN_DB_PATH}", flush=True)
     except Exception as e:
-        _asn_stats["last_error"] = f"init: {e}"[:200]
-        print(f"[maxmind] failed to load {MAXMIND_ASN_DB_PATH}: {e}", flush=True)
+        print(f"[maxmind] maxminddb python lib missing: {e}", flush=True)
+        return
+    if os.path.exists(MAXMIND_ASN_DB_PATH):
+        try:
+            _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+            MAXMIND_ENABLED = True
+            print(f"[maxmind] ASN DB loaded from {MAXMIND_ASN_DB_PATH}", flush=True)
+        except Exception as e:
+            _asn_stats["last_error"] = f"init: {e}"[:200]
+            print(f"[maxmind] failed to load {MAXMIND_ASN_DB_PATH}: {e}", flush=True)
+    if os.path.exists(MAXMIND_CITY_DB_PATH):
+        try:
+            _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
+            MAXMIND_CITY_ENABLED = True
+            print(f"[maxmind] City DB loaded from {MAXMIND_CITY_DB_PATH}", flush=True)
+        except Exception as e:
+            print(f"[maxmind] failed to load {MAXMIND_CITY_DB_PATH}: {e}", flush=True)
+
+
+def _city_lookup(ip: str):
+    """Return (lat, lng, country_code, city_name) or None if unknown.
+    City DB lookup latency ~0.1ms — same DB family as ASN."""
+    if _city_reader is None or not ip:
+        return None
+    try:
+        rec = _city_reader.get(ip)
+        if not rec:
+            return None
+        loc = rec.get("location") or {}
+        lat = loc.get("latitude"); lng = loc.get("longitude")
+        if lat is None or lng is None:
+            return None
+        country = (rec.get("country") or {}).get("iso_code") or ""
+        city    = ((rec.get("city") or {}).get("names") or {}).get("en") or ""
+        return (float(lat), float(lng), country, city)
+    except Exception:
+        return None
 
 def _asn_lookup(ip: str):
     """Returns (asn:int|None, organisation:str, is_hosting:bool, source:str)."""
@@ -1202,11 +1251,12 @@ async def db_writer_loop():
                         """, args)
                     elif op == "upsert_timeline":
                         conn.execute("""
-                          INSERT INTO timeline (bucket_minute,total,allowed,blocked,by_reason)
-                          VALUES (?, ?, ?, ?, ?)
+                          INSERT INTO timeline (bucket_minute,total,allowed,blocked,missed,by_reason)
+                          VALUES (?, ?, ?, ?, ?, ?)
                           ON CONFLICT(bucket_minute) DO UPDATE SET
                             total=excluded.total, allowed=excluded.allowed,
-                            blocked=excluded.blocked, by_reason=excluded.by_reason
+                            blocked=excluded.blocked, missed=excluded.missed,
+                            by_reason=excluded.by_reason
                         """, args)
                     elif op == "set_kv":
                         conn.execute("INSERT OR REPLACE INTO metrics_kv (key,val) VALUES (?,?)", args)
@@ -1281,7 +1331,15 @@ def db_load_state():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
-    n = _t.time()
+    # 1.5.4 — IpState.first_seen / last_seen are time.monotonic() values, but
+    # the DB persists epoch-wallclock (time.time()).  Convert by computing
+    # how-many-seconds-ago the timestamp was (epoch_now - epoch_value), then
+    # mapping that back onto the monotonic clock.  Pre-fix the in-memory
+    # values were epoch-wallclock and (now() - epoch) yielded a hugely
+    # negative number on the dashboard.
+    mono_now  = time.monotonic()
+    epoch_now = _t.time()
+    n = epoch_now  # used for ban-until comparison below
     # Load clients (cap to MAX_IDENTITIES, newest first)
     rows = conn.execute(
         "SELECT * FROM clients ORDER BY last_seen DESC LIMIT ?",
@@ -1289,8 +1347,10 @@ def db_load_state():
     ).fetchall()
     for r in rows:
         s = ip_state[r["ip"]]
-        s.first_seen   = n - max(0, n - (r["first_seen"] or n))  # keep monotonic-relative
-        s.last_seen    = n - max(0, n - (r["last_seen"] or n))
+        ago_first = max(0, epoch_now - (r["first_seen"] or epoch_now))
+        ago_last  = max(0, epoch_now - (r["last_seen"]  or epoch_now))
+        s.first_seen = mono_now - ago_first
+        s.last_seen  = mono_now - ago_last
         s.request_count = r["request_count"] or 0
         s.allowed_count = r["allowed_count"] or 0
         s.blocked_count = r["blocked_count"] or 0
@@ -1334,8 +1394,14 @@ def db_load_state():
 
     # Load timeline
     for row in conn.execute("SELECT * FROM timeline"):
+        # row['missed'] only present after the 1.5.4 migration ran; fall back to 0
+        try:
+            missed_v = row["missed"] or 0
+        except (IndexError, KeyError):
+            missed_v = 0
         timeline[row["bucket_minute"]] = {
             "total": row["total"], "allowed": row["allowed"], "blocked": row["blocked"],
+            "missed": missed_v,
             "by_reason": defaultdict(int, json.loads(row["by_reason"] or "{}")),
         }
 
@@ -1371,33 +1437,77 @@ def db_load_state():
 TIMELINE_RETAIN_SECS = 86400  # 24 hours
 timeline = {}                  # {minute_epoch_int: {"total","blocked","allowed","by_reason":{}}}
 
+# 1.5.4 — per-minute cost buffer for the middleware wall-time.
+# Each entry: {"sum_ms": float, "count": int, "max_ms": float}
+# Retained for COST_RETAIN_SECS (matches timeline retention).
+COST_RETAIN_SECS = int(os.environ.get("COST_RETAIN_SECS", "10800"))  # 3h
+cost_timeline: dict = {}
+
 def _bucket_now() -> int:
     """Return the current minute bucket (epoch seconds rounded to the minute)."""
     return int(_t.time() // 60) * 60
 
-def _timeline_bump(reason: str):
-    """Update the current minute bucket. Caller must hold state_lock."""
+def _cost_bump(elapsed_ms: float):
+    """Record a single request's middleware wall-time into the current bucket."""
+    b = _bucket_now()
+    if b not in cost_timeline:
+        cost_timeline[b] = {"sum_ms": 0.0, "count": 0, "max_ms": 0.0}
+        cutoff = b - COST_RETAIN_SECS
+        for k in [k for k in cost_timeline if k < cutoff]:
+            del cost_timeline[k]
+    bucket = cost_timeline[b]
+    bucket["sum_ms"] += elapsed_ms
+    bucket["count"] += 1
+    if elapsed_ms > bucket["max_ms"]:
+        bucket["max_ms"] = elapsed_ms
+
+def _timeline_bump(reason: str, missed: bool = False):
+    """Update the current minute bucket. Caller must hold state_lock.
+    `missed` = allowed AND identity score ≥ SOFT_CHALLENGE_SCORE (medium band)."""
     b = _bucket_now()
     if b not in timeline:
-        timeline[b] = {"total": 0, "blocked": 0, "allowed": 0,
+        timeline[b] = {"total": 0, "blocked": 0, "allowed": 0, "missed": 0,
                        "by_reason": defaultdict(int)}
         # cleanup buckets older than retention
         cutoff = b - TIMELINE_RETAIN_SECS
         for k in [k for k in timeline if k < cutoff]:
             del timeline[k]
     bucket = timeline[b]
+    # Backfill `missed` on buckets restored from older snapshots that lacked it
+    if "missed" not in bucket:
+        bucket["missed"] = 0
     bucket["total"] += 1
     if reason:
         bucket["blocked"] += 1
         bucket["by_reason"][reason] += 1
     else:
         bucket["allowed"] += 1
+        if missed:
+            bucket["missed"] += 1
 
 def now() -> float:
     return time.monotonic()
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 TRUST_XFF = os.environ.get("TRUST_XFF", "first").lower()  # first | last | none
+# 1.5.4 — pentester-found gap: with TRUST_XFF=first/last, anyone hitting the
+# gateway directly can spoof X-Forwarded-For to forge their source IP. Fix:
+# only honour XFF when the immediate peer (request.remote, the kernel-observed
+# socket IP) is one of these CIDRs. If the list is empty, every peer is
+# trusted (back-compat). Set this to your reverse proxy / CDN ranges.
+_trusted_proxies_raw = os.environ.get("TRUSTED_PROXIES", "").strip()
+TRUSTED_PROXIES_NETS: list = []
+if _trusted_proxies_raw:
+    import ipaddress as _ipa_tp
+    for _e in _trusted_proxies_raw.split(","):
+        _e = _e.strip()
+        if not _e:
+            continue
+        try:
+            TRUSTED_PROXIES_NETS.append(_ipa_tp.ip_network(_e, strict=False))
+        except ValueError as _e2:
+            print(f"FATAL: invalid TRUSTED_PROXIES entry {_e!r} — {_e2}", flush=True)
+            raise SystemExit(2)
 
 # 1.4.6 — structured logging + request correlation IDs.
 # When LOG_FORMAT=json, every log line is a one-line JSON document so it can
@@ -1438,14 +1548,35 @@ def slog(event: str, level: str = "info", **fields) -> None:
         kv = " ".join(f"{k}={v!r}" for k, v in fields.items())
         print(f"[{ts}] {level} {event} {kv}", flush=True)
 
+def _peer_is_trusted_proxy(remote: str) -> bool:
+    """Return True iff `remote` is in TRUSTED_PROXIES_NETS, OR no allowlist
+    is configured (back-compat). 1.5.4 — closes the spoofed-XFF bypass found
+    by the pentest: when the gateway is exposed directly (no real reverse
+    proxy in front), an attacker can set X-Forwarded-For to any value and
+    impersonate any IP for ban-tracking / risk / admin-allowlist purposes."""
+    if not TRUSTED_PROXIES_NETS:
+        return True   # back-compat: no allowlist configured
+    if not remote:
+        return False
+    try:
+        ip = _ipaddress.ip_address(remote)
+    except (ValueError, TypeError):
+        return False
+    return any(ip in net for net in TRUSTED_PROXIES_NETS)
+
+
 def get_ip(request: web.Request) -> str:
     """
     TRUST_XFF=first  → vulnerable: attacker-controlled (default, for bypass demos)
     TRUST_XFF=last   → secure: trusts only the last hop (ngrok-injected real IP)
     TRUST_XFF=none   → ignore XFF, use raw socket peer
+
+    1.5.4 — XFF is now ONLY honoured when the immediate peer is in
+    TRUSTED_PROXIES (otherwise we fall back to the raw socket IP, ignoring
+    any client-supplied X-Forwarded-For header).
     """
     xff = request.headers.get("X-Forwarded-For")
-    if xff and TRUST_XFF != "none":
+    if xff and TRUST_XFF != "none" and _peer_is_trusted_proxy(request.remote or ""):
         parts = [p.strip() for p in xff.split(",")]
         return parts[0] if TRUST_XFF == "first" else parts[-1]
     return request.remote or "0.0.0.0"
@@ -1765,9 +1896,18 @@ def _decay_risk(state, now_ts: float):
     """Apply exponential decay to risk_score based on elapsed time."""
     elapsed = max(0.0, now_ts - state.last_risk_update)
     if elapsed > 0 and state.risk_score > 0:
-        state.risk_score *= 0.5 ** (elapsed / RISK_DECAY_HALFLIFE_SECS)
+        factor = 0.5 ** (elapsed / RISK_DECAY_HALFLIFE_SECS)
+        state.risk_score *= factor
+        # Decay per-reason contributions in lockstep so the breakdown stays
+        # proportional to the live score. Drop entries that fall below noise.
+        if getattr(state, "risk_by_reason", None):
+            for r in list(state.risk_by_reason.keys()):
+                state.risk_by_reason[r] *= factor
+                if state.risk_by_reason[r] < 0.5:
+                    del state.risk_by_reason[r]
         if state.risk_score < 0.5:
             state.risk_score = 0.0
+            state.risk_by_reason.clear() if getattr(state, "risk_by_reason", None) else None
     state.last_risk_update = now_ts
 
 async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> bool:
@@ -1784,6 +1924,7 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
         s = ip_state[track_key]
         _decay_risk(s, n)
         s.risk_score += weight
+        s.risk_by_reason[reason] = s.risk_by_reason.get(reason, 0.0) + weight
         # M7: count only "legitimate-looking" identities at this IP toward NAT
         # detection. An attacker rotating UAs to spawn fake identities cannot
         # inflate this count because fake identities never fetch static assets
@@ -1954,7 +2095,10 @@ def make_pow_challenge(method: str = "*", path: str = "*") -> str:
     nonce  = secrets.token_hex(8)
     issued = str(int(time.time()))
     bind = _pow_bind(method, path)
-    payload = f"{nonce}|{issued}|{POW_DIFFICULTY}|{bind}"
+    # 1.5.4 — Anubis-mode boost to make scripted solving ~16× harder per
+    # additional zero (default boost=1 → 6 leading zeros instead of 5).
+    diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
+    payload = f"{nonce}|{issued}|{diff}|{bind}"
     sig = hmac.new(POW_HMAC_KEY, payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}|{sig}"
 
@@ -2023,12 +2167,18 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         metrics["total_requests"] += 1
         metrics["by_status"][status] += 1
         metrics["by_path"][path] += 1
-        _timeline_bump(reason)
         if ja4:
             metrics["by_ja4"][ja4[:64]] += 1
         # Default to ip if no track_key (back-compat for internal/probe paths)
         key = track_key or ip
         s = ip_state[key]
+        # 1.5.4: classify "missed" — request was allowed but identity sits
+        # in the medium-risk band (≥ SOFT_CHALLENGE_SCORE, < RISK_BAN_THRESHOLD).
+        # Apply decay before checking so the band reflects the live score.
+        _decay_risk(s, now())
+        is_missed = (not reason) and SOFT_CHALLENGE_SCORE > 0 and \
+                    SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD
+        _timeline_bump(reason, missed=is_missed)
         s.last_seen = now()
         s.last_user_agent = ua[:120]
         s.last_path = path[:120]
@@ -2044,6 +2194,8 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         else:
             metrics["allowed"] += 1
             s.allowed_count += 1
+            if is_missed:
+                metrics["missed"] = metrics.get("missed", 0) + 1
         # Persist to DB (non-blocking — drops in queue)
         if db_queue is not None:
             event_ts = _t.time()
@@ -2069,6 +2221,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
                     tb = timeline[b]
                     db_queue.put_nowait(("upsert_timeline", (
                         b, tb["total"], tb["allowed"], tb["blocked"],
+                        tb.get("missed", 0),
                         json.dumps(dict(tb["by_reason"])),
                     )))
                 # Periodic global counters flush (every ~50 events)
@@ -2241,6 +2394,22 @@ async def session_cookie_finalizer(request: web.Request, handler):
 
 # ── Middleware ─────────────────────────────────────────────────────────────
 @web.middleware
+async def cost_meter(request: web.Request, handler):
+    """1.5.4 — outer timing middleware. Records the wall-time the proxy
+    spends on this request (middleware + upstream forwarding). Used by the
+    main-dashboard cost graph to show 'how much latency did the controls
+    add this minute on average?'."""
+    t0 = time.perf_counter()
+    try:
+        return await handler(request)
+    finally:
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        try:
+            _cost_bump(elapsed_ms)
+        except Exception:
+            pass
+
+@web.middleware
 async def protect(request: web.Request, handler):
     # 1.4.6 — request correlation. Honour an inbound X-Request-ID if it's
     # safe-looking (so a CDN / front-proxy / load balancer that already
@@ -2374,8 +2543,10 @@ async def protect(request: web.Request, handler):
         # request completes the rest of the layered checks. Non-HTML or
         # non-GET requests without a cookie still silent-decoy so APIs
         # cannot be used directly without first visiting an HTML page.
-        if (not TURNSTILE_ENABLED
-                and request.method == "GET"
+        # 1.5.4 — when Turnstile is configured but the identity's risk
+        # hasn't crossed `_turnstile_active_threshold()`, also fall through
+        # to auto-mint (most users never see Turnstile, only suspected bots).
+        if (request.method == "GET"
                 and "text/html" in request.headers.get("Accept", "")):
             request["_auto_mint_chal"] = True
             # fall through to the rest of the middleware so UA filter,
@@ -2458,7 +2629,7 @@ async def protect(request: web.Request, handler):
                 del id_map[k]
             id_map[identity] = now_ts
             new_session_rate = len(id_map)
-        if new_session_rate > NEW_SESSIONS_PER_IP_PER_MIN:
+        if SESSION_FLOOD_ENABLED and new_session_rate > NEW_SESSIONS_PER_IP_PER_MIN:
             return await _silent_decoy_response(
                 ip, request.headers.get("User-Agent",""), request.path, "session-flood"
             )
@@ -2600,13 +2771,13 @@ async def protect(request: web.Request, handler):
     is_chrome_ua = "chrome" in ua_lower and "edg" not in ua_lower
     is_firefox_ua = "firefox" in ua_lower
     is_safari_ua = "safari" in ua_lower and not is_chrome_ua
-    if is_chrome_ua and not sec_ch_ua:
+    if UA_PLATFORM_CHECK_ENABLED and is_chrome_ua and not sec_ch_ua:
         await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
         request_signals.append("ua-platform-mismatch")
-    elif (is_firefox_ua or is_safari_ua) and sec_ch_ua:
+    elif UA_PLATFORM_CHECK_ENABLED and (is_firefox_ua or is_safari_ua) and sec_ch_ua:
         await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
         request_signals.append("ua-platform-mismatch")
-    elif is_chrome_ua and sec_ch_ua and sec_ch_ua_plat:
+    elif UA_PLATFORM_CHECK_ENABLED and is_chrome_ua and sec_ch_ua and sec_ch_ua_plat:
         # Cross-check OS hint: UA "Windows NT 10.0" vs Sec-Ch-Ua-Platform
         plat_norm = sec_ch_ua_plat.strip('"').lower()
         ua_lower_check = ua_lower
@@ -2663,11 +2834,11 @@ async def protect(request: web.Request, handler):
     # SPAs (Angular/React UFE-style apps) routinely load 50–200 chunked JS
     # modules on one page; the previous 50 threshold was a false-positive
     # magnet for legit users. Operator can override via env if needed.
-    if unique_n > int(os.environ.get("ENUM_THRESHOLD", "300")):
+    if AI_ENUMERATION_ENABLED and unique_n > int(os.environ.get("ENUM_THRESHOLD", "300")):
         return await deny(403, "ai-enumeration",
                           {"error": "too many distinct paths from this identity",
                            "unique_paths": unique_n})
-    if no_static:
+    if AI_NO_ASSETS_ENABLED and no_static:
         return await deny(403, "ai-no-assets",
                           {"error": "browser UA but never fetched any asset — likely AI agent",
                            "html_loads": s.html_loads, "static_loads": s.static_loads})
@@ -2713,7 +2884,9 @@ async def protect(request: web.Request, handler):
     #    static-asset GETs because SPA frameworks queue them with very regular
     #    timing (false positive on legitimate users).
     if id_mode != "session" and not is_static_asset_get:
-        suspicious, reason = await behavioral_check(track_key)
+        suspicious, reason = (False, "")
+        if BEHAVIORAL_CHECK_ENABLED:
+            suspicious, reason = await behavioral_check(track_key)
         if suspicious:
             return await deny(403, "behavior",
                               {"error": "suspicious behavior", "reason": reason})
@@ -2725,16 +2898,17 @@ async def protect(request: web.Request, handler):
         ok, why = verify_pow(token, solution, request.method, request.path)
         if not ok:
             challenge = make_pow_challenge(request.method, request.path)
+            eff_diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
             return await deny(402, "pow-required",
                               {"error": "Proof-of-Work required",
                                "reason": why,
                                "challenge": challenge,
-                               "difficulty": POW_DIFFICULTY,
+                               "difficulty": eff_diff,
                                "valid_for_seconds": POW_VALID_SECS,
                                "instructions": "Use /__solver"},
                               extra_headers={
                                   "X-PoW-Challenge": challenge,
-                                  "X-PoW-Difficulty": str(POW_DIFFICULTY),
+                                  "X-PoW-Difficulty": str(eff_diff),
                               })
 
     # Allowed → forward upstream and record under the identity
@@ -2791,7 +2965,7 @@ async def protect(request: web.Request, handler):
     # Treat upstream 404 as a small enumeration signal — repeated misses
     # accumulate risk until ban (legitimate users rarely hit many 404s).
     # Skip for static asset extensions (favicon misses are normal).
-    if response.status == 404:
+    if UPSTREAM_404_TRACKING_ENABLED and response.status == 404:
         if not request.path.endswith((".ico", ".png", ".jpg", ".jpeg", ".gif",
                                       ".svg", ".css", ".js", ".webp",
                                       ".woff", ".woff2", ".ttf", ".map")):
@@ -2809,11 +2983,13 @@ async def pow_endpoint(request: web.Request):
     """
     method = (request.query.get("method", "POST") or "POST").upper()
     path = request.query.get("path", "/") or "/"
+    eff_diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
     return web.json_response({
         "challenge": make_pow_challenge(method, path),
-        "difficulty": POW_DIFFICULTY,
+        "difficulty": eff_diff,
         "valid_for_seconds": POW_VALID_SECS,
         "bound_to": {"method": method, "path": path},
+        "anubis_mode": ANUBIS_ENABLED,
     }, headers={"Cache-Control": "no-store"})
 
 async def solver_endpoint(request: web.Request):
@@ -2912,7 +3088,7 @@ async def metrics_endpoint(request: web.Request):
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
                 for row in conn.execute(
-                    "SELECT bucket_minute, total, allowed, blocked FROM timeline "
+                    "SELECT bucket_minute, total, allowed, blocked, missed FROM timeline "
                     "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
                     (start_b, end_b + 60)
                 ):
@@ -2922,7 +3098,7 @@ async def metrics_endpoint(request: web.Request):
                 pass
 
         for slot in range(start_b, end_b + 1, bucket_secs):
-            agg = {"total": 0, "allowed": 0, "blocked": 0}
+            agg = {"total": 0, "allowed": 0, "blocked": 0, "missed": 0}
             # Sum every 1-min bucket falling inside [slot, slot + bucket_secs)
             for m in range(slot, slot + bucket_secs, 60):
                 d = timeline.get(m)
@@ -2932,6 +3108,11 @@ async def metrics_endpoint(request: web.Request):
                     agg["total"] += d["total"]
                     agg["allowed"] += d["allowed"]
                     agg["blocked"] += d["blocked"]
+                    # `missed` only present in 1.5.4+ rows
+                    try:
+                        agg["missed"] += (d["missed"] if d["missed"] is not None else 0)
+                    except (IndexError, KeyError):
+                        pass
             timeline_out.append({"t": slot, **agg})
 
         # 1.5.1: live throughput from the rolling 1-second window. Used by
@@ -2939,11 +3120,74 @@ async def metrics_endpoint(request: web.Request):
         cur_n = _t.time()
         live_rps = sum(1 for ts in _global_rps_window if ts > cur_n - 1.0)
 
+        # 1.5.4 — services / external integrations health.
+        # We surface lightweight counters here so the dashboard can show the
+        # operator at a glance which extras are wired up + their hit/miss.
+        services = {
+            "redis": {
+                "url":       REDIS_URL or None,
+                "connected": _redis is not None,
+            },
+            "abuseipdb": {
+                "configured": bool(ABUSEIPDB_KEY),
+                "enabled":    ABUSEIPDB_ENABLED,
+            },
+            "crowdsec": {
+                "configured": bool(globals().get("CROWDSEC_LAPI_URL", "")),
+                "enabled":    bool(globals().get("CROWDSEC_ENABLED", False)),
+            },
+            "maxmind": {
+                "loaded":  globals().get("_geoip_asn_reader") is not None,
+                "enabled": bool(globals().get("MAXMIND_ENABLED", False)),
+            },
+            "turnstile": {
+                "configured": TURNSTILE_ENABLED,
+                "enabled":    TURNSTILE_ENABLED and JS_CHALLENGE,
+            },
+            "anubis": {
+                "enabled":          ANUBIS_ENABLED,
+                "difficulty_boost": ANUBIS_DIFFICULTY_BOOST,
+                "effective_diff":   POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0),
+            },
+        }
+
+        # 1.5.4 — per-detector hit counts (derived from blocks_by_reason on
+        # global metrics). The dashboard renders these alongside services so
+        # the operator sees which detectors are actually firing.
+        detector_hits = {
+            "honeypot":            metrics["by_reason"].get("honeypot-silent", 0) + metrics["by_reason"].get("honeypot", 0),
+            "suspicious_path":     metrics["by_reason"].get("suspicious-path", 0),
+            "ai_probe":            metrics["by_reason"].get("ai-probe", 0),
+            "ai_enumeration":      metrics["by_reason"].get("ai-enumeration", 0),
+            "ai_no_assets":        metrics["by_reason"].get("ai-no-assets", 0),
+            "ua_filter":           sum(metrics["by_reason"].get(k, 0) for k in
+                                       ("ua-empty","ua-too-short","ua-blocked","ua-non-browser")),
+            "ua_platform_check":   metrics["by_reason"].get("ua-platform-mismatch", 0),
+            "header_completeness": sum(metrics["by_reason"].get(k, 0) for k in
+                                       ("ai-headers-empty","ai-headers-incomplete","missing-required-header")),
+            "behavioral_check":    metrics["by_reason"].get("behavior", 0),
+            "session_flood":       metrics["by_reason"].get("session-flood", 0),
+            "upstream_404":        metrics["by_reason"].get("upstream-404", 0),
+            "rate_limit_ip":       metrics["by_reason"].get("rate-limit-ip", 0),
+            "rate_limit_session":  metrics["by_reason"].get("rate-limit", 0),
+            "bot_trap":            metrics["by_reason"].get("bot-trap", 0),
+            "canary_echo":         metrics["by_reason"].get("canary-echo", 0),
+            "ja4_banned":          metrics["by_reason"].get("fp-banned", 0),
+            "host_not_allowed":    metrics["by_reason"].get("host-not-allowed", 0),
+            "abuseipdb":           sum(metrics["by_reason"].get(k, 0) for k in
+                                       ("abuseipdb-high","abuseipdb-med")),
+            "crowdsec":            metrics["by_reason"].get("crowdsec-banned", 0),
+            "asn_hosting":         metrics["by_reason"].get("asn-hosting", 0),
+            "js_challenge":        metrics["by_reason"].get("chal-required", 0),
+            "missed_medium_risk":  metrics.get("missed", 0),
+        }
+
         return web.json_response({
             "uptime_secs": int(_t.time() - START_EPOCH),
             "total": metrics["total_requests"],
             "allowed": metrics["allowed"],
             "blocked": metrics["blocked"],
+            "missed": metrics.get("missed", 0),
             "by_reason": dict(metrics["by_reason"]),
             "by_status": {str(k): v for k, v in metrics["by_status"].items()},
             "top_paths": [{"path": p, "count": c} for p, c in top_paths],
@@ -2956,6 +3200,8 @@ async def metrics_endpoint(request: web.Request):
             "timeline_bucket_secs": bucket_secs,
             "timeline_end_epoch": end_b,
             "timeline_is_live": end_epoch >= int(_t.time()) - 30,
+            "services":      services,
+            "detector_hits": detector_hits,
             "config": {
                 "burst": RATE_LIMIT_BURST,
                 "refill": RATE_LIMIT_REFILL,
@@ -3205,21 +3451,87 @@ async def scoring_endpoint(request: web.Request):
         "suspicious-body":    "BODY_PATTERN_MATCH",
         "canary-echo":        "CANARY_ECHO_DETECTION",
         "origin-mismatch":    "STRICT_ORIGIN",
-        "tls-fingerprint":    None,    # driven by JA4_DENY_LIST contents
+        "tls-fingerprint":    None,
         "abuseipdb-high":     "ABUSEIPDB_ENABLED",
         "abuseipdb-med":      "ABUSEIPDB_ENABLED",
         "crowdsec-banned":    "CROWDSEC_ENABLED",
         "asn-hosting":        "MAXMIND_ENABLED",
+        # 1.5.4: 11 new per-detector kill-switches
+        "honeypot":           "HONEYPOT_ENABLED",
+        "honeypot-silent":    "HONEYPOT_ENABLED",
+        "suspicious-path":    "SUSPICIOUS_PATH_ENABLED",
+        "ai-probe":           "AI_PROBE_ENABLED",
+        "ua-empty":           "UA_FILTER_ENABLED",
+        "ua-blocked":         "UA_FILTER_ENABLED",
+        "ua-too-short":       "UA_FILTER_ENABLED",
+        "ua-non-browser":     "UA_FILTER_ENABLED",
+        "ua-platform-mismatch": "UA_PLATFORM_CHECK_ENABLED",
+        "ai-headers-empty":   "HEADER_COMPLETENESS_ENABLED",
+        "ai-headers-incomplete": "HEADER_COMPLETENESS_ENABLED",
+        "behavior":           "BEHAVIORAL_CHECK_ENABLED",
+        "ai-enumeration":     "AI_ENUMERATION_ENABLED",
+        "ai-no-assets":       "AI_NO_ASSETS_ENABLED",
+        "session-flood":      "SESSION_FLOOD_ENABLED",
+        "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
+    }
+    # Per-signal latency cost (typical / cached / p99 in ms).
+    # External integrations can be sub-ms cached but high uncached. In-process
+    # heuristics are essentially free (set lookup, regex on path, dict ops).
+    SIGNAL_COST = {
+        # External integrations (network call required)
+        "abuseipdb-high":     {"cached": 0.3,   "typical": 150,  "p99": 450},
+        "abuseipdb-med":      {"cached": 0.3,   "typical": 150,  "p99": 450},
+        "crowdsec-banned":    {"cached": 0.2,   "typical": 5,    "p99": 20},
+        "asn-hosting":        {"cached": 0.1,   "typical": 0.1,  "p99": 0.5},
+        # Body-scanning regex (per request, body-bound)
+        "suspicious-body":    {"cached": 0,     "typical": 0.5,  "p99": 3},
+        "canary-echo":        {"cached": 0,     "typical": 0.2,  "p99": 1.5},
+        "bot-trap":           {"cached": 0,     "typical": 0.1,  "p99": 1},
+        # Path-regex / set lookups
+        "suspicious-path":    {"cached": 0,     "typical": 0.05, "p99": 0.2},
+        "honeypot":           {"cached": 0,     "typical": 0.005,"p99": 0.05},
+        "honeypot-silent":    {"cached": 0,     "typical": 0.005,"p99": 0.05},
+        "ai-probe":           {"cached": 0,     "typical": 0.005,"p99": 0.05},
+        # UA / header inspection
+        "ua-empty":           {"cached": 0,     "typical": 0.001,"p99": 0.01},
+        "ua-too-short":       {"cached": 0,     "typical": 0.001,"p99": 0.01},
+        "ua-blocked":         {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        "ua-non-browser":     {"cached": 0,     "typical": 0.005,"p99": 0.02},
+        "ua-platform-mismatch": {"cached": 0,   "typical": 0.005,"p99": 0.02},
+        "ai-headers-empty":   {"cached": 0,     "typical": 0.005,"p99": 0.01},
+        "ai-headers-incomplete": {"cached": 0,  "typical": 0.005,"p99": 0.01},
+        "accept-wildcard-html": {"cached": 0,   "typical": 0.001,"p99": 0.005},
+        "headers-suspicious": {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        # Behavioural / state ops
+        "behavior":           {"cached": 0,     "typical": 0.005,"p99": 0.02},
+        "ai-enumeration":     {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        "ai-no-assets":       {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        "session-flood":      {"cached": 0,     "typical": 0.01, "p99": 0.05},
+        "session-churn":      {"cached": 0,     "typical": 0.05, "p99": 0.2},
+        "upstream-404":       {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        # Misc
+        "host-not-allowed":   {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        "tls-fingerprint":    {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        "ja4-required-missing": {"cached": 0,   "typical": 0.001,"p99": 0.005},
+        "missing-required-header": {"cached": 0,"typical": 0.005,"p99": 0.01},
+        "origin-mismatch":    {"cached": 0,     "typical": 0.005,"p99": 0.02},
+        "js-challenge":       {"cached": 0,     "typical": 0.05, "p99": 0.3},
+        "rate-limit-ip":      {"cached": 0,     "typical": 0.005,"p99": 0.02},
+        "rate-limit":         {"cached": 0,     "typical": 0.005,"p99": 0.02},
+        "fp-banned":          {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        "traffic-threshold":  {"cached": 0,     "typical": 0.001,"p99": 0.005},
     }
     weights = []
     for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
         tier, desc = DESCRIPTIONS.get(sig, ("?", ""))
+        cost = SIGNAL_COST.get(sig, {"cached": 0, "typical": 0.001, "p99": 0.01})
         weights.append({
             "signal":      sig,
             "weight":      w,
             "tier":        tier,
             "description": desc,
             "toggle":      SIGNAL_KNOB.get(sig),    # None = always-on
+            "cost_ms":     cost,
         })
     # Modifier-only toggles — no weight, but operator-tunable.
     # Surface them at the bottom of the merged table.
@@ -3228,6 +3540,7 @@ async def scoring_endpoint(request: web.Request):
         ("JS_CHAL_BIND_JA4",        "Bind chal cookie to JA4 fingerprint (when injected)"),
         ("JS_CHAL_REQUIRE_JA4",     "Hard-require JA4 from a trusted peer at /__challenge"),
         ("JS_CHAL_STRICT_STATIC",   "Refuse static-asset bypass on API-shaped paths"),
+        ("ANUBIS_ENABLED",          "Anubis-mode (1.5.4): strict PoW gate on every first request, raises difficulty by ANUBIS_DIFFICULTY_BOOST"),
     ]
     return web.json_response({
         "weights":   weights,
@@ -3242,6 +3555,387 @@ async def scoring_endpoint(request: web.Request):
         },
     }, headers={"Cache-Control": "no-store"})
 
+async def geo_data_endpoint(request: web.Request):
+    """1.5.4 — geo aggregation for the world-map dashboard.
+    Returns counts per (lat,lng) split into kind=clean/missed/blocked.
+    Time-window controls mirror /__metrics.
+
+    Source: events table (SQLite). Each event row is bucketed by IP →
+    (lat,lng) via the GeoLite2-City mmdb. Cached in-process for 60s to
+    avoid hammering both SQLite + the mmdb on every dashboard tick.
+    """
+    if not MAXMIND_CITY_ENABLED:
+        return web.json_response(
+            {"points": [], "configured": False,
+             "hint": "drop GeoLite2-City.mmdb into /data and restart, "
+                     "or set MAXMIND_CITY_DB_PATH"},
+            headers={"Cache-Control": "no-store"})
+    try:
+        range_min = max(5, min(10080, int(request.query.get("range", "60"))))
+    except ValueError:
+        range_min = 60
+    try:
+        end_epoch = int(request.query.get("end", str(int(_t.time()))))
+    except ValueError:
+        end_epoch = int(_t.time())
+    start_epoch = end_epoch - range_min * 60
+
+    # In-process cache key: bucket the params on a 60s grain so live mode
+    # doesn't run a fresh SQL query per dashboard tick.
+    cache_key = (range_min, end_epoch // 60)
+    cached = _GEO_CACHE.get(cache_key)
+    if cached and cached[0] > _t.time():
+        return web.json_response(
+            cached[1], headers={"Cache-Control": "no-store"})
+
+    # Pull events. We need: ts, ip, reason. Allowed = reason='' or 'OK'.
+    # Risk-bin classification (clean / missed / blocked) is done from the
+    # current per-identity risk_score for that IP — best-effort.
+    points = {}  # {(lat_round, lng_round): {"country","city","clean","missed","blocked"}}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ip, reason FROM events WHERE ts >= ? AND ts <= ? LIMIT 200000",
+            (start_epoch, end_epoch),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response(
+            {"error": f"db: {e}", "points": []}, status=500,
+            headers={"Cache-Control": "no-store"})
+
+    # Resolve each unique IP only once
+    ip_geo = {}
+    for r in rows:
+        ip = r["ip"]
+        if not ip:
+            continue
+        if ip not in ip_geo:
+            ip_geo[ip] = _city_lookup(ip)
+        loc = ip_geo[ip]
+        if loc is None:
+            continue
+        lat, lng, country, city = loc
+        # Round to 0.5° to merge nearby cities into a single bubble
+        key = (round(lat * 2) / 2, round(lng * 2) / 2)
+        if key not in points:
+            points[key] = {"country": country, "city": city,
+                           "clean": 0, "missed": 0, "blocked": 0}
+        reason = (r["reason"] or "")
+        if reason and reason != "OK":
+            points[key]["blocked"] += 1
+        else:
+            points[key]["clean"] += 1
+
+    # We don't have per-event "missed" classification in the events table.
+    # Approximate "missed" via current per-identity risk band: any client
+    # whose risk_score is in the medium band contributes to missed at its
+    # current location.
+    async with state_lock:
+        for key_id, s in ip_state.items():
+            ip = s.last_ip or key_id
+            if ip not in ip_geo:
+                ip_geo[ip] = _city_lookup(ip)
+            loc = ip_geo.get(ip)
+            if not loc:
+                continue
+            if not (SOFT_CHALLENGE_SCORE > 0 and
+                    SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD):
+                continue
+            lat, lng, country, city = loc
+            key = (round(lat * 2) / 2, round(lng * 2) / 2)
+            if key not in points:
+                points[key] = {"country": country, "city": city,
+                               "clean": 0, "missed": 0, "blocked": 0}
+            points[key]["missed"] += s.allowed_count
+
+    # Project to a flat list
+    out_points = [
+        {"lat": lat, "lng": lng,
+         "country": p["country"], "city": p["city"],
+         "clean": p["clean"], "missed": p["missed"], "blocked": p["blocked"],
+         "total": p["clean"] + p["missed"] + p["blocked"]}
+        for (lat, lng), p in points.items()
+    ]
+    out_points.sort(key=lambda d: d["total"], reverse=True)
+    out_points = out_points[:1000]  # cap payload
+
+    payload = {
+        "configured": True,
+        "points":     out_points,
+        "summary": {
+            "total_points":  len(out_points),
+            "total_events":  sum(p["total"] for p in out_points),
+            "total_blocked": sum(p["blocked"] for p in out_points),
+            "total_missed":  sum(p["missed"]  for p in out_points),
+            "total_clean":   sum(p["clean"]   for p in out_points),
+            "range_min":     range_min,
+            "end_epoch":     end_epoch,
+        },
+    }
+    _GEO_CACHE[cache_key] = (_t.time() + 60, payload)
+    if len(_GEO_CACHE) > 64:
+        # cheap LRU: drop the oldest 16
+        for k in sorted(_GEO_CACHE.keys())[:16]:
+            _GEO_CACHE.pop(k, None)
+    return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+
+_GEO_CACHE: dict = {}
+
+
+async def geo_dashboard_endpoint(request: web.Request):
+    """HTML dashboard rendering the world-map geo view."""
+    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
+    body = GEO_DASHBOARD_HTML.replace(
+        "__KEY__",
+        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
+                "style-src 'self' https://unpkg.com 'unsafe-inline'; "
+                "img-src 'self' data: https://*.basemaps.cartocdn.com; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+
+async def agents_bucket_detail_endpoint(request: web.Request):
+    """1.5.4 — drill-down for the agents-dashboard timeline.
+    Given a bucket epoch + width, return the IPs / identities active during
+    that window, classified as detected / missed / clean.
+    Query params:
+      ?t=<epoch>           bucket left edge (rounded to width)
+      ?bucket_secs=<int>   bucket width (60 / 300 / 900 / 3600 / 86400)
+      ?kind=detected|missed|clean|all   filter (default 'all')
+    """
+    try:
+        t       = int(request.query.get("t", "0"))
+        bucket  = int(request.query.get("bucket_secs", "60"))
+    except ValueError:
+        return web.json_response({"error":"bad params"}, status=400)
+    if bucket not in (60, 300, 900, 3600, 86400):
+        bucket = 60
+    kind = request.query.get("kind", "all")
+    end = t + bucket
+
+    # 1.5.4 — best-effort IP→identity lookup so the drill-down shows the same
+    # `id` (HMAC track_key) used everywhere else, not only the IP. Multiple
+    # identities may share an IP (NAT) — we attach all of them.
+    ip_to_idents: dict = {}
+    async with state_lock:
+        for k, st in ip_state.items():
+            if st.last_ip:
+                ip_to_idents.setdefault(st.last_ip, []).append({
+                    "id": k, "ua": st.last_user_agent,
+                    "session": st.last_session, "fingerprint": st.last_fingerprint,
+                    "ja4": st.last_ja4,
+                    "risk_score": round(st.risk_score, 1),
+                    "allowed": st.allowed_count, "blocked": st.blocked_count,
+                })
+
+    detected_set, clean_set = {}, {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
+        for r in conn.execute(
+            f"SELECT ip, ua, path, reason, status FROM events "
+            f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
+            (t, end, *AGENT_BLOCK_REASONS),
+        ):
+            ip = r["ip"] or "?"
+            entry = detected_set.setdefault(ip, {
+                "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "reasons": {}, "last_path": r["path"] or "",
+                "identities": ip_to_idents.get(ip, []),
+            })
+            entry["count"] += 1
+            entry["reasons"][r["reason"]] = entry["reasons"].get(r["reason"], 0) + 1
+            entry["last_path"] = r["path"] or entry["last_path"]
+        for r in conn.execute(
+            "SELECT ip, ua, path FROM events "
+            "WHERE ts >= ? AND ts < ? AND (reason='' OR reason='OK') LIMIT 5000",
+            (t, end),
+        ):
+            ip = r["ip"] or "?"
+            entry = clean_set.setdefault(ip, {
+                "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "last_path": r["path"] or "",
+                "identities": ip_to_idents.get(ip, []),
+            })
+            entry["count"] += 1
+            entry["last_path"] = r["path"] or entry["last_path"]
+        conn.close()
+    except Exception as e:
+        return web.json_response({"error": f"db: {e}"}, status=500)
+
+    # `missed` IPs = currently have stealth_score >= MIN and were last_seen
+    # inside this bucket window. Best-effort using live state.
+    missed_list = []
+    try:
+        min_score = max(0, min(100, int(request.query.get("min_score", "20"))))
+    except ValueError:
+        min_score = 20
+    async with state_lock:
+        n_now = now()
+        for key, s in ip_state.items():
+            if s.allowed_count == 0:
+                continue
+            score, _, _ = _stealth_score(s)
+            if score < min_score:
+                continue
+            seen_epoch = _t.time() - (n_now - s.last_seen)
+            if t <= seen_epoch < end:
+                missed_list.append({
+                    "id": key, "ip": s.last_ip or key,
+                    "ua": s.last_user_agent, "stealth_score": score,
+                    "risk_score": round(s.risk_score, 1),
+                    "allowed": s.allowed_count, "blocked": s.blocked_count,
+                    "last_path": s.last_path,
+                })
+
+    payload = {
+        "bucket_t":     t,
+        "bucket_secs":  bucket,
+        "detected":     sorted(detected_set.values(), key=lambda r: r["count"], reverse=True)[:200],
+        "missed":       sorted(missed_list,           key=lambda r: r["stealth_score"], reverse=True)[:200],
+        "clean":        sorted(clean_set.values(),    key=lambda r: r["count"], reverse=True)[:200],
+    }
+    if kind in ("detected","missed","clean"):
+        payload["only"] = kind
+    return web.json_response(payload, headers={"Cache-Control":"no-store"})
+
+
+async def cost_timeline_endpoint(request: web.Request):
+    """1.5.4 — timeline of avg/p99 middleware wall-time (ms) per minute bucket.
+    Mirrors the params of /__metrics so the dashboard can drive both with the
+    same time-window controls.
+    Query params:
+      ?range=N    window in minutes (5..720, default 60)
+      ?bucket=S   bucket width in seconds (60,300,900,3600 — default 60)
+      ?end=EPOCH  right edge (default now)
+    """
+    try:
+        range_min = max(5, min(720, int(request.query.get("range", "60"))))
+    except ValueError:
+        range_min = 60
+    try:
+        bucket_secs = int(request.query.get("bucket", "60"))
+        if bucket_secs not in (60, 300, 900, 3600):
+            bucket_secs = 60
+    except ValueError:
+        bucket_secs = 60
+    try:
+        end_epoch = int(request.query.get("end", str(int(_t.time()))))
+    except ValueError:
+        end_epoch = int(_t.time())
+
+    end_b = (end_epoch // bucket_secs) * bucket_secs
+    bucket_count = min(250, max(2, (range_min * 60) // bucket_secs))
+    start_b = end_b - (bucket_count - 1) * bucket_secs
+
+    out = []
+    async with state_lock:
+        for slot in range(start_b, end_b + 1, bucket_secs):
+            agg_sum, agg_count, agg_max = 0.0, 0, 0.0
+            for m in range(slot, slot + bucket_secs, 60):
+                d = cost_timeline.get(m)
+                if d:
+                    agg_sum   += d["sum_ms"]
+                    agg_count += d["count"]
+                    if d["max_ms"] > agg_max:
+                        agg_max = d["max_ms"]
+            avg_ms = (agg_sum / agg_count) if agg_count else 0.0
+            out.append({
+                "t": slot,
+                "avg_ms": round(avg_ms, 2),
+                "max_ms": round(agg_max, 2),
+                "count":  agg_count,
+            })
+
+    # Headline figures across the whole window
+    total_count = sum(b["count"] for b in out)
+    total_sum   = sum(b["avg_ms"] * b["count"] for b in out)
+    overall_avg = (total_sum / total_count) if total_count else 0.0
+    overall_max = max((b["max_ms"] for b in out), default=0.0)
+
+    return web.json_response({
+        "timeline":            out,
+        "timeline_bucket_secs": bucket_secs,
+        "timeline_range_min":   range_min,
+        "timeline_end_epoch":   end_b,
+        "summary": {
+            "overall_avg_ms": round(overall_avg, 2),
+            "overall_max_ms": round(overall_max, 2),
+            "total_requests": total_count,
+        },
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def thresholds_endpoint(request: web.Request):
+    """Read-only enriched view of numeric thresholds: min/max/current + an
+    'impact_direction' hint so the UI can colour the value bar (red = looser,
+    green = stricter). 'lower-is-stricter' for ban triggers / burst caps;
+    'higher-is-stricter' for ban duration."""
+    SPECS = [
+        # name, min, max, impact_direction, description
+        ("RISK_BAN_THRESHOLD",     1,    1000,    "lower-is-stricter",
+         "Score that triggers a ban for a normal IP"),
+        ("RATE_LIMIT_BURST",       1,    500,     "lower-is-stricter",
+         "Per-identity token-bucket capacity"),
+        ("RATE_LIMIT_REFILL",      0.1,  100,     "lower-is-stricter",
+         "Per-identity tokens added per second"),
+        ("IP_BURST",               1,    500,     "lower-is-stricter",
+         "Per-socket-IP token-bucket capacity"),
+        ("IP_REFILL",              0.1,  100,     "lower-is-stricter",
+         "Per-socket-IP tokens added per second"),
+        ("HOSTILE_BAN_SECS",       60,   2678400, "higher-is-stricter",
+         "Ban duration (24 h default = 86400)"),
+        ("CANARY_TTL_S",           30,   86400,   "higher-is-stricter",
+         "Canary token validity window"),
+        ("GLOBAL_RPS_LIMIT",       0,    10000,   "lower-is-stricter",
+         "Global throttle (0 = disabled)"),
+        ("SESSION_CHURN_WINDOW_S", 5,    3600,    "higher-is-stricter",
+         "Window for session-rotation detector"),
+        ("SESSION_CHURN_MAX",      1,    100,     "lower-is-stricter",
+         "Max chal cookies per fingerprint per window"),
+        ("JA4_AUTODENY_THRESHOLD", 1,    100,     "lower-is-stricter",
+         "Distinct bans on a JA4 before auto-deny"),
+    ]
+    g = globals()
+    out = []
+    for name, lo, hi, direction, desc in SPECS:
+        if name not in g:
+            continue
+        cur = g[name]
+        # Normalised position 0.0..1.0 in [lo, hi]
+        try:
+            pos = max(0.0, min(1.0, (float(cur) - lo) / (hi - lo))) if hi > lo else 0.5
+        except (TypeError, ValueError):
+            pos = 0.5
+        out.append({
+            "name":             name,
+            "current":          cur,
+            "min":              lo,
+            "max":              hi,
+            "position":         round(pos, 4),
+            "impact_direction": direction,    # for UI colour gradient
+            "description":      desc,
+        })
+    return web.json_response({"thresholds": out},
+                              headers={"Cache-Control": "no-store"})
+
 async def external_endpoint(request: web.Request):
     """Status + cost telemetry of every external integration. Read-only —
     activation is via container env (the secrets must NOT be hot-reloadable
@@ -3253,6 +3947,11 @@ async def external_endpoint(request: web.Request):
     integrations.append({
         "name":         "Cloudflare Turnstile",
         "purpose":      "Real-browser challenge minted by Cloudflare's siteverify. The only chal-cookie path that's not client-computable.",
+        "vendor_url":   "https://www.cloudflare.com/products/turnstile/",
+        "docs_url":     "https://developers.cloudflare.com/turnstile/",
+        "trigger":      "Shown only when identity's risk_score ≥ TURNSTILE_RISK_THRESHOLD (default = mid-orange band). Below that, fresh clients fall through to cookie auto-mint.",
+        "weight":       "0 risk added directly — solving the challenge mints the chal cookie that bypasses the gate. Failing it = silent decoy.",
+        "data_egress":  "Each verify POSTs the user's token + remote IP to challenges.cloudflare.com/turnstile/v0/siteverify",
         "status":       "configured" if TURNSTILE_ENABLED else "disabled",
         "enabled":      TURNSTILE_ENABLED,
         "envs_needed":  ["TURNSTILE_SITEKEY", "TURNSTILE_SECRET", "JS_CHALLENGE=1"],
@@ -3269,6 +3968,11 @@ async def external_endpoint(request: web.Request):
     integrations.append({
         "name":         "AbuseIPDB",
         "purpose":      "Crowdsourced IP reputation. High score → +50 risk; medium → +15.",
+        "vendor_url":   "https://www.abuseipdb.com/",
+        "docs_url":     "https://docs.abuseipdb.com/",
+        "trigger":      "Every request — looks up the source IP. SQLite-cached for 6h to stay under the 1000 req/day free quota.",
+        "weight":       f"abuseipdb-high (≥{ABUSEIPDB_HIGH_THRESHOLD}) = +50 risk · abuseipdb-med (≥{ABUSEIPDB_MED_THRESHOLD}) = +15 risk",
+        "data_egress":  "Each uncached lookup sends the IP to api.abuseipdb.com/api/v2/check",
         "status":       "configured" if ABUSEIPDB_ENABLED else "disabled",
         "enabled":      ABUSEIPDB_ENABLED,
         "envs_needed":  ["ABUSEIPDB_KEY"],
@@ -3292,6 +3996,11 @@ async def external_endpoint(request: web.Request):
     integrations.append({
         "name":         "CrowdSec",
         "purpose":      "Community blocklist — IP listed in CrowdSec LAPI hits +70 risk (one-shot ban for normal IPs).",
+        "vendor_url":   "https://www.crowdsec.net/",
+        "docs_url":     "https://docs.crowdsec.net/docs/local_api/intro",
+        "trigger":      "Every request — queries the local LAPI for an active decision on the source IP. In-process cached for CROWDSEC_CACHE_SECS (default 60s).",
+        "weight":       "crowdsec-banned = +70 risk (above the 50 ban threshold → instant 24h hostile pool)",
+        "data_egress":  "Outbound to your self-hosted LAPI only — no internet calls.",
         "status":       "configured" if CROWDSEC_ENABLED else "disabled",
         "enabled":      CROWDSEC_ENABLED,
         "envs_needed":  ["CROWDSEC_LAPI_URL", "CROWDSEC_API_KEY"],
@@ -3312,6 +4021,11 @@ async def external_endpoint(request: web.Request):
     integrations.append({
         "name":         "MaxMind GeoLite2 ASN",
         "purpose":      "Local ASN tagging — IPs from hosting providers get +5 risk (soft signal).",
+        "vendor_url":   "https://www.maxmind.com/",
+        "docs_url":     "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data",
+        "trigger":      "Every request — looks up the ASN of the source IP in the local mmdb. Pure-local, ~0.1ms.",
+        "weight":       "asn-hosting = +5 risk (soft — just a hint that the IP isn't residential)",
+        "data_egress":  "None. Reads from /data/GeoLite2-ASN.mmdb. Refresh script downloads from MaxMind monthly via cron.",
         "status":       ("configured" if MAXMIND_ENABLED
                          else ("missing-db" if not os.path.exists(MAXMIND_ASN_DB_PATH)
                                else "disabled")),
@@ -3327,18 +4041,30 @@ async def external_endpoint(request: web.Request):
         }),
     })
 
-    # 5. Anubis — operates at the edge (not in-process)
+    # 5. Anubis-mode — in-process strict PoW gate (1.5.4)
+    eff_diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
     integrations.append({
-        "name":         "Anubis",
-        "purpose":      "Edge PoW reverse proxy — sits IN FRONT of the GW. Adds proof-of-work for first-time visitors. Scrapers tank, humans transparent.",
-        "status":       "edge-only (no in-process integration)",
-        "enabled":      False,
-        "envs_needed":  ["docker-compose chain: cloudflared → anubis → gateway"],
-        "free_tier":    "open source",
-        "cost_typical_ms":  0.0,    # outside our process; adds RTT to client only
-        "cost_p99_ms":      0.0,
+        "name":         "Anubis-mode (PoW)",
+        "purpose":      "In-process strict PoW gate inspired by github.com/TecharoHQ/anubis. When enabled, raises PoW difficulty by ANUBIS_DIFFICULTY_BOOST (each +1 ≈ 16× harder). Scrapers / LLM agents tank, humans pass after one round trip.",
+        "vendor_url":   "https://github.com/TecharoHQ/anubis",
+        "docs_url":     "https://anubis.techaro.lol/docs",
+        "trigger":      f"When ANUBIS_ENABLED=1, the existing PoW challenges (/__pow + verify) require {eff_diff} leading hex zeros (base {POW_DIFFICULTY} + boost {ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0}).",
+        "weight":       "0 risk added — failing PoW returns 402 with a fresh challenge; no ban accrual.",
+        "data_egress":  "None. Pure SHA-256 challenge / verify in-process.",
+        "status":       "configured",   # always available — no external service
+        "enabled":      ANUBIS_ENABLED,
+        "envs_needed":  ["ANUBIS_ENABLED=1", "ANUBIS_DIFFICULTY_BOOST (0..6)"],
+        "free_tier":    "in-process — no external service",
+        "cost_typical_ms":  0.05,    # SHA-256 verify on cookie path
+        "cost_p99_ms":      0.5,
         "cost_cached_ms":   0.0,
-        "telemetry":    {},
+        "telemetry": {
+            "base_difficulty":   POW_DIFFICULTY,
+            "boost":             ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0,
+            "effective_diff":    eff_diff,
+            "leading_zeros_req": eff_diff,
+            "active":            ANUBIS_ENABLED,
+        },
     })
 
     return web.json_response({"integrations": integrations},
@@ -3588,8 +4314,15 @@ _HOT_RELOAD_KNOBS = {
     "AI_NO_ASSETS_ENABLED":        (_to_bool, None),
     "SESSION_FLOOD_ENABLED":       (_to_bool, None),
     "UPSTREAM_404_TRACKING_ENABLED": (_to_bool, None),
+    # 1.5.4 Anubis-mode (strict PoW gate)
+    "ANUBIS_ENABLED":              (_to_bool, None),
+    "ANUBIS_DIFFICULTY_BOOST":     (int,   lambda v: 0 <= v <= 6),
+    # 1.5.4 — risk threshold (≥this) above which Turnstile is shown to a
+    # cookieless client. 0 = auto = midpoint of orange band.
+    "TURNSTILE_RISK_THRESHOLD":    (float, lambda v: 0.0 <= v <= 100000.0),
     # Numeric thresholds (with sane bounds)
     "RISK_BAN_THRESHOLD":     (int,   lambda v: 1 <= v <= 100000),
+    "SOFT_CHALLENGE_SCORE":   (float, lambda v: 0.0 <= v <= 100000.0),
     "RATE_LIMIT_BURST":       (int,   lambda v: 1 <= v <= 100000),
     "RATE_LIMIT_REFILL":      (float, lambda v: 0.0 < v <= 10000.0),
     "IP_BURST":               (int,   lambda v: 1 <= v <= 100000),
@@ -3872,38 +4605,59 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
 
 # ── v1.4: Bot-trap forms (auto-inject hidden field; flag bots that fill it) ─
 BOT_TRAP_FORMS = os.environ.get("BOT_TRAP_FORMS", "0") in ("1", "true", "yes")
-# Field name is per-process random — same for all forms in this container,
-# but rotates on every restart so static scrapers can't hard-code it.
-BOT_TRAP_FIELD = "ec_" + secrets.token_hex(4)
-_TRAP_INPUT_HTML = (
-    f'<input type="text" name="{BOT_TRAP_FIELD}" tabindex="-1" autocomplete="off" '
-    f'aria-hidden="true" '
-    f'style="position:absolute;left:-9999px;top:-9999px;opacity:0;'
-    f'width:0;height:0;visibility:hidden">'
-).encode()
+# 1.5.4: Multiple decoy fields with realistic names. Naive form-fillers
+# auto-complete on field NAME (not on attribute heuristics), so a hidden
+# `email_confirm` / `website` / `phone_alt` is high-yield. Each is rotated
+# at startup with a per-process random suffix to dodge memorisation.
+def _trap_name(prefix: str) -> str:
+    return f"{prefix}_" + secrets.token_hex(3)
+BOT_TRAP_FIELDS = [
+    _trap_name("email_confirm"),
+    _trap_name("website"),
+    _trap_name("phone_alt"),
+    _trap_name("address2"),
+    _trap_name("ec"),                       # legacy short name kept for back-compat
+]
+# Back-compat alias (older code paths still reference BOT_TRAP_FIELD)
+BOT_TRAP_FIELD = BOT_TRAP_FIELDS[0]
+_HIDDEN_STYLE = (
+    "position:absolute;left:-9999px;top:-9999px;opacity:0;"
+    "width:0;height:0;visibility:hidden")
+_TRAP_INPUTS_HTML = b"".join(
+    (
+        f'<input type="text" name="{name}" tabindex="-1" autocomplete="off" '
+        f'aria-hidden="true" style="{_HIDDEN_STYLE}">'
+    ).encode()
+    for name in BOT_TRAP_FIELDS
+)
 _FORM_OPEN_RX = re.compile(rb"(<form\b[^>]*>)", re.IGNORECASE)
 
 def _inject_bot_trap(body: bytes) -> bytes:
     if not BOT_TRAP_FORMS or b"<form" not in body[:65536].lower():
         return body
-    return _FORM_OPEN_RX.sub(rb"\1" + _TRAP_INPUT_HTML, body, count=20)
+    return _FORM_OPEN_RX.sub(rb"\1" + _TRAP_INPUTS_HTML, body, count=20)
 
-def _bot_trap_triggered(body: bytes, ctype: str) -> bool:
-    """True iff the bot-trap field is non-empty in a form-encoded POST body."""
+def _bot_trap_triggered(body: bytes, ctype: str) -> tuple:
+    """True iff ANY of the bot-trap fields is non-empty in a form-encoded
+    POST body. Returns (triggered, matched_field_or_'')."""
     if not BOT_TRAP_FORMS or not body:
-        return False
+        return (False, "")
     if "x-www-form-urlencoded" not in ctype.lower():
-        return False
-    needle = (BOT_TRAP_FIELD + "=").encode()
-    if needle not in body[:65536]:
-        return False
+        return (False, "")
+    sample = body[:65536]
+    # Quick reject if no needle present
+    if not any((f + "=").encode() in sample for f in BOT_TRAP_FIELDS):
+        return (False, "")
     try:
         from urllib.parse import parse_qs
         q = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=False)
-        v = q.get(BOT_TRAP_FIELD, [""])[0].strip()
-        return bool(v)
+        for f in BOT_TRAP_FIELDS:
+            v = (q.get(f, [""])[0] or "").strip()
+            if v:
+                return (True, f)
     except Exception:
-        return False
+        return (False, "")
+    return (False, "")
 
 # ── v1.4: JS challenge (Turnstile-backed cookie gate) ────────────────────
 # Earlier iterations of this feature stacked client-computed primitives —
@@ -3922,11 +4676,33 @@ JS_CHALLENGE = os.environ.get("JS_CHALLENGE", "0") in ("1", "true", "yes")
 CHAL_COOKIE  = "chal"
 CHAL_TTL     = int(os.environ.get("JS_CHALLENGE_TTL", "3600"))    # 1 h
 CHAL_NONCE_TTL = 120          # nonce valid for 2 min after issue
+
+# 1.5.4: Anubis-mode — strict PoW gate inspired by github.com/TecharoHQ/anubis.
+# When enabled, EVERY first-time request without a valid `chal` cookie is
+# bounced through the existing PoW challenge (no Turnstile required) and
+# the difficulty is raised by ANUBIS_DIFFICULTY_BOOST.  This is a stronger
+# default than JS_CHALLENGE alone, which only kicks in for suspicious
+# clients.  Use it when the protected app is being actively scraped by
+# script kiddies / LLM agents.
+ANUBIS_ENABLED          = os.environ.get("ANUBIS_ENABLED", "0") in ("1", "true", "yes")
+ANUBIS_DIFFICULTY_BOOST = int(os.environ.get("ANUBIS_DIFFICULTY_BOOST", "1"))
 # Reuse SESSION_KEY for chal HMAC (same trust domain).
 
 TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "").strip()
 TURNSTILE_SECRET  = os.environ.get("TURNSTILE_SECRET", "").strip()
 TURNSTILE_ENABLED = bool(TURNSTILE_SITEKEY and TURNSTILE_SECRET)
+# 1.5.4 — show Turnstile only when identity's risk crosses this threshold.
+# 0 (default) = auto = midpoint between SOFT_CHALLENGE_SCORE and
+# RISK_BAN_THRESHOLD (the upper half of the orange band). Below this,
+# fresh clients fall back to the cookie auto-mint heuristic — most legitimate
+# users never see Turnstile, only suspected bots do.
+TURNSTILE_RISK_THRESHOLD = float(os.environ.get("TURNSTILE_RISK_THRESHOLD", "0"))
+
+def _turnstile_active_threshold() -> float:
+    """Resolve the threshold dynamically: explicit knob if set, else mid-orange."""
+    if TURNSTILE_RISK_THRESHOLD > 0:
+        return TURNSTILE_RISK_THRESHOLD
+    return (SOFT_CHALLENGE_SCORE + RISK_BAN_THRESHOLD) / 2.0
 TURNSTILE_VERIFY_URL = (
     "https://challenges.cloudflare.com/turnstile/v0/siteverify")
 
@@ -4227,7 +5003,8 @@ def _js_challenge_required(request) -> bool:
         (heuristic friction layer — clients must pass UA/header/behavioural
         screens AND complete one round trip before reaching API paths,
         without requiring any third-party service)."""
-    if not JS_CHALLENGE:
+    # 1.5.4: ANUBIS_ENABLED forces the gate even if JS_CHALLENGE=0.
+    if not (JS_CHALLENGE or ANUBIS_ENABLED):
         return False
     if request.path == "/__challenge" or request.path.startswith("/__"):
         return False  # admin / challenge-solver have their own auth
@@ -4264,11 +5041,26 @@ def _js_challenge_applicable(request) -> bool:
     Only fires in Turnstile mode — without Turnstile, HTML GETs are
     forwarded normally and the cookie is auto-minted on the response.
     Only navigation-style HTML GETs see the page — non-HTML / non-GET
-    requests without the cookie are silent-decoyed instead."""
+    requests without the cookie are silent-decoyed instead.
+
+    1.5.4 — Turnstile is shown only when the identity's risk_score has
+    crossed `_turnstile_active_threshold()` (mid-orange band by default).
+    Below that, fresh clients fall through to the auto-mint heuristic —
+    most legitimate users never see Turnstile, only suspected bots do.
+    """
     if not _js_challenge_required(request):
         return False
     if not TURNSTILE_ENABLED:
         return False
+    # 1.5.4 — gate Turnstile on the identity's risk score.
+    track_key = request.get("_track_key")
+    if track_key:
+        s = ip_state.get(track_key)
+        if s:
+            _decay_risk(s, now())
+            thr = _turnstile_active_threshold()
+            if s.risk_score < thr:
+                return False
     if request.method != "GET":
         return False
     return "text/html" in request.headers.get("Accept", "")
@@ -4284,9 +5076,15 @@ SECURITY_HEADERS = {
                                                 "strict-origin-when-cross-origin"),
     "X-Permitted-Cross-Domain-Policies":
                                  os.environ.get("SEC_X_PERMITTED_XDP", "none"),
+    # 1.5.4 — also opt-out of Privacy Sandbox features so Chrome stops
+    # logging "Unrecognized feature: browsing-topics" warnings (Cloudflare's
+    # edge often layers in those features on `*.trycloudflare.com`).
     "Permissions-Policy":        os.environ.get("SEC_PERMISSIONS_POLICY",
         "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
-        "magnetometer=(), microphone=(), payment=(), usb=()"),
+        "magnetometer=(), microphone=(), payment=(), usb=(), "
+        "browsing-topics=(), run-ad-auction=(), join-ad-interest-group=(), "
+        "private-state-token-redemption=(), private-state-token-issuance=(), "
+        "private-aggregation=(), attribution-reporting=()"),
     "Strict-Transport-Security": os.environ.get("SEC_HSTS",
         "max-age=31536000; includeSubDomains"),
     # CSP is permissive by default to avoid breaking SPAs; tighten via env.
@@ -4626,8 +5424,12 @@ async def proxy(request: web.Request):
                     sid=request.get("_sid", ""),
                     fp=request.get("_fp", ""))
 
-        # v1.4 #6 — bot-trap form fields.
-        if _bot_trap_triggered(body, client_ctype):
+        # v1.4 #6 — bot-trap form fields (multiple decoys since 1.5.4)
+        _trap_hit, _trap_field = _bot_trap_triggered(body, client_ctype)
+        if _trap_hit:
+            slog("bot-trap-hit", level="warn",
+                 rid=request.get("_rid", ""), field=_trap_field,
+                 ip=get_ip(request))
             await update_risk_and_maybe_ban(
                 request.get("_track_key") or request.remote or "0.0.0.0",
                 "bot-trap", get_ip(request))
@@ -4708,7 +5510,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.5.3"
+                response_headers["X-Proxy"] = "AppSecGW_1.5.4"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -5024,11 +5826,21 @@ async def agents_data_endpoint(request: web.Request):
             if score < min_score:
                 clean += 1
                 continue
+            # Per-reason risk breakdown (decayed in lockstep with risk_score)
+            risk_breakdown = sorted(
+                ((r, round(v, 1)) for r, v in s.risk_by_reason.items() if v >= 0.5),
+                key=lambda kv: kv[1], reverse=True,
+            )
+            blocks_breakdown = sorted(
+                ((r, c) for r, c in s.blocks_by_reason.items() if c > 0),
+                key=lambda kv: kv[1], reverse=True,
+            )
             suspects.append({
                 "id": key,
                 "ip": s.last_ip or key,
                 "session": s.last_session,
                 "fingerprint": s.last_fingerprint,
+                "ja4": s.last_ja4,
                 "ua": s.last_user_agent,
                 "last_path": s.last_path,
                 "last_seen_secs_ago": round(n - s.last_seen, 1),
@@ -5041,6 +5853,8 @@ async def agents_data_endpoint(request: web.Request):
                 "components": comps,
                 "metrics": mets,
                 "recent_paths": list(s.last_allowed_paths),
+                "risk_breakdown":   risk_breakdown,    # [[reason, weighted], …]
+                "blocks_breakdown": blocks_breakdown,  # [[reason, count],   …]
             })
         suspects.sort(key=lambda r: r["stealth_score"], reverse=True)
         suspects = suspects[:limit]
@@ -5173,7 +5987,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.5.3",
+        "version":         "AppSecGW_1.5.4",
     }
     return web.json_response({
         "current":          current,
@@ -5192,6 +6006,7 @@ async def service_metrics_data_endpoint(request: web.Request):
 
 SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="utf-8")
 CONTROLS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
+GEO_DASHBOARD_HTML = (_DASHBOARDS_DIR / "geo.html").read_text(encoding="utf-8")
 
 async def controls_dashboard_endpoint(request: web.Request):
     """1.5.1: ops dashboard with on/off switches + thresholds for every
@@ -5235,7 +6050,7 @@ async def service_dashboard_endpoint(request: web.Request):
 
 
 def make_app() -> web.Application:
-    app = web.Application(middlewares=[session_cookie_finalizer, protect])
+    app = web.Application(middlewares=[cost_meter, session_cookie_finalizer, protect])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     app.router.add_get("/__pow", pow_endpoint)
@@ -5246,6 +6061,11 @@ def make_app() -> web.Application:
     app.router.add_get("/__unban", unban_endpoint)
     app.router.add_get("/__ban",   ban_endpoint)
     app.router.add_get("/__scoring",      scoring_endpoint)
+    app.router.add_get("/__thresholds",   thresholds_endpoint)
+    app.router.add_get("/__cost-timeline", cost_timeline_endpoint)
+    app.router.add_get("/__agents-bucket", agents_bucket_detail_endpoint)
+    app.router.add_get("/__geo",         geo_dashboard_endpoint)
+    app.router.add_get("/__geo-data",    geo_data_endpoint)
     app.router.add_get("/__external",     external_endpoint)
     app.router.add_get("/__admin-ips",    admin_ips_endpoint)
     app.router.add_post("/__admin-ips",   admin_ips_endpoint)
@@ -5270,7 +6090,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.5.3    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.5.4    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")

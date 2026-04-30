@@ -7,12 +7,73 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.5.2` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.5.4` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
-| Trivy CVE findings | **0** (any severity) |
+| Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
 | User | non-root, UID 65532 |
 | Architecture | linux/amd64, linux/arm64 |
+| External intel | Cloudflare Turnstile · AbuseIPDB · CrowdSec · MaxMind GeoLite2 (ASN + City) |
+| In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
+| Operator dashboards | `/__dashboard` · `/__agents` · `/__service` · `/__controls` · `/__geo` (DB-backed, click-to-drill) |
+
+## Architecture (1.5.4)
+
+```
+                                ┌─────────────────────┐
+   client ──── HTTP(S) ────────▶│  AppSecGW           │
+                                │  ───────────────────│
+                                │  middleware chain:  │
+                                │   1. cost_meter     │  ← per-request wall-time
+                                │   2. session cookie │
+                                │   3. protect():     │
+                                │      L0  TLS / JA4 fingerprint deny-list
+                                │      L1  rate-limit: socket-IP + per-identity tokens
+                                │      L1.5 host-not-allowed gate
+                                │      L2  honeypot paths (silent decoy)
+                                │      L2.5 suspicious-path / SQLi / XSS / LFI markers
+                                │      L3  AI probe + AI-headers + AI-enumeration
+                                │      L3.5 UA filter (empty / curl / GPTBot / mismatch)
+                                │      L3.7 header completeness, accept:*/*, Origin
+                                │      L4  bot-trap form fields, body-pattern match
+                                │      L4.5 canary echo (R7 — token planted in HTML)
+                                │      L5  behavioural (no-static-fetch / churn / 404 burst)
+                                │      L6  external intel: AbuseIPDB · CrowdSec · MaxMind ASN
+                                │      L7  cookie gate: JS_CHALLENGE / Turnstile / Anubis-mode PoW
+                                │      L8  risk-score model (decay + NAT threshold + soft-tier)
+                                │      ↓
+                                │      decision = deny | soft-challenge | allow
+                                │   4. forward to UPSTREAM if allowed
+                                │   5. record() → SQLite (events, timeline, clients, bans)
+                                └─────────────┬───────┘
+                                              │
+                          ┌───────────────────┼─────────────────────┐
+                          ▼                   ▼                     ▼
+                  ┌──────────────┐  ┌──────────────────┐   ┌─────────────────┐
+                  │   /data      │  │  Redis (opt'l)   │   │  External APIs  │
+                  │   antibot.db │  │  shared bans /   │   │ AbuseIPDB v2    │
+                  │   (SQLite    │  │  canary tokens   │   │ CrowdSec LAPI   │
+                  │   WAL)       │  │  for fleet mode  │   │ Turnstile sv    │
+                  │   .pow_key   │  └──────────────────┘   │ MaxMind .mmdb   │
+                  │   .session_… │                         │ (offline)       │
+                  │   .admin_key │                         └─────────────────┘
+                  │   GeoLite2-* │
+                  └──────────────┘
+
+  operator browser ──▶  /__dashboard  ─┐
+                        /__agents      │  hot-tunable knobs via /__config (POST JSON);
+                        /__service     │  click reasons → drill-down identities;
+                        /__controls    │  click identity / risk → popover details;
+                        /__geo  ───────┘  threshold sliders rewire risk model live.
+```
+
+The gateway is a single Python process. Persistent state (event log,
+client snapshots, timeline, bans, admin-IP allowlist) lives in
+`/data/antibot.db` (SQLite WAL); rotation keys live in `/data/.{pow,session,admin}_key`.
+External integrations are best-effort: any one of them (AbuseIPDB,
+CrowdSec, MaxMind ASN, MaxMind City, Turnstile, Anubis-mode PoW, Redis)
+may be absent and the gate degrades gracefully — the in-process
+detectors are sufficient on their own.
 
 ---
 
@@ -25,7 +86,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.5.2 \
+docker run -d --name appsec-antibot-gw1.5.4 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -42,7 +103,7 @@ docker run -d --name appsec-antibot-gw1.5.2 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.5.2 \
+  appsec-antibot-gw:1.5.4 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -105,7 +166,19 @@ Plus protocol-level support:
 - **SSO redirect rewriting** — `Location`, embedded `redirect_uri`, `Set-Cookie` `Domain=`
 - **Origin / Referer / Host rewriting** to upstream's canonical origin
 - **Streaming body forwarding** with hard size caps
-- **Edge-injected security response headers** on HTML (XFO, nosniff, HSTS, COOP, CORP, Permissions-Policy, …)
+- **Edge-injected security response headers** on HTML (XFO, nosniff, HSTS, COOP, CORP, Permissions-Policy with explicit Privacy-Sandbox opt-out, …)
+
+### External integrations (1.5.4)
+
+| Integration | Purpose | Effective weight |
+|---|---|---|
+| Cloudflare Turnstile | Real-browser challenge minted by `siteverify`. Shown only when identity's risk ≥ `TURNSTILE_RISK_THRESHOLD` | gates the chal cookie |
+| AbuseIPDB | Crowdsourced IP reputation, 6h SQLite cache | `+50` (high) / `+15` (med) |
+| CrowdSec LAPI | Self-hosted community blocklist, 60s cache | `+70` (instant ban) |
+| MaxMind GeoLite2-ASN | Local ASN tagging — hosting-provider IPs | `+5` (soft) |
+| MaxMind GeoLite2-City | Lat/lng for the GeoMap dashboard | telemetry only |
+| Anubis-mode (PoW) | In-process strict PoW gate — raises difficulty by `ANUBIS_DIFFICULTY_BOOST` | gates failing-PoW requests |
+| Redis (optional) | Cross-instance shared bans / canary tokens for fleet mode | shared state |
 
 ---
 
@@ -128,17 +201,29 @@ Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
 | URL | Purpose |
 |---|---|
 | `/__live` | Unauthenticated liveness probe (returns `ok`) |
-| `/__dashboard?key=…` | Real-time metrics, timeline (total / allowed / blocked) |
-| `/__agents?key=…` | **Stealth Agent Hunter** — identities that passed every block but exhibit stealth signals |
+| `/__dashboard?key=…` | Main dashboard: timeline (total/allowed/blocked/**missed**), defense-threshold sliders, **cost-per-request graph**, **services panel**, **per-detector hits**, click-reason drill-down |
+| `/__agents?key=…` | **Stealth Agent Hunter** — click identity for IP/UA/session popover; click risk score for per-signal breakdown; arrow-and-slider threshold widget |
 | `/__service?key=…` | **Service Metrics** — CPU / memory / disk / processes / FDs / network / SQLite size with 12 h windowed history |
+| `/__controls?key=…` | All hot-reload knobs (toggles, thresholds, lists) — Defenses & scoring merged table, Anubis toggle, admin-IP allowlist with click-to-edit description |
+| `/__geo?key=…` | **Geo map** — world-map of accesses (green=clean / orange=missed / red=blocked, size ∝ hits) over a configurable time window; needs `GeoLite2-City.mmdb` |
 | `/__service-data?key=…` | Service-metrics JSON feed (windowed) |
-| `/__metrics?key=…` | JSON feed |
-| `/__agents-data?key=…` | Per-identity stealth-score JSON |
+| `/__metrics?key=…` | JSON feed (now includes `services{}` + `detector_hits{}` + `missed`) |
+| `/__cost-timeline?key=…` | Avg / max middleware wall-time per minute bucket |
+| `/__geo-data?key=…` | Aggregated lat/lng/clean/missed/blocked points |
+| `/__agents-data?key=…` | Per-identity stealth-score JSON (now includes `risk_breakdown` + `blocks_breakdown`) |
 | `/__agents-timeline?key=…` | Detected-vs-missed timeline JSON |
-| `/__pow?key=…` | Mint a PoW challenge bound to (method, path) |
+| `/__scoring?key=…` | Per-signal weights + tier + cost (driven the scoring card) |
+| `/__thresholds?key=…` | Min/max/current/impact-direction for every numeric knob |
+| `/__external?key=…` | External-integration health (Turnstile / AbuseIPDB / CrowdSec / MaxMind) |
+| `/__admin-ips?key=…` | Admin IP allowlist CRUD (GET/POST/PATCH/DELETE) |
+| `/__config?key=…` | Read or update hot-reload knobs (POST JSON body) |
+| `/__rotate-keys?key=…` | Rotate `SESSION_KEY` and/or `POW_HMAC_KEY` |
+| `/__pow?key=…` | Mint a PoW challenge bound to (method, path) — reflects effective Anubis difficulty |
 | `/__solver?key=…` | Browser-side PoW solver |
 | `/__status?key=…` | Per-identity bucket state |
+| `/__ban?key=…&id=…` | Manually ban an identity for `HOSTILE_BAN_SECS` |
 | `/__unban?key=…&id=… \| ip=… \| all=1` | Clear ban + risk for an identity / IP / all |
+| `/__challenge` | Cookie-mint endpoint (Turnstile siteverify / Anubis-mode PoW) |
 
 ---
 
@@ -157,7 +242,13 @@ Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
 | `ALLOWED_HOSTS` | _(empty)_ | Comma-separated public hostnames the gateway accepts as Host header |
 | `ADMIN_ALLOWED_IPS` | _(empty)_ | Comma-separated IPs/CIDRs allowed on `/__*` |
 | `ADMIN_KEY` | auto-generated | Always mirrored to `/data/.admin_key` |
-| `TRUST_XFF` | `last` | `last` behind a trusted proxy / cloudflared, `none` for direct exposure |
+| `TRUST_XFF` | `first` | `first` / `last` / `none` — see XFF section below |
+| `TRUSTED_PROXIES` | _(empty)_ | **Set in production.** CIDRs of upstream proxies allowed to set XFF (1.5.4) |
+| `JS_CHALLENGE` | `0` | Cookie gate on every non-static path (Turnstile-backed when configured) |
+| `JS_CHAL_OPEN_PATHS` | _(empty)_ | Path prefixes that bypass the cookie gate (SPA data layer / webhooks / S2S) |
+| `SOFT_CHALLENGE_SCORE` | `4` | Risk-score threshold (orange band start) — hot-reloadable via `/__config` |
+| `RISK_BAN_THRESHOLD` | `50` | Risk-score threshold (red band / ban) — hot-reloadable |
+| `TURNSTILE_RISK_THRESHOLD` | `0` (auto = mid-orange) | Show Turnstile only when identity's risk crosses this. Below it, fresh clients fall through to cookie auto-mint — most users never see Turnstile, only suspected bots do (1.5.4) |
 
 ### Rate limiting
 
@@ -180,9 +271,88 @@ Add `PUT,PATCH,DELETE` for REST APIs.
 |---|---|
 | `POW_REQUIRED_PATHS` | _(empty)_ |
 | `POW_REQUIRE_ALL_WRITES` | `0` |
+| `ANUBIS_ENABLED` | `0` |
+| `ANUBIS_DIFFICULTY_BOOST` | `1` |
 
 PoW is **opt-in**. Set `POW_REQUIRED_PATHS=/login,/admin` to require PoW on
 those paths only.
+
+**Anubis-mode** (`ANUBIS_ENABLED=1`, hot-reloadable): forces the PoW gate on
+*every* first-time request without a valid `chal` cookie, even when
+`JS_CHALLENGE=0`. `ANUBIS_DIFFICULTY_BOOST` (0..6) adds extra leading hex
+zeros to the SHA-256 challenge — each +1 makes scripted solving ~16× harder
+(default `+1` → 6 leading zeros instead of 5). Inspired by
+[github.com/TecharoHQ/anubis](https://github.com/TecharoHQ/anubis); useful
+when the protected app is being actively scraped by LLM-driven agents.
+
+### Trusted reverse-proxy / XFF spoofing protection (1.5.4)
+
+| Variable | Default |
+|---|---|
+| `TRUST_XFF` | `first` |
+| `TRUSTED_PROXIES` | _(empty — every peer trusted, back-compat)_ |
+
+**Production deployments MUST set `TRUSTED_PROXIES`** to the IP / CIDR list of
+the reverse-proxy or CDN immediately upstream (e.g. `TRUSTED_PROXIES=172.17.0.1/32,103.21.244.0/22,...`
+for cloudflared / nginx). When set, `X-Forwarded-For` is honoured **only** if
+the kernel-observed peer IP falls inside one of those CIDRs; everything else
+falls back to the raw socket IP. Closes a pentest finding from 1.5.3 where
+a client hitting the gateway directly could spoof XFF and impersonate any
+source IP for ban-tracking and admin-allowlist purposes.
+
+### Geo-map (1.5.4)
+
+| Variable | Default |
+|---|---|
+| `MAXMIND_CITY_DB_PATH` | `/data/GeoLite2-City.mmdb` |
+
+Drop a `GeoLite2-City.mmdb` (~65 MB) into the named volume to populate the
+`/__geo` (GeoMap) dashboard. The bundled `maxmind-refresh.sh` cron script
+downloads both `GeoLite2-ASN.mmdb` and `GeoLite2-City.mmdb` monthly using
+`MAXMIND_LICENSE_KEY`. Map tiles are served from CARTO Dark Matter (no key,
+no Referer requirement).
+
+### External integrations
+
+| Variable | Purpose |
+|---|---|
+| `ABUSEIPDB_KEY` | AbuseIPDB v2 API key — high-score IPs hit `+50` risk |
+| `CROWDSEC_LAPI_URL` | URL of self-hosted CrowdSec LAPI (e.g. `http://crowdsec:8080`) |
+| `CROWDSEC_LAPI_KEY` *or* `CROWDSEC_API_KEY` | CrowdSec bouncer API key — either name accepted (1.5.4) |
+| `MAXMIND_ASN_DB_PATH` | Path to GeoLite2-ASN.mmdb (default `/data/GeoLite2-ASN.mmdb`) |
+| `MAXMIND_CITY_DB_PATH` | Path to GeoLite2-City.mmdb (1.5.4) |
+| `TURNSTILE_SITEKEY` / `TURNSTILE_SECRET` | Cloudflare Turnstile widget keys |
+
+Each integration is best-effort — any one of them may be absent and the
+gate degrades gracefully. Live status / cost / telemetry visible at
+`/__external` (or click any card on the Controls dashboard for full
+vendor docs + trigger criteria + data-egress info, 1.5.4).
+
+### Hot-reloadable knobs (POST `/__config`)
+
+All listed values can be changed at runtime without restart. The
+`/__controls` dashboard exposes them as toggles / inputs / sliders / lists.
+
+**Toggles (booleans):**
+`JS_CHALLENGE`, `BOT_TRAP_FORMS`, `BODY_PATTERN_MATCH`, `CANARY_ECHO_DETECTION`,
+`STRICT_ORIGIN`, `INJECT_SECURITY_HEADERS`, `JS_CHAL_BIND_JA4`,
+`JS_CHAL_REQUIRE_JA4`, `JS_CHAL_STRICT_STATIC`, `ABUSEIPDB_ENABLED`,
+`CROWDSEC_ENABLED`, `MAXMIND_ENABLED`, `TURNSTILE_ENABLED`,
+`HONEYPOT_ENABLED`, `SUSPICIOUS_PATH_ENABLED`, `AI_PROBE_ENABLED`,
+`UA_FILTER_ENABLED`, `UA_PLATFORM_CHECK_ENABLED`, `HEADER_COMPLETENESS_ENABLED`,
+`BEHAVIORAL_CHECK_ENABLED`, `AI_ENUMERATION_ENABLED`, `AI_NO_ASSETS_ENABLED`,
+`SESSION_FLOOD_ENABLED`, `UPSTREAM_404_TRACKING_ENABLED`, `ANUBIS_ENABLED`.
+
+**Numeric thresholds:**
+`RISK_BAN_THRESHOLD`, `SOFT_CHALLENGE_SCORE`, `TURNSTILE_RISK_THRESHOLD`,
+`ANUBIS_DIFFICULTY_BOOST`, `RATE_LIMIT_BURST`, `RATE_LIMIT_REFILL`,
+`IP_BURST`, `IP_REFILL`, `HOSTILE_BAN_SECS`, `CANARY_TTL_S`,
+`GLOBAL_RPS_LIMIT`, `SESSION_CHURN_WINDOW_S`, `SESSION_CHURN_MAX`,
+`JA4_AUTODENY_THRESHOLD`.
+
+**Lists:** `JS_CHAL_OPEN_PATHS`, `JA4_DENY_LIST`.
+
+**Logging:** `LOG_LEVEL` (`debug` / `info` / `warn` / `error`).
 
 ### Security response headers
 
@@ -376,7 +546,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.5.2
+  appsec-antibot-gw:1.5.4
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -566,8 +736,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.5.2 .
-trivy image appsec-antibot-gw:1.5.2        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.5.4 .
+trivy image appsec-antibot-gw:1.5.4        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -600,7 +770,18 @@ All owned by UID 65532 (`nonroot`).
 ├── Dockerfile                                  multi-stage Wolfi distroless build
 ├── docker-compose.yml                          example compose deployment
 ├── myip.sh                                     auto-detect-IP launcher
+├── maxmind-refresh.sh                          monthly cron — refreshes ASN+City mmdbs
 ├── README.md                                   this file
+├── tests/
+│   └── test_critical.py                        pytest unit suite (11 tests, all green)
+├── sbom/
+│   └── sbom-1.5.4.cdx.json                     CycloneDX SBOM (53 KB, generated by Trivy)
+├── dashboards/                                 server-rendered operator UIs
+│   ├── main.html                               /__dashboard
+│   ├── agents.html                             /__agents
+│   ├── service.html                            /__service
+│   ├── controls.html                           /__controls
+│   └── geo.html                                /__geo (1.5.4)
 ├── manual/manual-report-1.3.html               implementation report (HTML source)
 ├── AppSecGW-1.3-Report.pdf                     implementation report (PDF)
 ├── img/
@@ -624,6 +805,8 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.5.4** | **Defense thresholds slider** on main dashboard — drag the soft (orange) and ban (red) markers along a 0..200 track with live numeric readouts; releases POST to `/__config` so operators can re-tune the medium-vs-block band live during an attack. **Orange "missed" line** added to the timeline (allowed-but-medium-risk). **Cost-per-request graph** (`/__cost-timeline`) — outer middleware times every request and the dashboard graphs avg/max ms per bucket. **Reason drill-down** — click any block-reason → modal lists offending identities + IPs. **Identity & risk popovers** on the agents *and* main Clients table — click identity for IP/UA/session/JA4/timing/blocks-by-reason; click risk for per-signal contribution bars. **Agents threshold widget** — replaced the input field with up/down arrows + 0..100 range slider. **Anubis-mode** toggle in Controls — raises PoW difficulty by `ANUBIS_DIFFICULTY_BOOST` (default +1 → 16× harder per zero). **GeoMap dashboard** `/__geo` — Leaflet world-map with green=clean / orange=missed / red=blocked circles sized by hit count; CARTO Dark Matter tiles (no API key, no Referer issues); time-window controls. **Services panel + per-detector hits** in `/__metrics` — `services{}` (Redis, AbuseIPDB, CrowdSec, MaxMind, Turnstile, Anubis) and `detector_hits{}` (22 counters). **External-integration cards click-to-modal** — vendor / docs links, trigger criteria, weight, data-egress, live telemetry per integration. **Banned-identity tooltip** on Controls dashboard. **Detection-vs-Miss timeline drill-down** on agents dashboard — click any bar → modal listing the IPs / identities that contributed (`/__agents-bucket`). **11 new per-detector kill-switches** in `/__config`. **Cost column** in scoring table (cached / typical / p99 ms). **Bot-trap field variants** (multiple decoy fields, per-process random suffixes). **Mirrored upstream 404** for blocked admin endpoints. **Admin-IP description** PATCH endpoint + click-to-edit cell. **MaxMind GeoLite2-City** added (`/data/GeoLite2-City.mmdb`; refresh via `maxmind-refresh.sh`). **`Permissions-Policy`** explicitly opts-out of Privacy Sandbox features (silences Cloudflare-edge browser warnings). **`TURNSTILE_RISK_THRESHOLD`** (default = mid-orange band) — Turnstile is now shown only when an identity's risk crosses this threshold; below it, fresh clients fall through to cookie auto-mint. Most legitimate users never see Turnstile, only suspected bots do. **Pentest fix `TRUSTED_PROXIES`** — `X-Forwarded-For` is honoured only when the kernel-observed peer IP is inside the configured CIDRs; closes a 1.5.3 finding where any client hitting the gateway directly could spoof XFF and impersonate any source IP. **CrowdSec env-var alias** — accepts both `CROWDSEC_API_KEY` (original) and `CROWDSEC_LAPI_KEY` (the name CrowdSec's own docs use). **CrowdSec response hardening** — non-list LAPI responses no longer crash the lookup. **Last-seen units** in Clients table progressive (s → min > 1h → h > 4h → d > 48h); fixed an epoch / monotonic mix-up that made DB-loaded clients show negative ages. Unit tests: 11 / 11 passing. Bandit: 0 high / 0 critical. Trivy: 0 CVE (any severity). SBOM: `sbom/sbom-1.5.4.cdx.json`. |
+| 1.5.3 | Hybrid identity (cookie+fp) for shared-NAT; soft-challenge tier (score 4–8 forces chal even on open paths); `signals[]` array in event log; UA↔Sec-Ch-Ua consistency, Accept:`*/*` HTML heuristic, JA4-required-missing soft penalty; `Defenses & scoring` merged table; `admin_ips` SQLite table; suspicious-path regex (flag/secret/passwd/credentials/`*.bak`/`*.swp`/`*.git/`/path traversal/SQLi/XSS/LFI markers); upstream-404 risk; risk-weights doc + UI; AbuseIPDB + CrowdSec integrations; MaxMind GeoLite2 ASN tagging. |
 | 1.5.2 | **Hard stealth-score auto-ban knob (work-in-progress)** + uniform top-nav across every dashboard (`Dashboard / Agents / Service / Controls`, server-rendered `<a>` tags so the menu is visible without JS). Service dashboard stops crashing when legacy nav-link IDs are absent. Banner stamps `AppSecGW_1.5.2`. |
 | 1.5.1 | **Controls dashboard `/__controls`** with on/off switch per toggleable control + number inputs for thresholds + textareas for lists; dirty-marker, **Apply** / **Reset**, audit-log of `config_changed` events, banned-identity table with 1-click unban. Main-dashboard **Throughput cap** card: live req/s + operator-set `GLOBAL_RPS_LIMIT` slider; over-limit traffic silent-decoyed as `traffic-threshold`. Inline **Unban** button next to every banned row in the clients table. Agents dashboard: ban/unban switch in the suspicious-agents table + new `/__ban` admin endpoint mirroring `/__unban`. |
 | 1.5.0 | **Multi-instance shared state** (optional `REDIS_URL`): bans propagate across N gateways, JA4 deny-list auto-syncs every 30 s. **Session-churn-by-fingerprint** detector — same `(UA + IP-tier + JA4)` minting > N chal cookies in a window enters the 24 h hostile pool. **Webhook fan-out** (`WEBHOOK_URL` + optional `WEBHOOK_SECRET` HMAC) on every ban; deduplicated via Redis `SETNX`. **Auto-add-to-`JA4_DENY_LIST`** after `JA4_AUTODENY_THRESHOLD` (default 3) bans on the same JA4. |

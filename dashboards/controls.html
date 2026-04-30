@@ -65,14 +65,35 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .toast.show{opacity:1;pointer-events:auto}
 .toast.ok{border-color:var(--green)}
 .toast.err{border-color:var(--red)}
+.thr-row{display:grid;grid-template-columns:200px 110px 1fr 90px 90px;gap:14px;align-items:center;
+         padding:10px 0;border-bottom:1px solid #1f2730;font-size:12px}
+.thr-row:last-child{border-bottom:none}
+.thr-name{font-family:ui-monospace,Menlo,monospace;color:var(--fg);font-weight:600}
+.thr-name .dir{color:var(--dim);font-size:10px;font-weight:400;margin-left:4px}
+.thr-cur{text-align:right;font-family:ui-monospace,monospace;color:#fff;font-weight:600;font-size:13px}
+.thr-cur input{width:100%;background:#0d1117;color:#fff;border:1px solid var(--blue);border-radius:4px;
+               padding:4px 8px;font-family:inherit;font-size:13px;text-align:right}
+.thr-bar{position:relative;height:10px;background:#21262d;border-radius:5px;overflow:hidden}
+.thr-bar::after{content:'';position:absolute;top:0;left:0;height:100%;width:100%;
+                background:linear-gradient(to right,var(--green) 0%,var(--yellow) 50%,var(--red) 100%);opacity:.18}
+.thr-bar.flip-stricter::after{background:linear-gradient(to right,var(--red) 0%,var(--yellow) 50%,var(--green) 100%)}
+.thr-bar .marker{position:absolute;top:-2px;width:4px;height:14px;background:#fff;border-radius:2px;
+                 box-shadow:0 0 6px rgba(255,255,255,.4);transform:translateX(-50%)}
+.thr-bar .marker.bad{background:var(--red);box-shadow:0 0 6px var(--red)}
+.thr-bar .marker.good{background:var(--green);box-shadow:0 0 6px var(--green)}
+.thr-minmax{font-family:ui-monospace,monospace;color:var(--dim);font-size:10.5px}
+.thr-minmax .lbl{color:#6e7681;font-size:9.5px;display:block}
+.thr-desc{color:var(--dim);font-size:11px;grid-column:span 5;margin-top:-4px;padding-left:200px}
+@media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.5.3 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.5.4 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
   <a href="/__service?key=__KEY__">Service</a>
   <a href="/__controls?key=__KEY__" class="active">Controls</a>
+  <a href="/__geo?key=__KEY__">GeoMap</a>
 </nav>
 
 <main>
@@ -84,8 +105,13 @@ button:disabled{opacity:.4;cursor:not-allowed}
   </div>
 
   <section class="card" id="card-thresholds">
-    <h2>Thresholds &amp; rate limits</h2>
-    <div id="thresholds"></div>
+    <h2>Thresholds &amp; rate limits <span style="font-size:11px;color:var(--dim);font-weight:400">(click value to edit · bar shows current within min..max range, coloured by impact)</span></h2>
+    <div class="hint" style="margin-bottom:10px">
+      <span style="color:var(--green);font-weight:600">●</span> stricter / safer side &nbsp;·&nbsp;
+      <span style="color:var(--red);font-weight:600">●</span> looser / riskier side &nbsp;·&nbsp;
+      <code>↓</code> lower = stricter &nbsp;·&nbsp; <code>↑</code> higher = stricter
+    </div>
+    <div id="thresholds-rich"></div>
   </section>
 
   <section class="card" id="card-external">
@@ -114,6 +140,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
         <th style="padding:6px 8px">Signal / control</th>
         <th style="padding:6px 8px;text-align:right">Weight</th>
         <th style="padding:6px 8px">Tier</th>
+        <th style="padding:6px 8px;text-align:right" title="Latency added by this detector. cached/typical/p99 in ms">Cost (ms)</th>
         <th style="padding:6px 8px">Description</th>
       </tr></thead>
       <tbody></tbody>
@@ -214,6 +241,8 @@ const url = (p) => p + (p.includes('?') ? '&' : '?') + 'key=' + encodeURICompone
 const META = {
   // toggles
   JS_CHALLENGE:            {kind:'bool', desc:'Cookie gate engages on every non-static path; auto-mints on first qualifying GET (or via Turnstile when configured).'},
+  ANUBIS_ENABLED:          {kind:'bool', desc:'Anubis-mode (1.5.4) — strict PoW gate on every first request, even if JS_CHALLENGE=0. Raises difficulty by ANUBIS_DIFFICULTY_BOOST.'},
+  ANUBIS_DIFFICULTY_BOOST: {kind:'num', min:0, max:6, step:1, desc:'Extra leading hex zeros required when Anubis-mode is on (1 ≈ 16× harder, 2 ≈ 256×).', card:'thresholds'},
   BOT_TRAP_FORMS:          {kind:'bool', desc:'Inject a hidden honey field into every <form>. Filled = bot.'},
   BODY_PATTERN_MATCH:      {kind:'bool', desc:'Scan POST bodies for SQLi / XSS / SSTI / cmd-injection markers.'},
   CANARY_ECHO_DETECTION:   {kind:'bool', desc:'R7 — plant agw-c-* canary in HTML; ban any client that echoes it back.'},
@@ -406,11 +435,13 @@ async function loadBans(){
       tbody.innerHTML = '<tr><td colspan=6 style="padding:14px;text-align:center;color:var(--dim)">no current bans</td></tr>';
       return;
     }
-    tbody.innerHTML = banned.map(c => {
+    // 1.5.4 — stash for click-to-popover lookup
+    window._bannedList = banned;
+    tbody.innerHTML = banned.map((c, i) => {
       const id = c.id || c.ip || '';
-      return `<tr style="border-bottom:1px solid #1f2730">
-        <td style="padding:6px 8px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px"
-            title="${escapeHtml(id)}">${escapeHtml(id.slice(0,18))}</td>
+      return `<tr data-i="${i}" class="ban-row" style="border-bottom:1px solid #1f2730;cursor:pointer" title="click for full details">
+        <td style="padding:6px 8px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;border-bottom:1px dotted var(--blue)"
+            title="${escapeHtml(id)}"><b>${escapeHtml(id.slice(0,18))}</b></td>
         <td style="padding:6px 8px;color:var(--dim)">${escapeHtml(c.last_ip || '')}</td>
         <td style="padding:6px 8px;color:var(--dim);max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
             title="${escapeHtml(c.last_ua || '')}">${escapeHtml((c.last_ua||'').slice(0,40))}</td>
@@ -424,9 +455,18 @@ async function loadBans(){
         </td>
       </tr>`;
     }).join('');
+    // Click row to open the details popover (1.5.4)
+    tbody.querySelectorAll('tr.ban-row').forEach(tr => {
+      tr.onclick = (ev) => {
+        if (ev.target.closest('.row-unban')) return;   // unban button has its own action
+        const c = window._bannedList[+tr.dataset.i];
+        if (c) openBanDetails(c);
+      };
+    });
     // Click handlers
     tbody.querySelectorAll('.row-unban').forEach(btn => {
-      btn.onclick = async () => {
+      btn.onclick = async (ev) => {
+        ev.stopPropagation();
         if (!confirm('Unban\n' + btn.dataset.id + '?')) return;
         btn.disabled = true;
         await unban('id', btn.dataset.id);
@@ -593,6 +633,75 @@ document.addEventListener('DOMContentLoaded', () => {
   };
   $('aip-cidr').addEventListener('keydown', e => { if (e.key === 'Enter') $('aip-add').click(); });
 
+  // ── Thresholds (rich bar view) ──────────────────────────────────
+  async function loadThresholds(){
+    try {
+      const r = await fetch(url('/__thresholds'), {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const box = $('thresholds-rich');
+      box.innerHTML = (d.thresholds||[]).map(t => {
+        const lowerStricter = t.impact_direction === 'lower-is-stricter';
+        // Marker colour = whether current value is on the "good" side of midpoint
+        const goodSide = lowerStricter ? t.position < 0.5 : t.position > 0.5;
+        const markerCls = goodSide ? 'good' : (Math.abs(t.position-0.5)<0.15 ? '' : 'bad');
+        const arrow = lowerStricter ? '↓ stricter' : '↑ stricter';
+        // bar gradient flips when stricter is on the high side
+        const flipCls = lowerStricter ? '' : 'flip-stricter';
+        const pos = (t.position*100).toFixed(1);
+        return `<div class="thr-row" data-name="${t.name}">
+          <div class="thr-name">${escapeHtml(t.name)}<span class="dir">${arrow}</span></div>
+          <div class="thr-cur" data-cur="${t.current}" title="Click to edit">${escapeHtml(String(t.current))}</div>
+          <div class="thr-bar ${flipCls}"><div class="marker ${markerCls}" style="left:${pos}%"></div></div>
+          <div class="thr-minmax" style="text-align:right"><span class="lbl">min</span><b>${t.min}</b></div>
+          <div class="thr-minmax"><span class="lbl">max</span><b>${t.max}</b></div>
+          <div class="thr-desc">${escapeHtml(t.description)}</div>
+        </div>`;
+      }).join('');
+
+      // click-to-edit on current value
+      box.querySelectorAll('.thr-cur').forEach(cell => {
+        cell.onclick = () => {
+          if (cell.querySelector('input')) return;
+          const row = cell.parentElement;
+          const name = row.dataset.name;
+          const orig = cell.dataset.cur;
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.value = orig;
+          cell.innerHTML = '';
+          cell.appendChild(inp);
+          inp.focus(); inp.select();
+          const save = async (commit) => {
+            const v = inp.value.trim();
+            if (!commit || v === orig) { loadThresholds(); return; }
+            // try parse number (int or float)
+            const parsed = v.includes('.') ? parseFloat(v) : parseInt(v, 10);
+            if (Number.isNaN(parsed)) { showToast('Invalid number','err'); loadThresholds(); return; }
+            try {
+              const r = await fetch(url('/__config'),
+                {method:'POST', headers:{'Content-Type':'application/json'},
+                 body: JSON.stringify({[name]: parsed})});
+              const body = await r.json();
+              if (r.ok && body.applied && Object.keys(body.applied).length){
+                showToast(name+' = '+parsed,'ok');
+              } else {
+                const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
+                showToast('Rejected — ' + reasons, 'err');
+              }
+            } catch(e) { showToast('Network error: '+e.message,'err'); }
+            loadThresholds();
+          };
+          inp.addEventListener('keydown', ev => {
+            if (ev.key==='Enter') { ev.preventDefault(); save(true); }
+            if (ev.key==='Escape') { ev.preventDefault(); save(false); }
+          });
+          inp.addEventListener('blur', () => save(true));
+        };
+      });
+    } catch(e) { /* ignore */ }
+  }
+
   // ── External integrations status + cost ─────────────────────────
   async function loadExternal(){
     try {
@@ -617,6 +726,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'AbuseIPDB':              'ABUSEIPDB_ENABLED',
         'CrowdSec':               'CROWDSEC_ENABLED',
         'MaxMind GeoLite2 ASN':   'MAXMIND_ENABLED',
+        'Anubis-mode (PoW)':      'ANUBIS_ENABLED',
       };
       // Server's current toggle state (so the switch reflects reality even
       // if the integration was force-disabled at runtime).
@@ -678,7 +788,9 @@ document.addEventListener('DOMContentLoaded', () => {
             extra = `<div style="margin-top:8px;font-size:11px;color:var(--yellow)">DB not found at <code>${escapeHtml(tel.db_path||'/data/GeoLite2-ASN.mmdb')}</code> — download <a href="https://dev.maxmind.com/geoip/geolite2-free-geolocation-data" target="_blank" style="color:var(--blue)">GeoLite2-ASN.mmdb</a> and drop into the volume.</div>`;
           }
         }
-        return `<div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117">
+        // 1.5.4 — embed full info as data-attr so the click-to-tooltip can pull it
+        const itemJson = encodeURIComponent(JSON.stringify(item));
+        return `<div class="integration-card" data-item="${itemJson}" style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117;cursor:pointer;transition:border-color .12s" title="click for full details">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
             <div style="flex:1 1 280px;display:flex;align-items:flex-start;gap:12px">
               ${renderToggle(item)}
@@ -702,10 +814,23 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>`;
       }).join('');
 
+      // 1.5.4 — Wire integration-card click → details modal
+      box.querySelectorAll('.integration-card').forEach(card => {
+        card.onmouseover = () => card.style.borderColor = 'var(--blue)';
+        card.onmouseout  = () => card.style.borderColor = 'var(--line)';
+        card.onclick = (ev) => {
+          // Don't open the modal when the user clicks the toggle switch.
+          if (ev.target.closest('.switch')) return;
+          try { openIntegrationDetails(JSON.parse(decodeURIComponent(card.dataset.item))); }
+          catch(e){}
+        };
+      });
+
       // Wire up the toggle clicks
       box.querySelectorAll('.switch[data-knob]').forEach(sw => {
         if (sw.dataset.disabled === '1') return;   // disabled (no env config)
-        sw.onclick = async () => {
+        sw.onclick = async (ev) => {
+          ev.stopPropagation();   // don't bubble up to the integration-card click
           const knob = sw.dataset.knob;
           const newVal = !sw.classList.contains('on');
           sw.classList.toggle('on', newVal);
@@ -749,6 +874,24 @@ document.addEventListener('DOMContentLoaded', () => {
         const checked = !!cfg[knob];
         return `<td style="padding:5px 8px"><div class="switch${checked?' on':''}" data-knob-scoring="${knob}" title="Toggle ${escapeHtml(knob)}"></div></td>`;
       };
+      // Cost column: green if <1ms typical, yellow if 1-50ms, red if >50ms
+      const costCell = (cost) => {
+        if (!cost) return '<td style="padding:5px 8px;color:var(--dim)">—</td>';
+        const t = cost.typical || 0;
+        const cached = cost.cached || 0;
+        const p99 = cost.p99 || 0;
+        const tColor = t >= 50 ? 'var(--red)'
+                     : t >= 1  ? 'var(--yellow)'
+                     : 'var(--green)';
+        return `<td style="padding:5px 8px;text-align:right;font-family:ui-monospace,monospace;font-size:10.5px"
+                   title="cached ${cached}ms · typical ${t}ms · p99 ${p99}ms">
+          <span style="color:var(--green)">${cached}</span>
+          <span style="color:var(--dim)">/</span>
+          <span style="color:${tColor};font-weight:600">${t}</span>
+          <span style="color:var(--dim)">/</span>
+          <span style="color:var(--red)">${p99}</span>
+        </td>`;
+      };
       const weightRows = (d.weights||[]).map(w => {
         const tag = `<span style="background:${tierColor(w.tier)}22;color:${tierColor(w.tier)};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">${w.tier}</span>`;
         const wColor = w.weight >= 50 ? 'var(--red)'
@@ -759,11 +902,12 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(w.signal)}</code></td>
           <td style="padding:5px 8px;text-align:right;font-weight:600;color:${wColor}">${w.weight}</td>
           <td style="padding:5px 8px">${tag}</td>
+          ${costCell(w.cost_ms)}
           <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(w.description)}</td>
         </tr>`;
       }).join('');
       // Modifier rows — toggles that don't add weight
-      const modHeader = `<tr><td colspan="5" style="padding:10px 8px 4px 8px;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600">Behavior modifiers (no weight)</td></tr>`;
+      const modHeader = `<tr><td colspan="6" style="padding:10px 8px 4px 8px;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600">Behavior modifiers (no weight)</td></tr>`;
       const modRows = (d.modifiers||[]).map(m => {
         const checked = !!cfg[m.toggle];
         const knobInState = m.toggle in cfg;
@@ -776,6 +920,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(m.toggle)}</code></td>
           <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
           <td style="padding:5px 8px">${tag}</td>
+          <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
           <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(m.description)}</td>
         </tr>`;
       }).join('');
@@ -815,11 +960,96 @@ document.addEventListener('DOMContentLoaded', () => {
   loadAdminIps();
   loadScoring();
   loadExternal();
+  loadThresholds();
   setInterval(load, 15000);
   setInterval(loadAudit, 10000);
   setInterval(loadBans, 4000);
   setInterval(loadAdminIps, 8000);
   setInterval(loadExternal, 6000);
+  setInterval(loadThresholds, 10000);
 });
+
+// 1.5.4 — integration-card details modal + banned-identity tooltip
+const __MODAL_BACK = (() => {
+  const b = document.createElement('div');
+  b.id = 'ext-modal-back';
+  b.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:90;display:none';
+  document.body.appendChild(b);
+  return b;
+})();
+const __MODAL = (() => {
+  const m = document.createElement('div');
+  m.id = 'ext-modal';
+  m.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px 20px;min-width:520px;max-width:88vw;max-height:80vh;overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);z-index:100;display:none;font-size:12.5px;color:var(--fg)';
+  document.body.appendChild(m);
+  return m;
+})();
+function __closeModal(){ __MODAL_BACK.style.display='none'; __MODAL.style.display='none'; }
+__MODAL_BACK.onclick = __closeModal;
+document.addEventListener('keydown', e => { if (e.key==='Escape') __closeModal(); });
+
+function openIntegrationDetails(it){
+  const tel = it.telemetry || {};
+  const tx = (k) => `<tr><td class="dim" style="padding:4px 8px 4px 0;text-align:right;white-space:nowrap;color:var(--dim)">${escapeHtml(k)}</td><td style="padding:4px 0;font-family:ui-monospace,monospace;font-size:11.5px;word-break:break-all">${arguments[1]}</td></tr>`;
+  const link = (url, label) => url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">${escapeHtml(label||url)} ↗</a>` : '<span class="dim">—</span>';
+  const telRows = Object.entries(tel)
+    .map(([k,v]) => {
+      const vs = (typeof v === 'object' && v !== null)
+        ? `<code style="font-size:10.5px;color:var(--blue)">${escapeHtml(JSON.stringify(v))}</code>`
+        : `<code style="font-size:11px">${escapeHtml(String(v))}</code>`;
+      return `<tr><td class="dim" style="padding:3px 8px 3px 0;text-align:right;color:var(--dim);font-size:10.5px">${escapeHtml(k)}</td><td style="padding:3px 0">${vs}</td></tr>`;
+    }).join('');
+  __MODAL.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div>
+        <div style="font-weight:700;font-size:16px">${escapeHtml(it.name)}</div>
+        <div class="dim" style="font-size:11.5px;margin-top:2px">${escapeHtml(it.purpose||'')}</div>
+      </div>
+      <span style="cursor:pointer;color:var(--dim);font-size:18px" id="ext-modal-close">×</span>
+    </div>
+    <table style="width:100%">
+      ${tx('vendor', link(it.vendor_url, it.vendor_url ? new URL(it.vendor_url).hostname : ''))}
+      ${tx('docs',   link(it.docs_url,   it.docs_url   ? 'Documentation' : ''))}
+      ${tx('status', `<b style="color:${it.enabled?'var(--green)':'var(--dim)'}">${escapeHtml(it.status||'')}</b>${it.enabled?'  · enabled':'  · disabled'}`)}
+      ${tx('trigger', escapeHtml(it.trigger||'—'))}
+      ${tx('weight',  escapeHtml(it.weight||'—'))}
+      ${tx('data egress', escapeHtml(it.data_egress||'—'))}
+      ${tx('free tier',   escapeHtml(it.free_tier||'—'))}
+      ${tx('cost / req',  `<b style="color:var(--green)">${it.cost_cached_ms} ms</b> cached · <b style="color:var(--yellow)">${it.cost_typical_ms} ms</b> typical · <b style="color:var(--red)">${it.cost_p99_ms} ms</b> p99`)}
+      ${tx('required env', (it.envs_needed||[]).map(e=>`<code style="color:var(--blue);font-size:10.5px">${escapeHtml(e)}</code>`).join(' '))}
+    </table>
+    ${telRows ? `<h4 style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-top:14px;margin-bottom:6px">Live telemetry</h4><table style="width:100%">${telRows}</table>` : ''}
+  `;
+  document.getElementById('ext-modal-close').onclick = __closeModal;
+  __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
+}
+
+// Banned-identity tooltip: scan the bans list and add data attrs we can pop.
+function openBanDetails(b){
+  const fmtSecs = s => s == null ? '—' : (s<60?Math.round(s)+'s':s<3600?Math.round(s/60)+'m':s<86400?(s/3600).toFixed(1)+'h':(s/86400).toFixed(1)+'d');
+  const tx = (k, v) => `<tr><td class="dim" style="padding:4px 8px 4px 0;text-align:right;white-space:nowrap;color:var(--dim)">${escapeHtml(k)}</td><td style="padding:4px 0;font-family:ui-monospace,monospace;font-size:11.5px;word-break:break-all">${v}</td></tr>`;
+  const banLine = b.banned_secs > 0
+    ? `<span style="color:var(--red);font-weight:600">BANNED · ~${fmtSecs(b.banned_secs)} remaining</span>`
+    : `<span style="color:var(--green)">cleared</span>`;
+  __MODAL.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="font-weight:700;font-size:16px">Banned identity</div>
+      <span style="cursor:pointer;color:var(--dim);font-size:18px" id="ext-modal-close">×</span>
+    </div>
+    <table style="width:100%">
+      ${tx('id',          `<code>${escapeHtml(b.id||'')}</code>`)}
+      ${tx('status',      banLine)}
+      ${tx('ip',          escapeHtml(b.last_ip||'—'))}
+      ${tx('user-agent',  escapeHtml(b.last_ua||''))}
+      ${tx('last path',   escapeHtml(b.last_path||'—'))}
+      ${tx('reason',      `<code>${escapeHtml(b.reason||b.ban_reason||'—')}</code>`)}
+      ${tx('first seen',  fmtSecs(b.first_seen_secs_ago))}
+      ${tx('last seen',   fmtSecs(b.last_seen_secs_ago))}
+      ${tx('requests',    `${b.requests||'—'} (${b.allowed||0} ok / ${b.blocked||0} blocked)`)}
+      ${tx('risk score',  `<b>${(b.risk_score||0).toFixed(1)}</b>`)}
+    </table>`;
+  document.getElementById('ext-modal-close').onclick = __closeModal;
+  __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
+}
 </script>
 </body></html>

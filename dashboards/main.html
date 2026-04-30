@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.5.3 · Dashboard</title>
+<title>AppSecGW_1.5.4 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -73,14 +73,43 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
 .ctrl-now:hover{background:#1c3d5a}
 @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
+
+/* 1.5.4 — clickable cells (identity / risk drill-downs) */
+.cell-click{cursor:pointer;border-bottom:1px dotted var(--blue)}
+.cell-click:hover{color:var(--blue)}
+
+/* 1.5.4 — reason drill-down modal */
+.reason-drill{text-decoration:none;cursor:pointer}
+.reason-drill:hover .tag{outline:1px solid var(--blue)}
+.modal-back{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:90;display:none}
+.modal-back.show{display:block}
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);
+       background:var(--card);border:1px solid var(--line);border-radius:8px;
+       padding:16px 18px;min-width:520px;max-width:88vw;max-height:80vh;
+       overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);z-index:100;display:none}
+.modal.show{display:block}
+.modal h3{font-size:13px;color:#fff;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+.modal h3 .x{cursor:pointer;color:var(--dim);font-size:18px;line-height:1;font-weight:400}
+.modal h3 .x:hover{color:var(--red)}
+.modal table{width:100%}
+.modal td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace;font-size:11.5px}
+.modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
 </style></head>
 <body>
-<h1>AppSecGW_1.5.3 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.5.4 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+
+<!-- 1.5.4 — reason drill-down modal -->
+<div class="modal-back" id="modal-back"></div>
+<div class="modal" id="modal">
+  <h3 id="modal-title">Drill-down <span class="x" id="modal-close">×</span></h3>
+  <div id="modal-body"></div>
+</div>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__" class="active">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
   <a href="/__service?key=__KEY__">Service</a>
   <a href="/__controls?key=__KEY__">Controls</a>
+  <a href="/__geo?key=__KEY__">GeoMap</a>
 </nav>
 
 <div class="grid">
@@ -129,6 +158,63 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
     </div>
   </div>
 
+  <!-- 1.5.4 — middleware wall-time cost (avg ms / request) -->
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Avg added latency per request <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">cost of all enabled controls · ms wall-time inside the proxy</span></h2>
+      <div class="dim" style="font-size:11.5px">
+        <span>avg: <b id="cost-avg" style="color:var(--green)">—</b> ms</span>
+        &nbsp;·&nbsp; <span>p-max: <b id="cost-max" style="color:var(--orange,#ff7b3a)">—</b> ms</span>
+        &nbsp;·&nbsp; <span>n: <b id="cost-n" style="color:var(--blue)">—</b></span>
+      </div>
+    </div>
+    <div style="position:relative;height:160px"><canvas id="cost-chart"></canvas></div>
+  </div>
+
+  <!-- 1.5.4: Defense thresholds — live-tunable medium / block bands -->
+  <div class="card" id="thr-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Defense thresholds <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">drag the markers to change live · 0 = off</span></h2>
+      <span id="thr-msg" class="dim" style="font-size:11.5px"></span>
+    </div>
+    <div id="thr-slider" style="position:relative;height:60px;margin:8px 4px">
+      <!-- Track + bands rendered dynamically by JS -->
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px;font-size:11px">
+      <div>
+        <span style="color:var(--green)">●</span> <b>green</b> = clean (score &lt; soft)
+        <div class="dim">requests pass without extra checks</div>
+      </div>
+      <div>
+        <span style="color:var(--orange,#ff7b3a)">●</span> <b>orange</b> = soft challenge (score ≥ <span id="thr-soft-val" style="font-weight:700">—</span>)
+        <div class="dim">passes but flagged "missed" — soft PoW served</div>
+      </div>
+      <div>
+        <span style="color:var(--red)">●</span> <b>red</b> = blocked (score ≥ <span id="thr-ban-val" style="font-weight:700">—</span>)
+        <div class="dim">silent decoy + 24h hostile ban</div>
+      </div>
+    </div>
+  </div>
+  <style>
+  /* threshold slider */
+  #thr-slider .track{position:absolute;left:0;right:0;top:22px;height:14px;border-radius:7px;
+    background:linear-gradient(to right,#3fb950 0%,#3fb950 var(--soft-pct,5%),#ff7b3a var(--soft-pct,5%),#ff7b3a var(--ban-pct,50%),#f85149 var(--ban-pct,50%),#f85149 100%);
+    border:1px solid var(--line)}
+  #thr-slider .scale{position:absolute;left:0;right:0;top:42px;display:flex;justify-content:space-between;font:10px ui-monospace;color:var(--dim)}
+  #thr-slider .knob{position:absolute;top:14px;width:30px;height:30px;border-radius:50%;
+    background:#161b22;border:3px solid #fff;cursor:grab;transform:translateX(-50%);
+    display:flex;align-items:center;justify-content:center;font:600 10px ui-monospace;color:#fff;
+    box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:2;user-select:none;transition:transform .08s}
+  #thr-slider .knob:hover{transform:translateX(-50%) scale(1.08)}
+  #thr-slider .knob.drag{cursor:grabbing;transform:translateX(-50%) scale(1.12);box-shadow:0 4px 12px rgba(0,0,0,.6)}
+  #thr-slider .knob.soft{border-color:#ff7b3a}
+  #thr-slider .knob.ban{border-color:#f85149}
+  #thr-slider .knob-val{position:absolute;top:46px;font:600 11px ui-monospace,Menlo,monospace;
+    transform:translateX(-50%);white-space:nowrap;pointer-events:none}
+  #thr-slider .knob-val.soft{color:#ff7b3a}
+  #thr-slider .knob-val.ban{color:#f85149}
+  </style>
+
   <!-- 1.5.1: live throughput + operator-controlled global RPS limit -->
   <div class="card" id="rps-card" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
     <div style="min-width:180px">
@@ -164,12 +250,28 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 
   <div class="row" style="grid-template-columns:1fr 1fr">
     <div class="card">
-      <h2>Block reasons</h2>
+      <h2>Block reasons <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">click a reason to see offending identities</span></h2>
       <div class="reasons" id="reasons"><span class="dim">no blocks yet</span></div>
     </div>
     <div class="card">
       <h2>HTTP status distribution</h2>
       <div class="reasons" id="statuses"></div>
+    </div>
+  </div>
+
+  <!-- 1.5.4: Service health + per-detector counters -->
+  <div class="row" style="grid-template-columns:1fr 1fr">
+    <div class="card">
+      <h2>External services</h2>
+      <div id="services" style="display:grid;grid-template-columns:1fr auto;gap:5px 10px;font-size:11.5px">
+        <span class="dim">loading…</span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Per-detector hits</h2>
+      <div id="detector-hits" style="display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:11.5px;max-height:240px;overflow:auto">
+        <span class="dim">loading…</span>
+      </div>
     </div>
   </div>
 
@@ -207,6 +309,37 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 <script>
 let lastTotal = 0, lastTime = Date.now();
 let chart = null;
+let costChart = null;
+function ensureCostChart() {
+  if (costChart) return costChart;
+  const ctx = document.getElementById('cost-chart').getContext('2d');
+  costChart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: [], datasets: [
+      { label: 'avg ms', data: [], borderColor: '#3fb950',
+        backgroundColor: 'rgba(63,185,80,0.18)', tension: 0.25, fill: true,
+        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+      { label: 'max ms', data: [], borderColor: '#ff7b3a',
+        backgroundColor: 'rgba(255,123,58,0.10)', tension: 0.25, fill: false,
+        borderWidth: 1.5, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
+    ]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 250 },
+      interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
+                 tooltip: { backgroundColor:'#161b22', borderColor:'#30363d',
+                            borderWidth:1, titleColor:'#c9d1d9', bodyColor:'#c9d1d9' } },
+      scales: {
+        x: { ticks: { color:'#8b949e', font:{size:10}, maxRotation:0, autoSkipPadding:18 }, grid: { color:'#21262d' } },
+        y: { beginAtZero: true,
+             ticks: { color:'#8b949e', font:{size:10}, callback: v => v + ' ms' },
+             grid: { color:'#21262d' } },
+      },
+    },
+  });
+  return costChart;
+}
 
 function getRangeMin() {
   return parseInt(document.getElementById('range').value || '60', 10);
@@ -234,6 +367,11 @@ function ensureChart() {
         { label: 'blocked', data: [], borderColor: '#f85149',
           backgroundColor: 'rgba(248,81,73,0.18)', tension: 0.25, fill: true,
           borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+        // 1.5.4 — orange: allowed-but-medium-risk ("missed" — likely bots
+        // that haven't crossed the ban threshold yet)
+        { label: 'missed (medium risk)', data: [], borderColor: '#ff7b3a',
+          backgroundColor: 'rgba(255,123,58,0.18)', tension: 0.25, fill: false,
+          borderWidth: 2, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
       ],
     },
     options: {
@@ -354,11 +492,18 @@ async function tick() {
                          'rate-limit','behavior','pow-required'];
     const reasons = d.by_reason || {};
     const rEl = document.getElementById('reasons');
+    // 1.5.4 — make reason rows click-to-drill (offending IPs/identities).
+    // Hand the full clients[] payload to the click handler so we can filter
+    // locally without an extra round-trip.
+    window._lastClients = d.clients || [];
     if (Object.keys(reasons).length === 0) {
       rEl.innerHTML = '<span class="dim">no blocks yet</span>';
     } else {
       rEl.innerHTML = reasonOrder.filter(k => reasons[k])
-        .map(k => `<span class="lbl"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></span><span class="val">${reasons[k]|0}</span>`).join('');
+        .map(k => `<span class="lbl"><a href="#" class="reason-drill" data-reason="${escapeHtml(k)}" title="click to see offending identities"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></a></span><span class="val">${reasons[k]|0}</span>`).join('');
+      rEl.querySelectorAll('.reason-drill').forEach(el => {
+        el.onclick = e => { e.preventDefault(); openReasonDrill(el.dataset.reason); };
+      });
     }
 
     // Statuses
@@ -369,32 +514,47 @@ async function tick() {
 
     // Clients
     const tbody = document.querySelector('#clients-tbl tbody');
-    tbody.innerHTML = (d.clients || []).slice(0, 25).map(c => {
+    // 1.5.4 — stash for identity popover lookup on click.
+    window._clientsList = d.clients || [];
+    tbody.innerHTML = (d.clients || []).slice(0, 25).map((c, i) => {
       const banned = c.banned_secs > 0 ? `<span class="tag banned">${c.banned_secs}s</span>` : '<span class="dim">—</span>';
       const id = (c.id || c.ip || '');
       const lastIp = c.last_ip || '?';
       const risk = c.risk_score || 0;
       const riskColor = risk >= 50 ? 'var(--red)' : risk >= 25 ? 'var(--yellow)' : 'var(--dim)';
+      const hasBlocks = c.blocked > 0;
       // 1.5.1: inline unban action; only meaningful for currently-banned
       // identities. The button calls /__unban?id=… (admin-gated).
       const action = c.banned_secs > 0
         ? `<button class="btn-unban" data-id="${escapeHtml(id)}" title="Clear ban + reset risk score for this identity">Unban</button>`
         : `<span class="dim">—</span>`;
       return `<tr>
-        <td title="${escapeHtml(id)}"><b>${escapeHtml(id.slice(0,16))}</b></td>
+        <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
         <td class="dim">${escapeHtml(lastIp)}</td>
         <td>${c.requests}</td>
         <td style="color:var(--green)">${c.allowed}</td>
         <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
-        <td style="color:${riskColor};font-weight:600">${risk.toFixed(1)}</td>
+        <td style="color:${riskColor};font-weight:600">${
+          risk > 0
+            ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${risk.toFixed(1)}</span>`
+            : risk.toFixed(1)
+        }</td>
         <td>${banned}</td>
         <td>${c.tokens}</td>
-        <td class="dim">${c.last_seen_secs_ago}s ago</td>
+        <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
         <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
         <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
         <td>${action}</td>
       </tr>`;
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+    // Wire identity / risk popovers (1.5.4 — same UX as the agents dashboard)
+    tbody.querySelectorAll('.cell-click').forEach(el => {
+      el.onclick = ev => {
+        const c = window._clientsList[+el.dataset.i];
+        if (!c) return;
+        openClientPopover(el.dataset.pop, c);
+      };
+    });
 
     // Top paths
     const pBody = document.querySelector('#paths-tbl tbody');
@@ -425,6 +585,7 @@ async function tick() {
       const totals = d.timeline.map(b => b.total);
       const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
       const blocks = d.timeline.map(b => b.blocked);
+      const missed = d.timeline.map(b => b.missed || 0);
       // Dynamic decimation: aim at ~12 labels regardless of how many points
       const step = Math.max(1, Math.floor(labels.length / 12));
       const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
@@ -432,8 +593,66 @@ async function tick() {
       c.data.datasets[0].data = totals;
       c.data.datasets[1].data = allowed;
       c.data.datasets[2].data = blocks;
+      c.data.datasets[3].data = missed;
       c.update('none');
     }
+
+    // 1.5.4 — render services + detector hits cards
+    try {
+      const svc = d.services || {};
+      const dh  = d.detector_hits || {};
+      const sEl = document.getElementById('services');
+      const dotOn  = '<span style="color:var(--green)">●</span>';
+      const dotOff = '<span style="color:var(--dim)">○</span>';
+      const dotErr = '<span style="color:var(--red)">●</span>';
+      const svcLine = (label, ok, sub) =>
+        `<span class="lbl">${ok?dotOn:dotOff} ${escapeHtml(label)}${sub?` <span class="dim">${escapeHtml(sub)}</span>`:''}</span>` +
+        `<span class="val" style="font-size:10.5px">${ok?'active':'off'}</span>`;
+      const lines = [];
+      if (svc.redis)     lines.push(svcLine('Redis (shared store)',   svc.redis.connected, svc.redis.url ? '' : 'not configured'));
+      if (svc.abuseipdb) lines.push(svcLine('AbuseIPDB',              svc.abuseipdb.enabled && svc.abuseipdb.configured, svc.abuseipdb.configured ? '' : 'no key'));
+      if (svc.crowdsec)  lines.push(svcLine('CrowdSec LAPI',          svc.crowdsec.enabled && svc.crowdsec.configured, svc.crowdsec.configured ? '' : 'no LAPI URL'));
+      if (svc.maxmind)   lines.push(svcLine('MaxMind GeoLite2-ASN',   svc.maxmind.loaded && svc.maxmind.enabled, svc.maxmind.loaded ? '' : 'mmdb missing'));
+      if (svc.turnstile) lines.push(svcLine('Cloudflare Turnstile',   svc.turnstile.enabled && svc.turnstile.configured, svc.turnstile.configured ? '' : 'no keys'));
+      if (svc.anubis)    lines.push(svcLine(`Anubis-mode (PoW d=${svc.anubis.effective_diff})`, svc.anubis.enabled, ''));
+      sEl.innerHTML = lines.join('') || '<span class="dim">no integrations configured</span>';
+
+      const dEl = document.getElementById('detector-hits');
+      const sorted = Object.entries(dh).sort((a,b)=>b[1]-a[1]);
+      dEl.innerHTML = sorted.length
+        ? sorted.map(([k,v]) =>
+            `<span class="lbl">${escapeHtml(k)}</span><span class="val" style="color:${v>0?'var(--red)':'var(--dim)'}">${v|0}</span>`).join('')
+        : '<span class="dim">no hits yet</span>';
+    } catch(e) {}
+
+    // 1.5.4 — fetch cost timeline alongside the metrics one (same window)
+    try {
+      const costParams = new URLSearchParams({
+        range:  getRangeMin().toString(),
+        bucket: getBucketSec().toString(),
+      });
+      if (endEpoch !== null) costParams.set('end', endEpoch.toString());
+      if (ADMIN_KEY) costParams.set('key', ADMIN_KEY);
+      const cr = await fetch('/__cost-timeline?' + costParams.toString(),
+                            {cache:'no-store', credentials:'include'});
+      if (cr.ok) {
+        const cd = await cr.json();
+        if (cd.timeline && cd.timeline.length){
+          const cc = ensureCostChart();
+          const bSec = cd.timeline_bucket_secs || 60;
+          const lbls = cd.timeline.map(b => fmtTime(b.t, bSec));
+          const stp = Math.max(1, Math.floor(lbls.length / 12));
+          cc.data.labels = lbls.map((l,i)=>(i%stp===0||i===lbls.length-1)?l:'');
+          cc.data.datasets[0].data = cd.timeline.map(b=>b.avg_ms);
+          cc.data.datasets[1].data = cd.timeline.map(b=>b.max_ms);
+          cc.update('none');
+        }
+        const sm = cd.summary || {};
+        document.getElementById('cost-avg').textContent = (sm.overall_avg_ms||0).toFixed(2);
+        document.getElementById('cost-max').textContent = (sm.overall_max_ms||0).toFixed(0);
+        document.getElementById('cost-n').textContent   = (sm.total_requests||0).toLocaleString();
+      }
+    } catch(e) {}
 
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch (err) {
@@ -442,6 +661,17 @@ async function tick() {
   }
 }
 function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+// 1.5.4 — progressive unit formatter: s → min (>3600s) → h (>240min=14400s) → d (>48h=172800s)
+// Negative or invalid values render as "—" (was a 1.5.3 bug where stale DB-loaded
+// timestamps mixed epoch + monotonic).
+function fmtAgo(secs){
+  const n = Number(secs);
+  if (!isFinite(n) || n < 0) return '—';
+  if (n < 3600)   return Math.round(n) + 's ago';            //  <  1h    → seconds
+  if (n < 14400)  return Math.round(n/60) + 'min ago';       //  <  4h    → minutes
+  if (n < 172800) return (n/3600).toFixed(1) + 'h ago';      //  < 48h    → hours
+  return (n/86400).toFixed(1) + 'd ago';                     //  ≥ 48h    → days
+}
 function safeClass(s){return (s||'').replace(/[^a-zA-Z0-9_-]/g,'')}
 document.getElementById('range').addEventListener('change', () => { refreshControls(); tick(); });
 document.getElementById('bucket').addEventListener('change', tick);
@@ -536,5 +766,233 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
     }
   });
 })();
+
+// ── 1.5.4 Reason drill-down + identity popovers ─────────────────────
+(function(){
+  const back = document.getElementById('modal-back');
+  const modal = document.getElementById('modal');
+  function close(){ back.classList.remove('show'); modal.classList.remove('show'); }
+  back.onclick = close;
+  document.getElementById('modal-close').onclick = close;
+  document.addEventListener('keydown', e => { if (e.key==='Escape') close(); });
+
+  // 1.5.4 — click identity / risk in the Clients table → details modal
+  // (mirrors the popover UX from the agents dashboard).
+  function fmtSecs(s){
+    if (s == null) return '—';
+    if (s < 60)   return Math.round(s)+'s ago';
+    if (s < 3600) return Math.round(s/60)+'m ago';
+    if (s < 86400)return (s/3600).toFixed(1)+'h ago';
+    return (s/86400).toFixed(1)+'d ago';
+  }
+  window.openClientPopover = function(kind, c){
+    let title, body;
+    if (kind === 'id-main'){
+      title = 'Identity details';
+      const banLine = c.banned_secs > 0
+        ? `<span style="color:var(--red);font-weight:600">BANNED · ~${c.banned_secs}s remaining</span>`
+        : `<span style="color:var(--green)">allowed</span>`;
+      const blocksRows = Object.entries(c.blocks_by_reason || {})
+        .sort((a,b)=>b[1]-a[1])
+        .map(([r,n]) =>
+          `<tr><td><code>${escapeHtml(r)}</code></td><td style="color:var(--red);font-weight:600;text-align:right">${n}×</td></tr>`
+        ).join('');
+      body = `
+        <table>
+          <tr><td class="dim" style="text-align:right">id</td>          <td><code>${escapeHtml(c.id||'')}</code></td></tr>
+          <tr><td class="dim" style="text-align:right">status</td>      <td>${banLine}</td></tr>
+          <tr><td class="dim" style="text-align:right">ip</td>          <td>${escapeHtml(c.last_ip||'')}</td></tr>
+          <tr><td class="dim" style="text-align:right">user-agent</td>  <td style="word-break:break-all">${escapeHtml(c.last_ua||'')}</td></tr>
+          <tr><td class="dim" style="text-align:right">session</td>     <td>${escapeHtml(c.last_session||'—')}</td></tr>
+          <tr><td class="dim" style="text-align:right">fingerprint</td> <td>${escapeHtml(c.last_fingerprint||'—')}</td></tr>
+          <tr><td class="dim" style="text-align:right">first seen</td>  <td>${fmtSecs(c.first_seen_secs_ago)}</td></tr>
+          <tr><td class="dim" style="text-align:right">last seen</td>   <td>${fmtSecs(c.last_seen_secs_ago)}</td></tr>
+          <tr><td class="dim" style="text-align:right">requests</td>    <td>${c.requests} (${c.allowed} ok / ${c.blocked} blocked)</td></tr>
+          <tr><td class="dim" style="text-align:right">last path</td>   <td>${escapeHtml(c.last_path||'—')}</td></tr>
+          <tr><td class="dim" style="text-align:right">tokens</td>      <td>${c.tokens}</td></tr>
+          <tr><td class="dim" style="text-align:right">risk score</td>  <td><b>${(c.risk_score||0).toFixed(1)}</b></td></tr>
+        </table>
+        ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3><table>${blocksRows}</table>` : ''}`;
+    } else if (kind === 'risk-main'){
+      title = 'Risk score breakdown';
+      const blocks = Object.entries(c.blocks_by_reason || {})
+        .sort((a,b)=>b[1]-a[1]);
+      const rows = blocks.length
+        ? '<table>' + blocks.map(([r,n]) =>
+            `<tr><td><code>${escapeHtml(r)}</code></td><td style="color:var(--red);font-weight:600;text-align:right">${n}×</td></tr>`
+          ).join('') + '</table>'
+        : '<div class="empty">no contributing reasons currently in memory (may have decayed)</div>';
+      body = `
+        <div class="dim" style="margin-bottom:8px">
+          Live risk: <b style="color:var(--red)">${(c.risk_score||0).toFixed(1)}</b> ·
+          decays at half-life 1h ·
+          ban threshold ≥ 50 (≥100 for NAT)
+        </div>
+        ${rows}
+        <div class="dim" style="margin-top:8px;font-size:10.5px">
+          Tip: open the Agents dashboard for per-signal weighted contribution bars.
+        </div>`;
+    } else { return; }
+    document.getElementById('modal-title').innerHTML =
+      `${title} <span class="x" id="modal-close">×</span>`;
+    document.getElementById('modal-close').onclick = close;
+    document.getElementById('modal-body').innerHTML = body;
+    back.classList.add('show'); modal.classList.add('show');
+  };
+
+  window.openReasonDrill = function(reason){
+    const clients = window._lastClients || [];
+    const offenders = clients
+      .filter(c => (c.blocks_by_reason || {})[reason])
+      .map(c => ({
+        id: c.id, ip: c.last_ip || c.ip, ua: c.last_ua,
+        count: c.blocks_by_reason[reason],
+        risk: c.risk_score,
+        last_seen: c.last_seen_secs_ago,
+        banned: c.banned_secs > 0,
+      }))
+      .sort((a,b)=>b.count - a.count);
+    document.getElementById('modal-title').innerHTML =
+      `Offending identities · <code style="color:var(--red)">${escapeHtml(reason)}</code>` +
+      ` <span class="x" id="modal-close">×</span>`;
+    document.getElementById('modal-close').onclick = close;
+    let body;
+    if (!offenders.length){
+      body = `<div class="empty">no client currently in memory has hits on <b>${escapeHtml(reason)}</b><br><span style="font-size:10.5px">may have been pruned (24h idle eviction)</span></div>`;
+    } else {
+      body = `<div class="dim" style="margin-bottom:8px">${offenders.length} identit${offenders.length===1?'y':'ies'}</div>
+        <table><thead><tr>
+          <th style="text-align:left">Identity</th><th>IP</th><th>Hits</th>
+          <th>Risk</th><th>Last seen</th><th>Status</th>
+        </tr></thead><tbody>` +
+        offenders.map(o => `
+          <tr>
+            <td title="${escapeHtml(o.id||'')}">${escapeHtml((o.id||'').slice(0,16))}</td>
+            <td>${escapeHtml(o.ip||'—')}</td>
+            <td style="color:var(--red);font-weight:600">${o.count}×</td>
+            <td>${o.risk}</td>
+            <td class="dim">${o.last_seen!=null?Math.round(o.last_seen)+'s ago':'—'}</td>
+            <td>${o.banned?'<span style="color:var(--red);font-weight:600">BANNED</span>':'allowed'}</td>
+          </tr>`).join('') + '</tbody></table>';
+    }
+    document.getElementById('modal-body').innerHTML = body;
+    back.classList.add('show'); modal.classList.add('show');
+  };
+})();
+
+// ── 1.5.4 Defense thresholds slider ─────────────────────────────────
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const k_q = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
+  const sliderEl = document.getElementById('thr-slider');
+  const msgEl    = document.getElementById('thr-msg');
+  const MAX = 200;          // visual scale upper bound
+  let SOFT = 4, BAN = 50;   // current values, fetched on first tick
+  let dragging = null;      // 'soft' | 'ban' | null
+
+  // Build static DOM once
+  sliderEl.innerHTML = `
+    <div class="track" id="thr-track"></div>
+    <div class="scale"><span>0</span><span>50</span><span>100</span><span>150</span><span>${MAX}</span></div>
+    <div class="knob soft" id="thr-knob-soft"  title="soft challenge threshold (orange band)">S</div>
+    <div class="knob ban"  id="thr-knob-ban"   title="ban threshold (red band)">B</div>
+    <div class="knob-val soft" id="thr-knob-soft-val">—</div>
+    <div class="knob-val ban"  id="thr-knob-ban-val">—</div>`;
+  const knobSoft = document.getElementById('thr-knob-soft');
+  const knobBan  = document.getElementById('thr-knob-ban');
+  const knobSoftVal = document.getElementById('thr-knob-soft-val');
+  const knobBanVal  = document.getElementById('thr-knob-ban-val');
+  const track    = document.getElementById('thr-track');
+
+  function render(){
+    const softPct = Math.max(0, Math.min(100, (SOFT/MAX)*100));
+    const banPct  = Math.max(0, Math.min(100, (BAN/MAX)*100));
+    track.style.setProperty('--soft-pct', softPct + '%');
+    track.style.setProperty('--ban-pct',  banPct  + '%');
+    knobSoft.style.left = softPct + '%';
+    knobBan.style.left  = banPct  + '%';
+    knobSoftVal.style.left = softPct + '%';
+    knobBanVal.style.left  = banPct  + '%';
+    knobSoftVal.textContent = SOFT;
+    knobBanVal.textContent  = BAN;
+    document.getElementById('thr-soft-val').textContent = SOFT;
+    document.getElementById('thr-ban-val').textContent  = BAN;
+  }
+
+  function dragStart(which, ev){
+    dragging = which;
+    (which === 'soft' ? knobSoft : knobBan).classList.add('drag');
+    ev.preventDefault();
+  }
+  function dragMove(ev){
+    if (!dragging) return;
+    const rect = sliderEl.getBoundingClientRect();
+    const x = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+    const pct = Math.max(0, Math.min(1, x / rect.width));
+    const v = Math.round(pct * MAX);
+    if (dragging === 'soft') {
+      SOFT = Math.min(v, BAN - 1);
+    } else {
+      BAN = Math.max(v, SOFT + 1);
+    }
+    render();
+  }
+  async function dragEnd(){
+    if (!dragging) return;
+    knobSoft.classList.remove('drag');
+    knobBan.classList.remove('drag');
+    const which = dragging; dragging = null;
+    // Push live to backend
+    const body = which === 'soft'
+      ? {SOFT_CHALLENGE_SCORE: SOFT}
+      : {RISK_BAN_THRESHOLD: BAN};
+    try{
+      const r = await fetch('/__config' + k_q, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body),
+        credentials:'include',
+      });
+      const b = await r.json();
+      if (r.ok && b.applied && Object.keys(b.applied).length){
+        msgEl.style.color = 'var(--green)';
+        msgEl.textContent = `${which === 'soft' ? 'Soft' : 'Ban'} = ${which === 'soft' ? SOFT : BAN}`;
+      } else {
+        msgEl.style.color = 'var(--red)';
+        msgEl.textContent = 'rejected';
+        // Re-fetch real values to revert visual
+        await syncFromConfig();
+      }
+      setTimeout(() => msgEl.textContent = '', 2500);
+    } catch(e){
+      msgEl.style.color = 'var(--red)';
+      msgEl.textContent = 'error: ' + e.message;
+    }
+  }
+
+  knobSoft.addEventListener('mousedown', e => dragStart('soft', e));
+  knobBan .addEventListener('mousedown', e => dragStart('ban',  e));
+  knobSoft.addEventListener('touchstart', e => dragStart('soft', e), {passive:false});
+  knobBan .addEventListener('touchstart', e => dragStart('ban',  e), {passive:false});
+  document.addEventListener('mousemove', dragMove);
+  document.addEventListener('touchmove', dragMove, {passive:false});
+  document.addEventListener('mouseup', dragEnd);
+  document.addEventListener('touchend', dragEnd);
+
+  async function syncFromConfig(){
+    try{
+      const r = await fetch('/__config' + k_q, {credentials:'include'});
+      if (!r.ok) return;
+      const j = await r.json();
+      const cfg = j.state || j;
+      if (typeof cfg.SOFT_CHALLENGE_SCORE === 'number') SOFT = Math.round(cfg.SOFT_CHALLENGE_SCORE);
+      if (typeof cfg.RISK_BAN_THRESHOLD   === 'number') BAN  = Math.round(cfg.RISK_BAN_THRESHOLD);
+      render();
+    } catch(e){}
+  }
+  syncFromConfig();
+  setInterval(() => { if (!dragging) syncFromConfig(); }, 6000);
+})();
+
 </script>
 </body></html>
