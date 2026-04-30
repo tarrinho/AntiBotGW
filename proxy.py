@@ -916,10 +916,118 @@ _asn_stats = {
 }
 _asn_recent_latencies: deque = deque(maxlen=200)
 
+def _maxmind_auto_fetch():
+    """1.5.4 — first-boot convenience.  When `MAXMIND_LICENSE_KEY` is set
+    AND a target mmdb is missing, download it directly from MaxMind into
+    `/data/<edition>.mmdb`.  Lets operators just `docker run -e
+    MAXMIND_LICENSE_KEY=…` and skip the host-side `maxmind-refresh.sh`
+    entirely.  Each operator pulls under their own GeoLite2 license; we
+    never bundle MaxMind data in the image.
+
+    The same logic the old shell script used:
+      GET https://download.maxmind.com/app/geoip_download
+          ?edition_id=GeoLite2-{ASN,City}&license_key=…&suffix=tar.gz
+    """
+    key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
+    if not key:
+        return
+    targets = [
+        ("GeoLite2-ASN",  MAXMIND_ASN_DB_PATH),
+        ("GeoLite2-City", MAXMIND_CITY_DB_PATH),
+    ]
+    import urllib.request, urllib.error, tarfile, tempfile
+    for edition, dest in targets:
+        if os.path.exists(dest):
+            continue   # already there (mounted volume from previous run)
+        try:
+            url = (f"https://download.maxmind.com/app/geoip_download"
+                   f"?edition_id={edition}&license_key={key}&suffix=tar.gz")
+            print(f"[maxmind] {dest} missing — downloading {edition}…",
+                  flush=True)
+            with tempfile.TemporaryDirectory() as td:
+                tgz = os.path.join(td, f"{edition}.tar.gz")
+                with urllib.request.urlopen(url, timeout=60) as r:
+                    if r.status != 200:
+                        print(f"[maxmind] {edition} HTTP {r.status} — "
+                              "license-key invalid or rate-limited",
+                              flush=True)
+                        continue
+                    with open(tgz, "wb") as f:
+                        while chunk := r.read(64 * 1024):
+                            f.write(chunk)
+                # Locate the embedded .mmdb (GeoLite2 archives use a
+                # date-stamped sub-directory).
+                with tarfile.open(tgz) as tar:
+                    member = next(
+                        (m for m in tar.getmembers()
+                         if m.isfile() and m.name.endswith(f"{edition}.mmdb")),
+                        None,
+                    )
+                    if member is None:
+                        print(f"[maxmind] {edition}.mmdb not in archive",
+                              flush=True)
+                        continue
+                    fobj = tar.extractfile(member)
+                    if fobj is None:
+                        continue
+                    os.makedirs(os.path.dirname(dest) or "/data", exist_ok=True)
+                    with open(dest, "wb") as out:
+                        while chunk := fobj.read(64 * 1024):
+                            out.write(chunk)
+            size_mb = os.path.getsize(dest) / (1024 * 1024)
+            print(f"[maxmind] {edition} → {dest} ({size_mb:.1f} MB)",
+                  flush=True)
+        except (urllib.error.URLError, OSError, tarfile.TarError) as e:
+            print(f"[maxmind] {edition} fetch failed: {e}", flush=True)
+
+
+async def _maxmind_refresh_loop():
+    """1.5.4 — every 30 days, re-fetch any mmdb older than that AND reload
+    the in-memory readers.  Means an operator who only sets MAXMIND_LICENSE_KEY
+    never has to babysit the dbs (no host-side cron needed)."""
+    global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    if not os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+        return  # nothing to refresh — operator hasnt opted in
+    THIRTY_DAYS = 30 * 86400
+    while True:
+        await asyncio.sleep(86400)   # check daily, refresh monthly
+        try:
+            stale = []
+            for path in (MAXMIND_ASN_DB_PATH, MAXMIND_CITY_DB_PATH):
+                if os.path.exists(path) and (_t.time() - os.path.getmtime(path)) > THIRTY_DAYS:
+                    stale.append(path)
+            if not stale:
+                continue
+            print(f"[maxmind] {len(stale)} db(s) older than 30d — refreshing",
+                  flush=True)
+            # Force re-download by removing the stale file first.
+            for p in stale:
+                try: os.remove(p)
+                except OSError: pass
+            _maxmind_auto_fetch()
+            # Re-open readers in place.
+            try:
+                import maxminddb
+                if os.path.exists(MAXMIND_ASN_DB_PATH):
+                    _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+                    MAXMIND_ENABLED = True
+                if os.path.exists(MAXMIND_CITY_DB_PATH):
+                    _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
+                    MAXMIND_CITY_ENABLED = True
+                print("[maxmind] readers refreshed", flush=True)
+            except Exception as e:
+                print(f"[maxmind] reload failed: {e}", flush=True)
+        except Exception as e:
+            print(f"[maxmind] refresh loop error: {e}", flush=True)
+
+
 def _init_maxmind():
     """Lazy-load the mmdb. Called at startup; logs and stays disabled if
-    the file is missing or malformed."""
+    the file is missing or malformed.  1.5.4 — auto-fetches the dbs first
+    when MAXMIND_LICENSE_KEY is set and `/data/` doesn't already have
+    them, so a fresh deployment just needs the license-key env var."""
     global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    _maxmind_auto_fetch()
     try:
         import maxminddb
     except Exception as e:
@@ -5518,7 +5626,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.5.4"
+                response_headers["X-Proxy"] = "AppSecGW_1.5.5"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -5600,6 +5708,9 @@ async def on_startup(app):
     asyncio.create_task(_periodic_404_refresh_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
     service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
+    # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
+    # MAXMIND_LICENSE_KEY is set; checks daily, refreshes when >30d old).
+    asyncio.create_task(_maxmind_refresh_loop())
     # 1.5.0: optional shared-state connect. Failures degrade to no-op so
     # an unreachable Redis never prevents the gateway from coming up.
     await _shared_init()
@@ -5995,7 +6106,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.5.4",
+        "version":         "AppSecGW_1.5.5",
     }
     return web.json_response({
         "current":          current,
@@ -6098,7 +6209,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.5.4    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.5.5    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")

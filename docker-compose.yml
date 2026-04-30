@@ -1,23 +1,68 @@
+# AppSecGW 1.5.5 — turnkey docker-compose deployment.
+#
+# Quick start:
+#   1. cp .env.example .env
+#   2. edit .env — at minimum set UPSTREAM, ADMIN_ALLOWED_IPS, TRUSTED_PROXIES,
+#      and any external-integration keys you want active.
+#   3. docker compose up -d
+#
+# All integrations auto-enable when their config is present.  MaxMind dbs
+# auto-download on first boot when MAXMIND_LICENSE_KEY is set.
+
 services:
   appsec-antibot-gw:
-    build: .
-    image: appsec-antibot-gw:1.5.2
-    container_name: appsec-antibot-gw1.5.2
+    image: appsec-antibot-gw:1.5.5
+    container_name: appsec-antibot-gw1.5.5
     restart: unless-stopped
     ports:
       - "8443:8443"
     environment:
-      # UPSTREAM is required; supply via env, e.g.:
-      #   UPSTREAM=https://your-frontend.example.com docker compose up -d
+      # ── Required ──────────────────────────────────────────────────────
       UPSTREAM: ${UPSTREAM:?UPSTREAM env var is required}
-      BURST: ${BURST:-5}
-      REFILL: ${REFILL:-1.0}
+      PORT: ${PORT:-8443}
+      TLS_ENABLED: ${TLS_ENABLED:-0}
+
+      # ── Admin / hardening ─────────────────────────────────────────────
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-127.0.0.1/32}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1/32}
       TRUST_XFF: ${TRUST_XFF:-last}
       ADMIN_KEY: ${ADMIN_KEY:-}
-      DEBUG: ${DEBUG:-0}
+
+      # ── Cookie gate ──────────────────────────────────────────────────
+      JS_CHALLENGE: ${JS_CHALLENGE:-1}
+      JS_CHAL_OPEN_PATHS: ${JS_CHAL_OPEN_PATHS:-/content/,/static/,/assets/,/api/}
+
+      # ── Risk-score thresholds (also tunable live at /__controls) ─────
+      SOFT_CHALLENGE_SCORE: ${SOFT_CHALLENGE_SCORE:-4}
+      RISK_BAN_THRESHOLD: ${RISK_BAN_THRESHOLD:-50}
+      TURNSTILE_RISK_THRESHOLD: ${TURNSTILE_RISK_THRESHOLD:-0}
+
+      # ── External integrations (off-by-default; set keys to enable) ───
+      TURNSTILE_SITEKEY: ${TURNSTILE_SITEKEY:-}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+      TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-0}
+      ABUSEIPDB_KEY: ${ABUSEIPDB_KEY:-}
+      CROWDSEC_LAPI_URL: ${CROWDSEC_LAPI_URL:-}
+      CROWDSEC_LAPI_KEY: ${CROWDSEC_LAPI_KEY:-}
+      MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
+      ANUBIS_ENABLED: ${ANUBIS_ENABLED:-0}
+      ANUBIS_DIFFICULTY_BOOST: ${ANUBIS_DIFFICULTY_BOOST:-1}
+      REDIS_URL: ${REDIS_URL:-}
+
+      # ── Logging ──────────────────────────────────────────────────────
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-json}
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8443/__live"]
+      interval: 10s
+      timeout: 2s
+      retries: 3
+
     read_only: true
     tmpfs:
-      - /tmp:size=16m
+      - /tmp:size=16m,mode=1777,nosuid,nodev,noexec
     cap_drop:
       - ALL
     security_opt:
