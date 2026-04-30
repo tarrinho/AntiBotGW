@@ -1,8 +1,8 @@
 services:
   appsec-antibot-gw:
     build: .
-    image: appsec-antibot-gw:1.4.5
-    container_name: appsec-antibot-gw1.4.5
+    image: appsec-antibot-gw:1.5.2
+    container_name: appsec-antibot-gw1.5.2
     restart: unless-stopped
     ports:
       - "8443:8443"

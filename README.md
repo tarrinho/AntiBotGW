@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.4.5` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.5.2` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (any severity) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -25,7 +25,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.4.5 \
+docker run -d --name appsec-antibot-gw1.5.2 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -42,7 +42,7 @@ docker run -d --name appsec-antibot-gw1.4.5 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.4.5 \
+  appsec-antibot-gw:1.5.2 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -282,6 +282,264 @@ Each sample includes: CPU %, load average (1/5/15), memory total/used/available,
 
 ---
 
+## Multi-site fleet — one gateway per challenge / app
+
+Designed so each protected site gets its own gateway *container*, while the
+fleet shares state through one Redis. A flag on challenge **A** is silent-
+decoyed on challenges **B…N** within seconds (read-through cache) and at
+the TLS-handshake layer within 30 s (JA4 deny-list refresh). One operator
+webhook rings once per ban, not N times.
+
+### Topology
+
+```
+                    Internet
+                       │
+            ┌──────────┴──────────┐
+            │  TLS terminator     │   nginx / Cloudflared / Caddy / ALB
+            │  (host or per-app)  │   ← injects CF-JA4 if available
+            └──────┬──────┬───────┘
+                   │      │
+                   ▼      ▼
+         ┌──────────┐  ┌──────────┐  ┌──────────┐
+         │ gw-app1  │  │ gw-app2  │  │ gw-appN  │  ← one container/site
+         │ :8443    │  │ :8443    │  │ :8443    │
+         └────┬─────┘  └────┬─────┘  └────┬─────┘
+              │             │             │
+              └────┬────────┴────┬────────┘
+                   │             │
+                   ▼             ▼
+              ┌─────────┐   ┌──────────┐
+              │  Redis  │   │ Webhook  │   ← Slack / Discord / SIEM
+              │ (bans + │   │ receiver │
+              │  JA4    │   └──────────┘
+              │  shared)│
+              └─────────┘
+```
+
+Each gateway forwards to **one** upstream (`UPSTREAM=https://app1.internal`),
+isolates its own SQLite + chal-cookie HMAC, and writes ban events through
+to the shared Redis. No gateway sees another's traffic — only its bans.
+
+### Step 1 — start the shared Redis (once)
+
+```bash
+docker network create antibot-net 2>/dev/null
+docker run -d --name antibot-redis --network antibot-net \
+  --restart unless-stopped \
+  -v antibot-redis-data:/data \
+  redis:7-alpine redis-server --appendonly yes
+```
+
+### Step 2 — spin up one gateway per site
+
+A small helper makes the per-site flags trivial. Save as `spawn-gw.sh`:
+
+```bash
+#!/usr/bin/env bash
+# Usage: ./spawn-gw.sh <site-name> <upstream-url> <listen-port>
+set -euo pipefail
+
+NAME="$1"            # e.g. ctf-pwn1
+UPSTREAM="$2"        # e.g. https://pwn1.internal:8000
+PORT="${3:-8443}"
+ADMIN_KEY="${ADMIN_KEY:-$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')}"
+WEBHOOK_URL="${WEBHOOK_URL:-}"   # optional; same value on every container
+WEBHOOK_SECRET="${WEBHOOK_SECRET:-}"
+TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY:-}"
+TURNSTILE_SECRET="${TURNSTILE_SECRET:-}"
+
+docker rm -f "appsec-gw-${NAME}" 2>/dev/null || true
+docker run -d --name "appsec-gw-${NAME}" \
+  --restart unless-stopped --init --network antibot-net \
+  --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
+  --cap-drop ALL --security-opt no-new-privileges:true \
+  --pids-limit 200 --memory 256m --memory-swap 256m --cpus 1.0 \
+  --ulimit nofile=4096:4096 --ulimit nproc=200:200 --ulimit core=0:0 \
+  --ipc=private --log-opt max-size=10m --log-opt max-file=3 \
+  -p "${PORT}:8443" \
+  -e UPSTREAM="${UPSTREAM}" \
+  -e ALLOWED_HOSTS="${NAME}.example.com,127.0.0.1" \
+  -e ADMIN_ALLOWED_IPS="${ADMIN_ALLOWED_IPS:-127.0.0.1}" \
+  -e ADMIN_KEY="${ADMIN_KEY}" \
+  -e TRUST_XFF=last \
+  -e JS_CHALLENGE=1 \
+  -e CANARY_ECHO_DETECTION=1 \
+  -e BOT_TRAP_FORMS=1 \
+  -e BODY_PATTERN_MATCH=1 \
+  -e LOG_FORMAT=json \
+  -e LOG_LEVEL=info \
+  -e REDIS_URL="redis://antibot-redis:6379/0" \
+  -e REDIS_NS="appsecgw-${NAME}-shared" \
+  -e WEBHOOK_URL="${WEBHOOK_URL}" \
+  -e WEBHOOK_SECRET="${WEBHOOK_SECRET}" \
+  -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
+  -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
+  -v "appsec-gw-${NAME}-data:/data" \
+  appsec-antibot-gw:1.5.2
+echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
+```
+
+Then:
+
+```bash
+ADMIN_KEY=$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=') \
+WEBHOOK_URL=https://hooks.slack.com/services/T0/B0/X0 \
+WEBHOOK_SECRET=$(openssl rand -hex 32) \
+./spawn-gw.sh ctf-pwn1   https://pwn1.internal:8000   9001
+./spawn-gw.sh ctf-web2   https://web2.internal:8000   9002
+./spawn-gw.sh staff-app  https://staff.internal:8443  9003
+```
+
+Each gateway is independent for traffic; they share one ban list, one JA4
+deny-list, one webhook channel.
+
+### What's shared (1 Redis) vs. per-instance
+
+| Across the fleet (Redis) | Per gateway (local SQLite + memory) |
+|---|---|
+| `appsecgw:ban:<track-key>` — sticky bans (24 h hostile-pool reasons) | events log (last 200 in dashboard, all in `/data/antibot.db`) |
+| `appsecgw:ja4-bans:<ja4>` counter — drives auto-deny | per-identity rate-limit token buckets |
+| `appsecgw:ja4-denylist` set — refreshed on each instance every 30 s | risk score, behavioural windowing, header-completeness scores |
+| `appsecgw:wh:<reason>:<key>` — webhook dedup (5 min TTL) | service-metrics samples (CPU/mem/disk/proc/FDs) |
+| `REDIS_NS` knob — namespace per environment (`prod`, `staging`, `ctf-2026`) | chal cookie HMAC (rotate via `/__rotate-keys` per instance, or fleet-wide via the loop below) |
+
+`REDIS_NS` decides whether two clusters share or isolate state. Same value
+across N instances → fleet-wide shared bans. Different values (`gw-prod`
+vs `gw-staging`) → fully isolated.
+
+### Operating the fleet
+
+**Hot-reload one knob across every gateway** (controls dashboard works
+per instance; for fleet-wide changes use a small loop):
+
+```bash
+APPLY='{"BODY_PATTERN_MATCH": true, "RISK_BAN_THRESHOLD": 60}'
+for port in 9001 9002 9003; do
+  curl -s -X POST "http://localhost:${port}/__config?key=${ADMIN_KEY}" \
+       -H 'Content-Type: application/json' -d "$APPLY"
+done
+```
+
+**Bump the throughput cap on every site simultaneously:**
+
+```bash
+for port in 9001 9002 9003; do
+  curl -s -X POST "http://localhost:${port}/__config?key=${ADMIN_KEY}" \
+       -H 'Content-Type: application/json' -d '{"GLOBAL_RPS_LIMIT": 50}'
+done
+```
+
+**Rotate the HMAC key on every gateway after a credential incident:**
+
+```bash
+for port in 9001 9002 9003; do
+  curl -s -X POST "http://localhost:${port}/__rotate-keys?key=${ADMIN_KEY}&scope=all"
+done
+# every chal/session cookie issued before this point fails on every gateway
+```
+
+**Ban an identity everywhere** (the local ban write also pushes through
+Redis, so any gateway in the namespace will start silent-decoying):
+
+```bash
+curl "http://localhost:9001/__ban?key=${ADMIN_KEY}&id=<track-key>&secs=86400&reason=manual"
+# subsequent traffic on 9002 + 9003 to that track-key → silent decoy
+```
+
+**Unban everywhere:**
+
+```bash
+curl "http://localhost:9001/__unban?key=${ADMIN_KEY}&id=<track-key>"
+# Note: shared-store entries TTL out at the original ban duration. To
+# force-clear cross-fleet *now*, also delete the Redis key:
+docker exec antibot-redis redis-cli DEL "appsecgw-ctf-pwn1-shared:ban:<track-key>"
+# (if REDIS_NS differs per instance, delete from each namespace)
+```
+
+### Per-site overrides
+
+Different challenges need different open-paths and risk profiles. Set
+overrides in the per-site env block:
+
+| Knob | Why per site |
+|---|---|
+| `JS_CHAL_OPEN_PATHS` | Each SPA's data-layer prefixes (`/bin/mvc.do/`, `/api/v1/`, `/graphql`) |
+| `ALLOWED_HOSTS` | Public hostname for that site |
+| `RATE_LIMIT_BURST/REFILL`, `IP_BURST/REFILL` | A static-asset-heavy app needs higher buckets than a JSON API |
+| `SESSION_CHURN_MAX` | API-only sites with legitimate fresh-session-per-call patterns may need a higher bound |
+| `STRICT_ORIGIN`, `REQUIRED_HEADERS` | App-specific, opt-in |
+
+Knobs you should keep **identical** across the fleet:
+
+| Knob | Reason |
+|---|---|
+| `REDIS_URL`, `REDIS_NS` | Shared state requires aligned wiring |
+| `WEBHOOK_URL`, `WEBHOOK_SECRET` | One channel for fleet-wide ops |
+| `LOG_FORMAT=json`, `LOG_LEVEL` | Consistent ingestion downstream |
+| `ADMIN_KEY` | Operator scripts work everywhere |
+| `JA4_TRUSTED_PEERS`, `JA4_HEADER` | All instances read the same upstream JA4 |
+
+### Centralised observability
+
+With `LOG_FORMAT=json` set on every gateway, ship stdout to one collector:
+
+```bash
+# example: ship every container's stdout to Loki via promtail
+docker run -d --name promtail \
+  --network antibot-net \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v $PWD/promtail.yaml:/etc/promtail/promtail.yaml \
+  grafana/promtail:latest
+```
+
+Useful queries (LogQL / KQL / etc.):
+
+```
+{event="request", reason="canary-echo"}                — every R7 hit, fleet-wide
+{event="ban"}                                          — every ban, all instances
+{event="manual_ban"} | rid="<request-id>"              — single-request forensics
+{event="config_changed"}                               — full audit of `/__config` POSTs
+{event="session_churn"} | json | count > 5             — agent rotating sessions
+```
+
+The same `request_id` appears in the response's `X-Request-ID` header, so a
+support ticket from a real user pasted with a request ID grep's directly to
+the relevant log entries fleet-wide.
+
+### Webhook payload shape
+
+```json
+{
+  "event":     "ban",
+  "ts":        1719918300,
+  "reason":    "canary-echo",
+  "risk_score": 80,
+  "track_key": "8ef229cffad339b2",
+  "ip":        "203.0.113.42",
+  "ja4":       "t13d_8a44_python_urllib",
+  "ua":        "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
+  "duration_s": 86400,
+  "hostile":   true
+}
+```
+
+The `X-AppSecGW-Signature` HMAC-SHA-256 header is computed over the raw
+body using `WEBHOOK_SECRET`. Receiver verifies before acting.
+
+### Per-fleet incident playbook
+
+| Symptom | Action | Where |
+|---|---|---|
+| Slack ping: `canary-echo` from `track-key=…`, `ja4=t13d_…python` | nothing — already silent-decoyed for 24 h fleet-wide | shared store auto-handled |
+| Recurring `session_churn` from same `/24` | tighten `SESSION_CHURN_MAX` from 6 → 4 across fleet | controls dashboard or `/__config` loop |
+| Legitimate user accidentally banned | unban via main dashboard or `/__unban?id=…`; consider raising `RISK_BAN_THRESHOLD` | per instance + delete Redis key |
+| New SPA endpoint added to one challenge | append prefix to that gateway's `JS_CHAL_OPEN_PATHS` via `/__config` | per-site, hot-reload |
+| Major bypass disclosed | rotate keys fleet-wide | `for-loop POST /__rotate-keys?scope=all` |
+| Switching from heuristic mode to Turnstile | set `TURNSTILE_*` envs and restart that container; existing Redis state preserved | per instance |
+
+---
+
 ## Operator helpers
 
 ### `myip.sh`
@@ -308,8 +566,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.4.5 .
-trivy image appsec-antibot-gw:1.4.5        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.5.2 .
+trivy image appsec-antibot-gw:1.5.2        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -366,6 +624,11 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| 1.5.2 | **Hard stealth-score auto-ban knob (work-in-progress)** + uniform top-nav across every dashboard (`Dashboard / Agents / Service / Controls`, server-rendered `<a>` tags so the menu is visible without JS). Service dashboard stops crashing when legacy nav-link IDs are absent. Banner stamps `AppSecGW_1.5.2`. |
+| 1.5.1 | **Controls dashboard `/__controls`** with on/off switch per toggleable control + number inputs for thresholds + textareas for lists; dirty-marker, **Apply** / **Reset**, audit-log of `config_changed` events, banned-identity table with 1-click unban. Main-dashboard **Throughput cap** card: live req/s + operator-set `GLOBAL_RPS_LIMIT` slider; over-limit traffic silent-decoyed as `traffic-threshold`. Inline **Unban** button next to every banned row in the clients table. Agents dashboard: ban/unban switch in the suspicious-agents table + new `/__ban` admin endpoint mirroring `/__unban`. |
+| 1.5.0 | **Multi-instance shared state** (optional `REDIS_URL`): bans propagate across N gateways, JA4 deny-list auto-syncs every 30 s. **Session-churn-by-fingerprint** detector — same `(UA + IP-tier + JA4)` minting > N chal cookies in a window enters the 24 h hostile pool. **Webhook fan-out** (`WEBHOOK_URL` + optional `WEBHOOK_SECRET` HMAC) on every ban; deduplicated via Redis `SETNX`. **Auto-add-to-`JA4_DENY_LIST`** after `JA4_AUTODENY_THRESHOLD` (default 3) bans on the same JA4. |
+| 1.4.7 | **Hot-reload admin endpoint** `GET/POST /__config` — read or update a whitelisted set of runtime knobs (toggles, thresholds, lists, log level) without container restart. Every change audited as `event=config_changed`. |
+| 1.4.6 | **Structured JSON logs + request correlation IDs.** `LOG_FORMAT=json` emits one JSON document per line ready for Loki/Splunk/CloudWatch. Every request gets a short `r…` ID minted at the top of `protect()`, threaded through every decision and stamped on the response as `X-Request-ID`. Inbound `X-Request-ID` honoured (CDN trace propagation). |
 | 1.4.5 | **HMAC key rotation lever.** New admin endpoint `POST /__rotate-keys?key=…&scope=session\|pow\|all` regenerates `SESSION_KEY` (and optionally `POW_HMAC_KEY`) atomically and persists to `/data/.session_key` / `.pow_key`. Every chal/session cookie issued before the call fails HMAC verification immediately. Closes the pentester finding "old chal cookie still works after upgrade — HMAC secret not rotated". `JS_CHAL_OPEN_PATHS` documented as the SPA-friendly knob for data-layer prefixes (`/bin/mvc.do/,/api/,…`). Dashboards stamp `AppSecGW_1.4.5`. |
 | 1.4.4 | **No third-party dependency.** Cookie gate engages with `JS_CHALLENGE=1` regardless of Turnstile — when Turnstile keys are configured the cookie is minted by Cloudflare's `siteverify` (production-grade), otherwise the cookie is auto-minted on the first qualifying HTML GET (heuristic friction layer; ~1 RTT bypass cost vs determined script). Gateway is now fully usable without any external service. **Silent-decoy status code now mirrors upstream `/`** instead of hard-coded 200 — closes the 200-with-404-page fingerprint that an agent could use to distinguish blocked vs forwarded responses. |
 | 1.4.3 | **AI-canary echo detection (R7) + 24 h hostile pool (R8).** Every HTML response (challenge page included) is stamped with a unique `agw-c-<16hex>` token in an HTML comment and the `X-Trace-Id` header. Subsequent requests from any identity that quotes one of those tokens back at the gateway — in URL, header, or POST body — are silent-decoyed and the identity is added to the hostile pool for `HOSTILE_BAN_SECS` (default 24 h). Pentester-confirmed: this catches LLM-driven agents whose model context treats server-issued strings as actionable text and re-emits them in subsequent prompts. Near-zero false-positive on browser traffic. |

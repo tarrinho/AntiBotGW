@@ -32,6 +32,8 @@ main{padding:0;max-width:1300px;margin:0 auto}
 .switch::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
 .switch.on{background:var(--green)}
 .switch.on::after{left:22px}
+.switch.switch-disabled{opacity:0.35;cursor:not-allowed}
+.switch.switch-disabled:hover{background:#30363d}
 .num{background:#0d1117;border:1px solid var(--line);color:var(--fg);
      padding:5px 8px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;
      font-size:12px;width:120px;text-align:right}
@@ -65,7 +67,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .toast.err{border-color:var(--red)}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.5.2 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.5.3 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
@@ -81,16 +83,42 @@ button:disabled{opacity:.4;cursor:not-allowed}
     Refresh-safe: revert any unsaved edit with <b>Reset</b>.
   </div>
 
-  <div class="row">
-    <section class="card" id="card-toggles">
-      <h2>Toggles</h2>
-      <div id="toggles"></div>
-    </section>
-    <section class="card" id="card-thresholds">
-      <h2>Thresholds &amp; rate limits</h2>
-      <div id="thresholds"></div>
-    </section>
-  </div>
+  <section class="card" id="card-thresholds">
+    <h2>Thresholds &amp; rate limits</h2>
+    <div id="thresholds"></div>
+  </section>
+
+  <section class="card" id="card-external">
+    <h2>External integrations <span style="font-size:11px;color:var(--dim);font-weight:400">(activated via container env vars — secrets out of the dashboard for safety)</span></h2>
+    <div class="hint" style="margin-bottom:10px">
+      Each integration adds latency. Cached lookups are sub-ms; uncached
+      hits the third-party API. Numbers below are typical, not guaranteed.
+    </div>
+    <div id="external-list">loading…</div>
+  </section>
+
+  <section class="card" id="card-scoring">
+    <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
+    <div class="hint" style="margin-bottom:10px">
+      Each signal adds points to the identity's <code>risk_score</code>; ban
+      fires when score crosses <code>RISK_BAN_THRESHOLD</code> (50) — or
+      <code>RISK_BAN_THRESHOLD_NAT</code> (100) when the IP looks like a NAT.
+      Score halves every <code>RISK_DECAY_HALFLIFE_SECS</code> (1 h).
+      Toggle column flips a detector ON/OFF in real-time;
+      <span style="color:var(--green)">ALWAYS ON</span> = heuristic that can't be disabled,
+      modifier rows at the bottom tweak behavior without contributing weight.
+    </div>
+    <table id="scoring-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="text-align:left;color:var(--dim);font-weight:600;border-bottom:1px solid var(--line)">
+        <th style="padding:6px 8px;width:60px">Toggle</th>
+        <th style="padding:6px 8px">Signal / control</th>
+        <th style="padding:6px 8px;text-align:right">Weight</th>
+        <th style="padding:6px 8px">Tier</th>
+        <th style="padding:6px 8px">Description</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
 
   <section class="card section-list" id="card-lists">
     <h2>Lists (comma-separated)</h2>
@@ -137,6 +165,35 @@ button:disabled{opacity:.4;cursor:not-allowed}
         <th style="padding:6px 8px;text-align:right">Bans left</th>
         <th style="padding:6px 8px;text-align:right">Risk</th>
         <th style="padding:6px 8px"></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card" style="margin-top:20px">
+    <h2>Admin IP allowlist</h2>
+    <div class="hint" style="margin-bottom:8px">
+      Source IPs allowed to reach <code>/__*</code> endpoints. The admin
+      key is still required (defence-in-depth). Stored in DB — survives
+      restart. Env-seeded entries (source=<code>env</code>) can be removed
+      from here too. Accepts single IPs or CIDR (e.g. <code>192.168.1.0/24</code>).
+      <strong>Click the Description cell to edit in-place</strong> (Enter to save, Esc to cancel).
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
+      <input id="aip-cidr" type="text" placeholder="IP or CIDR" autocomplete="off"
+             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px;flex:0 1 220px">
+      <input id="aip-desc" type="text" placeholder="description (e.g. 'Pedro home VPN')" autocomplete="off"
+             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px;flex:1 1 320px">
+      <button id="aip-add">Add</button>
+      <span id="aip-msg" style="color:var(--dim);font-size:11.5px"></span>
+    </div>
+    <table id="aip-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead><tr style="text-align:left;color:var(--dim);font-weight:600;border-bottom:1px solid var(--line)">
+        <th style="padding:6px 8px">CIDR</th>
+        <th style="padding:6px 8px">Source</th>
+        <th style="padding:6px 8px">Added</th>
+        <th style="padding:6px 8px">Description</th>
+        <th style="padding:6px 8px;text-align:right"></th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -206,10 +263,28 @@ function renderControl(name, meta, value){
   if (m.kind === 'bool') {
     const sw = document.createElement('div');
     sw.className = 'switch' + (value ? ' on' : '');
-    sw.onclick = () => {
+    sw.onclick = async () => {
       const newVal = !sw.classList.contains('on');
       sw.classList.toggle('on', newVal);
-      mark(name, newVal);
+      // Auto-apply booleans: push instantly to /__config, no Apply click
+      // needed. Reverts the toggle visually if the server rejects.
+      try {
+        const r = await fetch(url('/__config'),
+          {method:'POST', headers:{'Content-Type':'application/json'},
+           body: JSON.stringify({[name]: newVal})});
+        const body = await r.json();
+        if (r.ok && body.applied && Object.keys(body.applied).length) {
+          serverState[name] = newVal;
+          showToast(name + ' = ' + newVal, 'ok');
+        } else {
+          sw.classList.toggle('on', !newVal);  // revert
+          const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
+          showToast('Rejected — ' + reasons, 'err');
+        }
+      } catch (e) {
+        sw.classList.toggle('on', !newVal);
+        showToast('Network error: ' + e.message, 'err');
+      }
     };
     input.appendChild(sw);
   } else if (m.kind === 'num') {
@@ -273,15 +348,21 @@ async function load(){
   if (!r.ok) { showToast('Failed to load /__config (' + r.status + ')', 'err'); return; }
   const body = await r.json();
   serverState = body.state || {};
-  // Group + render
-  ['toggles','thresholds','lists','logging'].forEach(g => $(g).innerHTML = '');
-  const map = {bool:'toggles', num:'thresholds', list:'lists', select:'logging'};
+  // Group + render. Booleans (toggles) are now rendered inside the merged
+  // "Defenses & scoring" table (see loadScoring), so skip them here.
+  ['thresholds','lists','logging'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  const map = {num:'thresholds', list:'lists', select:'logging'};
   for (const [name, meta] of Object.entries(META)){
     if (!(name in serverState)) continue;
+    if (meta.kind === 'bool') continue;        // moved to scoring table
     const card = meta.card || map[meta.kind];
+    if (!card || !$(card)) continue;
     const el = renderControl(name, META, serverState[name]);
     if (el) $(card).appendChild(el);
   }
+  // Refresh scoring table now that serverState is fresh — toggles inside it
+  // need the latest knob values to render correctly.
+  if (typeof loadScoring === 'function') loadScoring();
   clearDirty();
 }
 
@@ -418,12 +499,327 @@ document.addEventListener('DOMContentLoaded', () => {
     if (!confirm('Clear EVERY ban + reset risk scores?\nThis is audit-logged.')) return;
     unban('all');
   };
+  // ── Admin IP allowlist UI ──────────────────────────────────────────
+  async function loadAdminIps(){
+    try {
+      const r = await fetch(url('/__admin-ips'), {credentials:'include'});
+      const d = await r.json();
+      const tb = document.querySelector('#aip-tbl tbody');
+      tb.innerHTML = (d.entries||[]).map(e => {
+        const when = e.added_ts ? new Date(e.added_ts*1000).toISOString().replace('T',' ').slice(0,19) : '—';
+        const desc = escapeHtml(e.description || e.note || '');
+        const tag = e.source==='env'
+          ? '<span style="background:#1f3a4f;color:#79c0ff;padding:1px 7px;border-radius:3px;font-size:10px">env</span>'
+          : '<span style="background:#1f4830;color:#3fb950;padding:1px 7px;border-radius:3px;font-size:10px">manual</span>';
+        return `<tr style="border-bottom:1px solid var(--line)" data-cidr="${e.cidr}">
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${e.cidr}</code></td>
+          <td style="padding:5px 8px">${tag}</td>
+          <td style="padding:5px 8px;color:var(--dim)">${when}</td>
+          <td style="padding:5px 8px;color:var(--dim)" class="aip-desc-cell"
+              data-desc="${desc}" title="Click to edit"
+              style="padding:5px 8px;color:var(--dim);cursor:text">${desc || '<span style="color:#6e7681;font-style:italic">click to add description</span>'}</td>
+          <td style="padding:5px 8px;text-align:right">
+            <button data-cidr="${e.cidr}" class="aip-del danger" style="font-size:11px;padding:4px 10px">Remove</button>
+          </td></tr>`;
+      }).join('') || '<tr><td colspan="5" style="padding:10px;color:var(--dim);text-align:center">No entries — anyone with the admin key can reach <code>/__*</code></td></tr>';
+
+      // Wire delete buttons
+      tb.querySelectorAll('button.aip-del').forEach(b => {
+        b.onclick = async () => {
+          if (!confirm('Remove '+b.dataset.cidr+'?')) return;
+          const r = await fetch(url('/__admin-ips')+'&cidr='+encodeURIComponent(b.dataset.cidr),
+                                {method:'DELETE', credentials:'include'});
+          const d = await r.json();
+          $('aip-msg').textContent = d.message || (d.ok?'removed':'failed');
+          loadAdminIps();
+        };
+      });
+
+      // Wire click-to-edit on description cells.
+      tb.querySelectorAll('td.aip-desc-cell').forEach(cell => {
+        cell.onclick = () => {
+          if (cell.querySelector('input')) return;     // already editing
+          const cidr = cell.parentElement.dataset.cidr;
+          const orig = cell.dataset.desc || '';
+          const inp = document.createElement('input');
+          inp.type = 'text';
+          inp.value = orig;
+          inp.style.cssText = 'width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--blue);border-radius:3px;padding:3px 6px;font-size:11.5px;font-family:inherit';
+          cell.innerHTML = '';
+          cell.appendChild(inp);
+          inp.focus(); inp.select();
+
+          const save = async (commit) => {
+            const newDesc = inp.value.trim();
+            if (!commit || newDesc === orig) {
+              loadAdminIps();      // revert / re-render
+              return;
+            }
+            try {
+              const r = await fetch(url('/__admin-ips'),
+                {method:'PATCH', headers:{'Content-Type':'application/json'},
+                 credentials:'include',
+                 body: JSON.stringify({cidr, description: newDesc})});
+              const d = await r.json();
+              $('aip-msg').textContent = d.message || (d.ok?'updated':'failed');
+              if (d.ok) showToast('Description updated', 'ok');
+              else      showToast('Update failed: ' + (d.message||''), 'err');
+            } catch (e) {
+              showToast('Network error: ' + e.message, 'err');
+            }
+            loadAdminIps();
+          };
+          inp.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter')  { ev.preventDefault(); save(true);  }
+            if (ev.key === 'Escape') { ev.preventDefault(); save(false); }
+          });
+          inp.addEventListener('blur', () => save(true));
+        };
+      });
+    } catch(e) { /* ignore */ }
+  }
+  $('aip-add').onclick = async () => {
+    const cidr = $('aip-cidr').value.trim();
+    const description = $('aip-desc').value.trim();
+    if (!cidr) { $('aip-msg').textContent = 'cidr required'; return; }
+    const r = await fetch(url('/__admin-ips'),
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       credentials:'include',
+       body: JSON.stringify({cidr, description})});
+    const d = await r.json();
+    $('aip-msg').textContent = d.message || (d.ok?'added':'failed');
+    if (d.ok) { $('aip-cidr').value=''; $('aip-desc').value=''; }
+    loadAdminIps();
+  };
+  $('aip-cidr').addEventListener('keydown', e => { if (e.key === 'Enter') $('aip-add').click(); });
+
+  // ── External integrations status + cost ─────────────────────────
+  async function loadExternal(){
+    try {
+      const r = await fetch(url('/__external'), {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const box = $('external-list');
+      const statusBadge = (item) => {
+        if (item.enabled) return '<span style="background:#1f4830;color:var(--green);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">ACTIVE</span>';
+        if (item.status === 'configured') return '<span style="background:#3d3a1a;color:var(--yellow);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">CONFIGURED</span>';
+        if (item.status === 'edge-only (no in-process integration)')
+          return '<span style="background:#1a3a4a;color:#79c0ff;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">EDGE</span>';
+        if (item.status === 'not implemented')
+          return '<span style="background:#30363d;color:var(--dim);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">PLANNED</span>';
+        if (item.status === 'missing-db')
+          return '<span style="background:#3d2a1a;color:var(--yellow);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">MISSING DB</span>';
+        return '<span style="background:#30363d;color:var(--dim);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">DISABLED</span>';
+      };
+      // Map name → hot-reloadable knob (env var that controls active state)
+      const KNOB = {
+        'Cloudflare Turnstile':   'TURNSTILE_ENABLED',
+        'AbuseIPDB':              'ABUSEIPDB_ENABLED',
+        'CrowdSec':               'CROWDSEC_ENABLED',
+        'MaxMind GeoLite2 ASN':   'MAXMIND_ENABLED',
+      };
+      // Server's current toggle state (so the switch reflects reality even
+      // if the integration was force-disabled at runtime).
+      const cfg = serverState || {};
+      const renderToggle = (item) => {
+        const knob = KNOB[item.name];
+        if (!knob) return '';            // edge-only / planned — no toggle
+        const configured = item.status === 'configured' || item.enabled;
+        const checked = !!cfg[knob];
+        const disabledAttr = configured ? '' : 'data-disabled="1"';
+        const cls = (checked ? ' on' : '') + (configured ? '' : ' switch-disabled');
+        const title = configured
+          ? 'Toggle integration on/off (requires ' + (item.envs_needed||[]).join(', ') + ' to be configured)'
+          : 'Cannot enable — set ' + (item.envs_needed||[]).join(' / ') + ' in container env first';
+        return `<div class="switch${cls}" data-knob="${knob}" ${disabledAttr} title="${escapeHtml(title)}"></div>`;
+      };
+      box.innerHTML = (d.integrations||[]).map(item => {
+        const tel = item.telemetry || {};
+        let extra = '';
+        if (item.name === 'AbuseIPDB' && item.enabled) {
+          extra = `<div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:11px">
+            <div><div style="color:var(--dim)">Total lookups</div><div><b>${tel.lookups_total||0}</b></div></div>
+            <div><div style="color:var(--dim)">Cache hits</div><div><b style="color:var(--green)">${tel.lookups_cached||0}</b> (${tel.cache_hit_rate||0}%)</div></div>
+            <div><div style="color:var(--dim)">API calls</div><div><b>${tel.lookups_api||0}</b></div></div>
+            <div><div style="color:var(--dim)">Errors / 429</div><div><b style="color:${(tel.errors||tel.rate_limited)?'var(--red)':'var(--dim)'}">${tel.errors||0} / ${tel.rate_limited||0}</b></div></div>
+            <div><div style="color:var(--dim)">Avg API latency</div><div><b>${tel.avg_latency_ms||0} ms</b></div></div>
+            <div><div style="color:var(--dim)">P99 API latency</div><div><b>${tel.p99_latency_ms||0} ms</b></div></div>
+            <div><div style="color:var(--dim)">High threshold</div><div><b>${(tel.thresholds||{}).high||80}</b></div></div>
+            <div><div style="color:var(--dim)">Cache TTL</div><div><b>${tel.cache_hours||6} h</b></div></div>
+            ${tel.last_error ? `<div style="grid-column:span 4;color:var(--red);font-family:ui-monospace,monospace;font-size:11px">last error: ${escapeHtml(tel.last_error)}</div>` : ''}
+          </div>`;
+        }
+        if (item.name === 'CrowdSec' && item.enabled) {
+          extra = `<div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:11px">
+            <div><div style="color:var(--dim)">Total lookups</div><div><b>${tel.lookups_total||0}</b></div></div>
+            <div><div style="color:var(--dim)">Cache hits</div><div><b style="color:var(--green)">${tel.lookups_cached||0}</b> (${tel.cache_hit_rate||0}%)</div></div>
+            <div><div style="color:var(--dim)">LAPI calls</div><div><b>${tel.lookups_api||0}</b></div></div>
+            <div><div style="color:var(--dim)">Errors</div><div><b style="color:${tel.errors?'var(--red)':'var(--dim)'}">${tel.errors||0}</b></div></div>
+            <div><div style="color:var(--dim)">Avg latency</div><div><b>${tel.avg_latency_ms||0} ms</b></div></div>
+            <div><div style="color:var(--dim)">P99 latency</div><div><b>${tel.p99_latency_ms||0} ms</b></div></div>
+            <div><div style="color:var(--dim)">Active bans (cached)</div><div><b style="color:${tel.active_bans?'var(--red)':'var(--dim)'}">${tel.active_bans||0}</b></div></div>
+            <div><div style="color:var(--dim)">Cache TTL</div><div><b>${tel.cache_secs||60} s</b></div></div>
+            ${tel.lapi_url ? `<div style="grid-column:span 4;color:var(--dim);font-family:ui-monospace,monospace;font-size:10.5px">LAPI: <code style="color:var(--blue)">${escapeHtml(tel.lapi_url)}</code></div>` : ''}
+            ${tel.last_error ? `<div style="grid-column:span 4;color:var(--red);font-family:ui-monospace,monospace;font-size:11px">last error: ${escapeHtml(tel.last_error)}</div>` : ''}
+          </div>`;
+        }
+        if (item.name === 'MaxMind GeoLite2 ASN') {
+          if (item.enabled) {
+            extra = `<div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:11px">
+              <div><div style="color:var(--dim)">Total lookups</div><div><b>${tel.lookups_total||0}</b></div></div>
+              <div><div style="color:var(--dim)">Hosting hits</div><div><b style="color:var(--yellow)">${tel.hits_hosting||0}</b></div></div>
+              <div><div style="color:var(--dim)">Errors</div><div><b style="color:${tel.errors?'var(--red)':'var(--dim)'}">${tel.errors||0}</b></div></div>
+              <div><div style="color:var(--dim)">Avg latency</div><div><b>${tel.avg_latency_ms||0} ms</b></div></div>
+              <div style="grid-column:span 4;color:var(--dim);font-family:ui-monospace,monospace;font-size:10.5px">DB: <code style="color:var(--blue)">${escapeHtml(tel.db_path||'')}</code></div>
+              <div style="grid-column:span 4;color:var(--dim);font-size:10.5px">Hosting keywords: ${(tel.hosting_keywords||[]).map(k=>`<code style="font-size:10px;color:var(--blue)">${escapeHtml(k)}</code>`).join(' ')}</div>
+              ${tel.last_error ? `<div style="grid-column:span 4;color:var(--red);font-family:ui-monospace,monospace;font-size:11px">last error: ${escapeHtml(tel.last_error)}</div>` : ''}
+            </div>`;
+          } else if (item.status === 'missing-db') {
+            extra = `<div style="margin-top:8px;font-size:11px;color:var(--yellow)">DB not found at <code>${escapeHtml(tel.db_path||'/data/GeoLite2-ASN.mmdb')}</code> — download <a href="https://dev.maxmind.com/geoip/geolite2-free-geolocation-data" target="_blank" style="color:var(--blue)">GeoLite2-ASN.mmdb</a> and drop into the volume.</div>`;
+          }
+        }
+        return `<div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div style="flex:1 1 280px;display:flex;align-items:flex-start;gap:12px">
+              ${renderToggle(item)}
+              <div>
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">${escapeHtml(item.name)} ${statusBadge(item)}</div>
+                <div style="color:var(--dim);font-size:11.5px">${escapeHtml(item.purpose)}</div>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(3,auto);gap:14px;font-size:11px;text-align:right">
+              <div><div style="color:var(--dim)">cached</div><div style="font-family:ui-monospace,monospace"><b style="color:var(--green)">${item.cost_cached_ms} ms</b></div></div>
+              <div><div style="color:var(--dim)">typical</div><div style="font-family:ui-monospace,monospace"><b style="color:var(--yellow)">${item.cost_typical_ms} ms</b></div></div>
+              <div><div style="color:var(--dim)">p99</div><div style="font-family:ui-monospace,monospace"><b style="color:var(--red)">${item.cost_p99_ms} ms</b></div></div>
+            </div>
+          </div>
+          <div style="margin-top:8px;font-size:11px;color:var(--dim)">
+            <span>Free tier: <b style="color:var(--fg)">${escapeHtml(item.free_tier)}</b></span>
+            &nbsp;·&nbsp;
+            <span>Required env: ${item.envs_needed.map(e=>`<code style="font-size:10.5px;color:var(--blue)">${escapeHtml(e)}</code>`).join(' ')}</span>
+          </div>
+          ${extra}
+        </div>`;
+      }).join('');
+
+      // Wire up the toggle clicks
+      box.querySelectorAll('.switch[data-knob]').forEach(sw => {
+        if (sw.dataset.disabled === '1') return;   // disabled (no env config)
+        sw.onclick = async () => {
+          const knob = sw.dataset.knob;
+          const newVal = !sw.classList.contains('on');
+          sw.classList.toggle('on', newVal);
+          try {
+            const r = await fetch(url('/__config'),
+              {method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({[knob]: newVal})});
+            const d = await r.json();
+            if (r.ok && d.applied && Object.keys(d.applied).length) {
+              serverState[knob] = newVal;
+              showToast(knob + ' = ' + newVal, 'ok');
+              loadExternal();   // refresh status badges + telemetry
+            } else {
+              sw.classList.toggle('on', !newVal);   // revert
+              const reasons = d.rejected ? Object.entries(d.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
+              showToast('Rejected — ' + reasons, 'err');
+            }
+          } catch(e) {
+            sw.classList.toggle('on', !newVal);
+            showToast('Network error: ' + e.message, 'err');
+          }
+        };
+      });
+    } catch(e) { /* ignore */ }
+  }
+
+  // ── Defenses & scoring (merged toggles + weights view) ──────────
+  async function loadScoring(){
+    try {
+      const r = await fetch(url('/__scoring'), {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const cfg = serverState || {};
+      const tb = document.querySelector('#scoring-tbl tbody');
+      const tierColor = (t) => ({
+        hard:'#f85149', med:'#d29922', soft:'#3fb950', info:'#8b949e', mod:'#79c0ff'
+      }[t] || '#8b949e');
+      const toggleCell = (knob) => {
+        if (!knob) return '<td style="padding:5px 8px;color:var(--green);font-size:9.5px;font-weight:600">ALWAYS&nbsp;ON</td>';
+        if (!(knob in cfg)) return '<td style="padding:5px 8px;color:var(--dim);font-size:10px">—</td>';
+        const checked = !!cfg[knob];
+        return `<td style="padding:5px 8px"><div class="switch${checked?' on':''}" data-knob-scoring="${knob}" title="Toggle ${escapeHtml(knob)}"></div></td>`;
+      };
+      const weightRows = (d.weights||[]).map(w => {
+        const tag = `<span style="background:${tierColor(w.tier)}22;color:${tierColor(w.tier)};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">${w.tier}</span>`;
+        const wColor = w.weight >= 50 ? 'var(--red)'
+                     : w.weight >= 20 ? 'var(--yellow)'
+                     : w.weight > 0   ? 'var(--green)' : 'var(--dim)';
+        return `<tr style="border-bottom:1px solid var(--line)">
+          ${toggleCell(w.toggle)}
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(w.signal)}</code></td>
+          <td style="padding:5px 8px;text-align:right;font-weight:600;color:${wColor}">${w.weight}</td>
+          <td style="padding:5px 8px">${tag}</td>
+          <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(w.description)}</td>
+        </tr>`;
+      }).join('');
+      // Modifier rows — toggles that don't add weight
+      const modHeader = `<tr><td colspan="5" style="padding:10px 8px 4px 8px;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600">Behavior modifiers (no weight)</td></tr>`;
+      const modRows = (d.modifiers||[]).map(m => {
+        const checked = !!cfg[m.toggle];
+        const knobInState = m.toggle in cfg;
+        const cell = knobInState
+          ? `<td style="padding:5px 8px"><div class="switch${checked?' on':''}" data-knob-scoring="${m.toggle}" title="Toggle ${escapeHtml(m.toggle)}"></div></td>`
+          : '<td style="padding:5px 8px;color:var(--dim);font-size:10px">—</td>';
+        const tag = `<span style="background:${tierColor('mod')}22;color:${tierColor('mod')};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">modifier</span>`;
+        return `<tr style="border-bottom:1px solid var(--line)">
+          ${cell}
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(m.toggle)}</code></td>
+          <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
+          <td style="padding:5px 8px">${tag}</td>
+          <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(m.description)}</td>
+        </tr>`;
+      }).join('');
+      tb.innerHTML = weightRows + modHeader + modRows;
+
+      // Wire toggle clicks (auto-apply via /__config)
+      tb.querySelectorAll('.switch[data-knob-scoring]').forEach(sw => {
+        sw.onclick = async () => {
+          const knob = sw.dataset.knobScoring;
+          const newVal = !sw.classList.contains('on');
+          sw.classList.toggle('on', newVal);
+          try {
+            const r = await fetch(url('/__config'),
+              {method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({[knob]: newVal})});
+            const body = await r.json();
+            if (r.ok && body.applied && Object.keys(body.applied).length){
+              serverState[knob] = newVal;
+              showToast(knob + ' = ' + newVal, 'ok');
+            } else {
+              sw.classList.toggle('on', !newVal);
+              const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
+              showToast('Rejected — ' + reasons, 'err');
+            }
+          } catch(e) {
+            sw.classList.toggle('on', !newVal);
+            showToast('Network error: ' + e.message, 'err');
+          }
+        };
+      });
+    } catch(e) { /* ignore */ }
+  }
+
   load();
   loadAudit();
   loadBans();
+  loadAdminIps();
+  loadScoring();
+  loadExternal();
   setInterval(load, 15000);
   setInterval(loadAudit, 10000);
   setInterval(loadBans, 4000);
+  setInterval(loadAdminIps, 8000);
+  setInterval(loadExternal, 6000);
 });
 </script>
 </body></html>

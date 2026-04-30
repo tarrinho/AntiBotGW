@@ -132,14 +132,20 @@ def _internal_authed(request) -> bool:
 # and the admin-key must pass — defence-in-depth.
 import ipaddress as _ipaddress
 _admin_ips_raw = os.environ.get("ADMIN_ALLOWED_IPS", "").strip()
-ADMIN_ALLOWED_NETS: list = []
+ADMIN_ALLOWED_NETS: list = []          # parsed ip_network objects
+ADMIN_ALLOWED_ENTRIES: list = []       # [{cidr, note, source}, …] for the UI
+ADMIN_ENV_SEED: list = []              # initial env-supplied entries (read once)
 if _admin_ips_raw:
     for _entry in _admin_ips_raw.split(","):
         _entry = _entry.strip()
         if not _entry:
             continue
         try:
-            ADMIN_ALLOWED_NETS.append(_ipaddress.ip_network(_entry, strict=False))
+            _net = _ipaddress.ip_network(_entry, strict=False)
+            ADMIN_ALLOWED_NETS.append(_net)
+            ADMIN_ENV_SEED.append(str(_net))
+            ADMIN_ALLOWED_ENTRIES.append({"cidr": str(_net), "note": "env",
+                                          "source": "env", "added_ts": 0})
         except ValueError as _e:
             print(f"FATAL: invalid ADMIN_ALLOWED_IPS entry {_entry!r} — {_e}",
                   flush=True)
@@ -156,6 +162,114 @@ def _admin_ip_allowed(request) -> bool:
     except (ValueError, TypeError):
         return False
     return any(ip in net for net in ADMIN_ALLOWED_NETS)
+
+def _rebuild_admin_nets_from_entries():
+    """Re-parse ADMIN_ALLOWED_ENTRIES → ADMIN_ALLOWED_NETS. Hot-reload safe."""
+    global ADMIN_ALLOWED_NETS
+    nets = []
+    for e in ADMIN_ALLOWED_ENTRIES:
+        try:
+            nets.append(_ipaddress.ip_network(e["cidr"], strict=False))
+        except ValueError:
+            continue
+    ADMIN_ALLOWED_NETS = nets
+
+def db_load_admin_ips():
+    """Merge DB-stored admin IPs into in-memory state, seeding env entries on
+    first boot. Idempotent."""
+    global ADMIN_ALLOWED_ENTRIES
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        # Seed env entries once (source='env', upsert)
+        for cidr in ADMIN_ENV_SEED:
+            conn.execute(
+                "INSERT OR IGNORE INTO admin_ips (cidr, added_ts, note, source, description) "
+                "VALUES (?, ?, ?, 'env', ?)",
+                (cidr, _t.time(), "from ADMIN_ALLOWED_IPS env",
+                 "Seeded from ADMIN_ALLOWED_IPS environment variable"))
+        conn.commit()
+        rows = conn.execute(
+            "SELECT cidr, added_ts, note, source, description FROM admin_ips ORDER BY added_ts"
+        ).fetchall()
+        conn.close()
+        ADMIN_ALLOWED_ENTRIES = [
+            {"cidr": r["cidr"], "added_ts": r["added_ts"] or 0,
+             "note": r["note"] or "", "source": r["source"] or "manual",
+             "description": (r["description"] if "description" in r.keys() else "") or ""}
+            for r in rows
+        ]
+        _rebuild_admin_nets_from_entries()
+    except Exception as e:
+        print(f"[admin_ips] load error: {e}", flush=True)
+
+async def admin_ip_add(cidr: str, note: str = "", source: str = "manual",
+                        description: str = "") -> tuple[bool, str]:
+    """Validate + persist + reload. Returns (ok, message)."""
+    cidr = (cidr or "").strip()
+    note = (note or "").strip()[:200]
+    description = (description or "").strip()[:500]
+    if not cidr:
+        return False, "empty cidr"
+    try:
+        net = _ipaddress.ip_network(cidr, strict=False)
+    except ValueError as e:
+        return False, f"invalid cidr: {e}"
+    canon = str(net)
+    if any(e["cidr"] == canon for e in ADMIN_ALLOWED_ENTRIES):
+        return False, "already exists"
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("admin_ip_add",
+                (canon, _t.time(), note, source, description)))
+        except asyncio.QueueFull:
+            return False, "queue full"
+    ADMIN_ALLOWED_ENTRIES.append({"cidr": canon, "added_ts": _t.time(),
+                                  "note": note, "source": source,
+                                  "description": description})
+    _rebuild_admin_nets_from_entries()
+    return True, "added"
+
+async def admin_ip_update_description(cidr: str, description: str) -> tuple[bool, str]:
+    """Update the description of an existing entry in-place. Returns (ok, msg)."""
+    cidr = (cidr or "").strip()
+    description = (description or "").strip()[:500]
+    try:
+        canon = str(_ipaddress.ip_network(cidr, strict=False))
+    except ValueError:
+        return False, "invalid cidr"
+    found = None
+    for e in ADMIN_ALLOWED_ENTRIES:
+        if e["cidr"] == canon:
+            found = e
+            break
+    if found is None:
+        return False, "not present"
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("admin_ip_update_description", (description, canon)))
+        except asyncio.QueueFull:
+            return False, "queue full"
+    found["description"] = description
+    return True, "updated"
+
+async def admin_ip_remove(cidr: str) -> tuple[bool, str]:
+    """Remove from DB + reload."""
+    cidr = (cidr or "").strip()
+    try:
+        canon = str(_ipaddress.ip_network(cidr, strict=False))
+    except ValueError:
+        return False, "invalid cidr"
+    if not any(e["cidr"] == canon for e in ADMIN_ALLOWED_ENTRIES):
+        return False, "not present"
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("admin_ip_remove", (canon,)))
+        except asyncio.QueueFull:
+            return False, "queue full"
+    ADMIN_ALLOWED_ENTRIES[:] = [e for e in ADMIN_ALLOWED_ENTRIES if e["cidr"] != canon]
+    _rebuild_admin_nets_from_entries()
+    return True, "removed"
 
 # ── Hybrid identity: session cookie + browser fingerprint ──────────────────
 # Solves the "shared NAT" problem — bans apply per-browser, not per-IP.
@@ -537,6 +651,22 @@ def db_init():
         ts            REAL
     );
 
+    CREATE TABLE IF NOT EXISTS admin_ips (
+        cidr        TEXT PRIMARY KEY,
+        added_ts    REAL NOT NULL,
+        note        TEXT,
+        source      TEXT,
+        description TEXT  -- 1.5.3: free-text label visible in UI
+    );
+
+    CREATE TABLE IF NOT EXISTS abuseipdb_cache (
+        ip       TEXT PRIMARY KEY,
+        score    INTEGER NOT NULL,
+        country  TEXT,
+        ts       REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_abuseipdb_ts ON abuseipdb_cache(ts);
+
     CREATE TABLE IF NOT EXISTS svc_metrics (
         ts          REAL PRIMARY KEY,
         cpu_pct     REAL,
@@ -550,6 +680,13 @@ def db_init():
         db_db       INTEGER, db_wal INTEGER, db_shm INTEGER, db_total INTEGER
     );
     """)
+    # 1.5.3: idempotent migration — add `description` column if missing
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(admin_ips)")}
+        if "description" not in cols:
+            conn.execute("ALTER TABLE admin_ips ADD COLUMN description TEXT")
+    except Exception as _e:
+        print(f"[migrate] admin_ips description: {_e}", flush=True)
     conn.commit()
     conn.close()
 
@@ -558,6 +695,255 @@ db_queue: asyncio.Queue = None
 db_writer_task = None
 prune_task = None
 service_metrics_task = None
+
+# ── 1.5.3: AbuseIPDB integration (free tier 1000 lookups/day) ─────────────
+# Looks up the source IP against AbuseIPDB's reputation DB. Result cached in
+# SQLite for ABUSEIPDB_CACHE_HOURS so a single bad IP doesn't burn the quota.
+# Score is fed into the risk model as `abuseipdb-high` / `abuseipdb-med`.
+ABUSEIPDB_KEY            = os.environ.get("ABUSEIPDB_KEY", "").strip()
+ABUSEIPDB_ENABLED        = bool(ABUSEIPDB_KEY)
+ABUSEIPDB_HIGH_THRESHOLD = int(os.environ.get("ABUSEIPDB_HIGH_THRESHOLD", "80"))
+ABUSEIPDB_MED_THRESHOLD  = int(os.environ.get("ABUSEIPDB_MED_THRESHOLD",  "40"))
+ABUSEIPDB_CACHE_HOURS    = int(os.environ.get("ABUSEIPDB_CACHE_HOURS",    "6"))
+ABUSEIPDB_TIMEOUT_S      = float(os.environ.get("ABUSEIPDB_TIMEOUT_S", "3.0"))
+ABUSEIPDB_URL = "https://api.abuseipdb.com/api/v2/check"
+
+# Telemetry — exposed via /__external to show operator the cost/usage
+_abuseipdb_stats = {
+    "lookups_total": 0,
+    "lookups_cached": 0,
+    "lookups_api": 0,
+    "errors": 0,
+    "rate_limited": 0,        # 429 from AbuseIPDB
+    "last_error": "",
+    "last_latency_ms": 0.0,
+    "avg_latency_ms": 0.0,
+    "p99_latency_ms": 0.0,
+}
+_abuseipdb_recent_latencies: deque = deque(maxlen=200)
+
+async def _abuseipdb_lookup(ip: str):
+    """Returns (score:int 0-100, country:str, source:str). source ∈
+    ('cache','api','disabled','error'). Never raises — failures degrade
+    gracefully so a downed AbuseIPDB never breaks the gateway."""
+    if not ABUSEIPDB_ENABLED:
+        return 0, "", "disabled"
+    # Skip private / loopback / docker bridge lookups
+    try:
+        ipa = _ipaddress.ip_address(ip)
+        if ipa.is_private or ipa.is_loopback or ipa.is_link_local:
+            return 0, "", "private"
+    except (ValueError, TypeError):
+        return 0, "", "invalid"
+    _abuseipdb_stats["lookups_total"] += 1
+    n = _t.time()
+    # Cache check
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT score, country, ts FROM abuseipdb_cache WHERE ip = ?",
+            (ip,)).fetchone()
+        conn.close()
+        if row and (n - (row["ts"] or 0)) < ABUSEIPDB_CACHE_HOURS * 3600:
+            _abuseipdb_stats["lookups_cached"] += 1
+            return int(row["score"] or 0), row["country"] or "", "cache"
+    except Exception as e:
+        _abuseipdb_stats["errors"] += 1
+        _abuseipdb_stats["last_error"] = f"cache: {e}"[:200]
+    # API call
+    t0 = _t.time()
+    try:
+        timeout = ClientTimeout(total=ABUSEIPDB_TIMEOUT_S)
+        async with ClientSession(timeout=timeout) as session:
+            async with session.get(
+                ABUSEIPDB_URL,
+                params={"ipAddress": ip, "maxAgeInDays": 90},
+                headers={"Key": ABUSEIPDB_KEY,
+                          "Accept": "application/json"}) as resp:
+                if resp.status == 429:
+                    _abuseipdb_stats["rate_limited"] += 1
+                    _abuseipdb_stats["last_error"] = "API quota exceeded"
+                    return 0, "", "rate-limited"
+                if resp.status != 200:
+                    _abuseipdb_stats["errors"] += 1
+                    _abuseipdb_stats["last_error"] = f"HTTP {resp.status}"
+                    return 0, "", "error"
+                data = await resp.json()
+        score   = int((data.get("data") or {}).get("abuseConfidenceScore") or 0)
+        country = ((data.get("data") or {}).get("countryCode") or "")[:8]
+    except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as e:
+        _abuseipdb_stats["errors"] += 1
+        _abuseipdb_stats["last_error"] = f"api: {type(e).__name__}: {str(e)[:120]}"
+        return 0, "", "error"
+    finally:
+        latency_ms = (_t.time() - t0) * 1000.0
+        _abuseipdb_stats["last_latency_ms"] = round(latency_ms, 1)
+        _abuseipdb_recent_latencies.append(latency_ms)
+        if _abuseipdb_recent_latencies:
+            _abuseipdb_stats["avg_latency_ms"] = round(
+                sum(_abuseipdb_recent_latencies) / len(_abuseipdb_recent_latencies), 1)
+            _s = sorted(_abuseipdb_recent_latencies)
+            p99 = _s[max(0, int(len(_s) * 0.99) - 1)]
+            _abuseipdb_stats["p99_latency_ms"] = round(p99, 1)
+    _abuseipdb_stats["lookups_api"] += 1
+    # Persist via DB writer
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("abuseipdb_set", (ip, score, country, n)))
+        except asyncio.QueueFull:
+            pass
+    return score, country, "api"
+
+# ── 1.5.3: CrowdSec LAPI integration (open-source community blocklist) ───
+# Polls the CrowdSec Local API per request to check whether the IP is on the
+# community-vetted ban list. Cached in-process for CROWDSEC_CACHE_SECS to
+# avoid hammering LAPI; the recommended pattern is short TTL since CrowdSec
+# is meant to be queried live.
+CROWDSEC_LAPI_URL  = os.environ.get("CROWDSEC_LAPI_URL", "").rstrip("/")
+CROWDSEC_API_KEY   = os.environ.get("CROWDSEC_API_KEY", "").strip()
+CROWDSEC_ENABLED   = bool(CROWDSEC_LAPI_URL and CROWDSEC_API_KEY)
+CROWDSEC_CACHE_SECS = int(os.environ.get("CROWDSEC_CACHE_SECS", "60"))
+CROWDSEC_TIMEOUT_S = float(os.environ.get("CROWDSEC_TIMEOUT_S", "1.0"))
+
+_crowdsec_stats = {
+    "lookups_total": 0, "lookups_cached": 0, "lookups_api": 0,
+    "errors": 0, "last_error": "",
+    "last_latency_ms": 0.0, "avg_latency_ms": 0.0, "p99_latency_ms": 0.0,
+    "active_bans": 0,
+}
+_crowdsec_recent_latencies: deque = deque(maxlen=200)
+_crowdsec_cache: dict = {}        # ip → (decision_type, expires_ts)
+
+async def _crowdsec_check(ip: str):
+    """Returns (decision:str|None, source:str). decision is the action
+    type from CrowdSec ('ban', 'captcha', …) or None when clean.
+    source ∈ ('cache','api','disabled','private','error')."""
+    if not CROWDSEC_ENABLED:
+        return None, "disabled"
+    try:
+        ipa = _ipaddress.ip_address(ip)
+        if ipa.is_private or ipa.is_loopback or ipa.is_link_local:
+            return None, "private"
+    except (ValueError, TypeError):
+        return None, "invalid"
+    _crowdsec_stats["lookups_total"] += 1
+    n = _t.time()
+    cached = _crowdsec_cache.get(ip)
+    if cached and cached[1] > n:
+        _crowdsec_stats["lookups_cached"] += 1
+        return cached[0], "cache"
+    t0 = _t.time()
+    try:
+        timeout = ClientTimeout(total=CROWDSEC_TIMEOUT_S)
+        async with ClientSession(timeout=timeout) as session:
+            async with session.get(
+                f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                params={"ip": ip},
+                headers={"X-Api-Key": CROWDSEC_API_KEY,
+                          "Accept": "application/json"}) as resp:
+                if resp.status == 404 or resp.status == 200:
+                    pass
+                elif resp.status >= 500:
+                    _crowdsec_stats["errors"] += 1
+                    _crowdsec_stats["last_error"] = f"HTTP {resp.status}"
+                    return None, "error"
+                data = await resp.json()
+        # data is None when no active decisions
+        if not data:
+            _crowdsec_cache[ip] = (None, n + CROWDSEC_CACHE_SECS)
+            return None, "api"
+        # take first decision (CrowdSec returns priority-sorted)
+        decision_type = (data[0] or {}).get("type", "ban")
+        _crowdsec_cache[ip] = (decision_type, n + CROWDSEC_CACHE_SECS)
+        return decision_type, "api"
+    except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as e:
+        _crowdsec_stats["errors"] += 1
+        _crowdsec_stats["last_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+        return None, "error"
+    finally:
+        latency_ms = (_t.time() - t0) * 1000.0
+        _crowdsec_stats["last_latency_ms"] = round(latency_ms, 1)
+        _crowdsec_recent_latencies.append(latency_ms)
+        if _crowdsec_recent_latencies:
+            _crowdsec_stats["avg_latency_ms"] = round(
+                sum(_crowdsec_recent_latencies) / len(_crowdsec_recent_latencies), 1)
+            _s = sorted(_crowdsec_recent_latencies)
+            _crowdsec_stats["p99_latency_ms"] = round(
+                _s[max(0, int(len(_s) * 0.99) - 1)], 1)
+        _crowdsec_stats["lookups_api"] += 1
+        _crowdsec_stats["active_bans"] = sum(
+            1 for v in _crowdsec_cache.values() if v[0] is not None and v[1] > _t.time())
+
+# ── 1.5.3: MaxMind GeoLite2 ASN tagging (local mmdb, no API call) ─────────
+# Free DB download from https://dev.maxmind.com/geoip/geolite2-free-geolocation-data
+# Operator drops `GeoLite2-ASN.mmdb` into /data and points MAXMIND_ASN_DB_PATH
+# at it (default /data/GeoLite2-ASN.mmdb). Pure local lookup ~0.1ms per call.
+MAXMIND_ASN_DB_PATH = os.environ.get("MAXMIND_ASN_DB_PATH", "/data/GeoLite2-ASN.mmdb")
+HOSTING_ASN_KEYWORDS = tuple(
+    s.strip().lower() for s in os.environ.get(
+        "HOSTING_ASN_KEYWORDS",
+        "hetzner,ovh,digitalocean,linode,contabo,vultr,scaleway,"
+        "amazon,aws,google,gce,oracle,alibaba,m247,leaseweb,"
+        "datacamp,packet,equinix,choopa,namecheap,colocrossing,"
+        "psychz,tencent,quadranet"
+    ).split(",") if s.strip())
+
+_asn_reader = None
+MAXMIND_ENABLED = False
+_asn_stats = {
+    "lookups_total": 0, "hits_hosting": 0, "errors": 0, "last_error": "",
+    "last_latency_ms": 0.0, "avg_latency_ms": 0.0,
+}
+_asn_recent_latencies: deque = deque(maxlen=200)
+
+def _init_maxmind():
+    """Lazy-load the mmdb. Called at startup; logs and stays disabled if
+    the file is missing or malformed."""
+    global _asn_reader, MAXMIND_ENABLED
+    if not os.path.exists(MAXMIND_ASN_DB_PATH):
+        return
+    try:
+        import maxminddb
+        _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+        MAXMIND_ENABLED = True
+        print(f"[maxmind] ASN DB loaded from {MAXMIND_ASN_DB_PATH}", flush=True)
+    except Exception as e:
+        _asn_stats["last_error"] = f"init: {e}"[:200]
+        print(f"[maxmind] failed to load {MAXMIND_ASN_DB_PATH}: {e}", flush=True)
+
+def _asn_lookup(ip: str):
+    """Returns (asn:int|None, organisation:str, is_hosting:bool, source:str)."""
+    if not MAXMIND_ENABLED or _asn_reader is None:
+        return None, "", False, "disabled"
+    try:
+        ipa = _ipaddress.ip_address(ip)
+        if ipa.is_private or ipa.is_loopback or ipa.is_link_local:
+            return None, "", False, "private"
+    except (ValueError, TypeError):
+        return None, "", False, "invalid"
+    _asn_stats["lookups_total"] += 1
+    t0 = _t.time()
+    try:
+        rec = _asn_reader.get(ip) or {}
+    except Exception as e:
+        _asn_stats["errors"] += 1
+        _asn_stats["last_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+        return None, "", False, "error"
+    finally:
+        latency_ms = (_t.time() - t0) * 1000.0
+        _asn_stats["last_latency_ms"] = round(latency_ms, 3)
+        _asn_recent_latencies.append(latency_ms)
+        if _asn_recent_latencies:
+            _asn_stats["avg_latency_ms"] = round(
+                sum(_asn_recent_latencies) / len(_asn_recent_latencies), 3)
+    asn = rec.get("autonomous_system_number")
+    org = (rec.get("autonomous_system_organization") or "")[:120]
+    org_lower = org.lower()
+    is_hosting = any(k in org_lower for k in HOSTING_ASN_KEYWORDS)
+    if is_hosting:
+        _asn_stats["hits_hosting"] += 1
+    return asn, org, is_hosting, "ok"
 
 # ── v1.4: Service-metrics collection (no psutil dep — pure /proc + os) ───
 SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
@@ -850,6 +1236,27 @@ async def db_writer_loop():
                     elif op == "svc_metric_prune":
                         # args = (cutoff_ts,)
                         conn.execute("DELETE FROM svc_metrics WHERE ts < ?", args)
+                    elif op == "admin_ip_add":
+                        # args = (cidr, added_ts, note, source, description)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO admin_ips "
+                            "(cidr, added_ts, note, source, description) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            args)
+                    elif op == "admin_ip_remove":
+                        # args = (cidr,)
+                        conn.execute("DELETE FROM admin_ips WHERE cidr = ?", args)
+                    elif op == "admin_ip_update_description":
+                        # args = (description, cidr)
+                        conn.execute(
+                            "UPDATE admin_ips SET description=? WHERE cidr=?",
+                            args)
+                    elif op == "abuseipdb_set":
+                        # args = (ip, score, country, ts)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO abuseipdb_cache "
+                            "(ip, score, country, ts) VALUES (?, ?, ?, ?)",
+                            args)
                 except Exception as e:
                     print(f"[db] write failed: {e} args={args!r}")
             conn.commit()
@@ -1330,7 +1737,24 @@ RISK_WEIGHTS = {
     "tls-fingerprint":       30,    # v1.4.2: JA3/JA4 deny-list hit
     "origin-mismatch":       20,    # v1.4.2: STRICT_ORIGIN failure
     "missing-required-header": 15,  # v1.4.2: REQUIRED_HEADERS absent
+    # ── 1.5.3: scoring-system signals (article-aligned) ──
+    "ua-platform-mismatch":  25,    # UA claims Chrome but Sec-Ch-Ua absent /
+                                    # contradictory; or Firefox sending Sec-Ch-Ua
+    "accept-wildcard-html":   2,    # Accept: */* on what looks like HTML nav
+    "ja4-required-missing":   3,    # JA4 binding required but no header from
+                                    # trusted upstream (soft, opt-in scenario)
+    "headers-suspicious":     2,    # generic catch-all for soft header signals
+    # 1.5.3: external-intel signals
+    "abuseipdb-high":        50,    # AbuseIPDB confidence >= 80
+    "abuseipdb-med":         15,    # AbuseIPDB confidence in [40, 80)
+    "crowdsec-banned":       70,    # community-vetted ban via CrowdSec LAPI
+    "asn-hosting":            5,    # source IP belongs to a hosting provider
 }
+# 1.5.3: soft-challenge tier — when the score sits between SOFT_CHALLENGE_SCORE
+# and RISK_BAN_THRESHOLD the request is forwarded but the next request from
+# this identity is forced through the JS_CHALLENGE/Turnstile cookie gate even
+# on routes that would normally be exempt. Off when JS_CHALLENGE=0.
+SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
 RISK_BAN_THRESHOLD       = 50    # ban when score crosses this for normal IPs
 RISK_BAN_THRESHOLD_NAT   = 100   # higher threshold when IP looks like NAT
 RISK_DECAY_HALFLIFE_SECS = 3600  # score halves every hour
@@ -1587,7 +2011,8 @@ def needs_pow(request: web.Request) -> bool:
 # ── Metrics helpers ────────────────────────────────────────────────────────
 async def record(ip: str, ua: str, path: str, status: int, reason: str,
                  track_key: str = None, sid: str = "", fp: str = "",
-                 ja4: str = "", request_id: str = ""):
+                 ja4: str = "", request_id: str = "",
+                 signals: list = None, score: float = 0.0):
     """Record one request decision into global metrics + per-identity state + event log + DB.
     track_key (identity) is the primary key. ip is stored on IpState for display only.
     `ja4` (R0): TLS handshake fingerprint observed by the trusted upstream
@@ -1674,7 +2099,8 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
              level="info" if not reason else "warn",
              rid=request_id, ip=ip, ja4=ja4 or "", ua=ua[:120],
              method="", path=path[:200], status=status,
-             reason=reason or "ok", track_key=(track_key or "")[:32])
+             reason=reason or "ok", track_key=(track_key or "")[:32],
+             signals=signals or [], score=round(float(score or 0.0), 1))
 
 # ── Silent decoy: serves upstream / contents to banned attackers ───────────
 # Cache also stores the upstream's HTTP status so the decoy mirrors it. A
@@ -1683,6 +2109,65 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
 # detect blocked vs forwarded responses. We now match upstream verbatim.
 _decoy_cache = {"body": None, "ctype": None, "status": 200, "fetched_at": 0.0}
 _DECOY_TTL = 60.0  # cache the homepage for 60s
+
+# 1.5.4: upstream 404 mirror — blocked admin endpoints serve the upstream's
+# real 404 page so the gateway is indistinguishable from "this path doesn't
+# exist on the upstream". Refreshed hourly.
+_upstream_404_cache = {
+    "body":   None,
+    "ctype":  "text/plain; charset=utf-8",
+    "status": 404,
+    "fetched_at": 0.0,
+}
+_UPSTREAM_404_TTL = 3600  # 1 h
+
+async def _fetch_upstream_404() -> bool:
+    """GET a guaranteed-non-existent path from upstream and cache the
+    response. Returns True on success."""
+    probe = f"/__appsecgw-probe-{secrets.token_hex(8)}"
+    try:
+        timeout = ClientTimeout(total=5)
+        async with ClientSession(timeout=timeout) as session:
+            async with session.get(UPSTREAM + probe, ssl=False,
+                                    allow_redirects=False) as resp:
+                _upstream_404_cache["body"]   = await resp.read()
+                _upstream_404_cache["ctype"]  = resp.headers.get(
+                    "Content-Type", "text/html; charset=utf-8")
+                # Preserve actual upstream status (almost always 404; some
+                # apps return 200 with an error template — we mirror).
+                _upstream_404_cache["status"] = resp.status
+                _upstream_404_cache["fetched_at"] = _t.time()
+                return True
+    except Exception as e:
+        slog("upstream-404-fetch-failed", level="warn", error=str(e)[:120])
+        return False
+
+async def _periodic_404_refresh_loop():
+    """Refresh the cached upstream 404 hourly."""
+    while True:
+        try:
+            await asyncio.sleep(_UPSTREAM_404_TTL)
+            await _fetch_upstream_404()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            slog("upstream-404-refresh-error", level="warn", error=str(e)[:120])
+
+async def _serve_mirrored_404() -> web.Response:
+    """Serve a 404 that matches the upstream's 404 page. On first call (cache
+    cold) the upstream is fetched synchronously; on cache miss/expiry the
+    serving path uses whatever's cached and a background refresh kicks in."""
+    n = _t.time()
+    if (not _upstream_404_cache["body"]
+            or n - _upstream_404_cache["fetched_at"] > _UPSTREAM_404_TTL):
+        await _fetch_upstream_404()
+    body   = _upstream_404_cache["body"] or b"Not Found\n"
+    ctype  = _upstream_404_cache["ctype"]
+    status = _upstream_404_cache["status"] or 404
+    return web.Response(status=status, body=body, headers={
+        "Content-Type": ctype,
+        "Cache-Control": "no-store",
+    })
 _decoy_fetch_lock = asyncio.Lock()
 
 async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
@@ -1908,20 +2393,51 @@ async def protect(request: web.Request, handler):
     # When ADMIN_ALLOWED_IPS is configured, the source IP MUST also match —
     # silent decoy on IP mismatch (no leak that the IP check is what blocked).
     if request.path.startswith("/__"):
+        # Liveness probe is unauthenticated by design (k8s / docker healthcheck)
+        if request.path == "/__live":
+            return await handler(request)
         if _admin_ip_allowed(request) and _internal_authed(request):
             return await handler(request)
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
         reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)
                   else "internal-probe")
-        return await _silent_decoy_response(ip, ua, request.path, reason,
-                                            request_id=rid)
+        # 1.5.4: serve the upstream's actual 404 page (cached at startup,
+        # refreshed hourly). An attacker probing /__dashboard sees the same
+        # response as if they'd hit any non-existent path on the upstream.
+        await record(ip, ua, request.path,
+                      _upstream_404_cache.get("status") or 404,
+                      reason, request_id=rid)
+        return await _serve_mirrored_404()
 
     # ── Hybrid identity (primary tracking key) ──
     # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,
     # OR HMAC(fp + ip) for cookieless scripts (still stable per device).
     identity, sid, fp, is_new_session, id_mode = get_identity(request)
     ip = get_ip(request)            # IP for session-creation guard + display
+
+    # ── 1.5.3: external IP-intel layer (AbuseIPDB) ──
+    # Only fires when ABUSEIPDB_KEY is configured. Cached in SQLite — typical
+    # cost is ~0.1ms cached, 100-300ms uncached (Cloudfront RTT). Bumps risk
+    # but never blocks outright; the risk-score model decides.
+    if ABUSEIPDB_ENABLED:
+        ab_score, ab_country, ab_source = await _abuseipdb_lookup(ip)
+        if ab_score >= ABUSEIPDB_HIGH_THRESHOLD:
+            await update_risk_and_maybe_ban(identity, "abuseipdb-high", ip)
+        elif ab_score >= ABUSEIPDB_MED_THRESHOLD:
+            await update_risk_and_maybe_ban(identity, "abuseipdb-med", ip)
+
+    # 1.5.3: CrowdSec community-blocklist check (~5ms typical via local LAPI)
+    if CROWDSEC_ENABLED:
+        cs_decision, cs_source = await _crowdsec_check(ip)
+        if cs_decision:  # any active decision = community-vetted bad actor
+            await update_risk_and_maybe_ban(identity, "crowdsec-banned", ip)
+
+    # 1.5.3: MaxMind ASN tagging (~0.1ms local lookup) — soft signal only
+    if MAXMIND_ENABLED:
+        asn, asn_org, is_hosting, _src = _asn_lookup(ip)
+        if is_hosting:
+            await update_risk_and_maybe_ban(identity, "asn-hosting", ip)
     request["_sid"]    = sid
     request["_is_new"] = is_new_session
     request["_id_mode"] = id_mode
@@ -1995,7 +2511,7 @@ async def protect(request: web.Request, handler):
 
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
     #    Threshold-based: at NAT-like IPs, requires accumulated badness.
-    if request.path in HONEYPOT_PATHS:
+    if HONEYPOT_ENABLED and request.path in HONEYPOT_PATHS:
         await update_risk_and_maybe_ban(track_key, "honeypot-silent", ip)
         return await _silent_decoy_response(
             ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
@@ -2003,7 +2519,7 @@ async def protect(request: web.Request, handler):
 
     # 2b. Suspicious path PATTERN (flag-hunting, file-hunting, CTF recon).
     #     Catches /flag.txt, /myflag, /backup.sql, /id_rsa, /.git/HEAD, etc.
-    if is_suspicious_path(request.path):
+    if SUSPICIOUS_PATH_ENABLED and is_suspicious_path(request.path):
         await update_risk_and_maybe_ban(track_key, "suspicious-path", ip)
         return await _silent_decoy_response(
             ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
@@ -2023,30 +2539,27 @@ async def protect(request: web.Request, handler):
                 ip, ua, path, "canary-echo",
                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
 
-    # 3a. Empty / suspiciously short User-Agent
+    # 3a-c. UA filter family (gated by UA_FILTER_ENABLED)
     ua_stripped = ua.strip()
-    if not ua_stripped:
-        return await deny(403, "ua-empty",
-                          {"error": "missing User-Agent header"})
-    if len(ua_stripped) < 12:
-        return await deny(403, "ua-too-short",
-                          {"error": "User-Agent too short", "ua": ua_stripped})
-
-    # 3b. UA blocklist (substring match, case-insensitive)
     ua_lower = ua_stripped.lower()
-    for blocked in UA_BLOCKLIST:
-        if blocked in ua_lower:
-            return await deny(403, "ua-blocked",
-                              {"error": "user-agent blocked", "matched": blocked})
-
-    # 3c. UA must look like a browser (have one of: Mozilla / Safari / Chrome / Firefox / Edge / Opera)
-    if not any(t in ua_lower for t in ("mozilla", "safari", "chrome", "firefox", "edge", "opera", "trident")):
-        return await deny(403, "ua-non-browser",
-                          {"error": "User-Agent does not look like a browser",
-                           "ua": ua_stripped[:80]})
+    if UA_FILTER_ENABLED:
+        if not ua_stripped:
+            return await deny(403, "ua-empty",
+                              {"error": "missing User-Agent header"})
+        if len(ua_stripped) < 12:
+            return await deny(403, "ua-too-short",
+                              {"error": "User-Agent too short", "ua": ua_stripped})
+        for blocked in UA_BLOCKLIST:
+            if blocked in ua_lower:
+                return await deny(403, "ua-blocked",
+                                  {"error": "user-agent blocked", "matched": blocked})
+        if not any(t in ua_lower for t in ("mozilla", "safari", "chrome", "firefox", "edge", "opera", "trident")):
+            return await deny(403, "ua-non-browser",
+                              {"error": "User-Agent does not look like a browser",
+                               "ua": ua_stripped[:80]})
 
     # 3d. AI agent probe paths → risk_score += 30 (no immediate ban)
-    if request.path in AI_PROBE_PATHS:
+    if AI_PROBE_ENABLED and request.path in AI_PROBE_PATHS:
         await update_risk_and_maybe_ban(track_key, "ai-probe", ip)
         return await deny(403, "ai-probe",
                           {"error": "AI-probe endpoint requested"})
@@ -2060,22 +2573,69 @@ async def protect(request: web.Request, handler):
     sec_fetch_dest = request.headers.get("Sec-Fetch-Dest")
     sec_ch_ua      = request.headers.get("Sec-Ch-Ua")
 
-    # Score header completeness (0-7)
+    # Score header completeness (0-7) — gated by HEADER_COMPLETENESS_ENABLED
     score = (
         bool(accept_lang) + bool(accept_enc) + bool(accept_hdr)
         + bool(sec_fetch_site) + bool(sec_fetch_mode)
         + bool(sec_fetch_dest) + bool(sec_ch_ua)
     )
-    # Real browsers score 5-7. Agents score 0-2.
-    if score < 2 and "chrome" in ua_lower:
-        # Chrome UA but no Sec-Ch-Ua = forged UA (likely scripted)
-        return await deny(403, "ai-headers-incomplete",
-                          {"error": "Chrome UA without browser headers",
-                           "header_score": score})
-    if score == 0:
-        return await deny(403, "ai-headers-empty",
-                          {"error": "no Accept-* nor Sec-Fetch-* headers — not a real browser",
-                           "header_score": score})
+    if HEADER_COMPLETENESS_ENABLED:
+        if score < 2 and "chrome" in ua_lower:
+            return await deny(403, "ai-headers-incomplete",
+                              {"error": "Chrome UA without browser headers",
+                               "header_score": score})
+        if score == 0:
+            return await deny(403, "ai-headers-empty",
+                              {"error": "no Accept-* nor Sec-Fetch-* headers — not a real browser",
+                               "header_score": score})
+
+    # ── 1.5.3: soft signals (article alignment) ───────────────────────────
+    # These don't deny — they bump the risk score and feed signals[] in logs.
+    sec_ch_ua_plat = request.headers.get("Sec-Ch-Ua-Platform", "")
+    request_signals = []                       # collected for log
+
+    # 3e2. UA <-> Sec-Ch-Ua consistency
+    # Chrome ≥ 89 sends Sec-Ch-Ua; Firefox / Safari don't. A forged Chrome UA
+    # without Sec-Ch-Ua, or non-Chrome UA emitting Sec-Ch-Ua, is a strong tell.
+    is_chrome_ua = "chrome" in ua_lower and "edg" not in ua_lower
+    is_firefox_ua = "firefox" in ua_lower
+    is_safari_ua = "safari" in ua_lower and not is_chrome_ua
+    if is_chrome_ua and not sec_ch_ua:
+        await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+        request_signals.append("ua-platform-mismatch")
+    elif (is_firefox_ua or is_safari_ua) and sec_ch_ua:
+        await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+        request_signals.append("ua-platform-mismatch")
+    elif is_chrome_ua and sec_ch_ua and sec_ch_ua_plat:
+        # Cross-check OS hint: UA "Windows NT 10.0" vs Sec-Ch-Ua-Platform
+        plat_norm = sec_ch_ua_plat.strip('"').lower()
+        ua_lower_check = ua_lower
+        if plat_norm == "windows" and "windows" not in ua_lower_check:
+            await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+            request_signals.append("ua-platform-mismatch")
+        elif plat_norm == "macos" and ("mac os" not in ua_lower_check and "macintosh" not in ua_lower_check):
+            await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+            request_signals.append("ua-platform-mismatch")
+        elif plat_norm == "linux" and "linux" not in ua_lower_check and "android" not in ua_lower_check:
+            await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+            request_signals.append("ua-platform-mismatch")
+
+    # 3e3. Accept: */* on what looks like HTML nav (Sec-Fetch-Dest=document)
+    # Browsers always send a richer Accept on document navigation.
+    if (sec_fetch_dest == "document" and accept_hdr.strip() == "*/*"):
+        await update_risk_and_maybe_ban(track_key, "accept-wildcard-html", ip)
+        request_signals.append("accept-wildcard-html")
+
+    # 3e4. JA4 required but missing (only counts as soft penalty when the
+    # operator has set up a trusted JA4 peer but THIS request didn't carry it).
+    if JA4_TRUSTED_NETS and JA4_HEADER and not request.headers.get(JA4_HEADER):
+        # Only soft-score; don't deny (the JS_CHAL_REQUIRE_JA4 hard check is
+        # elsewhere). Helps populate signals[] for telemetry.
+        await update_risk_and_maybe_ban(track_key, "ja4-required-missing", ip)
+        request_signals.append("ja4-required-missing")
+
+    # Stash request_signals for the response wrapper to log
+    request["_signals"] = request_signals
 
     # 3f. Path-discovery rate: too many distinct paths from same identity = enumeration
     async with state_lock:
@@ -2205,8 +2765,17 @@ async def protect(request: web.Request, handler):
         # the hostile pool (24 h shared ban).
         await _record_chal_mint(ua, ip_tier_h, ja4, ip, rid=rid)
 
+    # Pull current risk score for this identity to log alongside signals[].
+    _score_now = 0.0
+    async with state_lock:
+        _s = ip_state.get(track_key)
+        if _s:
+            _decay_risk(_s, now())
+            _score_now = _s.risk_score
     await record(ip, ua, path, response.status, "",
-                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid,
+                 signals=request.get("_signals", []),
+                 score=_score_now)
     # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
     async with state_lock:
         st = ip_state[track_key]
@@ -2583,6 +3152,254 @@ async def unban_endpoint(request: web.Request):
         "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
         headers={"Cache-Control": "no-store"})
 
+async def scoring_endpoint(request: web.Request):
+    """Read-only view of the bot scoring config: per-signal weight, ban
+    thresholds, decay, and a short description per signal so the operator
+    can reason about why a given identity got banned."""
+    DESCRIPTIONS = {
+        "honeypot":              ("hard", "Hit a honeypot path (/.git/HEAD, /.env, /wp-admin, …)"),
+        "honeypot-silent":       ("hard", "Honeypot hit — silently decoyed (same severity)"),
+        "suspicious-path":       ("hard", "Path matches CTF/file-hunting/SQLi/LFI regex"),
+        "ai-probe":              ("med",  "Hit an AI-probe endpoint (/openapi.json, /llms.txt, …)"),
+        "ai-enumeration":        ("med",  ">300 distinct paths per identity (scanner)"),
+        "behavior":              ("soft", "Inter-arrival σ/μ < 0.05 — robotic timing"),
+        "ua-empty":              ("med",  "User-Agent header missing"),
+        "ua-blocked":            ("med",  "UA matched blocklist (curl, python-requests, sqlmap, …)"),
+        "ua-non-browser":        ("med",  "UA does not look like a browser"),
+        "ai-headers-empty":      ("med",  "No Accept-* nor Sec-Fetch-* headers"),
+        "ua-too-short":          ("soft", "UA suspiciously short (< 12 chars)"),
+        "ai-headers-incomplete": ("soft", "Browser UA but Sec-Ch-Ua / Sec-Fetch-* absent"),
+        "upstream-404":          ("soft", "Upstream returned 404 (small enumeration tick)"),
+        "ai-no-assets":          ("soft", "≥25 HTML loads, 0 static asset fetches"),
+        "session-flood":         ("soft", "Many distinct identities minted from same IP"),
+        "rate-limit-ip":         ("soft", "Per-IP rate limit hit (no risk; just throttle)"),
+        "rate-limit":            ("soft", "Per-identity rate limit hit (no risk; just throttle)"),
+        "host-not-allowed":      ("med",  "Host header not in ALLOWED_HOSTS"),
+        "suspicious-body":       ("med",  "POST body matches SQLi/XSS/SSTI/cmd patterns"),
+        "bot-trap":              ("hard", "Hidden honey field in form was filled"),
+        "canary-echo":           ("hard", "Echoed back an agw-c-* canary token (LLM agent)"),
+        "session-churn":         ("hard", "Same UA+IP-tier+JA4 minted N cookies in window"),
+        "fp-banned":             ("info", "Already-banned fingerprint hit (counter only)"),
+        "traffic-threshold":     ("info", "Operator-set GLOBAL_RPS_LIMIT cap"),
+        "js-challenge":          ("soft", "Unsolved JS challenge attempt"),
+        "tls-fingerprint":       ("med",  "JA3/JA4 in JA4_DENY_LIST"),
+        "origin-mismatch":       ("med",  "STRICT_ORIGIN: Origin header mismatch"),
+        "missing-required-header": ("med", "REQUIRED_HEADERS not all present"),
+        "ua-platform-mismatch":  ("med",  "UA / Sec-Ch-Ua / platform headers contradict"),
+        "accept-wildcard-html":  ("soft", "Accept: */* on HTML navigation request"),
+        "ja4-required-missing":  ("soft", "JA4 expected from trusted peer but absent"),
+        "headers-suspicious":    ("soft", "Generic header-shape anomaly"),
+        "abuseipdb-high":        ("hard", "AbuseIPDB confidence ≥ 80 — community-vetted bad IP"),
+        "abuseipdb-med":         ("med",  "AbuseIPDB confidence in [40,80)"),
+        "crowdsec-banned":       ("hard", "CrowdSec LAPI returned an active decision for this IP"),
+        "asn-hosting":           ("soft", "Source IP belongs to a hosting/cloud provider ASN"),
+    }
+    # Each entry annotated with the runtime-toggle knob (if any) that
+    # controls whether the detector runs. UI uses this to render a switch
+    # next to the weight, merging the old "Toggles" and "Bot scoring
+    # weights" cards into a single table.
+    SIGNAL_KNOB = {
+        # Operator-toggleable detectors → runtime ON/OFF switch
+        "js-challenge":       "JS_CHALLENGE",
+        "bot-trap":           "BOT_TRAP_FORMS",
+        "suspicious-body":    "BODY_PATTERN_MATCH",
+        "canary-echo":        "CANARY_ECHO_DETECTION",
+        "origin-mismatch":    "STRICT_ORIGIN",
+        "tls-fingerprint":    None,    # driven by JA4_DENY_LIST contents
+        "abuseipdb-high":     "ABUSEIPDB_ENABLED",
+        "abuseipdb-med":      "ABUSEIPDB_ENABLED",
+        "crowdsec-banned":    "CROWDSEC_ENABLED",
+        "asn-hosting":        "MAXMIND_ENABLED",
+    }
+    weights = []
+    for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
+        tier, desc = DESCRIPTIONS.get(sig, ("?", ""))
+        weights.append({
+            "signal":      sig,
+            "weight":      w,
+            "tier":        tier,
+            "description": desc,
+            "toggle":      SIGNAL_KNOB.get(sig),    # None = always-on
+        })
+    # Modifier-only toggles — no weight, but operator-tunable.
+    # Surface them at the bottom of the merged table.
+    modifiers = [
+        ("INJECT_SECURITY_HEADERS", "Inject HSTS/XFO/CSP/etc. on HTML responses"),
+        ("JS_CHAL_BIND_JA4",        "Bind chal cookie to JA4 fingerprint (when injected)"),
+        ("JS_CHAL_REQUIRE_JA4",     "Hard-require JA4 from a trusted peer at /__challenge"),
+        ("JS_CHAL_STRICT_STATIC",   "Refuse static-asset bypass on API-shaped paths"),
+    ]
+    return web.json_response({
+        "weights":   weights,
+        "modifiers": [{"toggle": k, "description": d} for k, d in modifiers],
+        "thresholds": {
+            "RISK_BAN_THRESHOLD":      RISK_BAN_THRESHOLD,
+            "RISK_BAN_THRESHOLD_NAT":  RISK_BAN_THRESHOLD_NAT,
+            "NAT_IDENTITIES_THRESHOLD": NAT_IDENTITIES_THRESHOLD,
+            "RISK_BAN_DURATION_SECS":  RISK_BAN_DURATION_SECS,
+            "RISK_DECAY_HALFLIFE_SECS": RISK_DECAY_HALFLIFE_SECS,
+            "SOFT_CHALLENGE_SCORE":    SOFT_CHALLENGE_SCORE,
+        },
+    }, headers={"Cache-Control": "no-store"})
+
+async def external_endpoint(request: web.Request):
+    """Status + cost telemetry of every external integration. Read-only —
+    activation is via container env (the secrets must NOT be hot-reloadable
+    via /__config because that would let an admin-key holder enable IP
+    intel keys arbitrarily and burn quota)."""
+    integrations = []
+
+    # 1. Cloudflare Turnstile — already wired
+    integrations.append({
+        "name":         "Cloudflare Turnstile",
+        "purpose":      "Real-browser challenge minted by Cloudflare's siteverify. The only chal-cookie path that's not client-computable.",
+        "status":       "configured" if TURNSTILE_ENABLED else "disabled",
+        "enabled":      TURNSTILE_ENABLED,
+        "envs_needed":  ["TURNSTILE_SITEKEY", "TURNSTILE_SECRET", "JS_CHALLENGE=1"],
+        "free_tier":    "unlimited",
+        "cost_typical_ms":  150.0,    # CF challenge widget round-trip
+        "cost_p99_ms":      400.0,
+        "cost_cached_ms":   0.0,      # cookie reuse — no per-request call
+        "telemetry": {
+            "active": JS_CHALLENGE and TURNSTILE_ENABLED,
+        },
+    })
+
+    # 2. AbuseIPDB
+    integrations.append({
+        "name":         "AbuseIPDB",
+        "purpose":      "Crowdsourced IP reputation. High score → +50 risk; medium → +15.",
+        "status":       "configured" if ABUSEIPDB_ENABLED else "disabled",
+        "enabled":      ABUSEIPDB_ENABLED,
+        "envs_needed":  ["ABUSEIPDB_KEY"],
+        "free_tier":    "1000 lookups/day",
+        "cost_typical_ms":  150.0,
+        "cost_p99_ms":      450.0,
+        "cost_cached_ms":   0.3,
+        "telemetry": dict(_abuseipdb_stats, **{
+            "cache_hit_rate": (
+                round(100.0 * _abuseipdb_stats["lookups_cached"] /
+                      max(1, _abuseipdb_stats["lookups_total"]), 1)),
+            "thresholds": {
+                "high": ABUSEIPDB_HIGH_THRESHOLD,
+                "med":  ABUSEIPDB_MED_THRESHOLD,
+            },
+            "cache_hours": ABUSEIPDB_CACHE_HOURS,
+        }),
+    })
+
+    # 3. CrowdSec
+    integrations.append({
+        "name":         "CrowdSec",
+        "purpose":      "Community blocklist — IP listed in CrowdSec LAPI hits +70 risk (one-shot ban for normal IPs).",
+        "status":       "configured" if CROWDSEC_ENABLED else "disabled",
+        "enabled":      CROWDSEC_ENABLED,
+        "envs_needed":  ["CROWDSEC_LAPI_URL", "CROWDSEC_API_KEY"],
+        "free_tier":    "open source (self-hosted LAPI)",
+        "cost_typical_ms":  5.0,
+        "cost_p99_ms":      20.0,
+        "cost_cached_ms":   0.2,
+        "telemetry": dict(_crowdsec_stats, **{
+            "cache_hit_rate": (
+                round(100.0 * _crowdsec_stats["lookups_cached"] /
+                      max(1, _crowdsec_stats["lookups_total"]), 1)),
+            "cache_secs": CROWDSEC_CACHE_SECS,
+            "lapi_url": CROWDSEC_LAPI_URL or "",
+        }),
+    })
+
+    # 4. MaxMind GeoLite2 ASN
+    integrations.append({
+        "name":         "MaxMind GeoLite2 ASN",
+        "purpose":      "Local ASN tagging — IPs from hosting providers get +5 risk (soft signal).",
+        "status":       ("configured" if MAXMIND_ENABLED
+                         else ("missing-db" if not os.path.exists(MAXMIND_ASN_DB_PATH)
+                               else "disabled")),
+        "enabled":      MAXMIND_ENABLED,
+        "envs_needed":  ["MAXMIND_ASN_DB_PATH (DB file at /data/GeoLite2-ASN.mmdb)"],
+        "free_tier":    "free DB download — monthly refresh",
+        "cost_typical_ms":  0.1,
+        "cost_p99_ms":      0.5,
+        "cost_cached_ms":   0.1,
+        "telemetry": dict(_asn_stats, **{
+            "db_path": MAXMIND_ASN_DB_PATH,
+            "hosting_keywords": list(HOSTING_ASN_KEYWORDS),
+        }),
+    })
+
+    # 5. Anubis — operates at the edge (not in-process)
+    integrations.append({
+        "name":         "Anubis",
+        "purpose":      "Edge PoW reverse proxy — sits IN FRONT of the GW. Adds proof-of-work for first-time visitors. Scrapers tank, humans transparent.",
+        "status":       "edge-only (no in-process integration)",
+        "enabled":      False,
+        "envs_needed":  ["docker-compose chain: cloudflared → anubis → gateway"],
+        "free_tier":    "open source",
+        "cost_typical_ms":  0.0,    # outside our process; adds RTT to client only
+        "cost_p99_ms":      0.0,
+        "cost_cached_ms":   0.0,
+        "telemetry":    {},
+    })
+
+    return web.json_response({"integrations": integrations},
+                              headers={"Cache-Control": "no-store"})
+
+async def admin_ips_endpoint(request: web.Request):
+    """Admin: read / add / remove entries from the admin-IP allowlist.
+
+      GET    /__admin-ips?key=…
+                 → {entries: [{cidr, description, source, added_ts}, …]}
+      POST   /__admin-ips?key=…   body: {cidr, description}
+                 → {ok, message, entries}
+      PATCH  /__admin-ips?key=…   body: {cidr, description}
+                 → {ok, message, entries}    (in-place description update)
+      DELETE /__admin-ips?key=…&cidr=…
+                 → {ok, message, entries}
+
+    Persisted to the `admin_ips` table; hot-reloaded into ADMIN_ALLOWED_NETS.
+    Env-seeded entries are persisted on first boot and CAN be removed via
+    this endpoint (DB authoritative after first boot).
+    """
+    if request.method == "GET":
+        return web.json_response(
+            {"entries": list(ADMIN_ALLOWED_ENTRIES),
+             "env_seed": ADMIN_ENV_SEED},
+            headers={"Cache-Control": "no-store"})
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cidr = (body or {}).get("cidr", "")
+        note = (body or {}).get("note", "")
+        description = (body or {}).get("description", "")
+        ok, msg = await admin_ip_add(cidr, note, source="manual",
+                                      description=description)
+        return web.json_response(
+            {"ok": ok, "message": msg, "entries": list(ADMIN_ALLOWED_ENTRIES)},
+            status=200 if ok else 400,
+            headers={"Cache-Control": "no-store"})
+    if request.method == "PATCH":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cidr = (body or {}).get("cidr", "")
+        description = (body or {}).get("description", "")
+        ok, msg = await admin_ip_update_description(cidr, description)
+        return web.json_response(
+            {"ok": ok, "message": msg, "entries": list(ADMIN_ALLOWED_ENTRIES)},
+            status=200 if ok else 400,
+            headers={"Cache-Control": "no-store"})
+    if request.method == "DELETE":
+        cidr = request.query.get("cidr", "")
+        ok, msg = await admin_ip_remove(cidr)
+        return web.json_response(
+            {"ok": ok, "message": msg, "entries": list(ADMIN_ALLOWED_ENTRIES)},
+            status=200 if ok else 400,
+            headers={"Cache-Control": "no-store"})
+    return web.json_response({"error": "method not allowed"}, status=405)
+
 async def ban_endpoint(request: web.Request):
     """Admin: ban a single identity (track-key) or all identities behind an
     IP for `secs` seconds. Mirror of /__unban so the controls/agents
@@ -2749,6 +3566,28 @@ _HOT_RELOAD_KNOBS = {
     "JS_CHAL_BIND_JA4":        (_to_bool, None),
     "JS_CHAL_REQUIRE_JA4":     (_to_bool, None),
     "JS_CHAL_STRICT_STATIC":   (_to_bool, None),
+    # 1.5.4: external integration kill-switches. Setting to True is rejected
+    # when the underlying credentials/files aren't configured (no point
+    # enabling an integration whose required env is missing). Setting False
+    # is always accepted — operator can disable a live integration without
+    # restart.
+    "ABUSEIPDB_ENABLED":  (_to_bool, lambda v: (not v) or bool(globals().get("ABUSEIPDB_KEY"))),
+    "CROWDSEC_ENABLED":   (_to_bool, lambda v: (not v) or bool(globals().get("CROWDSEC_LAPI_URL") and globals().get("CROWDSEC_API_KEY"))),
+    "MAXMIND_ENABLED":    (_to_bool, lambda v: (not v) or globals().get("_asn_reader") is not None),
+    "TURNSTILE_ENABLED":  (_to_bool, lambda v: (not v) or bool(globals().get("TURNSTILE_SITEKEY") and globals().get("TURNSTILE_SECRET"))),
+    # 1.5.4: per-detector kill-switches (default ON). Operator can mute a
+    # noisy heuristic without a container restart.
+    "HONEYPOT_ENABLED":            (_to_bool, None),
+    "SUSPICIOUS_PATH_ENABLED":     (_to_bool, None),
+    "AI_PROBE_ENABLED":            (_to_bool, None),
+    "UA_FILTER_ENABLED":           (_to_bool, None),
+    "UA_PLATFORM_CHECK_ENABLED":   (_to_bool, None),
+    "HEADER_COMPLETENESS_ENABLED": (_to_bool, None),
+    "BEHAVIORAL_CHECK_ENABLED":    (_to_bool, None),
+    "AI_ENUMERATION_ENABLED":      (_to_bool, None),
+    "AI_NO_ASSETS_ENABLED":        (_to_bool, None),
+    "SESSION_FLOOD_ENABLED":       (_to_bool, None),
+    "UPSTREAM_404_TRACKING_ENABLED": (_to_bool, None),
     # Numeric thresholds (with sane bounds)
     "RISK_BAN_THRESHOLD":     (int,   lambda v: 1 <= v <= 100000),
     "RATE_LIMIT_BURST":       (int,   lambda v: 1 <= v <= 100000),
@@ -2942,6 +3781,24 @@ def _tls_fingerprint_blocked(request) -> bool:
 # server-to-server clients don't send Origin. Operator can also list paths
 # that bypass the check (e.g. webhooks) via OPEN_ORIGIN_PATHS.
 STRICT_ORIGIN     = os.environ.get("STRICT_ORIGIN", "0") in ("1", "true", "yes")
+
+# 1.5.4: per-detector kill-switches (defaults ON). Operator can disable any
+# of these in real-time via /__config to mute noisy detectors or test-isolate.
+def _to_bool_default_true(v):
+    if v is None: return True
+    s = str(v).strip().lower()
+    return s in ("1", "true", "yes", "on")
+HONEYPOT_ENABLED          = _to_bool_default_true(os.environ.get("HONEYPOT_ENABLED", "1"))
+SUSPICIOUS_PATH_ENABLED   = _to_bool_default_true(os.environ.get("SUSPICIOUS_PATH_ENABLED", "1"))
+AI_PROBE_ENABLED          = _to_bool_default_true(os.environ.get("AI_PROBE_ENABLED", "1"))
+UA_FILTER_ENABLED         = _to_bool_default_true(os.environ.get("UA_FILTER_ENABLED", "1"))
+UA_PLATFORM_CHECK_ENABLED = _to_bool_default_true(os.environ.get("UA_PLATFORM_CHECK_ENABLED", "1"))
+HEADER_COMPLETENESS_ENABLED = _to_bool_default_true(os.environ.get("HEADER_COMPLETENESS_ENABLED", "1"))
+BEHAVIORAL_CHECK_ENABLED  = _to_bool_default_true(os.environ.get("BEHAVIORAL_CHECK_ENABLED", "1"))
+AI_ENUMERATION_ENABLED    = _to_bool_default_true(os.environ.get("AI_ENUMERATION_ENABLED", "1"))
+AI_NO_ASSETS_ENABLED      = _to_bool_default_true(os.environ.get("AI_NO_ASSETS_ENABLED", "1"))
+SESSION_FLOOD_ENABLED     = _to_bool_default_true(os.environ.get("SESSION_FLOOD_ENABLED", "1"))
+UPSTREAM_404_TRACKING_ENABLED = _to_bool_default_true(os.environ.get("UPSTREAM_404_TRACKING_ENABLED", "1"))
 _OPEN_ORIGIN_PATHS_RAW = os.environ.get("OPEN_ORIGIN_PATHS", "").strip()
 OPEN_ORIGIN_PATHS = [p.strip() for p in _OPEN_ORIGIN_PATHS_RAW.split(",")
                     if p.strip()]
@@ -3380,8 +4237,22 @@ def _js_challenge_required(request) -> bool:
         # tokens) would otherwise return JSON for `/api/v1/users.css`.
         if not (JS_CHAL_STRICT_STATIC and _looks_like_api(request.path)):
             return False  # public assets
-    if any(request.path.startswith(p) for p in JS_CHAL_OPEN_PATHS):
-        return False  # operator-defined non-browser paths
+    is_open_path = any(request.path.startswith(p) for p in JS_CHAL_OPEN_PATHS)
+    if is_open_path:
+        # 1.5.3 soft-challenge tier: open-path bypass is REVOKED when this
+        # identity's risk score has climbed into the soft-challenge band
+        # (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD). Forces a fresh
+        # cookie mint on a path that would otherwise be exempt.
+        track_key = request.get("_track_key")
+        if track_key and SOFT_CHALLENGE_SCORE > 0:
+            s = ip_state.get(track_key)
+            if s and SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD:
+                # fall through to the cookie verify
+                pass
+            else:
+                return False
+        else:
+            return False
     return not _verify_chal_cookie(
         request.cookies.get(CHAL_COOKIE, ""),
         request.headers.get("User-Agent", ""),
@@ -3837,7 +4708,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.5.2"
+                response_headers["X-Proxy"] = "AppSecGW_1.5.3"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -3896,6 +4767,27 @@ async def on_startup(app):
     db_load_state()
     db_queue = asyncio.Queue(maxsize=10000)
     db_writer_task = asyncio.create_task(db_writer_loop())
+    db_load_admin_ips()
+    print(f"[admin-ips] {len(ADMIN_ALLOWED_ENTRIES)} entries loaded "
+          f"({sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='env')} env, "
+          f"{sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='manual')} manual)")
+    _init_maxmind()
+    if ABUSEIPDB_ENABLED:
+        print(f"[abuseipdb] active — cache TTL {ABUSEIPDB_CACHE_HOURS} h, "
+              f"thresholds high={ABUSEIPDB_HIGH_THRESHOLD} med={ABUSEIPDB_MED_THRESHOLD}",
+              flush=True)
+    if CROWDSEC_ENABLED:
+        print(f"[crowdsec] active — LAPI {CROWDSEC_LAPI_URL}, "
+              f"cache {CROWDSEC_CACHE_SECS}s", flush=True)
+    # 1.5.4: prime upstream 404 cache so blocked admin requests mirror it
+    if await _fetch_upstream_404():
+        print(f"[upstream-404] cached: status={_upstream_404_cache['status']} "
+              f"size={len(_upstream_404_cache['body'])}b "
+              f"ctype={_upstream_404_cache['ctype'][:40]}", flush=True)
+    else:
+        print("[upstream-404] WARN: prime fetch failed; will retry hourly. "
+              "Falling back to plain 'Not Found' until refreshed.", flush=True)
+    asyncio.create_task(_periodic_404_refresh_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
     service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
     # 1.5.0: optional shared-state connect. Failures degrade to no-op so
@@ -4281,7 +5173,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.5.2",
+        "version":         "AppSecGW_1.5.3",
     }
     return web.json_response({
         "current":          current,
@@ -4353,6 +5245,12 @@ def make_app() -> web.Application:
     app.router.add_get("/__metrics", metrics_endpoint)
     app.router.add_get("/__unban", unban_endpoint)
     app.router.add_get("/__ban",   ban_endpoint)
+    app.router.add_get("/__scoring",      scoring_endpoint)
+    app.router.add_get("/__external",     external_endpoint)
+    app.router.add_get("/__admin-ips",    admin_ips_endpoint)
+    app.router.add_post("/__admin-ips",   admin_ips_endpoint)
+    app.router.add_patch("/__admin-ips",  admin_ips_endpoint)
+    app.router.add_delete("/__admin-ips", admin_ips_endpoint)
     app.router.add_post("/__rotate-keys", rotate_keys_endpoint)
     app.router.add_get("/__config",  config_endpoint)
     app.router.add_post("/__config", config_endpoint)
@@ -4372,7 +5270,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.5.2    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.5.3    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
