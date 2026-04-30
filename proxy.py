@@ -3141,7 +3141,7 @@ async def metrics_endpoint(request: web.Request):
                 "enabled": bool(globals().get("MAXMIND_ENABLED", False)),
             },
             "turnstile": {
-                "configured": TURNSTILE_ENABLED,
+                "configured": _TURNSTILE_CONFIGURED,
                 "enabled":    TURNSTILE_ENABLED and JS_CHALLENGE,
             },
             "anubis": {
@@ -4690,7 +4690,15 @@ ANUBIS_DIFFICULTY_BOOST = int(os.environ.get("ANUBIS_DIFFICULTY_BOOST", "1"))
 
 TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "").strip()
 TURNSTILE_SECRET  = os.environ.get("TURNSTILE_SECRET", "").strip()
-TURNSTILE_ENABLED = bool(TURNSTILE_SITEKEY and TURNSTILE_SECRET)
+# 1.5.4 — Turnstile is now OPT-IN even when keys are configured. Operators
+# explicitly enable via env (`TURNSTILE_ENABLED=1`) or the controls dashboard
+# toggle. Closes the deploy-time risk where leaving the test keys in env
+# silently activated Turnstile (see pentest R20).
+_TURNSTILE_CONFIGURED = bool(TURNSTILE_SITEKEY and TURNSTILE_SECRET)
+TURNSTILE_ENABLED = (
+    _TURNSTILE_CONFIGURED
+    and os.environ.get("TURNSTILE_ENABLED", "0") in ("1", "true", "yes")
+)
 # 1.5.4 — show Turnstile only when identity's risk crosses this threshold.
 # 0 (default) = auto = midpoint between SOFT_CHALLENGE_SCORE and
 # RISK_BAN_THRESHOLD (the upper half of the orange band). Below this,

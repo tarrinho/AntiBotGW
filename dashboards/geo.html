@@ -1,0 +1,167 @@
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · GeoMap</title>
+<link rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""/>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--orange:#ff7b3a;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);padding:14px}
+h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+h1 .pill{font-size:10px;background:var(--blue);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
+.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px}
+.topnav a:hover{color:var(--fg);background:#1f2730}
+.topnav a.active{color:var(--fg);background:#1f2730}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.row{display:grid;gap:14px;grid-template-columns:1fr 1fr 1fr 1fr;margin-top:14px}
+.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
+.metric.green{color:var(--green)} .metric.orange{color:var(--orange)} .metric.red{color:var(--red)} .metric.blue{color:var(--blue)}
+.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
+.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;line-height:1.4}
+.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.ctrl:disabled{opacity:.4;cursor:not-allowed}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+#map{height:560px;border-radius:6px;background:#0a0e13;border:1px solid var(--line)}
+.leaflet-container{background:#0a0e13!important;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.leaflet-popup-content-wrapper{background:#161b22;color:var(--fg);border:1px solid var(--line);border-radius:6px}
+.leaflet-popup-content{font:12px ui-monospace;color:var(--fg)}
+.leaflet-popup-tip{background:#161b22;border:1px solid var(--line)}
+.legend{position:absolute;bottom:12px;right:12px;background:rgba(22,27,34,.92);
+        padding:8px 12px;border:1px solid var(--line);border-radius:6px;font-size:11px;
+        color:var(--fg);z-index:1000;line-height:1.6}
+.legend .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
+.dim{color:var(--dim)}
+.notice{background:#3d2a1a;border:1px solid #5b3f1f;color:#e6c068;padding:10px 14px;border-radius:6px;margin-top:12px;font-size:12px;display:none}
+.notice.show{display:block}
+</style></head>
+<body>
+<h1>AppSecGW_1.5.4 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<nav class="topnav">
+  <a href="/__dashboard?key=__KEY__">Dashboard</a>
+  <a href="/__agents?key=__KEY__">Agents</a>
+  <a href="/__service?key=__KEY__">Service</a>
+  <a href="/__controls?key=__KEY__">Controls</a>
+  <a href="/__geo?key=__KEY__" class="active">Geo</a>
+</nav>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+    <h2 style="margin:0">World-map of accesses <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">circle size ∝ hits · green=clean · orange=missed · red=blocked</span></h2>
+    <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+      <span class="dim">window:</span>
+      <select id="range" class="ctrl">
+        <option value="15">15 min</option>
+        <option value="60" selected>1 h</option>
+        <option value="180">3 h</option>
+        <option value="720">12 h</option>
+        <option value="1440">24 h</option>
+        <option value="10080">7 days</option>
+      </select>
+      <button id="now"  class="ctrl ctrl-now">now</button>
+      <button id="refresh" class="ctrl">refresh</button>
+    </div>
+  </div>
+  <div id="notice" class="notice"></div>
+  <div style="position:relative">
+    <div id="map"></div>
+    <div class="legend">
+      <div><span class="dot" style="background:#3fb950"></span> clean (allowed)</div>
+      <div><span class="dot" style="background:#ff7b3a"></span> missed (medium risk)</div>
+      <div><span class="dot" style="background:#f85149"></span> blocked (bots)</div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card"><h2>Locations</h2><div class="metric blue" id="m-points">—</div><div class="metric-sub" id="m-points-sub">distinct lat/lng</div></div>
+  <div class="card"><h2>Clean</h2><div class="metric green" id="m-clean">—</div><div class="metric-sub">allowed requests</div></div>
+  <div class="card"><h2>Missed</h2><div class="metric orange" id="m-missed">—</div><div class="metric-sub">allowed but medium risk</div></div>
+  <div class="card"><h2>Blocked</h2><div class="metric red" id="m-blocked">—</div><div class="metric-sub">bots silent-decoyed</div></div>
+</div>
+
+<div class="foot">refreshes every 30 s · <code id="ts"></code></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script>
+const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+const k_q       = ADMIN_KEY ? ('&key=' + encodeURIComponent(ADMIN_KEY)) : '';
+
+// Carto Dark Matter — free, no API key, no Referer policy issues
+// (OSM's volunteer tile servers reject bulk requests + require Referer).
+const map = L.map('map', { worldCopyJump: true, zoomControl: true })
+  .setView([20, 0], 2);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors © CARTO',
+  subdomains: 'abcd',
+  maxZoom: 19,
+}).addTo(map);
+
+let layerGroup = L.layerGroup().addTo(map);
+
+function radiusFor(count){
+  // log scale: 1 hit -> 4px, 10 -> ~7, 100 -> ~10, 1000 -> ~13
+  return Math.max(4, Math.min(40, 4 + Math.log10(Math.max(1, count)) * 3));
+}
+
+function buildCircle(lat, lng, count, color, label){
+  return L.circleMarker([lat, lng], {
+    radius: radiusFor(count),
+    color: color, fillColor: color,
+    fillOpacity: 0.45, weight: 1.4,
+  }).bindTooltip(label, { className: 'leaflet-tooltip', sticky: true });
+}
+
+async function tick(){
+  const params = new URLSearchParams({range: document.getElementById('range').value});
+  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+  try {
+    const r = await fetch('/__geo-data?' + params, {credentials:'include'});
+    const d = await r.json();
+    const live = document.getElementById('live');
+    live.textContent = '● LIVE'; live.style.background = 'var(--blue)';
+    const notice = document.getElementById('notice');
+    if (!d.configured) {
+      notice.textContent = d.hint || 'GeoLite2-City DB not loaded — drop GeoLite2-City.mmdb into /data and restart.';
+      notice.classList.add('show');
+    } else {
+      notice.classList.remove('show');
+    }
+    const sm = d.summary || {};
+    document.getElementById('m-points').textContent  = sm.total_points  || 0;
+    document.getElementById('m-points-sub').textContent = (sm.total_events||0) + ' total events';
+    document.getElementById('m-clean').textContent   = (sm.total_clean   || 0).toLocaleString();
+    document.getElementById('m-missed').textContent  = (sm.total_missed  || 0).toLocaleString();
+    document.getElementById('m-blocked').textContent = (sm.total_blocked || 0).toLocaleString();
+
+    layerGroup.clearLayers();
+    (d.points || []).forEach(p => {
+      const tip = `<b>${p.city || '?'}</b> ${p.country ? '(' + p.country + ')' : ''}<br>` +
+        `<span style="color:#3fb950">clean</span>: ${p.clean}<br>` +
+        `<span style="color:#ff7b3a">missed</span>: ${p.missed}<br>` +
+        `<span style="color:#f85149">blocked</span>: ${p.blocked}`;
+      // Layered: red on top of orange on top of green for visual emphasis
+      if (p.clean   > 0) buildCircle(p.lat, p.lng, p.clean,   '#3fb950', tip).addTo(layerGroup);
+      if (p.missed  > 0) buildCircle(p.lat + 0.0001, p.lng + 0.0001, p.missed,  '#ff7b3a', tip).addTo(layerGroup);
+      if (p.blocked > 0) buildCircle(p.lat + 0.0002, p.lng + 0.0002, p.blocked, '#f85149', tip).addTo(layerGroup);
+    });
+    document.getElementById('ts').textContent = new Date().toISOString();
+  } catch(e) {
+    document.getElementById('live').style.background = 'var(--red)';
+    document.getElementById('live').textContent = '○ ERR';
+  }
+}
+document.getElementById('range').onchange = tick;
+document.getElementById('refresh').onclick = tick;
+document.getElementById('now').onclick     = tick;
+tick();
+setInterval(tick, 30000);
+</script>
+</body></html>
