@@ -23,11 +23,11 @@ table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;fon
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
 .ban-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
-.ban-track{position:relative;width:34px;height:18px;background:#30363d;border-radius:9px;transition:background .15s;display:inline-block;vertical-align:middle}
+.ban-track{position:relative;width:34px;height:18px;background:var(--green);border-radius:9px;transition:background .15s;display:inline-block;vertical-align:middle}
 .ban-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s}
 .ban-switch.on .ban-track{background:var(--red)}
 .ban-switch.on .ban-knob{left:18px}
-.ban-label{font:600 9.5px ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--dim);text-transform:uppercase}
+.ban-label{font:600 9.5px ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--green);text-transform:uppercase}
 .ban-switch.on .ban-label{color:var(--red)}
 .bar{height:10px;background:#0a0e13;border-radius:4px;overflow:hidden;display:flex}
 .bar>div{height:100%}
@@ -166,7 +166,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
   </div>
 
   <div class="card">
-    <h2>Suspicious agents (passed all blocks but exhibit stealth signals)</h2>
+    <h2>Suspicious identities / IPs (passed all blocks but exhibit stealth signals)</h2>
     <table id="sus-tbl">
       <thead><tr>
         <th>Score</th><th>Identity</th><th>UA</th><th>IP</th>
@@ -446,9 +446,15 @@ document.getElementById('t-bucket').addEventListener('change', tickChart);
 tRefreshControls();
 
 tick(); tickChart();
-setInterval(tick, 3000);
+// 1.5.5 — pause refresh while user is typing in any input
+function _typing(){
+  const ae = document.activeElement; if (!ae) return false;
+  const t = ae.tagName;
+  return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || ae.isContentEditable;
+}
+setInterval(() => { if (!_typing()) tick(); }, 3000);
 // Only auto-refresh the chart when in live mode.
-setInterval(()=>{ if (tEndEpoch === null) tickChart(); }, 5000);
+setInterval(() => { if (tEndEpoch === null && !_typing()) tickChart(); }, 5000);
 
 // ── 1.5.4 — Click on Detection-vs-Miss timeline → IPs in bucket ──────
 // 1.5.5 — render ALL three categories (detected/missed/clean) regardless

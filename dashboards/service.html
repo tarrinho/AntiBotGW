@@ -450,6 +450,12 @@ async function tick(){
 }
 tick();
 // Only auto-refresh when in live mode (when scrolled back, the data is static)
-setInterval(()=>{ if (endEpoch === null) tick(); }, 5000);
+// 1.5.5 — pause refresh while user is typing in any input
+function _typing(){
+  const ae = document.activeElement; if (!ae) return false;
+  const t = ae.tagName;
+  return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || ae.isContentEditable;
+}
+setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
 </script>
 </body></html>

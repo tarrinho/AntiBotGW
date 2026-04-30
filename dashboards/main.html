@@ -18,6 +18,14 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
 .btn-unban:hover{background:#e6ad29}
 .btn-unban:disabled{opacity:.5;cursor:not-allowed}
+/* 1.5.5 — ban-switch (mirror of agents.html) */
+.ban-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.ban-track{position:relative;width:34px;height:18px;background:var(--green);border-radius:9px;transition:background .15s;display:inline-block;vertical-align:middle}
+.ban-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s}
+.ban-switch.on .ban-track{background:var(--red)}
+.ban-switch.on .ban-knob{left:18px}
+.ban-label{font:600 9.5px ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--green);text-transform:uppercase}
+.ban-switch.on .ban-label{color:var(--red)}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
@@ -216,7 +224,10 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
   </style>
 
   <!-- 1.5.1: live throughput + operator-controlled global RPS limit -->
-  <div class="card" id="rps-card" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+  <!-- 1.5.5: Throughput cap card hidden by request — functionality preserved
+       (live RPS still computed in /__metrics, GLOBAL_RPS_LIMIT still tunable
+       via /__controls). -->
+  <div class="card" id="rps-card" style="display:none;align-items:center;gap:18px;flex-wrap:wrap">
     <div style="min-width:180px">
       <h2 style="margin:0 0 4px 0">Throughput cap</h2>
       <div style="font-size:11px;color:var(--dim)">
@@ -280,7 +291,8 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
     <table id="clients-tbl">
       <thead><tr>
         <th>Identity</th><th>Last IP</th><th>Total</th><th>Allowed</th><th>Blocked</th>
-        <th>Risk</th><th>Banned</th><th>Tokens</th><th>Last seen</th><th>Last UA</th><th>Last path</th>
+        <th title="Stealth score — combination of header completeness, asset discipline, path enumeration, behavioural timing, accumulated risk, and 404 rate. Higher = more bot-like.">Score</th>
+        <th>Banned</th><th>Tokens</th><th>Last seen</th><th>Last UA</th><th>Last path</th>
         <th>Action</th>
       </tr></thead>
       <tbody></tbody>
@@ -533,33 +545,64 @@ async function tick() {
       const banned = c.banned_secs > 0 ? `<span class="tag banned">${c.banned_secs}s</span>` : '<span class="dim">—</span>';
       const id = (c.id || c.ip || '');
       const lastIp = c.last_ip || '?';
-      const risk = c.risk_score || 0;
-      const riskColor = risk >= 50 ? 'var(--red)' : risk >= 25 ? 'var(--yellow)' : 'var(--dim)';
-      const hasBlocks = c.blocked > 0;
-      // 1.5.1: inline unban action; only meaningful for currently-banned
-      // identities. The button calls /__unban?id=… (admin-gated).
-      const action = c.banned_secs > 0
-        ? `<button class="btn-unban" data-id="${escapeHtml(id)}" title="Clear ban + reset risk score for this identity">Unban</button>`
-        : `<span class="dim">—</span>`;
+      const score = c.stealth_score || 0;
+      const scoreColor = score >= 80 ? 'var(--red)'
+                       : score >= 60 ? 'var(--orange,#ff7b3a)'
+                       : score >= 40 ? 'var(--yellow)'
+                       : score >= 20 ? 'var(--blue)'
+                       : 'var(--dim)';
+      // 1.5.5 — ban-switch toggle (mirror of agents dashboard).
+      const isBanned = (c.banned_secs || 0) > 0;
+      const switchHtml = `
+        <div class="ban-switch ${isBanned?'on':''}"
+             data-id="${escapeHtml(id)}"
+             title="${isBanned?('banned for ~'+c.banned_secs+'s — click to unban'):'click to ban for 24h'}">
+          <span class="ban-track"><span class="ban-knob"></span></span>
+          <span class="ban-label">${isBanned?'BANNED':'allow'}</span>
+        </div>`;
       return `<tr>
         <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
         <td class="dim">${escapeHtml(lastIp)}</td>
         <td>${c.requests}</td>
         <td style="color:var(--green)">${c.allowed}</td>
         <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
-        <td style="color:${riskColor};font-weight:600">${
-          risk > 0
-            ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${risk.toFixed(1)}</span>`
-            : risk.toFixed(1)
+        <td style="color:${scoreColor};font-weight:600">${
+          score > 0
+            ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${score}</span>`
+            : score
         }</td>
         <td>${banned}</td>
         <td>${c.tokens}</td>
         <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
         <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
         <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
-        <td>${action}</td>
+        <td>${switchHtml}</td>
       </tr>`;
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+    // 1.5.5 — wire ban/unban switches (same flow as agents dashboard).
+    const ADMIN_KEY_LOCAL = new URLSearchParams(location.search).get('key') || '';
+    const k_q_local = ADMIN_KEY_LOCAL ? ('?key=' + encodeURIComponent(ADMIN_KEY_LOCAL)) : '';
+    tbody.querySelectorAll('.ban-switch').forEach(el => {
+      el.onclick = async (ev) => {
+        ev.stopPropagation();
+        const id = el.dataset.id;
+        const banning = !el.classList.contains('on');
+        el.style.opacity = '0.5';
+        const url2 = (banning ? '/__ban' : '/__unban') + k_q_local + '&id=' + encodeURIComponent(id);
+        try {
+          const r = await fetch(url2, {credentials:'include'});
+          const b = await r.json().catch(()=>({}));
+          if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
+            el.classList.toggle('on', banning);
+            el.querySelector('.ban-label').textContent = banning ? 'BANNED' : 'allow';
+            setTimeout(tick, 300);
+          } else {
+            alert((banning?'Ban':'Unban') + ' failed (' + r.status + ')');
+          }
+        } catch(e){ alert('Network error: ' + e.message); }
+        el.style.opacity = '1';
+      };
+    });
     // Wire identity / risk popovers (1.5.4 — same UX as the agents dashboard)
     tbody.querySelectorAll('.cell-click').forEach(el => {
       el.onclick = ev => {
@@ -569,11 +612,17 @@ async function tick() {
       };
     });
 
-    // Top paths
+    // Top paths — 1.5.5: click any row to see who hit that path
     const pBody = document.querySelector('#paths-tbl tbody');
     pBody.innerHTML = (d.top_paths || []).map(p =>
-      `<tr><td>${escapeHtml(p.path)}</td><td>${p.count}</td></tr>`
+      `<tr class="path-row" data-path="${escapeHtml(p.path)}" style="cursor:pointer" title="click to see offender IPs / identities">
+        <td><b class="cell-click" style="border-bottom:1px dotted var(--blue)">${escapeHtml(p.path)}</b></td>
+        <td style="text-align:right;font-weight:600">${p.count}</td>
+      </tr>`
     ).join('') || '<tr><td colspan=2 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
+    pBody.querySelectorAll('.path-row').forEach(tr => {
+      tr.onclick = () => openPathDrill(tr.dataset.path);
+    });
 
     // Events
     const eEl = document.getElementById('events');
@@ -581,14 +630,33 @@ async function tick() {
       const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
       const isOk = (e.reason === 'OK' || e.reason === '');
       const evtCls = isOk ? 'evt-ok' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
-      return `<div class="evt ${evtCls}">
+      // 1.5.5 — make reason tag click-to-explain.  Tooltip on the row's
+      // OK/blocked indicator clarifies the decision (silent decoys can
+      // return 200 even when blocked, etc.)
+      const tagHtml = isOk
+        ? `<span class="tag ${safeClass(e.reason)}" title="Request reached upstream — no detector fired.">OK</span>`
+        : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
+      // Status hint based on HTTP code seen + whether reason fired
+      let statusHint = '';
+      if (!isOk) {
+        if (e.status === 200) statusHint = ' · silent-decoy (HTTP 200, mirrors upstream — bot can\'t tell it was blocked)';
+        else if (e.status === 404) statusHint = ' · upstream-404 mirror or honeypot decoy';
+        else if (e.status === 403) statusHint = ' · hard reject';
+        else if (e.status === 429) statusHint = ' · rate-limited';
+        else if (e.status === 402) statusHint = ' · PoW required';
+      }
+      return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint}">
         <span class="dim">${escapeHtml(time)}</span>
-        <span><span class="tag ${safeClass(e.reason)}">${escapeHtml(isOk ? 'OK' : e.reason)}</span></span>
+        <span>${tagHtml}</span>
         <span>${escapeHtml(e.ip)}</span>
         <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
         <span class="dim" title="request id (X-Request-ID)" style="font-family:ui-monospace;font-size:10.5px">${escapeHtml(e.rid || '')}</span>
       </div>`;
     }).join('') || '<span class="dim">no events yet</span>';
+    // Wire click handlers on the just-rendered events.
+    eEl.querySelectorAll('.reason-drill').forEach(el => {
+      el.onclick = ev => { ev.preventDefault(); openReasonDrill(el.dataset.reason); };
+    });
 
     // Timeline chart
     if (d.timeline && d.timeline.length) {
@@ -625,6 +693,15 @@ async function tick() {
         `<span class="lbl">${ok?dotOn:dotOff} ${escapeHtml(label)}${sub?` <span class="dim">${escapeHtml(sub)}</span>`:''}</span>` +
         `<span class="val" style="font-size:10.5px">${ok?'active':'off'}</span>`;
       const lines = [];
+      // 1.5.5 — SQLite persistence layer (always present, green when reachable)
+      if (svc.db) {
+        const mb = (svc.db.size_bytes / 1048576).toFixed(1);
+        const walMb = (svc.db.wal_size_bytes / 1048576).toFixed(1);
+        lines.push(svcLine(
+          `SQLite DB (${mb} MB${svc.db.wal_size_bytes ? ` + ${walMb} MB WAL` : ''})`,
+          svc.db.exists,
+          svc.db.path));
+      }
       if (svc.redis)     lines.push(svcLine('Redis (shared store)',   svc.redis.connected, svc.redis.url ? '' : 'not configured'));
       if (svc.abuseipdb) lines.push(svcLine('AbuseIPDB',              svc.abuseipdb.enabled && svc.abuseipdb.configured, svc.abuseipdb.configured ? '' : 'no key'));
       if (svc.crowdsec)  lines.push(svcLine('CrowdSec LAPI',          svc.crowdsec.enabled && svc.crowdsec.configured, svc.crowdsec.configured ? '' : 'no LAPI URL'));
@@ -692,9 +769,19 @@ function safeClass(s){return (s||'').replace(/[^a-zA-Z0-9_-]/g,'')}
 document.getElementById('range').addEventListener('change', () => { refreshControls(); tick(); });
 document.getElementById('bucket').addEventListener('change', tick);
 tick();
+// 1.5.5 — skip auto-refresh while the user is typing in any input /
+// textarea / contenteditable, so a tick() doesn't blow away their input
+// mid-edit.
+function _userIsTyping(){
+  const ae = document.activeElement;
+  if (!ae) return false;
+  const tag = ae.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable;
+}
+window._userIsTyping = _userIsTyping;
 // Auto-refresh — but ONLY when in live mode. When user has scrolled back,
 // the data is static and refreshing would just repaint the same window.
-setInterval(() => { if (endEpoch === null) tick(); }, 2000);
+setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
 // ── 1.5.1: throughput cap + unban actions ──────────────────────────
 (function(){
@@ -753,7 +840,7 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
   disEl.onclick     = () => postLimit(0);
   inputEl.addEventListener('keydown', e => { if (e.key==='Enter') applyEl.click(); });
   refreshRps();
-  setInterval(refreshRps, 2000);
+  setInterval(() => { if (!window._userIsTyping || !window._userIsTyping()) refreshRps(); }, 2000);
 
   // Unban buttons inside the clients table.
   document.addEventListener('click', async (e) => {
@@ -856,6 +943,71 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
     back.classList.add('show'); modal.classList.add('show');
   };
 
+  // 1.5.5 — Click any row in the Top-paths table → modal with offender IPs.
+  window.openPathDrill = async function(path){
+    const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+    const params = new URLSearchParams({ path, range: 1440, limit: 100 });
+    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+    let d = {};
+    try {
+      const r = await fetch('/__path-hits?' + params, {credentials:'include'});
+      d = await r.json();
+    } catch(e){ d = {ips:[], total_rows:0}; }
+    const ips = d.ips || [];
+    const totalRows = d.total_rows || 0;
+    const explainBlock = `
+      <div style="border-left:3px solid var(--blue);padding:8px 12px;margin-bottom:12px;background:#0a0e13;border-radius:0 4px 4px 0">
+        <code style="color:var(--blue);font-weight:600">${escapeHtml(path)}</code>
+        <div class="dim" style="font-size:11.5px;margin-top:4px">
+          ${totalRows} total events from ${ips.length} unique IP${ips.length===1?'':'s'} in the last 24 h.
+          Click a row's identity column for full details.
+        </div>
+      </div>`;
+    let body = explainBlock;
+    if (!ips.length){
+      body += '<div class="empty">no events recorded for this path in the window</div>';
+    } else {
+      const rows = ips.map(e => {
+        const idents = e.identities || [];
+        const identCell = idents.length === 0
+          ? '<span class="dim">—</span>'
+          : idents.length === 1
+            ? `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`
+            : `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
+        const topRsn = e.top_reason || 'OK';
+        const rsnColor = topRsn === 'OK' ? 'var(--green)' : 'var(--red)';
+        const banned = idents.some(i => i.banned)
+          ? `<span style="color:var(--red);font-weight:700">BANNED</span>`
+          : `<span style="color:var(--green)">allowed</span>`;
+        const totalRisk = idents.reduce((sum, i) => sum + (i.risk||0), 0);
+        return `<tr>
+          <td>${identCell}</td>
+          <td>${escapeHtml(e.ip)}</td>
+          <td style="text-align:right;font-weight:600">${e.count}×</td>
+          <td style="text-align:right;color:${totalRisk>=50?'var(--red)':totalRisk>=25?'var(--orange,#ff7b3a)':'var(--dim)'};font-weight:600">${totalRisk.toFixed(1)}</td>
+          <td><code style="color:${rsnColor}">${escapeHtml(topRsn)}</code></td>
+          <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,30))}</td>
+          <td class="dim">${e.last_seen_secs_ago != null ? Math.round(e.last_seen_secs_ago)+'s ago' : '—'}</td>
+          <td>${banned}</td>
+        </tr>`;
+      }).join('');
+      body += `<table><thead><tr>
+          <th style="text-align:left">Identity</th><th>IP</th>
+          <th style="text-align:right">Hits</th>
+          <th style="text-align:right" title="sum of risk_score across all in-memory identities at this IP">Σ risk</th>
+          <th style="text-align:left">Top reason</th>
+          <th style="text-align:left">UA</th>
+          <th style="text-align:left">Last seen</th>
+          <th>Status</th>
+        </tr></thead><tbody>${rows}</tbody></table>`;
+    }
+    document.getElementById('modal-title').innerHTML =
+      `Path drill-down · <code style="color:var(--blue)">${escapeHtml(path.length>50?path.slice(0,50)+'…':path)}</code> <span class="x" id="modal-close">×</span>`;
+    document.getElementById('modal-close').onclick = close;
+    document.getElementById('modal-body').innerHTML = body;
+    back.classList.add('show'); modal.classList.add('show');
+  };
+
   // 1.5.5 — Click any line on the timeline → modal with all 4 categories
   // (total/allowed/blocked/missed), with the clicked one highlighted.
   // Reuses the /__agents-bucket endpoint (which returns detected/missed/clean).
@@ -936,7 +1088,73 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
     back.classList.add('show'); modal.classList.add('show');
   };
 
+  // 1.5.5 — reason → human explanation. Mirror of proxy.py's
+  // `scoring_endpoint` DESCRIPTIONS dict + extra "synthetic" reasons that
+  // appear in events but aren't in RISK_WEIGHTS.
+  const REASON_INFO = {
+    // Hard signals (high weight)
+    "honeypot":              {tier:"hard", weight:50, text:"Hit a honeypot path (`/.git/HEAD`, `/.env`, `/wp-admin`, `/actuator/env`, …). These paths are advertised on the gateway but have no upstream — only scanners + LLM agents fetch them. Big risk bump + immediate silent decoy."},
+    "honeypot-silent":       {tier:"hard", weight:50, text:"Same as honeypot, but the gateway returned the upstream's homepage instead of a 404 so the bot can't tell it was caught. Still bumps risk."},
+    "suspicious-path":       {tier:"hard", weight:40, text:"Path matches the suspicious-path regex (CTF flag-hunting, file-hunting, SQLi/XSS/LFI markers, path traversal, VCS metadata, backup files: `*.bak`, `*.sql`, `.git/`, `etc/passwd`, `1' OR 1=1`, …)."},
+    "bot-trap":              {tier:"hard", weight:50, text:"A hidden honey form-field was submitted with a value. Real users never see those fields — they're injected by the gateway with `display:none` + `aria-hidden`. Filling them = bot."},
+    "canary-echo":           {tier:"hard", weight:60, text:"R7 detection: the client echoed back an `agw-c-*` canary token that the gateway planted in a previous HTML response. Only LLM-driven agents do this — they summarise the page into prompt context and re-emit fragments."},
+    "session-churn":         {tier:"hard", weight:40, text:"Same `(UA + IP-tier + JA4)` minted more than `SESSION_CHURN_MAX` chal cookies in `SESSION_CHURN_WINDOW_S` seconds. Cookie-rotation attack pattern."},
+    "abuseipdb-high":        {tier:"hard", weight:50, text:"AbuseIPDB community confidence ≥ `ABUSEIPDB_HIGH_THRESHOLD` (default 80) — IP is on a community-vetted bad-actor list."},
+    "crowdsec-banned":       {tier:"hard", weight:70, text:"CrowdSec LAPI returned an active decision (ban/captcha) for this IP — community blocklist hit. One-shot ban for normal IPs."},
+    // Medium signals
+    "ai-probe":              {tier:"med",  weight:30, text:"Hit an AI-probe endpoint: `/openapi.json`, `/llms.txt`, `/swagger.json`, `/.well-known/ai-plugin.json`, `/sitemap.xml`, model-discovery URLs."},
+    "ai-enumeration":        {tier:"med",  weight:25, text:"Identity has fetched more than `ENUM_THRESHOLD` distinct paths in its lifetime (default 300). Scanner / crawler pattern."},
+    "ua-empty":              {tier:"med",  weight:20, text:"User-Agent header missing. Any modern browser sends one."},
+    "ua-blocked":            {tier:"med",  weight:30, text:"UA matched the blocklist (60+ entries: HTTP libs `curl`/`python-requests`/`go-http-client`, scanners `sqlmap`/`nuclei`/`nmap`, AI tools `claude`/`gptbot`/`openai`/`copilot`, headless browsers `selenium`/`puppeteer`/`playwright`)."},
+    "ua-non-browser":        {tier:"med",  weight:15, text:"UA is set but doesn't contain any of `mozilla`/`safari`/`chrome`/`firefox`/`edge`/`opera`/`trident`."},
+    "ua-too-short":          {tier:"med",  weight:10, text:"UA is shorter than 12 chars. Typical for scripts (`curl/8.0`, `Go/1.21`, …); typical browser UAs are 80-120 chars."},
+    "ua-platform-mismatch":  {tier:"med",  weight:15, text:"UA-string platform contradicts `Sec-Ch-Ua-Platform` (e.g. UA says Windows but Client Hints say Linux). Real browsers don't lie about this."},
+    "ai-headers-empty":      {tier:"med",  weight:20, text:"No `Accept-*` and no `Sec-Fetch-*` headers. Browsers always send these; pure-HTTP clients usually don't."},
+    "ai-headers-incomplete": {tier:"soft", weight:8,  text:"UA looks like a browser (`Mozilla/...`) but `Sec-Ch-Ua` / `Sec-Fetch-*` are absent. Headless / minimal scripted clients."},
+    "missing-required-header": {tier:"med", weight:15, text:"`REQUIRED_HEADERS` allowlist not all present (operator-configured)."},
+    "abuseipdb-med":         {tier:"med",  weight:15, text:"AbuseIPDB confidence in `[ABUSEIPDB_MED_THRESHOLD, ABUSEIPDB_HIGH_THRESHOLD)` (default 40-79)."},
+    "tls-fingerprint":       {tier:"med",  weight:15, text:"JA3/JA4 TLS handshake fingerprint is in `JA4_DENY_LIST`. Scrapers using urllib3/curl/Go-http have very identifiable JA4s."},
+    "origin-mismatch":       {tier:"med",  weight:20, text:"`STRICT_ORIGIN=1` and the request's `Origin` header doesn't match `ALLOWED_HOSTS`. CSRF-style red flag."},
+    "host-not-allowed":      {tier:"med",  weight:20, text:"`Host` header not in `ALLOWED_HOSTS`. Host-header spoofing or wrong-domain bot."},
+    "suspicious-body":       {tier:"med",  weight:25, text:"`BODY_PATTERN_MATCH=1`: POST body contained SQLi/XSS/SSTI/cmd-injection markers."},
+    // Soft signals
+    "behavior":              {tier:"soft", weight:8,  text:"Inter-arrival timing σ/μ < 0.05, lag-1 autocorr > 0.85, or 50ms-bin majority > 70% — robotic timing signature."},
+    "upstream-404":          {tier:"soft", weight:5,  text:"Upstream returned 404 — small enumeration tick. After several 404s in a row, score crosses threshold."},
+    "ai-no-assets":          {tier:"soft", weight:8,  text:"≥25 HTML responses received but ZERO static-asset (CSS/JS/img/font) fetches. Real browsers always fetch assets; LLM agents skip them."},
+    "session-flood":         {tier:"soft", weight:5,  text:"Many distinct identities minted from the same socket-IP in a short window. NAT-aware (the threshold doubles when ≥3 legit-looking identities share the IP)."},
+    "asn-hosting":           {tier:"soft", weight:5,  text:"Source IP belongs to a hosting/cloud provider ASN (Hetzner, OVH, AWS, GCE, DigitalOcean, …). Soft signal — could be legitimate cloud user."},
+    "accept-wildcard-html":  {tier:"soft", weight:5,  text:"`Accept: */*` on a navigation request. Real browsers send specific `text/html,application/xhtml+xml,...`."},
+    "ja4-required-missing":  {tier:"soft", weight:5,  text:"`JS_CHAL_REQUIRE_JA4=1` and the trusted upstream peer didn't inject a JA4 header. Soft penalty (config issue, not necessarily attack)."},
+    "headers-suspicious":    {tier:"soft", weight:5,  text:"Generic header-shape anomaly (mixed casing, unusual ordering, non-standard separators)."},
+    "rate-limit-ip":         {tier:"soft", weight:0,  text:"Per-IP token bucket exhausted (`IP_BURST` / `IP_REFILL`). Throttled with HTTP 429 — no risk added, just back-pressure."},
+    "rate-limit":            {tier:"soft", weight:0,  text:"Per-identity token bucket exhausted (`RATE_LIMIT_BURST` / `RATE_LIMIT_REFILL`). HTTP 429."},
+    "js-challenge":          {tier:"soft", weight:0,  text:"Unsolved JS challenge attempt — incremented telemetry only."},
+    "fp-banned":             {tier:"info", weight:0,  text:"Already-banned fingerprint hit (counter only — the actual block is `banned-silent`)."},
+    "traffic-threshold":     {tier:"info", weight:0,  text:"Operator-set `GLOBAL_RPS_LIMIT` cap reached — silent decoy until traffic drops."},
+    // Synthetic reasons (not in RISK_WEIGHTS — emitted by middleware directly)
+    "banned-silent":         {tier:"info", weight:0,  text:"Identity is currently in the hostile pool (24-h ban after risk crossed threshold OR honeypot/AI-flagged hit). Every request returns the upstream's homepage so the bot can't tell it was caught."},
+    "chal-required":         {tier:"info", weight:0,  text:"Cookie gate (`JS_CHALLENGE=1`) requires a valid `chal` cookie and this request didn't carry one. Browser solves Turnstile / heuristic auto-mint to get the cookie; pure-HTTP bots get silent-decoyed."},
+    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/__metrics`, `/__dashboard`, etc. is never confirmed to outsiders."},
+    "admin-ip-blocked":      {tier:"info", weight:0,  text:"`ADMIN_ALLOWED_IPS` is configured and the source IP is not on the list. Admin endpoints return upstream-404 (mirrors a real not-found, no leak)."},
+    "pow-required":          {tier:"info", weight:0,  text:"`POW_REQUIRED_PATHS` includes this path and the request didn't carry a valid `X-PoW-Token`/`X-PoW-Solution`. Returns 402 with a fresh challenge."},
+    "OK":                    {tier:"info", weight:0,  text:"Request was forwarded to the upstream. No detector fired."},
+  };
+
+  const TIER_COLOR = { hard:"var(--red)", med:"var(--yellow)", soft:"#5fb3c0", info:"var(--dim)" };
+
   window.openReasonDrill = function(reason){
+    const info = REASON_INFO[reason] || {tier:"info", weight:0, text:"No description available for this reason yet."};
+    const explainBlock = `
+      <div style="border-left:3px solid ${TIER_COLOR[info.tier]||'var(--dim)'};padding:8px 12px;margin-bottom:12px;background:#0a0e13;border-radius:0 4px 4px 0">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
+          <code style="color:${TIER_COLOR[info.tier]||'var(--fg)'};font-weight:700;font-size:12.5px">${escapeHtml(reason)}</code>
+          <div style="display:flex;gap:10px;font-size:10.5px">
+            <span style="color:var(--dim)">tier:</span> <b style="color:${TIER_COLOR[info.tier]||'var(--fg)'};text-transform:uppercase">${info.tier}</b>
+            <span style="color:var(--dim)">weight:</span> <b>${info.weight}</b>
+          </div>
+        </div>
+        <div style="color:var(--fg);font-size:11.5px;margin-top:6px;line-height:1.45">${escapeHtml(info.text)}</div>
+      </div>`;
     const clients = window._lastClients || [];
     const offenders = clients
       .filter(c => (c.blocks_by_reason || {})[reason])
@@ -944,32 +1162,60 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
         id: c.id, ip: c.last_ip || c.ip, ua: c.last_ua,
         count: c.blocks_by_reason[reason],
         risk: c.risk_score,
+        score: c.stealth_score,            // 1.5.5 — show stealth score, not multiplied weight
         last_seen: c.last_seen_secs_ago,
         banned: c.banned_secs > 0,
       }))
       .sort((a,b)=>b.count - a.count);
     document.getElementById('modal-title').innerHTML =
-      `Offending identities · <code style="color:var(--red)">${escapeHtml(reason)}</code>` +
+      `Reason details · <code style="color:${TIER_COLOR[info.tier]||'var(--red)'}">${escapeHtml(reason)}</code>` +
       ` <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
-    let body;
+    let body = explainBlock;
     if (!offenders.length){
-      body = `<div class="empty">no client currently in memory has hits on <b>${escapeHtml(reason)}</b><br><span style="font-size:10.5px">may have been pruned (24h idle eviction)</span></div>`;
+      body += `<div class="empty">no client currently in memory has hits on <b>${escapeHtml(reason)}</b><br><span style="font-size:10.5px">may have been pruned (idle eviction) — check the <code>/__events</code> log for historical hits</span></div>`;
     } else {
-      body = `<div class="dim" style="margin-bottom:8px">${offenders.length} identit${offenders.length===1?'y':'ies'}</div>
-        <table><thead><tr>
-          <th style="text-align:left">Identity</th><th>IP</th><th>Hits</th>
-          <th>Risk</th><th>Last seen</th><th>Status</th>
-        </tr></thead><tbody>` +
-        offenders.map(o => `
+      // 1.5.5 — show stealth_score (current accumulated, decay-aware) per
+      // identity, NOT a naive weight×count multiplication.  The actual
+      // contribution decays at half-life 1h, so weight×count overstates
+      // the "current risk added" and was misleading.
+      const summaryRows = offenders.map(o => {
+        const r = o.risk || 0;
+        const ss = o.score != null ? o.score : 0;
+        const decision = o.banned
+          ? `<span style="color:var(--red);font-weight:700">BANNED</span>`
+          : (r >= 25
+              ? `<span style="color:var(--orange,#ff7b3a);font-weight:600">missed (medium risk)</span>`
+              : `<span style="color:var(--green)">allowed</span>`);
+        const scoreColor = ss >= 80 ? 'var(--red)'
+                         : ss >= 60 ? 'var(--orange,#ff7b3a)'
+                         : ss >= 40 ? 'var(--yellow)'
+                         : ss >= 20 ? 'var(--blue)'
+                         : 'var(--dim)';
+        return `
           <tr>
-            <td title="${escapeHtml(o.id||'')}">${escapeHtml((o.id||'').slice(0,16))}</td>
+            <td title="${escapeHtml(o.id||'')}"><b>${escapeHtml((o.id||'').slice(0,16))}</b></td>
             <td>${escapeHtml(o.ip||'—')}</td>
-            <td style="color:var(--red);font-weight:600">${o.count}×</td>
-            <td>${o.risk}</td>
+            <td style="color:var(--red);font-weight:600;text-align:right" title="number of times this reason fired for this identity (each hit adds +${info.weight} risk on impact, but decay erodes it at half-life 1h)">${o.count}×</td>
+            <td style="text-align:right;color:${scoreColor};font-weight:600" title="current stealth score (combines accumulated risk + behavioural signals; decays in lockstep with the risk model)">${ss}</td>
             <td class="dim">${o.last_seen!=null?Math.round(o.last_seen)+'s ago':'—'}</td>
-            <td>${o.banned?'<span style="color:var(--red);font-weight:600">BANNED</span>':'allowed'}</td>
-          </tr>`).join('') + '</tbody></table>';
+            <td>${decision}</td>
+          </tr>`;
+      }).join('');
+      body += `<div class="dim" style="margin-bottom:8px">${offenders.length} identit${offenders.length===1?'y':'ies'} hit this reason · click any row's identity for full details · per-hit weight: <b>+${info.weight}</b></div>
+        <table><thead><tr>
+          <th style="text-align:left">Identity</th><th>IP</th>
+          <th title="number of times this reason fired for this identity">Hits</th>
+          <th title="current stealth score (decay-aware) — this is the dashboard's primary score column">Score</th>
+          <th>Last seen</th>
+          <th title="current decision: BANNED if in hostile pool, missed if risk in medium-band, allowed otherwise. Note: a request can be 'allowed' (forwarded) but still recorded with a reason — silent decoys mirror the upstream so the bot can't tell, and some detectors log without blocking.">Status ⓘ</th>
+        </tr></thead><tbody>${summaryRows}</tbody></table>
+        <div class="dim" style="margin-top:10px;font-size:10.5px;line-height:1.5">
+          <b>Status legend:</b><br>
+          <span style="color:var(--green)">●</span> allowed — request reached upstream (or got silent-decoyed with HTTP 200; check the per-event drill-down for the actual decision)<br>
+          <span style="color:var(--orange,#ff7b3a)">●</span> missed — risk score in medium-band [SOFT_CHALLENGE_SCORE, RISK_BAN_THRESHOLD); request currently allowed but flagged for monitoring<br>
+          <span style="color:var(--red)">●</span> banned — risk score crossed RISK_BAN_THRESHOLD; in hostile pool for HOSTILE_BAN_SECS (default 24h)
+        </div>`;
     }
     document.getElementById('modal-body').innerHTML = body;
     back.classList.add('show'); modal.classList.add('show');
@@ -982,14 +1228,14 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
   const k_q = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
   const sliderEl = document.getElementById('thr-slider');
   const msgEl    = document.getElementById('thr-msg');
-  const MAX = 200;          // visual scale upper bound
+  const MAX = 100;          // visual scale upper bound (1.5.5 — 0..100)
   let SOFT = 4, BAN = 50;   // current values, fetched on first tick
   let dragging = null;      // 'soft' | 'ban' | null
 
   // Build static DOM once
   sliderEl.innerHTML = `
     <div class="track" id="thr-track"></div>
-    <div class="scale"><span>0</span><span>50</span><span>100</span><span>150</span><span>${MAX}</span></div>
+    <div class="scale"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>${MAX}</span></div>
     <div class="knob soft" id="thr-knob-soft"  title="soft challenge threshold (orange band)">S</div>
     <div class="knob ban"  id="thr-knob-ban"   title="ban threshold (red band)">B</div>
     <div class="knob-val soft" id="thr-knob-soft-val">—</div>
@@ -1087,7 +1333,7 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
     } catch(e){}
   }
   syncFromConfig();
-  setInterval(() => { if (!dragging) syncFromConfig(); }, 6000);
+  setInterval(() => { if (!dragging && (!window._userIsTyping || !window._userIsTyping())) syncFromConfig(); }, 6000);
 })();
 
 </script>

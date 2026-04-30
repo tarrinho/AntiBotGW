@@ -87,7 +87,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.5.5 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.0 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
@@ -105,13 +105,14 @@ button:disabled{opacity:.4;cursor:not-allowed}
   </div>
 
   <section class="card" id="card-external">
-    <h2>External integrations <span style="font-size:11px;color:var(--dim);font-weight:400">(activated via container env vars — secrets out of the dashboard for safety)</span></h2>
+    <h2>External integrations <span style="font-size:11px;color:var(--dim);font-weight:400">(activated via container env vars OR runtime secrets below)</span></h2>
     <div class="hint" style="margin-bottom:10px">
       Each integration adds latency. Cached lookups are sub-ms; uncached
       hits the third-party API. Numbers below are typical, not guaranteed.
     </div>
     <div id="external-list">loading…</div>
   </section>
+
 
   <section class="card" id="card-scoring">
     <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
@@ -808,7 +809,19 @@ document.addEventListener('DOMContentLoaded', () => {
           <div style="margin-top:8px;font-size:11px;color:var(--dim)">
             <span>Free tier: <b style="color:var(--fg)">${escapeHtml(item.free_tier)}</b></span>
             &nbsp;·&nbsp;
-            <span>Required env: ${item.envs_needed.map(e=>`<code style="font-size:10.5px;color:var(--blue)">${escapeHtml(e)}</code>`).join(' ')}</span>
+            <span>Required env: ${item.envs_needed.map(e => {
+              // 1.5.5 — make secret-key chips clickable to set the value at runtime.
+              const SECRET_NAMES = ['TURNSTILE_SITEKEY','TURNSTILE_SECRET',
+                'ABUSEIPDB_KEY','CROWDSEC_LAPI_URL','CROWDSEC_LAPI_KEY',
+                'MAXMIND_LICENSE_KEY'];
+              const stem = String(e).split('=')[0].split(' ')[0].trim();
+              if (SECRET_NAMES.includes(stem)) {
+                return `<a href="#" class="env-secret-edit" data-name="${escapeHtml(stem)}"
+                          title="click to set this secret at runtime"
+                          style="color:var(--blue);text-decoration:underline dotted;cursor:pointer"><code style="font-size:10.5px">${escapeHtml(e)}</code> ✎</a>`;
+              }
+              return `<code style="font-size:10.5px;color:var(--blue)">${escapeHtml(e)}</code>`;
+            }).join(' ')}</span>
           </div>
           ${extra}
         </div>`;
@@ -819,10 +832,21 @@ document.addEventListener('DOMContentLoaded', () => {
         card.onmouseover = () => card.style.borderColor = 'var(--blue)';
         card.onmouseout  = () => card.style.borderColor = 'var(--line)';
         card.onclick = (ev) => {
-          // Don't open the modal when the user clicks the toggle switch.
-          if (ev.target.closest('.switch')) return;
+          // Don't open the modal when user clicks the toggle switch OR
+          // an env-secret edit chip.
+          if (ev.target.closest('.switch') || ev.target.closest('.env-secret-edit')) return;
           try { openIntegrationDetails(JSON.parse(decodeURIComponent(card.dataset.item))); }
           catch(e){}
+        };
+      });
+
+      // 1.5.5 — Click env-name chip → small popover to set the secret value.
+      // Never displays the existing value; just lets you write a new one.
+      box.querySelectorAll('.env-secret-edit').forEach(el => {
+        el.onclick = (ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          openSecretEditor(el.dataset.name, el);
         };
       });
 
@@ -961,12 +985,19 @@ document.addEventListener('DOMContentLoaded', () => {
   loadScoring();
   loadExternal();
   loadThresholds();
-  setInterval(load, 15000);
-  setInterval(loadAudit, 10000);
-  setInterval(loadBans, 4000);
-  setInterval(loadAdminIps, 8000);
-  setInterval(loadExternal, 6000);
-  setInterval(loadThresholds, 10000);
+  // 1.5.5 — never repaint while the user is typing in any input.
+  function _typing(){
+    const ae = document.activeElement;
+    if (!ae) return false;
+    const tag = ae.tagName;
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable;
+  }
+  setInterval(() => { if (!_typing()) load();           }, 15000);
+  setInterval(() => { if (!_typing()) loadAudit();      }, 10000);
+  setInterval(() => { if (!_typing()) loadBans();       }, 4000);
+  setInterval(() => { if (!_typing()) loadAdminIps();   }, 8000);
+  setInterval(() => { if (!_typing()) loadExternal();   }, 6000);
+  setInterval(() => { if (!_typing()) loadThresholds(); }, 10000);
 });
 
 // 1.5.4 — integration-card details modal + banned-identity tooltip
@@ -987,6 +1018,129 @@ const __MODAL = (() => {
 function __closeModal(){ __MODAL_BACK.style.display='none'; __MODAL.style.display='none'; }
 __MODAL_BACK.onclick = __closeModal;
 document.addEventListener('keydown', e => { if (e.key==='Escape') __closeModal(); });
+
+// 1.5.5 — runtime secret editor.  Opens a tiny popover anchored near the
+// clicked chip, accepts a new value, POSTs to /__secrets, never shows
+// the current value.  Includes a "Clear" button to revert to env.
+function openSecretEditor(name, anchor){
+  // Remove any prior popover so only one is open at a time.
+  document.querySelectorAll('.secret-pop').forEach(el => el.remove());
+  const SECRET_INPUT_TYPE = name === 'CROWDSEC_LAPI_URL' ? 'text' : 'password';
+  const SECRET_PLACEHOLDER = {
+    "TURNSTILE_SITEKEY":   "0x4AAAAAA…",
+    "TURNSTILE_SECRET":    "0x4AAAAAA…",
+    "ABUSEIPDB_KEY":       "AbuseIPDB v2 API key",
+    "CROWDSEC_LAPI_URL":   "http://crowdsec:8080",
+    "CROWDSEC_LAPI_KEY":   "CrowdSec bouncer key",
+    "MAXMIND_LICENSE_KEY": "MaxMind license key",
+  }[name] || "new value";
+
+  const pop = document.createElement('div');
+  pop.className = 'secret-pop';
+  pop.style.cssText = 'position:fixed;z-index:100;background:var(--card);border:1px solid var(--blue);'
+    + 'border-radius:8px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,.5);'
+    + 'min-width:340px;font-size:12px;color:var(--fg)';
+  pop.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+      <code style="color:var(--blue);font-weight:700">${escapeHtml(name)}</code>
+      <span style="cursor:pointer;color:var(--dim);font-size:16px;line-height:1" data-close>×</span>
+    </div>
+    <div style="color:var(--dim);font-size:11px;margin-bottom:8px">
+      Existing value not shown.  Type a new value to overwrite, or click Clear to revert to the env-supplied value.
+    </div>
+    <input type="${SECRET_INPUT_TYPE}" placeholder="${escapeHtml(SECRET_PLACEHOLDER)}"
+           autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+           style="width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--line);
+                  padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;
+                  font-size:12px;margin-bottom:8px">
+    <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
+      <span class="hint" data-msg style="margin-right:auto;color:var(--dim);font-size:11px"></span>
+      <button class="secondary" data-clear style="font-size:11.5px;padding:5px 10px">Clear</button>
+      <button data-save style="font-size:11.5px;padding:5px 12px">Save</button>
+    </div>`;
+  document.body.appendChild(pop);
+
+  // Position next to the anchor; clamp inside viewport.
+  const r = anchor.getBoundingClientRect();
+  let x = r.left, y = r.bottom + 6;
+  pop.style.left = x + 'px';
+  pop.style.top  = y + 'px';
+  setTimeout(() => {
+    const pr = pop.getBoundingClientRect();
+    if (pr.right > window.innerWidth - 10) pop.style.left = (window.innerWidth - pr.width - 10) + 'px';
+    if (pr.bottom > window.innerHeight - 10) pop.style.top = (r.top - pr.height - 6) + 'px';
+  }, 0);
+
+  const inp = pop.querySelector('input');
+  const msg = pop.querySelector('[data-msg]');
+  const closeBtn = pop.querySelector('[data-close]');
+  const saveBtn  = pop.querySelector('[data-save]');
+  const clearBtn = pop.querySelector('[data-clear]');
+  inp.focus();
+  closeBtn.onclick = () => pop.remove();
+  // Close when clicking outside
+  setTimeout(() => {
+    const off = (ev) => {
+      if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener('mousedown', off); }
+    };
+    document.addEventListener('mousedown', off);
+  }, 0);
+  // Esc to close
+  inp.onkeydown = (e) => {
+    if (e.key === 'Escape') { pop.remove(); }
+    if (e.key === 'Enter')  { saveBtn.click(); }
+  };
+
+  saveBtn.onclick = async () => {
+    const v = inp.value.trim();
+    if (!v) { msg.textContent = 'empty'; return; }
+    saveBtn.disabled = true; msg.style.color='var(--dim)'; msg.textContent='saving…';
+    try {
+      const r = await fetch(url('/__secrets'),
+        { method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({[name]: v}) });
+      const b = await r.json();
+      if (r.ok && b.applied && b.applied[name]){
+        msg.style.color = 'var(--green)';
+        msg.textContent = '✓ saved · integration re-evaluated';
+        showToast(name + ' saved (' + v.length + ' chars)', 'ok');
+        setTimeout(() => { pop.remove(); loadExternal(); }, 600);
+      } else {
+        msg.style.color = 'var(--red)';
+        msg.textContent = 'rejected: ' + (b.rejected ? JSON.stringify(b.rejected) : 'unknown');
+        saveBtn.disabled = false;
+      }
+    } catch(e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'network error: ' + e.message;
+      saveBtn.disabled = false;
+    }
+  };
+
+  clearBtn.onclick = async () => {
+    if (!confirm('Clear DB-stored ' + name + ' and revert to env value?')) return;
+    clearBtn.disabled = true; msg.style.color='var(--dim)'; msg.textContent='clearing…';
+    try {
+      const r = await fetch(url('/__secrets') + '&name=' + encodeURIComponent(name),
+                            { method:'DELETE' });
+      const b = await r.json();
+      if (r.ok && b.ok){
+        msg.style.color = 'var(--green)';
+        msg.textContent = '✓ cleared · now from ' + b.now_source;
+        showToast(name + ' cleared', 'ok');
+        setTimeout(() => { pop.remove(); loadExternal(); }, 600);
+      } else {
+        msg.style.color = 'var(--red)';
+        msg.textContent = 'failed: ' + (b.error || 'unknown');
+        clearBtn.disabled = false;
+      }
+    } catch(e) {
+      msg.style.color = 'var(--red)';
+      msg.textContent = 'network error: ' + e.message;
+      clearBtn.disabled = false;
+    }
+  };
+}
 
 function openIntegrationDetails(it){
   const tel = it.telemetry || {};

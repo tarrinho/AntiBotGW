@@ -41,7 +41,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .notice.show{display:block}
 </style></head>
 <body>
-<h1>AppSecGW_1.5.5 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.0 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
@@ -192,6 +192,12 @@ document.getElementById('range').onchange = tick;
 document.getElementById('refresh').onclick = tick;
 document.getElementById('now').onclick     = tick;
 tick();
-setInterval(tick, 30000);
+// 1.5.5 — pause refresh while user is typing
+function _typing(){
+  const ae = document.activeElement; if (!ae) return false;
+  const t = ae.tagName;
+  return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || ae.isContentEditable;
+}
+setInterval(() => { if (!_typing()) tick(); }, 30000);
 </script>
 </body></html>

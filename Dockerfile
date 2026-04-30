@@ -37,14 +37,13 @@ COPY --from=builder --chown=65532:65532 /rootfs /
 WORKDIR /app
 USER 65532:65532
 
+# 1.5.5 — only deploy-shape envs go in the image. Runtime-tunable knobs
+# (BURST/REFILL/IP_BURST/IP_REFILL/ALLOWED_METHODS/ALLOWED_HOSTS/etc.) are
+# intentionally NOT set here so they stay hot-reloadable via /__config.
+# proxy.py has sensible in-code defaults; operators override per-deploy via
+# `docker run -e KEY=VAL` or compose env_file.
 ENV LISTEN_HOST=0.0.0.0 \
     LISTEN_PORT=8443 \
-    BURST=30 \
-    REFILL=2.0 \
-    IP_BURST=60 \
-    IP_REFILL=8.0 \
-    ALLOWED_METHODS="GET,HEAD,POST,OPTIONS" \
-    ALLOWED_HOSTS="" \
     TRUST_XFF=last \
     DB_PATH=/data/antibot.db \
     DEBUG=0 \

@@ -695,6 +695,17 @@ def db_init():
         value  TEXT,
         ts     REAL
     );
+
+    -- 1.5.5: runtime secret management. Operator can POST integration keys
+    -- via /__secrets to enable Turnstile / AbuseIPDB / CrowdSec / MaxMind
+    -- without redeploying. Stored separately from config_kv to make audit
+    -- + rotation cleaner. NEVER returned via /__config GET; readable only
+    -- by the in-process loader at startup.
+    CREATE TABLE IF NOT EXISTS secrets_kv (
+        key    TEXT PRIMARY KEY,
+        value  TEXT,
+        ts     REAL
+    );
     """)
     # 1.5.3: idempotent migration — add `description` column if missing
     try:
@@ -1418,6 +1429,11 @@ async def db_writer_loop():
                         conn.execute("INSERT OR REPLACE INTO config_kv (key,value,ts) VALUES (?,?,?)", args)
                     elif op == "del_config":
                         conn.execute("DELETE FROM config_kv WHERE key = ?", args)
+                    elif op == "set_secret":
+                        # 1.5.5 — runtime integration-secret persistence.
+                        conn.execute("INSERT OR REPLACE INTO secrets_kv (key,value,ts) VALUES (?,?,?)", args)
+                    elif op == "del_secret":
+                        conn.execute("DELETE FROM secrets_kv WHERE key = ?", args)
                     elif op == "ban":
                         conn.execute("""
                           INSERT INTO bans (ip,banned_until,reason,ts) VALUES (?,?,?,?)
@@ -1483,6 +1499,66 @@ async def db_writer_loop():
             break
         except Exception as e:
             print(f"[db] loop error: {e}")
+
+# 1.5.5 — runtime integration-secret store.  Each entry maps the public
+# /__secrets endpoint key → (the proxy.py global that holds the value,
+# the env var name we honour as bootstrap fallback).  Add new ones here.
+_SECRET_KEYS = {
+    "TURNSTILE_SITEKEY":   ("TURNSTILE_SITEKEY",   "TURNSTILE_SITEKEY"),
+    "TURNSTILE_SECRET":    ("TURNSTILE_SECRET",    "TURNSTILE_SECRET"),
+    "ABUSEIPDB_KEY":       ("ABUSEIPDB_KEY",       "ABUSEIPDB_KEY"),
+    "CROWDSEC_LAPI_URL":   ("CROWDSEC_LAPI_URL",   "CROWDSEC_LAPI_URL"),
+    "CROWDSEC_LAPI_KEY":   ("CROWDSEC_API_KEY",    "CROWDSEC_LAPI_KEY"),
+    "MAXMIND_LICENSE_KEY": ("MAXMIND_LICENSE_KEY", "MAXMIND_LICENSE_KEY"),
+}
+
+
+def db_load_secrets():
+    """1.5.5 — load DB-persisted integration secrets at startup AFTER env
+    reads.  Env wins iff the env var is set AND non-empty (operator's
+    deploy is authoritative); otherwise the DB-stored value populates the
+    in-process global.  After loading, runtime helpers re-init dependent
+    integration state (e.g. _TURNSTILE_CONFIGURED, ABUSEIPDB_ENABLED)."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT key, value FROM secrets_kv").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[secrets-kv] load failed: {e}", flush=True)
+        return
+    g = globals()
+    applied, env_pinned = 0, 0
+    for r in rows:
+        public_name = r["key"]
+        if public_name not in _SECRET_KEYS:
+            continue
+        global_name, env_name = _SECRET_KEYS[public_name]
+        # Env wins if it's actually set (non-empty)
+        if os.environ.get(env_name, "").strip():
+            env_pinned += 1
+            continue
+        g[global_name] = r["value"]
+        applied += 1
+    # Re-derive "configured" / "enabled" markers
+    _refresh_integration_state()
+    if applied or env_pinned:
+        print(f"[secrets-kv] loaded {applied} secret(s) from DB "
+              f"(env-pinned {env_pinned})", flush=True)
+
+
+def _refresh_integration_state():
+    """Re-derive integration-enabled flags from current globals.  Called
+    after db_load_secrets() and after a successful /__secrets POST."""
+    g = globals()
+    g["_TURNSTILE_CONFIGURED"] = bool(g.get("TURNSTILE_SITEKEY") and g.get("TURNSTILE_SECRET"))
+    g["TURNSTILE_ENABLED"] = (
+        g["_TURNSTILE_CONFIGURED"]
+        and os.environ.get("TURNSTILE_ENABLED", "0") in ("1", "true", "yes")
+    )
+    g["ABUSEIPDB_ENABLED"] = bool(g.get("ABUSEIPDB_KEY"))
+    g["CROWDSEC_ENABLED"]  = bool(g.get("CROWDSEC_LAPI_URL") and g.get("CROWDSEC_API_KEY"))
+
 
 def db_load_config():
     """1.5.5 — load DB-persisted hot-reload knobs over env defaults.
@@ -3235,6 +3311,15 @@ async def metrics_endpoint(request: web.Request):
             tokens = min(RATE_LIMIT_BURST, s.tokens + elapsed * RATE_LIMIT_REFILL)
             # Apply decay before reporting current score
             _decay_risk(s, n)
+            # 1.5.5 — also compute stealth_score so the main-dashboard
+            # Clients table can show it (synthetic fallback from
+            # risk_score / blocked_count when no allowed-traffic signal).
+            _ssc, _, _ = _stealth_score(s)
+            if _ssc == 0:
+                if s.risk_score > 0:
+                    _ssc = min(100, int(s.risk_score))
+                elif s.blocked_count > 0:
+                    _ssc = min(100, 30 + min(50, s.blocked_count * 2))
             clients.append({
                 "id": key,
                 "ip": key,
@@ -3252,6 +3337,7 @@ async def metrics_endpoint(request: web.Request):
                 "last_ua": s.last_user_agent,
                 "last_path": s.last_path,
                 "risk_score": round(s.risk_score, 1),
+                "stealth_score": _ssc,
             })
         recent_events = list(events)[-50:]
         recent_events.reverse()  # newest first
@@ -3335,6 +3421,15 @@ async def metrics_endpoint(request: web.Request):
             "redis": {
                 "url":       REDIS_URL or None,
                 "connected": _redis is not None,
+            },
+            # 1.5.5 — SQLite persistence layer status
+            "db": {
+                "path":      DB_PATH,
+                "exists":    os.path.exists(DB_PATH),
+                "size_bytes": (os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0),
+                "wal_size_bytes": (os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0),
+                "configured": True,
+                "enabled":    True,
             },
             "abuseipdb": {
                 "configured": bool(ABUSEIPDB_KEY),
@@ -3958,6 +4053,93 @@ async def geo_dashboard_endpoint(request: web.Request):
     )
 
 
+async def path_hits_endpoint(request: web.Request):
+    """1.5.5 — drill-down for the Top-paths table on the main dashboard.
+    Returns the IPs / identities that hit a given path, grouped, with
+    their per-path hit count, last-seen, and recorded reason (if any).
+    Reads from the `events` SQLite table (full history) so even pruned
+    in-memory identities still show up.
+
+    Query:
+      ?path=<exact path>     (required)
+      ?range=<minutes>       (default 1440 = 24h)
+      ?limit=<n>             (default 100, max 1000)
+    """
+    p = request.query.get("path", "").strip()
+    if not p or len(p) > 512:
+        return web.json_response({"error": "missing or invalid 'path' param"},
+                                  status=400, headers={"Cache-Control":"no-store"})
+    try:
+        range_min = max(1, min(43200, int(request.query.get("range", "1440"))))
+        limit = max(1, min(1000, int(request.query.get("limit", "100"))))
+    except ValueError:
+        range_min, limit = 1440, 100
+    start_epoch = _t.time() - range_min * 60
+
+    rows = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ip, ua, reason, status, ts FROM events "
+            "WHERE path = ? AND ts >= ? ORDER BY ts DESC LIMIT 50000",
+            (p, start_epoch),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response({"error": f"db: {e}"}, status=500,
+                                  headers={"Cache-Control":"no-store"})
+
+    # Group by IP
+    by_ip = {}
+    for r in rows:
+        ip = r["ip"] or "?"
+        e = by_ip.setdefault(ip, {
+            "ip": ip, "ua": r["ua"] or "", "count": 0,
+            "last_seen_secs_ago": None, "reasons": {}, "statuses": {},
+            "first_ts": r["ts"], "last_ts": r["ts"],
+        })
+        e["count"] += 1
+        e["last_ts"] = max(e["last_ts"], r["ts"])
+        e["first_ts"] = min(e["first_ts"], r["ts"])
+        rsn = r["reason"] or "OK"
+        e["reasons"][rsn] = e["reasons"].get(rsn, 0) + 1
+        st = str(r["status"] or "?")
+        e["statuses"][st] = e["statuses"].get(st, 0) + 1
+
+    # Add per-IP identities from in-memory ip_state (best-effort — multiple
+    # identities can share an IP via NAT)
+    async with state_lock:
+        ip_to_idents = {}
+        for k, st in ip_state.items():
+            if st.last_ip:
+                ip_to_idents.setdefault(st.last_ip, []).append({
+                    "id":      k,
+                    "ua":      st.last_user_agent,
+                    "risk":    round(st.risk_score, 1),
+                    "blocked": st.blocked_count,
+                    "allowed": st.allowed_count,
+                    "banned":  st.banned_until > now(),
+                })
+
+    now_epoch = _t.time()
+    for ip, e in by_ip.items():
+        e["last_seen_secs_ago"] = round(now_epoch - e["last_ts"], 1)
+        e["first_seen_secs_ago"] = round(now_epoch - e["first_ts"], 1)
+        e["identities"] = ip_to_idents.get(ip, [])
+        # Compact statuses + reasons → top-3 for display
+        e["top_reason"] = max(e["reasons"].items(), key=lambda kv: kv[1])[0] if e["reasons"] else "OK"
+        del e["first_ts"]; del e["last_ts"]
+
+    out = sorted(by_ip.values(), key=lambda d: d["count"], reverse=True)[:limit]
+    return web.json_response({
+        "path":       p,
+        "range_min":  range_min,
+        "total_rows": len(rows),
+        "ips":        out,
+    }, headers={"Cache-Control":"no-store"})
+
+
 async def agents_bucket_detail_endpoint(request: web.Request):
     """1.5.4 — drill-down for the agents-dashboard timeline.
     Given a bucket epoch + width, return the IPs / identities active during
@@ -4435,6 +4617,132 @@ async def ban_endpoint(request: web.Request):
         headers={"Cache-Control": "no-store"})
 
 
+async def secrets_endpoint(request: web.Request):
+    """1.5.5 — runtime integration secret management (admin-gated).
+
+      GET   /__secrets?key=…  → write-only status (which keys are
+                                 configured, never the values themselves)
+      POST  /__secrets?key=…   body: JSON object with any subset of:
+                                {TURNSTILE_SITEKEY, TURNSTILE_SECRET,
+                                 ABUSEIPDB_KEY, CROWDSEC_LAPI_URL,
+                                 CROWDSEC_LAPI_KEY, MAXMIND_LICENSE_KEY}
+      DELETE /__secrets?key=…&name=KEY  → clear one secret + revert to
+                                 env (which may also be empty).
+
+    Persists to `secrets_kv`. Re-applies dependent state immediately
+    (e.g. flips ABUSEIPDB_ENABLED true when ABUSEIPDB_KEY is set).
+    Env vars STILL win at boot — the DB value is only used when env is
+    empty for that key.
+
+    The values are NEVER returned via GET — operators must read them from
+    the SQLite DB directly if they need to recover one. That keeps the
+    dashboard non-leaky on a captured admin session.
+    """
+    g = globals()
+    if request.method == "GET":
+        out = {}
+        for public_name, (global_name, env_name) in _SECRET_KEYS.items():
+            cur = g.get(global_name) or ""
+            out[public_name] = {
+                "configured": bool(cur),
+                "source":     ("env" if os.environ.get(env_name, "").strip()
+                               else ("db" if cur else "unset")),
+                "length":     len(cur),
+            }
+        return web.json_response(
+            {"secrets": out,
+             "integration_state": {
+                 "_TURNSTILE_CONFIGURED": _TURNSTILE_CONFIGURED,
+                 "TURNSTILE_ENABLED":     TURNSTILE_ENABLED,
+                 "ABUSEIPDB_ENABLED":     ABUSEIPDB_ENABLED,
+                 "CROWDSEC_ENABLED":      CROWDSEC_ENABLED,
+                 "MAXMIND_ENABLED":       MAXMIND_ENABLED,
+                 "MAXMIND_CITY_ENABLED":  MAXMIND_CITY_ENABLED,
+             }},
+            headers={"Cache-Control": "no-store"})
+
+    if request.method == "DELETE":
+        public_name = request.query.get("name", "")
+        if public_name not in _SECRET_KEYS:
+            return web.json_response({"error": "unknown secret name"},
+                                      status=400, headers={"Cache-Control":"no-store"})
+        global_name, env_name = _SECRET_KEYS[public_name]
+        # Clear DB
+        if db_queue is not None:
+            try: db_queue.put_nowait(("del_secret", (public_name,)))
+            except asyncio.QueueFull: pass
+        # Revert global to env (or empty)
+        g[global_name] = os.environ.get(env_name, "").strip()
+        _refresh_integration_state()
+        # Special: license-key clear → don't re-fetch on next request
+        if public_name == "MAXMIND_LICENSE_KEY":
+            pass   # mmdbs persist on disk; nothing to undo
+        slog("secret_deleted", level="warn", rid=request.get("_rid", ""),
+             name=public_name)
+        return web.json_response(
+            {"ok": True, "deleted": public_name, "now_source": "env" if g[global_name] else "unset"},
+            headers={"Cache-Control": "no-store"})
+
+    if request.method != "POST":
+        return web.json_response({"error": "method not allowed"}, status=405)
+
+    try:
+        raw = await asyncio.wait_for(request.content.read(64 * 1024),
+                                      timeout=BODY_TIMEOUT)
+        updates = json.loads(raw.decode("utf-8") or "{}")
+        if not isinstance(updates, dict):
+            raise ValueError("body must be a JSON object")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"},
+                                  status=400, headers={"Cache-Control":"no-store"})
+
+    applied, rejected = {}, {}
+    for k, raw_v in updates.items():
+        if k not in _SECRET_KEYS:
+            rejected[k] = "unknown secret name"
+            continue
+        v = (str(raw_v) if raw_v is not None else "").strip()
+        if v == "":
+            rejected[k] = "empty value (use DELETE to clear)"
+            continue
+        if len(v) > 1024:
+            rejected[k] = "value too long (max 1024 bytes)"
+            continue
+        global_name, _env_name = _SECRET_KEYS[k]
+        g[global_name] = v
+        applied[k] = {"length": len(v)}
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("set_secret", (k, v, _t.time())))
+            except asyncio.QueueFull:
+                pass
+
+    if applied:
+        _refresh_integration_state()
+        # If MaxMind license was newly set, kick off a fetch (returns fast;
+        # the actual download runs async in the executor).
+        if "MAXMIND_LICENSE_KEY" in applied:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, _maxmind_auto_fetch)
+            except Exception:
+                pass
+        slog("secrets_changed", level="warn", rid=request.get("_rid", ""),
+             applied=list(applied.keys()),
+             rejected=list(rejected.keys()))
+
+    return web.json_response({
+        "applied":  applied, "rejected": rejected,
+        "integration_state": {
+            "_TURNSTILE_CONFIGURED": _TURNSTILE_CONFIGURED,
+            "TURNSTILE_ENABLED":     TURNSTILE_ENABLED,
+            "ABUSEIPDB_ENABLED":     ABUSEIPDB_ENABLED,
+            "CROWDSEC_ENABLED":      CROWDSEC_ENABLED,
+            "MAXMIND_ENABLED":       MAXMIND_ENABLED,
+        },
+    }, headers={"Cache-Control": "no-store"})
+
+
 async def rotate_keys_endpoint(request: web.Request):
     """1.4.5: rotate the SESSION_KEY (and optionally POW key) atomically.
 
@@ -4617,11 +4925,16 @@ _HOT_RELOAD_KNOBS = {
     "UPSTREAM_MAX_RESP":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),
 }
 
-# 1.5.5 — env-override detection.  If an operator explicitly sets a knob
-# in the container environment, that value is authoritative — the DB-
-# persisted value (set via /__config) is ignored on reload.  GitOps deploys
-# stay deterministic; only knobs NOT pinned in env can be tuned live.
-_ENV_PROVIDED_KNOBS = {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
+# 1.5.5 — env-override detection.  By default the DB takes precedence over
+# env (operators tuning live via /__config get their changes back on
+# restart).  Set `CONFIG_KV_STRICT_ENV=1` for GitOps-style determinism
+# where env values are authoritative and dashboard mutations are rejected
+# at runtime.
+_ENV_PROVIDED_KNOBS = (
+    {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
+    if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes")
+    else set()
+)
 
 def _read_hot_reload_state() -> dict:
     out = {}
@@ -5878,6 +6191,8 @@ async def on_startup(app):
     # 1.5.5 — load DB-persisted hot-reload knobs over env defaults so live
     # changes pushed via /__config survive restart.
     db_load_config()
+    # 1.5.5 — load DB-persisted integration secrets (env wins when set).
+    db_load_secrets()
     db_queue = asyncio.Queue(maxsize=10000)
     db_writer_task = asyncio.create_task(db_writer_loop())
     db_load_admin_ips()
@@ -6133,10 +6448,42 @@ async def agents_data_endpoint(request: web.Request):
         clean = 0
         total_allowed_identities = 0
         for key, s in ip_state.items():
-            if s.allowed_count == 0:
+            # 1.5.5 — broaden criteria.  Old logic skipped any identity
+            # with allowed_count==0, hiding hard-blocked bots entirely.
+            # New: include identities that EITHER have allowed traffic OR
+            # have meaningful risk/blocks.  Pure admin-poll identities
+            # (allowed_count > 0, risk=0, blocks=0, samples=0) are still
+            # filtered as "clean" via the score threshold.
+            has_signal = (
+                s.allowed_count > 0
+                or s.risk_score >= 1.0
+                or s.blocked_count > 0
+            )
+            if not has_signal:
                 continue
             total_allowed_identities += 1
             score, comps, mets = _stealth_score(s)
+            # 1.5.5 — when the identity has been blocked / has risk but
+            # zero "allowed" stealth signal, surface a synthetic score so
+            # it shows up in the table.  Order: live risk_score first
+            # (most signal-rich), then blocked_count (bot was banned in
+            # the past, decayed away but the receipts remain).
+            if score == 0:
+                if s.risk_score > 0:
+                    score = min(100, int(s.risk_score))
+                elif s.blocked_count > 0:
+                    score = min(100, 30 + min(50, s.blocked_count * 2))
+            if score and not comps:
+                comps = {"headers":0,"assets":0,"enum":0,"timing":0,
+                         "risk":score,"404s":0}
+            if score and not mets:
+                mets = {
+                    "avg_header_score": 0, "html_loads": 0, "static_loads": 0,
+                    "unique_paths": len(s.unique_paths),
+                    "path_diversity": 0, "behavioral_cov": None,
+                    "upstream_404_count": s.upstream_404_count,
+                    "risk_score": round(s.risk_score, 1), "samples": 0,
+                }
             if score < min_score:
                 clean += 1
                 continue
@@ -6378,6 +6725,7 @@ def make_app() -> web.Application:
     app.router.add_get("/__thresholds",   thresholds_endpoint)
     app.router.add_get("/__cost-timeline", cost_timeline_endpoint)
     app.router.add_get("/__agents-bucket", agents_bucket_detail_endpoint)
+    app.router.add_get("/__path-hits",     path_hits_endpoint)
     app.router.add_get("/__geo",         geo_dashboard_endpoint)
     app.router.add_get("/__geo-data",    geo_data_endpoint)
     app.router.add_post("/__maxmind-fetch", maxmind_fetch_endpoint)
@@ -6387,6 +6735,9 @@ def make_app() -> web.Application:
     app.router.add_patch("/__admin-ips",  admin_ips_endpoint)
     app.router.add_delete("/__admin-ips", admin_ips_endpoint)
     app.router.add_post("/__rotate-keys", rotate_keys_endpoint)
+    app.router.add_get   ("/__secrets",  secrets_endpoint)
+    app.router.add_post  ("/__secrets",  secrets_endpoint)
+    app.router.add_delete("/__secrets",  secrets_endpoint)
     app.router.add_get("/__config",  config_endpoint)
     app.router.add_post("/__config", config_endpoint)
     app.router.add_get("/__agents", agents_dashboard_endpoint)
