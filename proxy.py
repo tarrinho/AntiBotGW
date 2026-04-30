@@ -916,6 +916,37 @@ _asn_stats = {
 }
 _asn_recent_latencies: deque = deque(maxlen=200)
 
+def _maxmind_seed_from_image():
+    """1.5.5 — copy bundled mmdbs from the image's
+    `/usr/local/share/maxmind/` into `/data/` when `/data/` doesn't have
+    them yet. The image ships fresh mmdbs at build time so the GeoMap
+    dashboard works out-of-the-box on a brand-new volume; operators can
+    later replace them with newer ones or use `MAXMIND_LICENSE_KEY` to
+    auto-refresh in-process every 30 days."""
+    seed_dir = "/usr/local/share/maxmind"
+    if not os.path.isdir(seed_dir):
+        return
+    pairs = [
+        (os.path.join(seed_dir, "GeoLite2-ASN.mmdb"),  MAXMIND_ASN_DB_PATH),
+        (os.path.join(seed_dir, "GeoLite2-City.mmdb"), MAXMIND_CITY_DB_PATH),
+    ]
+    for src, dest in pairs:
+        if not os.path.isfile(src):
+            continue
+        if os.path.exists(dest):
+            continue   # operator already supplied
+        try:
+            os.makedirs(os.path.dirname(dest) or "/data", exist_ok=True)
+            with open(src, "rb") as r, open(dest, "wb") as w:
+                while chunk := r.read(64 * 1024):
+                    w.write(chunk)
+            size_mb = os.path.getsize(dest) / (1024 * 1024)
+            print(f"[maxmind] seeded {os.path.basename(dest)} from image "
+                  f"({size_mb:.1f} MB)", flush=True)
+        except OSError as e:
+            print(f"[maxmind] seed copy failed for {dest}: {e}", flush=True)
+
+
 def _maxmind_auto_fetch():
     """1.5.4 — first-boot convenience.  When `MAXMIND_LICENSE_KEY` is set
     AND a target mmdb is missing, download it directly from MaxMind into
@@ -1025,8 +1056,10 @@ def _init_maxmind():
     """Lazy-load the mmdb. Called at startup; logs and stays disabled if
     the file is missing or malformed.  1.5.4 — auto-fetches the dbs first
     when MAXMIND_LICENSE_KEY is set and `/data/` doesn't already have
-    them, so a fresh deployment just needs the license-key env var."""
+    them, so a fresh deployment just needs the license-key env var.
+    1.5.5 — also seeds from the image-bundled mmdbs at /usr/local/share/maxmind/."""
     global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    _maxmind_seed_from_image()
     _maxmind_auto_fetch()
     try:
         import maxminddb
@@ -3663,6 +3696,46 @@ async def scoring_endpoint(request: web.Request):
         },
     }, headers={"Cache-Control": "no-store"})
 
+async def maxmind_fetch_endpoint(request: web.Request):
+    """1.5.5 — operator-triggered MaxMind DB load. POST /__maxmind-fetch:
+    (1) copies the image-bundled mmdbs into /data if missing (no internet
+    needed); (2) if MAXMIND_LICENSE_KEY is set, also runs a fresh fetch
+    from MaxMind. Used by the GeoMap "Refresh DB" button so operators
+    never have to drop into a shell."""
+    global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    try:
+        # Step 1 — seed from image always works offline.
+        _maxmind_seed_from_image()
+        # Step 2 — license-keyed fetch only if env var present.
+        if os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _maxmind_auto_fetch)
+        # Re-open readers in place.
+        try:
+            import maxminddb
+            if os.path.exists(MAXMIND_ASN_DB_PATH):
+                _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+                MAXMIND_ENABLED = True
+            if os.path.exists(MAXMIND_CITY_DB_PATH):
+                _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
+                MAXMIND_CITY_ENABLED = True
+        except Exception as e:
+            return web.json_response(
+                {"ok": False, "error": f"reader reload failed: {e}"},
+                status=500, headers={"Cache-Control": "no-store"})
+        return web.json_response({
+            "ok": True,
+            "asn_loaded":  MAXMIND_ENABLED,
+            "city_loaded": MAXMIND_CITY_ENABLED,
+            "asn_path":    MAXMIND_ASN_DB_PATH if MAXMIND_ENABLED else None,
+            "city_path":   MAXMIND_CITY_DB_PATH if MAXMIND_CITY_ENABLED else None,
+        }, headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response(
+            {"ok": False, "error": str(e)[:200]},
+            status=500, headers={"Cache-Control": "no-store"})
+
+
 async def geo_data_endpoint(request: web.Request):
     """1.5.4 — geo aggregation for the world-map dashboard.
     Returns counts per (lat,lng) split into kind=clean/missed/blocked.
@@ -6185,6 +6258,7 @@ def make_app() -> web.Application:
     app.router.add_get("/__agents-bucket", agents_bucket_detail_endpoint)
     app.router.add_get("/__geo",         geo_dashboard_endpoint)
     app.router.add_get("/__geo-data",    geo_data_endpoint)
+    app.router.add_post("/__maxmind-fetch", maxmind_fetch_endpoint)
     app.router.add_get("/__external",     external_endpoint)
     app.router.add_get("/__admin-ips",    admin_ips_endpoint)
     app.router.add_post("/__admin-ips",   admin_ips_endpoint)

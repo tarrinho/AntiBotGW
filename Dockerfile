@@ -13,7 +13,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.
-RUN mkdir -p /rootfs/app /rootfs/data \
+RUN mkdir -p /rootfs/app /rootfs/data /rootfs/usr/local/share/maxmind \
  && cp -a /pydeps/. /rootfs/app/pydeps \
  && ln -sf /data/.admin_key   /rootfs/app/.admin_key \
  && ln -sf /data/.session_key /rootfs/app/.session_key \
@@ -21,6 +21,11 @@ RUN mkdir -p /rootfs/app /rootfs/data \
 
 COPY proxy.py /rootfs/app/proxy.py
 COPY dashboards /rootfs/app/dashboards
+# 1.5.5 — bundled GeoLite2 mmdbs at a path NOT shadowed by /data volume.
+# proxy.py copies these into /data on first boot so the GeoMap dashboard
+# works out-of-the-box. Operators may override by dropping fresher mmdbs
+# into /data, or set MAXMIND_LICENSE_KEY to auto-refresh inside the container.
+COPY _seed/ /rootfs/usr/local/share/maxmind/
 
 # ─── Stage 2: Chainguard's distroless python runtime (Wolfi). No shell, no
 # apt, no systemd, no ncurses, no util-linux, no expat-side-tools. Built

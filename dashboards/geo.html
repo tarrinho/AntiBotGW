@@ -129,8 +129,38 @@ async function tick(){
     live.textContent = '● LIVE'; live.style.background = 'var(--blue)';
     const notice = document.getElementById('notice');
     if (!d.configured) {
-      notice.textContent = d.hint || 'GeoLite2-City DB not loaded — drop GeoLite2-City.mmdb into /data and restart.';
+      notice.innerHTML =
+        (d.hint || 'GeoLite2-City DB not loaded.') +
+        ' &nbsp;<button id="mm-fix" class="ctrl" style="margin-left:8px;background:var(--blue);color:#fff;border-color:var(--blue)">Fix now</button>' +
+        '<span id="mm-msg" class="dim" style="margin-left:10px;font-size:11px"></span>';
       notice.classList.add('show');
+      const btn = document.getElementById('mm-fix');
+      const msg = document.getElementById('mm-msg');
+      btn.onclick = async () => {
+        btn.disabled = true;
+        btn.textContent = 'Fixing…';
+        msg.style.color = 'var(--dim)';
+        msg.textContent = 'fetching mmdb (image seed + license-key download)…';
+        try {
+          const r = await fetch('/__maxmind-fetch' + (ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : ''),
+                                {method:'POST', credentials:'include'});
+          const j = await r.json();
+          if (r.ok && j.ok) {
+            msg.style.color = 'var(--green)';
+            msg.textContent = 'loaded — refreshing map';
+            setTimeout(tick, 600);
+          } else {
+            btn.disabled = false; btn.textContent = 'Retry';
+            msg.style.color = 'var(--red)';
+            msg.textContent = j.error || 'failed';
+            if (j.hint) msg.textContent += '  ·  ' + j.hint;
+          }
+        } catch(e) {
+          btn.disabled = false; btn.textContent = 'Retry';
+          msg.style.color = 'var(--red)';
+          msg.textContent = 'network error: ' + e.message;
+        }
+      };
     } else {
       notice.classList.remove('show');
     }
