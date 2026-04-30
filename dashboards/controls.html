@@ -87,13 +87,14 @@ button:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.6.2 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.4 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
   <a href="/__service?key=__KEY__">Service</a>
   <a href="/__controls?key=__KEY__" class="active">Controls</a>
   <a href="/__geo?key=__KEY__">GeoMap</a>
+  <a href="/__logs?key=__KEY__">Logs</a>
 </nav>
 
 <main>
@@ -303,6 +304,9 @@ const META = {
   DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
   DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
   WEBHOOK_EVENT_FILTER:    {kind:'list', card:'lists', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
+  // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
+  DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
+  POSTGRES_DSN:            {kind:'text', card:'lists', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
   // logging
   LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'logging', desc:'Filter for stdout structured log emission.'},
 };
@@ -944,7 +948,9 @@ document.addEventListener('DOMContentLoaded', () => {
       const cfg = serverState || {};
       const tb = document.querySelector('#scoring-tbl tbody');
       const tierColor = (t) => ({
-        hard:'#f85149', med:'#d29922', soft:'#3fb950', info:'#8b949e', mod:'#79c0ff'
+        hard:'#f85149', med:'#d29922', soft:'#3fb950',
+        info:'#8b949e', mod:'#79c0ff',
+        intel:'#bc8cff',                              // 1.6.3 — DLP / OSINT leaks
       }[t] || '#8b949e');
       const toggleCell = (knob) => {
         if (!knob) return '<td style="padding:5px 8px;color:var(--green);font-size:9.5px;font-weight:600">ALWAYS&nbsp;ON</td>';
@@ -970,7 +976,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <span style="color:var(--red)">${p99}</span>
         </td>`;
       };
-      const weightRows = (d.weights||[]).map(w => {
+      const renderRow = (w) => {
         const tag = `<span style="background:${tierColor(w.tier)}22;color:${tierColor(w.tier)};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">${w.tier}</span>`;
         const wColor = w.weight >= 50 ? 'var(--red)'
                      : w.weight >= 20 ? 'var(--yellow)'
@@ -983,7 +989,27 @@ document.addEventListener('DOMContentLoaded', () => {
           ${costCell(w.cost_ms)}
           <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(w.description)}</td>
         </tr>`;
-      }).join('');
+      };
+      // 1.6.3 — split into "Toggleable" (operator can mute) vs
+      // "Always on" (no kill-switch). Each section ordered by weight desc.
+      const allWeights = (d.weights || []).slice();
+      const toggleable = allWeights
+        .filter(w => w.toggle)
+        .sort((a, b) => b.weight - a.weight);
+      const alwaysOn = allWeights
+        .filter(w => !w.toggle)
+        .sort((a, b) => b.weight - a.weight);
+      const sectionHeader = (title, count) =>
+        `<tr><td colspan="6" style="padding:10px 8px 4px 8px;background:#0d1117;color:var(--blue);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-top:1px solid var(--line)">${escapeHtml(title)} <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">· ${count} controls · click switch to mute / unmute</span></td></tr>`;
+      const sectionHeaderAlways = (title, count) =>
+        `<tr><td colspan="6" style="padding:10px 8px 4px 8px;background:#0d1117;color:var(--green);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-top:1px solid var(--line)">${escapeHtml(title)} <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">· ${count} controls · structural — no kill-switch</span></td></tr>`;
+      const toggleableRows = toggleable.map(renderRow).join('');
+      const alwaysOnRows   = alwaysOn.map(renderRow).join('');
+      const weightRows =
+        sectionHeader('Toggleable controls (sorted by weight)', toggleable.length) +
+        toggleableRows +
+        sectionHeaderAlways('Always-on controls (sorted by weight)', alwaysOn.length) +
+        alwaysOnRows;
       // Modifier rows — toggles that don't add weight
       const modHeader = `<tr><td colspan="6" style="padding:10px 8px 4px 8px;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600">Behavior modifiers (no weight)</td></tr>`;
       const modRows = (d.modifiers||[]).map(m => {
@@ -1260,4 +1286,101 @@ function openBanDetails(b){
   __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
 }
 </script>
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+<style>
+#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:#161b22;color:#fff;border:1px solid #30363d;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill:hover{transform:scale(1.04)}
+.gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
+  display:none;align-items:flex-start;justify-content:center;z-index:2200;
+  padding:60px 20px 20px}
+.gw-modal-overlay.show{display:flex}
+.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
+.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+  display:flex;justify-content:space-between;align-items:center}
+.gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
+.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
+.gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
+.gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
+.gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
+.gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+</style>
+<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="gw-modal-card">
+    <h3>
+      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
+    </h3>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+  </div>
+</div>
+<script>
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const pill = document.getElementById('gw-status-pill');
+  const modal = document.getElementById('gw-status-modal');
+  const modalScore = document.getElementById('gw-modal-score');
+  const modalBody = document.getElementById('gw-modal-body');
+  // Linear gradient red→yellow→green over 0..100.
+  function colorFor(score){
+    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  }
+  let lastData = null;
+  async function tick(){
+    try {
+      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+                            {credentials:'include'});
+      const d = await r.json();
+      lastData = d;
+      const s = d.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● GW ${s}/100`;
+    } catch(e){
+      pill.style.background = '#3d1a1a';
+      pill.style.color = '#f85149';
+      pill.textContent = '● ERR';
+    }
+  }
+  pill.onclick = () => {
+    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
+    modalScore.textContent = lastData.score|0;
+    modalScore.style.color = colorFor(lastData.score).fg;
+    const rows = (lastData.reasons||[]).map(r => `
+      <div class="gw-row">
+        <span class="key">${escHtml(r.key)}</span>
+        <span class="badge ${escHtml(r.status)}">${escHtml(r.status)}</span>
+        <span class="det">${escHtml(r.detail||'')}</span>
+        <span class="val">${escHtml(r.value||'')}</span>
+      </div>`).join('');
+    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+    </div>`;
+    modal.classList.add('show');
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') modal.classList.remove('show');
+  });
+  tick();
+  setInterval(tick, 15000);
+})();
+</script>
+<!-- /1.6.4 GW status pill -->
+
 </body></html>

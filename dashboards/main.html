@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.6.2 · Dashboard</title>
+<title>AppSecGW_1.6.4 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -104,7 +104,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.2 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.4 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.5.4 — reason drill-down modal -->
 <div class="modal-back" id="modal-back"></div>
@@ -118,6 +118,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
   <a href="/__service?key=__KEY__">Service</a>
   <a href="/__controls?key=__KEY__">Controls</a>
   <a href="/__geo?key=__KEY__">GeoMap</a>
+  <a href="/__logs?key=__KEY__">Logs</a>
 </nav>
 
 <div class="grid">
@@ -1337,4 +1338,101 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 })();
 
 </script>
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+<style>
+#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:#161b22;color:#fff;border:1px solid #30363d;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill:hover{transform:scale(1.04)}
+.gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
+  display:none;align-items:flex-start;justify-content:center;z-index:2200;
+  padding:60px 20px 20px}
+.gw-modal-overlay.show{display:flex}
+.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
+.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+  display:flex;justify-content:space-between;align-items:center}
+.gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
+.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
+.gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
+.gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
+.gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
+.gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+</style>
+<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="gw-modal-card">
+    <h3>
+      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
+    </h3>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+  </div>
+</div>
+<script>
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const pill = document.getElementById('gw-status-pill');
+  const modal = document.getElementById('gw-status-modal');
+  const modalScore = document.getElementById('gw-modal-score');
+  const modalBody = document.getElementById('gw-modal-body');
+  // Linear gradient red→yellow→green over 0..100.
+  function colorFor(score){
+    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  }
+  let lastData = null;
+  async function tick(){
+    try {
+      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+                            {credentials:'include'});
+      const d = await r.json();
+      lastData = d;
+      const s = d.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● GW ${s}/100`;
+    } catch(e){
+      pill.style.background = '#3d1a1a';
+      pill.style.color = '#f85149';
+      pill.textContent = '● ERR';
+    }
+  }
+  pill.onclick = () => {
+    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
+    modalScore.textContent = lastData.score|0;
+    modalScore.style.color = colorFor(lastData.score).fg;
+    const rows = (lastData.reasons||[]).map(r => `
+      <div class="gw-row">
+        <span class="key">${escHtml(r.key)}</span>
+        <span class="badge ${escHtml(r.status)}">${escHtml(r.status)}</span>
+        <span class="det">${escHtml(r.detail||'')}</span>
+        <span class="val">${escHtml(r.value||'')}</span>
+      </div>`).join('');
+    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+    </div>`;
+    modal.classList.add('show');
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') modal.classList.remove('show');
+  });
+  tick();
+  setInterval(tick, 15000);
+})();
+</script>
+<!-- /1.6.4 GW status pill -->
+
 </body></html>

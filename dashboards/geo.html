@@ -6,7 +6,8 @@
       crossorigin=""/>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--orange:#ff7b3a;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--orange:#ff7b3a;
+      --purple:#bc8cff;}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
@@ -18,14 +19,18 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.row{display:grid;gap:14px;grid-template-columns:1fr 1fr 1fr 1fr;margin-top:14px}
-.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
+.row{display:grid;gap:14px;grid-template-columns:1fr 1fr 1fr 1fr 1fr 1fr;margin-top:14px}
+.metric{font-size:26px;font-weight:600;color:#fff;line-height:1}
 .metric.green{color:var(--green)} .metric.orange{color:var(--orange)} .metric.red{color:var(--red)} .metric.blue{color:var(--blue)}
+.metric.purple{color:var(--purple)} .metric.yellow{color:var(--yellow)}
 .metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
 .ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;line-height:1.4}
 .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
 .ctrl:disabled{opacity:.4;cursor:not-allowed}
 .ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.toggle{display:inline-flex;gap:4px;align-items:center;font-size:11px;color:var(--dim);cursor:pointer;user-select:none}
+.toggle input{margin:0}
+.toggle.on{color:var(--blue)}
 #map{height:560px;border-radius:6px;background:#0a0e13;border:1px solid var(--line)}
 .leaflet-container{background:#0a0e13!important;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .leaflet-popup-content-wrapper{background:#161b22;color:var(--fg);border:1px solid var(--line);border-radius:6px}
@@ -35,25 +40,66 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         padding:8px 12px;border:1px solid var(--line);border-radius:6px;font-size:11px;
         color:var(--fg);z-index:1000;line-height:1.6}
 .legend .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.legend .square{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:middle;background:var(--purple)}
+.legend .triangle{display:inline-block;width:0;height:0;margin-right:6px;vertical-align:middle;
+                  border-left:6px solid transparent;border-right:6px solid transparent;border-bottom:11px solid var(--yellow)}
 .foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
 .dim{color:var(--dim)}
 .notice{background:#3d2a1a;border:1px solid #5b3f1f;color:#e6c068;padding:10px 14px;border-radius:6px;margin-top:12px;font-size:12px;display:none}
 .notice.show{display:block}
+.split{display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:start;margin-top:14px}
+@media(max-width:980px){.split{grid-template-columns:1fr}}
+.scrubber{display:flex;gap:10px;align-items:center;padding:10px 12px;background:var(--card);
+          border:1px solid var(--line);border-radius:6px;margin-top:8px;flex-wrap:wrap}
+.scrubber .play{padding:4px 10px;background:var(--blue);color:#000;border:none;
+                border-radius:4px;font-weight:700;cursor:pointer;font-size:11.5px}
+.scrubber input[type=range]{flex:1;min-width:200px}
+.scrubber .ts{font-family:ui-monospace,monospace;font-size:11px;color:var(--dim);min-width:170px;text-align:right}
+.country-tbl{width:100%;border-collapse:collapse;font-size:11.5px}
+.country-tbl th{text-align:left;padding:5px 6px;color:var(--dim);font-weight:600;
+                font-size:10px;letter-spacing:.4px;text-transform:uppercase;border-bottom:1px solid var(--line)}
+.country-tbl td{padding:5px 6px;border-bottom:1px solid #1f2730;font-family:ui-monospace,Menlo,monospace}
+.country-tbl tr:hover{background:#1f2730}
+.country-tbl .iso{color:var(--blue);font-weight:700}
+.country-tbl .deny-btn{background:transparent;color:var(--red);border:1px solid var(--red);
+                       border-radius:3px;padding:1px 6px;font-size:10px;cursor:pointer;
+                       font-family:inherit}
+.country-tbl .deny-btn.active{background:var(--red);color:#fff}
+.country-tbl .deny-btn:hover{background:rgba(248,81,73,.2)}
+.country-tbl .num{text-align:right}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;
+       justify-content:center;z-index:2000;padding:20px}
+.modal.show{display:flex}
+.modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+            padding:16px 20px;max-width:760px;width:100%;max-height:80vh;overflow:auto}
+.modal-card h3{margin:0 0 10px 0;color:#fff;font-size:14px;font-weight:700;
+               display:flex;justify-content:space-between;align-items:center}
+.modal-card .x{cursor:pointer;color:var(--dim);font-size:18px;border:none;background:none}
+.modal-card table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:8px}
+.modal-card th{text-align:left;padding:4px 6px;color:var(--dim);
+               font-size:10px;letter-spacing:.4px;text-transform:uppercase;border-bottom:1px solid var(--line)}
+.modal-card td{padding:4px 6px;border-bottom:1px solid #1f2730;
+               font-family:ui-monospace,Menlo,monospace}
+.modal-card .num{text-align:right}
+.tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700}
+.tag.tor{background:rgba(217,154,32,.18);color:var(--yellow)}
+.tag.dc{background:rgba(188,140,255,.18);color:var(--purple)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.2 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.4 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
   <a href="/__service?key=__KEY__">Service</a>
   <a href="/__controls?key=__KEY__">Controls</a>
   <a href="/__geo?key=__KEY__" class="active">GeoMap</a>
+  <a href="/__logs?key=__KEY__">Logs</a>
 </nav>
 
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-    <h2 style="margin:0">World-map of accesses <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">circle size ∝ hits · green=clean · orange=missed · red=blocked</span></h2>
-    <div style="display:flex;gap:6px;align-items:center;font-size:11px">
+    <h2 style="margin:0">World-map of accesses <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">circle size ∝ hits · click any circle for top IPs / reasons / paths</span></h2>
+    <div style="display:flex;gap:6px;align-items:center;font-size:11px;flex-wrap:wrap">
       <span class="dim">window:</span>
       <select id="range" class="ctrl">
         <option value="15">15 min</option>
@@ -63,17 +109,69 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         <option value="1440">24 h</option>
         <option value="10080">7 days</option>
       </select>
+      <label class="toggle" id="lbl-tor"><input type="checkbox" id="ovly-tor"> Tor overlay</label>
+      <label class="toggle" id="lbl-dc"><input type="checkbox" id="ovly-dc"> DC/VPN overlay</label>
+      <span class="dim" style="margin-left:6px">filter:</span>
+      <select id="pin-filter" class="ctrl">
+        <option value="all" selected>all cells</option>
+        <option value="bot-ai">bot/AI</option>
+        <option value="high-risk">high-risk (intel)</option>
+        <option value="fp-suspect">FP suspect</option>
+        <option value="normal">normal</option>
+      </select>
       <button id="now"  class="ctrl ctrl-now">now</button>
       <button id="refresh" class="ctrl">refresh</button>
     </div>
   </div>
   <div id="notice" class="notice"></div>
-  <div style="position:relative">
-    <div id="map"></div>
-    <div class="legend">
-      <div><span class="dot" style="background:#3fb950"></span> clean (allowed)</div>
-      <div><span class="dot" style="background:#ff7b3a"></span> missed (medium risk)</div>
-      <div><span class="dot" style="background:#f85149"></span> blocked (bots)</div>
+  <div class="split">
+    <div>
+      <div style="position:relative">
+        <div id="map"></div>
+        <div class="legend">
+          <div><span class="dot" style="background:#3fb950"></span> clean (allowed)</div>
+          <div><span class="dot" style="background:#ff7b3a"></span> missed (medium risk)</div>
+          <div><span class="dot" style="background:#f85149"></span> blocked (bots)</div>
+          <div><span class="triangle"></span> Tor exit (overlay)</div>
+          <div><span class="square"></span> DC / hosting ASN (overlay)</div>
+        </div>
+      </div>
+      <div class="scrubber" id="scrubber">
+        <button class="play" id="play">▶ Play</button>
+        <input type="range" id="scrub" min="0" max="0" value="0" step="1">
+        <span class="ts" id="scrub-ts">— · live</span>
+        <button class="ctrl" id="scrub-live">jump to live</button>
+      </div>
+    </div>
+
+    <div class="card" style="padding:10px 12px;margin:0">
+      <h2 style="margin-bottom:6px">Top countries <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">click <span style="color:var(--red)">deny</span> to push the ISO into COUNTRY_DENYLIST</span></h2>
+      <table class="country-tbl">
+        <thead><tr>
+          <th>iso</th><th class="num">clean</th>
+          <th class="num">missed</th><th class="num">blocked</th>
+          <th class="num" title="blocked / (blocked + missed) — what fraction of suspicious traffic from this country we actually stopped">eff%</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="country-tbody"><tr><td colspan="6" class="dim">loading…</td></tr></tbody>
+      </table>
+      <div class="dim" style="font-size:10px;margin-top:8px">
+        <code id="dl-state">denylist: —</code><br>
+        <code id="al-state">allowlist: —</code>
+      </div>
+
+      <h2 style="margin:14px 0 6px 0">Detection methods <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">global block-by-method breakdown</span></h2>
+      <div id="method-bars" style="font-family:ui-monospace,Menlo,monospace;font-size:11px"></div>
+
+      <h2 style="margin:14px 0 6px 0">Top ASN providers <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">where attack traffic originates</span></h2>
+      <table class="country-tbl">
+        <thead><tr>
+          <th style="font-size:10px">asn org</th>
+          <th class="num">total</th>
+          <th class="num">blocked</th>
+        </tr></thead>
+        <tbody id="asn-tbody"><tr><td colspan="3" class="dim">loading…</td></tr></tbody>
+      </table>
     </div>
   </div>
 </div>
@@ -83,6 +181,18 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   <div class="card"><h2>Clean</h2><div class="metric green" id="m-clean">—</div><div class="metric-sub">allowed requests</div></div>
   <div class="card"><h2>Missed</h2><div class="metric orange" id="m-missed">—</div><div class="metric-sub">allowed but medium risk</div></div>
   <div class="card"><h2>Blocked</h2><div class="metric red" id="m-blocked">—</div><div class="metric-sub">bots silent-decoyed</div></div>
+  <div class="card"><h2>Tor exits</h2><div class="metric yellow" id="m-tor">—</div><div class="metric-sub">events from Tor IPs</div></div>
+  <div class="card"><h2>DC / VPN</h2><div class="metric purple" id="m-dc">—</div><div class="metric-sub">events from hosting ASNs</div></div>
+</div>
+
+<div class="modal" id="drill-modal">
+  <div class="modal-card">
+    <h3>
+      <span id="drill-title">Drill-down</span>
+      <button class="x" onclick="document.getElementById('drill-modal').classList.remove('show')">×</button>
+    </h3>
+    <div id="drill-body" class="dim">loading…</div>
+  </div>
 </div>
 
 <div class="foot">refreshes every 30 s · <code id="ts"></code></div>
@@ -93,31 +203,304 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 <script>
 const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
 const k_q       = ADMIN_KEY ? ('&key=' + encodeURIComponent(ADMIN_KEY)) : '';
+const escapeHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-// Carto Dark Matter — free, no API key, no Referer policy issues
-// (OSM's volunteer tile servers reject bulk requests + require Referer).
+// Carto Dark Matter — free, no API key, no Referer policy issues.
 const map = L.map('map', { worldCopyJump: true, zoomControl: true })
   .setView([20, 0], 2);
 L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors © CARTO',
-  subdomains: 'abcd',
-  maxZoom: 19,
+  subdomains: 'abcd', maxZoom: 19,
 }).addTo(map);
 
 let layerGroup = L.layerGroup().addTo(map);
+let lastData = null;          // last full /__geo-data response
+let scrubBucketIdx = -1;      // -1 = aggregate (default); 0..N = bucket
+let scrubBuckets = [];        // [{ts, points:{key:{c,m,b}}}]
+let playing = false;
 
 function radiusFor(count){
-  // log scale: 1 hit -> 4px, 10 -> ~7, 100 -> ~10, 1000 -> ~13
   return Math.max(4, Math.min(40, 4 + Math.log10(Math.max(1, count)) * 3));
 }
 
-function buildCircle(lat, lng, count, color, label){
-  return L.circleMarker([lat, lng], {
+function buildCircle(lat, lng, count, color, label, onClick){
+  const c = L.circleMarker([lat, lng], {
     radius: radiusFor(count),
-    color: color, fillColor: color,
-    fillOpacity: 0.45, weight: 1.4,
-  }).bindTooltip(label, { className: 'leaflet-tooltip', sticky: true });
+    color, fillColor:color, fillOpacity:0.45, weight:1.4,
+  }).bindTooltip(label, { className:'leaflet-tooltip', sticky:true });
+  if (onClick) c.on('click', onClick);
+  return c;
 }
+
+// Distinct markers for Tor / DC overlays — triangle for Tor, square for DC.
+function buildOverlayMarker(lat, lng, count, kind){
+  const html = kind === 'tor'
+    ? `<div style="width:0;height:0;border-left:7px solid transparent;
+                   border-right:7px solid transparent;border-bottom:13px solid #d29922;
+                   filter:drop-shadow(0 0 4px #d2992288)"></div>`
+    : `<div style="width:11px;height:11px;background:#bc8cff;
+                   filter:drop-shadow(0 0 4px #bc8cff88)"></div>`;
+  return L.marker([lat, lng], {
+    icon: L.divIcon({className:'', html, iconSize:[14,14], iconAnchor:[7,7]}),
+  }).bindTooltip(`${kind === 'tor' ? 'Tor exit' : 'DC / hosting'} · ${count} hits`,
+                  {sticky:true});
+}
+
+// 1.6.4 — pin-type colours (border on circles when filter mode active)
+const PIN_COLORS = {
+  'bot-ai':     '#f85149',
+  'high-risk':  '#58a6ff',
+  'fp-suspect': '#d29922',
+  'normal':     '#3fb950',
+};
+
+// ── Build map for a given bucket index (-1 = aggregate, else live bucket) ──
+function renderMap(){
+  layerGroup.clearLayers();
+  if (!lastData) return;
+  const showTor = document.getElementById('ovly-tor').checked;
+  const showDC  = document.getElementById('ovly-dc').checked;
+  const pinFilter = document.getElementById('pin-filter').value;
+
+  // Decide which point set to render — full aggregate or scrubbed bucket.
+  let pts;
+  if (scrubBucketIdx < 0) {
+    pts = (lastData.points || []).map(p => ({...p}));
+  } else {
+    const bucket = scrubBuckets[scrubBucketIdx] || {};
+    pts = Object.entries(bucket.points || {}).map(([k, v]) => {
+      const [lat, lng] = k.split(',').map(Number);
+      const meta = (lastData.points||[]).find(
+        q => Math.abs(q.lat-lat)<0.01 && Math.abs(q.lng-lng)<0.01) || {};
+      return {lat, lng, country: meta.country||'', city: meta.city||'',
+              clean:v.c||0, missed:v.m||0, blocked:v.b||0,
+              tor_hits:0, dc_hits:0, methods: meta.methods || {},
+              pin_type: meta.pin_type || 'normal',
+              total:(v.c||0)+(v.m||0)+(v.b||0)};
+    });
+  }
+
+  // 1.6.4 — pin-type filter: drop cells that don't match the chosen type.
+  if (pinFilter !== 'all') {
+    pts = pts.filter(p => (p.pin_type || 'normal') === pinFilter);
+  }
+
+  pts.forEach(p => {
+    // 1.6.4 — methods breakdown in tooltip (top 3 method buckets)
+    const methods = p.methods || {};
+    const methodEntries = Object.entries(methods).sort((a,b) => b[1]-a[1]).slice(0, 3);
+    const methodLine = methodEntries.length
+      ? `<br><span style="color:#bc8cff">methods</span>: ${methodEntries.map(([k,v]) => `${k}=${v}`).join(' · ')}`
+      : '';
+    const pinTypeLine = p.pin_type && p.pin_type !== 'normal'
+      ? `<br><span style="color:${PIN_COLORS[p.pin_type]||'#fff'};font-weight:700">type</span>: ${escapeHtml(p.pin_type)}`
+      : '';
+    const tip = `<b>${escapeHtml(p.city || '?')}</b> ${p.country ? '(' + escapeHtml(p.country) + ')' : ''}<br>` +
+      `<span style="color:#3fb950">clean</span>: ${p.clean}<br>` +
+      `<span style="color:#ff7b3a">missed</span>: ${p.missed}<br>` +
+      `<span style="color:#f85149">blocked</span>: ${p.blocked}` +
+      methodLine + pinTypeLine +
+      (p.tor_hits ? `<br><span style="color:#d29922">tor exits</span>: ${p.tor_hits}` : '') +
+      (p.dc_hits  ? `<br><span style="color:#bc8cff">dc/hosting</span>: ${p.dc_hits}`  : '') +
+      `<br><span class="dim">click to drill down</span>`;
+    const onClick = () => openDrill(p.lat, p.lng);
+    if (p.clean   > 0) buildCircle(p.lat, p.lng, p.clean,   '#3fb950', tip, onClick).addTo(layerGroup);
+    if (p.missed  > 0) buildCircle(p.lat + 0.0001, p.lng + 0.0001, p.missed,  '#ff7b3a', tip, onClick).addTo(layerGroup);
+    if (p.blocked > 0) buildCircle(p.lat + 0.0002, p.lng + 0.0002, p.blocked, '#f85149', tip, onClick).addTo(layerGroup);
+    if (showTor && p.tor_hits) buildOverlayMarker(p.lat, p.lng, p.tor_hits, 'tor').addTo(layerGroup);
+    if (showDC  && p.dc_hits)  buildOverlayMarker(p.lat, p.lng, p.dc_hits,  'dc').addTo(layerGroup);
+  });
+}
+
+// ── Build N evenly-spaced bucket aggregations from `events` ──
+function rebuildBuckets(){
+  scrubBuckets = [];
+  if (!lastData || !lastData.events || !lastData.events.length) return;
+  const sm = lastData.summary || {};
+  const start = sm.start_epoch || lastData.events[0][0];
+  const end   = sm.end_epoch   || lastData.events[lastData.events.length-1][0];
+  const N = 24;                              // 24 frames per replay
+  const step = Math.max(1, (end - start) / N);
+  for (let i = 0; i < N; i++) {
+    scrubBuckets.push({
+      ts: start + (i+1) * step,
+      points: {},
+    });
+  }
+  for (const [ts, lat, lng, kind] of lastData.events) {
+    const idx = Math.min(N-1, Math.max(0, Math.floor((ts - start) / step)));
+    const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+    const b = scrubBuckets[idx];
+    if (!b.points[key]) b.points[key] = {c:0, m:0, b:0};
+    if (kind === 'clean')   b.points[key].c++;
+    else if (kind === 'missed') b.points[key].m++;
+    else                        b.points[key].b++;
+  }
+  document.getElementById('scrub').max = N - 1;
+}
+
+function fmtTs(epoch){
+  const d = new Date(epoch * 1000);
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+// ── Country leaderboard render ───────────────────────────────────────
+function renderCountries(){
+  const tbody = document.getElementById('country-tbody');
+  if (!lastData) { tbody.innerHTML = '<tr><td colspan="6" class="dim">no data</td></tr>'; return; }
+  const cs = lastData.countries || [];
+  const denylist  = new Set((lastData.geo_state||{}).country_denylist  || []);
+  const allowlist = new Set((lastData.geo_state||{}).country_allowlist || []);
+  if (!cs.length){
+    tbody.innerHTML = '<tr><td colspan="6" class="dim">no events with country data</td></tr>';
+  } else {
+    tbody.innerHTML = cs.slice(0, 12).map(c => {
+      const inDeny = denylist.has(c.country);
+      // 1.6.4 — block-effectiveness % column. blocked/(blocked+missed).
+      // Color: green ≥80%, yellow 50-80%, red <50%, dim if N/A.
+      const eff = c.effectiveness_pct;
+      let effCell;
+      if (eff === null || eff === undefined) {
+        effCell = `<td class="num" style="color:var(--dim)">—</td>`;
+      } else {
+        const col = eff >= 80 ? '#3fb950' : eff >= 50 ? '#d29922' : '#f85149';
+        effCell = `<td class="num" style="color:${col};font-weight:600">${eff.toFixed(0)}%</td>`;
+      }
+      return `<tr>
+        <td class="iso">${escapeHtml(c.country)}</td>
+        <td class="num" style="color:#3fb950">${c.clean}</td>
+        <td class="num" style="color:#ff7b3a">${c.missed}</td>
+        <td class="num" style="color:#f85149">${c.blocked}</td>
+        ${effCell}
+        <td><button class="deny-btn ${inDeny?'active':''}"
+                    data-iso="${escapeHtml(c.country)}"
+                    title="${inDeny?'Remove from':'Add to'} COUNTRY_DENYLIST">${inDeny?'denied':'deny'}</button></td>
+      </tr>`;
+    }).join('');
+  }
+  document.getElementById('dl-state').textContent =
+    'denylist: ' + (Array.from(denylist).join(', ') || '(empty)');
+  document.getElementById('al-state').textContent =
+    'allowlist: ' + (Array.from(allowlist).join(', ') || '(empty)');
+
+  // Wire deny buttons.
+  tbody.querySelectorAll('.deny-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const iso = btn.dataset.iso;
+      const cur = new Set((lastData.geo_state||{}).country_denylist || []);
+      if (cur.has(iso)) cur.delete(iso); else cur.add(iso);
+      const next = Array.from(cur).sort();
+      btn.disabled = true;
+      try {
+        const r = await fetch('/__config?' + (ADMIN_KEY?('key='+encodeURIComponent(ADMIN_KEY)):''),
+                              {method:'POST', headers:{'Content-Type':'application/json'},
+                               body: JSON.stringify({COUNTRY_DENYLIST: next, COUNTRY_BLOCK_ENABLED:true})});
+        const j = await r.json();
+        if (j.applied && j.applied.COUNTRY_DENYLIST !== undefined){
+          lastData.geo_state.country_denylist = next;
+          renderCountries();
+        } else {
+          alert('Rejected — ' + JSON.stringify(j.rejected||{}));
+        }
+      } catch(e) { alert('Network error: ' + e.message); }
+      btn.disabled = false;
+    };
+  });
+}
+
+// ── Drill modal: top IPs / reasons / paths at a clicked cell ─────────
+async function openDrill(lat, lng){
+  const modal = document.getElementById('drill-modal');
+  const body  = document.getElementById('drill-body');
+  document.getElementById('drill-title').textContent =
+    `Drill — lat ${lat}, lng ${lng}`;
+  body.textContent = 'loading…';
+  modal.classList.add('show');
+  const range = document.getElementById('range').value;
+  const params = new URLSearchParams({lat, lng, range});
+  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+  try {
+    const r = await fetch('/__geo-drill?' + params, {credentials:'include'});
+    const d = await r.json();
+    if (d.error){ body.innerHTML = '<span style="color:var(--red)">'+escapeHtml(d.error)+'</span>'; return; }
+    const ipRows = (d.top_ips||[]).map(x => {
+      const tags = (x.tor ? '<span class="tag tor">TOR</span> ' : '') +
+                   (x.dc  ? '<span class="tag dc">DC</span> '  : '');
+      return `<tr>
+        <td>${escapeHtml(x.ip)}</td>
+        <td>${escapeHtml(x.city||'')} (${escapeHtml(x.country||'')})</td>
+        <td>${escapeHtml(x.asn_org||'-')}</td>
+        <td>${tags}</td>
+        <td class="num">${x.hits}</td>
+        <td class="num" style="color:${x.blocked?'var(--red)':'var(--dim)'}">${x.blocked}</td>
+        <td>${escapeHtml(x.last_reason||'')}</td>
+      </tr>`;
+    }).join('');
+    const reasonRows = (d.top_reasons||[]).map(x =>
+      `<tr><td>${escapeHtml(x.reason||'OK')}</td><td class="num">${x.count}</td></tr>`).join('');
+    const pathRows = (d.top_paths||[]).map(x =>
+      `<tr><td>${escapeHtml(x.path)}</td><td class="num">${x.count}</td></tr>`).join('');
+    body.innerHTML = `
+      <div class="dim" style="margin-bottom:8px">
+        ${d.ip_count} unique IP${d.ip_count===1?'':'s'} · ${d.event_count} events in window
+      </div>
+      <h2 style="margin-top:8px">Top IPs</h2>
+      <table><thead><tr><th>ip</th><th>location</th><th>asn org</th><th>tags</th>
+                       <th class="num">hits</th><th class="num">blocked</th><th>last reason</th></tr></thead>
+      <tbody>${ipRows||'<tr><td colspan="7" class="dim">none</td></tr>'}</tbody></table>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+        <div>
+          <h2>Top reasons</h2>
+          <table><thead><tr><th>reason</th><th class="num">count</th></tr></thead>
+          <tbody>${reasonRows||'<tr><td colspan="2" class="dim">none</td></tr>'}</tbody></table>
+        </div>
+        <div>
+          <h2>Top paths</h2>
+          <table><thead><tr><th>path</th><th class="num">count</th></tr></thead>
+          <tbody>${pathRows||'<tr><td colspan="2" class="dim">none</td></tr>'}</tbody></table>
+        </div>
+      </div>`;
+  } catch(e){ body.innerHTML = '<span style="color:var(--red)">error: '+escapeHtml(e.message)+'</span>'; }
+}
+
+// ── Scrubber controls ────────────────────────────────────────────────
+const scrub = document.getElementById('scrub');
+const scrubTs = document.getElementById('scrub-ts');
+scrub.oninput = () => {
+  scrubBucketIdx = parseInt(scrub.value);
+  if (scrubBuckets[scrubBucketIdx]) {
+    scrubTs.textContent = fmtTs(scrubBuckets[scrubBucketIdx].ts);
+  }
+  renderMap();
+};
+document.getElementById('scrub-live').onclick = () => {
+  scrubBucketIdx = -1;
+  scrubTs.textContent = '— · live (aggregate)';
+  renderMap();
+};
+let playTimer = null;
+document.getElementById('play').onclick = () => {
+  playing = !playing;
+  document.getElementById('play').textContent = playing ? '⏸ Pause' : '▶ Play';
+  if (playing) {
+    if (scrubBucketIdx < 0) scrubBucketIdx = 0;
+    playTimer = setInterval(() => {
+      scrubBucketIdx = (scrubBucketIdx + 1) % Math.max(1, scrubBuckets.length);
+      scrub.value = scrubBucketIdx;
+      if (scrubBuckets[scrubBucketIdx]) {
+        scrubTs.textContent = fmtTs(scrubBuckets[scrubBucketIdx].ts);
+      }
+      renderMap();
+    }, 800);
+  } else if (playTimer) {
+    clearInterval(playTimer); playTimer = null;
+  }
+};
+
+// Overlay toggles → just re-render
+document.getElementById('ovly-tor').onchange = renderMap;
+document.getElementById('ovly-dc').onchange  = renderMap;
 
 async function tick(){
   const params = new URLSearchParams({range: document.getElementById('range').value});
@@ -137,67 +520,199 @@ async function tick(){
       const btn = document.getElementById('mm-fix');
       const msg = document.getElementById('mm-msg');
       btn.onclick = async () => {
-        btn.disabled = true;
-        btn.textContent = 'Fixing…';
+        btn.disabled = true; btn.textContent = 'Fixing…';
         msg.style.color = 'var(--dim)';
-        msg.textContent = 'fetching mmdb (image seed + license-key download)…';
+        msg.textContent = 'fetching mmdb…';
         try {
-          const r = await fetch('/__maxmind-fetch' + (ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : ''),
+          const r = await fetch('/__maxmind-fetch' + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : ''),
                                 {method:'POST', credentials:'include'});
           const j = await r.json();
-          if (r.ok && j.ok) {
-            msg.style.color = 'var(--green)';
-            msg.textContent = 'loaded — refreshing map';
-            setTimeout(tick, 600);
-          } else {
-            btn.disabled = false; btn.textContent = 'Retry';
-            msg.style.color = 'var(--red)';
-            msg.textContent = j.error || 'failed';
-            if (j.hint) msg.textContent += '  ·  ' + j.hint;
-          }
-        } catch(e) {
-          btn.disabled = false; btn.textContent = 'Retry';
-          msg.style.color = 'var(--red)';
-          msg.textContent = 'network error: ' + e.message;
-        }
+          if (r.ok && j.ok){ msg.style.color='var(--green)'; msg.textContent='loaded — refreshing'; setTimeout(tick, 600); }
+          else { btn.disabled=false; btn.textContent='Retry'; msg.style.color='var(--red)'; msg.textContent=j.error||'failed'; }
+        } catch(e){ btn.disabled=false; btn.textContent='Retry'; msg.style.color='var(--red)'; msg.textContent='network: '+e.message; }
       };
+      lastData = null;
+      return;
     } else {
       notice.classList.remove('show');
     }
+
+    lastData = d;
+    rebuildBuckets();
     const sm = d.summary || {};
     document.getElementById('m-points').textContent  = sm.total_points  || 0;
     document.getElementById('m-points-sub').textContent = (sm.total_events||0) + ' total events';
     document.getElementById('m-clean').textContent   = (sm.total_clean   || 0).toLocaleString();
     document.getElementById('m-missed').textContent  = (sm.total_missed  || 0).toLocaleString();
     document.getElementById('m-blocked').textContent = (sm.total_blocked || 0).toLocaleString();
+    document.getElementById('m-tor').textContent     = (sm.total_tor     || 0).toLocaleString();
+    document.getElementById('m-dc').textContent      = (sm.total_dc      || 0).toLocaleString();
 
-    layerGroup.clearLayers();
-    (d.points || []).forEach(p => {
-      const tip = `<b>${p.city || '?'}</b> ${p.country ? '(' + p.country + ')' : ''}<br>` +
-        `<span style="color:#3fb950">clean</span>: ${p.clean}<br>` +
-        `<span style="color:#ff7b3a">missed</span>: ${p.missed}<br>` +
-        `<span style="color:#f85149">blocked</span>: ${p.blocked}`;
-      // Layered: red on top of orange on top of green for visual emphasis
-      if (p.clean   > 0) buildCircle(p.lat, p.lng, p.clean,   '#3fb950', tip).addTo(layerGroup);
-      if (p.missed  > 0) buildCircle(p.lat + 0.0001, p.lng + 0.0001, p.missed,  '#ff7b3a', tip).addTo(layerGroup);
-      if (p.blocked > 0) buildCircle(p.lat + 0.0002, p.lng + 0.0002, p.blocked, '#f85149', tip).addTo(layerGroup);
-    });
+    renderMap();
+    renderCountries();
+    renderMethods();      // 1.6.4
+    renderAsns();         // 1.6.4
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch(e) {
     document.getElementById('live').style.background = 'var(--red)';
     document.getElementById('live').textContent = '○ ERR';
   }
 }
-document.getElementById('range').onchange = tick;
+
+// 1.6.4 — global block-by-method bars (which detection layer caught the most)
+function renderMethods(){
+  const div = document.getElementById('method-bars');
+  if (!div) return;
+  const totals = (lastData && lastData.summary && lastData.summary.method_totals) || {};
+  const entries = Object.entries(totals).sort((a,b) => b[1]-a[1]);
+  if (!entries.length){ div.innerHTML = '<div class="dim">no blocks in window</div>'; return; }
+  const max = Math.max(...entries.map(([_,v]) => v));
+  const COL = {
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+  };
+  div.innerHTML = entries.map(([k, v]) => {
+    const pct = (v / max) * 100;
+    return `<div style="display:grid;grid-template-columns:80px 1fr 50px;gap:8px;align-items:center;margin-bottom:4px">
+      <span style="color:${COL[k]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(k)}</span>
+      <span style="background:#21262d;border-radius:3px;height:14px;position:relative">
+        <span style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${COL[k]||'#8b949e'};border-radius:3px;opacity:.7"></span>
+      </span>
+      <span style="text-align:right;color:#fff;font-weight:600">${v}</span>
+    </div>`;
+  }).join('');
+}
+
+// 1.6.4 — top ASN providers table
+function renderAsns(){
+  const tb = document.getElementById('asn-tbody');
+  if (!tb) return;
+  const asns = (lastData && lastData.asns) || [];
+  if (!asns.length){ tb.innerHTML = '<tr><td colspan="3" class="dim">no ASN data — MaxMind ASN DB not loaded?</td></tr>'; return; }
+  tb.innerHTML = asns.slice(0, 10).map(a => `
+    <tr>
+      <td style="font-size:10.5px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(a.asn_org)}">${escapeHtml(a.asn_org)}</td>
+      <td class="num">${a.total}</td>
+      <td class="num" style="color:${a.blocked?'#f85149':'#8b949e'}">${a.blocked}</td>
+    </tr>`).join('');
+}
+
+document.getElementById('range').onchange = () => { scrubBucketIdx = -1; tick(); };
 document.getElementById('refresh').onclick = tick;
-document.getElementById('now').onclick     = tick;
+document.getElementById('now').onclick     = () => { scrubBucketIdx = -1; tick(); };
+document.getElementById('pin-filter').onchange = renderMap;     // 1.6.4
 tick();
-// 1.5.5 — pause refresh while user is typing
 function _typing(){
   const ae = document.activeElement; if (!ae) return false;
   const t = ae.tagName;
   return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || ae.isContentEditable;
 }
-setInterval(() => { if (!_typing()) tick(); }, 30000);
+setInterval(() => { if (!_typing() && !playing) tick(); }, 30000);
+
+// Close drill modal on background click + ESC.
+document.getElementById('drill-modal').onclick = (e) => {
+  if (e.target.id === 'drill-modal') e.currentTarget.classList.remove('show');
+};
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') document.getElementById('drill-modal').classList.remove('show');
+});
 </script>
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+<style>
+#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:#161b22;color:#fff;border:1px solid #30363d;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill:hover{transform:scale(1.04)}
+.gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
+  display:none;align-items:flex-start;justify-content:center;z-index:2200;
+  padding:60px 20px 20px}
+.gw-modal-overlay.show{display:flex}
+.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
+.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+  display:flex;justify-content:space-between;align-items:center}
+.gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
+.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
+.gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
+.gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
+.gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
+.gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+</style>
+<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="gw-modal-card">
+    <h3>
+      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
+    </h3>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+  </div>
+</div>
+<script>
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const pill = document.getElementById('gw-status-pill');
+  const modal = document.getElementById('gw-status-modal');
+  const modalScore = document.getElementById('gw-modal-score');
+  const modalBody = document.getElementById('gw-modal-body');
+  // Linear gradient red→yellow→green over 0..100.
+  function colorFor(score){
+    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  }
+  let lastData = null;
+  async function tick(){
+    try {
+      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+                            {credentials:'include'});
+      const d = await r.json();
+      lastData = d;
+      const s = d.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● GW ${s}/100`;
+    } catch(e){
+      pill.style.background = '#3d1a1a';
+      pill.style.color = '#f85149';
+      pill.textContent = '● ERR';
+    }
+  }
+  pill.onclick = () => {
+    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
+    modalScore.textContent = lastData.score|0;
+    modalScore.style.color = colorFor(lastData.score).fg;
+    const rows = (lastData.reasons||[]).map(r => `
+      <div class="gw-row">
+        <span class="key">${escHtml(r.key)}</span>
+        <span class="badge ${escHtml(r.status)}">${escHtml(r.status)}</span>
+        <span class="det">${escHtml(r.detail||'')}</span>
+        <span class="val">${escHtml(r.value||'')}</span>
+      </div>`).join('');
+    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+    </div>`;
+    modal.classList.add('show');
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') modal.classList.remove('show');
+  });
+  tick();
+  setInterval(tick, 15000);
+})();
+</script>
+<!-- /1.6.4 GW status pill -->
+
 </body></html>

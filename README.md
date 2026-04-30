@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.6.2` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.6.4` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -17,7 +17,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/__dashboard` · `/__agents` · `/__service` · `/__controls` · `/__geo` (DB-backed, click-to-drill) |
 
-## Architecture (1.6.2)
+## Architecture (1.6.4)
 
 ```
                                 ┌─────────────────────┐
@@ -201,7 +201,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.6.2 \
+docker run -d --name appsec-antibot-gw1.6.4 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.6.2 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.6.2 \
+  appsec-antibot-gw:1.6.4 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -661,7 +661,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.6.2
+  appsec-antibot-gw:1.6.4
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -851,8 +851,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.6.2 .
-trivy image appsec-antibot-gw:1.6.2        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.6.4 .
+trivy image appsec-antibot-gw:1.6.4        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -925,6 +925,8 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.6.4** | **Pluggable event store + GW health pill + Logs dashboard.** **(1) `DB_BACKEND` toggle** — `sqlite` (default, zero-deps) or `postgres` (future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale). Switching requires a container restart and does NOT migrate data; when `DB_BACKEND=postgres` is set without `psycopg` available in the image, the gateway falls back to sqlite with a loud startup warning. Knob exposed in the Controls dashboard with an explicit "RESTART REQUIRED" warning. New env vars: `DB_BACKEND` + `POSTGRES_DSN`. **(2) GW status pill** — fixed top-right pill on every dashboard showing a 0–100 health score (red→yellow→green at the 50 / 80 thresholds). Click → modal with per-pillar breakdown: `disk` (free space at the data volume) / `memory` (RSS vs 256–1024 MiB ceilings) / `db` (SQLite size vs 2 GiB / 10 GiB ceilings) / `integrations` (configured-but-failing AbuseIPDB / CrowdSec / MaxMind) / `bans` (active count) / `block_rate` (last-hour block-to-total ratio). Score = 100 − Σ(weight) of any pillar that's `warn` or `bad`. New endpoint `/__health-score`. Refreshes every 15 s. **(3) Logs dashboard** (1.6.3, restated for completeness) — two tabs (Connection logs from SQLite events / Gateway logs from in-mem ring), level filter, search, pause/resume, segmented LOG_LEVEL push toggle. **Tests**: 64 unit (5 new for 1.6.4) — `test_164_db_backend_default_sqlite`, `test_164_db_backend_falls_back_when_psycopg_missing`, `test_164_postgres_dsn_knob_registered`, `test_164_health_score_endpoint_registered`, `test_164_health_score_payload_shape`. |
+| **1.6.3** | **GeoMap upgrade — actionable triage view.** **(1) Country leaderboard** — side panel listing the top 12 countries by clean / missed / blocked counts. Each row has a one-click **deny** button that pushes the ISO code into `COUNTRY_DENYLIST` via `/__config` (also flips `COUNTRY_BLOCK_ENABLED=1` if it was off). The current denylist / allowlist is rendered live below the table. **(2) Click-circle drill modal** — clicking any map circle hits the new `/__geo-drill?lat=…&lng=…&range=…` endpoint and pops a modal with: top 25 IPs at that 0.5° cell (with country, city, ASN org, Tor / DC tags, hit count, blocked count, last reason), top 10 block reasons, top 10 paths. ESC / background click to close. **(3) Tor / DC overlay toggles** — checkboxes in the toolbar overlay distinct markers on top of the base circles: yellow triangles for IPs in `_tor_exits`, purple squares for IPs whose ASN matches `HOSTING_ASN_KEYWORDS`. Two new metric cards (Tor exits, DC / VPN). **(4) Animated time scrubber** — a 24-bucket replay control under the map. The new `/__geo-data` payload includes a sampled `events` array (capped at 5000); the front-end aggregates by bucket client-side and renders per-frame. Play / Pause / "jump to live" controls; auto-refresh pauses while playing so the cursor doesn't get yanked back. New `/__geo-drill` endpoint. `/__geo-data` payload extended with `countries`, `events`, `geo_state`, `tor_hits`, `dc_hits`, `total_tor`, `total_dc`, `start_epoch`. **Tests**: 59 unit (3 new for 1.6.3) — `test_163_geo_drill_endpoint_registered`, `test_163_geo_data_payload_shape`, `test_163_geo_drill_payload_shape`. |
 | **1.6.2** | **Tier C — response-side DLP + operational webhook filtering.** **(1) Outbound DLP scanning** — `DLP_ENABLED=1` activates a response-body scanner that runs *after* the upstream replies (so the gateway can also detect data leaving misconfigured / compromised origins). 7 named groups: `cc` (Luhn-validated credit cards) · `aws` (`AKIA*` / `ASIA*` / labelled secrets) · `jwt` (`eyJ…` triple-segment) · `private-key` (PEM headers) · `api-key` (Slack / GitHub / OpenAI / labelled high-entropy secrets) · `pii-email` (off by default — noisy) · `pii-ssn` (US 3-2-4). Every group has its own kill-switch (`DLP_GROUP_*_ENABLED`) and a `dlp-<group>` event reason. Bounded by `DLP_MAX_BYTES` (default 256 KiB) so a single large response can't stall the request path. Optional in-flight redaction (`DLP_REDACT=1` substitutes `[REDACTED-<group>]` for matched bytes). DLP fires accrue **zero** risk on the requester (upstream leakage isn't client malice). When `WEBHOOK_URL` is set, every DLP hit also fires a `dlp_leak` webhook event with group breakdown + redaction status. **(2) Webhook event filter** — `WEBHOOK_EVENT_FILTER` (CSV) lets a SOC consumer subscribe to specific events instead of getting fire-hosed on every ban: e.g. `canary-echo,custom-rule-block,dlp-*` (fnmatch globs supported). Empty = legacy 1.5.0 behaviour (every webhook through). Filter applied *before* Redis dedup so filtered-out events don't burn a dedup token. 11 new hot-reloadable knobs (**88 total**). 7 new `RISK_WEIGHTS` entries (all weight 0). **Tests**: 56 unit (15 new for Tier C) — `test_162_dlp_aws_keys`, `test_162_dlp_jwt`, `test_162_dlp_private_key`, `test_162_dlp_credit_card_luhn`, `test_162_dlp_api_key`, `test_162_dlp_disabled_when_off`, `test_162_dlp_only_text_content_types`, `test_162_dlp_redact`, `test_162_dlp_max_bytes_bound`, `test_162_luhn_check_helper`, `test_162_webhook_filter_empty_passes_all`, `test_162_webhook_filter_exact_match`, `test_162_webhook_filter_glob_family`, `test_162_tier_c_hot_reload_knobs`, `test_162_tier_c_signals_in_risk_weights`. |
 | **1.6.1** | **Tier B — operator-defined rules + per-endpoint controls + managed rulesets + JWT.** **(1) Custom rules engine** (`CUSTOM_RULES` JSON) — Cloudflare-Custom-Rules parity: `[{"if":{"path":"/api/*","method":"POST","header.X-Caller":"lambda","ip_cidr":"10.0.0.0/8","country":"PT","query.debug":"1","ua_contains":"corp"},"then":"allow|block|challenge|tag"}]`. First-match-wins, evaluated at L0.4 (before standard detectors) so an `allow` rule short-circuits the chain for legitimate internal traffic and a `block` rule fires `custom-rule-block` (weight 50 → ban). **(2) Per-endpoint rate limit** — extends `ENDPOINT_POLICIES` with optional `{rps, burst}` fields; `[{"path":"/login","policy":"challenge","rps":5,"burst":10}]` token-buckets per (path-glob, identity), fires `rate-limit-endpoint` on overage (zero risk added — pure throttle). **(3) Managed body-pattern rule groups** — split the legacy `BODY_PATTERN_MATCH` blanket into six named groups (`sqli`/`xss`/`lfi`/`rce`/`ssrf`/`cmd`) with per-group kill-switches (`BODY_GROUP_*_ENABLED`); each fires its own `body-<group>` reason (weights 40-50; rce + cmd at the ban threshold). Most-severe-first match order; legacy `suspicious-body` is the catch-all. **(4) JWT/Bearer signature validation** — `JWT_VALIDATE_PATHS` glob list + `JWT_HMAC_SECRET` (HS256, pure-stdlib, no PyJWT dep) with optional `JWT_REQUIRED_ISSUER` / `JWT_REQUIRED_AUDIENCE` and `JWT_LEEWAY_SECS` clock skew; mismatch fires `auth-jwt-invalid` (weight 25). All four features hot-reloadable via `/__config` (10 new knobs, **77 hot-reloadable knobs total**). 9 new `RISK_WEIGHTS` entries + descriptions + signal-knob mapping + cost rows. **Tests**: 41 unit (12 new for Tier B) — `test_161_custom_rules_parser`, `test_161_custom_rule_match_path_method_header`, `test_161_custom_rule_ip_cidr`, `test_161_endpoint_policies_rps_burst`, `test_161_endpoint_rule_lookup`, `test_161_body_groups_match`, `test_161_body_group_disabled`, `test_161_jwt_signature_verify`, `test_161_jwt_expiry_and_claims`, `test_161_jwt_required_for`, `test_161_tier_b_hot_reload_knobs`, `test_161_tier_b_signals_in_risk_weights`. |
 | **1.6.0** | **Tier A — Akamai-Kona / Cloudflare-WAF parity feature set.** **(1) Country-level geo block / allowlist** — `COUNTRY_BLOCK_ENABLED=1` + `COUNTRY_DENYLIST=RU,CN,KP` (or `COUNTRY_ALLOWLIST=PT,ES,US` for whitelist mode) consumes the existing GeoLite2-City lookup, costs ~0.1 ms in-process, fires `country-blocked` (weight 50 → instant ban). Allowlist takes precedence over denylist. **(2) AI-crawler granular toggles** — split the legacy `UA_BLOCKLIST` AI section into six named groups (`AI_UA_OPENAI_ENABLED` / `AI_UA_ANTHROPIC_ENABLED` / `AI_UA_GOOGLE_ENABLED` / `AI_UA_PERPLEXITY_ENABLED` / `AI_UA_META_ENABLED` / `AI_UA_OTHER_ENABLED`); each group ships its own kill-switch and a per-vendor reason (`ua-ai-openai`, `ua-ai-anthropic`, …) so an enterprise can allowlist e.g. ClaudeBot for indexing while still blocking OpenAI / Perplexity. **(3) Network-list integration (Tor + DC/VPN)** — `TOR_BLOCK_ENABLED=1` enables auto-fetch of `https://check.torproject.org/torbulkexitlist` (refreshed weekly in-process), checks O(1) set membership, fires `tor-exit` (weight 50 → instant ban). `DC_VPN_BLOCK_ENABLED=1` layers a heavier `datacenter-vpn` (weight 30) on top of the existing `asn-hosting` (weight 5) hosting-ASN flag. **(4) Per-endpoint policy engine** — extends `JS_CHAL_OPEN_PATHS` into an `ENDPOINT_POLICIES` JSON spec with fnmatch globs and four policies: `bypass` / `challenge` / `strict` / `default` — operators express e.g. `[{"path":"/api/v1/*","policy":"bypass"},{"path":"/admin","policy":"strict"}]` and the JS-challenge gate honours per-route policy. All four features are hot-reloadable via `/__config` (12 new knobs added, **67 hot-reloadable knobs total**). 6 new `RISK_WEIGHTS` entries + descriptions + signal-knob mapping + cost rows so the dashboards render them like any other detector. **Tests**: 29 unit (8 new for Tier A) — `test_16_country_set_parser`, `test_16_country_signals_in_risk_weights`, `test_16_country_hot_reload_knobs`, `test_16_ai_groups_nonempty`, `test_16_ai_group_uas_are_lowercase`, `test_16_endpoint_policy_parser`, `test_16_endpoint_policy_match`, `test_16_descriptions_complete`. |

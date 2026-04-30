@@ -1,0 +1,432 @@
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · Logs</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
+      --orange:#ff7b3a;--purple:#bc8cff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);padding:14px}
+h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+h1 .pill{font-size:10px;background:var(--blue);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
+.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px}
+.topnav a:hover{color:var(--fg);background:#1f2730}
+.topnav a.active{color:var(--fg);background:#1f2730}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.tabs{display:flex;gap:4px;margin-bottom:12px}
+.tab{padding:6px 14px;background:#0d1117;border:1px solid var(--line);border-radius:5px;
+     cursor:pointer;font-size:12.5px;color:var(--dim);user-select:none}
+.tab.active{background:var(--card);color:var(--fg);border-color:var(--blue);font-weight:600}
+.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.toolbar .ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+               border-radius:4px;padding:4px 10px;font-size:11.5px;
+               font-family:inherit;cursor:pointer;line-height:1.4}
+.toolbar .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.toolbar input[type=text]{font-family:ui-monospace,monospace;width:240px}
+.toolbar select{cursor:pointer}
+.toolbar .level-pill{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;
+                     text-transform:uppercase;letter-spacing:.4px}
+.live-indicator{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim)}
+.live-indicator .dot{width:8px;height:8px;border-radius:50%;background:var(--green);
+                     animation:pulse 1.6s ease-in-out infinite}
+.live-indicator.paused .dot{background:var(--yellow);animation:none}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+
+.log-pane{background:#0a0e13;border:1px solid var(--line);border-radius:6px;
+          font-family:ui-monospace,Menlo,monospace;font-size:11.5px;
+          overflow:auto;max-height:62vh;line-height:1.55}
+.log-row{display:grid;grid-template-columns:138px 64px 90px 1fr;gap:10px;
+         padding:4px 10px;border-bottom:1px solid #1f2730;align-items:start}
+.log-row:hover{background:#0e131a}
+.log-row .ts{color:var(--dim);white-space:nowrap}
+.log-row .lvl{font-weight:700;text-align:left}
+.log-row .lvl.debug{color:var(--dim)}
+.log-row .lvl.info{color:var(--green)}
+.log-row .lvl.warn,.log-row .lvl.warning{color:var(--yellow)}
+.log-row .lvl.error{color:var(--orange)}
+.log-row .lvl.critical{color:var(--red)}
+.log-row .meta{color:var(--blue)}
+.log-row .body{color:var(--fg);overflow-wrap:anywhere;white-space:pre-wrap}
+.log-row .body .k{color:var(--dim)}
+.log-row .body .v{color:var(--fg)}
+.log-row .body .vstr{color:var(--green)}
+.log-row .body .vnum{color:var(--orange)}
+
+.row{display:grid;gap:14px;grid-template-columns:1fr 1fr 1fr 1fr;margin-top:14px}
+.metric{font-size:26px;font-weight:600;color:#fff;line-height:1}
+.metric.green{color:var(--green)} .metric.orange{color:var(--orange)}
+.metric.red{color:var(--red)} .metric.blue{color:var(--blue)}
+.metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
+.foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
+.dim{color:var(--dim)}
+
+/* Level toggle row — segmented control */
+.lvl-segctl{display:inline-flex;border:1px solid var(--line);border-radius:5px;
+            overflow:hidden;background:#0d1117}
+.lvl-segctl button{background:transparent;border:none;color:var(--dim);
+                   padding:5px 12px;font-size:11px;cursor:pointer;
+                   font-family:inherit;font-weight:600;text-transform:uppercase;
+                   letter-spacing:.4px;border-right:1px solid var(--line)}
+.lvl-segctl button:last-child{border-right:none}
+.lvl-segctl button:hover{background:#1f2730;color:var(--fg)}
+.lvl-segctl button.on{background:var(--blue);color:#000}
+.lvl-segctl button.warn-on{background:var(--yellow);color:#000}
+.lvl-segctl button.error-on{background:var(--orange);color:#000}
+.lvl-segctl button.crit-on{background:var(--red);color:#fff}
+.lvl-segctl button.dbg-on{background:var(--dim);color:#000}
+
+.label{font-size:11px;color:var(--dim);margin-right:6px}
+</style></head>
+<body>
+<h1>AppSecGW_1.6.4 &middot; Logs <span class="pill" id="live">● LIVE</span></h1>
+<nav class="topnav">
+  <a href="/__dashboard?key=__KEY__">Dashboard</a>
+  <a href="/__agents?key=__KEY__">Agents</a>
+  <a href="/__service?key=__KEY__">Service</a>
+  <a href="/__controls?key=__KEY__">Controls</a>
+  <a href="/__geo?key=__KEY__">GeoMap</a>
+  <a href="/__logs?key=__KEY__" class="active">Logs</a>
+</nav>
+
+<div class="card">
+  <div class="tabs">
+    <div class="tab active" data-kind="requests">Connection logs</div>
+    <div class="tab" data-kind="gw">Gateway logs</div>
+  </div>
+
+  <div class="toolbar">
+    <span class="label">Filter level:</span>
+    <select id="filter-level" class="ctrl">
+      <option value="debug" selected>debug — show all</option>
+      <option value="info">info — info+</option>
+      <option value="warn">warn — warn+</option>
+      <option value="error">error — error+</option>
+      <option value="critical">critical — critical only</option>
+    </select>
+
+    <span class="label" style="margin-left:14px">Search:</span>
+    <input id="filter-q" type="text" class="ctrl" placeholder="ip / path / event / reason">
+
+    <span class="label" style="margin-left:14px">Limit:</span>
+    <select id="filter-limit" class="ctrl">
+      <option value="100">100</option>
+      <option value="200" selected>200</option>
+      <option value="500">500</option>
+      <option value="1000">1000</option>
+      <option value="2000">2000</option>
+    </select>
+
+    <button id="pause" class="ctrl">⏸ Pause</button>
+    <button id="refresh" class="ctrl">↻ Refresh</button>
+    <span class="live-indicator" id="ind"><span class="dot"></span><span id="ind-txt">live · 2 s</span></span>
+  </div>
+
+  <div class="toolbar" style="border-top:1px solid var(--line);padding-top:10px">
+    <span class="label">Server LOG_LEVEL (push to /__config):</span>
+    <div class="lvl-segctl" id="lvl-push">
+      <button data-lvl="debug">debug</button>
+      <button data-lvl="info">info</button>
+      <button data-lvl="warn">warn</button>
+      <button data-lvl="error">error</button>
+      <button data-lvl="critical">critical</button>
+    </div>
+    <span class="dim" style="font-size:11px;margin-left:8px">
+      currently: <code id="cur-lvl">—</code> · changes survive container restart (config_kv)
+    </span>
+  </div>
+
+  <div class="log-pane" id="pane">loading…</div>
+</div>
+
+<div class="row">
+  <div class="card"><h2>Rows shown</h2><div class="metric blue" id="m-count">—</div><div class="metric-sub">after filters</div></div>
+  <div class="card"><h2>Tab</h2><div class="metric orange" id="m-tab">requests</div><div class="metric-sub" id="m-tab-sub">connection log</div></div>
+  <div class="card"><h2>Filter level</h2><div class="metric green" id="m-level">debug</div><div class="metric-sub">events at this level or higher</div></div>
+  <div class="card"><h2>GW ring</h2><div class="metric red" id="m-ring">—</div><div class="metric-sub">in-memory entries (max 2000)</div></div>
+</div>
+
+<div class="foot">refreshes every 2 s · <code id="ts"></code></div>
+
+<script>
+const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+const escapeHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+
+let kind = 'requests';
+let paused = false;
+let lastIds = new Set();    // dedup helper for connection logs
+let serverState = {};
+
+function fmtTs(ts){
+  // accepts unix epoch (number) or ISO string
+  if (typeof ts === 'string') return ts.replace('T',' ').slice(0,19);
+  const d = new Date(ts*1000);
+  return d.toISOString().replace('T',' ').slice(0,19);
+}
+function lvlClass(l){ return (l||'info').toLowerCase(); }
+
+function renderRequestRow(r){
+  const status = r.status || 0;
+  const reasonColor = !r.reason ? 'var(--dim)'
+                    : r.reason==='OK' ? 'var(--green)'
+                    : 'var(--red)';
+  const statusColor = status >= 500 ? 'var(--red)'
+                    : status >= 400 ? 'var(--orange)'
+                    : status >= 300 ? 'var(--yellow)'
+                    : status >= 200 ? 'var(--green)' : 'var(--dim)';
+  const meta = `<span style="color:${statusColor}">${status}</span>`;
+  const body = `<span class="body">
+      <span style="color:var(--blue)">${escapeHtml(r.ip||'')}</span>
+      <span class="k">·</span>
+      <span style="color:var(--purple)">${escapeHtml(r.path||'')}</span>
+      <span class="k">· reason</span>=<span style="color:${reasonColor}">${escapeHtml(r.reason||'OK')}</span>
+      <span class="k"> · ua</span>=<span class="vstr">${escapeHtml((r.ua||'').slice(0,80))}</span>
+    </span>`;
+  return `<div class="log-row">
+    <span class="ts">${escapeHtml(fmtTs(r.ts))}</span>
+    <span class="lvl ${lvlClass(r.level)}">${escapeHtml(r.level||'info')}</span>
+    <span class="meta">${meta}</span>
+    ${body}
+  </div>`;
+}
+function renderGwRow(r){
+  // Render every key=value pair compactly, except ts/level/event which we put up front
+  const pairs = Object.entries(r).filter(([k,_]) => !['ts','level','event'].includes(k));
+  const body = pairs.map(([k,v]) => {
+    const sv = (typeof v === 'object') ? JSON.stringify(v) : String(v);
+    const colored = (typeof v === 'number')
+      ? `<span class="vnum">${escapeHtml(sv)}</span>`
+      : `<span class="vstr">${escapeHtml(sv)}</span>`;
+    return `<span class="k">${escapeHtml(k)}</span>=<span class="v">${colored}</span>`;
+  }).join(' ');
+  const evColor = r.event === 'config_changed' ? 'var(--blue)'
+                : r.event === 'ban' ? 'var(--red)'
+                : r.event === 'webhook_failed' ? 'var(--orange)'
+                : r.event === 'shared_store' ? 'var(--green)'
+                : 'var(--purple)';
+  return `<div class="log-row">
+    <span class="ts">${escapeHtml(fmtTs(r.ts))}</span>
+    <span class="lvl ${lvlClass(r.level)}">${escapeHtml(r.level||'info')}</span>
+    <span class="meta" style="color:${evColor}">${escapeHtml(r.event||'')}</span>
+    <span class="body">${body || '<span class="k">(no fields)</span>'}</span>
+  </div>`;
+}
+
+async function tick(force){
+  if (paused && !force) return;
+  const params = new URLSearchParams({
+    kind, level: document.getElementById('filter-level').value,
+    limit: document.getElementById('filter-limit').value,
+  });
+  const q = document.getElementById('filter-q').value.trim();
+  if (q) params.set('q', q);
+  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+  try {
+    const r = await fetch('/__logs-data?' + params, {credentials:'include'});
+    const d = await r.json();
+    document.getElementById('m-count').textContent = (d.count||0);
+    document.getElementById('m-level').textContent = d.level || '—';
+    if (d.kind === 'gw') {
+      document.getElementById('m-ring').textContent = d.ring_size || 0;
+    } else {
+      document.getElementById('m-ring').textContent = '—';
+    }
+    const pane = document.getElementById('pane');
+    if (!(d.rows||[]).length){
+      pane.innerHTML = '<div style="padding:20px;color:var(--dim);text-align:center">no log rows match the current filters</div>';
+    } else {
+      pane.innerHTML = (d.rows||[]).map(d.kind === 'requests' ? renderRequestRow : renderGwRow).join('');
+    }
+    document.getElementById('ts').textContent = new Date().toISOString();
+    document.getElementById('live').style.background = 'var(--blue)';
+    document.getElementById('live').textContent = '● LIVE';
+  } catch(e) {
+    document.getElementById('live').style.background = 'var(--red)';
+    document.getElementById('live').textContent = '○ ERR';
+  }
+}
+
+// ── Tabs ─────────────────────────────────────────────────────────────
+document.querySelectorAll('.tab').forEach(t => {
+  t.onclick = () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+    kind = t.dataset.kind;
+    document.getElementById('m-tab').textContent = kind;
+    document.getElementById('m-tab-sub').textContent =
+      kind === 'requests' ? 'connection log (SQLite events)' : 'gw operational events (in-mem ring)';
+    tick(true);
+  };
+});
+
+// ── Filter changes ───────────────────────────────────────────────────
+document.getElementById('filter-level').onchange = () => tick(true);
+document.getElementById('filter-limit').onchange = () => tick(true);
+let qDebounce = null;
+document.getElementById('filter-q').oninput = () => {
+  clearTimeout(qDebounce);
+  qDebounce = setTimeout(() => tick(true), 250);
+};
+
+// ── Pause / refresh ──────────────────────────────────────────────────
+const pauseBtn = document.getElementById('pause');
+const ind      = document.getElementById('ind');
+const indTxt   = document.getElementById('ind-txt');
+pauseBtn.onclick = () => {
+  paused = !paused;
+  pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+  ind.classList.toggle('paused', paused);
+  indTxt.textContent = paused ? 'paused' : 'live · 2 s';
+  if (!paused) tick(true);
+};
+document.getElementById('refresh').onclick = () => tick(true);
+
+// ── Server LOG_LEVEL push ────────────────────────────────────────────
+async function loadServerState(){
+  try {
+    const r = await fetch(url('/__config'), {credentials:'include'});
+    const d = await r.json();
+    serverState = d.state || {};
+    paintLvlButtons();
+  } catch(e) {}
+}
+function paintLvlButtons(){
+  const cur = (serverState.LOG_LEVEL || 'info').toLowerCase();
+  document.getElementById('cur-lvl').textContent = cur;
+  document.querySelectorAll('#lvl-push button').forEach(b => {
+    const lv = b.dataset.lvl;
+    b.classList.remove('on','warn-on','error-on','crit-on','dbg-on');
+    if (lv === cur) {
+      if (lv === 'critical') b.classList.add('crit-on');
+      else if (lv === 'error') b.classList.add('error-on');
+      else if (lv === 'warn')  b.classList.add('warn-on');
+      else if (lv === 'debug') b.classList.add('dbg-on');
+      else b.classList.add('on');
+    }
+  });
+}
+document.querySelectorAll('#lvl-push button').forEach(b => {
+  b.onclick = async () => {
+    const lvl = b.dataset.lvl;
+    try {
+      const r = await fetch(url('/__config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (d.applied && d.applied.LOG_LEVEL) {
+        serverState.LOG_LEVEL = lvl;
+        paintLvlButtons();
+      } else {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+      }
+    } catch(e) { alert('Network error: ' + e.message); }
+  };
+});
+
+loadServerState();
+tick(true);
+setInterval(tick, 2000);
+// refresh server LOG_LEVEL paint every 10s in case it was changed elsewhere
+setInterval(loadServerState, 10000);
+</script>
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+<style>
+#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:#161b22;color:#fff;border:1px solid #30363d;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill:hover{transform:scale(1.04)}
+.gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
+  display:none;align-items:flex-start;justify-content:center;z-index:2200;
+  padding:60px 20px 20px}
+.gw-modal-overlay.show{display:flex}
+.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
+.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+  display:flex;justify-content:space-between;align-items:center}
+.gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
+.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
+.gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
+.gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
+.gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
+.gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+</style>
+<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="gw-modal-card">
+    <h3>
+      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
+    </h3>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+  </div>
+</div>
+<script>
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const pill = document.getElementById('gw-status-pill');
+  const modal = document.getElementById('gw-status-modal');
+  const modalScore = document.getElementById('gw-modal-score');
+  const modalBody = document.getElementById('gw-modal-body');
+  // Linear gradient red→yellow→green over 0..100.
+  function colorFor(score){
+    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  }
+  let lastData = null;
+  async function tick(){
+    try {
+      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+                            {credentials:'include'});
+      const d = await r.json();
+      lastData = d;
+      const s = d.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● GW ${s}/100`;
+    } catch(e){
+      pill.style.background = '#3d1a1a';
+      pill.style.color = '#f85149';
+      pill.textContent = '● ERR';
+    }
+  }
+  pill.onclick = () => {
+    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
+    modalScore.textContent = lastData.score|0;
+    modalScore.style.color = colorFor(lastData.score).fg;
+    const rows = (lastData.reasons||[]).map(r => `
+      <div class="gw-row">
+        <span class="key">${escHtml(r.key)}</span>
+        <span class="badge ${escHtml(r.status)}">${escHtml(r.status)}</span>
+        <span class="det">${escHtml(r.detail||'')}</span>
+        <span class="val">${escHtml(r.value||'')}</span>
+      </div>`).join('');
+    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+    </div>`;
+    modal.classList.add('show');
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') modal.classList.remove('show');
+  });
+  tick();
+  setInterval(tick, 15000);
+})();
+</script>
+<!-- /1.6.4 GW status pill -->
+
+</body></html>

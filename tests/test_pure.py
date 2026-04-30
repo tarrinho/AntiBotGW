@@ -179,7 +179,7 @@ def test_pow_malformed_rejected(proxy_module):
     ("/.git/HEAD",                       True),
     ("/foo/passwd.bak",                  True),
     ("/api/secrets.yaml",                True),
-    ("/.aws/credentials",                False),  # in HONEYPOT_PATHS, not pattern
+    ("/.aws/credentials",                True),   # 1.6.4: now caught by SUSPICIOUS_PATH_PATTERNS
     ("/foo/../../../etc/passwd",         True),
     ("/path?q=union+select+*",           True),
     # Legitimate paths previously false-flagged by `passw[do]` — must NOT match

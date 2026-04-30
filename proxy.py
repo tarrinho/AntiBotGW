@@ -405,9 +405,7 @@ HONEYPOT_PATHS = {
 # Matches anywhere in the path (case-insensitive) so /myflag.txt,
 # /api/secret/v2, /backup.tar.gz are all caught.
 SUSPICIOUS_PATH_PATTERNS = (
-    # Flag/CTF hunting — patterns target FILES (with extension) or last path
-    # segment, not arbitrary substrings, so legit module names like
-    # "password-recovery" or "credentials-manager" don't false-positive.
+    # ── Flag / secret hunting ────────────────────────────────────────────
     re.compile(r"(^|/)flag(\.[a-z0-9]+|$)",                re.I),
     re.compile(r"(^|/)secret[s]?(\.[a-z0-9]+|$)",          re.I),
     re.compile(r"(^|/)passwd(\.[a-z0-9]+|$)",              re.I),
@@ -415,32 +413,100 @@ SUSPICIOUS_PATH_PATTERNS = (
     re.compile(r"(^|/)credentials?\.(json|yaml|yml|txt|conf|ini)$", re.I),
     re.compile(r"(^|/)private[_-]?key(\.[a-z0-9]+|$)",     re.I),
     re.compile(r"(^|/)api[_-]?key(\.[a-z0-9]+|$)",         re.I),
-    re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa)(\.[a-z0-9]+|$)", re.I),
-    # Backup / leak files
-    re.compile(r"\.(bak|old|orig|tmp|swp|sav|backup)$",      re.I),
-    re.compile(r"\.(sql|sqlite|db|mdb|sqlite3)$",             re.I),
-    re.compile(r"^/[^/]*\.(pem|key|crt|pfx|p12|jks)$",        re.I),
-    # VCS metadata leaks
-    re.compile(r"\.git/", re.I),
-    re.compile(r"\.svn/", re.I),
-    re.compile(r"\.hg/",  re.I),
-    re.compile(r"\.DS_Store", re.I),
-    # Debug/internal endpoints
-    re.compile(r"^/debug",     re.I),
-    re.compile(r"^/_internal", re.I),
-    # ── Injection / traversal patterns ──
-    re.compile(r"\.\.[\\/]"),                              # path traversal: ../  ..\
-    re.compile(r"%2e%2e[%/]",                  re.I),     # URL-encoded ..
-    re.compile(r"%252e%252e",                  re.I),     # double-encoded
-    re.compile(r"%c0%ae",                      re.I),     # overlong UTF-8 ..
-    # SQLi / XSS markers in path
-    re.compile(r"(union[ +]+select|select[ +]+\*|or[ +]+1=1|--$|/\*|\bxp_)", re.I),
-    re.compile(r"<script|javascript:|onerror=", re.I),
-    # OS / file inclusion
-    re.compile(r"/etc/passwd|/etc/shadow|/proc/self", re.I),
-    re.compile(r"\bphp://|\bfile://|\bexpect://", re.I),
-    # Shell injection
-    re.compile(r"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash)\b", re.I),
+    re.compile(r"(^|/)(id_rsa|id_dsa|id_ecdsa|id_ed25519)(\.[a-z0-9]+|$)", re.I),
+    re.compile(r"(^|/)\.aws/credentials\b",                re.I),
+    re.compile(r"(^|/)\.ssh/(id_rsa|authorized_keys|known_hosts)\b", re.I),
+    re.compile(r"(^|/)\.npmrc\b|(^|/)\.bashrc\b|(^|/)\.profile\b",  re.I),
+    re.compile(r"(^|/)\.docker/config\.json\b",            re.I),
+    re.compile(r"(^|/)\.env(\.[a-z]+)?$",                   re.I),
+    re.compile(r"(^|/)\.htpasswd\b|(^|/)\.htaccess\b",      re.I),
+    # ── Backup / leak files ──────────────────────────────────────────────
+    re.compile(r"\.(bak|old|orig|tmp|swp|swo|sav|backup|~)$", re.I),
+    re.compile(r"\.(sql|sqlite|db|mdb|sqlite3|dump)$",       re.I),
+    re.compile(r"^/[^/]*\.(pem|key|crt|pfx|p12|jks|asc|gpg|kbx)$", re.I),
+    re.compile(r"\.(tar|tar\.gz|tgz|zip|rar|7z)\.?(bak|old)?$", re.I),
+    # ── VCS metadata leaks ───────────────────────────────────────────────
+    re.compile(r"\.git/(HEAD|config|index|refs/|logs/|objects/)", re.I),
+    re.compile(r"\.svn/(entries|wc\.db|format)", re.I),
+    re.compile(r"\.hg/(store|requires|hgrc)",  re.I),
+    re.compile(r"\.bzr/",                       re.I),
+    re.compile(r"\.DS_Store$",                  re.I),
+    re.compile(r"(^|/)Thumbs\.db$",             re.I),
+    # ── Debug / admin / internal endpoints ───────────────────────────────
+    re.compile(r"^/(debug|dev|test|staging|admin|administrator|backend)/?$", re.I),
+    re.compile(r"^/_internal\b|^/_status\b|^/_health\b",  re.I),
+    re.compile(r"(^|/)server-(status|info)\b",            re.I),  # Apache
+    # Spring Boot Actuator (Tomcat/Spring) — extremely high-value targets
+    re.compile(r"(^|/)actuator/(env|heapdump|threaddump|beans|mappings|shutdown|jolokia)\b", re.I),
+    re.compile(r"(^|/)(manager|host-manager)/(html|status|jmxproxy)", re.I),  # Tomcat
+    re.compile(r"(^|/)console(/login\.jsp)?\b",            re.I),  # WebLogic
+    re.compile(r"(^|/)jmx-console\b|(^|/)web-console\b",   re.I),  # JBoss
+    re.compile(r"(^|/)_cat/|(^|/)_cluster/|(^|/)_search\b", re.I), # Elasticsearch
+    re.compile(r"(^|/)wp-(config\.php|admin/|login\.php)", re.I),  # WordPress
+    re.compile(r"(^|/)xmlrpc\.php\b",                       re.I),  # WordPress XML-RPC
+    re.compile(r"(^|/)(phpmyadmin|pma|myadmin|mysql)/?",   re.I),
+    re.compile(r"(^|/)WEB-INF/(web\.xml|classes/|lib/)",   re.I),  # Java traversal target
+    re.compile(r"(^|/)META-INF/MANIFEST\.MF\b",             re.I),
+    re.compile(r"(^|/)(web|Web)\.config$",                  re.I),
+    re.compile(r"(^|/)global\.asax$",                       re.I),
+    re.compile(r"(^|/)(composer|package|yarn|Gemfile|Pipfile)\.(json|lock)$", re.I),
+    # ── Cloud metadata services (SSRF target) ────────────────────────────
+    re.compile(r"169\.254\.169\.254",                       re.I),  # AWS / DO / Azure
+    re.compile(r"100\.100\.100\.200",                       re.I),  # Alibaba
+    re.compile(r"metadata\.google\.internal",               re.I),  # GCP
+    re.compile(r"/computeMetadata/v1\b|/latest/meta-data\b|/metadata/(instance|identity)", re.I),
+    # ── Path traversal (encoded variants) ────────────────────────────────
+    re.compile(r"\.\.[\\/]"),                          # ../  ..\
+    re.compile(r"\.\.;[\\/]"),                         # semicolon trick (Tomcat)
+    re.compile(r"\.{4,}/"),                            # ....//
+    re.compile(r"%2e%2e[%/\\]",                  re.I),  # URL-encoded ..
+    re.compile(r"%252e%252e",                    re.I),  # double-encoded
+    re.compile(r"%c0%ae|%c0%2e",                 re.I),  # overlong UTF-8 ..
+    re.compile(r"%c1%9c|%c1%1c",                 re.I),  # overlong /
+    re.compile(r"%uff0e%uff0e",                  re.I),  # full-width ..
+    re.compile(r"%00($|/|%)"),                   # null-byte truncation
+    # ── SQLi markers in path / query ─────────────────────────────────────
+    re.compile(r"(union[ +%]+(all[ +%]+)?select|select[ +%]+\*|or[ +%]+1[ +%]*=[ +%]*1|or[ +%]+'a'='a)", re.I),
+    re.compile(r"--($|[\s+])|/\*.*?\*/|;%20--|;%00",  re.I),
+    re.compile(r"\b(xp_cmdshell|sp_oacreate|load_file|into[ +%]+outfile)\b", re.I),
+    re.compile(r"\b(sleep|benchmark|waitfor[ +%]+delay|pg_sleep)\s*\(",     re.I),
+    re.compile(r"\binformation_schema\b|\b@@version\b",                     re.I),
+    # ── XSS markers in path / query ──────────────────────────────────────
+    re.compile(r"<script\b|</script>|javascript:|vbscript:|data:text/html", re.I),
+    re.compile(r"on(error|load|click|mouseover|focus|blur|change|submit|toggle|animation\w*|begin|end)\s*=", re.I),
+    re.compile(r"<(iframe|object|embed|svg|math|video|audio|details|frame|frameset|applet)\b", re.I),
+    re.compile(r"<img[^>]+\bsrc\s*=\s*[\"']?\s*x\s*[\"']?[^>]+\bonerror\s*=", re.I),
+    re.compile(r"\bsrcdoc\s*=|\bformaction\s*=",            re.I),
+    re.compile(r"&\#x?[0-9a-f]{2,};",                       re.I),  # numeric/hex char ref
+    # ── LFI / file inclusion ─────────────────────────────────────────────
+    re.compile(r"/etc/(passwd|shadow|group|hosts|issue|os-release|crontab)\b", re.I),
+    re.compile(r"/proc/(self|version|cpuinfo|cmdline|mounts|environ)\b",      re.I),
+    re.compile(r"/var/log/(auth|syslog|messages|dpkg|nginx|apache2)",          re.I),
+    re.compile(r"\bphp://(filter|input|memory|temp|fd)\b|\bfile://|\bexpect://|\bdata:[a-z/+-]+;base64", re.I),
+    re.compile(r"\bzip://|\bphar://|\bcompress\.zlib://|\bcompress\.bzip2://", re.I),
+    # Windows traversal targets
+    re.compile(r"(c:[\\/])?windows[\\/](system32[\\/])?(config[\\/]sam|win\.ini|boot\.ini|drivers[\\/]etc[\\/]hosts)", re.I),
+    # ── OS / shell injection ─────────────────────────────────────────────
+    re.compile(r"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id|env|uname|nslookup|dig|ping|ifconfig|netstat|lsof|ps)\b", re.I),
+    re.compile(r"\$\([^)]+\)|`[^`]+`|<\([^)]+\)",           re.I),
+    re.compile(r"\b(/bin/|/usr/bin/|/sbin/|/usr/sbin/)(sh|bash|zsh|nc|cat|ls|chmod|chown|wget|curl)\b", re.I),
+    re.compile(r"\b(cmd\.exe|powershell(\.exe)?|certutil|bitsadmin)\b",       re.I),
+    # ── Server-side template injection (path-side hints) ─────────────────
+    re.compile(r"\{\{[^}]{1,80}\}\}",                       re.I),  # Jinja / Twig
+    re.compile(r"\{%[^%]{1,80}%\}|<\#assign\b|<\#list\b",   re.I),  # Jinja2 / Freemarker
+    re.compile(r"<%=|<%-|\${.*?}",                          re.I),  # ERB / generic
+    # ── Log4Shell-style JNDI ─────────────────────────────────────────────
+    re.compile(r"\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)", re.I),
+    # ── XXE / XML entity probes (if a path carries XML) ──────────────────
+    re.compile(r"<!ENTITY\b|<!DOCTYPE[^>]+SYSTEM\b",        re.I),
+    # ── CRLF / header injection ──────────────────────────────────────────
+    re.compile(r"%0d%0a|%0a%0d|\r\n",                       re.I),
+    re.compile(r"%E5%98%8A|%E5%98%8D",                      re.I),  # UTF-8 hex CRLF
+    # ── NoSQL injection markers ──────────────────────────────────────────
+    re.compile(r"\$ne|\$gt|\$lt|\$gte|\$lte|\$in|\$nin|\$where|\$regex|\$exists|\$not|\$or|\$and", re.I),
+    # ── LDAP injection markers ───────────────────────────────────────────
+    re.compile(r"\)\(\s*(uid|cn|objectClass)\s*=\s*\*",     re.I),
+    re.compile(r"\*\)\(\s*&|\*\)\(\s*\|",                   re.I),
 )
 def is_suspicious_path(path: str) -> bool:
     return any(p.search(path) for p in SUSPICIOUS_PATH_PATTERNS)
@@ -635,9 +701,48 @@ metrics = {
 }
 events = deque(maxlen=200)            # last 200 events for the live log
 
+# ── 1.6.4: pluggable event-store backend ──────────────────────────────────
+# DB_BACKEND defaults to "sqlite" — single file, zero external deps, the
+# correct choice for ≤100 RPS sustained gateways. "postgres" is the
+# future-ready slot for high-volume / multi-instance deployments backed
+# by Postgres + the Timescale extension (compression + continuous
+# aggregates would replace SQLite's limits at >100 M rows). Switching the
+# backend requires a container restart and DOES NOT migrate data — the
+# operator stages the migration externally.
+DB_BACKEND = os.environ.get("DB_BACKEND", "sqlite").strip().lower()
+if DB_BACKEND not in ("sqlite", "postgres"):
+    print(f"[db] unknown DB_BACKEND={DB_BACKEND!r}; falling back to sqlite",
+          flush=True)
+    DB_BACKEND = "sqlite"
+POSTGRES_DSN = os.environ.get("POSTGRES_DSN", "").strip()
+
 # ── SQLite persistence ─────────────────────────────────────────────────────
 DB_PATH = os.environ.get("DB_PATH", os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "antibot.db"))
+
+# 1.6.4 — Postgres / Timescale event-store stub. Loaded only when
+# DB_BACKEND=postgres AND psycopg is importable. Falls back to SQLite
+# with a loud warning otherwise — operators who set DB_BACKEND=postgres
+# without staging the dependencies still get a working gateway.
+_postgres_pool = None
+_postgres_available = False
+if DB_BACKEND == "postgres":
+    if not POSTGRES_DSN:
+        print("[db] DB_BACKEND=postgres but POSTGRES_DSN is empty — "
+              "falling back to sqlite", flush=True)
+        DB_BACKEND = "sqlite"
+    else:
+        try:
+            import psycopg                                       # type: ignore
+            _postgres_available = True
+            print(f"[db] postgres backend selected (psycopg loaded)",
+                  flush=True)
+        except ImportError:
+            print("[db] DB_BACKEND=postgres but psycopg is not installed "
+                  "in this image — rebuild the image with psycopg in the "
+                  "Dockerfile or revert to sqlite. Falling back to sqlite "
+                  "for now.", flush=True)
+            DB_BACKEND = "sqlite"
 
 def db_init():
     """Create tables if they don't exist."""
@@ -1236,7 +1341,7 @@ def _tor_fetch():
         return
     ctx = ssl.create_default_context()
     req = urllib.request.Request(TOR_FEED_URL, headers={
-        "User-Agent": "AppSecGW/1.6.2 (anti-bot-gw)"
+        "User-Agent": "AppSecGW/1.6.4 (anti-bot-gw)"
     })
     new_set = set()
     try:
@@ -1919,13 +2024,35 @@ _LOG_LEVEL_N = _LOG_LEVELS.get(LOG_LEVEL, 20)
 _REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_\-:.]{1,64}$")
 
+# 1.6.3 — in-memory ring buffer for the Logs dashboard. Captures every slog
+# call EXCEPT `event=request` (request events live in SQLite via record()).
+# Capped at 2000 entries (~200 KB at typical event sizes). Older entries
+# are dropped silently.
+_GW_LOG_RING: deque = deque(maxlen=2000)
+
 def _new_request_id() -> str:
     """Short, sortable-by-time, easy to grep request id."""
     return f"r{int(time.time())%100000:05d}{secrets.token_hex(4)}"
 
 def slog(event: str, level: str = "info", **fields) -> None:
     """Structured log line. In `text` mode prints a compact key=value form;
-    in `json` mode emits one JSON document per line (no embedded newlines)."""
+    in `json` mode emits one JSON document per line (no embedded newlines).
+
+    1.6.3 — also captures non-request events into _GW_LOG_RING so the
+    /__logs dashboard can tail config_changed / ban / webhook_failed / etc.
+    Capture happens BEFORE the level filter so the ring keeps a richer
+    history than stdout (operators rarely run the gateway at debug level)."""
+    # Capture into the ring first — full fidelity.
+    if event != "request":
+        try:
+            _GW_LOG_RING.append({
+                "ts":    _t.time(),
+                "level": level,
+                "event": event,
+                **fields,
+            })
+        except Exception:
+            pass
     if _LOG_LEVELS.get(level, 20) < _LOG_LEVEL_N:
         return
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -2260,21 +2387,22 @@ async def ban(ip: str, secs: int = HONEYPOT_BAN_SECS, reason: str = "honeypot"):
 # Threshold scales with NAT-suspicion: shared-IP environments need MORE evidence
 # before a ban is applied, so one rogue session doesn't punish colleagues.
 RISK_WEIGHTS = {
+    # 1.6.3 — calibrated weights (post-Tier-C review)
     "honeypot":              50,
     "honeypot-silent":       50,
-    "suspicious-path":       40,    # CTF / file-hunting reconnaissance
-    "ai-probe":              30,
+    "suspicious-path":       50,    # 1.6.3: 40→50 — URL SQLi/LFI markers are unambiguous
+    "ai-probe":              40,    # 1.6.3: 30→40 — only AI agents hit /openapi.json etc.
     "ai-enumeration":        30,
-    "behavior":              10,
-    "ua-empty":              25,
+    "behavior":               8,    # 1.6.3: 10→8 — soft (FP risk on prefetch)
+    "ua-empty":              30,    # 1.6.3: 25→30 — every legit client sends a UA
     "ua-blocked":            20,
-    "ua-non-browser":        20,
-    "ai-headers-empty":      15,
+    "ua-non-browser":        25,    # 1.6.3: 20→25 — bumps in line with ua-empty
+    "ai-headers-empty":      20,    # 1.6.3: 15→20 — no Accept-* AND no Sec-Fetch-* is strong
     "ua-too-short":          15,
-    "ai-headers-incomplete":  8,
-    "upstream-404":           4,    # 404 from upstream — small enumeration signal
-    "ai-no-assets":           5,
-    "session-flood":          5,
+    "ai-headers-incomplete": 10,    # 1.6.3: 8→10 — incremental signal
+    "upstream-404":           6,    # 1.6.3: 4→6 — slight bump to enumeration sensitivity
+    "ai-no-assets":           8,    # 1.6.3: 5→8 — strong agent fingerprint
+    "session-flood":         10,    # 1.6.3: 5→10 — combined with other signals already lethal
     # Rate-limit hits are benign throttling (browsers parallel-fetching N
     # sub-resources) — they should NOT escalate to ban. The throttling itself
     # is sufficient mitigation; adding risk causes legitimate bursts to ban
@@ -2293,27 +2421,26 @@ RISK_WEIGHTS = {
                                     # hit us; counter only, no extra risk
     "traffic-threshold":      0,    # 1.5.1: operator-set global RPS cap;
                                     # not a malicious signal, just a cap
-    "js-challenge":           5,    # v1.4: each unsolved challenge bumps slightly
-    "tls-fingerprint":       30,    # v1.4.2: JA3/JA4 deny-list hit
+    "js-challenge":           3,    # 1.6.3: 5→3 — one stale tab is low signal
+    "tls-fingerprint":       40,    # 1.6.3: 30→40 — operator-curated deny-list
     "origin-mismatch":       20,    # v1.4.2: STRICT_ORIGIN failure
     "missing-required-header": 15,  # v1.4.2: REQUIRED_HEADERS absent
     # ── 1.5.3: scoring-system signals (article-aligned) ──
-    "ua-platform-mismatch":  25,    # UA claims Chrome but Sec-Ch-Ua absent /
-                                    # contradictory; or Firefox sending Sec-Ch-Ua
+    "ua-platform-mismatch":  30,    # 1.6.3: 25→30 — real browsers don't lie about themselves
     "accept-wildcard-html":   2,    # Accept: */* on what looks like HTML nav
     "ja4-required-missing":   3,    # JA4 binding required but no header from
                                     # trusted upstream (soft, opt-in scenario)
     "headers-suspicious":     2,    # generic catch-all for soft header signals
     # 1.5.3: external-intel signals
     "abuseipdb-high":        50,    # AbuseIPDB confidence >= 80
-    "abuseipdb-med":         15,    # AbuseIPDB confidence in [40, 80)
+    "abuseipdb-med":         20,    # 1.6.3: 15→20 — strong community signal at conf 40-80
     "crowdsec-banned":       70,    # community-vetted ban via CrowdSec LAPI
     "asn-hosting":            5,    # source IP belongs to a hosting provider
     # ── 1.6.0: Tier-A signals (Akamai-Kona / Cloudflare-WAF parity) ──
     "country-blocked":       50,    # source country in COUNTRY_DENYLIST or
                                     # not in COUNTRY_ALLOWLIST → instant ban
-    "tor-exit":              50,    # source IP is a Tor exit node
-    "datacenter-vpn":        30,    # source IP is in a known DC / VPN feed
+    "tor-exit":              40,    # 1.6.3: 50→40 — Tor includes legit privacy users
+    "datacenter-vpn":        25,    # 1.6.3: 30→25 — SaaS users legitimately in cloud egress
     # AI-crawler granular groups (per-vendor; allows enterprise allowlisting
     # of specific crawlers). Same risk weight as ua-blocked but a discrete
     # reason so the operator can attribute traffic per vendor.
@@ -2326,13 +2453,16 @@ RISK_WEIGHTS = {
     # ── 1.6.1: Tier-B signals ──
     "custom-rule-block":     50,    # operator-defined IF/THEN rule fired
     "rate-limit-endpoint":    0,    # per-endpoint throttle (no risk; throttle)
-    "body-sqli":             40,
-    "body-xss":              40,
-    "body-lfi":              40,
+    # 1.6.3 — body-* family promoted to instant-ban (same as RCE/CMD already
+    # were). Known-malicious payload signatures in a request body are
+    # unambiguous attack signals.
+    "body-sqli":             50,    # 1.6.3: 40→50
+    "body-xss":              50,    # 1.6.3: 40→50
+    "body-lfi":              50,    # 1.6.3: 40→50
     "body-rce":              50,
-    "body-ssrf":             40,
+    "body-ssrf":             50,    # 1.6.3: 40→50 — IMDS/gopher targeting
     "body-cmd":              50,
-    "auth-jwt-invalid":      25,    # bad/missing JWT on a JWT-required path
+    "auth-jwt-invalid":      30,    # 1.6.3: 25→30 — bypassing operator-explicit gate
     # ── 1.6.2: Tier-C signals (response-side DLP) ──
     # DLP fires are NOT client-malice — they're upstream leakage. Zero
     # risk added to the requester; the event is recorded for the operator.
@@ -3586,6 +3716,183 @@ document.getElementById('f').onsubmit=async e=>{e.preventDefault();
         content_type="text/html",
     )
 
+async def health_score_endpoint(request: web.Request):
+    """1.6.4 — single-number gateway health (0..100, green at 100, red at 0)
+    with a per-reason breakdown so operators can see what's pulling the
+    score down. Composed of:
+      • disk         : free space % at the data volume        (penalty if <30%)
+      • memory       : RSS vs system memory ceiling           (penalty if >70%)
+      • db           : SQLite file size vs sane ceiling       (penalty >2 GiB)
+      • integrations : configured external integrations green (penalty if any
+                       configured-but-failing AbuseIPDB / CrowdSec / MaxMind)
+      • bans         : count of currently-banned identities    (info only)
+      • errors       : recent block-rate vs total              (info only)
+    Each reason returns: {key, status (ok/warn/bad), value, weight, detail}.
+    The score is 100 minus the sum of weights of `bad`/`warn` reasons,
+    floored at 0."""
+    n = now()
+    reasons = []
+    score = 100
+
+    # 1. Disk free
+    disk = _disk_usage(os.path.dirname(_DATA_PATH) or "/")
+    free_pct = max(0, 100 - disk.get("pct", 0)) if disk else 0
+    if disk:
+        if free_pct < 5:
+            status, weight = "bad", 30
+        elif free_pct < 15:
+            status, weight = "warn", 15
+        elif free_pct < 30:
+            status, weight = "warn", 5
+        else:
+            status, weight = "ok", 0
+        reasons.append({
+            "key": "disk", "status": status, "weight": weight,
+            "value": f"{free_pct:.1f}% free",
+            "detail": f"{(disk.get('avail',0)/(1024**3)):.2f} GiB free of "
+                       f"{(disk.get('total',0)/(1024**3)):.2f} GiB on "
+                       f"{os.path.dirname(_DATA_PATH) or '/'}",
+        })
+        score -= weight
+    else:
+        reasons.append({"key": "disk", "status": "warn", "weight": 5,
+                        "value": "unknown", "detail": "statvfs failed"})
+        score -= 5
+
+    # 2. Memory (RSS) — soft ceiling at 256 MiB, hard at 1 GiB
+    rss = 0
+    try:
+        with open(f"{_PROC}/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1]) * 1024
+                    break
+    except Exception:
+        pass
+    rss_mib = rss / (1024 * 1024) if rss else 0
+    if rss_mib == 0:
+        status, weight = "warn", 3
+        detail = "could not read /proc/self/status"
+    elif rss_mib > 1024:
+        status, weight = "bad", 25
+        detail = f"RSS {rss_mib:.0f} MiB (>1 GiB) — investigate"
+    elif rss_mib > 512:
+        status, weight = "warn", 10
+        detail = f"RSS {rss_mib:.0f} MiB (>512 MiB)"
+    elif rss_mib > 256:
+        status, weight = "warn", 3
+        detail = f"RSS {rss_mib:.0f} MiB (>256 MiB)"
+    else:
+        status, weight = "ok", 0
+        detail = f"RSS {rss_mib:.0f} MiB"
+    reasons.append({"key": "memory", "status": status, "weight": weight,
+                    "value": f"{rss_mib:.0f} MiB", "detail": detail})
+    score -= weight
+
+    # 3. DB file size — soft ceiling 2 GiB, hard ceiling 10 GiB on SQLite
+    db_size = 0
+    try:
+        if os.path.exists(DB_PATH):
+            db_size = os.path.getsize(DB_PATH)
+    except Exception:
+        pass
+    db_mib = db_size / (1024 * 1024)
+    if db_mib > 10240:
+        status, weight = "bad", 20
+        detail = f"DB {db_mib:.0f} MiB — consider DB_BACKEND=postgres"
+    elif db_mib > 2048:
+        status, weight = "warn", 8
+        detail = f"DB {db_mib:.0f} MiB — approaching SQLite comfort limit"
+    else:
+        status, weight = "ok", 0
+        detail = f"DB {db_mib:.0f} MiB on {DB_BACKEND}"
+    reasons.append({"key": "db", "status": status, "weight": weight,
+                    "value": f"{db_mib:.0f} MiB", "detail": detail})
+    score -= weight
+
+    # 4. Integrations — penalty when something is CONFIGURED but failing
+    int_problems = []
+    if ABUSEIPDB_KEY and _abuseipdb_stats.get("last_error"):
+        int_problems.append(f"AbuseIPDB: {_abuseipdb_stats['last_error'][:80]}")
+    if CROWDSEC_LAPI_URL and _crowdsec_stats.get("last_error"):
+        int_problems.append(f"CrowdSec: {_crowdsec_stats['last_error'][:80]}")
+    if not MAXMIND_CITY_ENABLED and os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+        int_problems.append("MaxMind: license key set but City DB not loaded")
+    if int_problems:
+        if len(int_problems) >= 2:
+            status, weight = "bad", 20
+        else:
+            status, weight = "warn", 8
+        detail = " · ".join(int_problems)
+    else:
+        status, weight = "ok", 0
+        detail = "all configured integrations healthy"
+    reasons.append({
+        "key": "integrations", "status": status, "weight": weight,
+        "value": f"{len(int_problems)} problem(s)" if int_problems else "OK",
+        "detail": detail,
+    })
+    score -= weight
+
+    # 5. Active bans (informational — large numbers can mean we're under
+    # attack, which is the gateway working as designed; flag yellow only
+    # when the ban list is unusually large to surface NAT-style bans)
+    async with state_lock:
+        banned_now = sum(1 for s in ip_state.values() if s.banned_until > n)
+    if banned_now > 1000:
+        status, weight = "warn", 5
+        detail = f"{banned_now} active bans (large — review NAT bans)"
+    else:
+        status, weight = "ok", 0
+        detail = f"{banned_now} active bans"
+    reasons.append({"key": "bans", "status": status, "weight": weight,
+                    "value": str(banned_now), "detail": detail})
+    score -= weight
+
+    # 6. Recent error / block ratio (last hour)
+    blocked = clean = 0
+    try:
+        cutoff = _t.time() - 3600
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT reason, COUNT(*) FROM events WHERE ts >= ? GROUP BY reason",
+            (cutoff,)).fetchall()
+        conn.close()
+        for reason, count in rows:
+            if reason and reason != "OK":
+                blocked += count
+            else:
+                clean += count
+    except Exception:
+        pass
+    total = blocked + clean
+    block_ratio = blocked / total if total else 0
+    if total < 100:
+        status, weight = "ok", 0
+        detail = f"only {total} requests in last hour (low traffic)"
+    elif block_ratio > 0.95:
+        status, weight = "warn", 5
+        detail = (f"{block_ratio*100:.0f}% blocks "
+                  f"({blocked}/{total}) — likely under sustained attack")
+    elif block_ratio > 0.50:
+        status, weight = "warn", 3
+        detail = f"{block_ratio*100:.0f}% blocks ({blocked}/{total})"
+    else:
+        status, weight = "ok", 0
+        detail = f"{block_ratio*100:.0f}% blocks ({blocked}/{total})"
+    reasons.append({"key": "block_rate", "status": status, "weight": weight,
+                    "value": f"{block_ratio*100:.0f}%", "detail": detail})
+    score -= weight
+
+    score = max(0, min(100, score))
+    return web.json_response({
+        "score":   score,
+        "reasons": reasons,
+        "version": "AppSecGW_1.6.4",
+        "ts":      _t.time(),
+    }, headers={"Cache-Control": "no-store"})
+
+
 async def metrics_endpoint(request: web.Request):
     """JSON metrics dump consumed by the dashboard."""
     async with state_lock:
@@ -4049,13 +4356,16 @@ async def scoring_endpoint(request: web.Request):
         "body-cmd":              ("hard", "Body matched OS-command-injection pattern group"),
         "auth-jwt-invalid":      ("med",  "JWT missing / invalid signature on JWT_VALIDATE_PATHS route"),
         # ── 1.6.2: Tier-C DLP (response-side) ──
-        "dlp-cc":                ("info", "Upstream response contained a Luhn-valid credit-card number"),
-        "dlp-aws":               ("info", "Upstream response contained an AWS access-key / secret"),
-        "dlp-jwt":               ("info", "Upstream response contained a JWT (eyJ…)"),
-        "dlp-private-key":       ("info", "Upstream response contained a PEM private key"),
-        "dlp-api-key":           ("info", "Upstream response contained an API-key-shaped token (Slack / GitHub / OpenAI / labelled)"),
-        "dlp-pii-email":         ("info", "Upstream response contained an email address (off by default — noisy)"),
-        "dlp-pii-ssn":           ("info", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
+        # 1.6.3 — promoted from "info" to "intel" tier. DLP fires aren't
+        # operational chatter (rate-limit) — they're upstream leaks the
+        # operator must investigate. Distinct tier + colour in dashboards.
+        "dlp-cc":                ("intel", "Upstream response contained a Luhn-valid credit-card number"),
+        "dlp-aws":               ("intel", "Upstream response contained an AWS access-key / secret"),
+        "dlp-jwt":               ("intel", "Upstream response contained a JWT (eyJ…)"),
+        "dlp-private-key":       ("intel", "Upstream response contained a PEM private key"),
+        "dlp-api-key":           ("intel", "Upstream response contained an API-key-shaped token (Slack / GitHub / OpenAI / labelled)"),
+        "dlp-pii-email":         ("intel", "Upstream response contained an email address (off by default — noisy)"),
+        "dlp-pii-ssn":           ("intel", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
     }
     # Each entry annotated with the runtime-toggle knob (if any) that
     # controls whether the detector runs. UI uses this to render a switch
@@ -4268,6 +4578,48 @@ async def maxmind_fetch_endpoint(request: web.Request):
             status=500, headers={"Cache-Control": "no-store"})
 
 
+# 1.6.4 — categorise each block reason into a "method bucket" so the GeoMap
+# can show WHICH detection layer is firing per region. Anti-bot focus per the
+# user roadmap: UA filter / body group / external intel / behavioural /
+# cookie gate / TLS fingerprint / canary / operator-defined / other.
+_REASON_METHOD = {
+    # UA filter family
+    "ua-empty": "ua", "ua-blocked": "ua", "ua-too-short": "ua",
+    "ua-non-browser": "ua", "ua-platform-mismatch": "ua",
+    "ua-ai-openai": "ua", "ua-ai-anthropic": "ua", "ua-ai-google": "ua",
+    "ua-ai-perplexity": "ua", "ua-ai-meta": "ua", "ua-ai-other": "ua",
+    # Body / payload signature groups
+    "body-sqli": "body", "body-xss": "body", "body-lfi": "body",
+    "body-rce": "body", "body-ssrf": "body", "body-cmd": "body",
+    "suspicious-body": "body",
+    # External intel layer
+    "abuseipdb-high": "intel", "abuseipdb-med": "intel",
+    "crowdsec-banned": "intel", "country-blocked": "intel",
+    "tor-exit": "intel", "datacenter-vpn": "intel", "asn-hosting": "intel",
+    # Behavioural / fingerprint
+    "behavior": "behavior", "ai-enumeration": "behavior",
+    "ai-no-assets": "behavior", "ai-headers-empty": "behavior",
+    "ai-headers-incomplete": "behavior",
+    "session-flood": "behavior", "session-churn": "behavior",
+    "upstream-404": "behavior",
+    # Cookie / challenge gate
+    "chal-required": "cookie", "js-challenge": "cookie",
+    # TLS fingerprint
+    "tls-fingerprint": "tls", "ja4-required-missing": "tls",
+    # Canary echo (R7) — distinct family
+    "canary-echo": "canary",
+    # Operator-defined / structural rules
+    "custom-rule-block": "operator", "host-not-allowed": "operator",
+    "suspicious-path": "operator", "ai-probe": "operator",
+    "auth-jwt-invalid": "operator", "rate-limit-endpoint": "operator",
+    "honeypot": "honeypot", "honeypot-silent": "honeypot",
+    "bot-trap": "honeypot",
+}
+def _reason_method(reason: str) -> str:
+    """Return the method bucket for a reason or 'other' for unknowns."""
+    return _REASON_METHOD.get(reason, "other")
+
+
 async def geo_data_endpoint(request: web.Request):
     """1.5.4 — geo aggregation for the world-map dashboard.
     Returns counts per (lat,lng) split into kind=clean/missed/blocked.
@@ -4304,12 +4656,15 @@ async def geo_data_endpoint(request: web.Request):
     # Pull events. We need: ts, ip, reason. Allowed = reason='' or 'OK'.
     # Risk-bin classification (clean / missed / blocked) is done from the
     # current per-identity risk_score for that IP — best-effort.
-    points = {}  # {(lat_round, lng_round): {"country","city","clean","missed","blocked"}}
+    # 1.6.3 — also fetch ts so the front-end scrubber can replay frames.
+    points = {}  # {(lat_round, lng_round): {"country","city","clean","missed","blocked","tor_hits","dc_hits"}}
+    countries = {}  # {iso: {"clean","missed","blocked"}}
+    events_sample = []  # for the time scrubber (capped)
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT ip, reason FROM events WHERE ts >= ? AND ts <= ? LIMIT 200000",
+            "SELECT ts, ip, reason FROM events WHERE ts >= ? AND ts <= ? LIMIT 200000",
             (start_epoch, end_epoch),
         ).fetchall()
         conn.close()
@@ -4318,14 +4673,26 @@ async def geo_data_endpoint(request: web.Request):
             {"error": f"db: {e}", "points": []}, status=500,
             headers={"Cache-Control": "no-store"})
 
-    # Resolve each unique IP only once
+    # Resolve each unique IP only once. 1.6.3 — also flag Tor exits and
+    # hosting ASNs so the dashboard can render them with distinct markers.
+    # 1.6.4 — also resolve ASN org so we can rank top providers globally.
     ip_geo = {}
+    ip_flags = {}   # ip → {"tor": bool, "dc": bool, "asn_org": str}
+    asn_totals = {}  # asn_org → {clean, blocked}
     for r in rows:
         ip = r["ip"]
         if not ip:
             continue
         if ip not in ip_geo:
             ip_geo[ip] = _city_lookup(ip)
+            tor_hit = ip in _tor_exits
+            dc_hit = False
+            asn_org = ""
+            if MAXMIND_ENABLED:
+                _asn, _org, _is_hosting, _ = _asn_lookup(ip)
+                dc_hit = bool(_is_hosting)
+                asn_org = (_org or "")[:80]
+            ip_flags[ip] = {"tor": tor_hit, "dc": dc_hit, "asn_org": asn_org}
         loc = ip_geo[ip]
         if loc is None:
             continue
@@ -4333,13 +4700,43 @@ async def geo_data_endpoint(request: web.Request):
         # Round to 0.5° to merge nearby cities into a single bubble
         key = (round(lat * 2) / 2, round(lng * 2) / 2)
         if key not in points:
+            # 1.6.4 — `methods` counts blocks per detection-method bucket
+            # at this cell. Operators see WHICH layer is doing the work.
             points[key] = {"country": country, "city": city,
-                           "clean": 0, "missed": 0, "blocked": 0}
+                           "clean": 0, "missed": 0, "blocked": 0,
+                           "tor_hits": 0, "dc_hits": 0,
+                           "methods": {}}
         reason = (r["reason"] or "")
-        if reason and reason != "OK":
-            points[key]["blocked"] += 1
-        else:
-            points[key]["clean"] += 1
+        kind = "blocked" if (reason and reason != "OK") else "clean"
+        points[key][kind] += 1
+        # 1.6.4 — bucket the block reason by method
+        if kind == "blocked":
+            method = _reason_method(reason)
+            points[key]["methods"][method] = points[key]["methods"].get(method, 0) + 1
+        # Country aggregation (also methods + asn_org per country)
+        if country:
+            if country not in countries:
+                countries[country] = {"clean": 0, "missed": 0, "blocked": 0,
+                                       "methods": {}}
+            countries[country][kind] += 1
+            if kind == "blocked":
+                method = _reason_method(reason)
+                countries[country]["methods"][method] = (
+                    countries[country]["methods"].get(method, 0) + 1)
+        # Tor / DC counts at this point
+        flags = ip_flags.get(ip) or {}
+        if flags.get("tor"):
+            points[key]["tor_hits"] += 1
+        if flags.get("dc"):
+            points[key]["dc_hits"] += 1
+        # 1.6.4 — global ASN totals (top providers per range)
+        org = (flags.get("asn_org") or "").strip()
+        if org:
+            asn_totals.setdefault(org, {"clean": 0, "blocked": 0})
+            asn_totals[org][kind] += 1
+        # Sample for time-scrubber playback (cap at 5000 events)
+        if len(events_sample) < 5000:
+            events_sample.append([float(r["ts"]), lat, lng, kind])
 
     # We don't have per-event "missed" classification in the events table.
     # Approximate "missed" via current per-identity risk band: any client
@@ -4363,28 +4760,108 @@ async def geo_data_endpoint(request: web.Request):
                                "clean": 0, "missed": 0, "blocked": 0}
             points[key]["missed"] += s.allowed_count
 
+    # 1.6.4 — classify each cell into a "pin type" so the front-end can
+    # filter by behaviour family:
+    #   bot-ai          — UA / canary / behaviour blocks dominate
+    #   high-risk       — external intel (AbuseIPDB / CrowdSec / Tor / DC) dominates
+    #   fp-suspect      — high block ratio AND most blocks are "soft" (cookie / behaviour)
+    #   normal          — clean traffic dominates (default)
+    def _classify(p):
+        m = p.get("methods") or {}
+        total = sum(m.values())
+        if not total:
+            return "normal"
+        ai_share   = (m.get("ua", 0) + m.get("canary", 0) + m.get("behavior", 0)) / total
+        intel_sh   = m.get("intel", 0) / total
+        soft_sh    = (m.get("cookie", 0) + m.get("behavior", 0)) / total
+        block_rat  = p["blocked"] / max(1, p["blocked"] + p["clean"])
+        if intel_sh >= 0.5:
+            return "high-risk"
+        if ai_share >= 0.5:
+            return "bot-ai"
+        if block_rat >= 0.7 and soft_sh >= 0.6:
+            return "fp-suspect"
+        return "normal"
+
     # Project to a flat list
     out_points = [
         {"lat": lat, "lng": lng,
          "country": p["country"], "city": p["city"],
          "clean": p["clean"], "missed": p["missed"], "blocked": p["blocked"],
+         "tor_hits": p["tor_hits"], "dc_hits": p["dc_hits"],
+         "methods":  p.get("methods") or {},                # 1.6.4
+         "pin_type": _classify(p),                          # 1.6.4
          "total": p["clean"] + p["missed"] + p["blocked"]}
         for (lat, lng), p in points.items()
     ]
     out_points.sort(key=lambda d: d["total"], reverse=True)
     out_points = out_points[:1000]  # cap payload
 
+    # 1.6.3 — country leaderboard (top 30)
+    # 1.6.4 — also include methods + block_effectiveness per country
+    out_countries = []
+    for cc, counts in countries.items():
+        clean   = counts["clean"]
+        missed  = counts["missed"]
+        blocked = counts["blocked"]
+        seen    = clean + missed + blocked
+        # block-effectiveness = blocked / (blocked + missed) — i.e., when
+        # we suspected something, did we actually stop it? When missed=0,
+        # effectiveness = 100% if there were any blocks (perfect), else N/A.
+        susp = blocked + missed
+        eff  = (blocked / susp * 100.0) if susp > 0 else None
+        out_countries.append({
+            "country":   cc,
+            "clean":     clean,
+            "missed":    missed,
+            "blocked":   blocked,
+            "total":     seen,
+            "methods":   counts.get("methods") or {},      # 1.6.4
+            "effectiveness_pct": eff,                       # 1.6.4
+        })
+    out_countries.sort(key=lambda d: d["total"], reverse=True)
+    out_countries = out_countries[:30]
+
+    # 1.6.4 — top ASN providers (by block + total) globally
+    out_asns = sorted(
+        ({"asn_org": org,
+          "blocked": v["blocked"], "clean": v["clean"],
+          "total":   v["blocked"] + v["clean"]}
+         for org, v in asn_totals.items()),
+        key=lambda d: d["blocked"], reverse=True)[:20]
+
+    # 1.6.3 — read-only snapshot of geo-block list state for the UI
+    geo_state = {
+        "country_block_enabled": bool(globals().get("COUNTRY_BLOCK_ENABLED")),
+        "country_denylist":  sorted(globals().get("COUNTRY_DENYLIST")  or []),
+        "country_allowlist": sorted(globals().get("COUNTRY_ALLOWLIST") or []),
+    }
+
+    # 1.6.4 — global method totals across all blocks
+    method_totals = {}
+    for p in out_points:
+        for k, v in (p.get("methods") or {}).items():
+            method_totals[k] = method_totals.get(k, 0) + v
+
     payload = {
         "configured": True,
         "points":     out_points,
+        "countries":  out_countries,                     # 1.6.3 + 1.6.4 (methods, eff)
+        "asns":       out_asns,                          # 1.6.4 — top ASN providers
+        "events":     events_sample,                     # 1.6.3 — for scrubber
+        "geo_state":  geo_state,                         # 1.6.3
         "summary": {
             "total_points":  len(out_points),
             "total_events":  sum(p["total"] for p in out_points),
             "total_blocked": sum(p["blocked"] for p in out_points),
             "total_missed":  sum(p["missed"]  for p in out_points),
             "total_clean":   sum(p["clean"]   for p in out_points),
+            "total_tor":     sum(p["tor_hits"] for p in out_points),
+            "total_dc":      sum(p["dc_hits"] for p in out_points),
+            "method_totals": method_totals,              # 1.6.4
             "range_min":     range_min,
             "end_epoch":     end_epoch,
+            "start_epoch":   start_epoch,
         },
     }
     _GEO_CACHE[cache_key] = (_t.time() + 60, payload)
@@ -4396,6 +4873,108 @@ async def geo_data_endpoint(request: web.Request):
 
 
 _GEO_CACHE: dict = {}
+
+
+async def geo_drill_endpoint(request: web.Request):
+    """1.6.3 — click-circle drill-down. Given a (lat, lng) cell and the
+    same time window as the geo-data view, return:
+      • top 25 IPs at that cell (with country, city, asn_org, tor/dc flags, hits)
+      • top 10 block reasons (count desc)
+      • top 10 paths (count desc)
+    The cell granularity matches geo_data_endpoint (0.5° rounding)."""
+    if not MAXMIND_CITY_ENABLED:
+        return web.json_response(
+            {"error": "MaxMind City DB not loaded"}, status=503,
+            headers={"Cache-Control": "no-store"})
+    try:
+        lat = float(request.query.get("lat", "nan"))
+        lng = float(request.query.get("lng", "nan"))
+        range_min = max(5, min(10080, int(request.query.get("range", "60"))))
+        end_epoch = int(request.query.get("end", str(int(_t.time()))))
+    except (ValueError, TypeError):
+        return web.json_response(
+            {"error": "bad lat/lng/range"}, status=400,
+            headers={"Cache-Control": "no-store"})
+    if lat != lat or lng != lng:    # NaN check
+        return web.json_response({"error": "lat/lng required"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    start_epoch = end_epoch - range_min * 60
+    target_key = (round(lat * 2) / 2, round(lng * 2) / 2)
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ip, ua, path, reason, ts FROM events "
+            "WHERE ts >= ? AND ts <= ? LIMIT 200000",
+            (start_epoch, end_epoch),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response(
+            {"error": f"db: {e}"}, status=500,
+            headers={"Cache-Control": "no-store"})
+
+    ip_map = {}              # ip → {country, city, asn_org, tor, dc, hits, last_seen, last_reason}
+    reasons: dict = defaultdict(int)
+    paths:   dict = defaultdict(int)
+    ip_geo_cache: dict = {}
+    asn_cache: dict = {}
+    for r in rows:
+        ip = r["ip"]
+        if not ip:
+            continue
+        if ip not in ip_geo_cache:
+            ip_geo_cache[ip] = _city_lookup(ip)
+        loc = ip_geo_cache[ip]
+        if not loc:
+            continue
+        ilat, ilng, country, city = loc
+        key = (round(ilat * 2) / 2, round(ilng * 2) / 2)
+        if key != target_key:
+            continue
+        # In-cell event — accumulate.
+        reason = (r["reason"] or "OK")
+        reasons[reason] += 1
+        path = r["path"] or "/"
+        paths[path] += 1
+        if ip not in ip_map:
+            asn_org = ""
+            is_hosting = False
+            if MAXMIND_ENABLED:
+                if ip not in asn_cache:
+                    _, _org, _h, _ = _asn_lookup(ip)
+                    asn_cache[ip] = (_org, _h)
+                asn_org, is_hosting = asn_cache[ip]
+            ip_map[ip] = {
+                "ip": ip, "country": country, "city": city,
+                "asn_org": asn_org,
+                "tor": (ip in _tor_exits),
+                "dc":  is_hosting,
+                "hits": 0, "blocked": 0,
+                "last_seen": 0.0, "last_reason": "",
+            }
+        rec = ip_map[ip]
+        rec["hits"] += 1
+        if reason and reason != "OK":
+            rec["blocked"] += 1
+        rec["last_seen"] = float(r["ts"])
+        rec["last_reason"] = reason
+
+    top_ips = sorted(ip_map.values(), key=lambda d: d["hits"],
+                      reverse=True)[:25]
+    top_reasons = sorted(reasons.items(), key=lambda kv: -kv[1])[:10]
+    top_paths   = sorted(paths.items(),   key=lambda kv: -kv[1])[:10]
+
+    return web.json_response({
+        "lat": target_key[0], "lng": target_key[1],
+        "range_min": range_min, "end_epoch": end_epoch,
+        "ip_count":   len(ip_map),
+        "event_count": sum(reasons.values()),
+        "top_ips":    top_ips,
+        "top_reasons":[{"reason": r, "count": c} for r, c in top_reasons],
+        "top_paths":  [{"path":   p, "count": c} for p, c in top_paths],
+    }, headers={"Cache-Control": "no-store"})
 
 
 async def geo_dashboard_endpoint(request: web.Request):
@@ -4416,6 +4995,115 @@ async def geo_dashboard_endpoint(request: web.Request):
                 "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
                 "style-src 'self' https://unpkg.com 'unsafe-inline'; "
                 "img-src 'self' data: https://*.basemaps.cartocdn.com; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+
+# ── 1.6.3: Logs dashboard endpoints ──────────────────────────────────────
+async def logs_data_endpoint(request: web.Request):
+    """Live log feed for the Logs dashboard.
+
+    Query:
+      kind=requests | gw                (default: requests)
+      level=debug|info|warn|error|critical  (filter; default: debug = all)
+      limit=N                            (default: 200, max: 2000)
+      q=<substring>                      (optional case-insensitive search)
+
+    `requests` reads the SQLite `events` table (full history, paginated).
+    `gw` reads the in-memory `_GW_LOG_RING` (last 2000 non-request events).
+    """
+    kind  = (request.query.get("kind", "requests") or "requests").lower()
+    if kind not in ("requests", "gw"):
+        return web.json_response({"error": "kind must be requests|gw"},
+                                  status=400, headers={"Cache-Control":"no-store"})
+    level = (request.query.get("level", "debug") or "debug").lower()
+    if level not in _LOG_LEVELS:
+        level = "debug"
+    level_n = _LOG_LEVELS[level]
+    try:
+        limit = max(1, min(2000, int(request.query.get("limit", "200"))))
+    except ValueError:
+        limit = 200
+    q = (request.query.get("q", "") or "").strip().lower()
+
+    if kind == "requests":
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, ts, ip, ua, path, status, reason FROM events "
+                "ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+            conn.close()
+        except Exception as e:
+            return web.json_response({"error": f"db: {e}"}, status=500,
+                                      headers={"Cache-Control":"no-store"})
+        out = []
+        for r in rows:
+            reason = (r["reason"] or "")
+            # Synthesise a level for request rows: warn when blocked, info otherwise.
+            row_level = "warn" if (reason and reason != "OK") else "info"
+            if _LOG_LEVELS[row_level] < level_n:
+                continue
+            blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
+            if q and q not in blob:
+                continue
+            out.append({
+                "id":     r["id"],
+                "ts":     r["ts"],
+                "level":  row_level,
+                "ip":     r["ip"],
+                "ua":     (r["ua"] or "")[:200],
+                "path":   r["path"] or "",
+                "status": r["status"],
+                "reason": reason,
+            })
+        return web.json_response(
+            {"kind": "requests", "level": level, "limit": limit,
+             "count": len(out), "rows": out},
+            headers={"Cache-Control":"no-store"})
+
+    # kind == "gw" — in-memory ring buffer.
+    out = []
+    # Iterate newest-first.
+    for entry in list(_GW_LOG_RING)[::-1]:
+        if _LOG_LEVELS.get(entry.get("level"), 20) < level_n:
+            continue
+        if q:
+            blob = " ".join(f"{k}={v}" for k, v in entry.items()).lower()
+            if q not in blob:
+                continue
+        out.append(entry)
+        if len(out) >= limit:
+            break
+    return web.json_response(
+        {"kind": "gw", "level": level, "limit": limit,
+         "count": len(out), "rows": out,
+         "ring_size": len(_GW_LOG_RING)},
+        headers={"Cache-Control":"no-store"})
+
+
+async def logs_dashboard_endpoint(request: web.Request):
+    """HTML dashboard for the Logs viewer (request log + GW log + level toggle)."""
+    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
+    body = LOGS_DASHBOARD_HTML.replace(
+        "__KEY__",
+        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
                 "connect-src 'self'; "
                 "frame-ancestors 'none'; base-uri 'none'"
             ),
@@ -5489,6 +6177,13 @@ _HOT_RELOAD_KNOBS = {
     "DLP_GROUP_PII_SSN_ENABLED":      (_to_bool, None),
     # 1.6.2 — webhook event filter (CSV of reasons)
     "WEBHOOK_EVENT_FILTER":   (_to_path_list, None),
+    # 1.6.4 — event-store backend selector. The runtime knob is REFLECTED
+    # in /__config but the backend itself is bound at startup; mutating
+    # this value at runtime updates the displayed setting (useful for
+    # operators staging a migration) but won't switch live connections
+    # until the container restarts.
+    "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
+    "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
     # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
@@ -5776,6 +6471,9 @@ def _missing_required_header(request) -> bool:
 # ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────
 BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
 SUSPICIOUS_BODY_PATTERNS = (
+    # Legacy catch-all set kept for backwards compatibility with the
+    # `suspicious-body` reason. The Tier-B BODY_PATTERN_GROUPS below are
+    # checked FIRST and take precedence when they match.
     re.compile(rb"(union[ +]+select|select[ +]+\*|or[ +]+1=1|--\s*$|\bxp_)", re.I),
     re.compile(rb"<script\b|javascript:|onerror\s*=", re.I),
     re.compile(rb"\{\{[^}]{1,40}\}\}|\{%[^%]{1,40}%\}"),       # SSTI
@@ -5784,48 +6482,155 @@ SUSPICIOUS_BODY_PATTERNS = (
 )
 
 # 1.6.1 — Tier B managed body-pattern groups (Cloudflare Managed Rulesets parity).
-# Each group is independently toggleable; group-specific reasons let the
-# operator attribute traffic per attack family in dashboards / SIEM. These
-# groups apply ON TOP OF the legacy `suspicious-body` blanket check (kept
-# for backwards compatibility); when a group matches, its specific
-# `body-<group>` reason fires instead of the generic one.
+# 1.6.4 — significantly expanded based on the Portswigger / OWASP /
+# PayloadsAllTheThings cheat-sheet ecosystem. Each group is independently
+# toggleable; group-specific reasons let the operator attribute traffic per
+# attack family in dashboards / SIEM. The groups apply ON TOP OF the legacy
+# `suspicious-body` blanket check (kept for backwards compatibility); when a
+# group matches, its specific `body-<group>` reason fires instead of the
+# generic one. Patterns are case-insensitive byte regexes; bound to ≤ 64 KiB
+# of body content per request so cost stays under 0.5 ms p99.
 BODY_PATTERN_GROUPS = {
-    # SQL-injection
+    # ── SQL injection ────────────────────────────────────────────────────
     "sqli": (
-        re.compile(rb"(?i)(union[ +]+(all[ +]+)?select|select[ +]+\*|or[ +]+1=1|--\s*$|\bxp_cmdshell\b)"),
-        re.compile(rb"(?i)(\bsleep\s*\(\s*\d|\bbenchmark\s*\(|waitfor[ +]+delay)"),
-        re.compile(rb"(?i)(information_schema|pg_sleep|@@version|load_file\s*\()"),
+        # Classic UNION / SELECT-based
+        re.compile(rb"(?i)\bunion[ +/*]+(all[ +/*]+)?select\b"),
+        re.compile(rb"(?i)\bselect[ +/*]+(\*|\d+|null)[ +/*]+from\b"),
+        # Tautologies (boolean-based blind)
+        re.compile(rb"(?i)\bor[ +/*]+(1[ +]*=[ +]*1|'[a-z0-9]+'='[a-z0-9]+'|true|2[ +]*>[ +]*1)\b"),
+        re.compile(rb"(?i)\band[ +/*]+1[ +]*=[ +]*1|\band[ +/*]+'a'='a"),
+        # Comment styles closing the original query
+        re.compile(rb"(?i)(--|#|/\*).{0,8}($|[\r\n])"),
+        # Time-based blind (every major dialect)
+        re.compile(rb"(?i)\b(sleep|benchmark|pg_sleep|waitfor[ +]+delay|dbms_pipe\.receive_message)\s*\("),
+        re.compile(rb"(?i)if\s*\(\s*\d+\s*=\s*\d+\s*,\s*sleep"),
+        # Out-of-band / file primitives
+        re.compile(rb"(?i)\b(load_file|into[ +]+(out|dump)file|xp_cmdshell|sp_oacreate|xp_dirtree|extractvalue|updatexml)\b"),
+        # Schema discovery
+        re.compile(rb"(?i)\binformation_schema\.(tables|columns|schemata)\b|@@version|@@hostname|@@datadir"),
+        # Stacked queries
+        re.compile(rb"(?i);[ +]*(drop|insert|update|delete|create|alter|exec(ute)?|truncate|grant|revoke)[ +]+"),
+        # Hex / char encoded payloads (high-entropy + sqli context)
+        re.compile(rb"(?i)\bchar\s*\(\s*\d+\s*(,\s*\d+\s*){2,}\)|\bconcat\s*\(.{1,200}select\b"),
     ),
-    # Cross-site scripting
+
+    # ── Cross-site scripting ─────────────────────────────────────────────
     "xss": (
-        re.compile(rb"(?i)<script\b[^>]*>"),
-        re.compile(rb"(?i)javascript\s*:|on(error|load|click|mouseover)\s*="),
-        re.compile(rb"(?i)<(iframe|object|embed|svg/onload)\b"),
+        # <script> tags (every variant including SVG <script>)
+        re.compile(rb"(?i)<script\b[^>]*>|</script\s*>|<svg[^>]*>\s*<script\b"),
+        # javascript: / vbscript: / data: URIs
+        re.compile(rb"(?i)\b(javascript|vbscript|livescript)\s*:"),
+        re.compile(rb"(?i)data:\s*text/html\s*[;,]"),
+        # Event handlers (the exhaustive list the Portswigger cheat sheet uses)
+        re.compile(rb"(?i)\bon(error|load|click|mouseover|mouseenter|mouseleave|focus|blur"
+                   rb"|change|submit|input|toggle|cut|copy|paste|drag|drop|wheel"
+                   rb"|animationstart|animationend|transitionend|begin|end|repeat"
+                   rb"|pageshow|pagehide|popstate|hashchange|message|scroll"
+                   rb"|select|abort|canplay|durationchange)\s*="),
+        # Tag-based vectors beyond <script>
+        re.compile(rb"(?i)<(iframe|object|embed|svg|math|video|audio|details|frame|frameset"
+                   rb"|applet|meta|link|base|form|input|textarea|button|isindex)\b[^>]*>"),
+        # Specific known-malicious tag/attr combos
+        re.compile(rb"(?i)<(img|input|video|audio|details|svg)[^>]+\bonerror\s*="),
+        re.compile(rb"(?i)\b(srcdoc|formaction|background|poster|icon|action|src|href)\s*=\s*[\"']?\s*(javascript|data):"),
+        # Polyglot / mutation XSS markers
+        re.compile(rb"(?i)<style\b[^>]*>[^<]*expression\s*\("),                 # legacy CSS expression()
+        re.compile(rb"(?i)\b(import\s+url\s*\(|@import\s+[\"']?(java|vb)script:)"),
+        # Numeric / hex character references that decode to <script
+        re.compile(rb"(?i)&#x?(0*(60|3c)|[0]*[36]0|[0]*x?3c)\b"),
+        # Common AngularJS / templating injection
+        re.compile(rb"\{\{.{0,80}(constructor|__proto__|alert|prompt|confirm|fetch)\b"),
     ),
-    # Local-file-inclusion / path traversal
+
+    # ── Local-file-inclusion / path traversal ────────────────────────────
     "lfi": (
-        re.compile(rb"\.\.[\\/]|%2e%2e[\\/]|\.\.\\\\"),
-        re.compile(rb"(?i)/etc/(passwd|shadow|hosts)\b|/proc/self/"),
-        re.compile(rb"(?i)\bphp://|\bfile://|\bexpect://|\bdata://"),
+        # Traversal sequences (raw + URL-encoded + double-encoded + overlong UTF-8)
+        re.compile(rb"\.\.[\\/]|\.\.;[\\/]|\.{4,}/"),
+        # Literal `..` followed by URL-encoded slash variants (single + double encoded)
+        re.compile(rb"(?i)\.\.(%2f|%5c|%252f|%255c)"),
+        re.compile(rb"(?i)%2e%2e[%/\\]|%252e%252e|%c0%ae|%c0%2e|%c1%9c"),
+        # Sensitive Linux files
+        re.compile(rb"(?i)/etc/(passwd|shadow|group|hosts|issue|os-release|crontab|sudoers|fstab|nsswitch\.conf)\b"),
+        re.compile(rb"(?i)/proc/(self|version|cpuinfo|cmdline|mounts|environ|net/(tcp|fib_trie))\b"),
+        re.compile(rb"(?i)/var/log/(auth|syslog|messages|dpkg|nginx|apache2)|/root/\.bash_history"),
+        # Sensitive Windows files
+        re.compile(rb"(?i)(c:[\\/])?windows[\\/](system32[\\/])?(config[\\/]sam|win\.ini|boot\.ini|drivers[\\/]etc[\\/]hosts)"),
+        # PHP / Java traversal targets
+        re.compile(rb"(?i)WEB-INF/(web\.xml|classes/|lib/)|META-INF/MANIFEST\.MF"),
+        # Stream wrappers
+        re.compile(rb"(?i)\bphp://(filter|input|memory|temp|fd)\b|\bfile://|\bexpect://|\bdata:[a-z/+-]+;base64"),
+        re.compile(rb"(?i)\bzip://|\bphar://|\bcompress\.zlib://|\bcompress\.bzip2://"),
+        # Null-byte truncation
+        re.compile(rb"%00($|/|%)"),
     ),
-    # Remote-code-execution (Java / PHP / Python / Ruby specific)
+
+    # ── Remote code execution (multi-language + framework) ───────────────
     "rce": (
-        re.compile(rb"\$\{jndi:|\$\{lower:|\$\{upper:"),               # Log4Shell
-        re.compile(rb"(?i)\b(eval|exec|assert|system|passthru|popen)\s*\("),
-        re.compile(rb"(?i)Runtime\.getRuntime\(\)|ProcessBuilder\("),
-        re.compile(rb"(?i)__import__\s*\(|subprocess\.\w+\("),
+        # Log4Shell / JNDI lookup (with all common envelopes / obfuscations)
+        re.compile(rb"(?i)\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)"),
+        re.compile(rb"(?i)\$\{[\$:{}]*j[\$:{}]*n[\$:{}]*d[\$:{}]*i\s*:"),
+        # Spring4Shell / OGNL / SpEL
+        re.compile(rb"(?i)class\.module\.classLoader\."),
+        re.compile(rb"(?i)\bRuntime\.getRuntime\s*\(\s*\)\s*\.exec\b|\bProcessBuilder\s*\("),
+        re.compile(rb"(?i)#exec\s*\(|@\s*java\.lang\.Runtime|@\s*java\.lang\.ProcessBuilder"),
+        # Python
+        re.compile(rb"(?i)__import__\s*\(\s*['\"](os|subprocess|sys|builtins|importlib)"),
+        re.compile(rb"(?i)\b(subprocess|os)\.(system|popen|call|run|getoutput|spawn[a-z]*)\s*\("),
+        re.compile(rb"(?i)\b(eval|exec|compile)\s*\(\s*['\"]?(import|__import__|open|chr\()"),
+        # PHP
+        re.compile(rb"(?i)\b(eval|assert|system|passthru|shell_exec|exec|popen|proc_open|pcntl_exec|create_function|preg_replace_callback)\s*\("),
+        re.compile(rb"(?i)\$_(GET|POST|REQUEST|COOKIE)\s*\[[^]]+\]\s*\("),       # variable-fn call
+        # Ruby
+        re.compile(rb"(?i)\b(system|exec|eval|instance_eval|class_eval|Open3\.\w+|IO\.popen|Marshal\.load|ERB\.new)\s*\("),
+        # Node.js
+        re.compile(rb"(?i)\b(child_process|require\s*\(\s*['\"]child_process['\"]\)|process\.binding|execSync|spawnSync)\s*\("),
+        re.compile(rb"(?i)\bFunction\s*\(\s*['\"]return"),
+        # Generic eval-style
+        re.compile(rb"(?i)\beval\s*\(\s*atob\s*\("),                              # base64+eval JS
+        re.compile(rb"(?i)\bnew\s+Function\s*\("),
+        # Deserialisation gadgets
+        re.compile(rb"(?i)\baced0005|\brO0AB"),                                   # Java serialization magic
+        re.compile(rb"(?i)__reduce__\s*\(\s*\)|pickle\.loads"),                   # Python pickle
     ),
-    # Server-side-request-forgery
+
+    # ── Server-side request forgery (URL / metadata-service targeting) ──
     "ssrf": (
-        re.compile(rb"(?i)\bhttps?://(127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|localhost\b)"),
-        re.compile(rb"(?i)\bgopher://|\bdict://|\bldap://|\btftp://"),
-        re.compile(rb"(?i)169\.254\.169\.254"),                       # AWS IMDS
+        # Localhost / loopback / link-local in URLs
+        re.compile(rb"(?i)\bhttps?://(127\.\d+\.\d+\.\d+|0\.0\.0\.0|localhost|\[::1\]|\[?fe80:|\[?fc00:)"),
+        # RFC1918 / RFC6598 / metadata
+        re.compile(rb"(?i)\bhttps?://(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)"),
+        re.compile(rb"169\.254\.169\.254"),                                  # AWS / DO / Azure IMDS
+        re.compile(rb"100\.100\.100\.200"),                                  # Alibaba metadata
+        re.compile(rb"(?i)metadata\.google\.internal"),                      # GCP
+        re.compile(rb"(?i)/computeMetadata/v1\b|/latest/meta-data\b|/metadata/(instance|identity)"),
+        # Encoded loopback IPs
+        re.compile(rb"\b0x7f000001\b|\b2130706433\b|\b017700000001\b"),       # hex / decimal / octal 127.0.0.1
+        # Alternative URL schemes (non-HTTP exfil)
+        re.compile(rb"(?i)\bgopher://|\bdict://|\bldap[s]?://|\btftp://|\bsftp://|\bnetdoc://|\bjar://"),
+        re.compile(rb"(?i)\bfile:[/]{2,4}|\bphp://|\bjava\.net\.URL"),
+        # URL-parser confusion (smuggling host)
+        re.compile(rb"(?i)https?://[^/\s]*@(127\.|10\.|192\.168\.|169\.254\.)"),
+        # Common SSRF query keys with hostname value (often the entry point)
+        re.compile(rb"(?i)(\?|&)(url|uri|target|path|dest|redirect|next|continue|callback|webhook|image|file|link|src|fetch|preview)=https?://[^&]*?(127\.|10\.|192\.168\.|169\.254\.|localhost)"),
     ),
-    # OS-command-injection
+
+    # ── OS command injection ─────────────────────────────────────────────
     "cmd": (
-        re.compile(rb"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id)\b", re.I),
-        re.compile(rb"\$\([^)]+\)|`[^`]+`"),
-        re.compile(rb"(?i)\b(/bin/|/usr/bin/)(sh|bash|zsh|nc|cat|ls)\b"),
+        # Shell metachars + unix utils
+        re.compile(rb"(?i)[;&|`]\s*(cat|ls|wget|curl|nc|ncat|sh|bash|zsh|whoami|id|env|uname|nslookup|dig|ping|host|ifconfig|ip\b|route|netstat|ss\b|lsof|ps|tail|head|find|chmod|chown|crontab)\b"),
+        # Newline-based command separators (\n, \r, %0a, %0d)
+        re.compile(rb"(\n|%0a|\r|%0d)\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id|chmod|chown)\b", re.I),
+        # Command substitution
+        re.compile(rb"\$\(\s*[a-z]+[^)]*\)|`[^`\n]+`|<\(\s*[a-z]+[^)]*\)"),
+        # Absolute paths to shells / utils
+        re.compile(rb"(?i)\b(/bin/|/usr/bin/|/sbin/|/usr/sbin/)(sh|bash|zsh|dash|ksh|nc|ncat|cat|ls|wget|curl|chmod|chown|chsh|find|nmap)\b"),
+        # Reverse-shell idioms
+        re.compile(rb"(?i)(bash\s+-i\s*>&\s*/dev/tcp/|/dev/tcp/[\w.]+/\d+|nc\s+(-l\s+)?-?[ev]+\s+\S+\s+\d+|python\s+-c\s+['\"]\s*import\s+(os|socket|pty))"),
+        re.compile(rb"(?i)\bsocat\s+(tcp|exec|file):"),
+        # Windows command shell + LOL bins
+        re.compile(rb"(?i)\b(cmd\.exe|powershell(\.exe)?\s+-(e|enc|nop|w\s+hidden|c)\b|certutil\s+-(urlcache|decode)|bitsadmin\s+/transfer|wmic\s+process\s+call|mshta\.exe|regsvr32\.exe)\b"),
+        # PowerShell common encoded payload markers
+        re.compile(rb"(?i)\bIEX\s*\(?\s*New-Object\s+Net\.WebClient|FromBase64String\s*\("),
     ),
 }
 # Per-group toggles (default ON when BODY_PATTERN_MATCH is on; a group can
@@ -7134,7 +7939,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.6.2"
+                response_headers["X-Proxy"] = "AppSecGW_1.6.4"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -7653,7 +8458,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.6.2",
+        "version":         "AppSecGW_1.6.4",
     }
     return web.json_response({
         "current":          current,
@@ -7673,6 +8478,7 @@ async def service_metrics_data_endpoint(request: web.Request):
 SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="utf-8")
 CONTROLS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
 GEO_DASHBOARD_HTML = (_DASHBOARDS_DIR / "geo.html").read_text(encoding="utf-8")
+LOGS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "logs.html").read_text(encoding="utf-8")
 
 async def controls_dashboard_endpoint(request: web.Request):
     """1.5.1: ops dashboard with on/off switches + thresholds for every
@@ -7733,6 +8539,10 @@ def make_app() -> web.Application:
     app.router.add_get("/__path-hits",     path_hits_endpoint)
     app.router.add_get("/__geo",         geo_dashboard_endpoint)
     app.router.add_get("/__geo-data",    geo_data_endpoint)
+    app.router.add_get("/__geo-drill",   geo_drill_endpoint)
+    app.router.add_get("/__logs",        logs_dashboard_endpoint)
+    app.router.add_get("/__logs-data",   logs_data_endpoint)
+    app.router.add_get("/__health-score", health_score_endpoint)
     app.router.add_post("/__maxmind-fetch", maxmind_fetch_endpoint)
     app.router.add_get("/__external",     external_endpoint)
     app.router.add_get("/__admin-ips",    admin_ips_endpoint)
@@ -7761,7 +8571,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.6.2    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.6.4    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
