@@ -75,6 +75,121 @@ CrowdSec, MaxMind ASN, MaxMind City, Turnstile, Anubis-mode PoW, Redis)
 may be absent and the gate degrades gracefully — the in-process
 detectors are sufficient on their own.
 
+### Cookie-gate decision tree (Layer 7)
+
+`JS_CHALLENGE=1` engages the cookie gate.  How a fresh client gets a
+chal cookie depends on which extras are configured:
+
+```
+                    request without chal cookie
+                              │
+                ┌─────────────┼─────────────┐
+                ▼             ▼             ▼
+          path is in    path ends in     everything else
+       JS_CHAL_OPEN_     static-asset
+            PATHS         suffix
+            │                 │              │
+            │                 │              ▼
+            │                 │       ┌──────────────┐
+            │                 │       │ TURNSTILE_   │
+            │                 │       │ ENABLED &&   │
+            │                 │       │ identity     │
+            │                 │       │ risk ≥       │
+            │                 │       │ TURNSTILE_   │
+            │                 │       │ RISK_THRESH  │
+            │                 │       └──┬───────────┘
+            │                 │          │ yes
+            │                 │          ▼
+            │                 │       Turnstile widget HTML
+            │                 │       → siteverify
+            │                 │       → mint chal cookie
+            │                 │
+            │                 │       no  ─▶  ANUBIS_ENABLED?
+            │                 │                  │ yes
+            │                 │                  ▼
+            │                 │              PoW page (boosted
+            │                 │              difficulty) → mint
+            │                 │                  │ no
+            │                 │                  ▼
+            │                 │              HTML GET + Accept:
+            │                 │              text/html?
+            │                 │                  │ yes ─▶ heuristic auto-mint
+            │                 │                  │ no  ─▶ silent decoy
+            ▼                 ▼
+      bypass cookie     bypass cookie
+      gate (still       gate (still
+      runs UA / risk    runs UA / risk
+      detectors)        detectors)
+```
+
+The strictest configuration is **Turnstile + Anubis-mode + JS_CHAL_OPEN_PATHS = []**.  The most permissive is **JS_CHALLENGE=0** (gate disabled, downstream detectors only).
+
+### MaxMind self-maintenance chain
+
+In 1.5.5 the gateway maintains its own GeoLite2 mmdbs end-to-end:
+
+```
+docker build → COPY _seed/*.mmdb → /usr/local/share/maxmind/   (image-baked)
+                          │
+                          ▼
+container start →  _maxmind_seed_from_image()  ──▶ if /data empty → copy
+                          │
+                          ▼
+                  _maxmind_auto_fetch()
+                  needs MAXMIND_LICENSE_KEY?
+                          │ yes
+                          ▼
+                  https://download.maxmind.com → /data/GeoLite2-{ASN,City}.mmdb
+                          │
+                          ▼
+                  _maxmind_refresh_loop() — every 24h, re-fetch if mmdb >30d old
+                          │
+                          └─── operator pushes "Fix now" on /__geo  ─┐
+                                                                     ▼
+                                                           POST /__maxmind-fetch
+                                                                     │
+                                                       runs seed + auto_fetch then
+                                                       reopens reader handles
+```
+
+The image always ships seed mmdbs so a brand-new deploy works offline; `MAXMIND_LICENSE_KEY` enables fresh downloads + monthly self-refresh; the `/__maxmind-fetch` endpoint and the GeoMap "Fix now" button are operator-on-demand triggers.
+
+### Risk-score lifecycle
+
+Every detector that fires writes a weighted contribution into the per-identity `risk_score`.  The score then drives a three-tier decision model:
+
+```
+detectors fire ─▶ risk_score += RISK_WEIGHTS[reason]
+                            │
+                            ├─ score < SOFT_CHALLENGE_SCORE        ─▶ green (allowed)
+                            │
+                            ├─ SOFT ≤ score < BAN                  ─▶ orange "missed"
+                            │     ├─ allowed but counted on the timeline
+                            │     ├─ open-path bypass REVOKED — chal-required
+                            │     └─ Turnstile widget shown if score ≥
+                            │       TURNSTILE_RISK_THRESHOLD (default = mid-orange)
+                            │
+                            └─ score ≥ BAN  ─▶ red (banned-silent)
+                                  │
+                                  ├─ AI-flagged reasons → 24h hostile pool
+                                  │   (HOSTILE_BAN_SECS, default 86400)
+                                  │
+                                  └─ Other reasons → standard ban duration
+                                      (RISK_BAN_DURATION_SECS)
+
+                  (continuously decayed)
+                  score *= 0.5 every RISK_DECAY_HALFLIFE_SECS (1h)
+                  per-reason contributions decay in lockstep so the
+                  /__agents popover always shows the live breakdown.
+
+NAT awareness:  if ≥ NAT_IDENTITIES_THRESHOLD (default 3) "legitimate-
+looking" identities (≥1 static fetch AND ≥3 allowed reqs) are seen on
+the same IP within 1h, the BAN threshold doubles (50 → 100) so a
+shared-NAT office isn't carpet-banned by one bad apple.
+```
+
+The thresholds (`SOFT_CHALLENGE_SCORE`, `RISK_BAN_THRESHOLD`, `RISK_BAN_THRESHOLD_NAT`, `RISK_DECAY_HALFLIFE_SECS`, `HOSTILE_BAN_SECS`, `TURNSTILE_RISK_THRESHOLD`) are all hot-reloadable via `/__config` and live-tunable on `/__dashboard` (defense-thresholds slider) and `/__controls`.
+
 ---
 
 ## Quick start
@@ -776,6 +891,10 @@ All owned by UID 65532 (`nonroot`).
 │   └── test_critical.py                        pytest unit suite (11 tests, all green)
 ├── sbom/
 │   └── sbom-1.5.4.cdx.json                     CycloneDX SBOM (53 KB, generated by Trivy)
+├── _seed/
+│   ├── GeoLite2-ASN.mmdb                       mmdbs baked into image at build time
+│   └── GeoLite2-City.mmdb                       (1.5.5 — for offline-ready GeoMap)
+├── .env.example                                turnkey env template (cp → .env, edit, compose up)
 ├── dashboards/                                 server-rendered operator UIs
 │   ├── main.html                               /__dashboard
 │   ├── agents.html                             /__agents
