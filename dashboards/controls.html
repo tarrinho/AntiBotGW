@@ -104,16 +104,6 @@ button:disabled{opacity:.4;cursor:not-allowed}
     Refresh-safe: revert any unsaved edit with <b>Reset</b>.
   </div>
 
-  <section class="card" id="card-thresholds">
-    <h2>Thresholds &amp; rate limits <span style="font-size:11px;color:var(--dim);font-weight:400">(click value to edit · bar shows current within min..max range, coloured by impact)</span></h2>
-    <div class="hint" style="margin-bottom:10px">
-      <span style="color:var(--green);font-weight:600">●</span> stricter / safer side &nbsp;·&nbsp;
-      <span style="color:var(--red);font-weight:600">●</span> looser / riskier side &nbsp;·&nbsp;
-      <code>↓</code> lower = stricter &nbsp;·&nbsp; <code>↑</code> higher = stricter
-    </div>
-    <div id="thresholds-rich"></div>
-  </section>
-
   <section class="card" id="card-external">
     <h2>External integrations <span style="font-size:11px;color:var(--dim);font-weight:400">(activated via container env vars — secrets out of the dashboard for safety)</span></h2>
     <div class="hint" style="margin-bottom:10px">
@@ -147,23 +137,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
     </table>
   </section>
 
-  <section class="card section-list" id="card-lists">
-    <h2>Lists (comma-separated)</h2>
-    <div id="lists"></div>
-  </section>
-
   <section class="card">
-    <h2>Logging</h2>
-    <div id="logging"></div>
-  </section>
-
-  <div class="actions">
-    <button id="apply" disabled>Apply changes</button>
-    <button class="secondary" id="reset" disabled>Reset</button>
-    <span class="hint" id="hint">No pending changes.</span>
-  </div>
-
-  <section class="card" style="margin-top:20px">
     <h2>Unban an identity / IP</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="unban-target" type="text" placeholder="track-key or IP"
@@ -196,6 +170,32 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <tbody></tbody>
     </table>
   </section>
+
+  <section class="card" id="card-thresholds">
+    <h2>Thresholds &amp; rate limits <span style="font-size:11px;color:var(--dim);font-weight:400">(click value to edit · bar shows current within min..max range, coloured by impact)</span></h2>
+    <div class="hint" style="margin-bottom:10px">
+      <span style="color:var(--green);font-weight:600">●</span> stricter / safer side &nbsp;·&nbsp;
+      <span style="color:var(--red);font-weight:600">●</span> looser / riskier side &nbsp;·&nbsp;
+      <code>↓</code> lower = stricter &nbsp;·&nbsp; <code>↑</code> higher = stricter
+    </div>
+    <div id="thresholds-rich"></div>
+  </section>
+
+  <section class="card section-list" id="card-lists">
+    <h2>Lists (comma-separated)</h2>
+    <div id="lists"></div>
+  </section>
+
+  <section class="card">
+    <h2>Logging</h2>
+    <div id="logging"></div>
+  </section>
+
+  <div class="actions">
+    <button id="apply" disabled>Apply changes</button>
+    <button class="secondary" id="reset" disabled>Reset</button>
+    <span class="hint" id="hint">No pending changes.</span>
+  </div>
 
   <section class="card" style="margin-top:20px">
     <h2>Admin IP allowlist</h2>
