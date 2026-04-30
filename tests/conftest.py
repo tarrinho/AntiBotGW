@@ -45,3 +45,23 @@ def proxy_module():
 def url_safe_key():
     """A predictable URL-safe admin key for /__metrics-style tests."""
     return "TEST-KEY-DO-NOT-USE"
+
+
+@pytest.fixture(autouse=True)
+def _wipe_config_kv_between_tests():
+    """1.5.5 — config_kv now persists hot-reload knob mutations across
+    container restart.  In a test session, that means a /__config POST in
+    one test bleeds into the next.  This autouse fixture clears the table
+    after every test so the next one starts clean."""
+    yield
+    import sqlite3
+    db_path = os.environ.get("DB_PATH", "")
+    if not db_path or not os.path.exists(db_path):
+        return
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.execute("DELETE FROM config_kv")
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError:
+        pass

@@ -533,6 +533,8 @@ class IpState:
 
 MAX_IDENTITIES = int(os.environ.get("MAX_IDENTITIES", "100000"))
 PRUNE_IDLE_SECS = int(os.environ.get("PRUNE_IDLE_SECS", "86400"))  # 24h
+# 1.5.5 — promoted to module-level global so /__config can hot-reload it.
+ENUM_THRESHOLD  = int(os.environ.get("ENUM_THRESHOLD", "300"))     # >N unique paths/identity = ai-enumeration
 PRUNE_INTERVAL_SECS = 600  # run every 10 min
 
 ip_state: Dict[str, IpState] = defaultdict(IpState)
@@ -682,6 +684,16 @@ def db_init():
         procs       INTEGER, open_fds INTEGER,
         net_rx_bps  INTEGER, net_tx_bps INTEGER,
         db_db       INTEGER, db_wal INTEGER, db_shm INTEGER, db_total INTEGER
+    );
+
+    -- 1.5.5: hot-reload knob persistence. Every change pushed via /__config
+    -- is mirrored here so it survives container restart. Loaded AFTER env
+    -- defaults at boot, so DB takes precedence over env.  `value` is JSON-
+    -- encoded (covers ints / floats / bools / strings / arrays).
+    CREATE TABLE IF NOT EXISTS config_kv (
+        key    TEXT PRIMARY KEY,
+        value  TEXT,
+        ts     REAL
     );
     """)
     # 1.5.3: idempotent migration — add `description` column if missing
@@ -1138,7 +1150,7 @@ def _asn_lookup(ip: str):
 # ── v1.4: Service-metrics collection (no psutil dep — pure /proc + os) ───
 SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
 SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "8640"))  # in-mem samples (8640 * 5s = 12 h)
-SVC_DB_RETENTION_HOURS = int(os.environ.get("SVC_DB_RETENTION_HOURS", "168"))    # on-disk retention (default 7 days)
+SVC_DB_RETENTION_HOURS = int(os.environ.get("SVC_DB_RETENTION_HOURS", "720"))    # on-disk retention (default 30 days = 720 h)
 SERVICE_METRICS_HISTORY: deque = deque(maxlen=SERVICE_METRICS_RETENTION)
 _PROC = "/proc"
 _DATA_PATH = os.environ.get("DB_PATH", "/data/antibot.db")
@@ -1401,6 +1413,11 @@ async def db_writer_loop():
                         """, args)
                     elif op == "set_kv":
                         conn.execute("INSERT OR REPLACE INTO metrics_kv (key,val) VALUES (?,?)", args)
+                    elif op == "set_config":
+                        # 1.5.5 — hot-reload knob persistence.  args = (key, json_value, ts)
+                        conn.execute("INSERT OR REPLACE INTO config_kv (key,value,ts) VALUES (?,?,?)", args)
+                    elif op == "del_config":
+                        conn.execute("DELETE FROM config_kv WHERE key = ?", args)
                     elif op == "ban":
                         conn.execute("""
                           INSERT INTO bans (ip,banned_until,reason,ts) VALUES (?,?,?,?)
@@ -1466,6 +1483,56 @@ async def db_writer_loop():
             break
         except Exception as e:
             print(f"[db] loop error: {e}")
+
+def db_load_config():
+    """1.5.5 — load DB-persisted hot-reload knobs over env defaults.
+    Called at boot AFTER env-driven globals are initialised; DB takes
+    precedence so changes pushed via /__config survive restart.
+
+    Skips entries whose value fails the per-knob validator (e.g. an
+    operator manually edited the row to a bogus value) — the env default
+    stays in effect and a warning logs.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT key, value FROM config_kv").fetchall()
+        conn.close()
+    except Exception as e:
+        print(f"[config-kv] load failed: {e}", flush=True)
+        return
+    g = globals()
+    applied, skipped, env_pinned = 0, 0, 0
+    for r in rows:
+        key = r["key"]
+        spec = _HOT_RELOAD_KNOBS.get(key)
+        if spec is None:
+            skipped += 1
+            continue
+        # 1.5.5 — env wins. If the operator explicitly set this knob in the
+        # container env, treat that as authoritative (GitOps determinism).
+        if key in _ENV_PROVIDED_KNOBS:
+            env_pinned += 1
+            continue
+        parser, validator = spec
+        try:
+            raw = json.loads(r["value"])
+            value = parser(raw)
+            if validator is not None and not validator(value):
+                print(f"[config-kv] {key} failed validator — env default kept",
+                      flush=True)
+                skipped += 1
+                continue
+            g[key] = value
+            applied += 1
+        except (ValueError, TypeError, json.JSONDecodeError) as e:
+            print(f"[config-kv] {key} failed to parse ({e}) — env default kept",
+                  flush=True)
+            skipped += 1
+    if applied or skipped or env_pinned:
+        print(f"[config-kv] loaded {applied} knob(s) from DB "
+              f"(skipped {skipped}, env-pinned {env_pinned})", flush=True)
+
 
 def db_load_state():
     """Load saved state at startup."""
@@ -1575,7 +1642,7 @@ def db_load_state():
           f"{svc_loaded} svc-metrics samples")
 
 # ── Timeline: per-minute buckets, last 24h ─────────────────────────────────
-TIMELINE_RETAIN_SECS = 86400  # 24 hours
+TIMELINE_RETAIN_SECS = int(os.environ.get("TIMELINE_RETAIN_SECS", "2592000"))  # 30 days (DB-backed timeline)
 timeline = {}                  # {minute_epoch_int: {"total","blocked","allowed","by_reason":{}}}
 
 # 1.5.4 — per-minute cost buffer for the middleware wall-time.
@@ -2975,7 +3042,7 @@ async def protect(request: web.Request, handler):
     # SPAs (Angular/React UFE-style apps) routinely load 50–200 chunked JS
     # modules on one page; the previous 50 threshold was a false-positive
     # magnet for legit users. Operator can override via env if needed.
-    if AI_ENUMERATION_ENABLED and unique_n > int(os.environ.get("ENUM_THRESHOLD", "300")):
+    if AI_ENUMERATION_ENABLED and unique_n > ENUM_THRESHOLD:
         return await deny(403, "ai-enumeration",
                           {"error": "too many distinct paths from this identity",
                            "unique_paths": unique_n})
@@ -3073,7 +3140,7 @@ async def protect(request: web.Request, handler):
             httponly=True,
             samesite=SESSION_SAMESITE,
             secure=SESSION_SECURE,
-            path="/", max_age=CHAL_TTL)
+            path="/", max_age=JS_CHALLENGE_TTL)
         # 1.5.0: log this mint into the per-fingerprint churn detector. If
         # the same UA+IP-tier+JA4 has minted > SESSION_CHURN_MAX cookies in
         # the last SESSION_CHURN_WINDOW_S seconds, the fingerprint enters
@@ -3486,7 +3553,7 @@ async def js_challenge_endpoint(request: web.Request):
                     httponly=True,
                     samesite=SESSION_SAMESITE,
                     secure=SESSION_SECURE,
-                    path="/", max_age=CHAL_TTL)
+                    path="/", max_age=JS_CHALLENGE_TTL)
     # 1.5.0: same churn check on the Turnstile path. Even though Turnstile
     # itself raises the cost, an attacker that can solve Turnstile (e.g.
     # via a paid CAPTCHA-farm) and then mints many cookies still trips this.
@@ -4461,6 +4528,18 @@ def _to_ja4_set(v) -> set:
         return {str(p).strip() for p in v if str(p).strip()}
     return {p.strip() for p in str(v).split(",") if p.strip()}
 
+def _to_method_set(v) -> set:
+    """Comma-separated → set of UPPER-cased HTTP methods."""
+    if isinstance(v, (list, set)):
+        return {str(m).strip().upper() for m in v if str(m).strip()}
+    return {m.strip().upper() for m in str(v).split(",") if m.strip()}
+
+def _to_host_set(v) -> set:
+    """Comma-separated → set of lower-cased hostnames."""
+    if isinstance(v, (list, set)):
+        return {str(h).strip().lower() for h in v if str(h).strip()}
+    return {h.strip().lower() for h in str(v).split(",") if h.strip()}
+
 # name → (parser, optional validator returning bool)
 _HOT_RELOAD_KNOBS = {
     # Toggles (booleans)
@@ -4519,7 +4598,30 @@ _HOT_RELOAD_KNOBS = {
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
+    # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
+    "JS_CHALLENGE_TTL":       (int,   lambda v: 60 <= v <= 86400 * 7),
+    "ENUM_THRESHOLD":         (int,   lambda v: 10 <= v <= 100000),
+    "TIMELINE_RETAIN_SECS":   (int,   lambda v: 60 <= v <= 31536000),     # up to 1 year
+    "SVC_DB_RETENTION_HOURS": (int,   lambda v: 1 <= v <= 8760),          # up to 1 year
+    # 1.5.5 — Tier 2 promotions (lower frequency but useful)
+    "COST_RETAIN_SECS":       (int,   lambda v: 60 <= v <= 2592000),
+    "LOG_FORMAT":             (str,   lambda v: v.lower() in ("json", "text")),
+    "POW_REQUIRED_PATHS":     (_to_path_list, None),
+    "ALLOWED_METHODS":        (_to_method_set,
+                               lambda v: bool(v) and all(m in {"GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS"} for m in v)),
+    # 1.5.5 — Tier 3 promotions (advanced — change with care)
+    "ALLOWED_HOSTS":          (_to_host_set, None),   # empty set = no enforcement
+    "MAX_IDENTITIES":         (int,   lambda v: 100 <= v <= 10000000),
+    "PRUNE_IDLE_SECS":        (int,   lambda v: 60 <= v <= 31 * 86400),
+    "UPSTREAM_MAX_BODY":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),  # up to 1 GiB
+    "UPSTREAM_MAX_RESP":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),
 }
+
+# 1.5.5 — env-override detection.  If an operator explicitly sets a knob
+# in the container environment, that value is authoritative — the DB-
+# persisted value (set via /__config) is ignored on reload.  GitOps deploys
+# stay deterministic; only knobs NOT pinned in env can be tuned live.
+_ENV_PROVIDED_KNOBS = {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
 
 def _read_hot_reload_state() -> dict:
     out = {}
@@ -4562,6 +4664,12 @@ async def config_endpoint(request: web.Request):
         if spec is None:
             rejected[k] = "not-hot-reloadable"
             continue
+        # 1.5.5 — env precedence. If the operator pinned this knob in
+        # the container env, reject runtime mutations so GitOps-managed
+        # deploys stay deterministic.
+        if k in _ENV_PROVIDED_KNOBS:
+            rejected[k] = "env-pinned (set via container env, not mutable at runtime)"
+            continue
         parser, validator = spec
         try:
             value = parser(raw_v)
@@ -4570,6 +4678,16 @@ async def config_endpoint(request: web.Request):
                 continue
             g[k] = value
             applied[k] = sorted(value) if isinstance(value, set) else value
+            # 1.5.5 — persist to DB so the change survives container restart.
+            # JSON-encode so ints / floats / bools / strings / lists round-trip.
+            if db_queue is not None:
+                try:
+                    db_queue.put_nowait((
+                        "set_config",
+                        (k, json.dumps(applied[k]), _t.time()),
+                    ))
+                except asyncio.QueueFull:
+                    pass
         except (ValueError, TypeError) as e:
             rejected[k] = str(e)[:120]
     if applied:
@@ -4855,7 +4973,8 @@ def _bot_trap_triggered(body: bytes, ctype: str) -> tuple:
 # risk-score, bot-trap forms, body-pattern matching, slowloris guard).
 JS_CHALLENGE = os.environ.get("JS_CHALLENGE", "0") in ("1", "true", "yes")
 CHAL_COOKIE  = "chal"
-CHAL_TTL     = int(os.environ.get("JS_CHALLENGE_TTL", "3600"))    # 1 h
+# 1.5.5 — name the variable to match the hot-reload knob so /__config can mutate it.
+JS_CHALLENGE_TTL = int(os.environ.get("JS_CHALLENGE_TTL", "3600"))    # 1 h
 CHAL_NONCE_TTL = 120          # nonce valid for 2 min after issue
 
 # 1.5.4: Anubis-mode — strict PoW gate inspired by github.com/TecharoHQ/anubis.
@@ -5096,7 +5215,7 @@ def _verify_chal_cookie(value: str, ua: str, ip_tier: str = "",
         if not hmac.compare_digest(cookie_ja4_hash, _ja4_hash(ja4)):
             return False
     try:
-        if int(time.time()) - int(issued) > CHAL_TTL:
+        if int(time.time()) - int(issued) > JS_CHALLENGE_TTL:
             return False
     except ValueError:
         return False
@@ -5756,6 +5875,9 @@ async def on_startup(app):
     global db_queue, db_writer_task, prune_task, service_metrics_task
     db_init()
     db_load_state()
+    # 1.5.5 — load DB-persisted hot-reload knobs over env defaults so live
+    # changes pushed via /__config survive restart.
+    db_load_config()
     db_queue = asyncio.Queue(maxsize=10000)
     db_writer_task = asyncio.create_task(db_writer_loop())
     db_load_admin_ips()

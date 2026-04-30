@@ -378,6 +378,19 @@ function ensureChart() {
       responsive: true, maintainAspectRatio: false,
       animation: { duration: 250 },
       interaction: { mode: 'index', intersect: false },
+      // 1.5.5 — click any line/point opens a bucket-detail modal listing
+      // the IPs/identities for ALL four categories (total/allowed/blocked/
+      // missed), with the clicked one highlighted.
+      onClick: (ev, items) => {
+        if (!items || !items.length) return;
+        const idx = items[0].index;
+        const tl = window._lastMainTimeline || [];
+        if (!tl[idx]) return;
+        openMainBucketDetail(tl[idx], window._lastMainBucketSecs || 60, items[0].datasetIndex);
+      },
+      onHover: (ev, items) => {
+        ev.native && (ev.native.target.style.cursor = items.length ? 'pointer' : 'default');
+      },
       plugins: {
         legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
         tooltip: {
@@ -581,6 +594,9 @@ async function tick() {
     if (d.timeline && d.timeline.length) {
       const c = ensureChart();
       const bucketSec = d.timeline_bucket_secs || 60;
+      // 1.5.5 — stash for click-to-drill-down handler (mirrors agents page)
+      window._lastMainTimeline   = d.timeline;
+      window._lastMainBucketSecs = bucketSec;
       const labels = d.timeline.map(b => fmtTime(b.t, bucketSec));
       const totals = d.timeline.map(b => b.total);
       const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
@@ -835,6 +851,86 @@ setInterval(() => { if (endEpoch === null) tick(); }, 2000);
     } else { return; }
     document.getElementById('modal-title').innerHTML =
       `${title} <span class="x" id="modal-close">×</span>`;
+    document.getElementById('modal-close').onclick = close;
+    document.getElementById('modal-body').innerHTML = body;
+    back.classList.add('show'); modal.classList.add('show');
+  };
+
+  // 1.5.5 — Click any line on the timeline → modal with all 4 categories
+  // (total/allowed/blocked/missed), with the clicked one highlighted.
+  // Reuses the /__agents-bucket endpoint (which returns detected/missed/clean).
+  window.openMainBucketDetail = async function(bucketEntry, bucketSecs, datasetIndex){
+    const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+    const t = bucketEntry.t;
+    // datasetIndex: 0=total, 1=allowed, 2=blocked, 3=missed
+    const focusKind = ['total','allowed','blocked','missed'][datasetIndex] || null;
+    const params = new URLSearchParams({ t, bucket_secs: bucketSecs });
+    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+    let d = {};
+    try {
+      const r = await fetch('/__agents-bucket?' + params, {credentials:'include'});
+      d = await r.json();
+    } catch(e) { d = {detected:[], missed:[], clean:[]}; }
+    const fmt = epoch => new Date(epoch*1000).toLocaleString();
+    const renderClean = list => !list.length ? '<div class="empty">no entries</div>' :
+      `<table><thead><tr>
+        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Last path</th>
+      </tr></thead><tbody>` +
+      list.map(e => `<tr>
+        <td>${escapeHtml(e.ip)}</td>
+        <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
+        <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
+        <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      </tr>`).join('') + '</tbody></table>';
+    const renderBlocked = list => !list.length ? '<div class="empty">no entries</div>' :
+      `<table><thead><tr>
+        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th>
+      </tr></thead><tbody>` +
+      list.map(e => {
+        const top = Object.entries(e.reasons||{}).sort((a,b)=>b[1]-a[1])[0]||['—',0];
+        return `<tr>
+          <td>${escapeHtml(e.ip)}</td>
+          <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
+          <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
+          <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
+          <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+        </tr>`;
+      }).join('') + '</tbody></table>';
+    const renderMissed = list => !list.length ? '<div class="empty">no entries</div>' :
+      `<table><thead><tr>
+        <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th style="text-align:left">Last path</th>
+      </tr></thead><tbody>` +
+      list.map(e => `<tr>
+        <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
+        <td>${escapeHtml(e.ip)}</td>
+        <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
+        <td style="text-align:right">${e.risk_score}</td>
+        <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      </tr>`).join('') + '</tbody></table>';
+    // Combine clean + detected for "total" (everything seen in the bucket).
+    const totalCount = (d.clean||[]).length + (d.detected||[]).length + (d.missed||[]).length;
+    const sections = [
+      {kind:'allowed', label:'ALLOWED (clean)',         color:'#3fb950', list:d.clean   ||[], render:renderClean},
+      {kind:'blocked', label:'BLOCKED (detected)',      color:'#f85149', list:d.detected||[], render:renderBlocked},
+      {kind:'missed',  label:'MISSED (medium risk)',    color:'#ff7b3a', list:d.missed  ||[], render:renderMissed},
+    ];
+    if (focusKind && focusKind !== 'total'){
+      sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
+    }
+    const body = sections.map(s => {
+      const isFocus = s.kind === focusKind;
+      const border = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
+      return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
+        <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+          ${escapeHtml(s.label)}
+          <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
+        </h3>
+        ${s.render(s.list)}
+      </div>`;
+    }).join('');
+    document.getElementById('modal-title').innerHTML =
+      `Bucket · ${fmt(t)} +${bucketSecs}s · ${totalCount} entries (${focusKind||'all'} clicked)
+       <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
     document.getElementById('modal-body').innerHTML = body;
     back.classList.add('show'); modal.classList.add('show');

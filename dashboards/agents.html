@@ -451,78 +451,94 @@ setInterval(tick, 3000);
 setInterval(()=>{ if (tEndEpoch === null) tickChart(); }, 5000);
 
 // ── 1.5.4 — Click on Detection-vs-Miss timeline → IPs in bucket ──────
+// 1.5.5 — render ALL three categories (detected/missed/clean) regardless
+// of which line was clicked, so the operator can see the full picture.
+// The dataset that was clicked is rendered first + highlighted.
+function _identCell(idents){
+  if (!idents || idents.length === 0) return '<span class="dim">—</span>';
+  if (idents.length === 1)
+    return `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`;
+  return `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
+}
+function _renderDetected(list){
+  if (!list.length) return '<div class="empty">no entries</div>';
+  return `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th>
+    </tr></thead><tbody>` +
+    list.map(e => {
+      const top = Object.entries(e.reasons||{}).sort((a,b)=>b[1]-a[1])[0]||['—',0];
+      return `<tr>
+        <td>${_identCell(e.identities)}</td>
+        <td>${escapeHtml(e.ip)}</td>
+        <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
+        <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
+        <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
+        <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      </tr>`;
+    }).join('') + '</tbody></table>';
+}
+function _renderMissed(list){
+  if (!list.length) return '<div class="empty">no entries</div>';
+  return `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th>Allowed</th><th>Blocked</th><th style="text-align:left">Last path</th>
+    </tr></thead><tbody>` +
+    list.map(e => `<tr>
+      <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
+      <td>${escapeHtml(e.ip)}</td>
+      <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
+      <td style="text-align:right">${e.risk_score}</td>
+      <td style="color:var(--green)">${e.allowed}</td>
+      <td style="color:${e.blocked?'var(--red)':'var(--dim)'}">${e.blocked}</td>
+      <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+    </tr>`).join('') + '</tbody></table>';
+}
+function _renderClean(list){
+  if (!list.length) return '<div class="empty">no entries</div>';
+  return `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Last path</th>
+    </tr></thead><tbody>` +
+    list.map(e => `<tr>
+      <td>${_identCell(e.identities)}</td>
+      <td>${escapeHtml(e.ip)}</td>
+      <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
+      <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
+      <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+    </tr>`).join('') + '</tbody></table>';
+}
+
 async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
   const t      = bucketEntry.t;
-  const kind   = ['detected','missed','clean'][datasetIndex] || 'all';
+  // datasetIndex: 0=detected, 1=missed, 2=clean.  Highlight that section.
+  const focusKind = ['detected','missed','clean'][datasetIndex] || null;
   const params = new URLSearchParams({ t, bucket_secs: bucketSecs, min_score: MIN });
   if (ADMIN_KEY) params.set('key', ADMIN_KEY);
   const r = await fetch('/__agents-bucket?' + params, {credentials:'include'});
   const d = await r.json();
   const fmt = epoch => new Date(epoch*1000).toLocaleString();
-  const list = d[kind] || [];
-  const clrMap = {detected:'var(--red)', missed:'var(--orange,#ff7b3a)', clean:'var(--green)'};
-  let body;
-  if (!list.length){
-    body = `<div class="empty">no <b style="color:${clrMap[kind]}">${kind}</b> entries in this bucket</div>`;
-  } else if (kind === 'detected'){
-    body = `<table style="width:100%"><thead><tr>
-      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
-      <th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th>
-    </tr></thead><tbody>` +
-      list.map(e => {
-        const top = Object.entries(e.reasons).sort((a,b)=>b[1]-a[1])[0]||['—',0];
-        const idents = e.identities || [];
-        const identCell = idents.length === 0
-          ? '<span class="dim">—</span>'
-          : idents.length === 1
-            ? `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`
-            : `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
-        return `<tr>
-          <td>${identCell}</td>
-          <td>${escapeHtml(e.ip)}</td>
-          <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
-          <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml(e.ua.slice(0,40))}</td>
-          <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
-          <td class="dim">${escapeHtml(e.last_path.slice(0,40))}</td>
-        </tr>`;
-      }).join('') + '</tbody></table>';
-  } else if (kind === 'missed'){
-    body = `<table style="width:100%"><thead><tr>
-      <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th>Allowed</th><th>Blocked</th><th style="text-align:left">Last path</th>
-    </tr></thead><tbody>` +
-      list.map(e => `<tr>
-        <td title="${escapeHtml(e.id)}"><b>${escapeHtml(e.id.slice(0,12))}</b></td>
-        <td>${escapeHtml(e.ip)}</td>
-        <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
-        <td style="text-align:right">${e.risk_score}</td>
-        <td style="color:var(--green)">${e.allowed}</td>
-        <td style="color:${e.blocked?'var(--red)':'var(--dim)'}">${e.blocked}</td>
-        <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-      </tr>`).join('') + '</tbody></table>';
-  } else {
-    body = `<table style="width:100%"><thead><tr>
-      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
-      <th style="text-align:left">UA</th><th style="text-align:left">Last path</th>
-    </tr></thead><tbody>` +
-      list.map(e => {
-        const idents = e.identities || [];
-        const identCell = idents.length === 0
-          ? '<span class="dim">—</span>'
-          : idents.length === 1
-            ? `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`
-            : `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
-        return `<tr>
-          <td>${identCell}</td>
-          <td>${escapeHtml(e.ip)}</td>
-          <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
-          <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml(e.ua.slice(0,40))}</td>
-          <td class="dim">${escapeHtml(e.last_path.slice(0,40))}</td>
-        </tr>`;
-      }).join('') + '</tbody></table>';
+  // Render order: focused first, then the other two.
+  const sections = [
+    {kind:'detected', label:'BLOCKED (detected)',  color:'var(--red)',                 list:d.detected||[], render:_renderDetected},
+    {kind:'missed',   label:'MISSED (medium risk)', color:'var(--orange,#ff7b3a)',     list:d.missed  ||[], render:_renderMissed},
+    {kind:'clean',    label:'CLEAN (allowed)',      color:'var(--green)',              list:d.clean   ||[], render:_renderClean},
+  ];
+  if (focusKind){
+    sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
   }
-  POP.style.maxWidth = '720px';
+  const body = sections.map(s => {
+    const isFocus = s.kind === focusKind;
+    const border  = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
+    return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
+      <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+        ${escapeHtml(s.label)} <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
+      </h3>
+      ${s.render(s.list)}
+    </div>`;
+  }).join('');
+  POP.style.maxWidth = '900px';
   document.getElementById('pop-title').innerHTML =
-    `<b style="color:${clrMap[kind]}">${kind.toUpperCase()}</b> · ${fmt(t)} +${bucketSecs}s · ${list.length} entries
+    `Bucket · ${fmt(t)} +${bucketSecs}s · ${(d.detected||[]).length}+${(d.missed||[]).length}+${(d.clean||[]).length} entries
      <span class="x" id="pop-close">×</span>`;
   document.getElementById('pop-close').onclick = closePopover;
   document.getElementById('pop-body').innerHTML = body;
