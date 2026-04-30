@@ -25,6 +25,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import fnmatch as _fnmatch
 import re
 import secrets
 import sqlite3
@@ -102,10 +103,19 @@ _KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".admin_key
 ADMIN_KEY_FROM_ENV = "ADMIN_KEY" in os.environ and bool(os.environ["ADMIN_KEY"])
 if ADMIN_KEY_FROM_ENV:
     INTERNAL_KEY = os.environ["ADMIN_KEY"]
-elif os.path.exists(_KEY_FILE):
-    INTERNAL_KEY = open(_KEY_FILE).read().strip()
 else:
-    INTERNAL_KEY = secrets.token_urlsafe(20)
+    # 1.6.0 — treat an empty key file as missing. A zero-byte .admin_key
+    # (left behind by a crashed/aborted previous boot) used to load as ""
+    # which is unusable AND lets `key=` (empty query) constant-time-compare
+    # auth to True. Now we always regenerate when the file content is empty.
+    INTERNAL_KEY = ""
+    if os.path.exists(_KEY_FILE):
+        try:
+            INTERNAL_KEY = open(_KEY_FILE).read().strip()
+        except OSError:
+            INTERNAL_KEY = ""
+    if not INTERNAL_KEY:
+        INTERNAL_KEY = secrets.token_urlsafe(20)
 
 # Always mirror the active key to /data/.admin_key so operators can retrieve
 # it with a single canonical command (`docker exec <container> cat
@@ -457,23 +467,47 @@ UA_BLOCKLIST = (
     "node-fetch/", "axios/", "got/", "undici/",
     "powershell/", "winhttp/", "winhttp.winhttprequest",
     "perl/", "lwp::", "guzzlehttp/", "php/",
-    # Crawlers / scanners
-    "scrapy/", "crawler", "spider", "bot/", "scraper",
+    # Crawlers / scanners (non-AI)
+    "scrapy/", "crawler", "spider", "scraper",
     "nuclei", "nikto", "sqlmap", "wpscan", "wfuzz", "ffuf", "gobuster", "dirb",
     "burp", "zap/", "zaproxy", "masscan", "nmap", "arachni",
-    # AI / LLM agents (commercial APIs + frameworks + tools)
-    "claude", "chatgpt", "openai", "gptbot", "anthropic", "perplexity",
-    "claudebot", "google-extended", "amazonbot", "bytespider",
-    "langchain", "llamaindex", "autogen", "crewai", "auto-gpt", "babyagi",
-    "litellm", "openrouter", "cohere", "mistral", "groq",
-    "ollama", "anthropic-ai", "openai-python", "llm-",
-    "cursor", "codeium", "copilot", "tabnine",
     # Headless browsers
     "selenium", "headless", "puppeteer", "playwright", "phantomjs",
     "electron", "cypress", "webdriver", "chromedriver", "geckodriver",
     # Misc red flags
     "test", "monitor", "uptime", "pingdom", "scanner",
 )
+
+# 1.6.0 — AI-crawler granular groups (Tier A feature, Cloudflare-WAF parity).
+# Each group has its own kill-switch so an enterprise can allowlist e.g.
+# Anthropic's ClaudeBot for indexing while still blocking OpenAI / Perplexity.
+# Substrings are case-insensitive and matched against the lowercased UA.
+AI_UA_GROUPS = {
+    "openai":     ("gptbot", "chatgpt-user", "oai-searchbot", "openai-python",
+                   "openai", "chatgpt"),
+    "anthropic":  ("claudebot", "claude-web", "anthropic-ai", "anthropic",
+                   "claude"),
+    "google":     ("google-extended", "googleother", "googlebot-news",
+                   "gemini", "bard"),
+    "perplexity": ("perplexitybot", "perplexity"),
+    "meta":       ("meta-externalagent", "meta-externalfetcher",
+                   "facebookbot", "facebookexternalhit"),
+    "other":      ("bytespider", "amazonbot", "applebot-extended", "ccbot",
+                   "cohere", "mistral", "groq", "ollama", "litellm",
+                   "openrouter", "langchain", "llamaindex", "autogen",
+                   "crewai", "auto-gpt", "babyagi", "llm-",
+                   "cursor", "codeium", "copilot", "tabnine",
+                   "bot/",   # generic catch-all for un-named bots
+                   ),
+}
+# Per-group toggles (default ON — preserves 1.5.5 behaviour where these UAs
+# all matched the legacy UA_BLOCKLIST).
+AI_UA_OPENAI_ENABLED     = os.environ.get("AI_UA_OPENAI_ENABLED",     "1") in ("1", "true", "yes")
+AI_UA_ANTHROPIC_ENABLED  = os.environ.get("AI_UA_ANTHROPIC_ENABLED",  "1") in ("1", "true", "yes")
+AI_UA_GOOGLE_ENABLED     = os.environ.get("AI_UA_GOOGLE_ENABLED",     "1") in ("1", "true", "yes")
+AI_UA_PERPLEXITY_ENABLED = os.environ.get("AI_UA_PERPLEXITY_ENABLED", "1") in ("1", "true", "yes")
+AI_UA_META_ENABLED       = os.environ.get("AI_UA_META_ENABLED",       "1") in ("1", "true", "yes")
+AI_UA_OTHER_ENABLED      = os.environ.get("AI_UA_OTHER_ENABLED",      "1") in ("1", "true", "yes")
 
 # ── AI agent specific path probes (often hit during enumeration) ───────────
 AI_PROBE_PATHS = {
@@ -929,6 +963,25 @@ HOSTING_ASN_KEYWORDS = tuple(
         "psychz,tencent,quadranet"
     ).split(",") if s.strip())
 
+# 1.6.0 — country-level geo block (Tier A feature, Akamai-Kona-style).
+# Uses existing GeoLite2-City lookup; cost is ~0.1ms in-process.
+# COUNTRY_BLOCK_ENABLED=1 turns the detector on. Without a list configured
+# the detector is a no-op even when enabled.
+# COUNTRY_DENYLIST = comma-sep ISO-3166-1 alpha-2 codes (e.g. "RU,CN,KP").
+#                    Matching → +50 risk → instant ban (hard tier).
+# COUNTRY_ALLOWLIST = comma-sep codes (e.g. "PT,ES,US"). When non-empty,
+#                     ANY country *not* in the list also matches. Allowlist
+#                     takes precedence over denylist (more restrictive).
+COUNTRY_BLOCK_ENABLED = os.environ.get("COUNTRY_BLOCK_ENABLED", "0") in ("1", "true", "yes")
+COUNTRY_DENYLIST = {
+    s.strip().upper() for s in os.environ.get("COUNTRY_DENYLIST", "").split(",")
+    if s.strip() and len(s.strip()) == 2
+}
+COUNTRY_ALLOWLIST = {
+    s.strip().upper() for s in os.environ.get("COUNTRY_ALLOWLIST", "").split(",")
+    if s.strip() and len(s.strip()) == 2
+}
+
 _asn_reader = None
 _city_reader = None     # 1.5.4 — GeoLite2-City reader (lat/lng for geo dashboard)
 MAXMIND_ENABLED = False
@@ -1157,6 +1210,64 @@ def _asn_lookup(ip: str):
     if is_hosting:
         _asn_stats["hits_hosting"] += 1
     return asn, org, is_hosting, "ok"
+
+# ── 1.6.0: Tor exit + DC/VPN feeds (Tier A, network-list integration) ────
+# Tor exit list: https://check.torproject.org/torbulkexitlist (one IP per line)
+# Refreshed once per week. In-memory set keeps the membership check at O(1).
+TOR_BLOCK_ENABLED = os.environ.get("TOR_BLOCK_ENABLED", "0") in ("1", "true", "yes")
+TOR_FEED_URL = os.environ.get(
+    "TOR_FEED_URL", "https://check.torproject.org/torbulkexitlist")
+TOR_REFRESH_SECS = int(os.environ.get("TOR_REFRESH_SECS", str(7 * 86400)))
+_tor_exits: set = set()
+_tor_feed_stats = {
+    "loaded_at": 0.0, "size": 0, "last_error": "", "fetches": 0,
+}
+# DC / commercial-VPN check is layered on top of the existing GeoLite2-ASN
+# `is_hosting` flag. When DC_VPN_BLOCK_ENABLED is true a hosting-ASN hit
+# triggers the heavier `datacenter-vpn` reason (weight 30) in addition to
+# `asn-hosting` (weight 5) — so an operator who really wants to block all
+# datacenter traffic gets a meaningful score bump rather than a soft tag.
+DC_VPN_BLOCK_ENABLED = os.environ.get("DC_VPN_BLOCK_ENABLED", "0") in ("1", "true", "yes")
+
+def _tor_fetch():
+    """Pull the current Tor exit list. Synchronous — runs in executor."""
+    import urllib.request, ssl
+    if not TOR_FEED_URL.startswith(("https://", "http://")):
+        return
+    ctx = ssl.create_default_context()
+    req = urllib.request.Request(TOR_FEED_URL, headers={
+        "User-Agent": "AppSecGW/1.6.2 (anti-bot-gw)"
+    })
+    new_set = set()
+    try:
+        with urllib.request.urlopen(req, timeout=20, context=ctx) as resp:  # nosec B310 — fixed https URL
+            for line in resp.read().decode("utf-8", "replace").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    new_set.add(line)
+        _tor_exits.clear()
+        _tor_exits.update(new_set)
+        _tor_feed_stats["loaded_at"] = _t.time()
+        _tor_feed_stats["size"] = len(_tor_exits)
+        _tor_feed_stats["last_error"] = ""
+        _tor_feed_stats["fetches"] += 1
+        print(f"[tor] loaded {len(_tor_exits)} exit nodes from {TOR_FEED_URL}",
+              flush=True)
+    except Exception as e:
+        _tor_feed_stats["last_error"] = f"{type(e).__name__}: {str(e)[:160]}"
+        print(f"[tor] fetch failed: {_tor_feed_stats['last_error']}",
+              flush=True)
+
+async def _tor_refresh_loop():
+    """Background coroutine — refreshes the Tor exit list weekly."""
+    while True:
+        try:
+            if TOR_BLOCK_ENABLED:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, _tor_fetch)
+        except Exception as e:
+            print(f"[tor] refresh loop error: {e}", flush=True)
+        await asyncio.sleep(TOR_REFRESH_SECS)
 
 # ── v1.4: Service-metrics collection (no psutil dep — pure /proc + os) ───
 SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
@@ -1927,6 +2038,35 @@ async def _shared_ban_get(track_key: str) -> float:
 # 1.5.0 — webhook fan-out (operator awareness across N challenge gateways)
 WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").strip()
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "").strip()
+# 1.6.2 — Tier C: webhook event filter. Comma-separated list of `reason`
+# values that should fire the webhook. When empty (default), every webhook
+# call goes through (legacy 1.5.0 behaviour). When set, anything not in
+# the list is dropped silently — lets a SOC consumer subscribe to e.g.
+# `canary-echo,custom-rule-block,dlp-cc,dlp-aws` only.
+# The matcher accepts the wildcard `dlp-*` to subscribe to whole families.
+WEBHOOK_EVENT_FILTER = [
+    p.strip() for p in os.environ.get("WEBHOOK_EVENT_FILTER", "").split(",")
+    if p.strip()
+]
+
+def _webhook_event_allowed(event: dict) -> bool:
+    """1.6.2 — apply WEBHOOK_EVENT_FILTER. The list is matched against:
+      • event['reason']  (typical for ban events)
+      • event['event']   (typical for non-ban events like dlp_leak)
+    fnmatch glob entries (`dlp-*`, `body-*`) match a whole family."""
+    if not WEBHOOK_EVENT_FILTER:
+        return True
+    candidates = [str(event.get("reason", "")), str(event.get("event", ""))]
+    for cand in candidates:
+        if not cand:
+            continue
+        for filt in WEBHOOK_EVENT_FILTER:
+            if "*" in filt or "?" in filt:
+                if _fnmatch.fnmatchcase(cand, filt):
+                    return True
+            elif cand == filt:
+                return True
+    return False
 
 async def _post_webhook(event: dict) -> None:
     """Fire-and-forget POST to the operator's webhook (Slack-/Discord-/
@@ -1935,6 +2075,11 @@ async def _post_webhook(event: dict) -> None:
     receiver can authenticate the gateway. Best-effort: failures are
     logged but never block the request path."""
     if not WEBHOOK_URL:
+        return
+    # 1.6.2 — drop the event silently when the operator subscribed to a
+    # narrower set of reasons. Done BEFORE Redis dedup so a filtered-out
+    # event doesn't burn a dedup token.
+    if not _webhook_event_allowed(event):
         return
     try:
         body = json.dumps(event, separators=(",", ":"),
@@ -2164,6 +2309,40 @@ RISK_WEIGHTS = {
     "abuseipdb-med":         15,    # AbuseIPDB confidence in [40, 80)
     "crowdsec-banned":       70,    # community-vetted ban via CrowdSec LAPI
     "asn-hosting":            5,    # source IP belongs to a hosting provider
+    # ── 1.6.0: Tier-A signals (Akamai-Kona / Cloudflare-WAF parity) ──
+    "country-blocked":       50,    # source country in COUNTRY_DENYLIST or
+                                    # not in COUNTRY_ALLOWLIST → instant ban
+    "tor-exit":              50,    # source IP is a Tor exit node
+    "datacenter-vpn":        30,    # source IP is in a known DC / VPN feed
+    # AI-crawler granular groups (per-vendor; allows enterprise allowlisting
+    # of specific crawlers). Same risk weight as ua-blocked but a discrete
+    # reason so the operator can attribute traffic per vendor.
+    "ua-ai-openai":          25,
+    "ua-ai-anthropic":       25,
+    "ua-ai-google":          25,
+    "ua-ai-perplexity":      25,
+    "ua-ai-meta":            25,
+    "ua-ai-other":           20,
+    # ── 1.6.1: Tier-B signals ──
+    "custom-rule-block":     50,    # operator-defined IF/THEN rule fired
+    "rate-limit-endpoint":    0,    # per-endpoint throttle (no risk; throttle)
+    "body-sqli":             40,
+    "body-xss":              40,
+    "body-lfi":              40,
+    "body-rce":              50,
+    "body-ssrf":             40,
+    "body-cmd":              50,
+    "auth-jwt-invalid":      25,    # bad/missing JWT on a JWT-required path
+    # ── 1.6.2: Tier-C signals (response-side DLP) ──
+    # DLP fires are NOT client-malice — they're upstream leakage. Zero
+    # risk added to the requester; the event is recorded for the operator.
+    "dlp-cc":                 0,
+    "dlp-aws":                0,
+    "dlp-jwt":                0,
+    "dlp-private-key":        0,
+    "dlp-api-key":            0,
+    "dlp-pii-email":          0,
+    "dlp-pii-ssn":            0,
 }
 # 1.5.3: soft-challenge tier — when the score sits between SOFT_CHALLENGE_SCORE
 # and RISK_BAN_THRESHOLD the request is forwarded but the next request from
@@ -2779,6 +2958,48 @@ async def protect(request: web.Request, handler):
                                                 "host-not-allowed",
                                                 ja4=_request_ja4(request), request_id=rid)
 
+    # ── 1.6.1 Layer 0.4: Custom rules engine (Tier B). Operator-defined
+    # IF/THEN runs *before* standard detectors so an `allow` rule can
+    # short-circuit the chain (legitimate internal callers / IP-pinned
+    # automation), and a `block` rule can deny on operator-specific
+    # conditions the built-in detectors don't cover.
+    if CUSTOM_RULES:
+        _ip = get_ip(request)
+        _action, _tag = _eval_custom_rules(request, _ip)
+        if _action == "allow":
+            request["_custom_rule_allow"] = True   # surfaced in record()
+            # Skip the rest of the security chain — forward to upstream.
+            return await handler(request)
+        if _action == "block":
+            _ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(_ip, _ua, request.path,
+                                                "custom-rule-block",
+                                                ja4=_request_ja4(request),
+                                                request_id=rid)
+        if _action == "challenge":
+            request["_custom_rule_force_challenge"] = True
+        elif _action == "tag":
+            request["_custom_rule_tag"] = _tag
+
+    # ── 1.6.1 Layer 0.45: JWT/Bearer validation (Tier B). When the path
+    # matches JWT_VALIDATE_PATHS, the request must carry a valid HS256
+    # JWT in `Authorization: Bearer …`. Mismatches fire `auth-jwt-invalid`
+    # (weight 25) and silent-decoy. Doesn't replace upstream auth — adds
+    # an edge gate so probing this route without a token never reaches
+    # the application.
+    if JWT_VALIDATE_PATHS and _jwt_required_for(request.path):
+        _auth = request.headers.get("Authorization", "")
+        _ok = False
+        if _auth.lower().startswith("bearer "):
+            _ok, _ = _verify_jwt_hs256(_auth[7:].strip())
+        if not _ok:
+            _ip = get_ip(request)
+            _ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(_ip, _ua, request.path,
+                                                "auth-jwt-invalid",
+                                                ja4=_request_ja4(request),
+                                                request_id=rid)
+
     # ── v1.4.2 Layer 0.5: TLS fingerprint deny-list (JA3/JA4) ─────────────
     # The upstream TLS terminator (cloudflared, nginx, ALB) injects the
     # client's handshake fingerprint as a header. Off by default — operator
@@ -2893,6 +3114,41 @@ async def protect(request: web.Request, handler):
         asn, asn_org, is_hosting, _src = _asn_lookup(ip)
         if is_hosting:
             await update_risk_and_maybe_ban(identity, "asn-hosting", ip)
+            # 1.6.0 — heavier `datacenter-vpn` tag when explicit toggle is on.
+            if DC_VPN_BLOCK_ENABLED:
+                await update_risk_and_maybe_ban(identity, "datacenter-vpn", ip)
+
+    # 1.6.0 — Tor exit-node check (Tier A). O(1) set membership; the feed
+    # is refreshed weekly in `_tor_refresh_loop`. Tor exits are not blocked
+    # outright (some legitimate users) — they get a +50 risk tag which is
+    # the ban threshold, so a single hit silent-decoys + bans by default.
+    if TOR_BLOCK_ENABLED and ip in _tor_exits:
+        await update_risk_and_maybe_ban(identity, "tor-exit", ip)
+        return await _silent_decoy_response(
+            ip, request.headers.get("User-Agent", ""), request.path,
+            "tor-exit", track_key=identity, sid=sid, fp=fp,
+            ja4=_request_ja4(request), request_id=rid)
+
+    # 1.6.0 — Country-level geo block (Tier A, Akamai Kona-style geofencing).
+    # Uses existing GeoLite2-City lookup (~0.1ms). Allowlist beats denylist:
+    # if COUNTRY_ALLOWLIST is non-empty, anything outside it is blocked even
+    # when the country isn't explicitly listed in COUNTRY_DENYLIST.
+    if COUNTRY_BLOCK_ENABLED and _city_reader is not None:
+        _geo = _city_lookup(ip)
+        if _geo:
+            _, _, _cc, _ = _geo
+            _cc_u = (_cc or "").upper()
+            _block = False
+            if COUNTRY_ALLOWLIST and _cc_u and _cc_u not in COUNTRY_ALLOWLIST:
+                _block = True
+            elif _cc_u and _cc_u in COUNTRY_DENYLIST:
+                _block = True
+            if _block:
+                await update_risk_and_maybe_ban(identity, "country-blocked", ip)
+                return await _silent_decoy_response(
+                    ip, request.headers.get("User-Agent", ""), request.path,
+                    "country-blocked", track_key=identity, sid=sid, fp=fp,
+                    ja4=_request_ja4(request), request_id=rid)
     request["_sid"]    = sid
     request["_is_new"] = is_new_session
     request["_id_mode"] = id_mode
@@ -2964,6 +3220,17 @@ async def protect(request: web.Request, handler):
             ip, ua, path, "fp-banned", track_key=track_key, sid=sid,
             fp=fp, ja4=ja4, request_id=rid)
 
+    # 1.6.1 — Layer 1.7: per-endpoint rate-limit (Tier B). When an
+    # ENDPOINT_POLICIES rule has rps/burst set, run a token-bucket per
+    # (path_glob, identity). Over-budget requests return the silent decoy
+    # but accrue zero risk (throttle is not a malicious signal).
+    _ep_rule = _endpoint_rule(request.path)
+    if _ep_rule and _ep_rule.get("rps"):
+        if not await _endpoint_rate_consume(_ep_rule, track_key):
+            return await _silent_decoy_response(
+                ip, ua, path, "rate-limit-endpoint",
+                track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
     #    Threshold-based: at NAT-like IPs, requires accumulated badness.
     if HONEYPOT_ENABLED and request.path in HONEYPOT_PATHS:
@@ -3004,6 +3271,25 @@ async def protect(request: web.Request, handler):
         if len(ua_stripped) < 12:
             return await deny(403, "ua-too-short",
                               {"error": "User-Agent too short", "ua": ua_stripped})
+        # 1.6.0 — AI-crawler granular groups (Tier A). Per-group toggle lets
+        # an enterprise allowlist a specific vendor's crawler. Checked BEFORE
+        # the legacy UA_BLOCKLIST so a disabled group can pass through.
+        _ai_group_state = {
+            "openai":     AI_UA_OPENAI_ENABLED,
+            "anthropic":  AI_UA_ANTHROPIC_ENABLED,
+            "google":     AI_UA_GOOGLE_ENABLED,
+            "perplexity": AI_UA_PERPLEXITY_ENABLED,
+            "meta":       AI_UA_META_ENABLED,
+            "other":      AI_UA_OTHER_ENABLED,
+        }
+        for _grp, _frags in AI_UA_GROUPS.items():
+            if not _ai_group_state.get(_grp, True):
+                continue
+            for _f in _frags:
+                if _f in ua_lower:
+                    return await deny(403, f"ua-ai-{_grp}",
+                                      {"error": "AI crawler blocked",
+                                       "vendor": _grp, "matched": _f})
         for blocked in UA_BLOCKLIST:
             if blocked in ua_lower:
                 return await deny(403, "ua-blocked",
@@ -3742,6 +4028,34 @@ async def scoring_endpoint(request: web.Request):
         "abuseipdb-med":         ("med",  "AbuseIPDB confidence in [40,80)"),
         "crowdsec-banned":       ("hard", "CrowdSec LAPI returned an active decision for this IP"),
         "asn-hosting":           ("soft", "Source IP belongs to a hosting/cloud provider ASN"),
+        # ── 1.6.0: Tier-A signals ──
+        "country-blocked":       ("hard", "Source country in COUNTRY_DENYLIST (or outside COUNTRY_ALLOWLIST)"),
+        "tor-exit":              ("hard", "Source IP is a known Tor exit node"),
+        "datacenter-vpn":        ("med",  "Source IP is in a known datacenter/VPN feed"),
+        "ua-ai-openai":          ("med",  "AI-crawler UA: OpenAI / GPTBot / ChatGPT-User / OAI-SearchBot"),
+        "ua-ai-anthropic":       ("med",  "AI-crawler UA: ClaudeBot / Claude-Web / anthropic-ai"),
+        "ua-ai-google":          ("med",  "AI-crawler UA: Google-Extended / Bard / Gemini"),
+        "ua-ai-perplexity":      ("med",  "AI-crawler UA: PerplexityBot"),
+        "ua-ai-meta":            ("med",  "AI-crawler UA: Meta-ExternalAgent / FacebookBot"),
+        "ua-ai-other":           ("med",  "Other AI-crawler UAs (Bytespider, CCBot, Cohere, etc.)"),
+        # ── 1.6.1: Tier-B signals ──
+        "custom-rule-block":     ("hard", "Operator-defined CUSTOM_RULES IF/THEN block matched"),
+        "rate-limit-endpoint":   ("info", "Per-endpoint rate limit hit (no risk; just throttle)"),
+        "body-sqli":             ("hard", "Body matched SQL-injection pattern group"),
+        "body-xss":              ("hard", "Body matched cross-site-scripting pattern group"),
+        "body-lfi":              ("hard", "Body matched local-file-inclusion pattern group"),
+        "body-rce":              ("hard", "Body matched remote-code-execution pattern group"),
+        "body-ssrf":             ("hard", "Body matched server-side-request-forgery pattern group"),
+        "body-cmd":              ("hard", "Body matched OS-command-injection pattern group"),
+        "auth-jwt-invalid":      ("med",  "JWT missing / invalid signature on JWT_VALIDATE_PATHS route"),
+        # ── 1.6.2: Tier-C DLP (response-side) ──
+        "dlp-cc":                ("info", "Upstream response contained a Luhn-valid credit-card number"),
+        "dlp-aws":               ("info", "Upstream response contained an AWS access-key / secret"),
+        "dlp-jwt":               ("info", "Upstream response contained a JWT (eyJ…)"),
+        "dlp-private-key":       ("info", "Upstream response contained a PEM private key"),
+        "dlp-api-key":           ("info", "Upstream response contained an API-key-shaped token (Slack / GitHub / OpenAI / labelled)"),
+        "dlp-pii-email":         ("info", "Upstream response contained an email address (off by default — noisy)"),
+        "dlp-pii-ssn":           ("info", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
     }
     # Each entry annotated with the runtime-toggle knob (if any) that
     # controls whether the detector runs. UI uses this to render a switch
@@ -3759,6 +4073,34 @@ async def scoring_endpoint(request: web.Request):
         "abuseipdb-med":      "ABUSEIPDB_ENABLED",
         "crowdsec-banned":    "CROWDSEC_ENABLED",
         "asn-hosting":        "MAXMIND_ENABLED",
+        # 1.6.0 — Tier-A toggles
+        "country-blocked":    "COUNTRY_BLOCK_ENABLED",
+        "tor-exit":           "TOR_BLOCK_ENABLED",
+        "datacenter-vpn":     "DC_VPN_BLOCK_ENABLED",
+        "ua-ai-openai":       "AI_UA_OPENAI_ENABLED",
+        "ua-ai-anthropic":    "AI_UA_ANTHROPIC_ENABLED",
+        "ua-ai-google":       "AI_UA_GOOGLE_ENABLED",
+        "ua-ai-perplexity":   "AI_UA_PERPLEXITY_ENABLED",
+        "ua-ai-meta":         "AI_UA_META_ENABLED",
+        "ua-ai-other":        "AI_UA_OTHER_ENABLED",
+        # 1.6.1 — Tier-B toggles
+        "custom-rule-block":  None,                       # always-on (rules opt-in)
+        "rate-limit-endpoint": None,                      # part of ENDPOINT_POLICIES
+        "body-sqli":          "BODY_GROUP_SQLI_ENABLED",
+        "body-xss":           "BODY_GROUP_XSS_ENABLED",
+        "body-lfi":           "BODY_GROUP_LFI_ENABLED",
+        "body-rce":           "BODY_GROUP_RCE_ENABLED",
+        "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
+        "body-cmd":           "BODY_GROUP_CMD_ENABLED",
+        "auth-jwt-invalid":   None,                       # gated by JWT_VALIDATE_PATHS
+        # 1.6.2 — Tier-C DLP toggles
+        "dlp-cc":             "DLP_GROUP_CC_ENABLED",
+        "dlp-aws":            "DLP_GROUP_AWS_ENABLED",
+        "dlp-jwt":            "DLP_GROUP_JWT_ENABLED",
+        "dlp-private-key":    "DLP_GROUP_PRIVATE_KEY_ENABLED",
+        "dlp-api-key":        "DLP_GROUP_API_KEY_ENABLED",
+        "dlp-pii-email":      "DLP_GROUP_PII_EMAIL_ENABLED",
+        "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
         # 1.5.4: 11 new per-detector kill-switches
         "honeypot":           "HONEYPOT_ENABLED",
         "honeypot-silent":    "HONEYPOT_ENABLED",
@@ -3823,6 +4165,34 @@ async def scoring_endpoint(request: web.Request):
         "rate-limit":         {"cached": 0,     "typical": 0.005,"p99": 0.02},
         "fp-banned":          {"cached": 0,     "typical": 0.001,"p99": 0.005},
         "traffic-threshold":  {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        # 1.6.0 — Tier-A latencies
+        "country-blocked":    {"cached": 0,     "typical": 0.1,  "p99": 0.5},
+        "tor-exit":           {"cached": 0,     "typical": 0.001,"p99": 0.005},
+        "datacenter-vpn":     {"cached": 0,     "typical": 0.1,  "p99": 0.5},
+        "ua-ai-openai":       {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        "ua-ai-anthropic":    {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        "ua-ai-google":       {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        "ua-ai-perplexity":   {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        "ua-ai-meta":         {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        "ua-ai-other":        {"cached": 0,     "typical": 0.02, "p99": 0.1},
+        # 1.6.1 — Tier-B latencies
+        "custom-rule-block":  {"cached": 0,     "typical": 0.05, "p99": 0.5},
+        "rate-limit-endpoint":{"cached": 0,     "typical": 0.005,"p99": 0.02},
+        "body-sqli":          {"cached": 0,     "typical": 0.3,  "p99": 2.0},
+        "body-xss":           {"cached": 0,     "typical": 0.3,  "p99": 2.0},
+        "body-lfi":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
+        "body-rce":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
+        "body-ssrf":          {"cached": 0,     "typical": 0.2,  "p99": 1.0},
+        "body-cmd":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
+        "auth-jwt-invalid":   {"cached": 0,     "typical": 0.5,  "p99": 2.0},
+        # 1.6.2 — Tier-C DLP latencies (response-side; cost is per-response not per-request)
+        "dlp-cc":             {"cached": 0,     "typical": 0.5,  "p99": 3.0},
+        "dlp-aws":            {"cached": 0,     "typical": 0.3,  "p99": 1.5},
+        "dlp-jwt":            {"cached": 0,     "typical": 0.3,  "p99": 1.5},
+        "dlp-private-key":    {"cached": 0,     "typical": 0.05, "p99": 0.5},
+        "dlp-api-key":        {"cached": 0,     "typical": 0.5,  "p99": 2.0},
+        "dlp-pii-email":      {"cached": 0,     "typical": 0.5,  "p99": 2.0},
+        "dlp-pii-ssn":        {"cached": 0,     "typical": 0.2,  "p99": 1.0},
     }
     weights = []
     for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
@@ -4384,6 +4754,10 @@ async def external_endpoint(request: web.Request):
         "data_egress":  "Each verify POSTs the user's token + remote IP to challenges.cloudflare.com/turnstile/v0/siteverify",
         "status":       "configured" if TURNSTILE_ENABLED else "disabled",
         "enabled":      TURNSTILE_ENABLED,
+        # 1.6.0 — distinguish "creds present, currently off" (toggleable from
+        # the dashboard) from "creds missing" (cannot enable). Without this
+        # the controls switch greys out the moment an operator turns it off.
+        "credentials_present": _TURNSTILE_CONFIGURED,
         "envs_needed":  ["TURNSTILE_SITEKEY", "TURNSTILE_SECRET", "JS_CHALLENGE=1"],
         "free_tier":    "unlimited",
         "cost_typical_ms":  150.0,    # CF challenge widget round-trip
@@ -4405,6 +4779,7 @@ async def external_endpoint(request: web.Request):
         "data_egress":  "Each uncached lookup sends the IP to api.abuseipdb.com/api/v2/check",
         "status":       "configured" if ABUSEIPDB_ENABLED else "disabled",
         "enabled":      ABUSEIPDB_ENABLED,
+        "credentials_present": bool(ABUSEIPDB_KEY),
         "envs_needed":  ["ABUSEIPDB_KEY"],
         "free_tier":    "1000 lookups/day",
         "cost_typical_ms":  150.0,
@@ -4433,6 +4808,7 @@ async def external_endpoint(request: web.Request):
         "data_egress":  "Outbound to your self-hosted LAPI only — no internet calls.",
         "status":       "configured" if CROWDSEC_ENABLED else "disabled",
         "enabled":      CROWDSEC_ENABLED,
+        "credentials_present": bool(CROWDSEC_LAPI_URL and CROWDSEC_API_KEY),
         "envs_needed":  ["CROWDSEC_LAPI_URL", "CROWDSEC_API_KEY"],
         "free_tier":    "open source (self-hosted LAPI)",
         "cost_typical_ms":  5.0,
@@ -4460,6 +4836,7 @@ async def external_endpoint(request: web.Request):
                          else ("missing-db" if not os.path.exists(MAXMIND_ASN_DB_PATH)
                                else "disabled")),
         "enabled":      MAXMIND_ENABLED,
+        "credentials_present": os.path.exists(MAXMIND_ASN_DB_PATH),
         "envs_needed":  ["MAXMIND_ASN_DB_PATH (DB file at /data/GeoLite2-ASN.mmdb)"],
         "free_tier":    "free DB download — monthly refresh",
         "cost_typical_ms":  0.1,
@@ -4483,6 +4860,7 @@ async def external_endpoint(request: web.Request):
         "data_egress":  "None. Pure SHA-256 challenge / verify in-process.",
         "status":       "configured",   # always available — no external service
         "enabled":      ANUBIS_ENABLED,
+        "credentials_present": True,
         "envs_needed":  ["ANUBIS_ENABLED=1", "ANUBIS_DIFFICULTY_BOOST (0..6)"],
         "free_tier":    "in-process — no external service",
         "cost_typical_ms":  0.05,    # SHA-256 verify on cookie path
@@ -4848,6 +5226,172 @@ def _to_host_set(v) -> set:
         return {str(h).strip().lower() for h in v if str(h).strip()}
     return {h.strip().lower() for h in str(v).split(",") if h.strip()}
 
+def _to_country_set(v) -> set:
+    """Comma-separated → set of UPPER-cased ISO-3166-1 alpha-2 codes.
+    Drops anything that isn't a 2-letter token (rejects names, EU, etc.)."""
+    if isinstance(v, (list, set)):
+        items = [str(c).strip().upper() for c in v if str(c).strip()]
+    else:
+        items = [c.strip().upper() for c in str(v).split(",") if c.strip()]
+    return {c for c in items if len(c) == 2 and c.isalpha()}
+
+def _to_endpoint_policies(v):
+    """1.6.0 — parse the per-endpoint policy spec into a list of dicts:
+    [{"path": "<glob>", "policy": "...", "rps": <int|None>, "burst": <int|None>}].
+    Accepts a JSON string, a decoded list, or [path, policy] pairs (legacy).
+    1.6.1 — also accepts optional `rps` + `burst` for per-endpoint
+    rate-limit (Tier B). Missing means "no per-endpoint cap"."""
+    _VALID = ("bypass", "challenge", "strict", "default")
+    if v is None or v == "" or v == []:
+        return []
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except (ValueError, json.JSONDecodeError):
+            return []
+    if not isinstance(v, list):
+        raise ValueError("endpoint policies must be a JSON array")
+    out = []
+    for item in v:
+        if isinstance(item, (list, tuple)) and len(item) == 2:
+            path = str(item[0]).strip()
+            policy = str(item[1]).strip().lower()
+            rps = burst = None
+        elif isinstance(item, dict):
+            path = str(item.get("path", "")).strip()
+            policy = str(item.get("policy", "default")).strip().lower()
+            try:
+                rps = float(item["rps"]) if "rps" in item and item["rps"] not in (None, "") else None
+                burst = int(item["burst"]) if "burst" in item and item["burst"] not in (None, "") else None
+            except (ValueError, TypeError):
+                rps = burst = None
+        else:
+            continue
+        if not path or policy not in _VALID:
+            continue
+        if rps is not None and not (0 < rps <= 10000):
+            rps = None
+        if burst is not None and not (1 <= burst <= 100000):
+            burst = None
+        out.append({"path": path, "policy": policy, "rps": rps, "burst": burst})
+    return out
+
+def _to_custom_rules(v):
+    """1.6.1 — parse CUSTOM_RULES (Tier B Cloudflare-Custom-Rules parity).
+    Accepts a JSON string, a decoded list of dicts, or empty.
+    Each rule is a dict: {"if": {<conds>}, "then": <action>, "tag": <opt>}
+    Conditions (all must match — AND):
+      path:<glob>, method:<list/str>, ua_contains:<str>,
+      header.<Name>:<substring>,  query.<param>:<exact>,
+      ip_cidr:<cidr/list>, country:<iso/list>
+    Actions: allow | block | challenge | tag
+    Returns a sanitised list (gateway-safe, empty on parse fail)."""
+    _ACTIONS = ("allow", "block", "challenge", "tag")
+    if v is None or v == "" or v == []:
+        return []
+    if isinstance(v, str):
+        try:
+            v = json.loads(v)
+        except (ValueError, json.JSONDecodeError):
+            return []
+    if not isinstance(v, list):
+        raise ValueError("custom rules must be a JSON array")
+    out = []
+    for item in v:
+        if not isinstance(item, dict):
+            continue
+        cond = item.get("if") or {}
+        action = str(item.get("then", "")).strip().lower()
+        tag = str(item.get("tag", "")).strip()
+        if not isinstance(cond, dict) or action not in _ACTIONS:
+            continue
+        # Pre-compile any ip_cidr conditions for speed (skip rule on bad cidr).
+        cidrs = cond.get("ip_cidr")
+        if cidrs is not None:
+            if not isinstance(cidrs, list):
+                cidrs = [cidrs]
+            try:
+                cidrs = [_ipaddress.ip_network(str(c).strip(), strict=False)
+                         for c in cidrs if str(c).strip()]
+            except (ValueError, TypeError):
+                continue
+            cond = dict(cond, ip_cidr=cidrs)
+        out.append({"if": cond, "then": action, "tag": tag})
+    return out
+
+def _eval_custom_rules(request, ip: str):
+    """1.6.1 — first-match-wins. Returns (action, tag) or (None, "")."""
+    if not CUSTOM_RULES:
+        return None, ""
+    path = request.path
+    method = request.method.upper()
+    ua = (request.headers.get("User-Agent") or "")
+    ua_lower = ua.lower()
+    headers = request.headers
+    query = request.query
+    for rule in CUSTOM_RULES:
+        cond = rule.get("if") or {}
+        ok = True
+        # path glob
+        p = cond.get("path")
+        if p and not _fnmatch.fnmatchcase(path, str(p)):
+            ok = False
+        # method (single str OR list)
+        if ok:
+            m = cond.get("method")
+            if m:
+                allowed_methods = (
+                    [str(x).upper() for x in m] if isinstance(m, list)
+                    else [str(m).upper()])
+                if method not in allowed_methods:
+                    ok = False
+        # ua substring
+        if ok:
+            uac = cond.get("ua_contains")
+            if uac and str(uac).lower() not in ua_lower:
+                ok = False
+        # header.X-Foo (case-insensitive substring)
+        if ok:
+            for k, want in cond.items():
+                if not k.startswith("header."):
+                    continue
+                hv = (headers.get(k.split(".", 1)[1], "") or "").lower()
+                if str(want).lower() not in hv:
+                    ok = False
+                    break
+        # query.param exact
+        if ok:
+            for k, want in cond.items():
+                if not k.startswith("query."):
+                    continue
+                if query.get(k.split(".", 1)[1], "") != str(want):
+                    ok = False
+                    break
+        # ip in CIDR
+        if ok:
+            cidrs = cond.get("ip_cidr")
+            if cidrs:
+                try:
+                    ipa = _ipaddress.ip_address(ip)
+                    if not any(ipa in c for c in cidrs):
+                        ok = False
+                except (ValueError, TypeError):
+                    ok = False
+        # country (requires GeoLite2-City)
+        if ok:
+            cc = cond.get("country")
+            if cc:
+                wanted = (
+                    {str(x).upper() for x in cc} if isinstance(cc, list)
+                    else {str(cc).upper()})
+                geo = _city_lookup(ip) if _city_reader is not None else None
+                cc_obs = (geo[2] if geo else "").upper()
+                if cc_obs not in wanted:
+                    ok = False
+        if ok:
+            return rule.get("then"), rule.get("tag", "")
+    return None, ""
+
 # name → (parser, optional validator returning bool)
 _HOT_RELOAD_KNOBS = {
     # Toggles (booleans)
@@ -4904,6 +5448,47 @@ _HOT_RELOAD_KNOBS = {
     # Lists (comma-separated str → list/set)
     "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
+    # 1.6.0 — country-level geo block (requires GeoLite2-City)
+    "COUNTRY_BLOCK_ENABLED":  (_to_bool,
+                                lambda v: (not v) or globals().get("_city_reader") is not None),
+    "COUNTRY_DENYLIST":       (_to_country_set, None),
+    "COUNTRY_ALLOWLIST":      (_to_country_set, None),
+    # 1.6.0 — AI-crawler granular groups
+    "AI_UA_OPENAI_ENABLED":     (_to_bool, None),
+    "AI_UA_ANTHROPIC_ENABLED":  (_to_bool, None),
+    "AI_UA_GOOGLE_ENABLED":     (_to_bool, None),
+    "AI_UA_PERPLEXITY_ENABLED": (_to_bool, None),
+    "AI_UA_META_ENABLED":       (_to_bool, None),
+    "AI_UA_OTHER_ENABLED":      (_to_bool, None),
+    # 1.6.0 — network-list integration (Tor + DC/VPN)
+    "TOR_BLOCK_ENABLED":      (_to_bool, None),
+    "DC_VPN_BLOCK_ENABLED":   (_to_bool, None),
+    # 1.6.0 — per-endpoint policy engine (JSON array)
+    "ENDPOINT_POLICIES":      (_to_endpoint_policies, None),
+    # 1.6.1 — Tier-B knobs
+    "CUSTOM_RULES":           (_to_custom_rules, None),
+    "BODY_GROUP_SQLI_ENABLED":(_to_bool, None),
+    "BODY_GROUP_XSS_ENABLED": (_to_bool, None),
+    "BODY_GROUP_LFI_ENABLED": (_to_bool, None),
+    "BODY_GROUP_RCE_ENABLED": (_to_bool, None),
+    "BODY_GROUP_SSRF_ENABLED":(_to_bool, None),
+    "BODY_GROUP_CMD_ENABLED": (_to_bool, None),
+    "JWT_VALIDATE_PATHS":     (_to_path_list, None),
+    "JWT_REQUIRED_ISSUER":    (str, lambda v: len(v) <= 256),
+    "JWT_REQUIRED_AUDIENCE":  (str, lambda v: len(v) <= 256),
+    # 1.6.2 — Tier-C: outbound DLP knobs
+    "DLP_ENABLED":            (_to_bool, None),
+    "DLP_REDACT":             (_to_bool, None),
+    "DLP_MAX_BYTES":          (int, lambda v: 1024 <= v <= 16 * 1024 * 1024),
+    "DLP_GROUP_CC_ENABLED":           (_to_bool, None),
+    "DLP_GROUP_AWS_ENABLED":          (_to_bool, None),
+    "DLP_GROUP_JWT_ENABLED":          (_to_bool, None),
+    "DLP_GROUP_PRIVATE_KEY_ENABLED":  (_to_bool, None),
+    "DLP_GROUP_API_KEY_ENABLED":      (_to_bool, None),
+    "DLP_GROUP_PII_EMAIL_ENABLED":    (_to_bool, None),
+    "DLP_GROUP_PII_SSN_ENABLED":      (_to_bool, None),
+    # 1.6.2 — webhook event filter (CSV of reasons)
+    "WEBHOOK_EVENT_FILTER":   (_to_path_list, None),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
     # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
@@ -5198,6 +5783,61 @@ SUSPICIOUS_BODY_PATTERNS = (
     re.compile(rb"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash)\b", re.I),
 )
 
+# 1.6.1 — Tier B managed body-pattern groups (Cloudflare Managed Rulesets parity).
+# Each group is independently toggleable; group-specific reasons let the
+# operator attribute traffic per attack family in dashboards / SIEM. These
+# groups apply ON TOP OF the legacy `suspicious-body` blanket check (kept
+# for backwards compatibility); when a group matches, its specific
+# `body-<group>` reason fires instead of the generic one.
+BODY_PATTERN_GROUPS = {
+    # SQL-injection
+    "sqli": (
+        re.compile(rb"(?i)(union[ +]+(all[ +]+)?select|select[ +]+\*|or[ +]+1=1|--\s*$|\bxp_cmdshell\b)"),
+        re.compile(rb"(?i)(\bsleep\s*\(\s*\d|\bbenchmark\s*\(|waitfor[ +]+delay)"),
+        re.compile(rb"(?i)(information_schema|pg_sleep|@@version|load_file\s*\()"),
+    ),
+    # Cross-site scripting
+    "xss": (
+        re.compile(rb"(?i)<script\b[^>]*>"),
+        re.compile(rb"(?i)javascript\s*:|on(error|load|click|mouseover)\s*="),
+        re.compile(rb"(?i)<(iframe|object|embed|svg/onload)\b"),
+    ),
+    # Local-file-inclusion / path traversal
+    "lfi": (
+        re.compile(rb"\.\.[\\/]|%2e%2e[\\/]|\.\.\\\\"),
+        re.compile(rb"(?i)/etc/(passwd|shadow|hosts)\b|/proc/self/"),
+        re.compile(rb"(?i)\bphp://|\bfile://|\bexpect://|\bdata://"),
+    ),
+    # Remote-code-execution (Java / PHP / Python / Ruby specific)
+    "rce": (
+        re.compile(rb"\$\{jndi:|\$\{lower:|\$\{upper:"),               # Log4Shell
+        re.compile(rb"(?i)\b(eval|exec|assert|system|passthru|popen)\s*\("),
+        re.compile(rb"(?i)Runtime\.getRuntime\(\)|ProcessBuilder\("),
+        re.compile(rb"(?i)__import__\s*\(|subprocess\.\w+\("),
+    ),
+    # Server-side-request-forgery
+    "ssrf": (
+        re.compile(rb"(?i)\bhttps?://(127\.0\.0\.1|0\.0\.0\.0|10\.|192\.168\.|169\.254\.|localhost\b)"),
+        re.compile(rb"(?i)\bgopher://|\bdict://|\bldap://|\btftp://"),
+        re.compile(rb"(?i)169\.254\.169\.254"),                       # AWS IMDS
+    ),
+    # OS-command-injection
+    "cmd": (
+        re.compile(rb"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id)\b", re.I),
+        re.compile(rb"\$\([^)]+\)|`[^`]+`"),
+        re.compile(rb"(?i)\b(/bin/|/usr/bin/)(sh|bash|zsh|nc|cat|ls)\b"),
+    ),
+}
+# Per-group toggles (default ON when BODY_PATTERN_MATCH is on; a group can
+# be silenced individually if it produces too many false-positives on a
+# specific upstream).
+BODY_GROUP_SQLI_ENABLED = os.environ.get("BODY_GROUP_SQLI_ENABLED", "1") in ("1", "true", "yes")
+BODY_GROUP_XSS_ENABLED  = os.environ.get("BODY_GROUP_XSS_ENABLED",  "1") in ("1", "true", "yes")
+BODY_GROUP_LFI_ENABLED  = os.environ.get("BODY_GROUP_LFI_ENABLED",  "1") in ("1", "true", "yes")
+BODY_GROUP_RCE_ENABLED  = os.environ.get("BODY_GROUP_RCE_ENABLED",  "1") in ("1", "true", "yes")
+BODY_GROUP_SSRF_ENABLED = os.environ.get("BODY_GROUP_SSRF_ENABLED", "1") in ("1", "true", "yes")
+BODY_GROUP_CMD_ENABLED  = os.environ.get("BODY_GROUP_CMD_ENABLED",  "1") in ("1", "true", "yes")
+
 def is_suspicious_body(body: bytes, ctype: str) -> bool:
     """Returns True if request body matches a known SQLi/XSS/SSTI/cmd-injection
     pattern. Only scans text-ish content types and bounds at 64 KiB.
@@ -5214,6 +5854,164 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
     return any(p.search(sample) for p in SUSPICIOUS_BODY_PATTERNS)
+
+def match_body_group(body: bytes, ctype: str):
+    """1.6.1 — return the first matched group name or None.
+    Groups checked in order: rce → cmd → sqli → xss → lfi → ssrf
+    (most-severe first so reasons dominate when patterns overlap)."""
+    if not BODY_PATTERN_MATCH or not body:
+        return None
+    cl = ctype.lower()
+    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
+                                  "text/plain", "text/xml", "application/xml")):
+        return None
+    sample = body[:65536]
+    if "x-www-form-urlencoded" in cl:
+        from urllib.parse import unquote_to_bytes
+        sample = unquote_to_bytes(sample)
+    enabled = {
+        "rce":  BODY_GROUP_RCE_ENABLED,
+        "cmd":  BODY_GROUP_CMD_ENABLED,
+        "sqli": BODY_GROUP_SQLI_ENABLED,
+        "xss":  BODY_GROUP_XSS_ENABLED,
+        "lfi":  BODY_GROUP_LFI_ENABLED,
+        "ssrf": BODY_GROUP_SSRF_ENABLED,
+    }
+    for grp in ("rce", "cmd", "sqli", "xss", "lfi", "ssrf"):
+        if not enabled[grp]:
+            continue
+        for pat in BODY_PATTERN_GROUPS[grp]:
+            if pat.search(sample):
+                return grp
+    return None
+
+# ── 1.6.2: Tier C — Outbound DLP (response-side leak detection) ─────────
+# Scans upstream response bodies for sensitive data before forwarding to
+# the client. This is the only response-side detector — every other layer
+# inspects requests. Threat model: a misconfigured / compromised upstream
+# leaking PII / credentials / tokens that a regular WAF would never see.
+# Off by default. Bounded by DLP_MAX_BYTES so large responses don't OOM
+# the gateway. Only scans text-ish content types.
+DLP_ENABLED   = os.environ.get("DLP_ENABLED", "0") in ("1", "true", "yes")
+DLP_REDACT    = os.environ.get("DLP_REDACT",  "0") in ("1", "true", "yes")
+DLP_MAX_BYTES = int(os.environ.get("DLP_MAX_BYTES", str(256 * 1024)))   # 256 KiB
+
+# Per-group toggles (default ON when DLP_ENABLED is on).
+DLP_GROUP_CC_ENABLED          = os.environ.get("DLP_GROUP_CC_ENABLED",         "1") in ("1", "true", "yes")
+DLP_GROUP_AWS_ENABLED         = os.environ.get("DLP_GROUP_AWS_ENABLED",        "1") in ("1", "true", "yes")
+DLP_GROUP_JWT_ENABLED         = os.environ.get("DLP_GROUP_JWT_ENABLED",        "1") in ("1", "true", "yes")
+DLP_GROUP_PRIVATE_KEY_ENABLED = os.environ.get("DLP_GROUP_PRIVATE_KEY_ENABLED","1") in ("1", "true", "yes")
+DLP_GROUP_API_KEY_ENABLED     = os.environ.get("DLP_GROUP_API_KEY_ENABLED",    "1") in ("1", "true", "yes")
+DLP_GROUP_PII_EMAIL_ENABLED   = os.environ.get("DLP_GROUP_PII_EMAIL_ENABLED",  "0") in ("1", "true", "yes")  # noisy by default
+DLP_GROUP_PII_SSN_ENABLED     = os.environ.get("DLP_GROUP_PII_SSN_ENABLED",    "1") in ("1", "true", "yes")
+
+# Pattern groups.  Each entry is a regex compiled at import.  Order within
+# a group doesn't matter; first-match-wins per group.
+DLP_PATTERN_GROUPS = {
+    # 13-19 digit credit-card-ish runs, optionally separated by - or space.
+    # Luhn-validated post-match to drop false positives like phone numbers.
+    "cc": (
+        re.compile(rb"\b(?:\d[ -]?){13,18}\d\b"),
+    ),
+    # AWS access key id + secret access key.
+    "aws": (
+        re.compile(rb"\bAKIA[0-9A-Z]{16}\b"),                 # access key id
+        re.compile(rb"\bASIA[0-9A-Z]{16}\b"),                 # session token id
+        re.compile(rb"(?i)aws(.{0,20})?(secret|access).{0,5}key.{0,5}[:=]\s*[\"']?[A-Za-z0-9/+=]{40}"),
+    ),
+    # JWTs (3 b64url segments). Bounded so we don't false-match arbitrary
+    # base64 blobs (eyJ-prefix gives the JSON header `{"`).
+    "jwt": (
+        re.compile(rb"\beyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\b"),
+    ),
+    # Private keys (PEM).
+    "private-key": (
+        re.compile(rb"-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
+    ),
+    # Generic API-key-shape leaks. Targets common labels NEAR what looks
+    # like a high-entropy secret (40+ chars). This is intentionally conservative.
+    "api-key": (
+        re.compile(rb"(?i)(api[_-]?key|api[_-]?secret|access[_-]?token|bearer)['\"]?\s*[:=]\s*['\"]?[A-Za-z0-9_\-]{32,}"),
+        re.compile(rb"\bxox[baprs]-[A-Za-z0-9-]{10,}"),       # Slack tokens
+        re.compile(rb"\bgh[pousr]_[A-Za-z0-9]{36,}"),         # GitHub tokens
+        re.compile(rb"\bsk-[A-Za-z0-9_\-]{32,}"),             # OpenAI / Anthropic
+    ),
+    # Email addresses — off by default (noisy on most upstreams).
+    "pii-email": (
+        re.compile(rb"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,24}\b"),
+    ),
+    # US SSN (9 digits with optional dashes, 3-2-4 grouping).
+    "pii-ssn": (
+        re.compile(rb"\b(?!000|666|9\d{2})\d{3}-(?!00)\d{2}-(?!0000)\d{4}\b"),
+    ),
+}
+
+def _luhn_check(digits: bytes) -> bool:
+    """Validate the matched digit run against the Luhn checksum so phone
+    numbers / order IDs don't false-match `cc`."""
+    s = 0
+    n = len(digits)
+    for i, b in enumerate(digits):
+        if not (0x30 <= b <= 0x39):
+            return False
+        d = b - 0x30
+        if (n - 1 - i) % 2 == 1:
+            d *= 2
+            if d > 9:
+                d -= 9
+        s += d
+    return s % 10 == 0
+
+def dlp_scan(body: bytes, ctype: str):
+    """1.6.2 — return list of (group, bytes-or-str preview) hits.
+    Only scans text-ish content types and bounds at DLP_MAX_BYTES so a
+    very large JSON response can't stall the request path."""
+    if not DLP_ENABLED or not body:
+        return []
+    cl = (ctype or "").lower()
+    if not any(t in cl for t in (
+        "application/json", "application/xml", "text/", "+xml", "+json")):
+        return []
+    sample = body[:DLP_MAX_BYTES]
+    enabled = {
+        "cc":          DLP_GROUP_CC_ENABLED,
+        "aws":         DLP_GROUP_AWS_ENABLED,
+        "jwt":         DLP_GROUP_JWT_ENABLED,
+        "private-key": DLP_GROUP_PRIVATE_KEY_ENABLED,
+        "api-key":     DLP_GROUP_API_KEY_ENABLED,
+        "pii-email":   DLP_GROUP_PII_EMAIL_ENABLED,
+        "pii-ssn":     DLP_GROUP_PII_SSN_ENABLED,
+    }
+    hits = []
+    for grp, pats in DLP_PATTERN_GROUPS.items():
+        if not enabled.get(grp):
+            continue
+        for pat in pats:
+            for m in pat.finditer(sample):
+                raw = m.group(0)
+                # Luhn validate cc matches.
+                if grp == "cc":
+                    digits = bytes(b for b in raw if 0x30 <= b <= 0x39)
+                    if not (13 <= len(digits) <= 19) or not _luhn_check(digits):
+                        continue
+                hits.append((grp, raw[:64]))
+                if len(hits) >= 8:                # cap per response
+                    return hits
+    return hits
+
+def dlp_redact(body: bytes, hits) -> bytes:
+    """1.6.2 — replace each matched bytes-string with `[REDACTED-<group>]`.
+    Single pass per group; longer matches first to avoid partial overwrites."""
+    if not hits:
+        return body
+    out = body
+    seen = set()
+    for grp, raw in sorted(hits, key=lambda h: -len(h[1])):
+        if (grp, raw) in seen:
+            continue
+        seen.add((grp, raw))
+        out = out.replace(raw, f"[REDACTED-{grp}]".encode())
+    return out
 
 # ── v1.4: Bot-trap forms (auto-inject hidden field; flag bots that fill it) ─
 BOT_TRAP_FORMS = os.environ.get("BOT_TRAP_FORMS", "0") in ("1", "true", "yes")
@@ -5614,6 +6412,151 @@ _JS_CHAL_OPEN_PATHS_RAW = os.environ.get("JS_CHAL_OPEN_PATHS", "").strip()
 JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
                       if p.strip()]
 
+# 1.6.0 — per-endpoint policy engine (Tier A, Cloudflare WAF parity).
+# JSON: [{"path":"/api/v1/*","policy":"bypass"},
+#        {"path":"/admin",   "policy":"strict"},
+#        {"path":"/login",   "policy":"challenge"}]
+# Policies (precedence over JS_CHAL_OPEN_PATHS):
+#   bypass    → never require JS challenge (use sparingly — opens the route)
+#   challenge → always require JS challenge (overrides any open-path match)
+#   strict    → require challenge AND zero accumulated risk (forces soft band)
+#   default   → identical to no policy (other heuristics still run)
+# Path matching uses fnmatch — `*` is a glob, `?` matches one char.
+import fnmatch as _fnmatch
+
+ENDPOINT_POLICIES_RAW = os.environ.get("ENDPOINT_POLICIES", "").strip()
+try:
+    ENDPOINT_POLICIES = _to_endpoint_policies(ENDPOINT_POLICIES_RAW)
+except (ValueError, TypeError) as _e:
+    print(f"[endpoint-policies] parse failed: {_e} — ignoring", flush=True)
+    ENDPOINT_POLICIES = []
+
+# 1.6.1 — Tier B custom rules engine (Cloudflare-Custom-Rules parity).
+CUSTOM_RULES_RAW = os.environ.get("CUSTOM_RULES", "").strip()
+try:
+    CUSTOM_RULES = _to_custom_rules(CUSTOM_RULES_RAW)
+except (ValueError, TypeError) as _e:
+    print(f"[custom-rules] parse failed: {_e} — ignoring", flush=True)
+    CUSTOM_RULES = []
+if CUSTOM_RULES:
+    print(f"[custom-rules] {len(CUSTOM_RULES)} rule(s) loaded", flush=True)
+
+# 1.6.1 — Tier B JWT/Bearer signature validation.
+# JWT_VALIDATE_PATHS: comma-sep fnmatch globs. Requests matching any glob
+# must carry `Authorization: Bearer <jwt>` whose HS256 signature verifies
+# against JWT_HMAC_SECRET. Optional issuer/audience claim enforcement.
+import base64 as _b64
+JWT_VALIDATE_PATHS = [p.strip() for p in os.environ.get("JWT_VALIDATE_PATHS", "").split(",") if p.strip()]
+JWT_HMAC_SECRET = os.environ.get("JWT_HMAC_SECRET", "")
+JWT_REQUIRED_ISSUER = os.environ.get("JWT_REQUIRED_ISSUER", "").strip()
+JWT_REQUIRED_AUDIENCE = os.environ.get("JWT_REQUIRED_AUDIENCE", "").strip()
+JWT_LEEWAY_SECS = int(os.environ.get("JWT_LEEWAY_SECS", "30"))
+
+def _jwt_b64url_decode(seg: str) -> bytes:
+    """RFC 7515 — URL-safe base64 with padding stripped. Re-add padding
+    before decoding so the stdlib accepts it."""
+    pad = "=" * (-len(seg) % 4)
+    return _b64.urlsafe_b64decode(seg + pad)
+
+def _verify_jwt_hs256(token: str) -> tuple:
+    """Pure-stdlib HS256 verify. Returns (ok: bool, error: str).
+    Validates: signature, exp/nbf (with JWT_LEEWAY_SECS), iss, aud
+    (when configured). Constant-time signature compare."""
+    if not JWT_HMAC_SECRET:
+        return False, "no-secret-configured"
+    parts = token.split(".")
+    if len(parts) != 3:
+        return False, "malformed"
+    header_b64, payload_b64, sig_b64 = parts
+    try:
+        header = json.loads(_jwt_b64url_decode(header_b64))
+        payload = json.loads(_jwt_b64url_decode(payload_b64))
+        sig = _jwt_b64url_decode(sig_b64)
+    except (ValueError, KeyError, json.JSONDecodeError):
+        return False, "malformed"
+    if header.get("alg") != "HS256" or header.get("typ", "JWT") != "JWT":
+        return False, "alg-not-hs256"
+    msg = f"{header_b64}.{payload_b64}".encode("ascii")
+    expected = hmac.new(JWT_HMAC_SECRET.encode("utf-8"), msg, hashlib.sha256).digest()
+    if not hmac.compare_digest(expected, sig):
+        return False, "bad-signature"
+    n = int(_t.time())
+    exp = payload.get("exp")
+    if exp is not None and n > int(exp) + JWT_LEEWAY_SECS:
+        return False, "expired"
+    nbf = payload.get("nbf")
+    if nbf is not None and n + JWT_LEEWAY_SECS < int(nbf):
+        return False, "not-yet-valid"
+    if JWT_REQUIRED_ISSUER and payload.get("iss") != JWT_REQUIRED_ISSUER:
+        return False, "issuer-mismatch"
+    if JWT_REQUIRED_AUDIENCE:
+        aud = payload.get("aud")
+        if isinstance(aud, list):
+            if JWT_REQUIRED_AUDIENCE not in aud:
+                return False, "audience-mismatch"
+        elif aud != JWT_REQUIRED_AUDIENCE:
+            return False, "audience-mismatch"
+    return True, "ok"
+
+def _jwt_required_for(path: str) -> bool:
+    """True iff this path matches any glob in JWT_VALIDATE_PATHS."""
+    if not JWT_VALIDATE_PATHS:
+        return False
+    return any(_fnmatch.fnmatchcase(path, g) for g in JWT_VALIDATE_PATHS)
+
+def _endpoint_policy(path: str) -> str:
+    """Return the matched policy ('bypass'|'challenge'|'strict'|'default')
+    or 'default' when nothing matches. First match wins (operators order
+    most-specific first in the JSON array)."""
+    rule = _endpoint_rule(path)
+    return rule["policy"] if rule else "default"
+
+def _endpoint_rule(path: str):
+    """1.6.1 — return the FULL matched rule dict (with rps/burst) or None.
+    Accepts both new dict-shape and legacy [path, policy] pair entries
+    (gateway-safe even if a stale config_kv blob is loaded from DB)."""
+    if not ENDPOINT_POLICIES:
+        return None
+    for item in ENDPOINT_POLICIES:
+        if isinstance(item, dict):
+            if _fnmatch.fnmatchcase(path, item.get("path", "")):
+                return item
+        elif isinstance(item, (list, tuple)) and len(item) >= 2:
+            if _fnmatch.fnmatchcase(path, item[0]):
+                return {"path": item[0], "policy": item[1],
+                        "rps": None, "burst": None}
+    return None
+
+# 1.6.1 — per-endpoint token-bucket state. Key = (path_glob, identity).
+# Lives only in memory: rate-limit state doesn't need to survive restart
+# (limits reset on boot is acceptable; saves DB write traffic).
+_endpoint_buckets: dict = {}
+_endpoint_buckets_lock = asyncio.Lock()
+
+async def _endpoint_rate_consume(rule: dict, identity: str) -> bool:
+    """Token-bucket consume for an endpoint rule. True on accept,
+    False when over budget (caller should silent-decoy with
+    'rate-limit-endpoint')."""
+    rps = rule.get("rps")
+    burst = rule.get("burst") or (int(rps * 2) if rps else 1)
+    if not rps:
+        return True
+    n = time.monotonic()
+    key = (rule.get("path", ""), identity)
+    async with _endpoint_buckets_lock:
+        st = _endpoint_buckets.get(key)
+        if st is None:
+            st = {"tokens": float(burst), "ts": n}
+        elapsed = max(0.0, n - st["ts"])
+        st["tokens"] = min(float(burst), st["tokens"] + elapsed * float(rps))
+        st["ts"] = n
+        if st["tokens"] >= 1.0:
+            st["tokens"] -= 1.0
+            _endpoint_buckets[key] = st
+            return True
+        _endpoint_buckets[key] = st
+        return False
+
 def _js_challenge_required(request) -> bool:
     """True iff the JS challenge gate is on AND this request must carry a
     valid chal cookie but doesn't. The gate engages whenever JS_CHALLENGE=1.
@@ -5629,13 +6572,26 @@ def _js_challenge_required(request) -> bool:
         return False
     if request.path == "/__challenge" or request.path.startswith("/__"):
         return False  # admin / challenge-solver have their own auth
+    # 1.6.0 — per-endpoint policy engine. Resolve the policy ONCE per
+    # request and use it to decide gate behaviour. 'bypass' wins over
+    # static-asset short-circuit (operator opted-in to expose the route).
+    _epol = _endpoint_policy(request.path)
+    if _epol == "bypass":
+        return False
     if request.path.endswith(_STATIC_ASSET_SUFFIXES):
         # V8 hardening: don't trust a `.css` suffix on what looks like an API
         # path. Permissive backends (Spring suffix matching, Express trailing
         # tokens) would otherwise return JSON for `/api/v1/users.css`.
         if not (JS_CHAL_STRICT_STATIC and _looks_like_api(request.path)):
-            return False  # public assets
-    is_open_path = any(request.path.startswith(p) for p in JS_CHAL_OPEN_PATHS)
+            # 'challenge'/'strict' policies override the static-asset
+            # exemption so an operator can lock down a `*.json` API route.
+            if _epol not in ("challenge", "strict"):
+                return False  # public assets
+    # 'challenge' / 'strict' bypass the JS_CHAL_OPEN_PATHS exemption entirely.
+    if _epol in ("challenge", "strict"):
+        is_open_path = False
+    else:
+        is_open_path = any(request.path.startswith(p) for p in JS_CHAL_OPEN_PATHS)
     if is_open_path:
         # 1.5.3 soft-challenge tier: open-path bypass is REVOKED when this
         # identity's risk score has climbed into the soft-challenge band
@@ -6016,8 +6972,23 @@ async def proxy(request: web.Request):
             return web.Response(status=400, text="bad request\n")
 
     # v1.4 #4 — body pattern matching (extends Layer 3 to bodies).
+    # 1.6.1 — managed groups fire FIRST (per-group reason); the legacy
+    # blanket `suspicious-body` is the catch-all for anything not covered
+    # by a group OR when all groups are toggled off.
     if body is not None:
         client_ctype = request.headers.get("Content-Type", "")
+        _matched_group = match_body_group(body, client_ctype)
+        if _matched_group:
+            _reason = f"body-{_matched_group}"
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",
+                _reason, get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, _reason,
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
         if is_suspicious_body(body, client_ctype):
             await update_risk_and_maybe_ban(
                 request.get("_track_key") or request.remote or "0.0.0.0",
@@ -6081,6 +7052,38 @@ async def proxy(request: web.Request):
                     chunks.append(chunk)
                 resp_body = b"".join(chunks)
 
+                # 1.6.2 — Tier C: outbound DLP scan. Looks for sensitive
+                # data leaving the upstream (PII / credentials / tokens).
+                # Records `dlp-<group>` events and optionally redacts
+                # matches before forwarding. Off by default (DLP_ENABLED=1).
+                if DLP_ENABLED:
+                    _dlp_ctype = resp.headers.get("Content-Type", "")
+                    _dlp_hits = dlp_scan(resp_body, _dlp_ctype)
+                    if _dlp_hits:
+                        _ip = get_ip(request)
+                        _ua = request.headers.get("User-Agent", "")
+                        _hit_groups = sorted({h[0] for h in _dlp_hits})
+                        for _grp in _hit_groups:
+                            await record(_ip, _ua, request.path, resp.status,
+                                         f"dlp-{_grp}",
+                                         track_key=request.get("_track_key"),
+                                         sid=request.get("_sid", ""),
+                                         fp=request.get("_fp", ""),
+                                         request_id=request.get("_rid", ""))
+                        if WEBHOOK_URL:
+                            asyncio.create_task(_post_webhook({
+                                "event":  "dlp_leak",
+                                "ts":     _t.time(),
+                                "ip":     _ip,
+                                "path":   request.path,
+                                "status": resp.status,
+                                "groups": _hit_groups,
+                                "count":  len(_dlp_hits),
+                                "redacted": DLP_REDACT,
+                            }))
+                        if DLP_REDACT:
+                            resp_body = dlp_redact(resp_body, _dlp_hits)
+
                 # L4: complete hop-by-hop response strip. Use a multidict so
                 # repeated headers (notably Set-Cookie) survive intact.
                 from multidict import CIMultiDict
@@ -6131,7 +7134,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.5.5"
+                response_headers["X-Proxy"] = "AppSecGW_1.6.2"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -6221,6 +7224,8 @@ async def on_startup(app):
     # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
     # MAXMIND_LICENSE_KEY is set; checks daily, refreshes when >30d old).
     asyncio.create_task(_maxmind_refresh_loop())
+    # 1.6.0 — Tor exit-list weekly refresh (no-op until TOR_BLOCK_ENABLED=1).
+    asyncio.create_task(_tor_refresh_loop())
     # 1.5.0: optional shared-state connect. Failures degrade to no-op so
     # an unreachable Redis never prevents the gateway from coming up.
     await _shared_init()
@@ -6648,7 +7653,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.5.5",
+        "version":         "AppSecGW_1.6.2",
     }
     return web.json_response({
         "current":          current,
@@ -6756,7 +7761,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.5.5    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.6.2    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")

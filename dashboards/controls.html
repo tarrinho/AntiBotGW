@@ -87,7 +87,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 @media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.6.0 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.2 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/__dashboard?key=__KEY__">Dashboard</a>
   <a href="/__agents?key=__KEY__">Agents</a>
@@ -267,6 +267,42 @@ const META = {
   // lists
   JS_CHAL_OPEN_PATHS:      {kind:'list', card:'lists', desc:'Path prefixes that bypass the cookie gate (SPA data layer, webhooks, S2S).'},
   JA4_DENY_LIST:           {kind:'list', card:'lists', desc:'TLS handshake fingerprints to silent-decoy at Layer 0.5.'},
+  // 1.6.0 — Tier A
+  COUNTRY_BLOCK_ENABLED:   {kind:'bool', desc:'Country-level geofencing using GeoLite2-City. Off → no-op.'},
+  COUNTRY_DENYLIST:        {kind:'list', card:'lists', desc:'ISO-3166-1 alpha-2 codes to deny (e.g. RU,CN,KP). Empty → none.'},
+  COUNTRY_ALLOWLIST:       {kind:'list', card:'lists', desc:'ISO-3166-1 alpha-2 codes to allow exclusively (whitelist mode). Empty → denylist mode.'},
+  TOR_BLOCK_ENABLED:       {kind:'bool', desc:'Block Tor exit nodes — auto-fetches torbulkexitlist (weekly refresh). Fires tor-exit (+50 risk).'},
+  DC_VPN_BLOCK_ENABLED:    {kind:'bool', desc:'Block datacenter / commercial-VPN ASNs — heavier weight on top of asn-hosting.'},
+  AI_UA_OPENAI_ENABLED:    {kind:'bool', desc:'Block OpenAI / GPTBot / ChatGPT-User crawlers (granular toggle).'},
+  AI_UA_ANTHROPIC_ENABLED: {kind:'bool', desc:'Block ClaudeBot / Claude-Web / anthropic-ai (granular toggle).'},
+  AI_UA_GOOGLE_ENABLED:    {kind:'bool', desc:'Block Google-Extended / Bard / Gemini (granular toggle).'},
+  AI_UA_PERPLEXITY_ENABLED:{kind:'bool', desc:'Block PerplexityBot (granular toggle).'},
+  AI_UA_META_ENABLED:      {kind:'bool', desc:'Block Meta-ExternalAgent / FacebookBot (granular toggle).'},
+  AI_UA_OTHER_ENABLED:     {kind:'bool', desc:'Block Bytespider / CCBot / Cohere / Mistral / generic AI crawlers.'},
+  ENDPOINT_POLICIES:       {kind:'list', card:'lists', desc:'Per-endpoint policy + rate-limit JSON: [{"path":"/api/*","policy":"bypass","rps":5,"burst":10}].'},
+  // 1.6.1 — Tier B
+  CUSTOM_RULES:            {kind:'list', card:'lists', desc:'Custom IF/THEN JSON rules. [{"if":{"path":"/x","ip_cidr":"10.0/8"},"then":"allow"}]. Actions: allow|block|challenge|tag.'},
+  BODY_GROUP_SQLI_ENABLED: {kind:'bool', desc:'Body-pattern group: SQL injection (UNION SELECT, OR 1=1, etc.). Fires body-sqli (+40 risk).'},
+  BODY_GROUP_XSS_ENABLED:  {kind:'bool', desc:'Body-pattern group: cross-site-scripting (<script>, javascript:, on*=). Fires body-xss (+40 risk).'},
+  BODY_GROUP_LFI_ENABLED:  {kind:'bool', desc:'Body-pattern group: local-file-inclusion / path traversal. Fires body-lfi (+40 risk).'},
+  BODY_GROUP_RCE_ENABLED:  {kind:'bool', desc:'Body-pattern group: remote-code-execution incl. Log4Shell. Fires body-rce (+50 risk → ban).'},
+  BODY_GROUP_SSRF_ENABLED: {kind:'bool', desc:'Body-pattern group: server-side-request-forgery (loopback / IMDS / gopher). Fires body-ssrf (+40 risk).'},
+  BODY_GROUP_CMD_ENABLED:  {kind:'bool', desc:'Body-pattern group: OS-command-injection (; cat / `whoami` / $()). Fires body-cmd (+50 risk → ban).'},
+  JWT_VALIDATE_PATHS:      {kind:'list', card:'lists', desc:'fnmatch globs requiring a valid HS256 JWT in Authorization: Bearer (verifies against JWT_HMAC_SECRET).'},
+  JWT_REQUIRED_ISSUER:     {kind:'text', card:'lists', desc:'Require the iss claim to equal this value (empty = no enforcement).'},
+  JWT_REQUIRED_AUDIENCE:   {kind:'text', card:'lists', desc:'Require the aud claim to contain this value (empty = no enforcement).'},
+  // 1.6.2 — Tier C: outbound DLP + webhook event filter
+  DLP_ENABLED:             {kind:'bool', desc:'Outbound DLP — scan upstream response bodies for PII / API keys / JWTs / private keys leaving the gateway. Bounded by DLP_MAX_BYTES.'},
+  DLP_REDACT:              {kind:'bool', desc:'When DLP_ENABLED is on, replace matched bytes with [REDACTED-<group>] before forwarding.'},
+  DLP_MAX_BYTES:           {kind:'num', min:1024, max:16777216, step:1024, desc:'Max bytes scanned per response (cost cap). Default 256 KiB.', card:'thresholds'},
+  DLP_GROUP_CC_ENABLED:          {kind:'bool', desc:'DLP group: credit-card numbers (Luhn-validated to drop false positives).'},
+  DLP_GROUP_AWS_ENABLED:         {kind:'bool', desc:'DLP group: AWS access-key IDs (AKIA* / ASIA*) and labelled aws_secret_access_key.'},
+  DLP_GROUP_JWT_ENABLED:         {kind:'bool', desc:'DLP group: JWTs (eyJ…) leaking in upstream responses.'},
+  DLP_GROUP_PRIVATE_KEY_ENABLED: {kind:'bool', desc:'DLP group: PEM private keys (-----BEGIN ... PRIVATE KEY-----).'},
+  DLP_GROUP_API_KEY_ENABLED:     {kind:'bool', desc:'DLP group: API-key shapes (Slack xoxb-, GitHub ghp_/gho_, OpenAI sk-, labelled high-entropy secrets).'},
+  DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
+  DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
+  WEBHOOK_EVENT_FILTER:    {kind:'list', card:'lists', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
   // logging
   LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'logging', desc:'Filter for stdout structured log emission.'},
 };
@@ -340,6 +376,16 @@ function renderControl(name, meta, value){
     ta.value = (Array.isArray(value) ? value.join(', ') : String(value||''));
     ta.oninput = () => mark(name, ta.value);
     input.appendChild(ta);
+  } else if (m.kind === 'text') {
+    // 1.6.1 — single-line plaintext input (e.g. JWT_REQUIRED_ISSUER).
+    const it = document.createElement('input');
+    it.type = 'text';
+    it.className = 'num';
+    it.style.width = '260px';
+    it.style.textAlign = 'left';
+    it.value = String(value || '');
+    it.oninput = () => mark(name, it.value);
+    input.appendChild(it);
   }
 
   wrap.appendChild(label);
@@ -735,11 +781,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const renderToggle = (item) => {
         const knob = KNOB[item.name];
         if (!knob) return '';            // edge-only / planned — no toggle
-        const configured = item.status === 'configured' || item.enabled;
+        // 1.6.0 — toggle is clickable when CREDENTIALS are present (not just
+        // when the integration is currently enabled). Otherwise turning an
+        // integration off would lock the operator out of turning it back on
+        // from the dashboard — they'd have to curl /__config manually.
+        // Falls back to legacy `enabled || status==='configured'` if a
+        // backend pre-1.6.0 didn't ship `credentials_present`.
+        const credsPresent = (typeof item.credentials_present === 'boolean')
+          ? item.credentials_present
+          : (item.status === 'configured' || !!item.enabled);
         const checked = !!cfg[knob];
-        const disabledAttr = configured ? '' : 'data-disabled="1"';
-        const cls = (checked ? ' on' : '') + (configured ? '' : ' switch-disabled');
-        const title = configured
+        const disabledAttr = credsPresent ? '' : 'data-disabled="1"';
+        const cls = (checked ? ' on' : '') + (credsPresent ? '' : ' switch-disabled');
+        const title = credsPresent
           ? 'Toggle integration on/off (requires ' + (item.envs_needed||[]).join(', ') + ' to be configured)'
           : 'Cannot enable — set ' + (item.envs_needed||[]).join(' / ') + ' in container env first';
         return `<div class="switch${cls}" data-knob="${knob}" ${disabledAttr} title="${escapeHtml(title)}"></div>`;
