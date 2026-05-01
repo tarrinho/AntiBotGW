@@ -1,0 +1,90 @@
+# 1.6.7+ — armv7 (32-bit Raspberry Pi OS) variant. Chainguard's distroless
+# Python only ships amd64+arm64, so this leg is built on Debian-slim
+# (multi-arch including linux/arm/v7). Trade-off: ~290 MB image vs the
+# 184 MB Chainguard build, plus Debian-userland mediums show up in
+# Trivy.
+#
+# 1.6.7+ — multi-stage build adds psycopg (compiled from source against
+# system libpq). PyPI's `psycopg[binary]` ships C-extension wheels only
+# for amd64/arm64/ppc64le/s390x, NOT armv7 — so we install
+# `psycopg[c]>=3.1,<4` and let it compile its C extension against
+# libpq-dev at build time. The runtime stage carries only libpq5 (the
+# shared library psycopg links against), keeping the image tight.
+#
+# This means DB_BACKEND=postgres now works on armv7 — including
+# TimescaleDB (Timescale is a server-side Postgres extension; the
+# client just speaks plain Postgres protocol via psycopg, and the
+# gateway's hypertable bootstrap path in proxy.py handles the
+# `SELECT FROM pg_extension` check transparently when Timescale is
+# present on the server).
+
+# ─── Stage 1: build psycopg C extension + install pure-Python deps ───
+FROM python:3.13-slim-bookworm AS builder
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        gcc \
+        python3-dev \
+        libpq-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip \
+ && python3 -m pip install --no-cache-dir --target /pydeps \
+        'aiohttp>=3.11.11,<4' \
+        'maxminddb>=2.6,<3' \
+        'redis>=5,<6' \
+        'psycopg[c]>=3.1,<4'
+
+# ─── Stage 2: runtime — only the libpq5 shared lib + the prebuilt deps ─
+FROM python:3.13-slim-bookworm
+
+# libpq5 is the shared library psycopg's C extension was linked against
+# in stage 1. Without it, `import psycopg` fails at runtime.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        libpq5 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Non-root user matching the Chainguard image's UID convention.
+RUN groupadd -g 65532 nonroot \
+ && useradd  -u 65532 -g 65532 -M -d /app -s /usr/sbin/nologin nonroot
+
+WORKDIR /app
+
+COPY --from=builder /pydeps /app/pydeps
+
+# /data is the persistent volume. proxy.py writes the runtime keys next
+# to itself by default; symlinks redirect them onto /data so they
+# survive container restarts (same trick the production Dockerfile uses).
+RUN mkdir -p /data /usr/local/share/maxmind \
+ && ln -sf /data/.admin_key   /app/.admin_key \
+ && ln -sf /data/.session_key /app/.session_key \
+ && ln -sf /data/.pow_key     /app/.pow_key
+
+COPY proxy.py /app/proxy.py
+COPY dashboards /app/dashboards
+COPY _seed/ /usr/local/share/maxmind/
+
+RUN chown -R 65532:65532 /app /data
+
+ENV LISTEN_HOST=0.0.0.0 \
+    LISTEN_PORT=8443 \
+    TRUST_XFF=last \
+    DB_PATH=/data/antibot.db \
+    DB_BACKEND=sqlite \
+    DEBUG=0 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONHASHSEED=random \
+    PYTHONPATH=/app/pydeps \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+
+USER 65532:65532
+VOLUME ["/data"]
+EXPOSE 8443
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["python3","-c","import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8443/antibot-appsec-gateway/live', timeout=3).read()==b'ok' else 1)"]
+
+ENTRYPOINT ["python3", "/app/proxy.py"]
