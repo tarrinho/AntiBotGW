@@ -1178,27 +1178,64 @@ def pg_insert_event(ts: float, ip: str, ua: str, path: str,
 
 
 def pg_db_size() -> dict:
-    """1.6.5 — Postgres equivalent of /proc/.../size used by /__service.
-    Returns {"db_bytes", "events_rows", "ok": bool}.
-    Probes whenever POSTGRES_DSN is set, regardless of the active backend
-    — lets the Service dashboard plot Postgres size even before the
-    operator switches the backend."""
+    """1.6.5 → 1.6.8 — Postgres / TimescaleDB stats snapshot. Single
+    round-trip query so the per-minute sample stays cheap. Returns:
+      db_bytes        — pg_database_size (data + indexes + bloat)
+      events_rows     — row count in events table
+      index_bytes     — sum of pg_indexes_size across user tables
+      active_conns    — pg_stat_activity rows in 'active' state
+      idle_conns      — pg_stat_activity rows in 'idle' state
+      cache_hit_pct   — blks_hit / (blks_hit+blks_read), 0–100
+      tx_total        — xact_commit + xact_rollback (monotonic counter;
+                        graph deltas client-side for tx/s)
+    Probes whenever POSTGRES_DSN is set, regardless of the active backend."""
     pg = _postgres_load_module()
     if pg is None or not POSTGRES_DSN:
         return {"ok": False, "reason": "POSTGRES_DSN not configured"}
     try:
         with pg.connect(POSTGRES_DSN, connect_timeout=2) as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_database_size(current_database())")
-                size = int(cur.fetchone()[0])
-                # The events table may not exist yet if we're probing
-                # before the operator has switched to Postgres. Tolerate.
+                # Single round-trip — every sub-select runs once per call.
+                cur.execute("""
+                    SELECT
+                      (SELECT pg_database_size(current_database())),
+                      (SELECT COALESCE(SUM(pg_indexes_size(c.oid)), 0)
+                         FROM pg_class c
+                         JOIN pg_namespace n ON n.oid = c.relnamespace
+                         WHERE n.nspname = 'public' AND c.relkind = 'r'),
+                      (SELECT COUNT(*) FROM pg_stat_activity
+                         WHERE state = 'active'
+                           AND datname = current_database()),
+                      (SELECT COUNT(*) FROM pg_stat_activity
+                         WHERE state = 'idle'
+                           AND datname = current_database()),
+                      (SELECT CASE WHEN SUM(blks_hit + blks_read) = 0 THEN 0
+                                   ELSE ROUND(100.0 * SUM(blks_hit)
+                                              / SUM(blks_hit + blks_read), 2) END
+                         FROM pg_stat_database
+                         WHERE datname = current_database()),
+                      (SELECT COALESCE(SUM(xact_commit + xact_rollback), 0)
+                         FROM pg_stat_database
+                         WHERE datname = current_database())
+                """)
+                row = cur.fetchone() or (0, 0, 0, 0, 0, 0)
+                # events_rows separately — table may not exist yet when
+                # the standby is probed before the first switch.
                 try:
                     cur.execute("SELECT COUNT(*) FROM events")
                     rows = int(cur.fetchone()[0])
                 except Exception:
                     rows = 0
-                return {"ok": True, "db_bytes": size, "events_rows": rows}
+                return {
+                    "ok":            True,
+                    "db_bytes":      int(row[0] or 0),
+                    "events_rows":   rows,
+                    "index_bytes":   int(row[1] or 0),
+                    "active_conns":  int(row[2] or 0),
+                    "idle_conns":    int(row[3] or 0),
+                    "cache_hit_pct": float(row[4] or 0.0),
+                    "tx_total":      int(row[5] or 0),
+                }
     except Exception as e:
         return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:80]}"}
 
@@ -1293,6 +1330,14 @@ _SCHEMA_MIGRATIONS: list[tuple[str, str, str | None, str | None]] = [
     # cards (same UX as cpu/mem/disk).
     ("svc_metrics", "identities_count","INTEGER DEFAULT 0",             None),
     ("svc_metrics", "total_requests",  "INTEGER DEFAULT 0",             None),
+    # 1.6.8 — TimescaleDB / Postgres health metrics. All sampled in a
+    # single round-trip via pg_db_size() (renamed pg_stats internally).
+    # Click-to-zoom on the Service dashboard's TimescaleDB section.
+    ("svc_metrics", "pg_index_bytes",  "INTEGER DEFAULT 0",             None),
+    ("svc_metrics", "pg_active_conns", "INTEGER DEFAULT 0",             None),
+    ("svc_metrics", "pg_idle_conns",   "INTEGER DEFAULT 0",             None),
+    ("svc_metrics", "pg_cache_hit_pct","REAL DEFAULT 0",                None),
+    ("svc_metrics", "pg_tx_total",     "INTEGER DEFAULT 0",             None),
     # 1.6.5 — admin_ips.note added on PG only (SQLite schema had it from creation)
     ("admin_ips",   "note",            None,                            "TEXT"),
     # 1.6.7
@@ -2259,18 +2304,27 @@ async def _sample_service_metrics_loop():
                     try:
                         pg_info = pg_db_size()
                         if pg_info.get("ok"):
-                            sample["pg_db_bytes"] = pg_info["db_bytes"]
-                            sample["pg_events_rows"] = pg_info["events_rows"]
-                            _sample_service_metrics_loop._pg_last = (
-                                pg_info["db_bytes"], pg_info["events_rows"])
+                            sample["pg_db_bytes"]      = pg_info["db_bytes"]
+                            sample["pg_events_rows"]   = pg_info["events_rows"]
+                            sample["pg_index_bytes"]   = pg_info["index_bytes"]
+                            sample["pg_active_conns"]  = pg_info["active_conns"]
+                            sample["pg_idle_conns"]    = pg_info["idle_conns"]
+                            sample["pg_cache_hit_pct"] = pg_info["cache_hit_pct"]
+                            sample["pg_tx_total"]      = pg_info["tx_total"]
+                            _sample_service_metrics_loop._pg_last = pg_info
                         setattr(_sample_service_metrics_loop, "_last_pg_min",
                                 int(_t.time()) // 60)
                     except Exception:
                         pass
                 last = getattr(_sample_service_metrics_loop, "_pg_last", None)
                 if last and "pg_db_bytes" not in sample:
-                    sample["pg_db_bytes"]    = last[0]
-                    sample["pg_events_rows"] = last[1]
+                    sample["pg_db_bytes"]      = last["db_bytes"]
+                    sample["pg_events_rows"]   = last["events_rows"]
+                    sample["pg_index_bytes"]   = last.get("index_bytes", 0)
+                    sample["pg_active_conns"]  = last.get("active_conns", 0)
+                    sample["pg_idle_conns"]    = last.get("idle_conns", 0)
+                    sample["pg_cache_hit_pct"] = last.get("cache_hit_pct", 0.0)
+                    sample["pg_tx_total"]      = last.get("tx_total", 0)
             SERVICE_METRICS_HISTORY.append(sample)
 
             # Persist to SQLite via the async writer so chart history survives
@@ -2293,6 +2347,12 @@ async def _sample_service_metrics_loop():
                     sample.get("pg_db_bytes"), sample.get("pg_events_rows"),
                     sample.get("identities_count", 0),
                     sample.get("total_requests", 0),
+                    # 1.6.8 — TimescaleDB stats
+                    sample.get("pg_index_bytes", 0),
+                    sample.get("pg_active_conns", 0),
+                    sample.get("pg_idle_conns", 0),
+                    sample.get("pg_cache_hit_pct", 0.0),
+                    sample.get("pg_tx_total", 0),
                 )
                 try:
                     db_queue.put_nowait(("svc_metric", row))
@@ -2402,7 +2462,9 @@ async def db_writer_loop():
                            procs, open_fds, net_rx_bps, net_tx_bps,
                            db_db, db_wal, db_shm, db_total,
                            pg_db_bytes, pg_events_rows,
-                           identities_count, total_requests)
+                           identities_count, total_requests,
+                           pg_index_bytes, pg_active_conns, pg_idle_conns,
+                           pg_cache_hit_pct, pg_tx_total)
                           VALUES (?, ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?, ?,
@@ -2410,7 +2472,8 @@ async def db_writer_loop():
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?,
-                                  ?, ?)
+                                  ?, ?,
+                                  ?, ?, ?, ?, ?)
                         """, args)
                     elif op == "svc_metric_prune":
                         # args = (cutoff_ts,)
@@ -10228,14 +10291,19 @@ async def service_metrics_data_endpoint(request: web.Request):
 
     # Bucketise: average pcts/loads, max for counters, sum/per-window for net.
     AVG_KEYS  = ("cpu_pct", "mem_pct", "swap_used", "load1", "load5", "load15",
-                 "disk_pct", "cg_pct", "mem_used", "disk_used")
+                 "disk_pct", "cg_pct", "mem_used", "disk_used",
+                 # 1.6.8: PG cache-hit ratio (averaged across the bucket)
+                 "pg_cache_hit_pct")
     MAX_KEYS  = ("procs", "open_fds", "db_db", "db_wal", "db_shm", "db_total",
                  "cg_used", "cg_limit", "mem_total", "disk_total", "disk_avail",
                  "swap_total",
                  # 1.6.5: Postgres / TimescaleDB size + events rows
                  "pg_db_bytes", "pg_events_rows",
                  # 1.6.7+: app-level counters (identities live + requests total)
-                 "identities_count", "total_requests")
+                 "identities_count", "total_requests",
+                 # 1.6.8: PG/Timescale stats (counters/gauges → max within bucket)
+                 "pg_index_bytes", "pg_active_conns", "pg_idle_conns",
+                 "pg_tx_total")
     SUM_KEYS  = ("net_rx_bps", "net_tx_bps")
 
     buckets = {}
@@ -10306,6 +10374,10 @@ async def service_metrics_data_endpoint(request: web.Request):
         "is_live":          end_epoch >= _t.time() - 30,
         "samples_in_buffer": len(raw),
         "buffer_oldest_ts": raw[0]["ts"] if raw else 0,
+        # 1.6.8 — TimescaleDB stats availability flag. Used by the
+        # Service dashboard to hide the TimescaleDB section when no
+        # POSTGRES_DSN is configured (or psycopg never loaded).
+        "pg_available":     bool(_postgres_available and POSTGRES_DSN),
     }, headers={"Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff"})
 

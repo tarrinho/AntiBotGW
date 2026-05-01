@@ -123,6 +123,31 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
     </div>
   </div>
 
+  <!-- 1.6.8 — TimescaleDB / Postgres section. Hidden by default; -->
+  <!--          revealed when /service-data returns pg_available=true. -->
+  <div id="row-timescale" class="row5" style="display:none">
+    <div class="card stat-card" data-stat="pg_db_bytes" data-label="TimescaleDB · DB size" data-unit="bytes"><h2>PG · DB size</h2>
+      <div class="metric" style="color:var(--blue)" id="m-pg-db">—</div>
+      <div class="metric-sub" id="m-pg-db-sub">total on disk (data + indexes)</div>
+    </div>
+    <div class="card stat-card" data-stat="pg_index_bytes" data-label="TimescaleDB · indexes" data-unit="bytes"><h2>PG · indexes</h2>
+      <div class="metric" style="color:var(--purple)" id="m-pg-idx">—</div>
+      <div class="metric-sub">sum of pg_indexes_size</div>
+    </div>
+    <div class="card stat-card" data-stat="pg_events_rows" data-label="TimescaleDB · events rows" data-unit="count"><h2>events rows</h2>
+      <div class="metric" style="color:#5fb3c0" id="m-pg-rows">—</div>
+      <div class="metric-sub">recorded requests in hypertable</div>
+    </div>
+    <div class="card stat-card" data-stat="pg_active_conns" data-label="TimescaleDB · active connections" data-unit="count"><h2>PG · conns</h2>
+      <div class="metric" style="color:var(--green)" id="m-pg-conn">—</div>
+      <div class="metric-sub" id="m-pg-conn-sub">— active / — idle</div>
+    </div>
+    <div class="card stat-card" data-stat="pg_cache_hit_pct" data-label="TimescaleDB · cache hit ratio" data-unit="%"><h2>PG · cache hit</h2>
+      <div class="metric" style="color:var(--yellow)" id="m-pg-cache">—</div>
+      <div class="metric-sub" id="m-pg-tx">tx — total</div>
+    </div>
+  </div>
+
   <!-- ── Time controls (above the line charts) ───────── -->
   <div class="card" style="padding:8px 14px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -450,6 +475,28 @@ async function tick(){
     const uh = Math.floor(up/3600), um = Math.floor((up%3600)/60), us = up%60;
     document.getElementById('m-up').textContent      = `${uh}h ${um}m ${us}s`;
     document.getElementById('m-version').textContent = a2.version || 'AppSecGW';
+
+    // 1.6.8 — TimescaleDB section: hide entirely if no PG configured.
+    const tsRow = document.getElementById('row-timescale');
+    const pgDbCard = document.getElementById('card-pg-db');
+    if (d.pg_available) {
+      tsRow.style.display = '';
+      if (pgDbCard) pgDbCard.style.display = '';
+      document.getElementById('m-pg-db').textContent  = fmtBytes(c.pg_db_bytes ?? 0);
+      document.getElementById('m-pg-idx').textContent = fmtBytes(c.pg_index_bytes ?? 0);
+      document.getElementById('m-pg-rows').textContent =
+        (c.pg_events_rows ?? 0).toLocaleString();
+      document.getElementById('m-pg-conn').textContent = (c.pg_active_conns ?? 0);
+      document.getElementById('m-pg-conn-sub').textContent =
+        `${c.pg_active_conns ?? 0} active · ${c.pg_idle_conns ?? 0} idle`;
+      document.getElementById('m-pg-cache').textContent =
+        (c.pg_cache_hit_pct ?? 0).toFixed(1) + '%';
+      document.getElementById('m-pg-tx').textContent =
+        `tx ${(c.pg_tx_total ?? 0).toLocaleString()} total`;
+    } else {
+      tsRow.style.display = 'none';
+      if (pgDbCard) pgDbCard.style.display = 'none';
+    }
 
     // Memory detail table
     document.getElementById('kv-mem').innerHTML = `
