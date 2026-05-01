@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.6.7 · Dashboard</title>
+<title>AppSecGW_1.6.8 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -83,8 +83,16 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
 
 /* 1.5.4 — clickable cells (identity / risk drill-downs) */
-.cell-click{cursor:pointer;border-bottom:1px dotted var(--blue)}
+.cell-click{cursor:pointer;border-bottom:1px dotted var(--blue);position:relative}
 .cell-click:hover{color:var(--blue)}
+/* Persistent ↗ link-icon — signals the value is clickable for a popover. */
+.cell-click::after{
+  content:'';display:inline-block;width:10px;height:10px;margin-left:4px;
+  vertical-align:middle;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='%2358a6ff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><polyline points='3,1 8,1 8,6'/><line x1='8' y1='1' x2='2' y2='7'/></svg>");
+  background-repeat:no-repeat;background-position:center;
+  opacity:.6;transition:opacity .12s}
+.cell-click:hover::after{opacity:1}
 
 /* 1.5.4 — reason drill-down modal */
 .reason-drill{text-decoration:none;cursor:pointer}
@@ -108,7 +116,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.7 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.8 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.5.4 — reason drill-down modal -->
 <div class="modal-back" id="modal-back"></div>
@@ -612,14 +620,16 @@ async function tick() {
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
     // 1.5.5 — wire ban/unban switches (same flow as agents dashboard).
     const ADMIN_KEY_LOCAL = new URLSearchParams(location.search).get('key') || '';
-    const k_q_local = ADMIN_KEY_LOCAL ? ('?key=' + encodeURIComponent(ADMIN_KEY_LOCAL)) : '';
     tbody.querySelectorAll('.ban-switch').forEach(el => {
       el.onclick = async (ev) => {
         ev.stopPropagation();
         const id = el.dataset.id;
         const banning = !el.classList.contains('on');
         el.style.opacity = '0.5';
-        const url2 = (banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban') + k_q_local + '&id=' + encodeURIComponent(id);
+        const base2 = banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban';
+        const p2 = new URLSearchParams({id: id});
+        if (ADMIN_KEY_LOCAL) p2.set('key', ADMIN_KEY_LOCAL);
+        const url2 = base2 + '?' + p2.toString();
         try {
           const r = await fetch(url2, {credentials:'include'});
           const b = await r.json().catch(()=>({}));
@@ -982,7 +992,10 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     if (!confirm('Unban + reset risk score for\n' + id + '?')) return;
     btn.disabled = true; btn.textContent = '...';
     try{
-      const r = await fetch('/antibot-appsec-gateway/secured/unban' + k_q + '&id=' + encodeURIComponent(id),
+      const ub_p = new URLSearchParams({id: id});
+      const ub_k = new URLSearchParams(location.search).get('key') || '';
+      if (ub_k) ub_p.set('key', ub_k);
+      const r = await fetch('/antibot-appsec-gateway/secured/unban?' + ub_p.toString(),
                             {credentials:'include'});
       const b = await r.json().catch(()=>({}));
       if (r.ok && b.cleared){
@@ -1046,6 +1059,10 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
           <tr><td class="dim" style="text-align:right">tokens</td>      <td>${c.tokens}</td></tr>
           <tr><td class="dim" style="text-align:right">risk score</td>  <td><b>${(c.risk_score||0).toFixed(1)}</b></td></tr>
         </table>
+        <div id="ip-intel-section" style="margin-top:14px">
+          <h3 style="margin:0 0 6px 0">IP intelligence
+            <span class="dim" style="font-weight:400;font-size:11px">· loading…</span></h3>
+        </div>
         ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3><table>${blocksRows}</table>` : ''}`;
     } else if (kind === 'risk-main'){
       title = 'Risk score breakdown';
@@ -1072,6 +1089,95 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     document.getElementById('modal-close').onclick = close;
     document.getElementById('modal-body').innerHTML = body;
     back.classList.add('show'); modal.classList.add('show');
+    // 1.6.7+ — async-fill IP intelligence block on the identity modal.
+    if (kind === 'id-main' && c && c.last_ip) {
+      window.fetchIpIntel(c.last_ip).then(html => {
+        const node = document.getElementById('ip-intel-section');
+        if (node) node.innerHTML = html;
+      }).catch(() => {});
+    }
+  };
+
+  // 1.6.7+ — fetch + render IP intelligence (country / ASN / AbuseIPDB
+  // score / CrowdSec decision / Tor-exit flag / internal ban + risk).
+  // Hung off `window` so both the identity modal and any future caller
+  // (logs.html, …) can reuse without copy-pasting.
+  window.fetchIpIntel = async function(ip) {
+    let j;
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/ip-intel/' +
+                            encodeURIComponent(ip),
+                            {cache:'no-store', credentials:'include'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      j = await r.json();
+    } catch (e) {
+      return `<h3 style="margin:0 0 6px 0">IP intelligence</h3>
+              <div class="dim" style="font-size:11px">unavailable: ${escapeHtml(e.message||String(e))}</div>`;
+    }
+    const verdictColor = {
+      'high-risk':   'var(--red)',
+      'medium-risk': 'var(--orange)',
+      'low-risk':    'var(--yellow)',
+      'clean':       'var(--green)',
+    }[j.verdict] || 'var(--dim)';
+    const flagBadges = (j.flags||[]).map(f =>
+      `<span style="background:rgba(248,81,73,.15);color:#f85149;
+                    padding:1px 6px;border-radius:3px;font-size:10px;
+                    font-weight:700;text-transform:uppercase;
+                    margin-right:4px;display:inline-block">${escapeHtml(f)}</span>`
+    ).join(' ') || '<span class="dim" style="font-size:11px">no flags</span>';
+    const geo = j.geo || {};
+    const asn = j.asn || {};
+    const ab  = j.abuseipdb || {};
+    const cs  = j.crowdsec  || {};
+    const it  = j.internal  || {};
+    const fmtScore = (s) => {
+      if (s == null || s === undefined) return '—';
+      if (s >= 75) return `<span style="color:var(--red);font-weight:600">${s}</span>`;
+      if (s >= 25) return `<span style="color:var(--orange);font-weight:600">${s}</span>`;
+      return `<span style="color:var(--green)">${s}</span>`;
+    };
+    const fmtFlag = (v) => v
+      ? `<span style="color:var(--red);font-weight:600">⚑ yes</span>`
+      : `<span class="dim">no</span>`;
+    const ipEnc = encodeURIComponent(j.ip || '');
+    const refs = [
+      ['AbuseIPDB',    `https://www.abuseipdb.com/check/${ipEnc}`],
+      ['Scamalytics',  `https://scamalytics.com/ip/${ipEnc}`],
+      ['VirusTotal',   `https://www.virustotal.com/gui/ip-address/${ipEnc}`],
+      ['Shodan',       `https://www.shodan.io/host/${ipEnc}`],
+      ['GreyNoise',    `https://viz.greynoise.io/ip/${ipEnc}`],
+      ['IPinfo',       `https://ipinfo.io/${ipEnc}`],
+    ];
+    const refsHtml = refs.map(([name, url]) =>
+      `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
+          style="color:var(--blue);text-decoration:none;
+                 background:#0a0e13;border:1px solid #21262d;
+                 padding:2px 8px;border-radius:3px;font-size:11px;
+                 margin-right:5px;display:inline-block;margin-bottom:4px">
+         ${escapeHtml(name)} ↗</a>`).join('');
+    return `
+      <h3 style="margin:0 0 6px 0">IP intelligence
+        <span style="background:${verdictColor};color:#000;font-weight:700;
+                     padding:2px 8px;border-radius:3px;font-size:10px;
+                     text-transform:uppercase;letter-spacing:.4px">${escapeHtml(j.verdict||'?')}</span>
+      </h3>
+      <div style="margin-bottom:8px">${flagBadges}</div>
+      <table>
+        <tr><td class="dim" style="text-align:right">country</td>     <td>${escapeHtml(geo.country||'—')}${geo.city?(' · '+escapeHtml(geo.city)):''}</td></tr>
+        <tr><td class="dim" style="text-align:right">ASN</td>         <td>${asn.asn?(`AS${asn.asn} · ${escapeHtml(asn.org||'')}`):'—'}</td></tr>
+        <tr><td class="dim" style="text-align:right">datacenter</td>  <td>${fmtFlag(asn.is_hosting)}</td></tr>
+        <tr><td class="dim" style="text-align:right">tor exit</td>    <td>${fmtFlag(j.tor_exit)}</td></tr>
+        <tr><td class="dim" style="text-align:right">AbuseIPDB</td>   <td>${fmtScore(ab.score)}/100 ${ab.country?('· '+escapeHtml(ab.country)):''} <span class="dim" style="font-size:10px">(${escapeHtml(ab.source||'?')})</span></td></tr>
+        <tr><td class="dim" style="text-align:right">CrowdSec</td>    <td>${cs.decision?`<span style="color:var(--red);font-weight:600">${escapeHtml(cs.decision)}</span>`:'<span class="dim">clean</span>'} <span class="dim" style="font-size:10px">(${escapeHtml(cs.source||'?')})</span></td></tr>
+        <tr><td class="dim" style="text-align:right">internal ban</td><td>${it.banned?`<span style="color:var(--red);font-weight:600">YES · ${it.banned_remaining_secs}s left</span> <span class="dim" style="font-size:10px">${escapeHtml(it.ban_reason||'')}</span>`:'<span class="dim">no</span>'}</td></tr>
+        <tr><td class="dim" style="text-align:right">risk</td>        <td>${fmtScore(it.risk_score)}/100</td></tr>
+        <tr><td class="dim" style="text-align:right">activity</td>    <td>${it.requests_24h||0} reqs (${it.allowed_24h||0} ok / ${it.blocked_24h||0} blocked)</td></tr>
+      </table>
+      <div style="margin-top:10px">
+        <div class="dim" style="font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">External references · cross-check the score</div>
+        ${refsHtml}
+      </div>`;
   };
 
   // 1.5.5 — Click any row in the Top-paths table → modal with offender IPs.

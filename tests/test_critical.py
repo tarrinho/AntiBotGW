@@ -1230,10 +1230,28 @@ def test_166_admin_path_classifier():
     # to the upstream proxy like any other unknown URL.
     assert not proxy._is_admin_path("/__live")
     assert not proxy._is_admin_path("/__dashboard")
-    assert proxy._admin_path_is_public("/antibot-appsec-gateway/live")
+    # JS-challenge handshake — must remain public so visitor browsers
+    # can solve the cookie gate. Locking these breaks every visitor.
+    assert proxy._admin_path_is_public("/antibot-appsec-gateway/pow")
+    assert proxy._admin_path_is_public("/antibot-appsec-gateway/solver")
     assert proxy._admin_path_is_public("/antibot-appsec-gateway/challenge")
     assert proxy._admin_path_is_public("/antibot-appsec-gateway/botd-report")
-    assert proxy._admin_path_is_public("/antibot-appsec-gateway/assets/x.js")
+    # BotD bundle — visitor browsers fetch it as a module from injected JS.
+    assert proxy._admin_path_is_public("/antibot-appsec-gateway/assets/botd.bundle.js")
+    # 1.6.7+: /live is NO LONGER unconditionally public — handled by
+    # the early loopback-only shortcut in protect(). The path-level
+    # predicate returns False so the regular admin-IP gate doesn't
+    # accidentally let it through from non-loopback callers.
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/live")
+    # 1.6.7+: dashboard-only assets (escalate.svg, future SVGs) are
+    # NOT in the public allowlist — operators reach them via session.
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/assets/escalate.svg")
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/assets/random.css")
+    # 1.6.7+: /login and /logout require the admin-IP allowlist (no cookie).
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/login")
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/logout")
+    assert "/login"  in proxy._ADMIN_LOGIN_SUBPATHS
+    assert "/logout" in proxy._ADMIN_LOGIN_SUBPATHS
     # Secured sub-paths are NOT public.
     assert not proxy._admin_path_is_public("/antibot-appsec-gateway/secured/dashboard")
     assert not proxy._admin_path_is_public("/antibot-appsec-gateway/secured/config")

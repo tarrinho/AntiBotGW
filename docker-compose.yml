@@ -1,20 +1,48 @@
-# AppSecGW 1.6.5 — turnkey docker-compose deployment with TimescaleDB sidecar.
+# AppSecGW 1.6.8 — turnkey docker-compose deployment.
 #
-# Quick start:
+# What's bundled
+# ──────────────
+#   • appsec-antibot-gw      — the gateway (image ships GeoLite2-ASN +
+#                              GeoLite2-City pre-seeded from build context;
+#                              auto-copied to /data on first boot)
+#   • appsec-timescaledb     — Postgres 16 + TimescaleDB; gateway always has
+#                              POSTGRES_DSN ready, switch backends via the
+#                              Controls dashboard's pill toggle
+#   • appsecgw-redis         — Redis 7 with requirepass (shared store for
+#                              mesh-sync + cross-replica bans)
+#   • crowdsec               — CrowdSec LAPI (community blocklist) — first-run
+#                              bouncer registration: see "Post-up steps" below
+#
+# Network exposure (by default)
+# ──────────────────────────────
+# Only the GATEWAY exposes a port to the host (8443). All other services
+# are reachable ONLY from the internal Docker network `default` —
+# Redis (no -p), CrowdSec LAPI (no -p), Postgres (no -p). Auth is also
+# enforced inside the network (Redis password, CrowdSec api-key,
+# Postgres password) as defence-in-depth.
+#
+# Quick start
+# ───────────
 #   1. cp .env.example .env
-#   2. edit .env — at minimum set UPSTREAM, ADMIN_ALLOWED_IPS, TRUSTED_PROXIES,
-#      and any external-integration keys you want active.
+#   2. edit .env — at minimum set:
+#        UPSTREAM, ADMIN_ALLOWED_IPS, TRUSTED_PROXIES,
+#        POSTGRES_PASSWORD, REDIS_PASSWORD
+#      (and any external-integration keys you want active)
 #   3. docker compose up -d
+#   4. Post-up — register the gateway as a CrowdSec bouncer:
+#        BKEY=$(docker exec crowdsec cscli bouncers add appsecgw -o raw)
+#        echo "CROWDSEC_LAPI_KEY=$BKEY" >> .env
+#        echo "CROWDSEC_LAPI_URL=http://crowdsec:8080" >> .env
+#        docker compose up -d --force-recreate appsec-antibot-gw
 #
-# Architecture:
-#   • appsec-antibot-gw (this image)            — the gateway, on port 8443
-#   • appsec-timescaledb (TimescaleDB pg16)     — always running standby; the
-#       gateway points POSTGRES_DSN at it. Switch DB_BACKEND from sqlite →
-#       postgres via the Controls dashboard's pill toggle (RESTART REQUIRED;
-#       handled automatically by docker's restart policy).
-#
-# All integrations auto-enable when their config is present.  MaxMind dbs
-# auto-download on first boot when MAXMIND_LICENSE_KEY is set.
+# MaxMind GeoLite2
+# ────────────────
+# The gateway image SHIPS GeoLite2-ASN.mmdb + GeoLite2-City.mmdb in
+# /usr/local/share/maxmind/. On first boot they're auto-copied to /data
+# (the persistent volume), so the ASN + City lookups work out-of-the-box
+# with NO MaxMind license needed for an initial install. To refresh
+# them with the latest feed: set MAXMIND_LICENSE_KEY in .env and the
+# `_maxmind_auto_fetch` loop downloads new versions weekly.
 
 services:
   appsec-timescaledb:
@@ -22,9 +50,9 @@ services:
     container_name: appsec-timescaledb
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-appsec}
+      POSTGRES_USER:     ${POSTGRES_USER:-appsec}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD env var is required}
-      POSTGRES_DB:   ${POSTGRES_DB:-appsec}
+      POSTGRES_DB:       ${POSTGRES_DB:-appsec}
     volumes:
       - appsec-timescaledb-data:/var/lib/postgresql/data
     healthcheck:
@@ -34,66 +62,120 @@ services:
       timeout:  3s
       retries:  10
 
+  # 1.6.8 — Redis sidecar for mesh-sync + cross-replica ban propagation.
+  # No host port mapping → reachable only from the docker network.
+  # `requirepass` set via env so even an attacker that joined the network
+  # still needs the password.
+  appsecgw-redis:
+    image: redis:7-alpine
+    container_name: appsecgw-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD env var is required}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "PING"]
+      interval: 10s
+      timeout:  3s
+      retries:  5
+
+  # 1.6.8 — CrowdSec LAPI sidecar. Bouncer key generated post-up (see
+  # header). The single volume holds /etc/crowdsec (config) + the local
+  # decisions DB so bans persist across compose recreate.
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    restart: unless-stopped
+    environment:
+      COLLECTIONS:    "crowdsecurity/linux crowdsecurity/http-cve crowdsecurity/base-http-scenarios"
+      DISABLE_AGENT:  "false"
+      DISABLE_LOCAL_API: "false"
+    volumes:
+      - crowdsec-data:/var/lib/crowdsec/data
+      - crowdsec-config:/etc/crowdsec
+    healthcheck:
+      test: ["CMD", "cscli", "lapi", "status"]
+      interval: 30s
+      timeout:  5s
+      retries:  5
+
   appsec-antibot-gw:
-    image: appsec-antibot-gw:1.6.7
-    container_name: appsec-antibot-gw1.6.7
+    image: appsec-antibot-gw:1.6.8
+    container_name: appsec-antibot-gw1.6.8
     restart: unless-stopped
     depends_on:
       appsec-timescaledb:
         condition: service_healthy
+      appsecgw-redis:
+        condition: service_healthy
+      crowdsec:
+        condition: service_started
     ports:
       - "8443:8443"
     environment:
       # ── Required ──────────────────────────────────────────────────────
-      UPSTREAM: ${UPSTREAM:?UPSTREAM env var is required}
-      PORT: ${PORT:-8443}
+      UPSTREAM:    ${UPSTREAM:?UPSTREAM env var is required}
+      PORT:        ${PORT:-8443}
       TLS_ENABLED: ${TLS_ENABLED:-0}
 
       # ── Admin / hardening ─────────────────────────────────────────────
-      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-}
+      ALLOWED_HOSTS:     ${ALLOWED_HOSTS:-}
       ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-127.0.0.1/32}
-      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-127.0.0.1/32}
-      TRUST_XFF: ${TRUST_XFF:-last}
-      ADMIN_KEY: ${ADMIN_KEY:-}
+      TRUSTED_PROXIES:   ${TRUSTED_PROXIES:-127.0.0.1/32}
+      TRUST_XFF:         ${TRUST_XFF:-last}
+      ADMIN_KEY:         ${ADMIN_KEY:-}
 
       # ── Cookie gate ──────────────────────────────────────────────────
-      JS_CHALLENGE: ${JS_CHALLENGE:-1}
+      JS_CHALLENGE:       ${JS_CHALLENGE:-1}
       JS_CHAL_OPEN_PATHS: ${JS_CHAL_OPEN_PATHS:-/content/,/static/,/assets/,/api/}
 
       # ── Risk-score thresholds (also tunable live at /__controls) ─────
-      SOFT_CHALLENGE_SCORE: ${SOFT_CHALLENGE_SCORE:-4}
-      RISK_BAN_THRESHOLD: ${RISK_BAN_THRESHOLD:-50}
+      SOFT_CHALLENGE_SCORE:     ${SOFT_CHALLENGE_SCORE:-4}
+      RISK_BAN_THRESHOLD:       ${RISK_BAN_THRESHOLD:-50}
       TURNSTILE_RISK_THRESHOLD: ${TURNSTILE_RISK_THRESHOLD:-0}
 
       # ── External integrations (off-by-default; set keys to enable) ───
-      TURNSTILE_SITEKEY: ${TURNSTILE_SITEKEY:-}
-      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
-      TURNSTILE_ENABLED: ${TURNSTILE_ENABLED:-0}
-      ABUSEIPDB_KEY: ${ABUSEIPDB_KEY:-}
-      CROWDSEC_LAPI_URL: ${CROWDSEC_LAPI_URL:-}
-      CROWDSEC_LAPI_KEY: ${CROWDSEC_LAPI_KEY:-}
-      MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
-      ANUBIS_ENABLED: ${ANUBIS_ENABLED:-0}
+      TURNSTILE_SITEKEY:       ${TURNSTILE_SITEKEY:-}
+      TURNSTILE_SECRET:        ${TURNSTILE_SECRET:-}
+      TURNSTILE_ENABLED:       ${TURNSTILE_ENABLED:-0}
+      ABUSEIPDB_KEY:           ${ABUSEIPDB_KEY:-}
+      MAXMIND_LICENSE_KEY:     ${MAXMIND_LICENSE_KEY:-}
+      ANUBIS_ENABLED:          ${ANUBIS_ENABLED:-0}
       ANUBIS_DIFFICULTY_BOOST: ${ANUBIS_DIFFICULTY_BOOST:-1}
-      REDIS_URL: ${REDIS_URL:-}
+
+      # ── 1.6.8 — Redis (mesh-sync + cross-replica ban store) ──────────
+      # Default points at the bundled appsecgw-redis sidecar. Override
+      # in .env to point elsewhere (e.g. managed Redis cloud).
+      REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@appsecgw-redis:6379}
+
+      # ── 1.6.8 — CrowdSec (community blocklist) ───────────────────────
+      # Default URL is the bundled sidecar. The bouncer key has to be
+      # generated post-up (see compose header) — operator pastes it into
+      # .env then `docker compose up -d --force-recreate appsec-antibot-gw`.
+      CROWDSEC_LAPI_URL: ${CROWDSEC_LAPI_URL:-http://crowdsec:8080}
+      CROWDSEC_LAPI_KEY: ${CROWDSEC_LAPI_KEY:-}
 
       # ── Pluggable event store (1.6.4 / 1.6.5) ────────────────────────
       # Default backend is sqlite (zero-deps single-file). Flip to postgres
       # via /__controls — the Timescale sidecar above is always running so
       # the switch is one click + ~2 s container restart, no migration step
       # required (events accumulate fresh in the chosen backend).
-      DB_BACKEND: ${DB_BACKEND:-sqlite}
+      DB_BACKEND:   ${DB_BACKEND:-sqlite}
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-appsec}:${POSTGRES_PASSWORD}@appsec-timescaledb:5432/${POSTGRES_DB:-appsec}
 
       # ── Logging ──────────────────────────────────────────────────────
-      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_LEVEL:  ${LOG_LEVEL:-info}
       LOG_FORMAT: ${LOG_FORMAT:-json}
 
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8443/antibot-appsec-gateway/live"]
+      test: ["CMD", "python3", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8443/antibot-appsec-gateway/live', timeout=3).read()==b'ok' else 1)"]
       interval: 10s
-      timeout: 2s
-      retries: 3
+      timeout:  3s
+      retries:  3
 
     read_only: true
     tmpfs:
@@ -116,3 +198,5 @@ services:
 volumes:
   antibot-data:
   appsec-timescaledb-data:
+  crowdsec-data:
+  crowdsec-config:
