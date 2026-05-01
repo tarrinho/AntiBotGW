@@ -8,4 +8,13 @@ redis>=5,<6
 
 # Test-only dependencies. Used by GitHub Actions and `pytest tests/`.
 pytest>=8,<9
+pytest-asyncio>=0.23,<1
 fakeredis>=2,<3
+
+# 1.6.7 — runtime deps the Dockerfile installs separately. Listed here
+# so CI's `pip install -r requirements.txt` exercises the same import
+# paths that production runs (test_functional.py touches GeoLite2 +
+# Postgres conditionally; without these wheels available, lazy imports
+# fail and several tests skip silently).
+maxminddb>=2.6,<3
+psycopg[binary]>=3.1,<4

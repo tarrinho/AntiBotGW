@@ -85,8 +85,31 @@ POW_VALID_SECS    = 300     # 5 minutes
 BEHAVIOR_WINDOW   = 30      # seconds
 BEHAVIOR_MAX_REGULAR = 8    # >N requests with σ<10ms → bot
 
+# 1.6.7 — runtime-key directory.
+# Container (Dockerfile symlinks /app/.X_key → /data/.X_key on build) keeps
+# the legacy "next-to-proxy.py" location. Bare-metal / venv installs set
+# APPSECGW_KEY_DIR to e.g. $HOME/.config/appsecgw — the directory is
+# auto-created (mode 0700) on first boot.
+def _resolve_key_dir() -> str:
+    env_dir = os.environ.get("APPSECGW_KEY_DIR", "").strip()
+    if env_dir:
+        d = os.path.expanduser(env_dir)
+        try:
+            os.makedirs(d, mode=0o700, exist_ok=True)
+            try: os.chmod(d, 0o700)
+            except OSError: pass
+            return d
+        except OSError as _e:
+            print(f"[keys] APPSECGW_KEY_DIR={env_dir!r} not writable "
+                  f"({_e}); falling back to script dir", flush=True)
+    return os.path.dirname(os.path.abspath(__file__))
+
+_KEY_DIR = _resolve_key_dir()
+print(f"[keys] storing .admin_key / .session_key / .pow_key under {_KEY_DIR}",
+      flush=True)
+
 # PoW HMAC key — persist so restart doesn't invalidate every in-flight challenge.
-_POW_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".pow_key")
+_POW_KEY_FILE = os.path.join(_KEY_DIR, ".pow_key")
 if os.path.exists(_POW_KEY_FILE):
     POW_HMAC_KEY = bytes.fromhex(open(_POW_KEY_FILE).read().strip())
 else:
@@ -99,7 +122,7 @@ else:
         pass
 
 # ── Internal-route auth: hide /__* unless the operator presents the key ────
-_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".admin_key")
+_KEY_FILE = os.path.join(_KEY_DIR, ".admin_key")
 ADMIN_KEY_FROM_ENV = "ADMIN_KEY" in os.environ and bool(os.environ["ADMIN_KEY"])
 if ADMIN_KEY_FROM_ENV:
     INTERNAL_KEY = os.environ["ADMIN_KEY"]
@@ -315,7 +338,7 @@ async def admin_ip_remove(cidr: str) -> tuple[bool, str]:
 # ── Hybrid identity: session cookie + browser fingerprint ──────────────────
 # Solves the "shared NAT" problem — bans apply per-browser, not per-IP.
 # IP is kept only for: session-creation rate limit, dashboard display.
-_SESS_KEY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".session_key")
+_SESS_KEY_FILE = os.path.join(_KEY_DIR, ".session_key")
 if os.path.exists(_SESS_KEY_FILE):
     SESSION_KEY = bytes.fromhex(open(_SESS_KEY_FILE).read().strip())
 else:
