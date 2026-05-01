@@ -59,8 +59,16 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .nav a:hover{text-decoration:underline}
 
 /* 1.5.4 — click-to-popover for identity details + risk breakdown */
-.cell-click{cursor:pointer;border-bottom:1px dotted var(--blue)}
+.cell-click{cursor:pointer;border-bottom:1px dotted var(--blue);position:relative;padding-right:14px}
 .cell-click:hover{color:var(--blue)}
+/* Persistent ↗ link-icon — signals the value is clickable for a popover. */
+.cell-click::after{
+  content:'';display:inline-block;width:10px;height:10px;margin-left:4px;
+  vertical-align:middle;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10' fill='none' stroke='%2358a6ff' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><polyline points='3,1 8,1 8,6'/><line x1='8' y1='1' x2='2' y2='7'/></svg>");
+  background-repeat:no-repeat;background-position:center;
+  opacity:.6;transition:opacity .12s}
+.cell-click:hover::after{opacity:1}
 .pop-back{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:90;display:none}
 .pop-back.show{display:block}
 .popover{position:fixed;z-index:100;background:var(--card);border:1px solid var(--line);
@@ -95,7 +103,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.7 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.8 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__" class="active">Agents</a>
@@ -189,7 +197,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 <!-- 1.6.5 — rule inventory + per-method latency -->
 <div class="row" style="grid-template-columns:1fr 1fr;margin-top:14px;gap:14px">
   <div class="card">
-    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.6.7</span></h2>
+    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.6.8</span></h2>
     <div id="rule-inv" style="font-size:11.5px;font-family:ui-monospace,Menlo,monospace;line-height:1.7">loading…</div>
   </div>
   <div class="card">
@@ -330,8 +338,10 @@ async function tick(){
           const id = el.dataset.id;
           const banning = !el.classList.contains('on');
           el.style.opacity = '0.5';
-          const k_q = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
-          const url = (banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban') + k_q + '&id=' + encodeURIComponent(id);
+          const base = banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban';
+          const params = new URLSearchParams({id: id});
+          if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+          const url = base + '?' + params.toString();
           try {
             const r = await fetch(url, {credentials:'include'});
             const b = await r.json().catch(()=>({}));
@@ -716,6 +726,10 @@ function openPopover(kind, s, x, y){
         <span class="k">stealth</span>     <span class="v">${s.stealth_score}/100</span>
         <span class="k">risk score</span>  <span class="v">${s.metrics.risk_score}</span>
       </div>
+      <div id="ip-intel-section" style="margin-top:14px">
+        <h3 style="margin:0 0 6px 0">IP intelligence
+          <span class="dim" style="font-weight:400;font-size:11px">· loading…</span></h3>
+      </div>
       ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3>${blocksRows}` : ''}`;
   } else if (kind === 'risk'){
     title = 'Risk score breakdown';
@@ -742,6 +756,14 @@ function openPopover(kind, s, x, y){
     `${title} <span class="x" id="pop-close">×</span>`;
   document.getElementById('pop-close').onclick = closePopover;
   document.getElementById('pop-body').innerHTML = body;
+  // 1.6.7+ — async-fill the IP intelligence block on the identity popover
+  // (separate fetch, so the existing identity payload doesn't grow).
+  if (kind === 'id' && s && s.ip) {
+    fetchIpIntel(s.ip).then(html => {
+      const node = document.getElementById('ip-intel-section');
+      if (node) node.innerHTML = html;
+    }).catch(() => {});
+  }
   // Position near click, clamp to viewport.
   POP.style.display = 'block';
   POP.classList.add('show');
@@ -756,6 +778,89 @@ function openPopover(kind, s, x, y){
   if (px < 10) px = 10; if (py < 10) py = 10;
   POP.style.left = px+'px';
   POP.style.top  = py+'px';
+}
+
+// 1.6.7+ — fetch the per-IP intel payload and render as HTML. Pulls
+// country, ASN, AbuseIPDB score, CrowdSec decision, Tor-exit flag,
+// internal ban + risk + activity. Mirrors the layered summary that
+// scamalytics.com prints over an IP card.
+async function fetchIpIntel(ip) {
+  let j;
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/ip-intel/' +
+                          encodeURIComponent(ip),
+                          {cache:'no-store', credentials:'include'});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    j = await r.json();
+  } catch (e) {
+    return `<h3 style="margin:0 0 6px 0">IP intelligence</h3>
+            <div class="dim" style="font-size:11px">unavailable: ${escapeHtml(e.message||String(e))}</div>`;
+  }
+  const verdictColor = {
+    'high-risk':   'var(--red)',
+    'medium-risk': 'var(--orange)',
+    'low-risk':    'var(--yellow)',
+    'clean':       'var(--green)',
+  }[j.verdict] || 'var(--dim)';
+  const flagBadges = (j.flags||[]).map(f =>
+    `<span style="background:rgba(248,81,73,.15);color:#f85149;
+                  padding:1px 6px;border-radius:3px;font-size:10px;
+                  font-weight:700;text-transform:uppercase;
+                  margin-right:4px;display:inline-block">${escapeHtml(f)}</span>`
+  ).join(' ') || '<span class="dim" style="font-size:11px">no flags</span>';
+  const geo = j.geo || {};
+  const asn = j.asn || {};
+  const ab  = j.abuseipdb || {};
+  const cs  = j.crowdsec  || {};
+  const it  = j.internal  || {};
+  const fmtScore = (s) => {
+    if (s == null || s === undefined) return '—';
+    if (s >= 75) return `<span style="color:var(--red);font-weight:600">${s}</span>`;
+    if (s >= 25) return `<span style="color:var(--orange);font-weight:600">${s}</span>`;
+    return `<span style="color:var(--green)">${s}</span>`;
+  };
+  const fmtBool = (v, trueLabel='yes', falseLabel='no') =>
+    v ? `<span style="color:var(--red);font-weight:600">${trueLabel}</span>`
+      : `<span class="dim">${falseLabel}</span>`;
+  const fmtFlag = (v) => fmtBool(v, '⚑ yes', 'no');
+  const ipEnc = encodeURIComponent(j.ip || '');
+  const refs = [
+    ['AbuseIPDB',    `https://www.abuseipdb.com/check/${ipEnc}`],
+    ['Scamalytics',  `https://scamalytics.com/ip/${ipEnc}`],
+    ['VirusTotal',   `https://www.virustotal.com/gui/ip-address/${ipEnc}`],
+    ['Shodan',       `https://www.shodan.io/host/${ipEnc}`],
+    ['GreyNoise',    `https://viz.greynoise.io/ip/${ipEnc}`],
+    ['IPinfo',       `https://ipinfo.io/${ipEnc}`],
+  ];
+  const refsHtml = refs.map(([name, url]) =>
+    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
+        style="color:var(--blue);text-decoration:none;
+               background:#0a0e13;border:1px solid #21262d;
+               padding:2px 8px;border-radius:3px;font-size:11px;
+               margin-right:5px;display:inline-block;margin-bottom:4px">
+       ${escapeHtml(name)} ↗</a>`).join('');
+  return `
+    <h3 style="margin:0 0 6px 0">IP intelligence
+      <span style="background:${verdictColor};color:#000;font-weight:700;
+                   padding:2px 8px;border-radius:3px;font-size:10px;
+                   text-transform:uppercase;letter-spacing:.4px">${escapeHtml(j.verdict||'?')}</span>
+    </h3>
+    <div style="margin-bottom:8px">${flagBadges}</div>
+    <div class="kv">
+      <span class="k">country</span>     <span class="v">${escapeHtml((geo.country||'—'))}${geo.city?(' · '+escapeHtml(geo.city)):''}</span>
+      <span class="k">ASN</span>         <span class="v">${asn.asn?(`AS${asn.asn} · ${escapeHtml(asn.org||'')}`):'—'}</span>
+      <span class="k">datacenter</span>  <span class="v">${fmtFlag(asn.is_hosting)}</span>
+      <span class="k">tor exit</span>    <span class="v">${fmtFlag(j.tor_exit)}</span>
+      <span class="k">AbuseIPDB</span>   <span class="v">${fmtScore(ab.score)}/100 ${ab.country?('· '+escapeHtml(ab.country)):''} <span class="dim" style="font-size:10px">(${escapeHtml(ab.source||'?')})</span></span>
+      <span class="k">CrowdSec</span>    <span class="v">${cs.decision?`<span style="color:var(--red);font-weight:600">${escapeHtml(cs.decision)}</span>`:'<span class="dim">clean</span>'} <span class="dim" style="font-size:10px">(${escapeHtml(cs.source||'?')})</span></span>
+      <span class="k">internal ban</span><span class="v">${it.banned?`<span style="color:var(--red);font-weight:600">YES · ${it.banned_remaining_secs}s left</span> <span class="dim" style="font-size:10px">${escapeHtml(it.ban_reason||'')}</span>`:'<span class="dim">no</span>'}</span>
+      <span class="k">risk</span>        <span class="v">${fmtScore(it.risk_score)}/100</span>
+      <span class="k">activity</span>    <span class="v">${it.requests_24h||0} reqs (${it.allowed_24h||0} ok / ${it.blocked_24h||0} blocked)</span>
+    </div>
+    <div style="margin-top:10px">
+      <div class="dim" style="font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">External references · cross-check the score</div>
+      ${refsHtml}
+    </div>`;
 }
 </script>
 

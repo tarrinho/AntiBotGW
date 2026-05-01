@@ -1056,7 +1056,8 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                         last_seen_ts   DOUBLE PRECISION,
                         created_ts     DOUBLE PRECISION NOT NULL,
                         updated_ts     DOUBLE PRECISION NOT NULL,
-                        is_local       INTEGER NOT NULL DEFAULT 0
+                        is_local       INTEGER NOT NULL DEFAULT 0,
+                        auto_apply     INTEGER NOT NULL DEFAULT 0
                       );
                       CREATE TABLE IF NOT EXISTS gw_distribution (
                         source_gw_id TEXT NOT NULL,
@@ -1111,22 +1112,10 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                       CREATE INDEX IF NOT EXISTS idx_gw_sync_pending_status
                           ON gw_sync_pending(status, received_ts);
                     """)
-                    # 1.6.5 — idempotent ALTER for upgrade path: older schema
-                    # versions of admin_ips lacked the `note` column. Adding
-                    # IF NOT EXISTS keeps the dual-write in lockstep with SQLite.
-                    try:
-                        cur.execute(
-                            "ALTER TABLE admin_ips "
-                            "ADD COLUMN IF NOT EXISTS note TEXT")
-                    except Exception:
-                        pass
-                    # 1.6.7 — same for gw_registry.domain.
-                    try:
-                        cur.execute(
-                            "ALTER TABLE gw_registry "
-                            "ADD COLUMN IF NOT EXISTS domain TEXT")
-                    except Exception:
-                        pass
+                    # 1.6.7+ — additive column upgrades from the central
+                    # registry. Adds any missing column listed in
+                    # `_SCHEMA_MIGRATIONS` (PG side). Idempotent.
+                    _apply_pg_migrations(cur)
                     # Try to install Timescale hypertable if the extension exists.
                     # Best-effort: vanilla Postgres falls through silently.
                     # 1.6.5 — chunk_time_interval is an INTERVAL since `ts`
@@ -1275,6 +1264,79 @@ def pg_test_roundtrip() -> dict:
                 "reason": f"{type(e).__name__}: {str(e)[:160]}",
                 "round_trip_ms": round((_t.time() - t0) * 1000, 1)}
 
+# ─── Schema-migration registry ───────────────────────────────────────
+# Single source of truth for additive ALTER TABLE … ADD COLUMN
+# upgrades. Any release that adds a column to an existing table appends
+# one tuple here — never edit or remove old entries, they are the
+# upgrade path that older deployments rely on at first boot under the
+# new image.
+#
+# Format: (table, column, sqlite_ddl, pg_ddl)
+#   - sqlite_ddl / pg_ddl: the DDL fragment that follows
+#     "ALTER TABLE <t> ADD COLUMN <c> ". E.g. "TEXT" or
+#     "INTEGER NOT NULL DEFAULT 0". Set to None to skip on that backend
+#     (rare — happens when only one backend's older schema lacked the
+#     column; e.g. admin_ips.note was added later only on PG).
+#
+# Both appliers are idempotent (PRAGMA / IF NOT EXISTS) and safe to run
+# on every startup.
+_SCHEMA_MIGRATIONS: list[tuple[str, str, str | None, str | None]] = [
+    # 1.5.3
+    ("admin_ips",   "description",     "TEXT",                          None),
+    # 1.5.4 — `timeline` is SQLite-only (PG events table replaces it).
+    ("timeline",    "missed",          "INTEGER DEFAULT 0",             None),
+    # 1.6.5 — `svc_metrics` is SQLite-only (no PG mirror table).
+    ("svc_metrics", "pg_db_bytes",     "INTEGER",                       None),
+    ("svc_metrics", "pg_events_rows",  "INTEGER",                       None),
+    # 1.6.7+ — historical sampling of identity count + request counter
+    # so the Service dashboard can render click-to-zoom charts on those
+    # cards (same UX as cpu/mem/disk).
+    ("svc_metrics", "identities_count","INTEGER DEFAULT 0",             None),
+    ("svc_metrics", "total_requests",  "INTEGER DEFAULT 0",             None),
+    # 1.6.5 — admin_ips.note added on PG only (SQLite schema had it from creation)
+    ("admin_ips",   "note",            None,                            "TEXT"),
+    # 1.6.7
+    ("gw_registry", "domain",          "TEXT",                          "TEXT"),
+    # 1.6.7+
+    ("gw_registry", "auto_apply",      "INTEGER NOT NULL DEFAULT 0",    "INTEGER NOT NULL DEFAULT 0"),
+]
+
+def _apply_sqlite_migrations(conn) -> None:
+    """Apply every applicable entry from `_SCHEMA_MIGRATIONS` to the
+    given SQLite connection. Logs each ALTER. Per-table PRAGMA cache
+    avoids re-querying when multiple columns target the same table."""
+    pragma_cache: dict[str, set[str]] = {}
+    for table, col, sqlite_ddl, _pg_ddl in _SCHEMA_MIGRATIONS:
+        if sqlite_ddl is None:
+            continue
+        try:
+            if table not in pragma_cache:
+                pragma_cache[table] = {
+                    r[1] for r in conn.execute(f"PRAGMA table_info({table})")  # nosec B608 — table from internal allowlist
+                }
+            if col in pragma_cache[table]:
+                continue
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {sqlite_ddl}")  # nosec B608
+            pragma_cache[table].add(col)
+            print(f"[migrate-sqlite] +{table}.{col}", flush=True)
+        except Exception as _e:
+            print(f"[migrate-sqlite] {table}.{col}: {_e}", flush=True)
+
+def _apply_pg_migrations(cur) -> None:
+    """Apply every applicable entry from `_SCHEMA_MIGRATIONS` to the
+    given Postgres cursor. ADD COLUMN IF NOT EXISTS is built-in, so no
+    pre-check needed; failures are swallowed (best-effort upgrade)."""
+    for table, col, _sqlite_ddl, pg_ddl in _SCHEMA_MIGRATIONS:
+        if pg_ddl is None:
+            continue
+        try:
+            cur.execute(
+                f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {pg_ddl}"  # nosec B608
+            )
+        except Exception as _e:
+            print(f"[migrate-pg] {table}.{col}: {_e}", flush=True)
+
+
 def db_init():
     """Create tables if they don't exist."""
     conn = sqlite3.connect(DB_PATH)
@@ -1398,7 +1460,8 @@ def db_init():
         last_seen_ts   REAL,
         created_ts     REAL NOT NULL,
         updated_ts     REAL NOT NULL,
-        is_local       INTEGER NOT NULL DEFAULT 0
+        is_local       INTEGER NOT NULL DEFAULT 0,
+        auto_apply     INTEGER NOT NULL DEFAULT 0  -- 1.6.7+ trusted peer
     );
 
     -- 1.6.7: distribution rules — directional, source → target. Defaults
@@ -1480,37 +1543,9 @@ def db_init():
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user
         ON user_sessions(username, status);
     """)
-    # 1.5.3: idempotent migration — add `description` column if missing
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(admin_ips)")}
-        if "description" not in cols:
-            conn.execute("ALTER TABLE admin_ips ADD COLUMN description TEXT")
-    except Exception as _e:
-        print(f"[migrate] admin_ips description: {_e}", flush=True)
-    # 1.5.4: idempotent migration — add `missed` column to timeline
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(timeline)")}
-        if "missed" not in cols:
-            conn.execute("ALTER TABLE timeline ADD COLUMN missed INTEGER DEFAULT 0")
-    except Exception as _e:
-        print(f"[migrate] timeline missed: {_e}", flush=True)
-    # 1.6.5: idempotent migration — add Postgres / Timescale size columns
-    # to svc_metrics so the Service dashboard's PG-size chart has data.
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(svc_metrics)")}
-        if "pg_db_bytes" not in cols:
-            conn.execute("ALTER TABLE svc_metrics ADD COLUMN pg_db_bytes INTEGER")
-        if "pg_events_rows" not in cols:
-            conn.execute("ALTER TABLE svc_metrics ADD COLUMN pg_events_rows INTEGER")
-    except Exception as _e:
-        print(f"[migrate] svc_metrics pg_*: {_e}", flush=True)
-    # 1.6.7: idempotent migration — add `domain` column to gw_registry.
-    try:
-        cols = {r[1] for r in conn.execute("PRAGMA table_info(gw_registry)")}
-        if "domain" not in cols:
-            conn.execute("ALTER TABLE gw_registry ADD COLUMN domain TEXT")
-    except Exception as _e:
-        print(f"[migrate] gw_registry domain: {_e}", flush=True)
+    # 1.6.7+ — additive column upgrades driven by the central registry.
+    # See `_SCHEMA_MIGRATIONS` above; new releases append entries there.
+    _apply_sqlite_migrations(conn)
     conn.commit()
     conn.close()
 
@@ -2201,6 +2236,11 @@ async def _sample_service_metrics_loop():
                 "open_fds":      _fd_count(),
                 "net_rx_bps":    int(net_rx_per_s),
                 "net_tx_bps":    int(net_tx_per_s),
+                # 1.6.7+ — app-level counters so the click-to-zoom charts
+                # on the Service dashboard work for the Identities + Requests
+                # cards. Cheap reads — `len(ip_state)` is O(1).
+                "identities_count": len(ip_state),
+                "total_requests":   metrics.get("total_requests", 0),
                 **{f"db_{k}": v for k, v in _db_file_sizes().items()},
             }
             # 1.6.5 — sample pg_database_size + events row count once per
@@ -2251,6 +2291,8 @@ async def _sample_service_metrics_loop():
                     sample.get("db_db", 0), sample.get("db_wal", 0),
                     sample.get("db_shm", 0), sample.get("db_total", 0),
                     sample.get("pg_db_bytes"), sample.get("pg_events_rows"),
+                    sample.get("identities_count", 0),
+                    sample.get("total_requests", 0),
                 )
                 try:
                     db_queue.put_nowait(("svc_metric", row))
@@ -2359,13 +2401,15 @@ async def db_writer_loop():
                            disk_used, disk_total, disk_avail, disk_pct,
                            procs, open_fds, net_rx_bps, net_tx_bps,
                            db_db, db_wal, db_shm, db_total,
-                           pg_db_bytes, pg_events_rows)
+                           pg_db_bytes, pg_events_rows,
+                           identities_count, total_requests)
                           VALUES (?, ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?,
+                                  ?, ?,
                                   ?, ?)
                         """, args)
                     elif op == "svc_metric_prune":
@@ -2421,6 +2465,28 @@ async def db_writer_loop():
                             conn.execute(
                                 f"UPDATE gw_registry SET {cols} WHERE gw_id=?",
                                 params)
+                    elif op == "gw_registry_discover":
+                        # 1.6.7+ — auto-discovery from mesh-sync. Inserts a
+                        # placeholder row for an unknown peer that just
+                        # published to Redis. status='untrusted' + auto_apply=0
+                        # until the operator adopts the row in Settings.
+                        # args = (gw_id, ts)
+                        gw_id, ts = args
+                        conn.execute(
+                            "INSERT OR IGNORE INTO gw_registry "
+                            "(gw_id, domain, region, environment, status, "
+                            " can_distribute, public_key, private_key, "
+                            " key_created_ts, last_seen_ts, "
+                            " created_ts, updated_ts, is_local, auto_apply) "
+                            "VALUES (?, NULL, NULL, NULL, 'untrusted', 0, "
+                            "        '', NULL, ?, ?, ?, ?, 0, 0)",
+                            (gw_id, ts, ts, ts, ts))
+                        # Always refresh last_seen_ts so the Sync column
+                        # picks up the contact even if the row pre-existed.
+                        conn.execute(
+                            "UPDATE gw_registry SET last_seen_ts=? "
+                            "WHERE gw_id=?",
+                            (ts, gw_id))
                     elif op == "gw_registry_delete":
                         # args = (gw_id,)
                         conn.execute("DELETE FROM gw_registry WHERE gw_id=?", args)
@@ -2497,9 +2563,10 @@ async def db_writer_loop():
                     # 1.6.7 — mesh-sync pending offers ────────────────
                     elif op == "mesh_sync_pending_upsert":
                         # args = (received_ts, source_gw_id, key_name, value)
-                        # Replace the existing (source, key) row so a peer
-                        # that re-broadcasts a new value supersedes the
-                        # prior pending one.
+                        # Idempotent: the WHERE clause keeps a same-value
+                        # re-broadcast from disturbing a previously
+                        # confirmed/rejected row, and avoids no-op writes
+                        # for unchanged pending rows.
                         conn.execute(
                             "INSERT INTO gw_sync_pending "
                             "(received_ts, source_gw_id, key_name, value, status) "
@@ -2508,7 +2575,8 @@ async def db_writer_loop():
                             "  received_ts = excluded.received_ts, "
                             "  value       = excluded.value, "
                             "  status      = 'pending', "
-                            "  confirmed_ts = NULL",
+                            "  confirmed_ts = NULL "
+                            "WHERE excluded.value <> gw_sync_pending.value",
                             args)
                     elif op == "mesh_sync_status":
                         # args = (id, new_status, ts)
@@ -2853,12 +2921,22 @@ ADMIN_NS_SECURED = ADMIN_NS + "/secured"
 # Sub-paths that must remain reachable WITHOUT the admin key. Everything
 # else under ADMIN_NS implicitly requires admin-IP + admin-key auth.
 _ADMIN_PUBLIC_SUBPATHS = (
-    "/live", "/pow", "/solver", "/challenge",
-    "/botd-report", "/assets/",
-    # 1.6.7 — login flow must be reachable without auth so the operator
-    # can sign in. Logout is a GET so it works as a plain link.
-    "/login", "/logout",
+    # JS-challenge handshake — visitor browsers need these to mint the
+    # chal cookie. Locking any of them = site dead for all non-admin IPs.
+    "/pow", "/solver", "/challenge",
+    # BotD report endpoint + bundle — visitor browsers POST telemetry
+    # here after running the BotD detector loaded from /assets/botd.bundle.js.
+    "/botd-report",
+    "/assets/botd.bundle.js",
+    # 1.6.7+: NOT in this list — admin-IP gated:
+    #   /login, /logout       — see _ADMIN_LOGIN_SUBPATHS below
+    #   /live                 — source IP must be loopback (HEALTHCHECK only)
+    #   /assets/escalate.svg, …  — dashboard-only assets, operator session
+    # See protect() middleware for the per-tier handling.
 )
+# Sub-paths that require the admin-IP allowlist but NOT a session
+# cookie (the cookie doesn't exist yet on /login).
+_ADMIN_LOGIN_SUBPATHS = ("/login", "/logout")
 
 def _is_admin_path(p: str) -> bool:
     """True iff `p` lands on any internal endpoint (anything under the
@@ -3986,12 +4064,22 @@ async def protect(request: web.Request, handler):
         return web.Response(status=400, text="bad request\n",
                             headers={_REQUEST_ID_HEADER: rid})
 
-    # Unauthenticated liveness probe — used by the container HEALTHCHECK.
+    # 1.6.7+: liveness probe is loopback-only. The container's HEALTHCHECK
+    # connects via the container's own loopback (request.remote=127.0.0.1),
+    # which is the only legitimate caller. Anyone else gets the upstream
+    # 404 silent decoy — same as every other locked admin path.
     if request.path == ADMIN_NS + "/live":
-        return web.Response(text="ok",
-                            headers={"Cache-Control": "no-store",
-                                     "Content-Type": "text/plain; charset=utf-8",
-                                     _REQUEST_ID_HEADER: rid})
+        src = get_ip(request) or ""
+        if src in ("127.0.0.1", "::1"):
+            return web.Response(text="ok",
+                                headers={"Cache-Control": "no-store",
+                                         "Content-Type": "text/plain; charset=utf-8",
+                                         _REQUEST_ID_HEADER: rid})
+        ua = request.headers.get("User-Agent", "")
+        await record(src, ua, request.path,
+                      _upstream_404_cache.get("status") or 404,
+                      "live-not-loopback", request_id=rid)
+        return await _serve_mirrored_404()
 
     # v1.4 #1 — JS challenge: solver POSTs back here. Rate-limit by socket-IP
     # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
@@ -4171,7 +4259,17 @@ async def protect(request: web.Request, handler):
         # track_key — no admin-IP / admin-key gating needed there.
         if _admin_path_is_public(request.path):
             return await handler(request)
-        if _admin_ip_allowed(request) and _internal_authed(request):
+        # 1.6.7+: /login + /logout require the admin-IP allowlist but
+        # do NOT require a session cookie (there's no cookie until
+        # after login). Hides the login form entirely from anyone
+        # whose source IP isn't allowed — the form 404-decoys like
+        # any other admin path on un-allowed IPs.
+        sub = request.path[len(ADMIN_NS):]
+        if sub in _ADMIN_LOGIN_SUBPATHS:
+            if _admin_ip_allowed(request):
+                return await handler(request)
+            # else: fall through to silent decoy
+        elif _admin_ip_allowed(request) and _internal_authed(request):
             return await handler(request)
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
@@ -4185,6 +4283,29 @@ async def protect(request: web.Request, handler):
                       _upstream_404_cache.get("status") or 404,
                       reason, request_id=rid)
         return await _serve_mirrored_404()
+
+    # 1.6.7+ — Authenticated-operator bypass. When the request carries a
+    # valid `agw_session` cookie AND comes from an admin-allowed IP, we
+    # treat it as a signed-in operator and forward DIRECTLY to the upstream
+    # handler. This guards against the operator being silent-decoyed by a
+    # detector their own dashboard work is supposed to oversee:
+    #   - they may be testing the upstream from the same browser tab the
+    #     dashboard is open in,
+    #   - their IP may have scored high on AbuseIPDB / CrowdSec or even
+    #     hit the internal ban list during a prior probing session,
+    #   - they may have triggered RPS / ai-headers / honeypot etc. while
+    #     debugging — none of which should lock them out of the system
+    #     they are actively administering.
+    # The request is still recorded so it surfaces in the Logs dashboard
+    # with reason='operator-passthrough' (visible signal that a detector
+    # WOULD have fired but was bypassed for an authenticated operator).
+    if _internal_authed(request) and _admin_ip_allowed(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        await record(ip, ua, request.path, 0, "operator-passthrough",
+                     request_id=rid)
+        request["_operator_bypass"] = True
+        return await handler(request)
 
     # ── Hybrid identity (primary tracking key) ──
     # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,
@@ -4992,7 +5113,7 @@ async def lists_snapshot_endpoint(request: web.Request):
         # Admin IPs
         "admin_ip_count":         len(globals().get("ADMIN_ALLOWED_NETS") or []),
         # Versions
-        "version":                "AppSecGW_1.6.7",
+        "version":                "AppSecGW_1.6.8",
         "ts":                     n,
     }
     return web.json_response(snapshot, headers={"Cache-Control":"no-store"})
@@ -5170,7 +5291,7 @@ async def health_score_endpoint(request: web.Request):
     return web.json_response({
         "score":       score,
         "reasons":     reasons,
-        "version":     "AppSecGW_1.6.7",
+        "version":     "AppSecGW_1.6.8",
         "upstream":    UPSTREAM,
         "db_backend":  DB_BACKEND,
         "uptime_secs": int(_t.time() - START_EPOCH),
@@ -9574,7 +9695,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.6.7"
+                response_headers["X-Proxy"] = "AppSecGW_1.6.8"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -10112,7 +10233,9 @@ async def service_metrics_data_endpoint(request: web.Request):
                  "cg_used", "cg_limit", "mem_total", "disk_total", "disk_avail",
                  "swap_total",
                  # 1.6.5: Postgres / TimescaleDB size + events rows
-                 "pg_db_bytes", "pg_events_rows")
+                 "pg_db_bytes", "pg_events_rows",
+                 # 1.6.7+: app-level counters (identities live + requests total)
+                 "identities_count", "total_requests")
     SUM_KEYS  = ("net_rx_bps", "net_tx_bps")
 
     buckets = {}
@@ -10170,7 +10293,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.6.7",
+        "version":         "AppSecGW_1.6.8",
     }
     return web.json_response({
         "current":          current,
@@ -10976,6 +11099,7 @@ def _gw_row_to_dict(r: dict, include_private: bool = False) -> dict:
     out = dict(r)
     out["can_distribute"] = bool(out.get("can_distribute", 0))
     out["is_local"]       = bool(out.get("is_local", 0))
+    out["auto_apply"]     = bool(out.get("auto_apply", 0))
     out["fingerprint"]    = _gw_fingerprint(out.get("public_key") or "")
     # Never leak another gateway's private key (defence-in-depth —
     # the column is also normally NULL for non-local rows). For the
@@ -11010,14 +11134,64 @@ def _gw_load_distribution() -> list[tuple[str, str]]:
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────
+async def _gw_sync_state(gw_id: str, is_local: bool, can_distribute: bool,
+                          last_seen_ts: float | None) -> dict:
+    """1.6.7 — compute live Redis-presence + persisted last-seen status
+    for a peer gateway. Surfaced as the `sync` column in the Settings →
+    Gateway Registry table.
+
+    state values:
+      local       — this is the local gw (★)
+      no-redis    — REDIS_URL not set or Redis unreachable
+      disabled    — peer marked can_distribute=0 (we wouldn't sync to it
+                    anyway; informational)
+      live        — Redis has a fresh `mesh:offers:<gw_id>` hash for this
+                    peer (publishing within the 60 s TTL window)
+      stale       — last_seen_ts within the last hour but no current
+                    Redis presence (peer paused or briefly offline)
+      offline     — never seen, or last_seen > 1 h ago
+    """
+    if is_local:
+        return {"state": "local", "live_offers": None, "age_secs": 0}
+    if not REDIS_URL or _redis is None:
+        return {"state": "no-redis", "live_offers": None, "age_secs": None}
+    if not can_distribute:
+        return {"state": "disabled", "live_offers": 0, "age_secs": None}
+    n = _t.time()
+    age = (n - last_seen_ts) if last_seen_ts else None
+    # Live check — does Redis have an offer hash from this peer right now?
+    live_count = 0
+    try:
+        key = f"{REDIS_NS}:{_MESH_REDIS_NS}:{gw_id}"
+        live_count = await asyncio.wait_for(_redis.hlen(key),
+                                             timeout=REDIS_TIMEOUT)
+    except Exception:
+        live_count = 0
+    if live_count > 0:
+        return {"state": "live", "live_offers": int(live_count),
+                "age_secs": 0 if age is None else age}
+    if age is not None and age < 3600:
+        return {"state": "stale", "live_offers": 0, "age_secs": age}
+    return {"state": "offline", "live_offers": 0, "age_secs": age}
+
+
 async def gw_registry_list_endpoint(request: web.Request):
-    """GET <NS>/secured/admin/gw-registry — list all gateways."""
+    """GET <NS>/secured/admin/gw-registry — list all gateways with live
+    sync state per row (computed from Redis at request time)."""
     rows = _gw_load_all()
     local_id = _gw_local_id()
+    redis_available = bool(REDIS_URL and _redis is not None)
+    for r in rows:
+        sync = await _gw_sync_state(
+            r["gw_id"], bool(r.get("is_local")),
+            bool(r.get("can_distribute")),
+            r.get("last_seen_ts"))
+        r["sync"] = sync
     return web.json_response(
         {"local_gw_id": local_id, "gateways": rows,
          "regions": list(_GW_REGIONS), "environments": list(_GW_ENVS),
-         "statuses": list(_GW_STATUSES)},
+         "statuses": list(_GW_STATUSES),
+         "redis_available": redis_available},
         headers={"Cache-Control": "no-store"})
 
 
@@ -11213,6 +11387,46 @@ async def gw_registry_can_distribute_endpoint(request: web.Request):
     _gw_audit("can_distribute_toggled", gw_id, _gw_actor(request),
               can_distribute=bool(new_val))
     return web.json_response({"gw_id": gw_id, "can_distribute": bool(new_val)},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_auto_apply_endpoint(request: web.Request):
+    """PATCH <NS>/secured/admin/gw-registry/{gw_id}/auto-apply
+
+    Toggle the trusted-peer flag. When ON, inbound mesh-sync offers from
+    this peer skip the pending queue and apply straight to the live
+    integration. Only meaningful for non-local rows; rejected on the
+    local row to keep the audit story clean."""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    cur = _gw_load_one(gw_id)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    if cur.get("is_local"):
+        return web.json_response(
+            {"error": "auto-apply only meaningful on remote peers"},
+            status=400, headers={"Cache-Control": "no-store"})
+    try:
+        body = await asyncio.wait_for(request.content.read(1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    new_val = 1 if data.get("auto_apply") else 0
+    n = _t.time()
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "gw_registry_update",
+                (gw_id, {"auto_apply": new_val, "updated_ts": n}),
+            ))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("auto_apply_toggled", gw_id, _gw_actor(request),
+              auto_apply=bool(new_val))
+    return web.json_response({"gw_id": gw_id, "auto_apply": bool(new_val)},
                               headers={"Cache-Control": "no-store"})
 
 
@@ -11566,6 +11780,157 @@ async def logout_endpoint(request: web.Request):
     resp = web.HTTPFound("/antibot-appsec-gateway/login")
     resp.del_cookie(_SESSION_COOKIE, path="/")
     return resp
+
+
+async def ip_intel_endpoint(request: web.Request):
+    """GET <NS>/secured/ip-intel/{ip} — aggregate every reputation +
+    geolocation signal the gateway already has on an IP into one
+    payload. Powers the Identity-details popover in agents.html /
+    main.html. All sub-lookups are best-effort: a downed AbuseIPDB or
+    missing MaxMind file degrades to source='disabled'/'unknown', the
+    rest of the payload still returns.
+
+    Layers (in increasing reliance on remote services):
+      • internal: ban state, risk score, request counts (free, local DB)
+      • geo:      MaxMind GeoLite2-City  (free, local mmdb)
+      • asn:      MaxMind GeoLite2-ASN  (free, local mmdb)
+      • tor_exit: in-memory torbulkexitlist set
+      • abuseipdb: SQLite cache (or live API if cache stale + key set)
+      • crowdsec:  in-process cache (or LAPI poll if stale + URL set)
+    """
+    ip = (request.match_info.get("ip") or "").strip()
+    try:
+        _ipaddress.ip_address(ip)
+    except (ValueError, TypeError):
+        return web.json_response({"error": "invalid IP"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+
+    out: dict = {"ip": ip}
+
+    # ── geo (City) ────────────────────────────────────────────────
+    city_rec = _city_lookup(ip)
+    if city_rec:
+        lat, lng, country, city = city_rec
+        out["geo"] = {"country": country, "city": city,
+                      "lat": lat, "lng": lng}
+    else:
+        out["geo"] = {"country": "", "city": "", "lat": None, "lng": None}
+
+    # ── ASN ──────────────────────────────────────────────────────
+    asn, org, is_hosting, asn_src = _asn_lookup(ip)
+    out["asn"] = {"asn": asn, "org": org,
+                  "is_hosting": is_hosting, "source": asn_src}
+
+    # ── Tor exit set ─────────────────────────────────────────────
+    out["tor_exit"] = ip in _tor_exits
+
+    # ── AbuseIPDB ────────────────────────────────────────────────
+    ab_score, ab_country, ab_src = await _abuseipdb_lookup(ip)
+    out["abuseipdb"] = {"score": ab_score, "country": ab_country,
+                        "source": ab_src,
+                        "url": (f"https://www.abuseipdb.com/check/{ip}"
+                                if ab_src not in ("disabled", "private",
+                                                   "invalid") else None)}
+
+    # ── CrowdSec ─────────────────────────────────────────────────
+    cs_decision, cs_src = await _crowdsec_check(ip)
+    out["crowdsec"] = {"decision": cs_decision, "source": cs_src}
+
+    # ── Internal: bans + recent activity + risk ──────────────────
+    n = _t.time()
+    banned_until = None; ban_reason = None
+    requests_24h = 0; allowed_24h = 0; blocked_24h = 0
+    first_seen_ts = None; last_seen_ts = None
+    last_path = None
+    blocks_by_reason: dict = {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        b = conn.execute(
+            "SELECT banned_until, reason FROM bans WHERE ip = ?",
+            (ip,)).fetchone()
+        if b and (b["banned_until"] or 0) > n:
+            banned_until = b["banned_until"]
+            ban_reason   = b["reason"]
+        # Activity from clients table (column names: first_seen / last_seen).
+        c = conn.execute(
+            "SELECT allowed_count, blocked_count, "
+            "       first_seen, last_seen, "
+            "       last_path, blocks_by_reason "
+            "FROM clients WHERE ip = ? "
+            "ORDER BY last_seen DESC LIMIT 1",
+            (ip,)).fetchone()
+        if c:
+            allowed_24h   = int(c["allowed_count"] or 0)
+            blocked_24h   = int(c["blocked_count"] or 0)
+            requests_24h  = allowed_24h + blocked_24h
+            first_seen_ts = c["first_seen"]
+            last_seen_ts  = c["last_seen"]
+            last_path     = c["last_path"]
+            try:
+                blocks_by_reason = json.loads(c["blocks_by_reason"] or "{}")
+            except (ValueError, TypeError):
+                blocks_by_reason = {}
+        conn.close()
+    except Exception as _e:
+        slog("ip_intel_internal_failed", level="warn", err=str(_e)[:200])
+
+    # Risk score lives in-memory on `ip_state` keyed by track_key. Scan
+    # for entries whose `last_ip` matches and take the maximum — multiple
+    # identities can share an IP (NAT, shared device).
+    risk_score = 0
+    try:
+        for s in ip_state.values():
+            if getattr(s, "last_ip", "") == ip:
+                rs = int(s.risk_score or 0)
+                if rs > risk_score:
+                    risk_score = rs
+    except Exception:
+        pass
+
+    out["internal"] = {
+        "banned": bool(banned_until),
+        "banned_until_ts": banned_until,
+        "banned_remaining_secs": (int(banned_until - n)
+                                   if banned_until else None),
+        "ban_reason": ban_reason,
+        "risk_score": risk_score,
+        "first_seen_ts": first_seen_ts,
+        "last_seen_ts":  last_seen_ts,
+        "requests_24h":  requests_24h,
+        "allowed_24h":   allowed_24h,
+        "blocked_24h":   blocked_24h,
+        "last_path":     last_path,
+        "blocks_by_reason": blocks_by_reason,
+    }
+
+    # ── Risk verdict — single human-readable label combining all signals.
+    # Mirrors the kind of summary scamalytics.com prints on top of the page.
+    flags: list[str] = []
+    if banned_until:                flags.append("banned")
+    if cs_decision:                 flags.append(f"crowdsec:{cs_decision}")
+    if ab_score >= 75:              flags.append("abuse-high")
+    elif ab_score >= 25:            flags.append("abuse-med")
+    if out["tor_exit"]:             flags.append("tor-exit")
+    if is_hosting:                  flags.append("datacenter")
+    if risk_score >= 100:           flags.append("risk-critical")
+    elif risk_score >= 50:          flags.append("risk-high")
+    elif risk_score >= 25:          flags.append("risk-med")
+    if not flags:
+        verdict = "clean"
+    elif any(f in flags for f in
+              ("banned", "abuse-high", "risk-critical")) \
+         or any(f.startswith("crowdsec:") for f in flags):
+        verdict = "high-risk"
+    elif any(f in flags for f in
+              ("abuse-med", "tor-exit", "risk-high")):
+        verdict = "medium-risk"
+    else:
+        verdict = "low-risk"
+    out["verdict"] = verdict
+    out["flags"]   = flags
+
+    return web.json_response(out, headers={"Cache-Control": "no-store"})
 
 
 async def whoami_endpoint(request: web.Request):
@@ -12096,18 +12461,22 @@ async def mesh_sync_reject_endpoint(request: web.Request):
 # ── Background loop: publish + scrape via Redis ─────────────────────
 async def _mesh_sync_loop():
     """Every 30s when REDIS_URL is set:
-      1. Publish each enabled key's current value to a Redis hash keyed
-         by this gateway's id (TTL 60s — re-published each cycle).
-      2. Scan all peer hashes in `appsecgw:mesh:offers:*`, skip own.
-      3. For each peer offer: skip if local value is set OR same offer is
-         already pending; otherwise INSERT into gw_sync_pending.
-    All Redis I/O is best-effort — failures are logged at warn level
-    once and the loop continues."""
+      1. Publish enabled-key values to `mesh:offers:<gw_id>` (TTL 60s).
+      2. Snapshot peer trust state from gw_registry (one query/cycle).
+      3. Scan peer hashes; for each:
+           - queue gw_registry_discover (INSERT OR IGNORE + bump last_seen)
+           - per offered eligible key:
+               - skip if local value is already set
+               - if peer is trusted (status=active + auto_apply=1):
+                     apply directly + audit
+               - else: queue mesh_sync_pending_upsert (handler dedupes via
+                     ON CONFLICT WHERE value differs)
+    All Redis/DB I/O is best-effort."""
     while True:
         try:
             if _redis is not None:
                 src = _gw_local_id() or "gw-local"
-                # 1. publish
+                # 1. publish own offers
                 offers = {k: _mesh_sync_get_value(k)
                           for k in _mesh_sync_enabled_set()
                           if _mesh_sync_get_value(k)}
@@ -12125,7 +12494,19 @@ async def _mesh_sync_loop():
                     except Exception as e:
                         slog("mesh_sync_publish_failed", level="warn",
                              err=str(e)[:120])
-                # 2. scrape peers
+                # 2. snapshot peer trust state once per cycle. Avoids a
+                # SQLite round-trip per peer-key inside the inner loop.
+                trust_map: dict = {}   # peer_gw -> auto-apply allowed?
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    for r in conn.execute(
+                            "SELECT gw_id, status, auto_apply "
+                            "FROM gw_registry WHERE is_local = 0"):
+                        trust_map[r[0]] = (r[1] == "active" and r[2] == 1)
+                    conn.close()
+                except Exception:
+                    pass
+                # 3. scrape peers
                 try:
                     pattern = f"{REDIS_NS}:{_MESH_REDIS_NS}:*"
                     peer_keys = []
@@ -12135,6 +12516,7 @@ async def _mesh_sync_loop():
                     slog("mesh_sync_scan_failed", level="warn",
                          err=str(e)[:120])
                     peer_keys = []
+                now = _t.time()
                 for pk in peer_keys:
                     peer_gw = pk.rsplit(":", 1)[-1]
                     if peer_gw == src:
@@ -12144,35 +12526,47 @@ async def _mesh_sync_loop():
                                                           timeout=REDIS_TIMEOUT)
                     except Exception:
                         continue
+                    # Auto-discover: insert placeholder if missing + bump
+                    # last_seen_ts. Idempotent — handler does INSERT OR
+                    # IGNORE then UPDATE.
+                    if db_queue is not None:
+                        try:
+                            db_queue.put_nowait((
+                                "gw_registry_discover", (peer_gw, now),
+                            ))
+                        except asyncio.QueueFull:
+                            pass
+                    auto_ok = trust_map.get(peer_gw, False)
                     for kname, kval in (offered or {}).items():
                         if kname not in _MESH_SYNC_ELIGIBLE_KEYS:
                             continue
                         if not kval:
                             continue
-                        # If we already have a non-empty local value, skip.
                         if _mesh_sync_get_value(kname):
                             continue
-                        # Skip if a pending row already exists from this
-                        # peer with the same value (avoid noisy
-                        # re-broadcasts).
-                        try:
-                            conn = sqlite3.connect(DB_PATH)
-                            existing = conn.execute(
-                                "SELECT value, status FROM gw_sync_pending "
-                                "WHERE source_gw_id = ? AND key_name = ?",
-                                (peer_gw, kname)).fetchone()
-                            conn.close()
-                        except Exception:
-                            existing = None
-                        if existing and existing[1] == "pending" and existing[0] == kval:
+                        if auto_ok:
+                            # Trusted peer — apply directly. No pending.
+                            try:
+                                _mesh_sync_apply_value(kname, kval)
+                            except Exception as e:
+                                slog("mesh_sync_auto_apply_failed",
+                                     level="error",
+                                     source_gw=peer_gw, key=kname,
+                                     err=str(e)[:120])
+                                continue
+                            slog("mesh_sync_auto_applied", level="warn",
+                                 source_gw=peer_gw, key=kname,
+                                 value_length=len(kval))
+                            _gw_audit("mesh_sync_auto_applied", kname,
+                                      "system", source_gw=peer_gw)
                             continue
-                        if existing and existing[1] in ("confirmed", "rejected") and existing[0] == kval:
-                            continue
+                        # Untrusted peer — UPSERT pending. Dedup happens
+                        # in the handler via ON CONFLICT WHERE value differs.
                         if db_queue is not None:
                             try:
                                 db_queue.put_nowait((
                                     "mesh_sync_pending_upsert",
-                                    (_t.time(), peer_gw, kname, kval),
+                                    (now, peer_gw, kname, kval),
                                 ))
                             except asyncio.QueueFull:
                                 pass
@@ -12283,6 +12677,7 @@ def make_app() -> web.Application:
     app.router.add_patch (GW + "/{gw_id}",                          gw_registry_update_endpoint)
     app.router.add_delete(GW + "/{gw_id}",                          gw_registry_delete_endpoint)
     app.router.add_patch (GW + "/{gw_id}/can-distribute",           gw_registry_can_distribute_endpoint)
+    app.router.add_patch (GW + "/{gw_id}/auto-apply",               gw_registry_auto_apply_endpoint)
     app.router.add_post  (GW + "/{gw_id}/rotate-key",               gw_registry_rotate_key_endpoint)
     app.router.add_get   (GW + "/{gw_id}/sync-status",              gw_registry_sync_status_endpoint)
 
@@ -12291,6 +12686,7 @@ def make_app() -> web.Application:
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
     app.router.add_get  (PUBLIC + "/logout", logout_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
+    app.router.add_get  (SEC    + "/ip-intel/{ip}", ip_intel_endpoint)
     USERS = SEC + "/admin/users"
     app.router.add_get   (USERS,                  users_list_endpoint)
     app.router.add_post  (USERS,                  users_create_endpoint)
@@ -12328,7 +12724,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.6.7    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.6.8    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     _ns_line = f"Admin namespace: {ADMIN_NS}"
     print(f"  ║ {_ns_line:<57}║")

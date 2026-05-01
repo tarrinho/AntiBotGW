@@ -59,7 +59,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.7 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.8 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
@@ -72,28 +72,28 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
 <div class="grid">
 
-  <!-- ── Top-row counters ────────────────────────────── -->
+  <!-- ── Top-row counters · click any card to drill into history ─── -->
   <div class="row5">
-    <div class="card"><h2>CPU</h2>
+    <div class="card stat-card" data-stat="cpu_pct" data-label="CPU usage" data-unit="%"><h2>CPU</h2>
       <div class="metric cpu" id="m-cpu">—</div>
       <div class="metric-sub" id="m-load">load —</div>
       <div class="bar cpu"><div id="b-cpu" style="width:0%"></div></div>
     </div>
-    <div class="card"><h2>Memory</h2>
+    <div class="card stat-card" data-stat="mem_pct" data-label="Memory usage" data-unit="%"><h2>Memory</h2>
       <div class="metric mem" id="m-mem">—</div>
       <div class="metric-sub" id="m-mem-sub">— used / —</div>
       <div class="bar mem"><div id="b-mem" style="width:0%"></div></div>
     </div>
-    <div class="card"><h2>Disk (/data)</h2>
+    <div class="card stat-card" data-stat="disk_used" data-label="Disk used" data-unit="bytes"><h2>Disk (/data)</h2>
       <div class="metric disk" id="m-disk">—</div>
       <div class="metric-sub" id="m-disk-sub">— used / —</div>
       <div class="bar disk"><div id="b-disk" style="width:0%"></div></div>
     </div>
-    <div class="card"><h2>Processes</h2>
+    <div class="card stat-card" data-stat="procs" data-label="Process count" data-unit="count"><h2>Processes</h2>
       <div class="metric proc" id="m-procs">—</div>
       <div class="metric-sub" id="m-procs-sub">— open FDs</div>
     </div>
-    <div class="card"><h2>Network</h2>
+    <div class="card stat-card" data-stat="net_rx_bps" data-label="Network rx" data-unit="bytes/s"><h2>Network</h2>
       <div class="metric net" id="m-net-rx">—</div>
       <div class="metric-sub" id="m-net-tx">tx —</div>
     </div>
@@ -101,19 +101,19 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
   <!-- ── Second row: extras incl. DB size ──────────── -->
   <div class="row5">
-    <div class="card"><h2>SQLite DB</h2>
+    <div class="card stat-card" data-stat="db_total" data-label="SQLite DB size" data-unit="bytes"><h2>SQLite DB</h2>
       <div class="metric" style="color:#5fb3c0" id="m-db" title="Main file (.db). WAL/SHM are transient and reported separately below.">—</div>
       <div class="metric-sub" id="m-db-sub">+ wal — · + shm — · total —</div>
     </div>
-    <div class="card"><h2>cgroup memory</h2>
+    <div class="card stat-card" data-stat="cg_pct" data-label="cgroup memory" data-unit="%"><h2>cgroup memory</h2>
       <div class="metric" style="color:var(--purple)" id="m-cg">—</div>
       <div class="metric-sub" id="m-cg-sub">— / —</div>
     </div>
-    <div class="card"><h2>Identities</h2>
+    <div class="card stat-card" data-stat="identities_count" data-label="Identities tracked" data-unit="count"><h2>Identities</h2>
       <div class="metric" style="color:var(--blue)" id="m-id">—</div>
       <div class="metric-sub" id="m-buckets">— IP buckets</div>
     </div>
-    <div class="card"><h2>Requests</h2>
+    <div class="card stat-card" data-stat="total_requests" data-label="Total requests" data-unit="count"><h2>Requests</h2>
       <div class="metric" style="color:#fff" id="m-req">—</div>
       <div class="metric-sub" id="m-req-sub">— allowed / — blocked</div>
     </div>
@@ -736,6 +736,203 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<!-- 1.6.7+ — Stat-card click-to-zoom modal (history graph + range picker) -->
+<style>
+.stat-card{cursor:pointer;transition:border-color .15s, transform .12s;position:relative}
+.stat-card:hover{border-color:var(--blue);transform:translateY(-1px)}
+/* Persistent chart-icon hint: tiny inline SVG of a sparkline with an
+   arrow, visible on every clickable card. Brightens on hover. */
+.stat-card::before{
+  content:'';position:absolute;top:8px;right:8px;width:18px;height:14px;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 18 14' fill='none' stroke='%238b949e' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'><polyline points='1,11 5,7 8,9 12,3 16,5'/><polyline points='13,2 16,2 16,5' stroke='%2358a6ff'/></svg>");
+  background-repeat:no-repeat;background-position:center;
+  opacity:.55;transition:opacity .15s, transform .12s;pointer-events:none}
+.stat-card:hover::before{opacity:1;transform:scale(1.15)}
+/* Tooltip on hover — explains the click-action. */
+.stat-card::after{
+  content:'click for time-series';position:absolute;top:8px;right:30px;
+  font-size:9px;color:var(--blue);font-weight:600;letter-spacing:.4px;
+  text-transform:uppercase;opacity:0;transition:opacity .15s;pointer-events:none}
+.stat-card:hover::after{opacity:.85}
+#stat-modal{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:3000;
+  display:none;align-items:flex-start;justify-content:center;padding:60px 20px 20px}
+#stat-modal.show{display:flex}
+#stat-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:18px 22px;max-width:900px;width:100%;max-height:85vh;overflow:auto;color:var(--fg)}
+#stat-modal-card h3{display:flex;justify-content:space-between;align-items:center;
+  font-size:15px;font-weight:700;color:#fff;margin-bottom:10px}
+#stat-modal-card .x{cursor:pointer;color:var(--dim);font-size:22px;border:none;background:none}
+#stat-modal-card .x:hover{color:#fff}
+.sm-controls{display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+  font-size:11px;margin-bottom:10px}
+.sm-summary{font-size:11px;color:var(--dim);margin-top:8px}
+.sm-summary b{color:#fff;font-family:ui-monospace,Menlo,monospace}
+</style>
+<div id="stat-modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div id="stat-modal-card">
+    <h3>
+      <span id="sm-title">—</span>
+      <button class="x" onclick="document.getElementById('stat-modal').classList.remove('show')">×</button>
+    </h3>
+    <div class="sm-controls">
+      <span class="dim">window:</span>
+      <select id="sm-range" class="ctrl">
+        <option value="5">5 min</option>
+        <option value="15">15 min</option>
+        <option value="60" selected>1 h</option>
+        <option value="180">3 h</option>
+        <option value="360">6 h</option>
+        <option value="720">12 h</option>
+        <option value="1440">24 h</option>
+        <option value="4320">3 d</option>
+        <option value="10080">7 d</option>
+        <option value="20160">14 d</option>
+        <option value="43200">30 d</option>
+      </select>
+      <span class="dim" style="margin-left:8px">bucket:</span>
+      <select id="sm-bucket" class="ctrl">
+        <option value="5">5 sec</option>
+        <option value="30">30 sec</option>
+        <option value="60" selected>1 min</option>
+        <option value="300">5 min</option>
+        <option value="900">15 min</option>
+        <option value="3600">1 hour</option>
+      </select>
+      <span id="sm-loading" class="dim" style="margin-left:8px;display:none">loading…</span>
+    </div>
+    <div style="position:relative;height:320px"><canvas id="sm-chart"></canvas></div>
+    <div class="sm-summary" id="sm-summary"></div>
+  </div>
+</div>
+<script>
+(function(){
+  const KEY = new URLSearchParams(location.search).get('key') || '';
+  const url = (p) => p + (KEY?(p.includes('?')?'&':'?')+'key='+encodeURIComponent(KEY):'');
+  const fmt = {
+    'bytes':   (v) => {
+      if (v == null) return '—';
+      if (v < 1024) return v + ' B';
+      if (v < 1048576) return (v/1024).toFixed(1) + ' KB';
+      if (v < 1073741824) return (v/1048576).toFixed(1) + ' MB';
+      return (v/1073741824).toFixed(2) + ' GB';
+    },
+    'bytes/s': (v) => v == null ? '—' : (v/1024 < 1024 ? (v/1024).toFixed(1)+' KB/s' : (v/1048576).toFixed(2)+' MB/s'),
+    '%':       (v) => v == null ? '—' : v.toFixed(1) + '%',
+    'count':   (v) => v == null ? '—' : v.toLocaleString(),
+  };
+  let chart = null;
+  const modal   = document.getElementById('stat-modal');
+  const titleEl = document.getElementById('sm-title');
+  const rangeEl = document.getElementById('sm-range');
+  const bucketEl = document.getElementById('sm-bucket');
+  const summaryEl = document.getElementById('sm-summary');
+  const loadingEl = document.getElementById('sm-loading');
+  let currentStat = null;
+
+  function pickBucketForRange(rangeMin) {
+    // Default sensible bucket by window size to keep < ~300 points per chart.
+    if (rangeMin <= 15)   return 5;
+    if (rangeMin <= 60)   return 30;
+    if (rangeMin <= 360)  return 60;
+    if (rangeMin <= 1440) return 300;
+    if (rangeMin <= 10080) return 900;
+    return 3600;
+  }
+
+  async function loadAndRender() {
+    if (!currentStat) return;
+    const range = parseInt(rangeEl.value, 10) || 60;
+    const bucket = parseInt(bucketEl.value, 10) || 60;
+    const key = currentStat.stat;
+    const unit = currentStat.unit || 'count';
+    const label = currentStat.label || key;
+    loadingEl.style.display = '';
+    let j;
+    try {
+      const r = await fetch(url(`/antibot-appsec-gateway/secured/service-data?range=${range}&bucket=${bucket}`),
+                            {cache:'no-store', credentials:'include'});
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      j = await r.json();
+    } catch (e) {
+      summaryEl.innerHTML = '<span style="color:var(--red)">load failed: ' + (e.message||e) + '</span>';
+      loadingEl.style.display = 'none';
+      return;
+    }
+    loadingEl.style.display = 'none';
+    const hist = j.history || [];
+    const labels = hist.map(s => new Date(s.ts*1000).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second: range<=15 ? '2-digit' : undefined}));
+    const data   = hist.map(s => (s[key] == null ? null : s[key]));
+    const fmtFn = fmt[unit] || fmt['count'];
+
+    // Summary stats
+    const valid = data.filter(v => v != null && !isNaN(v));
+    const cur  = valid.length ? valid[valid.length-1] : null;
+    const min  = valid.length ? Math.min.apply(null, valid) : null;
+    const max  = valid.length ? Math.max.apply(null, valid) : null;
+    const avg  = valid.length ? valid.reduce((a,b)=>a+b,0)/valid.length : null;
+    summaryEl.innerHTML =
+      `current: <b>${fmtFn(cur)}</b> ·
+       min: <b>${fmtFn(min)}</b> ·
+       max: <b>${fmtFn(max)}</b> ·
+       avg: <b>${fmtFn(avg)}</b> ·
+       samples: <b>${valid.length}</b>`;
+
+    if (chart) chart.destroy();
+    chart = new Chart(document.getElementById('sm-chart').getContext('2d'), {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label,
+          data,
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,.12)',
+          borderWidth: 1.5,
+          fill: true,
+          tension: 0.2,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+          legend: {display:false},
+          tooltip: {callbacks: {label: (ctx) => `${label}: ${fmtFn(ctx.parsed.y)}`}}
+        },
+        scales: {
+          x: {ticks:{color:'#8b949e',maxTicksLimit:10},grid:{color:'#21262d'}},
+          y: {ticks:{color:'#8b949e',callback:(v)=>fmtFn(v)},grid:{color:'#21262d'},beginAtZero: unit !== 'bytes'}
+        }
+      }
+    });
+  }
+
+  document.querySelectorAll('.stat-card').forEach(el => {
+    el.addEventListener('click', () => {
+      currentStat = {
+        stat:  el.dataset.stat,
+        label: el.dataset.label || el.dataset.stat,
+        unit:  el.dataset.unit  || 'count',
+      };
+      titleEl.textContent = currentStat.label + ' · history';
+      bucketEl.value = pickBucketForRange(parseInt(rangeEl.value,10) || 60);
+      modal.classList.add('show');
+      loadAndRender();
+    });
+  });
+  rangeEl.addEventListener('change', () => {
+    bucketEl.value = pickBucketForRange(parseInt(rangeEl.value,10) || 60);
+    loadAndRender();
+  });
+  bucketEl.addEventListener('change', loadAndRender);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') modal.classList.remove('show');
+  });
+})();
+</script>
 
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

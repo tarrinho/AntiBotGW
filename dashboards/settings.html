@@ -131,7 +131,7 @@ button.danger{background:var(--red)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1 class="page-title">AppSecGW_1.6.7 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.8 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
@@ -237,13 +237,15 @@ button.danger{background:var(--red)}
             <th data-sort="region">Region</th>
             <th data-sort="environment">Env</th>
             <th data-sort="can_distribute">Distribute</th>
+            <th data-sort="auto_apply" title="When ON, mesh-sync offers from this peer apply directly without operator confirmation">Auto-apply</th>
             <th data-sort="status">Status</th>
+            <th>Sync</th>
             <th data-sort="last_seen_ts">Last seen</th>
             <th>Actions</th>
           </tr>
         </thead>
         <tbody id="gw-tbody">
-          <tr><td colspan="9" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
+          <tr><td colspan="11" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
         </tbody>
       </table>
     </div>
@@ -638,6 +640,21 @@ const fmtAge = (epoch) => {
   if (dt < 86400) return Math.round(dt/3600) + "h";
   return Math.round(dt/86400) + "d";
 };
+
+// 1.6.7 — render the Sync-state cell. Backend sets sync = {state, live_offers, age_secs}
+function renderSyncCell(sync) {
+  if (!sync) return '<span class="dim">—</span>';
+  const map = {
+    local:    { color: 'var(--yellow)',  label: '★ self',     title: 'this is the local gateway' },
+    live:     { color: 'var(--green)',   label: '● live',     title: 'publishing to Redis right now' + (sync.live_offers ? ` (${sync.live_offers} offers)` : '') },
+    stale:    { color: 'var(--yellow)',  label: '◐ stale',    title: 'last seen recently but not currently publishing' },
+    offline:  { color: 'var(--red)',     label: '○ offline',  title: 'never seen, or last seen >1h ago' },
+    disabled: { color: 'var(--dim)',     label: '⊘ disabled', title: 'can_distribute is off — peer is in registry but not participating in mesh' },
+    'no-redis':{ color: 'var(--dim)',    label: '— no redis', title: 'REDIS_URL not configured on this gateway' },
+  };
+  const m = map[sync.state] || map.offline;
+  return `<span title="${escHtml(m.title)}" style="color:${m.color};font-weight:600;font-family:ui-monospace,Menlo,monospace;font-size:11px">${m.label}</span>`;
+}
 const apiUrl = (p) => p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY);
 async function api(method, path, body) {
   const opts = { method, credentials: "same-origin",
@@ -732,7 +749,7 @@ function renderList() {
     return ((av < bv) ? -1 : (av > bv) ? 1 : 0) * GW_STATE.sortDir;
   });
   if (!rows.length) {
-    tb.innerHTML = `<tr><td colspan="9"><div class="gw-empty">
+    tb.innerHTML = `<tr><td colspan="11"><div class="gw-empty">
       <strong>No gateways registered yet.</strong>
       Click <em>+ Add gateway</em> to register the first one. The local
       gateway should be added with <em>is_local: true</em> so this
@@ -756,7 +773,18 @@ function renderList() {
           <span style="font-size:10px;color:var(--dim)">${r.can_distribute ? 'on' : 'off'}</span>
         </label>
       </td>
+      <td>
+        ${r.is_local ? '<span class="dim" style="font-size:11px">— (local)</span>' : `
+        <label class="gw-toggle" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"
+               title="Trusted peer — mesh-sync offers apply directly, no operator confirmation">
+          <input type="checkbox" class="gw-aa" data-gw="${escHtml(r.gw_id)}"
+                 ${r.auto_apply ? 'checked' : ''}
+                 style="accent-color:var(--yellow);transform:scale(1.1)">
+          <span style="font-size:10px;color:var(--dim)">${r.auto_apply ? 'trusted' : 'manual'}</span>
+        </label>`}
+      </td>
       <td><span class="pill-status pill-${r.status}">${escHtml(r.status)}</span></td>
+      <td>${renderSyncCell(r.sync)}</td>
       <td>${fmtAge(r.last_seen_ts)}</td>
       <td>
         <button class="act-btn" data-act="edit"     data-gw="${escHtml(r.gw_id)}">Edit</button>
@@ -804,26 +832,45 @@ $("gw-tbody").addEventListener("click", async (ev) => {
 });
 $("gw-tbody").addEventListener("change", async (ev) => {
   const t = ev.target;
-  if (!t.classList.contains("gw-cd")) return;
   const id = t.dataset.gw;
-  const newVal = t.checked;
-  // Optimistic update; rollback on failure.
   const row = GW_STATE.gateways.find(r => r.gw_id === id);
-  if (row) row.can_distribute = newVal;
-  // If disabling on production, confirm first.
-  if (!newVal && row && row.environment === "production") {
-    const ok = confirm(`Disable distribution on PRODUCTION gateway "${id}"?`);
-    if (!ok) { row.can_distribute = true; renderList(); return; }
+  if (t.classList.contains("gw-cd")) {
+    const newVal = t.checked;
+    if (row) row.can_distribute = newVal;
+    if (!newVal && row && row.environment === "production") {
+      const ok = confirm(`Disable distribution on PRODUCTION gateway "${id}"?`);
+      if (!ok) { row.can_distribute = true; renderList(); return; }
+    }
+    try {
+      await api("PATCH", `${GW_BASE}/${encodeURIComponent(id)}/can-distribute`,
+                { can_distribute: newVal });
+      toast(`can_distribute=${newVal} on ${id}`, "ok");
+      renderList();
+    } catch (e) {
+      if (row) row.can_distribute = !newVal;
+      renderList();
+      toast("Toggle failed: " + e.message, "err");
+    }
+    return;
   }
-  try {
-    await api("PATCH", `${GW_BASE}/${encodeURIComponent(id)}/can-distribute`,
-              { can_distribute: newVal });
-    toast(`can_distribute=${newVal} on ${id}`, "ok");
-    renderList();
-  } catch (e) {
-    if (row) row.can_distribute = !newVal;  // rollback
-    renderList();
-    toast("Toggle failed: " + e.message, "err");
+  if (t.classList.contains("gw-aa")) {
+    const newVal = t.checked;
+    if (newVal) {
+      const ok = confirm(`Mark "${id}" as TRUSTED?\n\nMesh-sync offers (TURNSTILE/ABUSEIPDB/MAXMIND/CROWDSEC keys + integration toggles) from this peer will be applied DIRECTLY to your live integrations — no operator confirmation. Only enable for peers you control.`);
+      if (!ok) { t.checked = false; return; }
+    }
+    if (row) row.auto_apply = newVal;
+    try {
+      await api("PATCH", `${GW_BASE}/${encodeURIComponent(id)}/auto-apply`,
+                { auto_apply: newVal });
+      toast(`auto_apply=${newVal} on ${id}`, "ok");
+      renderList();
+    } catch (e) {
+      if (row) row.auto_apply = !newVal;
+      renderList();
+      toast("Toggle failed: " + e.message, "err");
+    }
+    return;
   }
 });
 

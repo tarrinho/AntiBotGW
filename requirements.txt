@@ -17,4 +17,10 @@ fakeredis>=2,<3
 # Postgres conditionally; without these wheels available, lazy imports
 # fail and several tests skip silently).
 maxminddb>=2.6,<3
-psycopg[binary]>=3.1,<4
+# `psycopg[binary]` ships C-extension wheels only for amd64 / arm64 /
+# ppc64le / s390x. armv7l / armv6l Raspberry Pi OS hosts have to either
+# (a) leave Postgres support out (DB_BACKEND=sqlite, lazy-import becomes
+# a no-op), or (b) `apt install libpq5 libpq-dev` and use plain
+# `psycopg` (without [binary]) which builds the C extension on demand.
+# The marker below skips this line on armv7 / armv6 wheels-only installs.
+psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
