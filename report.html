@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+<meta charset="UTF-8">
+<title>AntiBot-GW/1.0 — Implementation Report</title>
+<style>
+  @page {
+    size: A4;
+    margin: 22mm 18mm;
+    @bottom-center {
+      content: counter(page) " / " counter(pages);
+      font-family: 'Helvetica', sans-serif;
+      font-size: 9pt;
+      color: #888;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Helvetica', 'Arial', sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+    margin: 0;
+  }
+  h1 { font-size: 28pt; font-weight: 300; letter-spacing: -0.5px; margin: 0; }
+  h2 { font-size: 18pt; font-weight: 600; color: #0a3d62; border-bottom: 2px solid #0a3d62; padding-bottom: 6px; margin-top: 28px; page-break-after: avoid; }
+  h3 { font-size: 13pt; font-weight: 600; color: #1e5f9c; margin-top: 20px; page-break-after: avoid; }
+  h4 { font-size: 11pt; font-weight: 600; color: #333; margin-top: 14px; margin-bottom: 4px; }
+  p { margin: 8px 0; text-align: justify; }
+  code {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 9.5pt;
+    background: #f4f6f8;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: #c0392b;
+  }
+  pre {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 8.5pt;
+    background: #1e272e;
+    color: #ecf0f1;
+    padding: 10px 14px;
+    border-radius: 5px;
+    line-height: 1.45;
+    overflow-x: auto;
+    page-break-inside: avoid;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.5pt; page-break-inside: avoid; }
+  th { background: #0a3d62; color: white; padding: 8px 10px; text-align: left; font-weight: 600; }
+  td { padding: 6px 10px; border-bottom: 1px solid #e1e5e9; vertical-align: top; }
+  tr:nth-child(even) td { background: #f8f9fa; }
+  ul, ol { padding-left: 24px; margin: 8px 0; }
+  li { margin: 3px 0; }
+  .cover {
+    page-break-after: always;
+    height: 240mm;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: 30mm 10mm 0 10mm;
+  }
+  .cover-title {
+    border-left: 6px solid #0a3d62;
+    padding-left: 18px;
+  }
+  .cover-title .subtitle { font-size: 14pt; color: #555; margin-top: 8px; font-weight: 300; }
+  .cover-meta { font-size: 10pt; color: #555; line-height: 1.8; }
+  .cover-meta strong { color: #1a1a1a; display: inline-block; width: 110px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 9pt;
+    font-weight: 600;
+    color: white;
+  }
+  .badge-200 { background: #27ae60; }
+  .badge-403 { background: #e67e22; }
+  .badge-429 { background: #c0392b; }
+  .badge-402 { background: #8e44ad; }
+  .layer-box {
+    border: 1px solid #d4dce3;
+    border-left: 4px solid #1e5f9c;
+    border-radius: 4px;
+    padding: 12px 16px;
+    margin: 14px 0;
+    background: #fafbfc;
+    page-break-inside: avoid;
+  }
+  .layer-box h3 { margin-top: 0; }
+  .layer-num {
+    display: inline-block;
+    width: 24px; height: 24px;
+    line-height: 24px;
+    text-align: center;
+    background: #1e5f9c;
+    color: white;
+    border-radius: 50%;
+    font-weight: 600;
+    margin-right: 8px;
+  }
+  .ascii {
+    font-family: 'Menlo', 'Consolas', monospace;
+    font-size: 7.5pt;
+    background: #f4f6f8;
+    padding: 12px;
+    border-radius: 4px;
+    line-height: 1.3;
+    white-space: pre;
+    border: 1px solid #d4dce3;
+    page-break-inside: avoid;
+  }
+  .footer-note { font-size: 8.5pt; color: #888; font-style: italic; margin-top: 6px; }
+  .pill { display: inline-block; padding: 1px 6px; background: #e8eef4; color: #1e5f9c; border-radius: 3px; font-size: 9pt; font-family: 'Menlo', monospace; }
+  .alert {
+    background: #fff4e6;
+    border-left: 4px solid #e67e22;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 9.5pt;
+    border-radius: 3px;
+  }
+  .alert strong { color: #c44a00; }
+</style>
+</head>
+<body>
+
+<!-- ───────────────────────── COVER ───────────────────────── -->
+<div class="cover">
+  <div class="cover-title">
+    <h1>AntiBot-GW/1.0</h1>
+    <div class="subtitle">Reverse Proxy with Layered Anti-Automation Defenses</div>
+    <div class="subtitle">Implementation Report</div>
+  </div>
+  <div class="cover-meta">
+    <p><strong>Author:</strong> Pedro Tarrinho</p>
+    <p><strong>Date:</strong> 2026-04-26</p>
+    <p><strong>Target:</strong> sporting.cfsectraining.com</p>
+    <p><strong>Stack:</strong> Python 3.13 / aiohttp / ngrok</p>
+    <p><strong>Purpose:</strong> Defensive control evaluation — bypass-testing harness</p>
+    <p><strong>Document version:</strong> 1.0</p>
+  </div>
+</div>
+
+<!-- ───────────────────────── 1. EXECUTIVE SUMMARY ───────────────────────── -->
+<h2>1. Executive Summary</h2>
+
+<p>
+This report describes <strong>AntiBot-GW/1.0</strong>, a reverse HTTP proxy
+implemented to sit in front of the CTF challenge
+<code>sporting.cfsectraining.com</code> for the purpose of evaluating
+anti-automation defenses. The proxy implements <strong>six independent
+protection layers</strong>, each addressing a distinct attack surface used by
+automated agents (CLI tools, scrapers, headless browsers, AI agents).
+</p>
+
+<p>
+The objective is twofold: <em>(i)</em> demonstrate working defenses against
+common automated traffic patterns, and <em>(ii)</em> expose the deliberate weaknesses
+of each layer so they can be tested and bypassed in a controlled environment.
+This dual nature makes the proxy a learning artifact for offensive testing of
+defensive controls — every layer is wired to be inspected at runtime via
+internal endpoints (<code>/__status</code>, <code>/__xff</code>).
+</p>
+
+<h3>Implemented controls</h3>
+<table>
+  <tr>
+    <th style="width:5%">#</th><th style="width:18%">Control</th>
+    <th style="width:14%">Trigger response</th>
+    <th>Description</th>
+  </tr>
+  <tr><td>1</td><td>Ban list</td>
+    <td><span class="badge badge-403">403</span></td>
+    <td>In-memory blocklist of IPs that previously hit a honeypot path.</td></tr>
+  <tr><td>2</td><td>Honeypot paths</td>
+    <td><span class="badge badge-403">403</span> + ban</td>
+    <td>Trap URLs (e.g. <code>/wp-admin</code>) that auto-ban any visitor for 1h.</td></tr>
+  <tr><td>3</td><td>UA blocklist</td>
+    <td><span class="badge badge-403">403</span></td>
+    <td>Substring match against a list of automation-tool User-Agents.</td></tr>
+  <tr><td>4</td><td>Rate limit</td>
+    <td><span class="badge badge-429">429</span></td>
+    <td>Per-IP token bucket; configurable burst and refill rate.</td></tr>
+  <tr><td>5</td><td>Behavioral check</td>
+    <td><span class="badge badge-403">403</span></td>
+    <td>Statistical analysis of inter-request timing (σ, µ).</td></tr>
+  <tr><td>6</td><td>Proof-of-Work</td>
+    <td><span class="badge badge-402">402</span></td>
+    <td>Hashcash-style puzzle gating sensitive endpoints.</td></tr>
+</table>
+
+<p>
+All six layers were tested individually and end-to-end through an ngrok tunnel.
+Each layer functions as designed and each has a known bypass vector
+documented in §6.
+</p>
+
+<!-- ───────────────────────── 2. ARCHITECTURE ───────────────────────── -->
+<h2>2. Architecture</h2>
+
+<h3>2.1 Deployment topology</h3>
+<div class="ascii">                ┌─────────────────────────────────┐
+                │      Internet (attacker)        │
+                └────────────────┬────────────────┘
+                                 │ HTTPS
+                                 ▼
+                ┌─────────────────────────────────┐
+                │  ngrok edge (public URL)        │
+                │  https://&lt;sub&gt;.ngrok-free.app   │
+                │  → injects X-Forwarded-For      │
+                └────────────────┬────────────────┘
+                                 │ HTTP localhost:8443
+                                 ▼
+       ╔═══════════════════════════════════════════╗
+       ║   AntiBot-GW/1.0  (aiohttp middleware)    ║
+       ║   ┌─────────────────────────────────┐     ║
+       ║   │  protect()   ← 6 layers in seq. │     ║
+       ║   └────────────────┬────────────────┘     ║
+       ║   ┌────────────────▼────────────────┐     ║
+       ║   │  proxy()   ← upstream forward   │     ║
+       ║   └────────────────┬────────────────┘     ║
+       ╚════════════════════│══════════════════════╝
+                            │ HTTPS
+                            ▼
+                ┌─────────────────────────────────┐
+                │  sporting.cfsectraining.com     │
+                │  (Apache 2.4 + own rate limit)  │
+                └─────────────────────────────────┘
+</div>
+
+<h3>2.2 Request lifecycle</h3>
+
+<div class="ascii">  Request  →  protect() middleware  →  6 layers
+                                       ▼ (all pass)
+                                    proxy() handler
+                                       ▼
+                                   upstream call
+                                       ▼
+                                    response back
+</div>
+
+<h3>2.3 In-memory state model</h3>
+
+<pre>@dataclass
+class IpState:
+    tokens: float           # current token-bucket capacity (max BURST)
+    last_refill: float      # monotonic timestamp of last refill
+    banned_until: float     # 0 if not banned, else absolute monotonic time
+    request_times: deque    # last 50 request timestamps (for behavioral check)
+    request_count: int      # cumulative count
+    first_seen: float       # first appearance of this IP</pre>
+
+<p>
+State is keyed by client IP (resolved via the <code>get_ip()</code> helper),
+held in a <code>defaultdict</code> guarded by an <code>asyncio.Lock</code>,
+and is process-local — restarting the proxy clears all bans and counters.
+</p>
+
+<!-- ───────────────────────── 3. PROTECTION LAYERS ───────────────────────── -->
+<h2>3. Protection Layers</h2>
+
+<!-- LAYER 1 -->
+<div class="layer-box">
+<h3><span class="layer-num">1</span>Ban List</h3>
+<p>
+Simple membership check against <code>ip_state[ip].banned_until</code>.
+If the value is greater than the current monotonic time, the request is
+rejected immediately, before any other check.
+</p>
+<pre>banned, remaining = await is_banned(ip)
+if banned:
+    return Response(status=403,
+                    text=f"banned for {int(remaining)}s",
+                    headers={"X-Reason": "banned"})</pre>
+<p class="footer-note">
+Default ban duration: 1h (3600s). Bans are populated by Layer 2 (honeypot).
+</p>
+</div>
+
+<!-- LAYER 2 -->
+<div class="layer-box">
+<h3><span class="layer-num">2</span>Honeypot Paths</h3>
+<p>
+The proxy maintains a hard-coded set of paths that legitimate users never
+intentionally visit. Any request to these paths immediately bans the source
+IP for 1 hour.
+</p>
+<pre>HONEYPOT_PATHS = {
+  "/wp-admin", "/wp-login.php", "/.env", "/.git/config",
+  "/admin-backup", "/config.php.bak", "/phpinfo.php",
+  "/xmlrpc.php", "/.aws/credentials", "/server-status",
+  "/.well-known/admin", "/admin.php", "/phpmyadmin",
+}
+
+if request.path in HONEYPOT_PATHS:
+    await ban(ip)
+    return Response(status=403, text="banned (honeypot)",
+                    headers={"X-Reason": "honeypot"})</pre>
+<p class="footer-note">
+Targets indiscriminate vulnerability scanners (nuclei, dirbuster, ffuf
+default wordlists). Real browsers never request these paths because they
+are not linked from the application HTML.
+</p>
+</div>
+
+<!-- LAYER 3 -->
+<div class="layer-box">
+<h3><span class="layer-num">3</span>User-Agent Blocklist</h3>
+<p>
+Case-insensitive substring match against a curated list of automation
+fingerprints. Detects default User-Agents from CLI tools, scripting
+libraries, headless browsers, and AI/LLM crawlers.
+</p>
+<pre>UA_BLOCKLIST = (
+  "curl/", "python-requests/", "httpx/", "go-http-client/",
+  "wget/", "scrapy/", "java/", "okhttp/",
+  "claude", "chatgpt", "gptbot", "anthropic",
+  "selenium", "headless", "puppeteer", "playwright", "phantomjs",
+)
+
+ua_lower = ua.lower()
+for blocked in UA_BLOCKLIST:
+    if blocked in ua_lower:
+        return Response(status=403,
+                        body=json.dumps({"error":"user-agent blocked",
+                                         "matched":blocked}),
+                        headers={"X-Reason":"ua-blocked"})</pre>
+</div>
+
+<!-- LAYER 4 -->
+<div class="layer-box">
+<h3><span class="layer-num">4</span>Per-IP Rate Limit (Token Bucket)</h3>
+<p>
+Each IP gets a token bucket of <code>BURST</code> capacity, refilling at
+<code>REFILL</code> tokens per second. Each successful request consumes
+one token. When the bucket is empty, the proxy returns
+<code>429 Too Many Requests</code> with a calculated <code>Retry-After</code>
+header.
+</p>
+<pre>async def take_token(ip) -> tuple[bool, float, int]:
+    s = ip_state[ip]
+    n = now()
+    elapsed = n - s.last_refill
+    s.tokens = min(BURST, s.tokens + elapsed * REFILL)
+    s.last_refill = n
+    if s.tokens >= 1.0:
+        s.tokens -= 1.0
+        return True, 0.0, int(s.tokens)
+    retry = (1.0 - s.tokens) / REFILL
+    return False, retry, 0</pre>
+
+<p>Response on rate-limit hit:</p>
+<pre>HTTP/2 429 Too Many Requests
+Retry-After: 1
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-Reason: rate-limit
+Content-Type: application/json
+
+{"error":"rate limit exceeded","retry_after":1}</pre>
+</div>
+
+<!-- LAYER 5 -->
+<div class="layer-box">
+<h3><span class="layer-num">5</span>Behavioral Check</h3>
+<p>
+Tracks the last 50 request timestamps per IP. Once 8 requests have been seen,
+the proxy computes the standard deviation σ and mean µ of inter-request
+intervals. If σ &lt; 10 ms <strong>and</strong> µ &lt; 1 s, the traffic is flagged
+as too regular for human origin.
+</p>
+<pre>async def behavioral_check(ip):
+    s = ip_state[ip]
+    if len(s.request_times) &lt; BEHAVIOR_MAX_REGULAR:  # 8
+        return False, ""
+    recent = list(s.request_times)[-8:]
+    intervals = [recent[i+1] - recent[i] for i in range(7)]
+    µ = mean(intervals)
+    σ = sqrt(mean((iv - µ)**2 for iv in intervals))
+    if σ &lt; 0.010 and µ &lt; 1.0:
+        return True, f"timing too regular (σ={σ*1000:.1f}ms, µ={µ*1000:.1f}ms)"
+    return False, ""</pre>
+<p class="footer-note">
+Target: scripted attackers using <code>time.sleep(constant)</code> between
+requests. Empirically, σ for human browser navigation is &gt;100 ms.
+</p>
+</div>
+
+<!-- LAYER 6 -->
+<div class="layer-box">
+<h3><span class="layer-num">6</span>Proof-of-Work</h3>
+<p>
+For state-changing methods (<code>POST/PUT/DELETE</code>) and any path in
+<code>POW_REQUIRED_PATHS</code> = {/login, /api/auth, /admin}, the proxy
+requires a valid hashcash-style PoW solution. Without one, it returns
+<code>402 Payment Required</code> with a fresh challenge.
+</p>
+
+<h4>Challenge format</h4>
+<pre>nonce | issued_ts | difficulty | HMAC-SHA256(nonce|issued_ts|difficulty, server_key)
+↓
+e31bd4c6bbaedb37 | 1777241780 | 5 | 03ca5327…0098b1b582d511e9231</pre>
+
+<h4>Solution</h4>
+<p>The client must find <code>X</code> such that:</p>
+<pre>SHA256(nonce + X) starts with N hex zeros (default N=5)</pre>
+<p>
+With N=5, finding X requires ~10⁵ hashes (≈ 0.3 s on modern CPU). The signed
+HMAC prevents challenge forgery; the 300-second TTL prevents replay over time.
+</p>
+
+<h4>Submission</h4>
+<pre>POST /login HTTP/1.1
+X-PoW-Token:    e31bd4c6…0098b1b582d511e9231
+X-PoW-Solution: 844737
+Content-Type:   application/x-www-form-urlencoded
+
+user=admin&password=…</pre>
+
+<h4>Verification</h4>
+<pre>def verify_pow(token, solution):
+    nonce, issued, diff, sig = token.split("|")
+    payload = f"{nonce}|{issued}|{diff}"
+    if not hmac.compare_digest(sig,
+        hmac.new(KEY, payload.encode(), sha256).hexdigest()):
+        return False, "bad signature"
+    if int(time.time()) - int(issued) &gt; 300:
+        return False, "expired"
+    h = sha256(f"{nonce}{solution}".encode()).hexdigest()
+    if not h.startswith("0" * int(diff)):
+        return False, f"hash {h[:8]} does not start with {diff} zeros"
+    return True, "ok"</pre>
+</div>
+
+<!-- ───────────────────────── 4. CONFIGURATION ───────────────────────── -->
+<h2>4. Configuration</h2>
+
+<h3>4.1 Environment variables</h3>
+<table>
+  <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+  <tr><td><code>UPSTREAM</code></td><td>https://sporting.cfsectraining.com</td>
+      <td>Backend URL to forward to.</td></tr>
+  <tr><td><code>LISTEN_HOST</code></td><td>127.0.0.1</td>
+      <td>Bind address.</td></tr>
+  <tr><td><code>LISTEN_PORT</code></td><td>8443</td>
+      <td>Bind port.</td></tr>
+  <tr><td><code>BURST</code></td><td>5</td>
+      <td>Token-bucket burst capacity.</td></tr>
+  <tr><td><code>REFILL</code></td><td>1.0</td>
+      <td>Token refill rate (per second).</td></tr>
+  <tr><td><code>TRUST_XFF</code></td><td>first</td>
+      <td><code>first</code> | <code>last</code> | <code>none</code> — which X-Forwarded-For entry to honour for IP resolution.</td></tr>
+</table>
+
+<h3>4.2 Internal endpoints (bypass all checks)</h3>
+<table>
+  <tr><th>Path</th><th>Method</th><th>Purpose</th></tr>
+  <tr><td><code>/__status</code></td><td>GET</td>
+      <td>JSON snapshot of the per-IP state and config.</td></tr>
+  <tr><td><code>/__pow</code></td><td>GET</td>
+      <td>Issue a fresh PoW challenge.</td></tr>
+  <tr><td><code>/__solver</code></td><td>GET</td>
+      <td>Browser-side JavaScript PoW solver UI.</td></tr>
+  <tr><td><code>/__xff</code></td><td>GET</td>
+      <td>Debug — echoes received <code>X-Forwarded-For</code> chain and computed IP.</td></tr>
+</table>
+
+<!-- ───────────────────────── 5. TEST RESULTS ───────────────────────── -->
+<h2>5. Test Results</h2>
+
+<p>All six layers were validated end-to-end against the live upstream and
+through the ngrok tunnel. Results:</p>
+
+<table>
+  <tr><th>Test</th><th>Expected</th><th>Observed</th><th>Status</th></tr>
+  <tr><td>Browser UA <span class="pill">Mozilla/5.0…</span></td><td>200 forwarded</td>
+      <td><span class="badge badge-200">200</span></td><td>PASS</td></tr>
+  <tr><td>UA <span class="pill">curl/8.4.0</span></td><td>403 ua-blocked</td>
+      <td><span class="badge badge-403">403</span> matched=<code>curl/</code></td><td>PASS</td></tr>
+  <tr><td>UA <span class="pill">ClaudeBot</span></td><td>403 ua-blocked</td>
+      <td><span class="badge badge-403">403</span> matched=<code>claude</code></td><td>PASS</td></tr>
+  <tr><td>UA <span class="pill">python-requests</span></td><td>403 ua-blocked</td>
+      <td><span class="badge badge-403">403</span> matched=<code>python-requests/</code></td><td>PASS</td></tr>
+  <tr><td>GET <code>/wp-admin</code></td><td>403 honeypot + 1h ban</td>
+      <td><span class="badge badge-403">403</span>, then ban applied</td><td>PASS</td></tr>
+  <tr><td>Subsequent GET after ban</td><td>403 banned</td>
+      <td><span class="badge badge-403">403</span> banned for 3599s</td><td>PASS</td></tr>
+  <tr><td>Burst test (BURST=5, send 8)</td><td>1× 200, 7× 429</td>
+      <td>1× <span class="badge badge-200">200</span>, 7× <span class="badge badge-429">429</span> Retry-After=1</td><td>PASS</td></tr>
+  <tr><td>POST <code>/login</code> w/o PoW</td><td>402 + challenge</td>
+      <td><span class="badge badge-402">402</span> challenge issued</td><td>PASS</td></tr>
+  <tr><td>POST w/ invalid PoW solution</td><td>402 + reason</td>
+      <td><span class="badge badge-402">402</span> "hash X does not start with 5 zeros"</td><td>PASS</td></tr>
+  <tr><td>PoW solve (difficulty=5)</td><td>~0.3s</td>
+      <td>0.34s, 641,466 attempts</td><td>PASS</td></tr>
+  <tr><td>POST <code>/login</code> w/ valid PoW</td><td>200 forwarded</td>
+      <td><span class="badge badge-200">200</span></td><td>PASS</td></tr>
+  <tr><td>12 reqs at ~150 ms regular</td><td>req 1-7 OK, 8+ blocked</td>
+      <td>req 8+ <span class="badge badge-403">403</span> σ=1.7 ms, µ=152 ms</td><td>PASS</td></tr>
+</table>
+
+<!-- ───────────────────────── 6. BYPASS ANALYSIS ───────────────────────── -->
+<h2>6. Bypass Surface</h2>
+
+<p>
+By design, every layer has a known weakness so the proxy can be used as a
+testing harness. Each weakness reflects a real-world failure mode.
+</p>
+
+<table>
+  <tr><th>Layer</th><th>Weakness</th><th>Bypass technique</th><th>Severity</th></tr>
+  <tr>
+    <td>UA blocklist</td>
+    <td>Substring match on client-controlled header</td>
+    <td>Set <code>User-Agent: Mozilla/5.0…</code></td>
+    <td>Trivial</td>
+  </tr>
+  <tr>
+    <td>Honeypot</td>
+    <td>Hard-coded path list, IP-keyed ban</td>
+    <td>Avoid the paths; rotate IPs to escape ban</td>
+    <td>Trivial</td>
+  </tr>
+  <tr>
+    <td>Rate limit</td>
+    <td>Bucket keyed on client-controlled IP (XFF)</td>
+    <td>Spoof <code>X-Forwarded-For</code> per request</td>
+    <td>High</td>
+  </tr>
+  <tr>
+    <td>Behavioral</td>
+    <td>Window of only 8 requests, σ threshold 10 ms</td>
+    <td>Inject jitter <code>sleep(uniform(0.05, 0.4))</code></td>
+    <td>Trivial</td>
+  </tr>
+  <tr>
+    <td>PoW</td>
+    <td>Constant difficulty, replay window 5 min</td>
+    <td>Single solve serves multiple requests within 5 min</td>
+    <td>Medium</td>
+  </tr>
+  <tr>
+    <td>Internal endpoints</td>
+    <td><code>/__*</code> paths bypass every check</td>
+    <td>Probe <code>/__status</code> to enumerate state</td>
+    <td>Medium</td>
+  </tr>
+</table>
+
+<div class="alert">
+<strong>Key finding — ngrok-free trust boundary:</strong>
+ngrok's free tier <em>passes through</em> the client-supplied
+<code>X-Forwarded-For</code> header without sanitisation. Setting
+<code>TRUST_XFF=last</code> does not prevent spoofing because the proxy
+sees only the value the client provided. Production deployments need a tier
+that overwrites or appends-only XFF (paid ngrok, Cloudflare Tunnel, or a
+trusted L7 LB with <code>X-Forwarded-For</code> normalisation).
+</div>
+
+<!-- ───────────────────────── 7. RECOMMENDATIONS ───────────────────────── -->
+<h2>7. Recommendations</h2>
+
+<p>The proxy demonstrates the techniques but should be hardened before any
+production-style use:</p>
+
+<ol>
+  <li><strong>IP resolution:</strong> Replace <code>X-Forwarded-For</code>
+  parsing with a trusted-proxy-aware resolver
+  (<code>aiohttp_remotes.XForwardedStrict</code>) or terminate TLS behind a
+  trusted edge that overwrites the chain.</li>
+
+  <li><strong>PoW replay protection:</strong> Track used <code>(token,
+  solution)</code> pairs server-side; bind challenges to method+path so a
+  solved <code>/login</code> challenge can't authorise <code>/admin</code>.</li>
+
+  <li><strong>Adaptive PoW difficulty:</strong> Increase difficulty
+  exponentially under sustained load per IP (e.g. 5 → 6 → 7 zeros).</li>
+
+  <li><strong>Behavioral signals:</strong> Move beyond timing; check for
+  realistic HTTP/2 fingerprints, TLS JA4, accept-language presence,
+  static-asset fetch sequences.</li>
+
+  <li><strong>Persistent state:</strong> Move <code>ip_state</code> from
+  in-process dict to Redis or DragonflyDB so restarts don't reset bans and
+  multiple instances share state.</li>
+
+  <li><strong>Honeypot expansion:</strong> Generate honeypots dynamically
+  (random unique paths injected into HTML as zero-size links); attackers can
+  no longer pre-list and avoid them.</li>
+
+  <li><strong>Edge integration:</strong> For real protection, place
+  Cloudflare Turnstile or hCaptcha in front of <code>POST</code> endpoints
+  rather than relying on PoW alone — Turnstile in invisible mode adds
+  bot-detection signals server-side PoW cannot reach.</li>
+</ol>
+
+<!-- ───────────────────────── 8. APPENDIX ───────────────────────── -->
+<h2>8. Appendix</h2>
+
+<h3>8.1 File inventory</h3>
+<table>
+  <tr><th>File</th><th>Purpose</th><th>LOC</th></tr>
+  <tr><td><code>proxy.py</code></td><td>Main reverse proxy with all 6 layers</td><td>~290</td></tr>
+  <tr><td><code>mock_upstream.py</code></td><td>Echo backend on :9090 for isolated tests</td><td>~5</td></tr>
+  <tr><td><code>test_final.py</code></td><td>End-to-end integration test</td><td>~70</td></tr>
+  <tr><td><code>test_behavior.py</code></td><td>Behavioral-check timing test</td><td>~30</td></tr>
+  <tr><td><code>README.md</code></td><td>Usage and bypass documentation</td><td>~190</td></tr>
+</table>
+
+<h3>8.2 Run</h3>
+<pre>cd /media/share/shared\ with\ kali-claude-code/anti-bot-proxy/
+
+# Default (in front of sporting.cfsectraining.com, BURST=5, REFILL=1/s)
+python3 proxy.py
+
+# Custom config
+TRUST_XFF=last BURST=100 REFILL=10.0 python3 proxy.py
+
+# Public exposure via ngrok
+ngrok http 8443</pre>
+
+<h3>8.3 Wire example — full PoW exchange</h3>
+<pre># 1. Client posts without PoW headers
+$ curl -X POST -H 'User-Agent: Mozilla/5.0' \
+       -d 'user=admin' https://&lt;tunnel&gt;/login
+
+HTTP/2 402 Payment Required
+X-Reason: pow-required
+X-PoW-Challenge: e31b…|1777241780|5|03ca…
+X-PoW-Difficulty: 5
+Content-Type: application/json
+
+{"error":"Proof-of-Work required",
+ "challenge":"e31b…|1777241780|5|03ca…",
+ "difficulty":5}
+
+# 2. Client solves
+nonce = "e31b…"
+for i in range(10**8):
+    if sha256(f"{nonce}{i}".encode()).hexdigest().startswith("00000"):
+        solution = str(i)
+        break
+
+# 3. Client retries with PoW headers
+$ curl -X POST -H 'User-Agent: Mozilla/5.0' \
+       -H 'X-PoW-Token: e31b…|1777241780|5|03ca…' \
+       -H 'X-PoW-Solution: 844737' \
+       -d 'user=admin' https://&lt;tunnel&gt;/login
+
+HTTP/2 200 OK
+... (forwarded upstream response)</pre>
+
+<h3>8.4 State snapshot</h3>
+<pre>$ curl -s http://127.0.0.1:8443/__status | jq
+{
+  "clients": {
+    "94.61.192.8": {
+      "tokens": 100,
+      "request_count": 7,
+      "banned_until": 0,
+      "first_seen_secs_ago": 12.4
+    }
+  },
+  "config": {
+    "burst": 100,
+    "refill_per_sec": 10.0,
+    "pow_difficulty": 5,
+    "honeypot_ban_secs": 3600
+  }
+}</pre>
+
+<p style="margin-top: 36px; padding-top: 12px; border-top: 1px solid #d4dce3; font-size: 9pt; color: #888; text-align: center;">
+End of report — AntiBot-GW/1.0 Implementation Report — Pedro Tarrinho — 2026-04-26
+</p>
+
+</body>
+</html>

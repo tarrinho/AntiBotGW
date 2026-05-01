@@ -9,7 +9,8 @@ WORKDIR /tmp
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
  && python3 -m pip install --no-cache-dir --upgrade --target /pydeps \
        'aiohttp>=3.11.11,<4' \
-       'maxminddb>=2.6,<3'
+       'maxminddb>=2.6,<3' \
+       'psycopg[binary]>=3.1,<4'
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.
@@ -58,6 +59,6 @@ VOLUME ["/data"]
 EXPOSE 8443
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD ["python3","-c","import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8443/__live', timeout=3).read()==b'ok' else 1)"]
+    CMD ["python3","-c","import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8443/antibot-appsec-gateway/live', timeout=3).read()==b'ok' else 1)"]
 
 ENTRYPOINT ["python3", "/app/proxy.py"]

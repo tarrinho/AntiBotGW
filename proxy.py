@@ -128,12 +128,43 @@ except OSError:
     pass
 
 def _internal_authed(request) -> bool:
-    """Operator key check for /__* routes. Constant-time compare; no cookie path
-    (cookie is never set by us, removing the dead code path)."""
-    provided = request.headers.get("X-Admin-Key") or request.query.get("key") or ""
-    if not provided:
+    """1.6.7 — session-cookie only. The shared-admin-key bearer
+    (`X-Admin-Key` header / `?key=…`) was removed in 1.6.7; the only way
+    to reach `/secured/...` is to sign in via /antibot-appsec-gateway/login
+    and carry the resulting `agw_session` cookie. INTERNAL_KEY is now used
+    EXCLUSIVELY as the bootstrap admin password (see `_user_bootstrap`);
+    the operator should change it at first login.
+
+    Cookies are an aiohttp-only surface; fake-request unit tests pass
+    objects that only expose .headers/.query, so the access is guarded."""
+    cookies = getattr(request, "cookies", None)
+    cookie = cookies.get(_SESSION_COOKIE, "") if cookies else ""
+    if not cookie:
         return False
-    return hmac.compare_digest(provided, INTERNAL_KEY)
+    u = _session_verify(cookie)
+    if not u:
+        return False
+    # Pull the sid for the touch-on-activity path + the operator's
+    # current-session indicator in the sessions modal.
+    parsed = _session_parse(cookie)
+    sid = parsed[1] if parsed else ""
+    try:
+        request["_session_user"] = u
+        request["_session_sid"]  = sid
+    except (TypeError, AttributeError): pass
+    # Bump the in-memory last-seen marker so the Users list can show
+    # an online indicator without persisting per-request writes.
+    try: _ACTIVE_SESSIONS[u] = _t.time()
+    except Exception: pass
+    if sid:
+        _session_touch(sid)
+    return True
+
+def _request_username(request) -> str:
+    """Identify the operator behind a call: returns the session-cookie
+    username if signed in, else 'unknown'."""
+    u = request.get("_session_user") if hasattr(request, "get") else None
+    return u or "unknown"
 
 # ── Admin IP allowlist ─────────────────────────────────────────────────────
 # Comma-separated list of source IPs / CIDRs allowed to reach /__* endpoints
@@ -720,29 +751,506 @@ POSTGRES_DSN = os.environ.get("POSTGRES_DSN", "").strip()
 DB_PATH = os.environ.get("DB_PATH", os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "antibot.db"))
 
-# 1.6.4 — Postgres / Timescale event-store stub. Loaded only when
+# 1.6.4 / 1.6.5 — Postgres + Timescale event-store backend. Loaded only when
 # DB_BACKEND=postgres AND psycopg is importable. Falls back to SQLite
 # with a loud warning otherwise — operators who set DB_BACKEND=postgres
 # without staging the dependencies still get a working gateway.
+#
+# The events table schema is intentionally compatible with TimescaleDB's
+# `create_hypertable`: ts is REAL/DOUBLE PRECISION, no surrogate sequence,
+# (ts, ip) covering index. Operators who want compression / continuous
+# aggregates run `SELECT create_hypertable('events', 'ts')` once.
 _postgres_pool = None
 _postgres_available = False
+_postgres = None     # the psycopg module reference
+
+def _postgres_load_module():
+    """Import psycopg lazily so SQLite users don't take the import cost.
+    Returns the module on success, None on failure."""
+    global _postgres
+    if _postgres is not None:
+        return _postgres
+    try:
+        import psycopg                                           # type: ignore
+        _postgres = psycopg
+        return _postgres
+    except ImportError:
+        return None
+
 if DB_BACKEND == "postgres":
     if not POSTGRES_DSN:
         print("[db] DB_BACKEND=postgres but POSTGRES_DSN is empty — "
               "falling back to sqlite", flush=True)
         DB_BACKEND = "sqlite"
+    elif _postgres_load_module() is None:
+        print("[db] DB_BACKEND=postgres but psycopg is not installed "
+              "in this image — rebuild the image with psycopg in the "
+              "Dockerfile or revert to sqlite. Falling back to sqlite "
+              "for now.", flush=True)
+        DB_BACKEND = "sqlite"
     else:
+        _postgres_available = True
+        print("[db] postgres backend selected (psycopg loaded)", flush=True)
+elif POSTGRES_DSN:
+    # 1.6.5 — even when SQLite is the active backend, load psycopg if
+    # POSTGRES_DSN is set so the standby Timescale probes / size sampling /
+    # one-click Controls switch all work without a restart.
+    if _postgres_load_module() is not None:
+        _postgres_available = True
+        print(f"[db] sqlite active, postgres standby ready (psycopg loaded)",
+              flush=True)
+
+
+def _pg_mirror_kv(op: str, args: tuple) -> bool:
+    """1.6.5 — best-effort dual-write of config / secret / admin-ip
+    changes to Postgres (in addition to SQLite). Lets the standby
+    backend stay in sync so a backend swap loses no configuration.
+
+    Supported `op` values (mirrors the SQLite writer):
+      set_config / del_config        (config_kv)
+      set_secret / del_secret        (secrets_kv)
+      set_admin_ip / del_admin_ip    (admin_ips)
+    Anything else is a no-op.
+
+    Failures log once and move on — the SQLite write already succeeded
+    so the operator's intent is durable. Re-sync happens on the next
+    successful Postgres write or on operator-triggered table reload.
+    """
+    pg = _postgres_load_module()
+    if pg is None or not POSTGRES_DSN:
+        return False
+    try:
+        with pg.connect(POSTGRES_DSN, connect_timeout=2,
+                          autocommit=True) as conn:
+            with conn.cursor() as cur:
+                if op == "set_config":
+                    cur.execute(
+                        "INSERT INTO config_kv (key, value, ts) "
+                        "VALUES (%s, %s, %s) "
+                        "ON CONFLICT (key) DO UPDATE SET "
+                        "  value = EXCLUDED.value, ts = EXCLUDED.ts", args)
+                elif op == "del_config":
+                    cur.execute("DELETE FROM config_kv WHERE key = %s", args)
+                elif op == "set_secret":
+                    cur.execute(
+                        "INSERT INTO secrets_kv (key, value, ts) "
+                        "VALUES (%s, %s, %s) "
+                        "ON CONFLICT (key) DO UPDATE SET "
+                        "  value = EXCLUDED.value, ts = EXCLUDED.ts", args)
+                elif op == "del_secret":
+                    cur.execute("DELETE FROM secrets_kv WHERE key = %s", args)
+                elif op == "set_admin_ip":
+                    # SQLite arg order: (cidr, added_ts, note, source, description)
+                    cur.execute(
+                        "INSERT INTO admin_ips "
+                        "  (cidr, added_ts, note, source, description) "
+                        "VALUES (%s, %s, %s, %s, %s) "
+                        "ON CONFLICT (cidr) DO UPDATE SET "
+                        "  added_ts = EXCLUDED.added_ts, "
+                        "  note = EXCLUDED.note, "
+                        "  source = EXCLUDED.source, "
+                        "  description = EXCLUDED.description", args)
+                elif op == "del_admin_ip":
+                    cur.execute("DELETE FROM admin_ips WHERE cidr = %s", args)
+                elif op == "update_admin_ip_description":
+                    # args = (description, cidr)  — same order as SQLite UPDATE
+                    cur.execute(
+                        "UPDATE admin_ips SET description = %s "
+                        "WHERE cidr = %s", args)
+                else:
+                    return False
+        return True
+    except Exception as e:
+        # Log once per minute to avoid spamming.
+        last = getattr(_pg_mirror_kv, "_last_warn_min", -1)
+        cur_min = int(_t.time()) // 60
+        if last != cur_min:
+            print(f"[db-pg] kv mirror failed (op={op}): "
+                  f"{type(e).__name__}: {str(e)[:120]}", flush=True)
+            _pg_mirror_kv._last_warn_min = cur_min
+        return False
+
+
+def _migrate_recent_events(target: str, window_secs: int = 60) -> dict:
+    """1.6.5 — copy the last `window_secs` of events from the source
+    backend to the target backend during a DB swap. Best-effort: a copy
+    failure logs a warning but doesn't block the swap (the new backend
+    will accumulate fresh events from boot).
+
+    Direction:
+      • target=postgres → read SQLite, INSERT into Postgres
+      • target=sqlite   → read Postgres, INSERT into SQLite
+
+    `config_kv`, `secrets_kv`, `admin_ips`, `clients`, `timeline` and
+    `bans` ALL live in SQLite regardless of `DB_BACKEND` (the gateway's
+    operational state — quotas, knobs, allow-lists), so they survive
+    backend swaps automatically. Only the events table is split, and
+    only for the very recent window.
+    """
+    pg = _postgres_load_module()
+    if pg is None or not POSTGRES_DSN:
+        return {"ok": False, "reason": "postgres unavailable"}
+    cutoff = _t.time() - window_secs
+    copied = 0
+    try:
+        if target == "postgres":
+            # SQLite → Postgres
+            src_conn = sqlite3.connect(DB_PATH)
+            src_conn.row_factory = sqlite3.Row
+            rows = src_conn.execute(
+                "SELECT ts, ip, ua, path, status, reason "
+                "FROM events WHERE ts >= ? ORDER BY ts ASC LIMIT 100000",
+                (cutoff,)
+            ).fetchall()
+            src_conn.close()
+            if not rows:
+                return {"ok": True, "copied": 0, "direction": "sqlite->postgres"}
+            with pg.connect(POSTGRES_DSN, connect_timeout=5,
+                              autocommit=False) as dst:
+                with dst.cursor() as cur:
+                    cur.executemany(
+                        "INSERT INTO events (ts, ip, ua, path, status, reason) "
+                        "VALUES (to_timestamp(%s), %s, %s, %s, %s, %s)",
+                        [(r["ts"], r["ip"], (r["ua"] or "")[:500],
+                          r["path"] or "", int(r["status"] or 0),
+                          r["reason"] or "") for r in rows])
+                dst.commit()
+                copied = len(rows)
+            return {"ok": True, "copied": copied,
+                    "direction": "sqlite->postgres"}
+        else:
+            # Postgres → SQLite
+            with pg.connect(POSTGRES_DSN, connect_timeout=5) as src:
+                with src.cursor() as cur:
+                    # ts is TIMESTAMPTZ in Postgres; convert to epoch float
+                    # for the SQLite REAL column on the destination side.
+                    cur.execute(
+                        "SELECT EXTRACT(EPOCH FROM ts), ip, ua, path, status, reason "
+                        "FROM events WHERE ts >= to_timestamp(%s) "
+                        "ORDER BY ts ASC LIMIT 100000",
+                        (cutoff,))
+                    rows = cur.fetchall()
+            if not rows:
+                return {"ok": True, "copied": 0, "direction": "postgres->sqlite"}
+            dst = sqlite3.connect(DB_PATH)
+            try:
+                dst.executemany(
+                    "INSERT INTO events (ts, ip, ua, path, method, status, reason) "
+                    "VALUES (?, ?, ?, ?, '', ?, ?)",
+                    [(r[0], r[1], (r[2] or "")[:500], r[3] or "",
+                      int(r[4] or 0), r[5] or "") for r in rows])
+                dst.commit()
+                copied = len(rows)
+            finally:
+                dst.close()
+            return {"ok": True, "copied": copied,
+                    "direction": "postgres->sqlite"}
+    except Exception as e:
+        return {"ok": False,
+                "reason": f"{type(e).__name__}: {str(e)[:160]}"}
+
+
+def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
+    """1.6.5 — initialise the Postgres event store. Called from on_startup
+    when DB_BACKEND=postgres. Idempotent; safe to call on a Timescale-
+    enabled DB (the create_hypertable call is left to the operator).
+
+    Retries up to `max_attempts` with linear backoff to handle the common
+    race where docker-compose / Kubernetes brings up the gateway before
+    Postgres has finished accepting TCP connections (pg_isready can return
+    yes while the listener is still binding)."""
+    pg = _postgres_load_module()
+    # 1.6.5 — initialise schema whenever a Postgres DSN is configured, even
+    # if the active backend is SQLite. The standby tables must exist so the
+    # dual-write `_pg_mirror_kv` calls can land config / secret / admin-ip
+    # changes in both backends, and so an operator-driven backend swap to
+    # postgres has the schema ready.
+    if pg is None or not POSTGRES_DSN:
+        return False
+    last_err = None
+    for attempt in range(1, max_attempts + 1):
         try:
-            import psycopg                                       # type: ignore
-            _postgres_available = True
-            print(f"[db] postgres backend selected (psycopg loaded)",
-                  flush=True)
-        except ImportError:
-            print("[db] DB_BACKEND=postgres but psycopg is not installed "
-                  "in this image — rebuild the image with psycopg in the "
-                  "Dockerfile or revert to sqlite. Falling back to sqlite "
-                  "for now.", flush=True)
-            DB_BACKEND = "sqlite"
+            with pg.connect(POSTGRES_DSN, connect_timeout=5,
+                              autocommit=True) as conn:
+                with conn.cursor() as cur:
+                    # 1.6.5 — `ts` is TIMESTAMPTZ (not DOUBLE PRECISION) so
+                    # TimescaleDB's `create_hypertable` accepts it as the
+                    # time dimension. Insert path uses `to_timestamp(epoch)`
+                    # to convert from Python's _t.time() floats.
+                    cur.execute("""
+                      CREATE TABLE IF NOT EXISTS events (
+                        id          BIGSERIAL,
+                        ts          TIMESTAMPTZ NOT NULL,
+                        ip          TEXT NOT NULL,
+                        ua          TEXT,
+                        path        TEXT,
+                        status      INTEGER,
+                        reason      TEXT,
+                        track_key   TEXT,
+                        sid         TEXT,
+                        fp          TEXT,
+                        ja4         TEXT,
+                        request_id  TEXT,
+                        PRIMARY KEY (ts, id)
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
+                      CREATE INDEX IF NOT EXISTS idx_events_ip     ON events(ip);
+                      CREATE INDEX IF NOT EXISTS idx_events_reason ON events(reason);
+
+                      -- 1.6.5 — operational KV tables mirrored from SQLite so
+                      -- every config / secret / admin-IP change is persisted
+                      -- in BOTH backends. Lets an operator swap the active
+                      -- backend without losing any configuration.
+                      CREATE TABLE IF NOT EXISTS config_kv (
+                        key    TEXT PRIMARY KEY,
+                        value  TEXT,
+                        ts     DOUBLE PRECISION
+                      );
+                      CREATE TABLE IF NOT EXISTS secrets_kv (
+                        key    TEXT PRIMARY KEY,
+                        value  TEXT,
+                        ts     DOUBLE PRECISION
+                      );
+                      CREATE TABLE IF NOT EXISTS admin_ips (
+                        cidr        TEXT PRIMARY KEY,
+                        added_ts    DOUBLE PRECISION,
+                        note        TEXT,
+                        source      TEXT,
+                        description TEXT
+                      );
+                      -- 1.6.7: gateway-mesh registry mirror.
+                      CREATE TABLE IF NOT EXISTS gw_registry (
+                        gw_id          TEXT PRIMARY KEY,
+                        domain         TEXT,
+                        region         TEXT,
+                        environment    TEXT,
+                        status         TEXT NOT NULL DEFAULT 'active',
+                        can_distribute INTEGER NOT NULL DEFAULT 1,
+                        public_key     TEXT NOT NULL,
+                        private_key    TEXT,
+                        key_created_ts DOUBLE PRECISION NOT NULL,
+                        key_rotated_ts DOUBLE PRECISION,
+                        last_seen_ts   DOUBLE PRECISION,
+                        created_ts     DOUBLE PRECISION NOT NULL,
+                        updated_ts     DOUBLE PRECISION NOT NULL,
+                        is_local       INTEGER NOT NULL DEFAULT 0
+                      );
+                      CREATE TABLE IF NOT EXISTS gw_distribution (
+                        source_gw_id TEXT NOT NULL,
+                        target_gw_id TEXT NOT NULL,
+                        ts           DOUBLE PRECISION NOT NULL,
+                        PRIMARY KEY (source_gw_id, target_gw_id)
+                      );
+                      CREATE TABLE IF NOT EXISTS gw_audit (
+                        id      BIGSERIAL PRIMARY KEY,
+                        ts      DOUBLE PRECISION NOT NULL,
+                        action  TEXT NOT NULL,
+                        gw_id   TEXT,
+                        actor   TEXT,
+                        details TEXT
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_gw_audit_ts    ON gw_audit(ts);
+                      CREATE INDEX IF NOT EXISTS idx_gw_audit_gw_id ON gw_audit(gw_id);
+                      CREATE TABLE IF NOT EXISTS users (
+                        username       TEXT PRIMARY KEY,
+                        password_hash  TEXT NOT NULL,
+                        role           TEXT NOT NULL DEFAULT 'admin',
+                        status         TEXT NOT NULL DEFAULT 'active',
+                        created_ts     DOUBLE PRECISION NOT NULL,
+                        updated_ts     DOUBLE PRECISION NOT NULL,
+                        last_login_ts  DOUBLE PRECISION,
+                        last_login_ip  TEXT
+                      );
+                      CREATE TABLE IF NOT EXISTS user_sessions (
+                        sid          TEXT PRIMARY KEY,
+                        username     TEXT NOT NULL,
+                        ip           TEXT,
+                        user_agent   TEXT,
+                        created_ts   DOUBLE PRECISION NOT NULL,
+                        last_seen_ts DOUBLE PRECISION NOT NULL,
+                        expires_ts   DOUBLE PRECISION NOT NULL,
+                        status       TEXT NOT NULL DEFAULT 'active',
+                        revoked_ts   DOUBLE PRECISION,
+                        revoked_by   TEXT
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_user_sessions_user
+                          ON user_sessions(username, status);
+                      CREATE TABLE IF NOT EXISTS gw_sync_pending (
+                        id           BIGSERIAL PRIMARY KEY,
+                        received_ts  DOUBLE PRECISION NOT NULL,
+                        source_gw_id TEXT NOT NULL,
+                        key_name     TEXT NOT NULL,
+                        value        TEXT NOT NULL,
+                        status       TEXT NOT NULL DEFAULT 'pending',
+                        confirmed_ts DOUBLE PRECISION,
+                        UNIQUE(source_gw_id, key_name)
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_gw_sync_pending_status
+                          ON gw_sync_pending(status, received_ts);
+                    """)
+                    # 1.6.5 — idempotent ALTER for upgrade path: older schema
+                    # versions of admin_ips lacked the `note` column. Adding
+                    # IF NOT EXISTS keeps the dual-write in lockstep with SQLite.
+                    try:
+                        cur.execute(
+                            "ALTER TABLE admin_ips "
+                            "ADD COLUMN IF NOT EXISTS note TEXT")
+                    except Exception:
+                        pass
+                    # 1.6.7 — same for gw_registry.domain.
+                    try:
+                        cur.execute(
+                            "ALTER TABLE gw_registry "
+                            "ADD COLUMN IF NOT EXISTS domain TEXT")
+                    except Exception:
+                        pass
+                    # Try to install Timescale hypertable if the extension exists.
+                    # Best-effort: vanilla Postgres falls through silently.
+                    # 1.6.5 — chunk_time_interval is an INTERVAL since `ts`
+                    # is TIMESTAMPTZ (the integer-seconds form is rejected
+                    # for non-bigint time columns).
+                    try:
+                        cur.execute("SELECT 1 FROM pg_extension WHERE extname='timescaledb'")
+                        if cur.fetchone():
+                            try:
+                                cur.execute(
+                                    "SELECT create_hypertable('events', 'ts', "
+                                    " if_not_exists => TRUE, "
+                                    " chunk_time_interval => INTERVAL '1 day')")
+                                print("[db-pg] Timescale hypertable on events(ts)",
+                                      flush=True)
+                            except Exception as _e:
+                                # Already a hypertable, or older API.
+                                pass
+                    except Exception:
+                        pass
+            if attempt > 1:
+                print(f"[db-pg] init succeeded on attempt {attempt}",
+                      flush=True)
+            return True
+        except Exception as e:
+            last_err = e
+            if attempt < max_attempts:
+                _t.sleep(backoff_s * attempt)
+                continue
+    print(f"[db-pg] init failed after {max_attempts} attempts: "
+          f"{type(last_err).__name__}: {last_err}", flush=True)
+    return False
+
+
+def pg_insert_event(ts: float, ip: str, ua: str, path: str,
+                     status: int, reason: str, track_key: str = "",
+                     sid: str = "", fp: str = "", ja4: str = "",
+                     request_id: str = "") -> bool:
+    """1.6.5 — append one event row to the Postgres backend. Returns True
+    on success, False on transient failure (caller falls back to dropping
+    silently — events are best-effort, never block the request path)."""
+    pg = _postgres_load_module()
+    if pg is None or DB_BACKEND != "postgres":
+        return False
+    try:
+        with pg.connect(POSTGRES_DSN, connect_timeout=2,
+                          autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO events (ts, ip, ua, path, status, reason, "
+                    "track_key, sid, fp, ja4, request_id) "
+                    "VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (ts, ip, (ua or "")[:500], path or "", int(status),
+                     reason or "", track_key or "", sid or "",
+                     fp or "", ja4 or "", request_id or ""))
+        return True
+    except Exception as e:
+        # Don't spam — the dashboards' /__db-test endpoint surfaces health.
+        return False
+
+
+def pg_db_size() -> dict:
+    """1.6.5 — Postgres equivalent of /proc/.../size used by /__service.
+    Returns {"db_bytes", "events_rows", "ok": bool}.
+    Probes whenever POSTGRES_DSN is set, regardless of the active backend
+    — lets the Service dashboard plot Postgres size even before the
+    operator switches the backend."""
+    pg = _postgres_load_module()
+    if pg is None or not POSTGRES_DSN:
+        return {"ok": False, "reason": "POSTGRES_DSN not configured"}
+    try:
+        with pg.connect(POSTGRES_DSN, connect_timeout=2) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_database_size(current_database())")
+                size = int(cur.fetchone()[0])
+                # The events table may not exist yet if we're probing
+                # before the operator has switched to Postgres. Tolerate.
+                try:
+                    cur.execute("SELECT COUNT(*) FROM events")
+                    rows = int(cur.fetchone()[0])
+                except Exception:
+                    rows = 0
+                return {"ok": True, "db_bytes": size, "events_rows": rows}
+    except Exception as e:
+        return {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:80]}"}
+
+
+def pg_test_roundtrip() -> dict:
+    """1.6.5 — connectivity probe for the Controls dashboard. Inserts a
+    canary 'pgtest' event, reads it back, deletes it, returns timing.
+
+    Probes whenever POSTGRES_DSN is set, regardless of the active backend
+    — lets the operator see "yes, Postgres is reachable" before clicking
+    the switch. The events table is created on first probe (idempotent
+    DDL via CREATE TABLE IF NOT EXISTS) so dashboards don't trip when
+    pg_db_size is queried before any traffic has hit Postgres."""
+    pg = _postgres_load_module()
+    if pg is None:
+        return {"ok": False, "reason": "psycopg not installed"}
+    if not POSTGRES_DSN:
+        return {"ok": False, "reason": "POSTGRES_DSN not configured"}
+    t0 = _t.time()
+    try:
+        with pg.connect(POSTGRES_DSN, connect_timeout=3,
+                          autocommit=True) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT version(), current_database(), now()")
+                ver, dbname, now_ts = cur.fetchone()
+                # 1.6.5 — ensure the events schema exists (idempotent).
+                # When DB_BACKEND=sqlite, the standby Postgres still gets
+                # its schema ready so the dashboard shows real probe
+                # results without needing the operator to flip the switch
+                # first.
+                cur.execute("""
+                  CREATE TABLE IF NOT EXISTS events (
+                    id          BIGSERIAL,
+                    ts          TIMESTAMPTZ NOT NULL,
+                    ip          TEXT NOT NULL,
+                    ua          TEXT,
+                    path        TEXT,
+                    status      INTEGER,
+                    reason      TEXT,
+                    track_key   TEXT,
+                    sid         TEXT,
+                    fp          TEXT,
+                    ja4         TEXT,
+                    request_id  TEXT,
+                    PRIMARY KEY (ts, id)
+                  )""")
+                # Test the events schema works
+                ts = _t.time()
+                cur.execute(
+                    "INSERT INTO events (ts, ip, reason) "
+                    "VALUES (to_timestamp(%s), '127.0.0.1', 'pgtest') RETURNING id", (ts,))
+                test_id = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM events WHERE reason='pgtest'")
+                cnt = int(cur.fetchone()[0])
+                cur.execute("DELETE FROM events WHERE id = %s", (test_id,))
+                return {"ok": True,
+                        "version": str(ver)[:120],
+                        "db": str(dbname),
+                        "round_trip_ms": round((_t.time() - t0) * 1000, 1),
+                        "events_rows_seen_during_test": cnt}
+    except Exception as e:
+        return {"ok": False,
+                "reason": f"{type(e).__name__}: {str(e)[:160]}",
+                "round_trip_ms": round((_t.time() - t0) * 1000, 1)}
 
 def db_init():
     """Create tables if they don't exist."""
@@ -845,6 +1353,109 @@ def db_init():
         value  TEXT,
         ts     REAL
     );
+
+    -- 1.6.7: gateway-mesh registry. Each row is one gateway in the
+    -- distributed mesh; the `private_key` is an HMAC secret used to sign
+    -- block records before they are pushed to peers, and `public_key` is
+    -- the SHA256-derived verification handle peers use to authenticate
+    -- those records (HMAC public-handle scheme — see _gw_derive_pubkey).
+    -- The `can_distribute` flag is the coarse gate; the per-pair sync
+    -- topology lives in `gw_distribution` below.
+    CREATE TABLE IF NOT EXISTS gw_registry (
+        gw_id          TEXT PRIMARY KEY,
+        domain         TEXT,                  -- 1.6.7: external hostname
+        region         TEXT,
+        environment    TEXT,
+        status         TEXT NOT NULL DEFAULT 'active',
+        can_distribute INTEGER NOT NULL DEFAULT 1,
+        public_key     TEXT NOT NULL,
+        private_key    TEXT,                  -- only set on the LOCAL gw row
+        key_created_ts REAL NOT NULL,
+        key_rotated_ts REAL,
+        last_seen_ts   REAL,
+        created_ts     REAL NOT NULL,
+        updated_ts     REAL NOT NULL,
+        is_local       INTEGER NOT NULL DEFAULT 0
+    );
+
+    -- 1.6.7: distribution rules — directional, source → target. Defaults
+    -- to none when a new gw is added; operator must enable explicit pairs.
+    CREATE TABLE IF NOT EXISTS gw_distribution (
+        source_gw_id TEXT NOT NULL,
+        target_gw_id TEXT NOT NULL,
+        ts           REAL NOT NULL,
+        PRIMARY KEY (source_gw_id, target_gw_id)
+    );
+
+    -- 1.6.7: append-only audit log of every registry mutation. Used by
+    -- the Settings dashboard's audit-log view; never pruned by the
+    -- gateway itself (operator-driven rotation).
+    CREATE TABLE IF NOT EXISTS gw_audit (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts         REAL NOT NULL,
+        action     TEXT NOT NULL,
+        gw_id      TEXT,
+        actor      TEXT,
+        details    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_gw_audit_ts    ON gw_audit(ts);
+    CREATE INDEX IF NOT EXISTS idx_gw_audit_gw_id ON gw_audit(gw_id);
+
+    -- 1.6.7: mesh-sync of integration secrets / config keys. Each row
+    -- is an INBOUND offer received from a peer gateway via Redis. The
+    -- destination operator must explicitly confirm to apply; until then
+    -- the value sits in the pending state and the live integration is
+    -- untouched. UNIQUE(source_gw_id, key_name) keeps each peer's
+    -- last-offered value as one row (re-broadcast updates in place).
+    CREATE TABLE IF NOT EXISTS gw_sync_pending (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        received_ts  REAL NOT NULL,
+        source_gw_id TEXT NOT NULL,
+        key_name     TEXT NOT NULL,
+        value        TEXT NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'pending',
+        confirmed_ts REAL,
+        UNIQUE(source_gw_id, key_name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_gw_sync_pending_status
+        ON gw_sync_pending(status, received_ts);
+
+    -- 1.6.7: dashboard user accounts. Replaces the prior shared-admin-key
+    -- model (key-bearer auth still works for scripted clients — the new
+    -- session cookie is checked alongside it). Passwords stored as
+    -- scrypt(salt|password) base64-encoded; role is "admin" today, room
+    -- to extend (viewer/editor) without schema churn.
+    CREATE TABLE IF NOT EXISTS users (
+        username       TEXT PRIMARY KEY,
+        password_hash  TEXT NOT NULL,
+        role           TEXT NOT NULL DEFAULT 'admin',
+        status         TEXT NOT NULL DEFAULT 'active',
+        created_ts     REAL NOT NULL,
+        updated_ts     REAL NOT NULL,
+        last_login_ts  REAL,
+        last_login_ip  TEXT
+    );
+
+    -- 1.6.7: per-user session ledger. Each successful login mints a
+    -- fresh `sid` (16-char URL-safe random), records the IP + UA, and
+    -- the corresponding session cookie carries the sid as part of the
+    -- HMAC payload. Lookup happens on every authenticated request via
+    -- the in-memory _SESSION_CACHE; revocation drops the row's status
+    -- to 'revoked' and the next request fails verification.
+    CREATE TABLE IF NOT EXISTS user_sessions (
+        sid          TEXT PRIMARY KEY,
+        username     TEXT NOT NULL,
+        ip           TEXT,
+        user_agent   TEXT,
+        created_ts   REAL NOT NULL,
+        last_seen_ts REAL NOT NULL,
+        expires_ts   REAL NOT NULL,
+        status       TEXT NOT NULL DEFAULT 'active',
+        revoked_ts   REAL,
+        revoked_by   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_sessions_user
+        ON user_sessions(username, status);
     """)
     # 1.5.3: idempotent migration — add `description` column if missing
     try:
@@ -860,6 +1471,23 @@ def db_init():
             conn.execute("ALTER TABLE timeline ADD COLUMN missed INTEGER DEFAULT 0")
     except Exception as _e:
         print(f"[migrate] timeline missed: {_e}", flush=True)
+    # 1.6.5: idempotent migration — add Postgres / Timescale size columns
+    # to svc_metrics so the Service dashboard's PG-size chart has data.
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(svc_metrics)")}
+        if "pg_db_bytes" not in cols:
+            conn.execute("ALTER TABLE svc_metrics ADD COLUMN pg_db_bytes INTEGER")
+        if "pg_events_rows" not in cols:
+            conn.execute("ALTER TABLE svc_metrics ADD COLUMN pg_events_rows INTEGER")
+    except Exception as _e:
+        print(f"[migrate] svc_metrics pg_*: {_e}", flush=True)
+    # 1.6.7: idempotent migration — add `domain` column to gw_registry.
+    try:
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(gw_registry)")}
+        if "domain" not in cols:
+            conn.execute("ALTER TABLE gw_registry ADD COLUMN domain TEXT")
+    except Exception as _e:
+        print(f"[migrate] gw_registry domain: {_e}", flush=True)
     conn.commit()
     conn.close()
 
@@ -1341,7 +1969,7 @@ def _tor_fetch():
         return
     ctx = ssl.create_default_context()
     req = urllib.request.Request(TOR_FEED_URL, headers={
-        "User-Agent": "AppSecGW/1.6.4 (anti-bot-gw)"
+        "User-Agent": "AppSecGW/1.6.7 (anti-bot-gw)"
     })
     new_set = set()
     try:
@@ -1552,10 +2180,39 @@ async def _sample_service_metrics_loop():
                 "net_tx_bps":    int(net_tx_per_s),
                 **{f"db_{k}": v for k, v in _db_file_sizes().items()},
             }
+            # 1.6.5 — sample pg_database_size + events row count once per
+            # minute whenever POSTGRES_DSN is set (regardless of which
+            # backend is active). Lets the Service dashboard plot the
+            # Postgres size trend even on an SQLite gateway that has a
+            # standby Timescale ready to switch to.
+            #
+            # Between the per-minute live samples, we carry forward the
+            # LAST KNOWN value so every persisted row has the field
+            # populated — otherwise the chart's bucket aggregator sees
+            # mostly zeros and renders a spiky / empty line.
+            if _postgres_available and POSTGRES_DSN:
+                if (int(_t.time()) // 60) != getattr(
+                        _sample_service_metrics_loop, "_last_pg_min", -1):
+                    try:
+                        pg_info = pg_db_size()
+                        if pg_info.get("ok"):
+                            sample["pg_db_bytes"] = pg_info["db_bytes"]
+                            sample["pg_events_rows"] = pg_info["events_rows"]
+                            _sample_service_metrics_loop._pg_last = (
+                                pg_info["db_bytes"], pg_info["events_rows"])
+                        setattr(_sample_service_metrics_loop, "_last_pg_min",
+                                int(_t.time()) // 60)
+                    except Exception:
+                        pass
+                last = getattr(_sample_service_metrics_loop, "_pg_last", None)
+                if last and "pg_db_bytes" not in sample:
+                    sample["pg_db_bytes"]    = last[0]
+                    sample["pg_events_rows"] = last[1]
             SERVICE_METRICS_HISTORY.append(sample)
 
             # Persist to SQLite via the async writer so chart history survives
             # container restarts. Tuple matches the svc_metrics column order.
+            # 1.6.5: appended pg_db_bytes + pg_events_rows.
             if db_queue is not None:
                 row = (
                     sample["ts"], sample["cpu_pct"],
@@ -1570,6 +2227,7 @@ async def _sample_service_metrics_loop():
                     sample["net_rx_bps"], sample["net_tx_bps"],
                     sample.get("db_db", 0), sample.get("db_wal", 0),
                     sample.get("db_shm", 0), sample.get("db_total", 0),
+                    sample.get("pg_db_bytes"), sample.get("pg_events_rows"),
                 )
                 try:
                     db_queue.put_nowait(("svc_metric", row))
@@ -1643,13 +2301,24 @@ async def db_writer_loop():
                     elif op == "set_config":
                         # 1.5.5 — hot-reload knob persistence.  args = (key, json_value, ts)
                         conn.execute("INSERT OR REPLACE INTO config_kv (key,value,ts) VALUES (?,?,?)", args)
+                        # 1.6.5 — also mirror to Postgres so the standby
+                        # backend sees the same configuration. Best-effort;
+                        # SQLite is the source of truth.
+                        try: _pg_mirror_kv("set_config", args)
+                        except Exception: pass
                     elif op == "del_config":
                         conn.execute("DELETE FROM config_kv WHERE key = ?", args)
+                        try: _pg_mirror_kv("del_config", args)
+                        except Exception: pass
                     elif op == "set_secret":
                         # 1.5.5 — runtime integration-secret persistence.
                         conn.execute("INSERT OR REPLACE INTO secrets_kv (key,value,ts) VALUES (?,?,?)", args)
+                        try: _pg_mirror_kv("set_secret", args)
+                        except Exception: pass
                     elif op == "del_secret":
                         conn.execute("DELETE FROM secrets_kv WHERE key = ?", args)
+                        try: _pg_mirror_kv("del_secret", args)
+                        except Exception: pass
                     elif op == "ban":
                         conn.execute("""
                           INSERT INTO bans (ip,banned_until,reason,ts) VALUES (?,?,?,?)
@@ -1658,6 +2327,7 @@ async def db_writer_loop():
                         """, args)
                     elif op == "svc_metric":
                         # args is a tuple of values matching the column order.
+                        # 1.6.5: appended pg_db_bytes + pg_events_rows
                         conn.execute("""
                           INSERT OR REPLACE INTO svc_metrics
                           (ts, cpu_pct, load1, load5, load15,
@@ -1665,13 +2335,15 @@ async def db_writer_loop():
                            swap_used, swap_total, cg_used, cg_limit, cg_pct,
                            disk_used, disk_total, disk_avail, disk_pct,
                            procs, open_fds, net_rx_bps, net_tx_bps,
-                           db_db, db_wal, db_shm, db_total)
+                           db_db, db_wal, db_shm, db_total,
+                           pg_db_bytes, pg_events_rows)
                           VALUES (?, ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?, ?,
                                   ?, ?, ?, ?,
                                   ?, ?, ?, ?,
-                                  ?, ?, ?, ?)
+                                  ?, ?, ?, ?,
+                                  ?, ?)
                         """, args)
                     elif op == "svc_metric_prune":
                         # args = (cutoff_ts,)
@@ -1683,20 +2355,144 @@ async def db_writer_loop():
                             "(cidr, added_ts, note, source, description) "
                             "VALUES (?, ?, ?, ?, ?)",
                             args)
+                        try: _pg_mirror_kv("set_admin_ip", args)
+                        except Exception: pass
                     elif op == "admin_ip_remove":
                         # args = (cidr,)
                         conn.execute("DELETE FROM admin_ips WHERE cidr = ?", args)
+                        try: _pg_mirror_kv("del_admin_ip", args)
+                        except Exception: pass
                     elif op == "admin_ip_update_description":
                         # args = (description, cidr)
                         conn.execute(
                             "UPDATE admin_ips SET description=? WHERE cidr=?",
                             args)
+                        try: _pg_mirror_kv("update_admin_ip_description", args)
+                        except Exception: pass
                     elif op == "abuseipdb_set":
                         # args = (ip, score, country, ts)
                         conn.execute(
                             "INSERT OR REPLACE INTO abuseipdb_cache "
                             "(ip, score, country, ts) VALUES (?, ?, ?, ?)",
                             args)
+                    # 1.6.7 — Gateway Registry persistence ─────────────
+                    elif op == "gw_registry_add":
+                        # args = (gw_id, domain, region, environment, status,
+                        #         can_distribute, public_key, private_key,
+                        #         key_created_ts, key_rotated_ts,
+                        #         last_seen_ts, created_ts, updated_ts,
+                        #         is_local)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO gw_registry "
+                            "(gw_id, domain, region, environment, status, can_distribute, "
+                            " public_key, private_key, key_created_ts, key_rotated_ts, "
+                            " last_seen_ts, created_ts, updated_ts, is_local) "
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            args)
+                    elif op == "gw_registry_update":
+                        # args = (gw_id, {col: val, ...})
+                        gw_id, fields = args
+                        if fields:
+                            cols = ", ".join(f"{k}=?" for k in fields)
+                            params = list(fields.values()) + [gw_id]
+                            conn.execute(
+                                f"UPDATE gw_registry SET {cols} WHERE gw_id=?",
+                                params)
+                    elif op == "gw_registry_delete":
+                        # args = (gw_id,)
+                        conn.execute("DELETE FROM gw_registry WHERE gw_id=?", args)
+                        conn.execute(
+                            "DELETE FROM gw_distribution "
+                            "WHERE source_gw_id=? OR target_gw_id=?",
+                            (args[0], args[0]))
+                    elif op == "gw_distribution_replace":
+                        # args = (cleaned_pairs, ts)  — full replace
+                        pairs, ts = args
+                        conn.execute("DELETE FROM gw_distribution")
+                        if pairs:
+                            conn.executemany(
+                                "INSERT OR IGNORE INTO gw_distribution "
+                                "(source_gw_id, target_gw_id, ts) VALUES (?, ?, ?)",
+                                [(s, t, ts) for s, t in pairs])
+                    elif op == "gw_audit_add":
+                        # args = (ts, action, gw_id, actor, details)
+                        conn.execute(
+                            "INSERT INTO gw_audit "
+                            "(ts, action, gw_id, actor, details) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            args)
+                    # 1.6.7 — user accounts ───────────────────────────
+                    elif op == "user_create":
+                        # args = (username, password_hash, role, status,
+                        #         created_ts, updated_ts)
+                        conn.execute(
+                            "INSERT OR REPLACE INTO users "
+                            "(username, password_hash, role, status, "
+                            " created_ts, updated_ts) "
+                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            args)
+                    elif op == "user_update":
+                        # args = (username, {col: val, ...})
+                        username, fields = args
+                        if fields:
+                            cols   = ", ".join(f"{k}=?" for k in fields)
+                            params = list(fields.values()) + [username]
+                            conn.execute(
+                                f"UPDATE users SET {cols} WHERE username=?",  # nosec B608
+                                params)
+                    elif op == "user_delete":
+                        # args = (username,)
+                        conn.execute("DELETE FROM users WHERE username=?", args)
+                    elif op == "user_login_recorded":
+                        # args = (ts, ip, username)
+                        conn.execute(
+                            "UPDATE users SET last_login_ts=?, last_login_ip=? "
+                            "WHERE username=?",
+                            args)
+                    # 1.6.7 — per-session ledger writes ───────────────
+                    elif op == "user_session_create":
+                        # args = (sid, username, ip, ua, created_ts,
+                        #         last_seen_ts, expires_ts)
+                        conn.execute(
+                            "INSERT INTO user_sessions "
+                            "(sid, username, ip, user_agent, "
+                            " created_ts, last_seen_ts, expires_ts, status) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, 'active')",
+                            args)
+                    elif op == "user_session_touch":
+                        # args = (last_seen_ts, sid)
+                        conn.execute(
+                            "UPDATE user_sessions SET last_seen_ts=? "
+                            "WHERE sid=?",
+                            args)
+                    elif op == "user_session_revoke":
+                        # args = (sid, revoked_by, revoked_ts)
+                        conn.execute(
+                            "UPDATE user_sessions SET status='revoked', "
+                            "revoked_by=?, revoked_ts=? WHERE sid=?",
+                            (args[1], args[2], args[0]))
+                    # 1.6.7 — mesh-sync pending offers ────────────────
+                    elif op == "mesh_sync_pending_upsert":
+                        # args = (received_ts, source_gw_id, key_name, value)
+                        # Replace the existing (source, key) row so a peer
+                        # that re-broadcasts a new value supersedes the
+                        # prior pending one.
+                        conn.execute(
+                            "INSERT INTO gw_sync_pending "
+                            "(received_ts, source_gw_id, key_name, value, status) "
+                            "VALUES (?, ?, ?, ?, 'pending') "
+                            "ON CONFLICT(source_gw_id, key_name) DO UPDATE SET "
+                            "  received_ts = excluded.received_ts, "
+                            "  value       = excluded.value, "
+                            "  status      = 'pending', "
+                            "  confirmed_ts = NULL",
+                            args)
+                    elif op == "mesh_sync_status":
+                        # args = (id, new_status, ts)
+                        conn.execute(
+                            "UPDATE gw_sync_pending "
+                            "SET status = ?, confirmed_ts = ? WHERE id = ?",
+                            (args[1], args[2], args[0]))
                 except Exception as e:
                     print(f"[db] write failed: {e} args={args!r}")
             conn.commit()
@@ -2023,6 +2819,43 @@ _LOG_LEVELS = {"debug": 10, "info": 20, "warn": 30, "warning": 30,
 _LOG_LEVEL_N = _LOG_LEVELS.get(LOG_LEVEL, 20)
 _REQUEST_ID_HEADER = "X-Request-ID"
 _REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_\-:.]{1,64}$")
+
+# 1.6.6 — every internal/admin endpoint lives under this single namespace
+# instead of the ad-hoc `/__name` prefix. Anything that requires the admin
+# key is mounted under `<NS>/secured/...`; the unauthenticated subset
+# (liveness probe, JS-challenge plumbing, BotD bundle/callback, public
+# assets) lives directly under `<NS>/...`.
+ADMIN_NS         = "/antibot-appsec-gateway"
+ADMIN_NS_SECURED = ADMIN_NS + "/secured"
+# Sub-paths that must remain reachable WITHOUT the admin key. Everything
+# else under ADMIN_NS implicitly requires admin-IP + admin-key auth.
+_ADMIN_PUBLIC_SUBPATHS = (
+    "/live", "/pow", "/solver", "/challenge",
+    "/botd-report", "/assets/",
+    # 1.6.7 — login flow must be reachable without auth so the operator
+    # can sign in. Logout is a GET so it works as a plain link.
+    "/login", "/logout",
+)
+
+def _is_admin_path(p: str) -> bool:
+    """True iff `p` lands on any internal endpoint (anything under the
+    admin namespace). Used by the protect middleware to skip detector
+    layers (RPS limit, method allowlist) on operator paths."""
+    return p == ADMIN_NS or p.startswith(ADMIN_NS + "/")
+
+def _admin_path_is_public(p: str) -> bool:
+    """True iff this admin path is exempt from the admin-key gate
+    (liveness, challenge plumbing, browser-callable BotD endpoints)."""
+    if not p.startswith(ADMIN_NS + "/"):
+        return False
+    sub = p[len(ADMIN_NS):]
+    for entry in _ADMIN_PUBLIC_SUBPATHS:
+        if entry.endswith("/"):
+            if sub.startswith(entry):
+                return True
+        elif sub == entry:
+            return True
+    return False
 
 # 1.6.3 — in-memory ring buffer for the Logs dashboard. Captures every slog
 # call EXCEPT `event=request` (request events live in SQLite via record()).
@@ -2463,6 +3296,15 @@ RISK_WEIGHTS = {
     "body-ssrf":             50,    # 1.6.3: 40→50 — IMDS/gopher targeting
     "body-cmd":              50,
     "auth-jwt-invalid":      30,    # 1.6.3: 25→30 — bypassing operator-explicit gate
+    # 1.6.5 — slowloris-style: client took longer than BODY_TIMEOUT to
+    # finish a POST body. Soft signal — could be a flaky mobile network
+    # OR a Slowloris-style DoS attempt. Risk-band escalation handles the
+    # rest (combined with other signals → ban; alone → just throttle).
+    "slow-client":            10,
+    # 1.6.5 — FingerprintJS BotD: client-side library reports
+    # automation / headless markers via /__botd-report. Med tier — not
+    # instant ban (BotD has known FPs on privacy-focused browsers).
+    "botd-detected":          30,
     # ── 1.6.2: Tier-C signals (response-side DLP) ──
     # DLP fires are NOT client-malice — they're upstream leakage. Zero
     # risk added to the requester; the event is recorded for the operator.
@@ -2479,6 +3321,66 @@ RISK_WEIGHTS = {
 # this identity is forced through the JS_CHALLENGE/Turnstile cookie gate even
 # on routes that would normally be exempt. Off when JS_CHALLENGE=0.
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
+
+# 1.6.5 — escalation tier: expensive / external detectors (network round-trip
+# or cumulative cost) are skipped on requests from identities with zero
+# accumulated risk. Lets the cheap in-process detectors run on every
+# request, while AbuseIPDB / CrowdSec / MaxMind-City spend their quota
+# only on suspects. ESCALATION_THRESHOLD=0 reverts to "always run".
+ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "1"))
+
+# 1.6.5 — BotD client-side detection (FingerprintJS open-source library).
+# Off by default. When enabled, every text/html response from the upstream
+# is rewritten to include a `<script type="module">` that loads the
+# self-hosted botd.bundle.js, runs the in-browser detection, and POSTs
+# the result to /__botd-report. The reporter is HMAC-bound to the
+# requester's chal cookie so an attacker can't forge "not a bot" reports
+# for someone else's identity. Detected bot → +30 risk (med tier).
+BOTD_ENABLED = os.environ.get("BOTD_ENABLED", "0") in ("1", "true", "yes")
+# Reporter HMAC key — derived from SESSION_KEY at startup so it rotates
+# in lockstep when SESSION_KEY rotates. Never logged.
+_BOTD_REPORT_TTL = 300  # report valid for 5 minutes after the page loads
+
+
+# 1.6.5 — TARPIT MITIGATION (artificial slowdown for soft-band identities).
+# When TARPIT_ENABLED=1 AND the requester's risk_score sits between
+# SOFT_CHALLENGE_SCORE and RISK_BAN_THRESHOLD, the silent-decoy response
+# is delayed by TARPIT_DELAY_MS milliseconds. Effect:
+#   • A scripted attacker iterating bypass payloads sees its throughput
+#     drop ~10× without any 4xx response that would tip them off.
+#   • Legitimate users in the soft band experience a slight pause before
+#     the silent-decoy 200 — they're still served real content, just slower.
+# Set TARPIT_ENABLED=0 to disable. TARPIT_DELAY_MS is the delay PER
+# response; total wall-time blow-up = delay × #soft-band hits.
+TARPIT_ENABLED = os.environ.get("TARPIT_ENABLED", "0") in ("1", "true", "yes")
+TARPIT_DELAY_MS = int(os.environ.get("TARPIT_DELAY_MS", "1500"))    # 1.5 s default
+
+# Reasons whose detector has the `escalate-only` label (rendered with the
+# escalate icon in the Controls dashboard). The list MUST stay in sync
+# with the actual call-site gating below — we just keep it here for the UI.
+ESCALATE_ONLY_REASONS = {
+    "abuseipdb-high", "abuseipdb-med",   # external API call
+    "crowdsec-banned",                   # external LAPI call
+    # MaxMind is local + cheap, but only useful on suspects:
+    "asn-hosting", "datacenter-vpn",
+    # body-pattern groups read up to 64 KiB of body per request — defer:
+    "body-sqli", "body-xss", "body-lfi", "body-rce", "body-ssrf", "body-cmd",
+    "suspicious-body",
+    # DLP scans response bodies — already deferred behind DLP_ENABLED, but
+    # surface in the UI so operators understand the cost.
+    "dlp-cc", "dlp-aws", "dlp-jwt", "dlp-private-key",
+    "dlp-api-key", "dlp-pii-email", "dlp-pii-ssn",
+}
+
+def _escalation_score(track_key: str) -> float:
+    """1.6.5 — return the current decayed risk_score for `track_key`,
+    or 0 when no state exists. Used as the precondition for escalate-only
+    detectors. No lock — called from the hot path; the read of float is
+    atomic in CPython, and a stale value at most causes one extra call."""
+    s = ip_state.get(track_key)
+    if s is None:
+        return 0.0
+    return float(s.risk_score or 0.0)
 RISK_BAN_THRESHOLD       = 50    # ban when score crosses this for normal IPs
 RISK_BAN_THRESHOLD_NAT   = 100   # higher threshold when IP looks like NAT
 RISK_DECAY_HALFLIFE_SECS = 3600  # score halves every hour
@@ -2792,6 +3694,19 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         # Persist to DB (non-blocking — drops in queue)
         if db_queue is not None:
             event_ts = _t.time()
+            # 1.6.5 — when DB_BACKEND=postgres, fire-and-forget the event
+            # write to Postgres alongside the SQLite path so dashboards on
+            # both backends see the row. The Postgres write is best-effort.
+            if DB_BACKEND == "postgres" and _postgres_available:
+                try:
+                    asyncio.get_event_loop().run_in_executor(
+                        None, pg_insert_event,
+                        event_ts, ip, ua[:200], path[:200],
+                        status, reason or "",
+                        track_key or "", sid or "", fp or "",
+                        ja4 or "", request_id or "")
+                except Exception:
+                    pass
             try:
                 db_queue.put_nowait(("event",
                     (event_ts, ip, ua[:200], path[:200], "", status, reason or "")))
@@ -2927,7 +3842,10 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
     happened to land on `/`. The block IS still recorded under the hybrid
     identity (track_key), keyed on the cookie+fingerprint so a single bad
     actor in a NAT pool doesn't poison all peers.
+    1.6.5 — also bumps the per-reason hit/latency telemetry consumed by
+    the Dashboard / Agents / Service surfaces.
     """
+    _decoy_t0 = time.perf_counter()
     n = _t.time()
     # N2: serialize the upstream fetch — many concurrent blocked requests
     # mustn't fan out a thundering herd. Double-check inside the lock.
@@ -2953,6 +3871,29 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
     decoy_status = int(_decoy_cache.get("status") or 200)
     await record(ip, ua, path, decoy_status, reason, track_key=track_key, sid=sid,
                  fp=fp, ja4=ja4, request_id=request_id)
+    # 1.6.5 — TARPIT mitigation: identities in the soft-challenge band
+    # (between SOFT_CHALLENGE_SCORE and RISK_BAN_THRESHOLD) get a
+    # configurable delay before the silent-decoy response. Burns attacker
+    # iteration time without committing to a ban. Skipped for the
+    # requester's first contact (no track_key yet) so legitimate cold
+    # browsers aren't tarpitted.
+    if TARPIT_ENABLED and TARPIT_DELAY_MS > 0 and track_key:
+        s = ip_state.get(track_key)
+        if s is not None:
+            try:
+                _decay_risk(s, _t.time())
+                if (SOFT_CHALLENGE_SCORE > 0 and
+                        SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD):
+                    await asyncio.sleep(TARPIT_DELAY_MS / 1000.0)
+            except Exception:
+                pass
+    # 1.6.5 — per-detector hit + latency telemetry. Drives the Dashboard
+    # "Top methods", Agents "rule inventory" and Service "detector latency"
+    # surfaces. Cheap (deque append + dict bump).
+    _detector_record(reason, (time.perf_counter() - _decoy_t0) * 1000.0)
+    if reason == "chal-required":
+        global _chal_required_count
+        _chal_required_count += 1
     headers = {
         "Content-Type": _decoy_cache["ctype"],
         "Cache-Control": "no-store",
@@ -3023,7 +3964,7 @@ async def protect(request: web.Request, handler):
                             headers={_REQUEST_ID_HEADER: rid})
 
     # Unauthenticated liveness probe — used by the container HEALTHCHECK.
-    if request.path == "/__live":
+    if request.path == ADMIN_NS + "/live":
         return web.Response(text="ok",
                             headers={"Cache-Control": "no-store",
                                      "Content-Type": "text/plain; charset=utf-8",
@@ -3031,8 +3972,8 @@ async def protect(request: web.Request, handler):
 
     # v1.4 #1 — JS challenge: solver POSTs back here. Rate-limit by socket-IP
     # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
-    # ops) hammering /__challenge with bogus solutions.
-    if request.path == "/__challenge":
+    # ops) hammering the challenge endpoint with bogus solutions.
+    if request.path == ADMIN_NS + "/challenge":
         socket_ip = request.remote or "0.0.0.0"
         sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
         if not sip_ok:
@@ -3049,10 +3990,10 @@ async def protect(request: web.Request, handler):
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
-    # request. /__live and /__* paths are exempt so health-checks and
-    # admin tools keep working under load. Operator drives this via the
-    # main dashboard slider (or /__config POST GLOBAL_RPS_LIMIT=N).
-    if GLOBAL_RPS_LIMIT > 0 and not request.path.startswith("/__"):
+    # request. Internal admin paths are exempt so health-checks and admin
+    # tools keep working under load. Operator drives this via the main
+    # dashboard slider (or POST <NS>/secured/config GLOBAL_RPS_LIMIT=N).
+    if GLOBAL_RPS_LIMIT > 0 and not _is_admin_path(request.path):
         n_ts = _t.time()
         cutoff = n_ts - 1.0
         # Lazy-trim
@@ -3068,8 +4009,8 @@ async def protect(request: web.Request, handler):
 
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
-    # /__* routes accept any method (HEAD probes, OPTIONS preflight).
-    if not request.path.startswith("/__") and request.method not in ALLOWED_METHODS:
+    # admin routes accept any method (HEAD probes, OPTIONS preflight).
+    if not _is_admin_path(request.path) and request.method not in ALLOWED_METHODS:
         return web.Response(status=405, text="method not allowed\n",
                             headers={"Allow": ", ".join(sorted(ALLOWED_METHODS))})
 
@@ -3195,12 +4136,17 @@ async def protect(request: web.Request, handler):
                                                 ja4=_request_ja4(request), request_id=rid)
 
     # Internal endpoints: only authenticated operator gets through.
-    # Anyone else sees the silent decoy — they don't even learn that /__* exist.
-    # When ADMIN_ALLOWED_IPS is configured, the source IP MUST also match —
-    # silent decoy on IP mismatch (no leak that the IP check is what blocked).
-    if request.path.startswith("/__"):
-        # Liveness probe is unauthenticated by design (k8s / docker healthcheck)
-        if request.path == "/__live":
+    # Anyone else sees the silent decoy — they don't even learn that the
+    # admin namespace exists. When ADMIN_ALLOWED_IPS is configured, the
+    # source IP MUST also match — silent decoy on IP mismatch (no leak
+    # that the IP check is what blocked).
+    if _is_admin_path(request.path):
+        # Public sub-paths (liveness, JS-challenge plumbing, BotD callback,
+        # asset bundle) are always reachable. The BotD bundle is fetched
+        # by browsers when the injected <script> runs and the report
+        # endpoint validates its own HMAC bound to the requester's
+        # track_key — no admin-IP / admin-key gating needed there.
+        if _admin_path_is_public(request.path):
             return await handler(request)
         if _admin_ip_allowed(request) and _internal_authed(request):
             return await handler(request)
@@ -3209,8 +4155,9 @@ async def protect(request: web.Request, handler):
         reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)
                   else "internal-probe")
         # 1.5.4: serve the upstream's actual 404 page (cached at startup,
-        # refreshed hourly). An attacker probing /__dashboard sees the same
-        # response as if they'd hit any non-existent path on the upstream.
+        # refreshed hourly). An attacker probing the admin namespace sees
+        # the same response as if they'd hit any non-existent path on the
+        # upstream.
         await record(ip, ua, request.path,
                       _upstream_404_cache.get("status") or 404,
                       reason, request_id=rid)
@@ -3222,25 +4169,32 @@ async def protect(request: web.Request, handler):
     identity, sid, fp, is_new_session, id_mode = get_identity(request)
     ip = get_ip(request)            # IP for session-creation guard + display
 
-    # ── 1.5.3: external IP-intel layer (AbuseIPDB) ──
-    # Only fires when ABUSEIPDB_KEY is configured. Cached in SQLite — typical
-    # cost is ~0.1ms cached, 100-300ms uncached (Cloudfront RTT). Bumps risk
-    # but never blocks outright; the risk-score model decides.
-    if ABUSEIPDB_ENABLED:
+    # 1.6.5 — escalation gate: skip the expensive / external intel layer
+    # for identities with zero accumulated risk. ESCALATION_THRESHOLD=0
+    # reverts to legacy "run on every request" behaviour. Saves AbuseIPDB
+    # quota + CrowdSec round-trip on the 99% of requests that are clean.
+    _esc_score = _escalation_score(identity)
+    _escalate  = (ESCALATION_THRESHOLD <= 0) or (_esc_score >= ESCALATION_THRESHOLD)
+
+    # ── 1.5.3: external IP-intel layer (AbuseIPDB) — escalate-only ──
+    # Cached in SQLite — typical cost is ~0.1ms cached, 100-300ms uncached
+    # (CloudFront RTT). Bumps risk but never blocks outright.
+    if ABUSEIPDB_ENABLED and _escalate:
         ab_score, ab_country, ab_source = await _abuseipdb_lookup(ip)
         if ab_score >= ABUSEIPDB_HIGH_THRESHOLD:
             await update_risk_and_maybe_ban(identity, "abuseipdb-high", ip)
         elif ab_score >= ABUSEIPDB_MED_THRESHOLD:
             await update_risk_and_maybe_ban(identity, "abuseipdb-med", ip)
 
-    # 1.5.3: CrowdSec community-blocklist check (~5ms typical via local LAPI)
-    if CROWDSEC_ENABLED:
+    # 1.5.3: CrowdSec community-blocklist check — escalate-only (~5ms LAPI)
+    if CROWDSEC_ENABLED and _escalate:
         cs_decision, cs_source = await _crowdsec_check(ip)
         if cs_decision:  # any active decision = community-vetted bad actor
             await update_risk_and_maybe_ban(identity, "crowdsec-banned", ip)
 
-    # 1.5.3: MaxMind ASN tagging (~0.1ms local lookup) — soft signal only
-    if MAXMIND_ENABLED:
+    # 1.5.3: MaxMind ASN tagging — escalate-only (cheap but only useful on
+    # suspects; soft signal anyway).
+    if MAXMIND_ENABLED and _escalate:
         asn, asn_org, is_hosting, _src = _asn_lookup(ip)
         if is_hosting:
             await update_risk_and_maybe_ban(identity, "asn-hosting", ip)
@@ -3263,7 +4217,13 @@ async def protect(request: web.Request, handler):
     # Uses existing GeoLite2-City lookup (~0.1ms). Allowlist beats denylist:
     # if COUNTRY_ALLOWLIST is non-empty, anything outside it is blocked even
     # when the country isn't explicitly listed in COUNTRY_DENYLIST.
-    if COUNTRY_BLOCK_ENABLED and _city_reader is not None:
+    # 1.6.5 — admin IPs ALWAYS bypass country block. Prevents the operator
+    # from locking themselves out by accidentally adding their own country
+    # to the denylist (the lesson learned from a stale test entry on
+    # 2026-05-01 — PT was added during a probe and persisted in
+    # config_kv, silent-decoying the operator's own browser).
+    if (COUNTRY_BLOCK_ENABLED and _city_reader is not None
+            and not _admin_ip_allowed(request)):
         _geo = _city_lookup(ip)
         if _geo:
             _, _, _cc, _ = _geo
@@ -3716,6 +4676,305 @@ document.getElementById('f').onsubmit=async e=>{e.preventDefault();
         content_type="text/html",
     )
 
+async def detector_stats_endpoint(request: web.Request):
+    """1.6.5 — per-detector latency & hit count, plus method-bucket
+    aggregation. Used by:
+      • Dashboard "Top detection methods" + bot/AI breakdown
+      • Agents "Per-method latency" panel
+      • Service "Detector-latency / cost-by-bucket" panels
+
+    Latency is computed from the rolling 200-sample deque per reason
+    (recorded in _detector_record on every fire). Cost bucket totals
+    are cumulative since process start.
+    """
+    out_signals = []
+    for reason, dq in _detector_latency.items():
+        samples = list(dq) if dq else []
+        if not samples:
+            typical = p99 = 0.0
+        else:
+            ss = sorted(samples)
+            n = len(ss)
+            typical = ss[n // 2]
+            p99 = ss[max(0, int(n * 0.99) - 1)]
+        out_signals.append({
+            "reason":  reason,
+            "method":  _reason_method(reason),
+            "hits":    _detector_hits.get(reason, 0),
+            "p50_ms":  round(typical, 3),
+            "p99_ms":  round(p99, 3),
+            "samples": len(samples),
+        })
+    out_signals.sort(key=lambda x: -x["hits"])
+
+    # Per-method aggregation (sum hits + worst p99 per bucket)
+    by_method = {}
+    for s in out_signals:
+        m = s["method"]
+        by_method.setdefault(m, {"method": m, "hits": 0, "p99_ms": 0.0,
+                                  "reasons": 0})
+        by_method[m]["hits"]   += s["hits"]
+        by_method[m]["p99_ms"]  = max(by_method[m]["p99_ms"], s["p99_ms"])
+        by_method[m]["reasons"] += 1
+    methods = sorted(by_method.values(), key=lambda x: -x["hits"])
+
+    return web.json_response({
+        "signals": out_signals,
+        "methods": methods,
+        "chal":    {"required":   _chal_required_count,
+                     "minted":     _chal_mint_count,
+                     "mint_rate":  (round(_chal_mint_count / _chal_required_count * 100.0, 1)
+                                    if _chal_required_count else 0.0)},
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def db_switch_endpoint(request: web.Request):
+    """1.6.5 — operator-triggered swap of the active DB backend.
+
+    POST /__db-switch?key=…&target=sqlite|postgres
+
+    Persists `DB_BACKEND` (and on first switch to postgres, the supplied
+    `dsn` body field as `POSTGRES_DSN`) to `config_kv`, then calls
+    `os._exit(0)` so docker's `--restart=unless-stopped` policy brings the
+    process back with the new backend bound.
+
+    Validates:
+      • target ∈ {"sqlite","postgres"}
+      • on target=postgres: psycopg is loadable AND POSTGRES_DSN is set
+        (current value or supplied in body), AND the gateway can reach
+        the DB end-to-end (round-trip probe before commit).
+
+    Impact warned by the dashboard:
+      • all in-flight requests are dropped (~1 s blip)
+      • SQLite events table is NOT migrated to Postgres or vice versa
+      • bans, config_kv, admin_ips persist (they live in SQLite always)
+    """
+    target = (request.query.get("target", "") or "").strip().lower()
+    if target not in ("sqlite", "postgres"):
+        return web.json_response(
+            {"ok": False, "reason": "target must be sqlite or postgres"},
+            status=400, headers={"Cache-Control": "no-store"})
+
+    # On switch-to-postgres we may receive a fresh DSN in the body.
+    body_dsn = ""
+    if request.method == "POST":
+        try:
+            raw = await asyncio.wait_for(request.content.read(8192),
+                                          timeout=BODY_TIMEOUT)
+            body = json.loads(raw.decode("utf-8") or "{}")
+            if isinstance(body, dict):
+                body_dsn = str(body.get("dsn", "")).strip()
+        except (asyncio.TimeoutError, ValueError, json.JSONDecodeError):
+            return web.json_response(
+                {"ok": False, "reason": "bad json body"},
+                status=400, headers={"Cache-Control": "no-store"})
+
+    if target == "postgres":
+        if _postgres_load_module() is None:
+            return web.json_response(
+                {"ok": False,
+                 "reason": "psycopg not installed in this image"},
+                status=400, headers={"Cache-Control": "no-store"})
+        dsn = body_dsn or POSTGRES_DSN
+        if not dsn:
+            return web.json_response(
+                {"ok": False,
+                 "reason": "no POSTGRES_DSN configured (set it before switching)"},
+                status=400, headers={"Cache-Control": "no-store"})
+        # Probe the DB end-to-end before committing — we don't want to
+        # re-exec the container into a state that won't connect.
+        try:
+            saved_dsn = globals().get("POSTGRES_DSN", "")
+            globals()["POSTGRES_DSN"] = dsn
+            globals()["DB_BACKEND"]   = "postgres"
+            probe = pg_test_roundtrip()
+        finally:
+            globals()["POSTGRES_DSN"] = saved_dsn
+            globals()["DB_BACKEND"]   = DB_BACKEND  # noqa
+        if not probe.get("ok"):
+            return web.json_response(
+                {"ok": False,
+                 "reason": f"DB connectivity probe failed: {probe.get('reason')}"},
+                status=400, headers={"Cache-Control": "no-store"})
+
+    # 1.6.5 — copy the last 60 s of events from the source backend to the
+    # target backend so the dashboard timeline doesn't lose its tail
+    # during the cut-over. config_kv / secrets_kv / admin_ips / bans /
+    # clients / timeline ALL live in SQLite regardless of DB_BACKEND so
+    # they survive automatically — only the events split between the two.
+    # Apply the DSN temporarily so _migrate_recent_events sees the same
+    # connection state the post-restart gateway will use.
+    saved_dsn = globals().get("POSTGRES_DSN", "")
+    if target == "postgres" and body_dsn:
+        globals()["POSTGRES_DSN"] = body_dsn
+    try:
+        loop = asyncio.get_event_loop()
+        migration = await loop.run_in_executor(
+            None, _migrate_recent_events, target, 60)
+    finally:
+        globals()["POSTGRES_DSN"] = saved_dsn
+    slog("db_switch_migration", level="warn", **migration,
+         target=target)
+
+    # Persist the new backend (and DSN if supplied) to config_kv. Uses the
+    # async writer queue so the change is durable BEFORE we exit. The
+    # config_kv table itself stays in SQLite across both backends, so
+    # this also serves as the cross-backend operational state vault.
+    if db_queue is not None:
+        n = _t.time()
+        try:
+            db_queue.put_nowait(("set_config",
+                                  ("DB_BACKEND", json.dumps(target), n)))
+            if target == "postgres" and body_dsn:
+                db_queue.put_nowait(("set_config",
+                                      ("POSTGRES_DSN", json.dumps(body_dsn), n)))
+        except asyncio.QueueFull:
+            return web.json_response(
+                {"ok": False, "reason": "config_kv queue full"},
+                status=503, headers={"Cache-Control": "no-store"})
+        # Give the queue a tick to flush.
+        await asyncio.sleep(0.5)
+
+    slog("db_switch", level="warn", target=target,
+         dsn_set=bool(body_dsn),
+         rid=request.get("_rid", ""))
+
+    # Reply BEFORE exiting so the dashboard's POST gets a clean 200.
+    response = web.json_response(
+        {"ok": True, "target": target,
+         "events_copied": migration.get("copied", 0),
+         "events_copy_direction": migration.get("direction", ""),
+         "events_copy_ok": migration.get("ok", False),
+         "events_copy_reason": migration.get("reason", ""),
+         "message": "DB_BACKEND persisted; container will restart in 1 s"},
+        headers={"Cache-Control": "no-store"})
+
+    async def _delayed_exit():
+        await asyncio.sleep(1.0)
+        slog("db_switch_restart", level="warn", target=target)
+        os._exit(0)
+    asyncio.create_task(_delayed_exit())
+    return response
+
+
+async def db_test_endpoint(request: web.Request):
+    """1.6.5 — DB connectivity probe used by the Controls dashboard
+    'External integrations · Postgres / TimescaleDB' card.
+    Returns a structured payload describing both backends:
+      • sqlite:    file size, row counts, WAL state
+      • postgres:  version, db name, round-trip ms, events row count
+                    (or `ok=false` + reason when not configured / unreachable)"""
+    sqlite_info = {"ok": False}
+    try:
+        if os.path.exists(DB_PATH):
+            sqlite_info["ok"] = True
+            sqlite_info["path"] = DB_PATH
+            sqlite_info["size_bytes"] = os.path.getsize(DB_PATH)
+            wal = DB_PATH + "-wal"
+            if os.path.exists(wal):
+                sqlite_info["wal_size_bytes"] = os.path.getsize(wal)
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.execute("SELECT COUNT(*) FROM events")
+                sqlite_info["events_rows"] = int(cur.fetchone()[0])
+                conn.close()
+            except Exception as e:
+                sqlite_info["events_rows_error"] = str(e)[:120]
+    except Exception as e:
+        sqlite_info["error"] = f"{type(e).__name__}: {str(e)[:120]}"
+
+    postgres_info = pg_test_roundtrip()
+    if postgres_info.get("ok"):
+        size = pg_db_size()
+        if size.get("ok"):
+            postgres_info["db_bytes"] = size["db_bytes"]
+            postgres_info["events_rows"] = size["events_rows"]
+    # Mask credentials in the DSN so the endpoint can be shown in dashboards.
+    masked_dsn = ""
+    if POSTGRES_DSN:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(POSTGRES_DSN)
+            masked_dsn = f"{p.scheme}://{p.username or '<user>'}:****@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
+        except Exception:
+            masked_dsn = "(redacted)"
+    return web.json_response({
+        "active_backend": DB_BACKEND,
+        "sqlite":   sqlite_info,
+        "postgres": {**postgres_info,
+                      "dsn_masked": masked_dsn,
+                      "available": _postgres_available},
+        "ts": _t.time(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def lists_snapshot_endpoint(request: web.Request):
+    """1.6.5 — static-config snapshot: sizes of every allow / deny / pattern
+    list, with last-updated timestamps where available. Powers the Controls
+    dashboard's 'Allow/block list sizes' card and the Agents 'rule inventory'."""
+    n = _t.time()
+    snapshot = {
+        # UA blocklist (legacy + AI groups)
+        "ua_blocklist_size":      len(UA_BLOCKLIST),
+        "ai_ua_groups": {
+            grp: {"frags": len(frags),
+                   "enabled": bool(globals().get(f"AI_UA_{grp.upper()}_ENABLED"))}
+            for grp, frags in AI_UA_GROUPS.items()
+        },
+        # Country lists
+        "country_block_enabled":  bool(COUNTRY_BLOCK_ENABLED),
+        "country_denylist_size":  len(COUNTRY_DENYLIST or set()),
+        "country_allowlist_size": len(COUNTRY_ALLOWLIST or set()),
+        "country_denylist":       sorted(COUNTRY_DENYLIST or set()),
+        "country_allowlist":      sorted(COUNTRY_ALLOWLIST or set()),
+        # JA4 deny-list
+        "ja4_deny_size":          len(globals().get("JA4_DENY_LIST") or set()),
+        # Tor exits + DC
+        "tor_block_enabled":      bool(TOR_BLOCK_ENABLED),
+        "tor_exits_size":         len(_tor_exits),
+        "tor_loaded_at":          _tor_feed_stats.get("loaded_at", 0),
+        "tor_age_secs":           int(n - _tor_feed_stats["loaded_at"]) if _tor_feed_stats.get("loaded_at") else None,
+        "dc_vpn_block_enabled":   bool(DC_VPN_BLOCK_ENABLED),
+        "hosting_keywords_size":  len(HOSTING_ASN_KEYWORDS),
+        # Honeypot paths
+        "honeypot_paths_size":    len(HONEYPOT_PATHS),
+        # Body groups
+        "body_groups": {
+            grp: {"patterns": len(pats),
+                   "enabled": bool(globals().get(f"BODY_GROUP_{grp.upper()}_ENABLED"))}
+            for grp, pats in BODY_PATTERN_GROUPS.items()
+        },
+        # Suspicious-path patterns
+        "suspicious_path_patterns": len(SUSPICIOUS_PATH_PATTERNS),
+        # Custom rules
+        "custom_rules_size":      len(CUSTOM_RULES),
+        # Endpoint policies (with rate-limit summary)
+        "endpoint_policies":      [
+            {"path": p["path"] if isinstance(p, dict) else p[0],
+             "policy": p["policy"] if isinstance(p, dict) else p[1],
+             "rps":    (p.get("rps")   if isinstance(p, dict) else None),
+             "burst":  (p.get("burst") if isinstance(p, dict) else None)}
+            for p in (ENDPOINT_POLICIES or [])
+        ],
+        # JWT
+        "jwt_paths":              list(JWT_VALIDATE_PATHS or []),
+        # DLP groups
+        "dlp_groups": {
+            grp: {"patterns": len(pats),
+                   "enabled": bool(globals().get(f"DLP_GROUP_{grp.upper().replace('-','_')}_ENABLED"))}
+            for grp, pats in DLP_PATTERN_GROUPS.items()
+        },
+        # Webhook event filter
+        "webhook_event_filter":   list(WEBHOOK_EVENT_FILTER or []),
+        # Admin IPs
+        "admin_ip_count":         len(globals().get("ADMIN_ALLOWED_NETS") or []),
+        # Versions
+        "version":                "AppSecGW_1.6.7",
+        "ts":                     n,
+    }
+    return web.json_response(snapshot, headers={"Cache-Control":"no-store"})
+
+
 async def health_score_endpoint(request: web.Request):
     """1.6.4 — single-number gateway health (0..100, green at 100, red at 0)
     with a per-reason breakdown so operators can see what's pulling the
@@ -3886,10 +5145,13 @@ async def health_score_endpoint(request: web.Request):
 
     score = max(0, min(100, score))
     return web.json_response({
-        "score":   score,
-        "reasons": reasons,
-        "version": "AppSecGW_1.6.4",
-        "ts":      _t.time(),
+        "score":       score,
+        "reasons":     reasons,
+        "version":     "AppSecGW_1.6.7",
+        "upstream":    UPSTREAM,
+        "db_backend":  DB_BACKEND,
+        "uptime_secs": int(_t.time() - START_EPOCH),
+        "ts":          _t.time(),
     }, headers={"Cache-Control": "no-store"})
 
 
@@ -4017,12 +5279,22 @@ async def metrics_endpoint(request: web.Request):
             },
             # 1.5.5 — SQLite persistence layer status
             "db": {
+                "backend":   DB_BACKEND,         # 1.6.5 — active selection
                 "path":      DB_PATH,
                 "exists":    os.path.exists(DB_PATH),
                 "size_bytes": (os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0),
                 "wal_size_bytes": (os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0),
                 "configured": True,
-                "enabled":    True,
+                "enabled":    DB_BACKEND == "sqlite",
+            },
+            # 1.6.5 — Postgres / TimescaleDB persistence layer status
+            "db_postgres": {
+                "configured": bool(POSTGRES_DSN),
+                "enabled":    DB_BACKEND == "postgres" and _postgres_available,
+                "available":  _postgres_available,
+                **({"db_bytes":  pg_db_size().get("db_bytes"),
+                    "events_rows": pg_db_size().get("events_rows")}
+                   if (DB_BACKEND == "postgres" and _postgres_available) else {}),
             },
             "abuseipdb": {
                 "configured": bool(ABUSEIPDB_KEY),
@@ -4235,6 +5507,9 @@ async def js_challenge_endpoint(request: web.Request):
     # is tied to a specific verification.
     sess_salt = hashlib.sha256(ts_token.encode()).hexdigest()[:16]
     cookie = _make_chal_cookie(ua, sess_salt, ip_tier, bind_ja4)
+    # 1.6.5 — count successful chal-cookie mints (Turnstile path).
+    global _chal_mint_count
+    _chal_mint_count += 1
     resp = web.Response(status=200, text="ok",
                         headers={"Cache-Control": "no-store"})
     resp.set_cookie(CHAL_COOKIE, cookie,
@@ -4355,6 +5630,8 @@ async def scoring_endpoint(request: web.Request):
         "body-ssrf":             ("hard", "Body matched server-side-request-forgery pattern group"),
         "body-cmd":              ("hard", "Body matched OS-command-injection pattern group"),
         "auth-jwt-invalid":      ("med",  "JWT missing / invalid signature on JWT_VALIDATE_PATHS route"),
+        "slow-client":           ("soft", "Body upload exceeded BODY_TIMEOUT (slowloris guard)"),
+        "botd-detected":         ("med",  "FingerprintJS BotD client-side library reported the visitor as a bot (headless / WebDriver / automation markers)"),
         # ── 1.6.2: Tier-C DLP (response-side) ──
         # 1.6.3 — promoted from "info" to "intel" tier. DLP fires aren't
         # operational chatter (rate-limit) — they're upstream leaks the
@@ -4403,6 +5680,8 @@ async def scoring_endpoint(request: web.Request):
         "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
         "body-cmd":           "BODY_GROUP_CMD_ENABLED",
         "auth-jwt-invalid":   None,                       # gated by JWT_VALIDATE_PATHS
+        "slow-client":        None,                       # always-on (BODY_TIMEOUT structural)
+        "botd-detected":      "BOTD_ENABLED",              # 1.6.5 — client-side fingerprintjs/botd
         # 1.6.2 — Tier-C DLP toggles
         "dlp-cc":             "DLP_GROUP_CC_ENABLED",
         "dlp-aws":            "DLP_GROUP_AWS_ENABLED",
@@ -4495,6 +5774,11 @@ async def scoring_endpoint(request: web.Request):
         "body-ssrf":          {"cached": 0,     "typical": 0.2,  "p99": 1.0},
         "body-cmd":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
         "auth-jwt-invalid":   {"cached": 0,     "typical": 0.5,  "p99": 2.0},
+        # 1.6.5 — slow-client cost is the timeout itself (BODY_TIMEOUT default 30s)
+        "slow-client":        {"cached": 0,     "typical": 30000, "p99": 30000},
+        # 1.6.5 — BotD: client-side cost (in-browser fingerprinting); the
+        # gateway-side cost is just receiving the report POST.
+        "botd-detected":      {"cached": 0,     "typical": 0.1,   "p99": 0.5},
         # 1.6.2 — Tier-C DLP latencies (response-side; cost is per-response not per-request)
         "dlp-cc":             {"cached": 0,     "typical": 0.5,  "p99": 3.0},
         "dlp-aws":            {"cached": 0,     "typical": 0.3,  "p99": 1.5},
@@ -4515,6 +5799,7 @@ async def scoring_endpoint(request: web.Request):
             "description": desc,
             "toggle":      SIGNAL_KNOB.get(sig),    # None = always-on
             "cost_ms":     cost,
+            "escalate_only": sig in ESCALATE_ONLY_REASONS,   # 1.6.5
         })
     # Modifier-only toggles — no weight, but operator-tunable.
     # Surface them at the bottom of the merged table.
@@ -4578,6 +5863,33 @@ async def maxmind_fetch_endpoint(request: web.Request):
             status=500, headers={"Cache-Control": "no-store"})
 
 
+# 1.6.5 — per-detector latency observability. Every entry in deny() hot path
+# bumps the corresponding counter + records a wall-time sample. The /__detector-stats
+# endpoint exposes this for the Service / Agents / Dashboard surfaces. Bounded
+# at 200 samples per reason (rolling window) so memory stays trivial.
+_detector_latency: dict = {}   # reason → deque(ms samples, maxlen=200)
+_detector_hits:    dict = {}   # reason → int
+
+def _detector_record(reason: str, elapsed_ms: float) -> None:
+    """1.6.5 — internal: add a per-reason latency sample. Called from every
+    detector's deny() / silent-decoy emission. Never raises."""
+    try:
+        _detector_hits[reason] = _detector_hits.get(reason, 0) + 1
+        dq = _detector_latency.get(reason)
+        if dq is None:
+            from collections import deque as _dq
+            _detector_latency[reason] = _dq(maxlen=200)
+            dq = _detector_latency[reason]
+        dq.append(float(elapsed_ms))
+    except Exception:
+        pass
+
+# 1.6.5 — challenge-cookie mint counters. Lets the Controls dashboard show
+# the chal-cookie success rate (mints / chal-required hits).
+_chal_mint_count = 0
+_chal_required_count = 0
+
+
 # 1.6.4 — categorise each block reason into a "method bucket" so the GeoMap
 # can show WHICH detection layer is firing per region. Anti-bot focus per the
 # user roadmap: UA filter / body group / external intel / behavioural /
@@ -4602,6 +5914,10 @@ _REASON_METHOD = {
     "ai-headers-incomplete": "behavior",
     "session-flood": "behavior", "session-churn": "behavior",
     "upstream-404": "behavior",
+    # 1.6.5 — slowloris signal (slow body upload) lives in the behavioral bucket
+    "slow-client": "behavior",
+    # 1.6.5 — FingerprintJS BotD client-side detection
+    "botd-detected": "behavior",
     # Cookie / challenge gate
     "chal-required": "cookie", "js-challenge": "cookie",
     # TLS fingerprint
@@ -4818,6 +6134,10 @@ async def geo_data_endpoint(request: web.Request):
             "total":     seen,
             "methods":   counts.get("methods") or {},      # 1.6.4
             "effectiveness_pct": eff,                       # 1.6.4
+            # 1.6.5 — bypass-rate proxy: missed / (blocked + missed) — i.e.,
+            # of suspicious traffic, what fraction got through (fell into the
+            # soft-challenge "missed" band rather than triggering a ban).
+            "bypass_pct": ((missed / susp * 100.0) if susp > 0 else None),
         })
     out_countries.sort(key=lambda d: d["total"], reverse=True)
     out_countries = out_countries[:30]
@@ -5030,12 +6350,19 @@ async def logs_data_endpoint(request: web.Request):
     q = (request.query.get("q", "") or "").strip().lower()
 
     if kind == "requests":
+        # 1.6.5 — extra filters
+        method_filter = (request.query.get("method", "all") or "all").lower()
+        iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
+            # 1.6.5 — pull more rows than `limit` so we can post-filter
+            # (method/ip_type) without paginating multiple SQL queries.
+            sql_cap = max(limit * 4, 1000) if (method_filter != "all" or
+                                                 iptype_filter != "all") else limit
             rows = conn.execute(
                 "SELECT id, ts, ip, ua, path, status, reason FROM events "
-                "ORDER BY id DESC LIMIT ?", (limit,)
+                "ORDER BY id DESC LIMIT ?", (sql_cap,)
             ).fetchall()
             conn.close()
         except Exception as e:
@@ -5044,10 +6371,23 @@ async def logs_data_endpoint(request: web.Request):
         out = []
         for r in rows:
             reason = (r["reason"] or "")
-            # Synthesise a level for request rows: warn when blocked, info otherwise.
             row_level = "warn" if (reason and reason != "OK") else "info"
             if _LOG_LEVELS[row_level] < level_n:
                 continue
+            # 1.6.5 — method bucket filter (via _reason_method)
+            if method_filter != "all" and _reason_method(reason) != method_filter:
+                continue
+            # 1.6.5 — IP-type filter: tor / dc / residential
+            if iptype_filter != "all":
+                ip_v = r["ip"] or ""
+                is_tor = ip_v in _tor_exits
+                is_dc = False
+                if MAXMIND_ENABLED:
+                    _, _, _is_hosting, _ = _asn_lookup(ip_v)
+                    is_dc = bool(_is_hosting)
+                if iptype_filter == "tor" and not is_tor: continue
+                if iptype_filter == "dc"  and not is_dc:  continue
+                if iptype_filter == "residential" and (is_tor or is_dc): continue
             blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
             if q and q not in blob:
                 continue
@@ -5060,7 +6400,10 @@ async def logs_data_endpoint(request: web.Request):
                 "path":   r["path"] or "",
                 "status": r["status"],
                 "reason": reason,
+                "method": _reason_method(reason),       # 1.6.5
             })
+            if len(out) >= limit:
+                break
         return web.json_response(
             {"kind": "requests", "level": level, "limit": limit,
              "count": len(out), "rows": out},
@@ -5084,6 +6427,78 @@ async def logs_data_endpoint(request: web.Request):
          "count": len(out), "rows": out,
          "ring_size": len(_GW_LOG_RING)},
         headers={"Cache-Control":"no-store"})
+
+
+async def logs_export_endpoint(request: web.Request):
+    """1.6.5 — stream the events table as CSV. Honours the same
+    method/ip_type/level/q filters as /__logs-data. Capped at 100 000 rows
+    for safety. Used by the Logs dashboard 'Download CSV' button."""
+    level = (request.query.get("level", "debug") or "debug").lower()
+    if level not in _LOG_LEVELS: level = "debug"
+    level_n = _LOG_LEVELS[level]
+    method_filter = (request.query.get("method", "all") or "all").lower()
+    iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
+    q = (request.query.get("q", "") or "").strip().lower()
+    try:
+        cap = max(1, min(100000, int(request.query.get("limit", "10000"))))
+    except ValueError:
+        cap = 10000
+    resp = web.StreamResponse(status=200, headers={
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": "attachment; filename=appsecgw_events.csv",
+        "Cache-Control": "no-store",
+    })
+    await resp.prepare(request)
+    await resp.write(b"id,ts,iso_ts,ip,ua,path,status,reason,method,ip_type\r\n")
+    written = 0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        # Stream from the cursor — don't load everything in memory.
+        for r in conn.execute(
+            "SELECT id, ts, ip, ua, path, status, reason FROM events "
+            "ORDER BY id DESC LIMIT ?", (cap * 2,)
+        ):
+            reason = (r["reason"] or "")
+            row_level = "warn" if (reason and reason != "OK") else "info"
+            if _LOG_LEVELS[row_level] < level_n:
+                continue
+            if method_filter != "all" and _reason_method(reason) != method_filter:
+                continue
+            ip_v = r["ip"] or ""
+            ip_type = "residential"
+            if ip_v in _tor_exits:
+                ip_type = "tor"
+            elif MAXMIND_ENABLED:
+                _, _, _is_hosting, _ = _asn_lookup(ip_v)
+                if _is_hosting: ip_type = "dc"
+            if iptype_filter != "all" and ip_type != iptype_filter:
+                continue
+            blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
+            if q and q not in blob:
+                continue
+            iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["ts"]))
+            # CSV escape: wrap in double-quotes if needed, double up internal quotes
+            def esc(v):
+                s = "" if v is None else str(v)
+                if any(c in s for c in ',"\r\n'):
+                    return '"' + s.replace('"', '""') + '"'
+                return s
+            line = ",".join([
+                esc(r["id"]), esc(round(r["ts"], 3)), iso,
+                esc(r["ip"]), esc((r["ua"] or "")[:200]),
+                esc(r["path"]), esc(r["status"]),
+                esc(reason), esc(_reason_method(reason)), ip_type,
+            ]) + "\r\n"
+            await resp.write(line.encode("utf-8"))
+            written += 1
+            if written >= cap:
+                break
+        conn.close()
+    except Exception as e:
+        await resp.write(f"# error: {e}\r\n".encode("utf-8"))
+    await resp.write_eof()
+    return resp
 
 
 async def logs_dashboard_endpoint(request: web.Request):
@@ -5310,12 +6725,14 @@ async def cost_timeline_endpoint(request: web.Request):
     Mirrors the params of /__metrics so the dashboard can drive both with the
     same time-window controls.
     Query params:
-      ?range=N    window in minutes (5..720, default 60)
+      ?range=N    window in minutes (5..43200 = up to 30 d, default 60)
       ?bucket=S   bucket width in seconds (60,300,900,3600 — default 60)
       ?end=EPOCH  right edge (default now)
+    1.6.5 — range cap raised from 720 → 43200 minutes (30 d) so the
+    Service dashboard can graph long Postgres / DB-size trends.
     """
     try:
-        range_min = max(5, min(720, int(request.query.get("range", "60"))))
+        range_min = max(5, min(43200, int(request.query.get("range", "60"))))
     except ValueError:
         range_min = 60
     try:
@@ -5561,6 +6978,82 @@ async def external_endpoint(request: web.Request):
             "leading_zeros_req": eff_diff,
             "active":            ANUBIS_ENABLED,
         },
+    })
+
+    # 6. SQLite event store — always present (the gateway can't run without it)
+    try:
+        sqlite_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    except Exception:
+        sqlite_size = 0
+    sqlite_rows = 0
+    try:
+        if os.path.exists(DB_PATH):
+            _c = sqlite3.connect(DB_PATH)
+            sqlite_rows = int(_c.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+            _c.close()
+    except Exception:
+        pass
+    integrations.append({
+        "name":         "SQLite event store",
+        "purpose":      "Default event store. Single-file zero-deps; correct for ≤100 RPS sustained.",
+        "vendor_url":   "https://www.sqlite.org/",
+        "docs_url":     "https://www.sqlite.org/docs.html",
+        "trigger":      "Every request — events table append + per-client snapshot upsert. WAL mode.",
+        "weight":       "0 risk added — pure persistence.",
+        "data_egress":  "None. Lives on the /data Docker volume.",
+        "status":       "configured" if DB_BACKEND == "sqlite" else "disabled",
+        "enabled":      DB_BACKEND == "sqlite",
+        "credentials_present": True,                   # always available
+        "envs_needed":  ["DB_PATH (default /data/antibot.db)"],
+        "free_tier":    "free / open source",
+        "cost_typical_ms":  0.05,
+        "cost_p99_ms":      1.0,
+        "cost_cached_ms":   0.0,
+        "telemetry": {
+            "active":      DB_BACKEND == "sqlite",
+            "endpoint":    DB_PATH,
+            "size_bytes":  sqlite_size,
+            "events_rows": sqlite_rows,
+        },
+    })
+
+    # 7. PostgreSQL / TimescaleDB event store — opt-in via DB_BACKEND=postgres
+    pg_status = ("configured" if (DB_BACKEND == "postgres" and _postgres_available)
+                 else ("disabled" if DB_BACKEND != "postgres"
+                        else "missing-driver"))
+    pg_telemetry = {"active": DB_BACKEND == "postgres" and _postgres_available}
+    if DB_BACKEND == "postgres" and _postgres_available:
+        size = pg_db_size()
+        if size.get("ok"):
+            pg_telemetry["size_bytes"]  = size["db_bytes"]
+            pg_telemetry["events_rows"] = size["events_rows"]
+    if POSTGRES_DSN:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(POSTGRES_DSN)
+            pg_telemetry["endpoint"] = (
+                f"{p.scheme}://{p.username or '<user>'}:****@"
+                f"{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}"
+                f"{p.path or ''}")
+        except Exception:
+            pg_telemetry["endpoint"] = "(redacted)"
+    integrations.append({
+        "name":         "PostgreSQL / TimescaleDB",
+        "purpose":      "High-volume event store backed by Postgres + the TimescaleDB extension (compression + continuous aggregates + hypertable). Required for >100 RPS sustained or multi-instance fleet mode.",
+        "vendor_url":   "https://www.timescale.com/",
+        "docs_url":     "https://docs.timescale.com/",
+        "trigger":      "Every request when DB_BACKEND=postgres — events row inserted via psycopg, fire-and-forget.",
+        "weight":       "0 risk added — pure persistence.",
+        "data_egress":  "Outbound to your Postgres / Timescale instance (POSTGRES_DSN).",
+        "status":       pg_status,
+        "enabled":      DB_BACKEND == "postgres" and _postgres_available,
+        "credentials_present": bool(POSTGRES_DSN),
+        "envs_needed":  ["DB_BACKEND=postgres", "POSTGRES_DSN"],
+        "free_tier":    "free / open source (self-hosted)",
+        "cost_typical_ms":  2.0,
+        "cost_p99_ms":      10.0,
+        "cost_cached_ms":   0.0,
+        "telemetry": pg_telemetry,
     })
 
     return web.json_response({"integrations": integrations},
@@ -6184,6 +7677,13 @@ _HOT_RELOAD_KNOBS = {
     # until the container restarts.
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
     "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
+    # 1.6.5 — escalation threshold (cost gate for expensive detectors)
+    "ESCALATION_THRESHOLD":   (float, lambda v: 0.0 <= v <= 100000.0),
+    # 1.6.5 — tarpit (artificial slowdown for soft-band identities)
+    "TARPIT_ENABLED":         (_to_bool, None),
+    "TARPIT_DELAY_MS":        (int, lambda v: 0 <= v <= 30000),
+    # 1.6.5 — FingerprintJS BotD client-side detection
+    "BOTD_ENABLED":           (_to_bool, None),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
     # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
@@ -6459,7 +7959,7 @@ REQUIRED_HEADERS = [h.strip() for h in _REQUIRED_HEADERS_RAW.split(",")
 def _missing_required_header(request) -> bool:
     if not REQUIRED_HEADERS:
         return False
-    if request.path.startswith("/__"):
+    if _is_admin_path(request.path):
         return False
     if request.path.endswith((
             ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif",
@@ -7173,7 +8673,7 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
   try{
     const tsToken = await waitForTurnstile();
     const fd = new URLSearchParams({n, t, 'cf-turnstile-response': tsToken});
-    const r = await fetch('/__challenge', {
+    const r = await fetch('/antibot-appsec-gateway/challenge', {
       method: 'POST', body: fd, credentials: 'include',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     });
@@ -7375,7 +8875,7 @@ def _js_challenge_required(request) -> bool:
     # 1.5.4: ANUBIS_ENABLED forces the gate even if JS_CHALLENGE=0.
     if not (JS_CHALLENGE or ANUBIS_ENABLED):
         return False
-    if request.path == "/__challenge" or request.path.startswith("/__"):
+    if _is_admin_path(request.path):
         return False  # admin / challenge-solver have their own auth
     # 1.6.0 — per-endpoint policy engine. Resolve the policy ONCE per
     # request and use it to decide gate behaviour. 'bypass' wins over
@@ -7532,6 +9032,101 @@ def _inject_canary(body: bytes, token: str) -> bytes:
         if idx >= 0:
             return body[:idx] + blob + body[idx:]
     return blob + body
+
+# 1.6.5 — BotD (FingerprintJS open-source) client-side reporter. Generates
+# a per-page HMAC token that the in-browser script signs its report with;
+# the gateway re-derives the same token from the requester's chal cookie
+# (or session cookie when the chal cookie is absent), preventing forgery.
+def _botd_token_for(track_key: str, ts: int) -> str:
+    """Per-page HMAC over (track_key, ts). Bound to track_key so an
+    attacker cannot craft a 'detected=false' report for someone else."""
+    msg = f"botd|{track_key}|{ts}".encode()
+    return hmac.new(SESSION_KEY, msg, hashlib.sha256).hexdigest()[:32]
+
+def _inject_botd(body: bytes, track_key: str) -> bytes:
+    """Inject a tiny `<script type="module">` snippet right before </body>
+    that loads botd.bundle.js, runs the in-browser detector, and POSTs
+    the result to /__botd-report. The token argument lets the report
+    endpoint reject forged claims. No-op when track_key is empty
+    (cookieless requests have nothing to bind to)."""
+    if not body or not track_key:
+        return body
+    n = int(_t.time())
+    tok = _botd_token_for(track_key, n)
+    snippet = (
+        f'<script type="module">'
+        f'(async function(){{'
+        f'try{{'
+        f'const m=await import("/antibot-appsec-gateway/assets/botd.bundle.js");'
+        f'const det=await m.default.load({{}});'
+        f'const r=await det.detect();'
+        f'await fetch("/antibot-appsec-gateway/botd-report",{{method:"POST",'
+        f'headers:{{"Content-Type":"application/json"}},'
+        f'credentials:"include",body:JSON.stringify({{'
+        f'token:"{tok}",ts:{n},'
+        f'bot:!!(r&&r.bot&&r.bot.result),'
+        f'type:(r&&r.bot&&r.bot.type)||""}})}});'
+        f'}}catch(e){{}}'
+        f'}})();'
+        f'</script>'
+    ).encode()
+    lower = body.lower()
+    for needle in (b"</body>", b"</html>"):
+        idx = lower.find(needle)
+        if idx >= 0:
+            return body[:idx] + snippet + body[idx:]
+    return body + snippet
+
+
+async def botd_report_endpoint(request: web.Request):
+    """1.6.5 — receive a BotD client-side report. Validates the HMAC
+    token (bound to the requester's track_key) so an attacker can't
+    POST 'detected=false' for someone else, and bumps risk on
+    detected=true. Idempotent per (track_key, ts) — we don't re-bump
+    on duplicate posts (browser may retry).
+    """
+    if not BOTD_ENABLED:
+        return web.json_response({"ok": False, "reason": "disabled"},
+                                  status=400)
+    try:
+        raw = await asyncio.wait_for(request.content.read(8192),
+                                      timeout=BODY_TIMEOUT)
+        d = json.loads(raw.decode("utf-8") or "{}")
+        if not isinstance(d, dict):
+            raise ValueError("body must be json object")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError):
+        return web.json_response({"ok": False, "reason": "bad-request"},
+                                  status=400)
+    # Re-derive identity for THIS request — same as protect() does.
+    identity, _sid, _fp, _is_new, _id_mode = get_identity(request)
+    ip = get_ip(request)
+    ua = request.headers.get("User-Agent", "")
+    # Token validation: re-compute and constant-time compare. ts must
+    # be within _BOTD_REPORT_TTL of the current time so an old token
+    # leaked from a server-rendered page can't be replayed forever.
+    try:
+        ts_in = int(d.get("ts", 0))
+    except (ValueError, TypeError):
+        ts_in = 0
+    n = int(_t.time())
+    if ts_in <= 0 or abs(n - ts_in) > _BOTD_REPORT_TTL:
+        return web.json_response({"ok": False, "reason": "stale-token"},
+                                  status=400)
+    expected = _botd_token_for(identity, ts_in)
+    provided = str(d.get("token", ""))
+    if not hmac.compare_digest(expected, provided):
+        # Bump risk slightly + record so an operator can investigate.
+        await update_risk_and_maybe_ban(identity, "botd-detected", ip)
+        return web.json_response({"ok": False, "reason": "bad-token"},
+                                  status=403)
+    # Validated — apply the report.
+    if d.get("bot") is True:
+        await update_risk_and_maybe_ban(identity, "botd-detected", ip)
+        await record(ip, ua, request.path, 200, "botd-detected",
+                     track_key=identity, sid=_sid, fp=_fp,
+                     ja4=_request_ja4(request),
+                     request_id=request.get("_rid", ""))
+    return web.json_response({"ok": True}, headers={"Cache-Control":"no-store"})
 
 def _scan_request_for_canary(request: web.Request, body_bytes: bytes = b"") -> str:
     """Return the first canary token that appears on the incoming request
@@ -7755,6 +9350,9 @@ async def proxy(request: web.Request):
     # H6+v1.4: stream the body, bound it, AND apply a slowloris timeout.
     # Reject if larger than UPSTREAM_MAX_BODY or if it takes longer than
     # BODY_TIMEOUT to fully arrive.
+    # 1.6.5 — slow body now surfaces a discrete `slow-client` reason via
+    # the silent-decoy path, so the dashboards count it like any other
+    # detector and the operator sees how many requests stalled out.
     body = None
     if request.body_exists and request.method in ("POST", "PUT", "PATCH", "DELETE"):
         try:
@@ -7770,7 +9368,21 @@ async def proxy(request: web.Request):
                 return b"".join(chunks) if chunks else None
             body = await asyncio.wait_for(_drain(), timeout=BODY_TIMEOUT)
         except asyncio.TimeoutError:
-            return web.Response(status=408, text="request body timeout\n")
+            # 1.6.5 — bump risk + surface as 'slow-client'. Silent decoy
+            # so the attacker can't distinguish a slowloris-block from any
+            # other 200/404 path. The risk model decides whether to ban.
+            _ip = get_ip(request)
+            _ua = request.headers.get("User-Agent", "")
+            _tk = request.get("_track_key")
+            if _tk:
+                await update_risk_and_maybe_ban(_tk, "slow-client", _ip)
+            return await _silent_decoy_response(
+                _ip, _ua, request.path, "slow-client",
+                track_key=_tk,
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""),
+                ja4=_request_ja4(request),
+                request_id=request.get("_rid", ""))
         except web.HTTPRequestEntityTooLarge:
             return web.Response(status=413, text="payload too large\n")
         except Exception:
@@ -7939,7 +9551,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.6.4"
+                response_headers["X-Proxy"] = "AppSecGW_1.6.7"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -7964,6 +9576,12 @@ async def proxy(request: web.Request):
                         canary = _new_canary()
                         resp_body = _inject_canary(resp_body, canary)
                         response_headers["X-Trace-Id"] = canary
+                    # 1.6.5 — BotD client-side detection (FingerprintJS).
+                    # No-op until BOTD_ENABLED=1. Token bound to the
+                    # requester's track_key so reports cannot be forged.
+                    if BOTD_ENABLED:
+                        resp_body = _inject_botd(resp_body,
+                                                  request.get("_track_key", ""))
 
                 return web.Response(status=resp.status, body=resp_body, headers=response_headers)
     except aiohttp.ClientError:
@@ -7996,6 +9614,26 @@ async def on_startup(app):
     global db_queue, db_writer_task, prune_task, service_metrics_task
     db_init()
     db_load_state()
+    # 1.6.5 — initialise MaxMind FIRST so that knob validators which gate on
+    # `_city_reader is not None` (notably COUNTRY_BLOCK_ENABLED) see the
+    # readers as loaded when db_load_config() applies persisted values.
+    # Previously the load order was reversed, which caused
+    # COUNTRY_BLOCK_ENABLED=true to be silently rejected on restart and
+    # snap back to false even though the DB held the right value.
+    _init_maxmind()
+    # 1.6.5 — initialise the Postgres event store schema whenever
+    # POSTGRES_DSN is configured. Even when SQLite is the active backend,
+    # the standby Postgres has its schema ready so the operator can flip
+    # the switch on the Controls dashboard without first running migrate
+    # commands. Best-effort: a misconfigured DSN logs a warning but the
+    # gateway boots fine.
+    if POSTGRES_DSN and _postgres_available:
+        if db_init_postgres():
+            print(f"[db-pg] event store ready (active={DB_BACKEND})",
+                  flush=True)
+        else:
+            print("[db-pg] init failed — events will only land in the "
+                  "active backend (SQLite) until a fresh restart", flush=True)
     # 1.5.5 — load DB-persisted hot-reload knobs over env defaults so live
     # changes pushed via /__config survive restart.
     db_load_config()
@@ -8007,7 +9645,38 @@ async def on_startup(app):
     print(f"[admin-ips] {len(ADMIN_ALLOWED_ENTRIES)} entries loaded "
           f"({sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='env')} env, "
           f"{sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='manual')} manual)")
-    _init_maxmind()
+    # 1.6.7 — bootstrap an `admin` user from INTERNAL_KEY on first boot
+    # so the dashboard login works out of the box.
+    _user_bootstrap()
+    print(f"[users] {_user_count()} dashboard user(s) registered", flush=True)
+    # 1.6.7 — load the active sessions cache from `user_sessions`.
+    _session_cache_load()
+    # 1.6.7 — print first-time login instructions to the container log so
+    # an operator running `docker compose up -d` can see how to sign in
+    # without having to dig the auto-generated key out of /data. The
+    # message disappears once any user has actually logged in (same
+    # condition as the login-page bootstrap hint).
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        seen = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE last_login_ts IS NOT NULL"
+        ).fetchone()[0]
+        conn.close()
+    except Exception:
+        seen = 1
+    if not seen:
+        print("  ╔══════════════════════════════════════════════════════════╗")
+        print("  ║ FIRST-TIME LOGIN                                         ║")
+        print("  ║   open  /antibot-appsec-gateway/login                    ║")
+        print("  ║   user: admin                                            ║")
+        if ADMIN_KEY_FROM_ENV:
+            _bootstrap_pw_line = "   pass: see your ADMIN_KEY env var"
+        else:
+            _bootstrap_pw_line = ("   pass: " + INTERNAL_KEY)
+        print(f"  ║ {_bootstrap_pw_line:<57}║")
+        print("  ║   then change the password in Settings → Users           ║")
+        print("  ╚══════════════════════════════════════════════════════════╝",
+              flush=True)
     if ABUSEIPDB_ENABLED:
         print(f"[abuseipdb] active — cache TTL {ABUSEIPDB_CACHE_HOURS} h, "
               f"thresholds high={ABUSEIPDB_HIGH_THRESHOLD} med={ABUSEIPDB_MED_THRESHOLD}",
@@ -8036,6 +9705,9 @@ async def on_startup(app):
     await _shared_init()
     # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
     asyncio.create_task(_refresh_ja4_denylist_loop())
+    # 1.6.7 — mesh-sync of integration secrets (no-op without REDIS_URL).
+    global _mesh_sync_task
+    _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
     print(f"[db] persistence active → {DB_PATH}")
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
@@ -8389,7 +10061,9 @@ async def service_metrics_data_endpoint(request: web.Request):
     current = raw[-1] if raw else {}
 
     try:
-        range_min = max(1, min(720, int(request.query.get("range", "60"))))
+        # 1.6.5 — range cap raised from 720 → 43200 (30 d) so the
+        # Service dashboard's longer windows have data to plot.
+        range_min = max(1, min(43200, int(request.query.get("range", "60"))))
     except ValueError:
         range_min = 60
     try:
@@ -8413,7 +10087,9 @@ async def service_metrics_data_endpoint(request: web.Request):
                  "disk_pct", "cg_pct", "mem_used", "disk_used")
     MAX_KEYS  = ("procs", "open_fds", "db_db", "db_wal", "db_shm", "db_total",
                  "cg_used", "cg_limit", "mem_total", "disk_total", "disk_avail",
-                 "swap_total")
+                 "swap_total",
+                 # 1.6.5: Postgres / TimescaleDB size + events rows
+                 "pg_db_bytes", "pg_events_rows")
     SUM_KEYS  = ("net_rx_bps", "net_tx_bps")
 
     buckets = {}
@@ -8425,11 +10101,24 @@ async def service_metrics_data_endpoint(request: web.Request):
         slot = buckets.setdefault(b, {"_n": 0, "ts": b})
         slot["_n"] += 1
         for k in AVG_KEYS + MAX_KEYS + SUM_KEYS:
-            v = s.get(k, 0)
+            # 1.6.5 — None handling: pg_db_bytes / pg_events_rows can be
+            # None on samples taken before the standby PG was probed.
+            # Coerce to 0 for arithmetic (max / sum) — the carry-forward
+            # logic in _sample_service_metrics_loop populates the value
+            # on every subsequent tick once the first probe lands.
+            v = s.get(k)
+            if v is None:
+                v = 0
             if k in MAX_KEYS:
-                slot[k] = max(slot.get(k, v), v)
+                cur = slot.get(k, 0)
+                if cur is None:
+                    cur = 0
+                slot[k] = max(cur, v)
             else:
-                slot[k] = slot.get(k, 0) + v
+                cur = slot.get(k, 0)
+                if cur is None:
+                    cur = 0
+                slot[k] = cur + v
 
     history = []
     for b in range(start_b, end_b + 1, bucket_secs):
@@ -8458,7 +10147,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.6.4",
+        "version":         "AppSecGW_1.6.7",
     }
     return web.json_response({
         "current":          current,
@@ -8479,6 +10168,8 @@ SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="
 CONTROLS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
 GEO_DASHBOARD_HTML = (_DASHBOARDS_DIR / "geo.html").read_text(encoding="utf-8")
 LOGS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "logs.html").read_text(encoding="utf-8")
+SETTINGS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "settings.html").read_text(encoding="utf-8")
+LOGIN_DASHBOARD_HTML    = (_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8")
 
 async def controls_dashboard_endpoint(request: web.Request):
     """1.5.1: ops dashboard with on/off switches + thresholds for every
@@ -8521,47 +10212,2090 @@ async def service_dashboard_endpoint(request: web.Request):
     )
 
 
+# ── 1.6.6: Settings dashboard — export / import config as zipped XML ─────
+async def settings_dashboard_endpoint(request: web.Request):
+    """GET /__settings — render the Settings dashboard (admin-IP gated)."""
+    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
+    body = SETTINGS_DASHBOARD_HTML.replace(
+        "__KEY__",
+        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        })
+
+
+def _settings_build_xml(include_secrets: bool) -> bytes:
+    """Serialise current hot-reload state + admin-IPs (and optionally
+    secrets) into a self-describing XML document. Kept stdlib-only — no
+    external XML deps in the runtime image. Returns UTF-8 encoded bytes."""
+    import xml.etree.ElementTree as _ET
+    root = _ET.Element("appsecgw-config", attrib={
+        "version": "1.6.5",
+        "exported_at": str(int(_t.time())),
+    })
+    knobs_el = _ET.SubElement(root, "knobs")
+    for k, v in _read_hot_reload_state().items():
+        # JSON-encode each value so lists / bools / numbers / strings
+        # round-trip without ambiguity. The element's text holds the
+        # JSON representation; the @type attribute is informational.
+        e = _ET.SubElement(knobs_el, "knob", attrib={
+            "name": k, "type": type(v).__name__,
+        })
+        e.text = json.dumps(v, ensure_ascii=False)
+
+    ips_el = _ET.SubElement(root, "admin_ips")
+    for ent in ADMIN_ALLOWED_ENTRIES:
+        # Only export *manually-added* entries — env-derived entries are
+        # re-derived from $ADMIN_ALLOWED_IPS on the import side and would
+        # otherwise duplicate.
+        if (ent.get("source") or "").lower() == "env":
+            continue
+        _ET.SubElement(ips_el, "admin_ip", attrib={
+            "cidr": str(ent.get("cidr") or ""),
+            "note": str(ent.get("note") or ""),
+            "source": str(ent.get("source") or "manual"),
+            "description": str(ent.get("description") or ""),
+            "added_ts": str(ent.get("added_ts") or ""),
+        })
+
+    secrets_el = _ET.SubElement(root, "secrets")
+    if include_secrets:
+        g = globals()
+        for public_name, (global_name, _env) in _SECRET_KEYS.items():
+            v = g.get(global_name) or ""
+            if not v:
+                continue
+            e = _ET.SubElement(secrets_el, "secret", attrib={"name": public_name})
+            e.text = str(v)
+
+    _ET.indent(root, space="  ")
+    return _ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _settings_make_zip(xml_bytes: bytes) -> bytes:
+    """Pack the XML document into a single-entry ZIP archive."""
+    import io as _io
+    import zipfile as _zf
+    buf = _io.BytesIO()
+    with _zf.ZipFile(buf, "w", compression=_zf.ZIP_DEFLATED, compresslevel=6) as zf:
+        zf.writestr("appsecgw-config.xml", xml_bytes)
+    return buf.getvalue()
+
+
+async def settings_export_endpoint(request: web.Request):
+    """GET /__settings-export?include_secrets=0|1 — return a ZIP archive
+    containing `appsecgw-config.xml`. Admin-IP + admin-key gated like
+    every other /__* route (the global `protect` middleware enforces
+    auth before this handler runs)."""
+    include_secrets = (request.query.get("include_secrets") or "0").lower() in ("1", "true", "yes")
+    try:
+        xml_bytes = _settings_build_xml(include_secrets=include_secrets)
+        zip_bytes = _settings_make_zip(xml_bytes)
+    except Exception as e:
+        slog("config_export_failed", level="error",
+             rid=request.get("_rid", ""), err=str(e)[:200])
+        return web.json_response({"error": f"export failed: {e}"}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+    # Build a host-stamped filename for the operator's downloads folder.
+    # Sanitise the Host header — operator-controlled but untrusted. Strip
+    # to alphanumerics + dot/dash so a hostile Host can't break the
+    # Content-Disposition quoting (alpha/digit/dot/dash is a strict subset
+    # of RFC 7230 token charset).
+    raw_host = (request.host or "appsecgw").split(":", 1)[0]
+    host = re.sub(r"[^A-Za-z0-9._-]", "", raw_host)[:80] or "appsecgw"
+    stamp = _t.strftime("%Y%m%d-%H%M%S", _t.gmtime())
+    fname = f"appsecgw-config-{host}-{stamp}.zip"
+    slog("config_exported", level="warn",
+         rid=request.get("_rid", ""),
+         include_secrets=include_secrets,
+         bytes=len(zip_bytes), filename=fname)
+    return web.Response(
+        body=zip_bytes,
+        headers={
+            "Content-Type": "application/zip",
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
+
+
+async def settings_import_endpoint(request: web.Request):
+    """POST /__settings-import?dry_run=0|1&overwrite_secrets=0|1
+    Body: a ZIP archive containing `appsecgw-config.xml` produced by
+    `/__settings-export`. Returns a JSON summary { knobs_applied,
+    knobs_rejected, admin_ips_added, secrets_applied, errors[] }.
+
+    Validation runs through the same parser/validator pair used by
+    POST /__config so an import can never sidestep bounds-checking. A
+    single malformed knob does NOT abort the whole import — it lands
+    in `errors[]` and the rest are still applied."""
+    import io as _io
+    import zipfile as _zf
+    import xml.etree.ElementTree as _ET
+
+    dry_run = (request.query.get("dry_run") or "0").lower() in ("1", "true", "yes")
+    overwrite_secrets = (request.query.get("overwrite_secrets") or "0").lower() in ("1", "true", "yes")
+
+    # Cap the upload at 1 MiB — config archives are tiny in practice.
+    try:
+        raw = await asyncio.wait_for(request.content.read(1 * 1024 * 1024),
+                                      timeout=BODY_TIMEOUT)
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "upload timeout"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if not raw:
+        return web.json_response({"error": "empty body"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+
+    # Parse ZIP → extract the single XML entry. Hardened: only the
+    # exact entry name `appsecgw-config.xml` is accepted (no path
+    # traversal, no surprise alternate filenames), and the inflated
+    # entry size is bounded to 4 MiB before calling .read() to defuse
+    # ZIP-bomb amplification.
+    _MAX_INFLATED = 4 * 1024 * 1024
+    try:
+        with _zf.ZipFile(_io.BytesIO(raw), "r") as zf:
+            try:
+                info = zf.getinfo("appsecgw-config.xml")
+            except KeyError:
+                return web.json_response(
+                    {"error": "zip missing 'appsecgw-config.xml'"},
+                    status=400, headers={"Cache-Control": "no-store"})
+            if info.file_size > _MAX_INFLATED:
+                return web.json_response(
+                    {"error": f"xml entry too large ({info.file_size} bytes)"},
+                    status=400, headers={"Cache-Control": "no-store"})
+            xml_bytes = zf.read(info)
+    except _zf.BadZipFile as e:
+        return web.json_response({"error": f"bad zip: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+
+    try:
+        # B314 false-positive: input is bounded (DLP_MAX_BYTES already
+        # capped the upload at 1 MiB above) and the endpoint is admin-IP
+        # + admin-key gated, so the threat model is "operator uploads
+        # malformed XML to break their own gateway" — not external XXE.
+        # CPython 3.7+ ET.fromstring does not resolve external entities
+        # and pyexpat applies its own entity-expansion limits.
+        root = _ET.fromstring(xml_bytes)  # nosec B314
+    except _ET.ParseError as e:
+        return web.json_response({"error": f"bad xml: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if root.tag != "appsecgw-config":
+        return web.json_response({"error": f"unexpected root <{root.tag}>"},
+                                  status=400,
+                                  headers={"Cache-Control": "no-store"})
+
+    summary = {
+        "dry_run": dry_run,
+        "overwrite_secrets": overwrite_secrets,
+        "knobs_applied": 0,
+        "knobs_rejected": 0,
+        "admin_ips_added": 0,
+        "secrets_applied": 0,
+        "applied": [],
+        "rejected": {},
+        "errors": [],
+    }
+
+    # ── 1) Knobs ─────────────────────────────────────────────────
+    g = globals()
+    knobs_el = root.find("knobs")
+    if knobs_el is not None:
+        for ke in knobs_el.findall("knob"):
+            name = ke.attrib.get("name") or ""
+            spec = _HOT_RELOAD_KNOBS.get(name)
+            if spec is None:
+                summary["rejected"][name] = "not-hot-reloadable"
+                summary["knobs_rejected"] += 1
+                continue
+            if name in _ENV_PROVIDED_KNOBS:
+                summary["rejected"][name] = "env-pinned"
+                summary["knobs_rejected"] += 1
+                continue
+            try:
+                raw_v = json.loads(ke.text or "null")
+            except (ValueError, json.JSONDecodeError) as e:
+                summary["rejected"][name] = f"bad json: {e}"
+                summary["knobs_rejected"] += 1
+                continue
+            parser, validator = spec
+            try:
+                value = parser(raw_v)
+                if validator is not None and not validator(value):
+                    summary["rejected"][name] = "validation failed"
+                    summary["knobs_rejected"] += 1
+                    continue
+            except (ValueError, TypeError) as e:
+                summary["rejected"][name] = str(e)[:120]
+                summary["knobs_rejected"] += 1
+                continue
+            if not dry_run:
+                g[name] = value
+                applied_v = sorted(value) if isinstance(value, set) else value
+                if db_queue is not None:
+                    try:
+                        db_queue.put_nowait((
+                            "set_config",
+                            (name, json.dumps(applied_v), _t.time()),
+                        ))
+                    except asyncio.QueueFull:
+                        pass
+            summary["applied"].append(name)
+            summary["knobs_applied"] += 1
+
+    # ── 2) Admin IPs (merge — never remove) ──────────────────────
+    ips_el = root.find("admin_ips")
+    if ips_el is not None:
+        for ie in ips_el.findall("admin_ip"):
+            cidr = ie.attrib.get("cidr") or ""
+            note = ie.attrib.get("note") or ""
+            description = ie.attrib.get("description") or ""
+            if not cidr:
+                continue
+            if dry_run:
+                # Fast-path validate without persisting.
+                try:
+                    _ipaddress.ip_network(cidr, strict=False)
+                    summary["admin_ips_added"] += 1
+                except ValueError as e:
+                    summary["errors"].append(f"admin_ip {cidr}: {e}")
+                continue
+            ok, msg = await admin_ip_add(cidr, note, source="import",
+                                          description=description)
+            if ok:
+                summary["admin_ips_added"] += 1
+            elif msg != "already exists":
+                summary["errors"].append(f"admin_ip {cidr}: {msg}")
+
+    # ── 3) Secrets (opt-in, replaces existing values when present) ──
+    if overwrite_secrets:
+        secrets_el = root.find("secrets")
+        if secrets_el is not None:
+            for se in secrets_el.findall("secret"):
+                name = se.attrib.get("name") or ""
+                if name not in _SECRET_KEYS:
+                    summary["errors"].append(f"secret {name}: unknown")
+                    continue
+                value = (se.text or "").strip()
+                if not value:
+                    continue
+                if dry_run:
+                    summary["secrets_applied"] += 1
+                    continue
+                global_name, _env = _SECRET_KEYS[name]
+                g[global_name] = value
+                if db_queue is not None:
+                    try:
+                        db_queue.put_nowait((
+                            "set_secret", (name, value, _t.time()),
+                        ))
+                    except asyncio.QueueFull:
+                        pass
+                summary["secrets_applied"] += 1
+
+    slog("config_imported", level="warn",
+         rid=request.get("_rid", ""),
+         dry_run=dry_run,
+         knobs_applied=summary["knobs_applied"],
+         knobs_rejected=summary["knobs_rejected"],
+         admin_ips_added=summary["admin_ips_added"],
+         secrets_applied=summary["secrets_applied"])
+    return web.json_response(summary, headers={"Cache-Control": "no-store"})
+
+
+# ── 1.6.7: Gateway-mesh registry ─────────────────────────────────────────
+# Manages the set of gateways in a distributed mesh. Each gateway has a
+# unique id, an HMAC keypair (private secret + SHA256-derived public
+# verification handle), a coarse can_distribute flag, and a per-pair
+# distribution topology stored in `gw_distribution`. Every mutation lands
+# in `gw_audit`.
+
+# ── 1.6.7: dashboard user accounts ──────────────────────────────────
+_USERNAME_RE  = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
+_USER_ROLES   = ("admin",)            # extension point: viewer/editor
+_USER_STATUS  = ("active", "disabled")
+_SESSION_COOKIE = "agw_session"
+_SESSION_TTL  = 12 * 3600              # 12h sliding session
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1   # ~70 ms on a single core
+_LOGIN_BUCKET: dict = {}               # ip → (window_start, count)
+_LOGIN_BUCKET_LOCK = asyncio.Lock()
+# 1.6.7 — last-seen-ts per signed-in user. Bumped on every cookie-
+# authenticated request inside `_internal_authed`. In-memory so it
+# resets on container restart (acceptable: a fresh boot shows everyone
+# offline until they next interact). The Users list considers a user
+# "online" if seen in the last `_ACTIVE_SESSION_TTL_S` seconds.
+_ACTIVE_SESSIONS: dict = {}            # username → last_seen_ts
+_ACTIVE_SESSION_TTL_S = 60
+
+def _password_hash(pw: str) -> str:
+    """scrypt with random 16-byte salt; result is `scrypt$N$r$p$salt$hash`
+    base64url so it round-trips in JSON / SQL cleanly."""
+    salt = secrets.token_bytes(16)
+    h = hashlib.scrypt(pw.encode("utf-8"), salt=salt,
+                        n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P,
+                        maxmem=64 * 1024 * 1024)
+    salt_b = _b64.urlsafe_b64encode(salt).rstrip(b"=").decode("ascii")
+    hash_b = _b64.urlsafe_b64encode(h).rstrip(b"=").decode("ascii")
+    return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt_b}${hash_b}"
+
+def _password_verify(pw: str, stored: str) -> bool:
+    """Constant-time compare. Returns False on any malformed stored value."""
+    try:
+        algo, n, r, p, salt_b, hash_b = stored.split("$")
+        if algo != "scrypt":
+            return False
+        n, r, p = int(n), int(r), int(p)
+        salt = _b64.urlsafe_b64decode(salt_b + "=" * (-len(salt_b) % 4))
+        want = _b64.urlsafe_b64decode(hash_b + "=" * (-len(hash_b) % 4))
+        got  = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=n, r=r, p=p,
+                               maxmem=64 * 1024 * 1024)
+        return hmac.compare_digest(want, got)
+    except (ValueError, TypeError):
+        return False
+
+# 1.6.7 — per-session state. Each login mints a fresh sid; the server-
+# side `user_sessions` row is the source of truth for whether a token
+# is still valid. The in-memory cache is loaded at boot from the table
+# and updated on login/logout/revoke. O(1) verify on the request path.
+_SESSION_CACHE: dict = {}              # sid → {username, expires_ts, revoked}
+_SESSION_CACHE_LOCK = asyncio.Lock()
+_SID_RE = re.compile(r"^[A-Za-z0-9_-]{16,32}$")
+
+def _new_sid() -> str:
+    """22-char URL-safe random — matches secrets.token_urlsafe(16)."""
+    return secrets.token_urlsafe(16)
+
+def _session_sign(username: str, sid: str | None = None,
+                   ttl: int = _SESSION_TTL) -> str:
+    """Return a tamper-evident session token: `username|sid|expiry|HMAC`.
+    The sid lets the server revoke individual sessions (older format
+    without sid is no longer accepted — operators re-login on upgrade).
+    HMAC-SHA256 over `username|sid|expiry` keyed with SESSION_KEY."""
+    if sid is None:
+        sid = _new_sid()
+    expiry = int(_t.time()) + int(ttl)
+    payload = f"{username}|{sid}|{expiry}".encode("utf-8")
+    sig = hmac.new(SESSION_KEY, payload, hashlib.sha256).digest()
+    sig_b = _b64.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+    return f"{username}|{sid}|{expiry}|{sig_b}"
+
+def _session_parse(token: str) -> tuple[str, str, int] | None:
+    """Verify HMAC + structural shape; return (username, sid, expiry) or
+    None. Does NOT consult the cache — that's the caller's job."""
+    if not token or token.count("|") != 3:
+        return None
+    try:
+        username, sid, expiry_s, sig_b = token.split("|")
+        expiry = int(expiry_s)
+    except (ValueError, TypeError):
+        return None
+    if expiry < int(_t.time()):
+        return None
+    if not _USERNAME_RE.match(username):
+        return None
+    if not _SID_RE.match(sid):
+        return None
+    payload = f"{username}|{sid}|{expiry}".encode("utf-8")
+    want = hmac.new(SESSION_KEY, payload, hashlib.sha256).digest()
+    try:
+        got = _b64.urlsafe_b64decode(sig_b + "=" * (-len(sig_b) % 4))
+    except (ValueError, TypeError):
+        return None
+    if not hmac.compare_digest(want, got):
+        return None
+    return username, sid, expiry
+
+def _session_verify(token: str) -> str | None:
+    """Return the username if the token is structurally valid AND the
+    sid is still active in `_SESSION_CACHE`. A revoked sid fails here,
+    making the operator's "Revoke" click effective on the very next
+    request. Falls back to `_session_parse` semantics when the cache
+    is cold (just after boot, before the loader runs)."""
+    parsed = _session_parse(token)
+    if parsed is None:
+        return None
+    username, sid, expiry = parsed
+    cached = _SESSION_CACHE.get(sid)
+    if cached is None:
+        # Cold cache OR row purged; trust the HMAC + expiry only when
+        # the cache hasn't loaded yet (boot-window grace). After boot
+        # we require the cache hit to be present — see _session_cache_ready.
+        if not _SESSION_CACHE_READY:
+            return username
+        return None
+    if cached.get("revoked"):
+        return None
+    if cached.get("username") != username:
+        return None
+    if cached.get("expires_ts", 0) < _t.time():
+        return None
+    return username
+
+
+# Track whether the cache loader has finished (post-boot).
+_SESSION_CACHE_READY = False
+
+def _session_cache_load() -> None:
+    """Populate `_SESSION_CACHE` from the `user_sessions` table at boot
+    and after a writer-loop refresh. O(active_sessions) reads."""
+    global _SESSION_CACHE_READY
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT sid, username, expires_ts, status FROM user_sessions "
+            "WHERE status = 'active' AND expires_ts > ?",
+            (_t.time(),)).fetchall()
+        conn.close()
+    except Exception as e:
+        slog("session_cache_load_failed", level="error", err=str(e)[:200])
+        _SESSION_CACHE_READY = True
+        return
+    fresh = {}
+    for r in rows:
+        fresh[r["sid"]] = {
+            "username":   r["username"],
+            "expires_ts": float(r["expires_ts"] or 0),
+            "revoked":    False,
+        }
+    _SESSION_CACHE.clear()
+    _SESSION_CACHE.update(fresh)
+    _SESSION_CACHE_READY = True
+    slog("session_cache_loaded", level="info", count=len(fresh))
+
+
+def _session_create(username: str, ip: str, user_agent: str) -> str:
+    """Mint a fresh session: insert the row, prime the cache, return
+    the cookie token. Caller is responsible for setting the cookie on
+    the response."""
+    sid = _new_sid()
+    n = _t.time()
+    expires_ts = n + _SESSION_TTL
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "user_session_create",
+                (sid, username, ip or "", (user_agent or "")[:512],
+                 n, n, expires_ts),
+            ))
+        except asyncio.QueueFull:
+            pass
+    _SESSION_CACHE[sid] = {
+        "username": username, "expires_ts": expires_ts, "revoked": False,
+    }
+    return _session_sign(username, sid=sid)
+
+
+def _session_revoke(sid: str, by_username: str) -> bool:
+    """Mark a session revoked. Effective on the next request via the
+    cache miss. Returns False if the sid is unknown."""
+    if sid not in _SESSION_CACHE:
+        return False
+    _SESSION_CACHE[sid]["revoked"] = True
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "user_session_revoke",
+                (sid, by_username or "", _t.time()),
+            ))
+        except asyncio.QueueFull:
+            pass
+    return True
+
+
+def _session_touch(sid: str) -> None:
+    """Bump last_seen_ts on the row. Throttled — at most one update
+    per session per 30s to avoid flooding the writer queue."""
+    n = _t.time()
+    cached = _SESSION_CACHE.get(sid)
+    if not cached:
+        return
+    last_touch = cached.get("_last_touch", 0)
+    if n - last_touch < 30:
+        return
+    cached["_last_touch"] = n
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("user_session_touch", (n, sid)))
+        except asyncio.QueueFull:
+            pass
+
+def _user_load(username: str) -> dict | None:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM users WHERE username = ?",
+                            (username,)).fetchone()
+        conn.close()
+    except Exception:
+        return None
+    return dict(row) if row else None
+
+def _user_load_all() -> list[dict]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT username, role, status, created_ts, updated_ts, "
+            "last_login_ts, last_login_ip FROM users ORDER BY username"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
+
+def _user_count() -> int:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        conn.close()
+        return int(n or 0)
+    except Exception:
+        return 0
+
+def _user_validate_username(u: str) -> tuple[bool, str]:
+    if not u or not isinstance(u, str):
+        return False, "username required"
+    if len(u) > 64:
+        return False, "username too long (max 64)"
+    if not _USERNAME_RE.match(u):
+        return False, "username must be lowercase alphanumeric + . _ - (2-64)"
+    return True, ""
+
+def _user_bootstrap() -> None:
+    """1.6.7 — on first start (no users in the table), auto-create an
+    `admin` user whose password is the existing INTERNAL_KEY. This
+    preserves the existing single-key auth model as the operator's
+    bootstrap credential while moving forward to per-user accounts.
+    Once the operator changes the password, the INTERNAL_KEY → admin
+    mapping is gone (the key still works as a bearer for scripted
+    clients via `_internal_authed`)."""
+    if _user_count() > 0:
+        return
+    n = _t.time()
+    pw_hash = _password_hash(INTERNAL_KEY)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO users (username, password_hash, role, status, "
+            "created_ts, updated_ts) VALUES (?, ?, 'admin', 'active', ?, ?)",
+            ("admin", pw_hash, n, n))
+        conn.commit()
+        conn.close()
+        slog("user_bootstrap", level="warn", username="admin",
+             note="initial admin password = INTERNAL_KEY (rotate via /__rotate-keys or Settings)")
+    except Exception as e:
+        print(f"[users] bootstrap failed: {e}", flush=True)
+
+async def _login_rate_limit(ip: str) -> bool:
+    """Return True iff this IP is allowed to attempt another login.
+    5 attempts per 60s rolling window. Failed attempts are counted; a
+    successful login does not reset (cheap, good-enough back-pressure)."""
+    n = _t.time()
+    async with _LOGIN_BUCKET_LOCK:
+        st = _LOGIN_BUCKET.get(ip)
+        if st is None or n - st[0] > 60:
+            _LOGIN_BUCKET[ip] = [n, 1]
+            return True
+        st[1] += 1
+        if st[1] > 5:
+            return False
+        _LOGIN_BUCKET[ip] = st
+        return True
+
+_GW_ID_RE     = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
+# 1.6.7 — operator-supplied external hostname (e.g. "gw-prod.example.com").
+# Subset of RFC 1035 hostname grammar — labels of [a-z0-9-]{1,63} joined
+# by dots, no trailing dot, no IP-literal forms. Empty is allowed (no
+# domain published yet).
+_GW_DOMAIN_RE = re.compile(
+    r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)"
+    r"(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$")
+_GW_REGIONS   = ("eu-west", "eu-central", "us-east", "us-west", "ap-south",
+                 "ap-northeast", "sa-east", "af-south", "me-central", "global")
+_GW_ENVS      = ("production", "staging", "test")
+_GW_STATUSES  = ("active", "inactive", "decommissioned")
+
+# Cache of the local gateway's id. Resolved lazily — falls back to
+# host.id() then "gw-local" if no row is yet stored.
+_LOCAL_GW_ID: str = ""
+
+def _gw_validate_id(gw_id: str) -> tuple[bool, str]:
+    if not gw_id or not isinstance(gw_id, str):
+        return False, "gw_id required"
+    if len(gw_id) > 64:
+        return False, "gw_id too long (max 64)"
+    if not _GW_ID_RE.match(gw_id):
+        return False, "gw_id must be lowercase alphanumeric + hyphens, 2-64 chars"
+    return True, ""
+
+def _gw_id_from_domain(domain: str) -> str:
+    """1.6.7 — derive a valid gw_id from a hostname. Lowercase, replace
+    every non-[a-z0-9-] char with '-', collapse runs of '-', trim leading
+    /trailing hyphens, cap at 63 chars (the validator's upper bound).
+    Returns "" if the input collapses to nothing valid (caller falls
+    back to operator-supplied gw_id)."""
+    if not domain:
+        return ""
+    s = re.sub(r"[^a-z0-9-]+", "-", domain.lower().strip())
+    s = re.sub(r"-+", "-", s).strip("-")
+    if not s:
+        return ""
+    # _GW_ID_RE caps at 63 chars (1 leading alphanumeric + up to 62 more).
+    s = s[:63].rstrip("-")
+    if not s or not s[0].isalnum():
+        s = re.sub(r"^[^a-z0-9]+", "", s)
+    return s if (s and _GW_ID_RE.match(s)) else ""
+
+def _gw_generate_keypair() -> tuple[str, str]:
+    """Mint a new (private_key, public_key) pair. Private is 32-byte
+    URL-safe random; public is a SHA256-derived verification handle so
+    peers can authenticate signatures without holding the private key.
+    Both are base64url-encoded so they round-trip in JSON / XML cleanly."""
+    private_key = secrets.token_urlsafe(32)
+    public_key  = _gw_derive_pubkey(private_key)
+    return private_key, public_key
+
+def _gw_derive_pubkey(private_key: str) -> str:
+    """SHA256 fingerprint of the private secret — used as the public
+    verification handle. Peers receive this, and verify HMAC-SHA256
+    signatures on inbound block records by recomputing locally with the
+    SAME secret (mesh participants share the secret out-of-band), which
+    is the symmetric-HMAC mesh model we ship until proper Ed25519 lands."""
+    h = hashlib.sha256(private_key.encode("utf-8")).digest()
+    return _b64.urlsafe_b64encode(h).rstrip(b"=").decode("ascii")
+
+def _gw_fingerprint(public_key: str, length: int = 12) -> str:
+    """Short fingerprint for the dashboard. SHA256 of the public key,
+    hex-encoded, truncated to `length` chars."""
+    h = hashlib.sha256(public_key.encode("utf-8")).hexdigest()
+    return h[:length]
+
+def _gw_local_id() -> str:
+    """Lazy resolver for the LOCAL gateway's id. Falls back to the
+    container hostname / 'gw-local' until the operator registers one."""
+    global _LOCAL_GW_ID
+    if _LOCAL_GW_ID:
+        return _LOCAL_GW_ID
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        row = conn.execute(
+            "SELECT gw_id FROM gw_registry WHERE is_local = 1 LIMIT 1"
+        ).fetchone()
+        conn.close()
+        if row:
+            _LOCAL_GW_ID = row[0]
+            return _LOCAL_GW_ID
+    except Exception:
+        pass
+    # Fall back to hostname-derived id.
+    try:
+        hostname = os.uname().nodename or "gw-local"
+    except Exception:
+        hostname = "gw-local"
+    safe = re.sub(r"[^a-z0-9-]", "-", hostname.lower())[:32] or "gw-local"
+    _LOCAL_GW_ID = safe if _GW_ID_RE.match(safe) else "gw-local"
+    return _LOCAL_GW_ID
+
+def _gw_audit(action: str, gw_id: str, actor: str, **details) -> None:
+    """Append-only audit record. Mirrors to Postgres via _pg_mirror_kv-
+    style best-effort write. Never raises."""
+    if db_queue is None:
+        return
+    payload = json.dumps(details, separators=(",", ":"), default=str) if details else ""
+    try:
+        db_queue.put_nowait((
+            "gw_audit_add",
+            (_t.time(), action, gw_id, actor, payload),
+        ))
+    except asyncio.QueueFull:
+        pass
+    slog("gw_registry_event", level="warn",
+         action=action, gw_id=gw_id, actor=actor or "unknown")
+
+def _gw_actor(request: web.Request) -> str:
+    """Identify the operator behind a registry request. Uses the source
+    IP after TRUSTED_PROXIES filtering — same source the audit log uses
+    everywhere else."""
+    return get_ip(request) or "unknown"
+
+def _gw_load_one(gw_id: str, include_private: bool = False) -> dict | None:
+    """Fetch one row from gw_registry as a dict, or None if not found.
+    Detail GETs may opt in to seeing the local row's private key by
+    passing `include_private=True`."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT * FROM gw_registry WHERE gw_id = ?", (gw_id,)
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        slog("gw_registry_load_failed", level="error",
+             err=str(e)[:200], gw_id=gw_id)
+        return None
+    if row is None:
+        return None
+    return _gw_row_to_dict(dict(row), include_private=include_private)
+
+def _gw_row_to_dict(r: dict, include_private: bool = False) -> dict:
+    """Normalise a SQLite row → JSON-serialisable dict. Adds the
+    public-key fingerprint. The private_key is stripped UNLESS
+    `include_private=True` AND the row is the local gateway — list
+    views always pass False, single-row detail GETs pass True so the
+    operator can reveal the local secret on demand."""
+    out = dict(r)
+    out["can_distribute"] = bool(out.get("can_distribute", 0))
+    out["is_local"]       = bool(out.get("is_local", 0))
+    out["fingerprint"]    = _gw_fingerprint(out.get("public_key") or "")
+    # Never leak another gateway's private key (defence-in-depth —
+    # the column is also normally NULL for non-local rows). For the
+    # local row, only return it on explicit detail fetches.
+    if not (include_private and out["is_local"]):
+        out["private_key"] = None
+    return out
+
+def _gw_load_all() -> list[dict]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM gw_registry ORDER BY created_ts ASC"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        slog("gw_registry_load_failed", level="error", err=str(e)[:200])
+        return []
+    return [_gw_row_to_dict(dict(r)) for r in rows]
+
+def _gw_load_distribution() -> list[tuple[str, str]]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT source_gw_id, target_gw_id FROM gw_distribution"
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    return [(r[0], r[1]) for r in rows]
+
+
+# ── Endpoints ────────────────────────────────────────────────────────────
+async def gw_registry_list_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/gw-registry — list all gateways."""
+    rows = _gw_load_all()
+    local_id = _gw_local_id()
+    return web.json_response(
+        {"local_gw_id": local_id, "gateways": rows,
+         "regions": list(_GW_REGIONS), "environments": list(_GW_ENVS),
+         "statuses": list(_GW_STATUSES)},
+        headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_get_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/gw-registry/{gw_id}[?reveal=1]
+    The local row's private_key is included only when the caller
+    explicitly opts in via `?reveal=1`. The FE Settings dashboard's
+    "Reveal" button is the only path that sets this flag — every
+    other consumer (list, edit, sync-status) leaves it absent."""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    ok, msg = _gw_validate_id(gw_id)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    reveal = (request.query.get("reveal") or "").lower() in ("1", "true", "yes")
+    row = _gw_load_one(gw_id, include_private=reveal)
+    if row is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    if reveal and row.get("is_local"):
+        _gw_audit("private_key_revealed", gw_id, _gw_actor(request))
+    return web.json_response(row, headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_create_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/gw-registry"""
+    try:
+        body = await asyncio.wait_for(request.content.read(64 * 1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    gw_id  = (data.get("gw_id") or "").strip().lower()
+    domain = (data.get("domain") or "").strip().lower()[:253]
+    region = (data.get("region") or "").strip()
+    env    = (data.get("environment") or "").strip()
+    can_distribute = 1 if data.get("can_distribute", env == "production") else 0
+    auto_keys = bool(data.get("auto_generate_keys", True))
+    is_local  = 1 if data.get("is_local") else 0
+    if domain and not _GW_DOMAIN_RE.match(domain):
+        return web.json_response(
+            {"error": "domain must be a valid hostname (a-z, 0-9, dots, hyphens)"},
+            status=400, headers={"Cache-Control": "no-store"})
+    # 1.6.7 — auto-derive gw_id from domain when caller didn't supply one.
+    # Operators can still pass an explicit gw_id to override the derivation.
+    if not gw_id and domain:
+        gw_id = _gw_id_from_domain(domain)
+
+    ok, msg = _gw_validate_id(gw_id)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if region not in _GW_REGIONS:
+        return web.json_response({"error": f"region must be one of {list(_GW_REGIONS)}"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    if env not in _GW_ENVS:
+        return web.json_response({"error": f"environment must be one of {list(_GW_ENVS)}"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    if _gw_load_one(gw_id) is not None:
+        return web.json_response({"error": "gw_id already exists"}, status=409,
+                                  headers={"Cache-Control": "no-store"})
+
+    private_key = ""
+    if auto_keys:
+        private_key, public_key = _gw_generate_keypair()
+    else:
+        # Manual entry — caller MUST provide both halves and they must match.
+        private_key = (data.get("private_key") or "").strip()
+        public_key  = (data.get("public_key") or "").strip()
+        if not private_key or not public_key:
+            return web.json_response(
+                {"error": "manual key entry requires private_key + public_key"},
+                status=400, headers={"Cache-Control": "no-store"})
+        if _gw_derive_pubkey(private_key) != public_key:
+            return web.json_response(
+                {"error": "public_key does not match private_key"},
+                status=400, headers={"Cache-Control": "no-store"})
+    # Operators registering a remote peer should NOT have its private key
+    # — the local gateway only holds private material for the LOCAL row.
+    stored_private = private_key if is_local else None
+    n = _t.time()
+    args = (gw_id, domain or None, region, env, "active", can_distribute,
+            public_key, stored_private, n, None, None, n, n, is_local)
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("gw_registry_add", args))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("gw_registered", gw_id, _gw_actor(request),
+              domain=domain or None, region=region, environment=env,
+              can_distribute=bool(can_distribute), is_local=bool(is_local))
+    # Echo back the row including private_key ONLY when it was just
+    # auto-generated AND this is the local gw — operator must copy it now.
+    out = {
+        "gw_id": gw_id, "domain": domain or None,
+        "region": region, "environment": env,
+        "status": "active", "can_distribute": bool(can_distribute),
+        "public_key": public_key,
+        "private_key": private_key if (is_local and auto_keys) else None,
+        "fingerprint": _gw_fingerprint(public_key),
+        "is_local": bool(is_local),
+        "created_ts": n,
+    }
+    return web.json_response(out, status=201,
+                              headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_update_endpoint(request: web.Request):
+    """PATCH <NS>/secured/admin/gw-registry/{gw_id}"""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    ok, msg = _gw_validate_id(gw_id)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    cur = _gw_load_one(gw_id)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        body = await asyncio.wait_for(request.content.read(8 * 1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+
+    updates: dict = {}
+    if "domain" in data:
+        d = (data.get("domain") or "").strip().lower()
+        if d and not _GW_DOMAIN_RE.match(d):
+            return web.json_response({"error": "invalid domain"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        updates["domain"] = d or None
+    if "region" in data:
+        if data["region"] not in _GW_REGIONS:
+            return web.json_response({"error": "invalid region"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        updates["region"] = data["region"]
+    if "environment" in data:
+        if data["environment"] not in _GW_ENVS:
+            return web.json_response({"error": "invalid environment"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        updates["environment"] = data["environment"]
+    if "status" in data:
+        if data["status"] not in _GW_STATUSES:
+            return web.json_response({"error": "invalid status"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        updates["status"] = data["status"]
+    if "can_distribute" in data:
+        updates["can_distribute"] = 1 if data["can_distribute"] else 0
+    if not updates:
+        return web.json_response({"error": "no updates supplied"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    updates["updated_ts"] = _t.time()
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("gw_registry_update", (gw_id, updates)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("gw_updated", gw_id, _gw_actor(request), **updates)
+    return web.json_response({"gw_id": gw_id, "updates": updates},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_can_distribute_endpoint(request: web.Request):
+    """PATCH <NS>/secured/admin/gw-registry/{gw_id}/can-distribute"""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    cur = _gw_load_one(gw_id)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        body = await asyncio.wait_for(request.content.read(1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    new_val = 1 if data.get("can_distribute") else 0
+    n = _t.time()
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "gw_registry_update",
+                (gw_id, {"can_distribute": new_val, "updated_ts": n}),
+            ))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("can_distribute_toggled", gw_id, _gw_actor(request),
+              can_distribute=bool(new_val))
+    return web.json_response({"gw_id": gw_id, "can_distribute": bool(new_val)},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_rotate_key_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/gw-registry/{gw_id}/rotate-key"""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    cur = _gw_load_one(gw_id)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        body = await asyncio.wait_for(request.content.read(8 * 1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError):
+        data = {}
+    reason = (data.get("reason") or "").strip()[:500]
+    private_key, public_key = _gw_generate_keypair()
+    stored_private = private_key if cur.get("is_local") else None
+    n = _t.time()
+    upd = {"public_key": public_key, "private_key": stored_private,
+           "key_rotated_ts": n, "updated_ts": n}
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("gw_registry_update", (gw_id, upd)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("key_rotated", gw_id, _gw_actor(request),
+              fingerprint=_gw_fingerprint(public_key),
+              reason=reason or None)
+    out = {"gw_id": gw_id, "public_key": public_key,
+           "fingerprint": _gw_fingerprint(public_key),
+           "key_rotated_ts": n}
+    if cur.get("is_local"):
+        # Operator must copy this once — do not return again.
+        out["private_key"] = private_key
+    return web.json_response(out, headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_delete_endpoint(request: web.Request):
+    """DELETE <NS>/secured/admin/gw-registry/{gw_id}"""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    cur = _gw_load_one(gw_id)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    if cur.get("is_local"):
+        return web.json_response(
+            {"error": "cannot delete the local gateway row"},
+            status=400, headers={"Cache-Control": "no-store"})
+    # Refuse if this is the last gateway in the registry — there must
+    # always be at least one row (the local one) for the dashboard to
+    # function.
+    if len(_gw_load_all()) <= 1:
+        return web.json_response(
+            {"error": "cannot delete the last gateway in the registry"},
+            status=400, headers={"Cache-Control": "no-store"})
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("gw_registry_delete", (gw_id,)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("gw_deleted", gw_id, _gw_actor(request))
+    return web.json_response({"gw_id": gw_id, "deleted": True},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_distribution_matrix_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/gw-registry/distribution/matrix"""
+    rows = _gw_load_all()
+    pairs = _gw_load_distribution()
+    by_pair = {(s, t): True for s, t in pairs}
+    return web.json_response({
+        "gateways": [{"gw_id": r["gw_id"], "region": r["region"],
+                       "environment": r["environment"],
+                       "status": r["status"],
+                       "can_distribute": r["can_distribute"]} for r in rows],
+        "rules": [{"source": s, "target": t} for s, t in pairs],
+        "matrix": {f"{s}|{t}": True for (s, t) in by_pair},
+        "local_gw_id": _gw_local_id(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_distribution_rules_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/gw-registry/distribution/rules
+    Body: {"rules": [{"source": "gw-a", "target": "gw-b"}, ...]}
+    Replaces the entire rule set in one transaction (idempotent)."""
+    try:
+        body = await asyncio.wait_for(request.content.read(64 * 1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    rules = data.get("rules") or []
+    if not isinstance(rules, list):
+        return web.json_response({"error": "rules must be a list"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    # Validate every (source, target) refers to a registered gateway.
+    known = {r["gw_id"] for r in _gw_load_all()}
+    cleaned: list[tuple[str, str]] = []
+    for entry in rules:
+        if not isinstance(entry, dict):
+            return web.json_response({"error": "rules entries must be objects"},
+                                      status=400, headers={"Cache-Control": "no-store"})
+        s = (entry.get("source") or "").strip().lower()
+        t = (entry.get("target") or "").strip().lower()
+        if s == t:
+            return web.json_response({"error": f"self-loop rejected: {s}"},
+                                      status=400, headers={"Cache-Control": "no-store"})
+        if s not in known or t not in known:
+            return web.json_response(
+                {"error": f"unknown gw in rule: source={s} target={t}"},
+                status=400, headers={"Cache-Control": "no-store"})
+        cleaned.append((s, t))
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("gw_distribution_replace", (cleaned, _t.time())))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("distribution_rules_updated", "*", _gw_actor(request),
+              count=len(cleaned))
+    return web.json_response({"rules": [{"source": s, "target": t}
+                                         for s, t in cleaned]},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_audit_log_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/gw-registry/audit-log
+    Query: ?limit=50&offset=0&action=...&gw_id=...&since=<epoch>&until=<epoch>
+    """
+    try:
+        limit  = max(1,  min(int(request.query.get("limit",  "50")),  500))
+        offset = max(0,  min(int(request.query.get("offset", "0")), 100000))
+    except ValueError:
+        return web.json_response({"error": "limit/offset must be ints"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    action = (request.query.get("action") or "").strip()
+    gw_id  = (request.query.get("gw_id") or "").strip().lower()
+    since  = request.query.get("since")
+    until  = request.query.get("until")
+    where, args = ["1=1"], []
+    if action:
+        where.append("action = ?"); args.append(action)
+    if gw_id:
+        where.append("gw_id = ?"); args.append(gw_id)
+    try:
+        if since:
+            where.append("ts >= ?"); args.append(float(since))
+        if until:
+            where.append("ts <= ?"); args.append(float(until))
+    except ValueError:
+        return web.json_response({"error": "since/until must be epoch floats"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    # B608 false-positive: the WHERE fragments are hard-coded literal
+    # template strings (e.g. "action = ?") joined with AND; operator-
+    # supplied values are bound exclusively via `?` placeholders in
+    # `args`. No user-controlled text reaches the SQL string.
+    sql = (f"SELECT id, ts, action, gw_id, actor, details "       # nosec B608
+           f"FROM gw_audit WHERE {' AND '.join(where)} "
+           f"ORDER BY ts DESC LIMIT ? OFFSET ?")
+    args.extend([limit, offset])
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(sql, args).fetchall()
+        total = conn.execute("SELECT COUNT(*) FROM gw_audit").fetchone()[0]
+        conn.close()
+    except Exception as e:
+        slog("gw_audit_query_failed", level="error", err=str(e)[:200])
+        return web.json_response({"error": "audit query failed"}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+    return web.json_response({
+        "total":   total,
+        "limit":   limit,
+        "offset":  offset,
+        "entries": [dict(r) for r in rows],
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def gw_registry_sync_status_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/gw-registry/{gw_id}/sync-status — synthetic
+    health view: how recently the gateway was seen + active distribution
+    pairs sourced from / targeted at it."""
+    gw_id = request.match_info.get("gw_id", "").strip().lower()
+    cur = _gw_load_one(gw_id)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    pairs = _gw_load_distribution()
+    out_targets = sorted({t for s, t in pairs if s == gw_id})
+    in_sources  = sorted({s for s, t in pairs if t == gw_id})
+    n = _t.time()
+    last_seen = cur.get("last_seen_ts") or 0.0
+    age_s = (n - last_seen) if last_seen else None
+    if cur.get("is_local"):
+        # Local gateway is always live (we are it).
+        health = "live"
+    elif age_s is None:
+        health = "unknown"
+    elif age_s < 90:
+        health = "live"
+    elif age_s < 600:
+        health = "stale"
+    else:
+        health = "lost"
+    return web.json_response({
+        "gw_id": gw_id, "health": health, "last_seen_ts": last_seen,
+        "age_secs": age_s, "is_local": cur.get("is_local"),
+        "distribution_targets": out_targets,
+        "distribution_sources": in_sources,
+        "can_distribute": cur.get("can_distribute"),
+    }, headers={"Cache-Control": "no-store"})
+
+
+# ── 1.6.7: dashboard login + users CRUD ─────────────────────────────────
+def _bootstrap_hint_html() -> str:
+    """Return the first-time-setup banner only when no user has ever
+    logged in. Once any account has a non-null `last_login_ts`, the
+    bootstrap message is suppressed so a returning operator doesn't see
+    the "Sign in as admin using the startup-issued key" hint indefinitely."""
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        seen = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE last_login_ts IS NOT NULL"
+        ).fetchone()[0]
+        conn.close()
+    except Exception:
+        seen = 1   # fail-closed: don't show the hint if the DB is wonky
+    if seen and seen > 0:
+        return ""
+    return (
+        '<div class="bootstrap-note" id="bootstrap-note">'
+        '<strong>First-time setup?</strong> Sign in as <code>admin</code> '
+        'using the gateway\'s startup-issued admin key. After login you '
+        'can change the password and add other users from '
+        '<em>Settings → Users</em>.'
+        '</div>')
+
+
+async def login_page_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/login — render the sign-in form. Public
+    sub-path; no auth required to view. The first-time-setup hint is
+    rendered only until the operator's first successful login."""
+    if request.cookies.get(_SESSION_COOKIE) and _session_verify(
+            request.cookies.get(_SESSION_COOKIE)):
+        next_url = request.query.get("next") or "/antibot-appsec-gateway/secured/dashboard"
+        return web.HTTPFound(next_url)
+    body = LOGIN_DASHBOARD_HTML.replace("__BOOTSTRAP_HINT__", _bootstrap_hint_html())
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        })
+
+
+async def login_submit_endpoint(request: web.Request):
+    """POST /antibot-appsec-gateway/login — verify credentials and set the
+    session cookie. Body: form-urlencoded `username`, `password`, `next`."""
+    ip = get_ip(request)
+    if not await _login_rate_limit(ip):
+        return web.json_response({"error": "too many attempts; wait 60s"},
+                                  status=429,
+                                  headers={"Cache-Control": "no-store",
+                                           "Retry-After": "60"})
+    try:
+        raw = await asyncio.wait_for(request.content.read(8 * 1024),
+                                      timeout=BODY_TIMEOUT)
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "timeout"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    from urllib.parse import parse_qs
+    try:
+        params = parse_qs(raw.decode("utf-8", errors="replace"),
+                           keep_blank_values=True)
+    except Exception:
+        return web.json_response({"error": "bad form"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    username = (params.get("username", [""])[0] or "").strip().lower()
+    password = params.get("password", [""])[0] or ""
+    next_url = params.get("next", ["/antibot-appsec-gateway/secured/dashboard"])[0]
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/antibot-appsec-gateway/secured/dashboard"
+    ok, msg = _user_validate_username(username)
+    if not ok or not password:
+        slog("login_failed", level="warn", username=username, ip=ip,
+             reason="bad-input")
+        return web.json_response({"error": "invalid credentials"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    user = _user_load(username)
+    if user is None or user.get("status") != "active":
+        slog("login_failed", level="warn", username=username, ip=ip,
+             reason="no-such-user-or-disabled")
+        return web.json_response({"error": "invalid credentials"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if not _password_verify(password, user.get("password_hash") or ""):
+        slog("login_failed", level="warn", username=username, ip=ip,
+             reason="bad-password")
+        return web.json_response({"error": "invalid credentials"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    # 1.6.7 — mint a fresh per-session cookie (sid embedded). Captures
+    # the source IP and User-Agent for the session ledger so the
+    # operator can spot unfamiliar sessions and revoke them.
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "user_login_recorded",
+                (_t.time(), ip, username),
+            ))
+        except asyncio.QueueFull:
+            pass
+    slog("login_success", level="warn", username=username, ip=ip)
+    _ACTIVE_SESSIONS[username] = _t.time()
+    ua = (request.headers.get("User-Agent") or "")[:512]
+    token = _session_create(username, ip, ua)
+    resp = web.json_response({"ok": True, "redirect": next_url, "username": username},
+                              headers={"Cache-Control": "no-store"})
+    # SameSite=Lax + HttpOnly + Secure-when-TLS — the cookie travels on
+    # top-level navigations from the login form's redirect, never cross-
+    # site, never readable by JavaScript.
+    resp.set_cookie(_SESSION_COOKIE, token,
+                     max_age=_SESSION_TTL, httponly=True,
+                     samesite="Lax", path="/",
+                     secure=bool(int(os.environ.get("TLS_ENABLED", "0"))))
+    return resp
+
+
+async def logout_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/logout — revoke the current session
+    server-side AND clear the cookie. Revoking on the server makes the
+    cookie unusable even if it leaks; the operator's other sessions on
+    the same account stay live."""
+    user = ""
+    sid  = ""
+    cookie = request.cookies.get(_SESSION_COOKIE, "")
+    if cookie:
+        parsed = _session_parse(cookie)
+        if parsed:
+            user, sid, _ = parsed
+    if user:
+        slog("logout", level="warn", username=user, ip=get_ip(request), sid=sid)
+        _ACTIVE_SESSIONS.pop(user, None)
+        if sid:
+            _session_revoke(sid, by_username=user)
+    resp = web.HTTPFound("/antibot-appsec-gateway/login")
+    resp.del_cookie(_SESSION_COOKIE, path="/")
+    return resp
+
+
+async def whoami_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/secured/whoami — return the calling
+    operator's identity. Used by the dashboard's top-right strip."""
+    username = _request_username(request)
+    via = "session" if request.get("_session_user") else "admin-key"
+    user_row = None
+    if username and username not in ("admin-key", "unknown"):
+        u = _user_load(username)
+        if u:
+            user_row = {
+                "username": u["username"],
+                "role":     u["role"],
+                "status":   u["status"],
+                "last_login_ts": u.get("last_login_ts"),
+            }
+    return web.json_response({
+        "username": username, "via": via, "user": user_row,
+        "ip": get_ip(request),
+    }, headers={"Cache-Control": "no-store"})
+
+
+# ── Users CRUD ───────────────────────────────────────────────────────
+async def users_list_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/users — list all dashboard users (no
+    password material). Each row gains `online` and `last_seen_ts` from
+    the in-memory active-session map (bumped on every authenticated
+    request)."""
+    rows = _user_load_all()
+    n = _t.time()
+    for r in rows:
+        ts = _ACTIVE_SESSIONS.get(r["username"], 0.0)
+        r["last_seen_ts"] = ts or None
+        r["online"] = bool(ts and (n - ts) < _ACTIVE_SESSION_TTL_S)
+    return web.json_response(
+        {"users": rows, "roles": list(_USER_ROLES),
+         "statuses": list(_USER_STATUS),
+         "current": _request_username(request),
+         "online_ttl_secs": _ACTIVE_SESSION_TTL_S},
+        headers={"Cache-Control": "no-store"})
+
+
+async def users_create_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/users — body: {username, password, role}."""
+    try:
+        body = await asyncio.wait_for(request.content.read(8 * 1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    username = (data.get("username") or "").strip().lower()
+    password = data.get("password") or ""
+    role     = (data.get("role") or "admin").strip()
+    ok, msg = _user_validate_username(username)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if role not in _USER_ROLES:
+        return web.json_response({"error": f"role must be one of {list(_USER_ROLES)}"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    if len(password) < 8:
+        return web.json_response({"error": "password must be at least 8 chars"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    if _user_load(username) is not None:
+        return web.json_response({"error": "username already exists"}, status=409,
+                                  headers={"Cache-Control": "no-store"})
+    n = _t.time()
+    pw_hash = _password_hash(password)
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "user_create",
+                (username, pw_hash, role, "active", n, n),
+            ))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("user_created", username, _request_username(request), role=role)
+    return web.json_response(
+        {"username": username, "role": role, "status": "active",
+         "created_ts": n, "updated_ts": n},
+        status=201, headers={"Cache-Control": "no-store"})
+
+
+async def users_get_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/users/{username}"""
+    username = request.match_info.get("username", "").strip().lower()
+    ok, msg = _user_validate_username(username)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    u = _user_load(username)
+    if not u:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    out = {k: u[k] for k in ("username", "role", "status", "created_ts",
+                              "updated_ts", "last_login_ts", "last_login_ip")}
+    return web.json_response(out, headers={"Cache-Control": "no-store"})
+
+
+async def users_update_endpoint(request: web.Request):
+    """PATCH <NS>/secured/admin/users/{username} — body may include
+    `password`, `status`, `role`."""
+    username = request.match_info.get("username", "").strip().lower()
+    ok, msg = _user_validate_username(username)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    cur = _user_load(username)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        body = await asyncio.wait_for(request.content.read(8 * 1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    fields: dict = {}
+    audit_fields: dict = {}
+    if "password" in data:
+        pw = data.get("password") or ""
+        if len(pw) < 8:
+            return web.json_response({"error": "password must be at least 8 chars"},
+                                      status=400, headers={"Cache-Control": "no-store"})
+        fields["password_hash"] = _password_hash(pw)
+        audit_fields["password_changed"] = True
+    if "role" in data:
+        if data["role"] not in _USER_ROLES:
+            return web.json_response({"error": "invalid role"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        fields["role"] = data["role"]; audit_fields["role"] = data["role"]
+    if "status" in data:
+        if data["status"] not in _USER_STATUS:
+            return web.json_response({"error": "invalid status"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        # Refuse to disable the LAST active admin — would lock everyone out.
+        if data["status"] != "active":
+            actives = [u for u in _user_load_all() if u["status"] == "active"]
+            if len(actives) <= 1 and any(u["username"] == username for u in actives):
+                return web.json_response(
+                    {"error": "cannot disable the last active admin"},
+                    status=400, headers={"Cache-Control": "no-store"})
+        fields["status"] = data["status"]; audit_fields["status"] = data["status"]
+    if not fields:
+        return web.json_response({"error": "no updates supplied"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    fields["updated_ts"] = _t.time()
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("user_update", (username, fields)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("user_updated", username, _request_username(request), **audit_fields)
+    return web.json_response({"username": username, "updates": list(audit_fields)},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def user_sessions_list_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/users/{username}/sessions — list every
+    session ever recorded for `username`. Active sessions float to the
+    top; revoked / expired follow. Includes the requester's own sid so
+    the FE can flag the "this is you" row."""
+    username = request.match_info.get("username", "").strip().lower()
+    ok, msg = _user_validate_username(username)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if _user_load(username) is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT sid, username, ip, user_agent, created_ts, last_seen_ts, "
+            "expires_ts, status, revoked_ts, revoked_by "
+            "FROM user_sessions WHERE username = ? "
+            "ORDER BY (status='active') DESC, created_ts DESC LIMIT 200",
+            (username,)).fetchall()
+        conn.close()
+    except Exception as e:
+        slog("user_sessions_query_failed", level="error", err=str(e)[:200])
+        return web.json_response({"error": "session query failed"}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+    n = _t.time()
+    out = []
+    for r in rows:
+        d = dict(r)
+        # Mark expired rows as such even if still recorded as active.
+        if d["status"] == "active" and d.get("expires_ts", 0) < n:
+            d["status"] = "expired"
+        d["online"] = (
+            d["status"] == "active"
+            and d.get("last_seen_ts", 0) > n - _ACTIVE_SESSION_TTL_S
+        )
+        out.append(d)
+    return web.json_response(
+        {"username": username,
+         "current_sid": request.get("_session_sid") or "",
+         "sessions": out},
+        headers={"Cache-Control": "no-store"})
+
+
+async def user_session_revoke_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/users/{username}/sessions/{sid}/revoke"""
+    username = request.match_info.get("username", "").strip().lower()
+    sid      = request.match_info.get("sid", "").strip()
+    ok, msg = _user_validate_username(username)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if not _SID_RE.match(sid):
+        return web.json_response({"error": "invalid sid"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    cached = _SESSION_CACHE.get(sid)
+    if cached is None or cached.get("username") != username:
+        return web.json_response({"error": "session not found or already revoked"},
+                                  status=404, headers={"Cache-Control": "no-store"})
+    actor = _request_username(request)
+    self_revoke = (request.get("_session_sid") == sid)
+    _session_revoke(sid, by_username=actor)
+    _gw_audit("user_session_revoked", username, actor,
+              sid=sid, self_revoke=self_revoke)
+    return web.json_response(
+        {"username": username, "sid": sid, "revoked": True,
+         "self_revoke": self_revoke},
+        headers={"Cache-Control": "no-store"})
+
+
+async def users_delete_endpoint(request: web.Request):
+    """DELETE <NS>/secured/admin/users/{username}"""
+    username = request.match_info.get("username", "").strip().lower()
+    ok, msg = _user_validate_username(username)
+    if not ok:
+        return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    cur = _user_load(username)
+    if cur is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    # Refuse to delete the last active admin.
+    actives = [u for u in _user_load_all() if u["status"] == "active"]
+    if len(actives) <= 1 and any(u["username"] == username for u in actives):
+        return web.json_response(
+            {"error": "cannot delete the last active admin"},
+            status=400, headers={"Cache-Control": "no-store"})
+    # Refuse self-delete (operator must hand off first).
+    if _request_username(request) == username:
+        return web.json_response(
+            {"error": "cannot delete your own account while signed in as it"},
+            status=400, headers={"Cache-Control": "no-store"})
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("user_delete", (username,)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _gw_audit("user_deleted", username, _request_username(request))
+    return web.json_response({"username": username, "deleted": True},
+                              headers={"Cache-Control": "no-store"})
+
+
+# ── 1.6.7: mesh-sync of integration secrets / variables ────────────────
+# Operators flip a per-key toggle next to each integration credential or
+# config knob; when on, this gateway publishes the value to Redis under
+# `appsecgw:mesh:offers:<gw_id>` (TTL 60s) every 30s. Peer gateways scrape
+# those hashes on the same cadence; an offer for a key whose local value
+# is empty AND not already pending lands in `gw_sync_pending` with
+# status=pending. The destination operator confirms or rejects from the
+# Settings dashboard; only then does the value reach the live integration.
+#
+# Allowlist = the only keys eligible for mesh sync. Anything outside is
+# rejected at the toggle endpoint (defence-in-depth — no mesh-sync of,
+# say, ADMIN_KEY or session secrets, even if a malicious peer crafts an
+# offer).
+_MESH_SYNC_ELIGIBLE_KEYS = (
+    # Integration secrets (live in `secrets_kv` + module globals).
+    "TURNSTILE_SITEKEY", "TURNSTILE_SECRET",
+    "ABUSEIPDB_KEY",
+    "CROWDSEC_LAPI_URL", "CROWDSEC_LAPI_KEY",
+    "MAXMIND_LICENSE_KEY",
+    # Integration on/off knobs (config_kv) — sharing the toggle state
+    # with peers lets a fleet-wide "all integrations active" deploy be
+    # achieved by enabling once and confirming on each peer.
+    "TURNSTILE_ENABLED", "ABUSEIPDB_ENABLED",
+    "CROWDSEC_ENABLED", "MAXMIND_ENABLED",
+    "ANUBIS_ENABLED",   "BOTD_ENABLED",
+)
+_MESH_REDIS_NS = "mesh:offers"          # full key: appsecgw:mesh:offers:<gw_id>
+_MESH_OFFER_TTL_S = 60
+_MESH_LOOP_INTERVAL_S = 30
+_MESH_SYNC_ENABLED_KEY = "_MESH_SYNC_ENABLED_KEYS"   # config_kv slot
+_mesh_sync_task = None
+
+def _mesh_sync_enabled_set() -> set[str]:
+    """Read the live enabled-keys set from config_kv. JSON list → set."""
+    g = globals()
+    raw = g.get(_MESH_SYNC_ENABLED_KEY) or []
+    if isinstance(raw, set):
+        return set(raw)
+    if isinstance(raw, list):
+        return {str(k) for k in raw if isinstance(k, str)}
+    return set()
+
+def _mesh_sync_set_enabled(key: str, enabled: bool) -> set[str]:
+    """Mutate the in-memory set + persist to config_kv (mirrored to
+    Postgres via the existing dual-write path). Returns the new set."""
+    cur = _mesh_sync_enabled_set()
+    if enabled:
+        cur.add(key)
+    else:
+        cur.discard(key)
+    g = globals()
+    g[_MESH_SYNC_ENABLED_KEY] = sorted(cur)
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "set_config",
+                (_MESH_SYNC_ENABLED_KEY, json.dumps(sorted(cur)), _t.time()),
+            ))
+        except asyncio.QueueFull:
+            pass
+    return cur
+
+def _mesh_sync_get_value(key: str) -> str:
+    """Return the live value of a syncable key. Pulls from module globals
+    (works for both secret and config knobs)."""
+    g = globals()
+    v = g.get(key)
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    return str(v)
+
+def _mesh_sync_apply_value(key: str, value: str) -> None:
+    """Apply an inbound value to the live store. Secrets land in
+    `secrets_kv` (which the secrets loader re-derives from); booleans
+    flip the matching config knob. Audit happens in the calling
+    confirm endpoint."""
+    g = globals()
+    if key in _SECRET_KEYS:
+        global_name, _env = _SECRET_KEYS[key]
+        g[global_name] = value
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("set_secret", (key, value, _t.time())))
+            except asyncio.QueueFull:
+                pass
+        # Re-derive `_TURNSTILE_CONFIGURED` etc. by calling the loader.
+        try:
+            db_load_secrets()
+        except Exception:
+            pass
+        return
+    # Config knob — coerce to bool/int via the existing parser if registered.
+    spec = _HOT_RELOAD_KNOBS.get(key)
+    if spec is not None:
+        parser, validator = spec
+        try:
+            v = parser(value)
+            if validator is None or validator(v):
+                g[key] = v
+                if db_queue is not None:
+                    try:
+                        db_queue.put_nowait((
+                            "set_config", (key, json.dumps(v), _t.time())))
+                    except asyncio.QueueFull:
+                        pass
+        except (ValueError, TypeError):
+            pass
+
+def _mesh_load_pending(status: str = "pending") -> list[dict]:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, received_ts, source_gw_id, key_name, value, "
+            "status, confirmed_ts FROM gw_sync_pending "
+            "WHERE status = ? ORDER BY received_ts DESC",
+            (status,)).fetchall()
+        conn.close()
+    except Exception:
+        return []
+    # Mask the value — operator clicks Apply to actually use it; we only
+    # show its length + a 4-char prefix for identification.
+    out = []
+    for r in rows:
+        d = dict(r)
+        v = d.get("value") or ""
+        d["value_preview"] = (v[:4] + "…") if v else ""
+        d["value_length"]  = len(v)
+        del d["value"]
+        out.append(d)
+    return out
+
+
+# ── Mesh-sync endpoints ─────────────────────────────────────────────
+async def mesh_sync_state_endpoint(request: web.Request):
+    """GET <NS>/secured/admin/mesh-sync — current state."""
+    enabled = sorted(_mesh_sync_enabled_set())
+    pending = _mesh_load_pending("pending")
+    return web.json_response({
+        "eligible_keys": list(_MESH_SYNC_ELIGIBLE_KEYS),
+        "enabled_keys":  enabled,
+        "pending":       pending,
+        "redis_available": bool(REDIS_URL and _redis is not None),
+        "local_gw_id":   _gw_local_id(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def mesh_sync_toggle_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/mesh-sync/{key}/toggle — body {enabled}."""
+    key = request.match_info.get("key", "").strip()
+    if key not in _MESH_SYNC_ELIGIBLE_KEYS:
+        return web.json_response({"error": "key not eligible for mesh sync"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    try:
+        body = await asyncio.wait_for(request.content.read(1024),
+                                       timeout=BODY_TIMEOUT)
+        data = json.loads(body.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    enabled = bool(data.get("enabled"))
+    cur = _mesh_sync_set_enabled(key, enabled)
+    _gw_audit("mesh_sync_toggled", key, _request_username(request),
+              enabled=enabled)
+    return web.json_response(
+        {"key": key, "enabled": enabled, "all_enabled": sorted(cur)},
+        headers={"Cache-Control": "no-store"})
+
+
+async def mesh_sync_confirm_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/mesh-sync/pending/{id}/confirm — apply
+    a pending offer's value to the live integration."""
+    try:
+        pid = int(request.match_info.get("id", "0"))
+    except ValueError:
+        return web.json_response({"error": "id must be an integer"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    if pid <= 0:
+        return web.json_response({"error": "bad id"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    # Fetch the row so we can apply the actual value (not echoed in the
+    # listing endpoint to avoid casual leaks).
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT id, source_gw_id, key_name, value, status "
+            "FROM gw_sync_pending WHERE id = ?", (pid,)).fetchone()
+        conn.close()
+    except Exception:
+        row = None
+    if row is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    if row["status"] != "pending":
+        return web.json_response({"error": f"already {row['status']}"},
+                                  status=409, headers={"Cache-Control": "no-store"})
+    if row["key_name"] not in _MESH_SYNC_ELIGIBLE_KEYS:
+        return web.json_response({"error": "key not eligible (allowlist drift)"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    _mesh_sync_apply_value(row["key_name"], row["value"])
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "mesh_sync_status",
+                (pid, "confirmed", _t.time()),
+            ))
+        except asyncio.QueueFull:
+            pass
+    _gw_audit("mesh_sync_confirmed", row["key_name"],
+              _request_username(request),
+              source_gw=row["source_gw_id"], pending_id=pid)
+    return web.json_response({"id": pid, "status": "confirmed",
+                               "key": row["key_name"]},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def mesh_sync_reject_endpoint(request: web.Request):
+    """POST <NS>/secured/admin/mesh-sync/pending/{id}/reject"""
+    try:
+        pid = int(request.match_info.get("id", "0"))
+    except ValueError:
+        return web.json_response({"error": "id must be an integer"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    if pid <= 0:
+        return web.json_response({"error": "bad id"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT key_name, source_gw_id, status FROM gw_sync_pending "
+            "WHERE id = ?", (pid,)).fetchone()
+        conn.close()
+    except Exception:
+        row = None
+    if row is None:
+        return web.json_response({"error": "not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    if row["status"] != "pending":
+        return web.json_response({"error": f"already {row['status']}"},
+                                  status=409, headers={"Cache-Control": "no-store"})
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait((
+                "mesh_sync_status",
+                (pid, "rejected", _t.time()),
+            ))
+        except asyncio.QueueFull:
+            pass
+    _gw_audit("mesh_sync_rejected", row["key_name"],
+              _request_username(request),
+              source_gw=row["source_gw_id"], pending_id=pid)
+    return web.json_response({"id": pid, "status": "rejected",
+                               "key": row["key_name"]},
+                              headers={"Cache-Control": "no-store"})
+
+
+# ── Background loop: publish + scrape via Redis ─────────────────────
+async def _mesh_sync_loop():
+    """Every 30s when REDIS_URL is set:
+      1. Publish each enabled key's current value to a Redis hash keyed
+         by this gateway's id (TTL 60s — re-published each cycle).
+      2. Scan all peer hashes in `appsecgw:mesh:offers:*`, skip own.
+      3. For each peer offer: skip if local value is set OR same offer is
+         already pending; otherwise INSERT into gw_sync_pending.
+    All Redis I/O is best-effort — failures are logged at warn level
+    once and the loop continues."""
+    while True:
+        try:
+            if _redis is not None:
+                src = _gw_local_id() or "gw-local"
+                # 1. publish
+                offers = {k: _mesh_sync_get_value(k)
+                          for k in _mesh_sync_enabled_set()
+                          if _mesh_sync_get_value(k)}
+                key = f"{REDIS_NS}:{_MESH_REDIS_NS}:{src}"
+                if offers:
+                    try:
+                        await asyncio.wait_for(_redis.delete(key),
+                                                timeout=REDIS_TIMEOUT)
+                        await asyncio.wait_for(
+                            _redis.hset(key, mapping=offers),
+                            timeout=REDIS_TIMEOUT)
+                        await asyncio.wait_for(
+                            _redis.expire(key, _MESH_OFFER_TTL_S),
+                            timeout=REDIS_TIMEOUT)
+                    except Exception as e:
+                        slog("mesh_sync_publish_failed", level="warn",
+                             err=str(e)[:120])
+                # 2. scrape peers
+                try:
+                    pattern = f"{REDIS_NS}:{_MESH_REDIS_NS}:*"
+                    peer_keys = []
+                    async for k in _redis.scan_iter(match=pattern, count=100):
+                        peer_keys.append(k)
+                except Exception as e:
+                    slog("mesh_sync_scan_failed", level="warn",
+                         err=str(e)[:120])
+                    peer_keys = []
+                for pk in peer_keys:
+                    peer_gw = pk.rsplit(":", 1)[-1]
+                    if peer_gw == src:
+                        continue
+                    try:
+                        offered = await asyncio.wait_for(_redis.hgetall(pk),
+                                                          timeout=REDIS_TIMEOUT)
+                    except Exception:
+                        continue
+                    for kname, kval in (offered or {}).items():
+                        if kname not in _MESH_SYNC_ELIGIBLE_KEYS:
+                            continue
+                        if not kval:
+                            continue
+                        # If we already have a non-empty local value, skip.
+                        if _mesh_sync_get_value(kname):
+                            continue
+                        # Skip if a pending row already exists from this
+                        # peer with the same value (avoid noisy
+                        # re-broadcasts).
+                        try:
+                            conn = sqlite3.connect(DB_PATH)
+                            existing = conn.execute(
+                                "SELECT value, status FROM gw_sync_pending "
+                                "WHERE source_gw_id = ? AND key_name = ?",
+                                (peer_gw, kname)).fetchone()
+                            conn.close()
+                        except Exception:
+                            existing = None
+                        if existing and existing[1] == "pending" and existing[0] == kval:
+                            continue
+                        if existing and existing[1] in ("confirmed", "rejected") and existing[0] == kval:
+                            continue
+                        if db_queue is not None:
+                            try:
+                                db_queue.put_nowait((
+                                    "mesh_sync_pending_upsert",
+                                    (_t.time(), peer_gw, kname, kval),
+                                ))
+                            except asyncio.QueueFull:
+                                pass
+                        slog("mesh_sync_received", level="warn",
+                             source_gw=peer_gw, key=kname,
+                             value_length=len(kval))
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            slog("mesh_sync_loop_error", level="error", err=str(e)[:200])
+        try:
+            await asyncio.sleep(_MESH_LOOP_INTERVAL_S)
+        except asyncio.CancelledError:
+            return
+
+
 def make_app() -> web.Application:
     app = web.Application(middlewares=[cost_meter, session_cookie_finalizer, protect])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
-    app.router.add_get("/__pow", pow_endpoint)
-    app.router.add_get("/__solver", solver_endpoint)
-    app.router.add_get("/__status", status_endpoint)
-    app.router.add_get("/__dashboard", dashboard_endpoint)
-    app.router.add_get("/__metrics", metrics_endpoint)
-    app.router.add_get("/__unban", unban_endpoint)
-    app.router.add_get("/__ban",   ban_endpoint)
-    app.router.add_get("/__scoring",      scoring_endpoint)
-    app.router.add_get("/__thresholds",   thresholds_endpoint)
-    app.router.add_get("/__cost-timeline", cost_timeline_endpoint)
-    app.router.add_get("/__agents-bucket", agents_bucket_detail_endpoint)
-    app.router.add_get("/__path-hits",     path_hits_endpoint)
-    app.router.add_get("/__geo",         geo_dashboard_endpoint)
-    app.router.add_get("/__geo-data",    geo_data_endpoint)
-    app.router.add_get("/__geo-drill",   geo_drill_endpoint)
-    app.router.add_get("/__logs",        logs_dashboard_endpoint)
-    app.router.add_get("/__logs-data",   logs_data_endpoint)
-    app.router.add_get("/__health-score", health_score_endpoint)
-    app.router.add_post("/__maxmind-fetch", maxmind_fetch_endpoint)
-    app.router.add_get("/__external",     external_endpoint)
-    app.router.add_get("/__admin-ips",    admin_ips_endpoint)
-    app.router.add_post("/__admin-ips",   admin_ips_endpoint)
-    app.router.add_patch("/__admin-ips",  admin_ips_endpoint)
-    app.router.add_delete("/__admin-ips", admin_ips_endpoint)
-    app.router.add_post("/__rotate-keys", rotate_keys_endpoint)
-    app.router.add_get   ("/__secrets",  secrets_endpoint)
-    app.router.add_post  ("/__secrets",  secrets_endpoint)
-    app.router.add_delete("/__secrets",  secrets_endpoint)
-    app.router.add_get("/__config",  config_endpoint)
-    app.router.add_post("/__config", config_endpoint)
-    app.router.add_get("/__agents", agents_dashboard_endpoint)
-    app.router.add_get("/__agents-data", agents_data_endpoint)
-    app.router.add_get("/__agents-timeline", agents_timeline_endpoint)
-    app.router.add_get("/__service",      service_dashboard_endpoint)
-    app.router.add_get("/__service-data", service_metrics_data_endpoint)
-    app.router.add_get("/__controls",     controls_dashboard_endpoint)
-    app.router.add_get("/__xff", debug_xff)
+
+    # ── 1.6.6: every internal endpoint lives under a single namespace.
+    # Public sub-paths (liveness probe + JS-challenge plumbing + BotD
+    # bundle/callback + dashboard assets) live directly under ADMIN_NS;
+    # everything that requires the admin key is mounted under
+    # ADMIN_NS_SECURED. The protect middleware enforces auth based on
+    # path prefix — see _admin_path_is_public(). The legacy `/__*`
+    # routes from earlier releases were removed in this cut once the
+    # new structure was confirmed working in production.
+    PUBLIC = ADMIN_NS                # /antibot-appsec-gateway
+    SEC    = ADMIN_NS_SECURED        # /antibot-appsec-gateway/secured
+    ASSETS = str(_DASHBOARDS_DIR / "assets")
+
+    # (path_suffix, method, handler, secured?)
+    _ROUTES = [
+        # ── public (no admin-key required) ──────────────────────
+        ("pow",          "GET",  pow_endpoint,                  False),
+        ("solver",       "GET",  solver_endpoint,               False),
+        ("botd-report",  "POST", botd_report_endpoint,          False),
+        # ── secured (admin-IP + admin-key gated) ────────────────
+        ("status",            "GET",    status_endpoint,                       True),
+        ("dashboard",         "GET",    dashboard_endpoint,                    True),
+        ("metrics",           "GET",    metrics_endpoint,                      True),
+        ("unban",             "GET",    unban_endpoint,                        True),
+        ("ban",               "GET",    ban_endpoint,                          True),
+        ("scoring",           "GET",    scoring_endpoint,                      True),
+        ("thresholds",        "GET",    thresholds_endpoint,                   True),
+        ("cost-timeline",     "GET",    cost_timeline_endpoint,                True),
+        ("agents-bucket",     "GET",    agents_bucket_detail_endpoint,         True),
+        ("path-hits",         "GET",    path_hits_endpoint,                    True),
+        ("geo",               "GET",    geo_dashboard_endpoint,                True),
+        ("geo-data",          "GET",    geo_data_endpoint,                     True),
+        ("geo-drill",         "GET",    geo_drill_endpoint,                    True),
+        ("logs",              "GET",    logs_dashboard_endpoint,               True),
+        ("logs-data",         "GET",    logs_data_endpoint,                    True),
+        ("logs-export",       "GET",    logs_export_endpoint,                  True),
+        ("health-score",      "GET",    health_score_endpoint,                 True),
+        ("detector-stats",    "GET",    detector_stats_endpoint,               True),
+        ("lists-snapshot",    "GET",    lists_snapshot_endpoint,               True),
+        ("db-test",           "GET",    db_test_endpoint,                      True),
+        ("db-switch",         "POST",   db_switch_endpoint,                    True),
+        ("maxmind-fetch",     "POST",   maxmind_fetch_endpoint,                True),
+        ("external",          "GET",    external_endpoint,                     True),
+        ("admin-ips",         "GET",    admin_ips_endpoint,                    True),
+        ("admin-ips",         "POST",   admin_ips_endpoint,                    True),
+        ("admin-ips",         "PATCH",  admin_ips_endpoint,                    True),
+        ("admin-ips",         "DELETE", admin_ips_endpoint,                    True),
+        ("rotate-keys",       "POST",   rotate_keys_endpoint,                  True),
+        ("secrets",           "GET",    secrets_endpoint,                      True),
+        ("secrets",           "POST",   secrets_endpoint,                      True),
+        ("secrets",           "DELETE", secrets_endpoint,                      True),
+        ("config",            "GET",    config_endpoint,                       True),
+        ("config",            "POST",   config_endpoint,                       True),
+        ("agents",            "GET",    agents_dashboard_endpoint,             True),
+        ("agents-data",       "GET",    agents_data_endpoint,                  True),
+        ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),
+        ("service",           "GET",    service_dashboard_endpoint,            True),
+        ("service-data",      "GET",    service_metrics_data_endpoint,         True),
+        ("controls",          "GET",    controls_dashboard_endpoint,           True),
+        ("settings",          "GET",    settings_dashboard_endpoint,           True),
+        ("settings-export",   "GET",    settings_export_endpoint,              True),
+        ("settings-import",   "POST",   settings_import_endpoint,              True),
+        ("xff",               "GET",    debug_xff,                             True),
+    ]
+
+    _METHOD_MAP = {
+        "GET":    app.router.add_get,
+        "POST":   app.router.add_post,
+        "PATCH":  app.router.add_patch,
+        "DELETE": app.router.add_delete,
+    }
+    for suffix, method, handler, secured in _ROUTES:
+        canonical_root = SEC if secured else PUBLIC
+        canonical = f"{canonical_root}/{suffix}"
+        _METHOD_MAP[method](canonical, handler)
+
+    # 1.6.7 — Gateway Registry routes (parameterised paths can't be
+    # expressed in the flat _ROUTES table above, so they're wired
+    # directly here. All admin-IP + admin-key gated by the protect
+    # middleware via the SEC prefix.)
+    GW = SEC + "/admin/gw-registry"
+    app.router.add_get   (GW,                                       gw_registry_list_endpoint)
+    app.router.add_post  (GW,                                       gw_registry_create_endpoint)
+    app.router.add_get   (GW + "/distribution/matrix",              gw_registry_distribution_matrix_endpoint)
+    app.router.add_post  (GW + "/distribution/rules",               gw_registry_distribution_rules_endpoint)
+    app.router.add_get   (GW + "/audit-log",                        gw_registry_audit_log_endpoint)
+    app.router.add_get   (GW + "/{gw_id}",                          gw_registry_get_endpoint)
+    app.router.add_patch (GW + "/{gw_id}",                          gw_registry_update_endpoint)
+    app.router.add_delete(GW + "/{gw_id}",                          gw_registry_delete_endpoint)
+    app.router.add_patch (GW + "/{gw_id}/can-distribute",           gw_registry_can_distribute_endpoint)
+    app.router.add_post  (GW + "/{gw_id}/rotate-key",               gw_registry_rotate_key_endpoint)
+    app.router.add_get   (GW + "/{gw_id}/sync-status",              gw_registry_sync_status_endpoint)
+
+    # 1.6.7 — Login flow + Users CRUD ────────────────────────────────
+    app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
+    app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
+    app.router.add_get  (PUBLIC + "/logout", logout_endpoint)
+    app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
+    USERS = SEC + "/admin/users"
+    app.router.add_get   (USERS,                  users_list_endpoint)
+    app.router.add_post  (USERS,                  users_create_endpoint)
+    app.router.add_get   (USERS + "/{username}",  users_get_endpoint)
+    app.router.add_patch (USERS + "/{username}",  users_update_endpoint)
+    app.router.add_delete(USERS + "/{username}",  users_delete_endpoint)
+    app.router.add_get   (USERS + "/{username}/sessions",            user_sessions_list_endpoint)
+    app.router.add_post  (USERS + "/{username}/sessions/{sid}/revoke", user_session_revoke_endpoint)
+
+    # 1.6.7 — Mesh-sync of integration secrets / variables ───────────
+    MESH = SEC + "/admin/mesh-sync"
+    app.router.add_get  (MESH,                              mesh_sync_state_endpoint)
+    app.router.add_post (MESH + "/{key}/toggle",            mesh_sync_toggle_endpoint)
+    app.router.add_post (MESH + "/pending/{id}/confirm",    mesh_sync_confirm_endpoint)
+    app.router.add_post (MESH + "/pending/{id}/reject",     mesh_sync_reject_endpoint)
+
+    # Liveness probe — public, handled inline by protect(). We register
+    # a stub route here only so URL reversal / router introspection
+    # works; the middleware short-circuits before reaching the handler.
+    async def _live_stub(_r):
+        return web.Response(text="ok", content_type="text/plain")
+    app.router.add_get(PUBLIC + "/live", _live_stub)
+
+    # Static dashboard assets (botd.bundle.js, escalate.svg, …) —
+    # browser-callable (BotD bundle is fetched by regular users).
+    app.router.add_static(PUBLIC + "/assets/", path=ASSETS, show_index=False)
+
+    # Catch-all upstream proxy MUST be last.
     app.router.add_route("*", "/{path:.*}", proxy)
     return app
 
@@ -8571,9 +12305,14 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.6.4    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.6.7    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
-    print(f"  ║ Internal: /__pow  /__solver  /__status  /__dashboard{' '*5}║")
+    _ns_line = f"Admin namespace: {ADMIN_NS}"
+    print(f"  ║ {_ns_line:<57}║")
+    _pub_line = "Public sub-paths: /live /pow /solver /challenge /assets/"
+    print(f"  ║ {_pub_line:<57}║")
+    _sec_line = f"Secured: {ADMIN_NS_SECURED}/{{dashboard, ...}}"
+    print(f"  ║ {_sec_line:<57}║")
     print(f"  ║ DB:    {DB_PATH:<50}║")
     print(f"  ║ Admin key: {key_line:<46}║")
     if ADMIN_ALLOWED_NETS:

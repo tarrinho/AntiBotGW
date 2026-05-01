@@ -17,7 +17,7 @@ os.environ.setdefault("ADMIN_KEY",         "TEST-KEY-DO-NOT-USE")
 os.environ.setdefault("DB_PATH",           os.path.join(_TMP, "antibot.db"))
 os.environ.setdefault("ALLOWED_HOSTS",     "")
 os.environ.setdefault("ADMIN_ALLOWED_IPS", "")
-os.environ.setdefault("DEBUG",             "1")  # enables /__xff in tests
+os.environ.setdefault("DEBUG",             "1")  # enables /antibot-appsec-gateway/secured/xff in tests
 
 # Make `import proxy` find the file regardless of where pytest is run from.
 _HERE = Path(__file__).resolve().parent
@@ -43,14 +43,14 @@ def proxy_module():
 
 @pytest.fixture
 def url_safe_key():
-    """A predictable URL-safe admin key for /__metrics-style tests."""
+    """A predictable URL-safe admin key for /antibot-appsec-gateway/secured/metrics-style tests."""
     return "TEST-KEY-DO-NOT-USE"
 
 
 @pytest.fixture(autouse=True)
 def _wipe_config_kv_between_tests():
     """1.5.5 — config_kv now persists hot-reload knob mutations across
-    container restart.  In a test session, that means a /__config POST in
+    container restart.  In a test session, that means a /antibot-appsec-gateway/secured/config POST in
     one test bleeds into the next.  This autouse fixture clears the table
     after every test so the next one starts clean."""
     yield

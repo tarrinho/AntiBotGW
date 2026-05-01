@@ -1,0 +1,1774 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · Settings</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13.5px/1.45 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);padding:14px}
+a{color:var(--blue);text-decoration:none}
+h1.page-title{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;margin:0}
+h1.page-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
+.topnav a{color:var(--dim);padding:4px 8px;border-radius:4px;transition:color .1s}
+.topnav a:hover{color:var(--fg);background:#1f2730}
+.topnav a.active{color:var(--fg);background:#1f2730}
+main{max-width:1100px;margin:0 auto}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:780px){.row{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px 18px 16px 18px;margin-bottom:14px}
+.card h2{margin:0 0 6px 0;font-size:14px;font-weight:600;color:var(--fg)}
+.card .desc{color:var(--dim);font-size:11.5px;margin-bottom:14px;line-height:1.55}
+.card .desc code{background:#0d1117;color:var(--fg);padding:1px 5px;border-radius:3px;
+                 font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.row-controls{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.row-controls label{font-size:11.5px;color:var(--dim);display:flex;align-items:center;gap:6px;cursor:pointer}
+.row-controls input[type=checkbox]{accent-color:var(--blue);transform:scale(1.1)}
+button{background:var(--blue);color:#fff;border:none;padding:9px 18px;
+       border-radius:5px;font-size:12.5px;font-weight:600;cursor:pointer;
+       font-family:inherit}
+button:hover{filter:brightness(1.1)}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.secondary{background:#30363d;color:var(--fg)}
+button.danger{background:var(--red)}
+.drop{border:2px dashed var(--line);border-radius:8px;padding:24px;text-align:center;
+      color:var(--dim);font-size:12px;cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--blue);background:rgba(88,166,255,.05);color:var(--fg)}
+.drop strong{color:var(--fg);display:block;margin-bottom:4px}
+.drop .hint{font-size:10.5px;color:var(--dim);margin-top:6px}
+.fname{font-family:ui-monospace,Menlo,monospace;color:var(--blue);font-size:11.5px;margin-top:8px}
+.banner{background:#1a2733;border-left:3px solid var(--blue);padding:10px 14px;
+        border-radius:5px;color:var(--dim);font-size:12px;margin-bottom:14px}
+.banner code{background:#0d1117;color:var(--fg);padding:1px 5px;border-radius:3px}
+.result{margin-top:14px;padding:10px 12px;border-radius:6px;font-size:11.5px;
+        font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap;
+        max-height:240px;overflow:auto;border:1px solid var(--line);
+        background:#0a0e13;display:none}
+.result.show{display:block}
+.result.ok{border-color:var(--green)}
+.result.err{border-color:var(--red);color:#ffb4b4}
+.toast{position:fixed;bottom:20px;right:20px;background:var(--card);
+       border:1px solid var(--line);border-radius:6px;padding:10px 14px;
+       font-size:12.5px;box-shadow:0 4px 16px rgba(0,0,0,.4);
+       opacity:0;transition:opacity .15s;pointer-events:none;z-index:1000}
+.toast.show{opacity:1;pointer-events:auto}
+.toast.ok{border-color:var(--green)}
+.toast.err{border-color:var(--red)}
+.kv{display:flex;gap:14px;font-size:11px;color:var(--dim);margin-top:8px}
+.kv .pill{background:#0d1117;border:1px solid var(--line);padding:3px 8px;border-radius:4px;
+          font-family:ui-monospace,Menlo,monospace}
+.kv .pill .n{color:var(--fg);font-weight:600}
+.foot{margin-top:14px;text-align:right;font-size:10.5px;color:var(--dim)}
+
+/* ── 1.6.7 — Gateway Registry section ──────────────────────────── */
+.gw-tab{padding:7px 14px;font-size:12px;color:var(--dim);cursor:pointer;
+        border-radius:5px 5px 0 0;border:1px solid transparent;border-bottom:none;
+        user-select:none;font-weight:500;line-height:1.2}
+.gw-tab:hover{color:var(--fg);background:#1f2730}
+.gw-tab.gw-tab-active{color:var(--fg);background:var(--card);
+        border-color:var(--line);border-bottom-color:var(--card);
+        position:relative;top:1px;font-weight:600}
+.gw-tbl{width:100%;border-collapse:collapse;font-size:12px}
+.gw-tbl th{background:#0d1117;color:var(--dim);text-align:left;
+        padding:7px 9px;font-weight:600;text-transform:uppercase;
+        letter-spacing:.5px;font-size:10px;border-bottom:1px solid var(--line);
+        cursor:pointer;user-select:none;white-space:nowrap}
+.gw-tbl th[data-sort]:hover{color:var(--fg)}
+.gw-tbl td{padding:6px 9px;border-bottom:1px solid #1f2730;
+        font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:middle}
+.gw-tbl tr:hover td{background:#1f2730}
+.gw-tbl tr.gw-row-local td:first-child::before{content:'★ ';color:var(--yellow);
+        font-family:-apple-system}
+.gw-tbl tr.gw-row-local{background:rgba(217,154,32,.05)}
+.gw-tbl .pill-status{padding:2px 8px;border-radius:10px;font-size:10px;
+        font-weight:700;text-transform:uppercase;letter-spacing:.4px;font-family:-apple-system}
+.gw-tbl .pill-active{background:rgba(63,185,80,.15);color:var(--green)}
+.gw-tbl .pill-inactive{background:rgba(217,154,32,.15);color:var(--yellow)}
+.gw-tbl .pill-decommissioned{background:rgba(248,81,73,.15);color:var(--red)}
+.gw-tbl .act-btn{background:#0d1117;border:1px solid var(--line);color:var(--fg);
+        padding:3px 8px;border-radius:4px;font-size:10.5px;cursor:pointer;
+        font-family:-apple-system;margin-right:4px}
+.gw-tbl .act-btn:hover{border-color:var(--blue);color:var(--blue)}
+.gw-tbl .act-btn.danger:hover{border-color:var(--red);color:var(--red)}
+.gw-empty{padding:34px 14px;text-align:center;color:var(--dim);font-size:12px}
+.gw-empty strong{color:var(--fg);display:block;margin-bottom:6px;font-size:13px}
+.gw-fp{font-family:ui-monospace,Menlo,monospace;background:#0d1117;
+        padding:1px 6px;border-radius:3px;font-size:10.5px;color:var(--blue)}
+
+.gw-matrix-tbl{width:auto;border-collapse:collapse;font-size:11.5px;
+        font-family:ui-monospace,Menlo,monospace}
+.gw-matrix-tbl th, .gw-matrix-tbl td{padding:6px 8px;border:1px solid var(--line);
+        text-align:center;white-space:nowrap}
+.gw-matrix-tbl th{background:#0d1117;color:var(--dim);font-weight:600}
+.gw-matrix-tbl td.cell{cursor:pointer;background:#0a0e13}
+.gw-matrix-tbl td.cell.on{background:rgba(63,185,80,.20);color:var(--green);font-weight:700}
+.gw-matrix-tbl td.cell:hover{outline:1px solid var(--blue)}
+.gw-matrix-tbl td.cell.disabled{cursor:not-allowed;color:#3a4048;background:#1c1f24}
+.gw-matrix-tbl td.cell.asym{box-shadow:inset 0 0 0 2px var(--yellow)}
+.gw-matrix-tbl tr.gw-row-local th{color:var(--yellow)}
+
+.gw-form-grid{display:grid;grid-template-columns:130px 1fr;gap:10px 12px;
+        align-items:center;font-size:12px}
+.gw-form-grid label{color:var(--dim);font-size:11.5px}
+.gw-form-grid input[type=text], .gw-form-grid select, .gw-form-grid textarea{
+        background:#0d1117;border:1px solid var(--line);color:var(--fg);
+        border-radius:5px;padding:6px 10px;font-family:ui-monospace,Menlo,monospace;
+        font-size:12px;width:100%}
+.gw-form-grid textarea{font-size:11px;min-height:80px;resize:vertical;word-break:break-all}
+.gw-form-grid .err{color:var(--red);font-size:10.5px;grid-column:2}
+.gw-warn{background:rgba(248,81,73,.10);border:1px solid var(--red);border-radius:6px;
+        color:#ffb4b4;padding:10px 12px;font-size:11.5px;margin:10px 0}
+.gw-warn strong{color:var(--red)}
+.gw-key-block{font-family:ui-monospace,Menlo,monospace;font-size:11px;
+        background:#0a0e13;border:1px solid var(--line);border-radius:5px;
+        padding:8px 10px;word-break:break-all;line-height:1.5;color:var(--green);
+        max-height:120px;overflow:auto}
+
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
+</style></head>
+<body>
+<h1 class="page-title">AppSecGW_1.6.7 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
+<nav class="topnav">
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__" class="active">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
+
+<main>
+<!-- ── 1.6.6 — Gateway identity strip ──────────────────────────── -->
+<div class="card" style="display:flex;flex-wrap:wrap;gap:10px 32px;align-items:center;
+                          padding:12px 16px;margin-bottom:14px">
+  <div>
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Domain</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--blue);font-weight:600"
+         id="gw-host">—</div>
+  </div>
+  <div>
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Upstream</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
+         id="gw-upstream">—</div>
+  </div>
+  <div>
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Version</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
+         id="gw-version">—</div>
+  </div>
+  <div>
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">DB backend</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
+         id="gw-db">—</div>
+  </div>
+  <div>
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Started</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
+         id="gw-started">—</div>
+  </div>
+  <div style="margin-left:auto">
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Logged in as</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--green);font-weight:600"
+         id="gw-whoami">—</div>  </div>
+</div>
+
+<!-- ── 1.6.7 — Gateway Registry ─────────────────────────────────── -->
+<div class="card" id="card-gw-registry" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <div>
+      <h2 style="margin-bottom:4px">Gateway Registry</h2>
+      <p class="desc" style="margin:0">
+        Manage every gateway in the distributed mesh: keypair lifecycle,
+        per-pair distribution topology, and an append-only audit trail of
+        every registry mutation. Each gateway holds a unique
+        <code>gw_id</code>, an HMAC keypair (private secret + SHA256
+        verification handle), a coarse <code>can_distribute</code>
+        flag, and a directional sync rule set. Mesh storage is Redis
+        (when <code>REDIS_URL</code> is set); registry of record is
+        SQLite (mirrored to Postgres).
+      </p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span class="foot" id="gw-last-refresh">—</span>
+      <button class="secondary" id="gw-refresh">↻ Refresh</button>
+      <button id="gw-add">+ Add gateway</button>
+    </div>
+  </div>
+
+  <!-- Tabs ──────────────────────────────────────────────────────── -->
+  <div style="display:flex;gap:4px;margin:6px 0 14px 0;border-bottom:1px solid var(--line)">
+    <div class="gw-tab gw-tab-active" data-tab="list">Gateway list</div>
+    <div class="gw-tab" data-tab="matrix">Distribution matrix</div>
+    <div class="gw-tab" data-tab="audit">Audit log</div>
+  </div>
+
+  <!-- ─ Tab 1: Gateway list ─────────────────────────────────────── -->
+  <div class="gw-pane" id="pane-list">
+    <div class="row-controls" style="margin-bottom:10px">
+      <input id="gw-filter" type="text" placeholder="Search id / region / env / status…"
+             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+                    border-radius:5px;padding:6px 10px;font-family:inherit;font-size:12px;
+                    flex:1;min-width:240px">
+      <select id="gw-bulk-action" class="ctrl"
+              style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+                     border-radius:5px;padding:6px 10px;font-size:12px">
+        <option value="">Bulk action…</option>
+        <option value="enable">Enable can_distribute</option>
+        <option value="disable">Disable can_distribute</option>
+        <option value="active">Mark active</option>
+        <option value="inactive">Mark inactive</option>
+        <option value="decommissioned">Decommission</option>
+      </select>
+      <button id="gw-bulk-apply" class="secondary">Apply</button>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="gw-tbl">
+        <thead>
+          <tr>
+            <th style="width:30px"><input type="checkbox" id="gw-select-all"></th>
+            <th data-sort="gw_id">GW ID</th>
+            <th data-sort="domain">Domain</th>
+            <th data-sort="region">Region</th>
+            <th data-sort="environment">Env</th>
+            <th data-sort="can_distribute">Distribute</th>
+            <th data-sort="status">Status</th>
+            <th data-sort="last_seen_ts">Last seen</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="gw-tbody">
+          <tr><td colspan="9" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ─ Tab 2: Distribution matrix ──────────────────────────────── -->
+  <div class="gw-pane" id="pane-matrix" style="display:none">
+    <p class="desc" style="margin-bottom:10px">
+      Toggle a cell to enable / disable the <strong>source → target</strong>
+      sync direction. Asymmetric pairs (source syncs to target but target
+      doesn't sync back) are highlighted. Self-loops are not allowed.
+    </p>
+    <div style="overflow-x:auto">
+      <table class="gw-matrix-tbl" id="gw-matrix">
+        <thead><tr><th>source ↓ / target →</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="row-controls" style="margin-top:12px">
+      <button id="gw-matrix-save">Save matrix</button>
+      <button class="secondary" id="gw-matrix-revert">Revert</button>
+      <span class="foot" id="gw-matrix-status"></span>
+    </div>
+  </div>
+
+  <!-- ─ Tab 3: Audit log ────────────────────────────────────────── -->
+  <div class="gw-pane" id="pane-audit" style="display:none">
+    <div class="row-controls" style="margin-bottom:10px">
+      <select id="audit-action" class="ctrl"
+              style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+                     border-radius:5px;padding:6px 10px;font-size:12px">
+        <option value="">All actions</option>
+        <option value="gw_registered">gw_registered</option>
+        <option value="gw_updated">gw_updated</option>
+        <option value="key_rotated">key_rotated</option>
+        <option value="can_distribute_toggled">can_distribute_toggled</option>
+        <option value="gw_deleted">gw_deleted</option>
+        <option value="distribution_rules_updated">distribution_rules_updated</option>
+      </select>
+      <input id="audit-gw" type="text" placeholder="filter by gw_id"
+             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+                    border-radius:5px;padding:6px 10px;font-family:inherit;font-size:12px;
+                    width:160px">
+      <button id="audit-refresh" class="secondary">↻</button>
+      <button id="audit-export">Export CSV</button>
+      <span class="foot" id="audit-status"></span>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="gw-tbl">
+        <thead>
+          <tr>
+            <th>When</th><th>Action</th><th>GW ID</th>
+            <th>Actor</th><th>Details</th>
+          </tr>
+        </thead>
+        <tbody id="audit-tbody">
+          <tr><td colspan="5" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="row-controls" style="margin-top:10px;justify-content:space-between">
+      <span class="foot" id="audit-pager-info">—</span>
+      <span style="display:flex;gap:6px">
+        <button class="secondary" id="audit-prev">‹ prev</button>
+        <button class="secondary" id="audit-next">next ›</button>
+      </span>
+    </div>
+  </div>
+</div>
+
+<!-- ── 1.6.7 — Users ─────────────────────────────────────────────── -->
+<div class="card" id="card-users" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <div>
+      <h2 style="margin-bottom:4px">Users</h2>
+      <p class="desc" style="margin:0">
+        Dashboard sign-in accounts. The first user (<code>admin</code>) is
+        bootstrapped on first boot using the gateway's startup-issued
+        admin key as the password — change it here, then add other
+        operators. Bearer-key auth (<code>?key=…</code>) keeps working
+        for scripted clients regardless of which users exist.
+      </p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span class="foot" id="users-current">—</span>
+      <button class="secondary" id="users-refresh">↻ Refresh</button>
+      <button id="users-add">+ Add user</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="gw-tbl">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Online</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Last login</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        <tr><td colspan="7" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── 1.6.7 — Mesh sync (pending inbound) ──────────────────────── -->
+<div class="card" id="card-mesh" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <div>
+      <h2 style="margin-bottom:4px">Mesh sync — pending inbound</h2>
+      <p class="desc" style="margin:0">
+        Integration secrets and toggles offered by peer gateways arrive
+        here when the local value is empty. Each row stays in
+        <em>waiting for confirmation</em> until you Apply or Reject —
+        nothing reaches the live integration without an explicit click.
+        Outbound sharing is enabled per-secret in <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__" style="color:var(--blue)">Controls → External integrations</a>.
+      </p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span class="foot" id="mesh-redis-status">—</span>
+      <button class="secondary" id="mesh-refresh">↻ Refresh</button>
+    </div>
+  </div>
+  <div style="margin-bottom:10px">
+    <span class="foot" id="mesh-enabled-summary">enabled outbound: —</span>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="gw-tbl">
+      <thead>
+        <tr>
+          <th>Received</th>
+          <th>Source GW</th>
+          <th>Key</th>
+          <th>Value</th>
+          <th>Status</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="mesh-tbody">
+        <tr><td colspan="6" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="banner">
+  Export and import the gateway's hot-reload configuration as a zipped XML file.
+  Includes every knob from <code>/antibot-appsec-gateway/secured/config</code> plus the admin-IP allowlist.
+  Secrets are excluded by default — tick the box to include them and store the
+  archive somewhere safe.
+</div>
+
+<div class="row">
+
+  <!-- ── Export ───────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Export configuration</h2>
+    <p class="desc">
+      Download a ZIP archive containing <code>appsecgw-config.xml</code> with
+      all hot-reload knobs and the admin-IP allowlist. The file is named
+      <code>appsecgw-config-&lt;host&gt;-&lt;timestamp&gt;.zip</code>.
+    </p>
+    <div class="row-controls">
+      <label>
+        <input type="checkbox" id="export-include-secrets">
+        Include integration secrets (Turnstile, AbuseIPDB, CrowdSec, MaxMind, JWT)
+      </label>
+    </div>
+    <div class="row-controls">
+      <button id="btn-export">Download ZIP</button>
+      <span class="foot" id="export-status"></span>
+    </div>
+    <div id="export-result" class="result"></div>
+  </div>
+
+  <!-- ── Import ───────────────────────────────────────────────── -->
+  <div class="card">
+    <h2>Import configuration</h2>
+    <p class="desc">
+      Upload a previously-exported ZIP. Knobs validate against the same rules
+      as <code>POST /antibot-appsec-gateway/secured/config</code>; env-pinned values are skipped. Admin IPs
+      are merged (existing entries are not removed).
+    </p>
+    <div class="row-controls">
+      <label>
+        <input type="checkbox" id="import-overwrite-secrets">
+        Overwrite secrets if archive contains them
+      </label>
+      <label>
+        <input type="checkbox" id="import-dry-run">
+        Dry-run (validate only, don't apply)
+      </label>
+    </div>
+    <div id="drop" class="drop">
+      <strong>Drop ZIP here</strong>
+      <span>or click to choose a file</span>
+      <div class="hint">accepts <code>.zip</code> with <code>appsecgw-config.xml</code> inside</div>
+      <div class="fname" id="fname"></div>
+    </div>
+    <div class="row-controls" style="margin-top:12px">
+      <button id="btn-import" disabled>Apply</button>
+      <button id="btn-clear" class="secondary">Clear</button>
+    </div>
+    <div id="import-result" class="result"></div>
+  </div>
+
+</div>
+
+</main>
+
+<div id="toast" class="toast"></div>
+
+<script>
+"use strict";
+const KEY = "__KEY__";
+const $ = (id) => document.getElementById(id);
+const toast = (msg, kind) => {
+  const t = $("toast"); t.textContent = msg; t.className = "toast show " + (kind || "");
+  setTimeout(() => t.className = "toast", 2400);
+};
+
+// ── Gateway identity strip ────────────────────────────────────────
+// Domain comes from the URL the operator opened the page on.
+// Everything else comes from the JSON status feed.
+$("gw-host").textContent = window.location.host || "—";
+(async () => {
+  try {
+    const r = await fetch("/antibot-appsec-gateway/secured/health-score?key=" +
+                          encodeURIComponent(KEY), { credentials: "same-origin" });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j.upstream)         $("gw-upstream").textContent = j.upstream;
+    if (j.version)          $("gw-version").textContent  = j.version;
+    if (j.db_backend)       $("gw-db").textContent       = j.db_backend;
+    if (j.uptime_secs != null) {
+      const up   = Number(j.uptime_secs) || 0;
+      const tNow = Date.now() / 1000;
+      const startEpoch = tNow - up;
+      $("gw-started").textContent = new Date(startEpoch * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+    }
+  } catch (e) { /* leave dashes */ }
+})();
+
+// 1.6.7 — fill the "Logged in as" cell from /secured/whoami.
+(async () => {
+  try {
+    const r = await fetch("/antibot-appsec-gateway/secured/whoami?key=" +
+                          encodeURIComponent(KEY), { credentials: "same-origin" });
+    if (!r.ok) return;
+    const j = await r.json();
+    const who = j.username + (j.via === "admin-key" ? " (via key)" : "");
+    document.getElementById("gw-whoami").textContent = who;
+  } catch (e) { /* leave dashes */ }
+})();
+
+// ── Export ─────────────────────────────────────────────────────────
+$("btn-export").addEventListener("click", async () => {
+  const inc = $("export-include-secrets").checked ? "1" : "0";
+  const url = "/antibot-appsec-gateway/secured/settings-export?key=" + encodeURIComponent(KEY) + "&include_secrets=" + inc;
+  const status = $("export-status");
+  const result = $("export-result");
+  result.className = "result";
+  status.textContent = "Building archive…";
+  try {
+    const r = await fetch(url, { method: "GET", credentials: "same-origin" });
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error("HTTP " + r.status + " — " + txt.slice(0, 200));
+    }
+    const blob = await r.blob();
+    // Try to read filename from Content-Disposition.
+    const cd = r.headers.get("Content-Disposition") || "";
+    let name = "appsecgw-config.zip";
+    const m = cd.match(/filename="([^"]+)"/);
+    if (m) name = m[1];
+    const a = document.createElement("a");
+    const dlUrl = URL.createObjectURL(blob);
+    a.href = dlUrl; a.download = name;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(dlUrl);
+    status.textContent = "Downloaded " + name + " (" + blob.size + " bytes)";
+    result.className = "result show ok";
+    result.textContent = "Exported " + name + "\nSize:  " + blob.size + " bytes" +
+      (inc === "1" ? "\nIncluded: knobs + admin-IPs + secrets" :
+                     "\nIncluded: knobs + admin-IPs (secrets excluded)");
+    toast("Configuration exported", "ok");
+  } catch (e) {
+    status.textContent = "";
+    result.className = "result show err";
+    result.textContent = "Export failed: " + e.message;
+    toast("Export failed", "err");
+  }
+});
+
+// ── Import (drag/drop + click) ─────────────────────────────────────
+let pending = null;
+const drop = $("drop");
+const fnameEl = $("fname");
+const btnImport = $("btn-import");
+
+const setFile = (f) => {
+  if (!f) {
+    pending = null; fnameEl.textContent = ""; btnImport.disabled = true; return;
+  }
+  if (!f.name.endsWith(".zip") && f.type !== "application/zip" && f.type !== "application/x-zip-compressed") {
+    toast("Not a .zip file", "err"); return;
+  }
+  pending = f;
+  fnameEl.textContent = f.name + "  (" + f.size + " bytes)";
+  btnImport.disabled = false;
+};
+
+drop.addEventListener("click", () => {
+  const inp = document.createElement("input");
+  inp.type = "file"; inp.accept = ".zip,application/zip";
+  inp.addEventListener("change", () => setFile(inp.files[0]));
+  inp.click();
+});
+drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", (e) => {
+  e.preventDefault(); drop.classList.remove("over");
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) setFile(f);
+});
+
+$("btn-clear").addEventListener("click", () => {
+  setFile(null);
+  $("import-result").className = "result";
+});
+
+$("btn-import").addEventListener("click", async () => {
+  if (!pending) return;
+  const ow = $("import-overwrite-secrets").checked ? "1" : "0";
+  const dry = $("import-dry-run").checked ? "1" : "0";
+  const url = "/antibot-appsec-gateway/secured/settings-import?key=" + encodeURIComponent(KEY) +
+              "&overwrite_secrets=" + ow + "&dry_run=" + dry;
+  const result = $("import-result");
+  result.className = "result";
+  btnImport.disabled = true;
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/zip" },
+      body: pending,
+      credentials: "same-origin",
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      result.className = "result show err";
+      result.textContent = "Import failed (HTTP " + r.status + "):\n" +
+                            JSON.stringify(j, null, 2);
+      toast("Import failed", "err");
+      return;
+    }
+    result.className = "result show ok";
+    const summary = [
+      "OK · " + (dry === "1" ? "DRY-RUN — no changes applied" : "configuration applied"),
+      "Knobs applied:    " + (j.knobs_applied || 0),
+      "Knobs rejected:   " + (j.knobs_rejected || 0),
+      "Admin-IPs added:  " + (j.admin_ips_added || 0),
+      "Secrets applied:  " + (j.secrets_applied || 0),
+    ].join("\n");
+    result.textContent = summary + "\n\n" + JSON.stringify(j, null, 2);
+    toast(dry === "1" ? "Validation OK (dry-run)" : "Configuration applied", "ok");
+  } catch (e) {
+    result.className = "result show err";
+    result.textContent = "Import failed: " + e.message;
+    toast("Import failed", "err");
+  } finally {
+    btnImport.disabled = !pending;
+  }
+});
+
+// ── 1.6.7 — Gateway Registry ─────────────────────────────────────────
+const GW_BASE = "/antibot-appsec-gateway/secured/admin/gw-registry";
+const escHtml = (s) => String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+const fmtAge = (epoch) => {
+  if (!epoch) return "—";
+  const dt = (Date.now()/1000) - Number(epoch);
+  if (dt < 60) return Math.round(dt) + "s";
+  if (dt < 3600) return Math.round(dt/60) + "m";
+  if (dt < 86400) return Math.round(dt/3600) + "h";
+  return Math.round(dt/86400) + "d";
+};
+const apiUrl = (p) => p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY);
+async function api(method, path, body) {
+  const opts = { method, credentials: "same-origin",
+                 headers: { "Origin": location.origin } };
+  if (body !== undefined) {
+    opts.headers["Content-Type"] = "application/json";
+    opts.body = JSON.stringify(body);
+  }
+  const r = await fetch(apiUrl(path), opts);
+  const text = await r.text();
+  let j = null;
+  try { j = text ? JSON.parse(text) : null; } catch (_) { /* tolerate */ }
+  if (!r.ok) {
+    const err = new Error((j && j.error) || ("HTTP " + r.status));
+    err.status = r.status;
+    err.body = j;
+    throw err;
+  }
+  return j;
+}
+
+// Generic modal helper (mirrors the controls.html pattern).
+function showSimpleModal(innerHtml) {
+  let m = document.getElementById("simple-modal");
+  if (!m) {
+    m = document.createElement("div");
+    m.id = "simple-modal";
+    m.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,.65);"
+      + "display:flex;align-items:center;justify-content:center;z-index:5000;padding:20px";
+    m.onclick = (e) => { if (e.target === m) closeSimpleModal(); };
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div style="background:var(--card);border:1px solid var(--line);
+    border-radius:8px;padding:20px 24px;max-width:680px;width:100%;max-height:86vh;overflow:auto;
+    box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:-apple-system,'SF Pro',ui-sans-serif">
+    ${innerHtml}</div>`;
+  m.style.display = "flex";
+}
+function closeSimpleModal() {
+  const m = document.getElementById("simple-modal");
+  if (m) m.style.display = "none";
+}
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") closeSimpleModal();
+});
+
+// ── State + tab switching ────────────────────────────────────────
+let GW_STATE = { gateways: [], local_gw_id: "",
+                 regions: [], environments: [], statuses: [],
+                 sortBy: "gw_id", sortDir: 1, filter: "",
+                 selected: new Set(),
+                 matrix: { gateways: [], rules: [], dirty: new Map() },
+                 audit: { offset: 0, limit: 50, total: 0 } };
+
+document.querySelectorAll(".gw-tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".gw-tab").forEach(x => x.classList.remove("gw-tab-active"));
+    t.classList.add("gw-tab-active");
+    document.querySelectorAll(".gw-pane").forEach(p => p.style.display = "none");
+    $("pane-" + t.dataset.tab).style.display = "";
+    if (t.dataset.tab === "matrix") loadMatrix();
+    if (t.dataset.tab === "audit")  loadAudit();
+  });
+});
+
+// ── Gateway list ─────────────────────────────────────────────────
+async function loadList() {
+  try {
+    const j = await api("GET", GW_BASE);
+    GW_STATE.gateways     = j.gateways || [];
+    GW_STATE.local_gw_id  = j.local_gw_id || "";
+    GW_STATE.regions      = j.regions || [];
+    GW_STATE.environments = j.environments || [];
+    GW_STATE.statuses     = j.statuses || [];
+    renderList();
+    $("gw-last-refresh").textContent = "updated just now";
+  } catch (e) {
+    toast("List load failed: " + e.message, "err");
+  }
+}
+function renderList() {
+  const tb = $("gw-tbody");
+  let rows = GW_STATE.gateways.slice();
+  const f = GW_STATE.filter.trim().toLowerCase();
+  if (f) rows = rows.filter(r =>
+    [r.gw_id, r.region, r.environment, r.status].some(v =>
+      String(v || "").toLowerCase().includes(f)));
+  rows.sort((a, b) => {
+    const k = GW_STATE.sortBy;
+    const av = (a[k] == null ? "" : a[k]);
+    const bv = (b[k] == null ? "" : b[k]);
+    return ((av < bv) ? -1 : (av > bv) ? 1 : 0) * GW_STATE.sortDir;
+  });
+  if (!rows.length) {
+    tb.innerHTML = `<tr><td colspan="9"><div class="gw-empty">
+      <strong>No gateways registered yet.</strong>
+      Click <em>+ Add gateway</em> to register the first one. The local
+      gateway should be added with <em>is_local: true</em> so this
+      portal recognises which keypair it owns.
+    </div></td></tr>`;
+    return;
+  }
+  tb.innerHTML = rows.map(r => `
+    <tr class="${r.is_local ? 'gw-row-local' : ''}" data-gw="${escHtml(r.gw_id)}">
+      <td><input type="checkbox" class="gw-row-cb" data-gw="${escHtml(r.gw_id)}"
+                 ${GW_STATE.selected.has(r.gw_id) ? 'checked' : ''}></td>
+      <td>${escHtml(r.gw_id)}</td>
+      <td>${r.domain ? `<a href="https://${escHtml(r.domain)}" target="_blank" rel="noopener" style="color:var(--blue)">${escHtml(r.domain)}</a>` : '<span class="dim">—</span>'}</td>
+      <td>${escHtml(r.region || '—')}</td>
+      <td>${escHtml(r.environment || '—')}</td>
+      <td>
+        <label class="gw-toggle" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
+          <input type="checkbox" class="gw-cd" data-gw="${escHtml(r.gw_id)}"
+                 ${r.can_distribute ? 'checked' : ''}
+                 style="accent-color:var(--green);transform:scale(1.1)">
+          <span style="font-size:10px;color:var(--dim)">${r.can_distribute ? 'on' : 'off'}</span>
+        </label>
+      </td>
+      <td><span class="pill-status pill-${r.status}">${escHtml(r.status)}</span></td>
+      <td>${fmtAge(r.last_seen_ts)}</td>
+      <td>
+        <button class="act-btn" data-act="edit"     data-gw="${escHtml(r.gw_id)}">Edit</button>
+        <button class="act-btn" data-act="rotate"   data-gw="${escHtml(r.gw_id)}">Rotate key</button>
+        <button class="act-btn danger" data-act="delete" data-gw="${escHtml(r.gw_id)}"
+                ${r.is_local ? 'disabled title="cannot delete the local gateway"' : ''}>Delete</button>
+      </td>
+    </tr>`).join("");
+}
+
+document.querySelectorAll("#pane-list th[data-sort]").forEach(th => {
+  th.addEventListener("click", () => {
+    const k = th.dataset.sort;
+    if (GW_STATE.sortBy === k) GW_STATE.sortDir *= -1;
+    else { GW_STATE.sortBy = k; GW_STATE.sortDir = 1; }
+    renderList();
+  });
+});
+$("gw-filter").addEventListener("input", (e) => {
+  GW_STATE.filter = e.target.value;
+  renderList();
+});
+$("gw-refresh").addEventListener("click", loadList);
+$("gw-select-all").addEventListener("change", (e) => {
+  GW_STATE.selected.clear();
+  if (e.target.checked) GW_STATE.gateways.forEach(r => GW_STATE.selected.add(r.gw_id));
+  renderList();
+});
+
+// Delegated events on the table body.
+$("gw-tbody").addEventListener("click", async (ev) => {
+  const t = ev.target;
+  if (t.classList.contains("gw-row-cb")) {
+    const id = t.dataset.gw;
+    if (t.checked) GW_STATE.selected.add(id);
+    else GW_STATE.selected.delete(id);
+    return;
+  }
+  if (!t.classList.contains("act-btn")) return;
+  const id  = t.dataset.gw;
+  const act = t.dataset.act;
+  if (act === "edit")     return openEditModal(id);
+  if (act === "rotate")   return rotateKey(id);
+  if (act === "delete")   return deleteGw(id);
+});
+$("gw-tbody").addEventListener("change", async (ev) => {
+  const t = ev.target;
+  if (!t.classList.contains("gw-cd")) return;
+  const id = t.dataset.gw;
+  const newVal = t.checked;
+  // Optimistic update; rollback on failure.
+  const row = GW_STATE.gateways.find(r => r.gw_id === id);
+  if (row) row.can_distribute = newVal;
+  // If disabling on production, confirm first.
+  if (!newVal && row && row.environment === "production") {
+    const ok = confirm(`Disable distribution on PRODUCTION gateway "${id}"?`);
+    if (!ok) { row.can_distribute = true; renderList(); return; }
+  }
+  try {
+    await api("PATCH", `${GW_BASE}/${encodeURIComponent(id)}/can-distribute`,
+              { can_distribute: newVal });
+    toast(`can_distribute=${newVal} on ${id}`, "ok");
+    renderList();
+  } catch (e) {
+    if (row) row.can_distribute = !newVal;  // rollback
+    renderList();
+    toast("Toggle failed: " + e.message, "err");
+  }
+});
+
+// ── Bulk action ──────────────────────────────────────────────────
+$("gw-bulk-apply").addEventListener("click", async () => {
+  const op = $("gw-bulk-action").value;
+  if (!op) return toast("Pick a bulk action first", "err");
+  if (!GW_STATE.selected.size) return toast("Select at least one gateway", "err");
+  const ids = Array.from(GW_STATE.selected);
+  const ok = confirm(`Apply "${op}" to ${ids.length} gateway(s)?\n\n${ids.join(", ")}`);
+  if (!ok) return;
+  let okCount = 0, failCount = 0;
+  for (const id of ids) {
+    try {
+      if (op === "enable" || op === "disable") {
+        await api("PATCH", `${GW_BASE}/${encodeURIComponent(id)}/can-distribute`,
+                  { can_distribute: op === "enable" });
+      } else if (op === "active" || op === "inactive" || op === "decommissioned") {
+        await api("PATCH", `${GW_BASE}/${encodeURIComponent(id)}`, { status: op });
+      }
+      okCount++;
+    } catch (e) { failCount++; }
+  }
+  toast(`Bulk: ${okCount} ok, ${failCount} failed`, failCount ? "err" : "ok");
+  GW_STATE.selected.clear();
+  loadList();
+});
+
+// ── Add gateway modal ────────────────────────────────────────────
+$("gw-add").addEventListener("click", () => openAddModal());
+
+function regionOpts(sel) {
+  return GW_STATE.regions.map(r =>
+    `<option value="${escHtml(r)}" ${r===sel?'selected':''}>${escHtml(r)}</option>`
+  ).join("");
+}
+function envOpts(sel) {
+  return GW_STATE.environments.map(e =>
+    `<option value="${escHtml(e)}" ${e===sel?'selected':''}>${escHtml(e)}</option>`
+  ).join("");
+}
+function statusOpts(sel) {
+  return GW_STATE.statuses.map(s =>
+    `<option value="${escHtml(s)}" ${s===sel?'selected':''}>${escHtml(s)}</option>`
+  ).join("");
+}
+
+function openAddModal() {
+  showSimpleModal(`
+    <h3 style="margin:0 0 14px 0;color:#fff">Register a new gateway</h3>
+    <div class="gw-form-grid">
+      <label>Domain</label>
+      <input id="add-domain" type="text"
+             placeholder="gw-prod.example.com"
+             value="${escHtml(window.location.host || '')}">
+      <label>GW ID</label>
+      <input id="add-id" type="text" placeholder="auto-derived from domain"
+             pattern="[a-z0-9][a-z0-9-]{1,62}"
+             title="Auto-derived from the domain — edit to override">
+      <span style="grid-column:2;color:var(--dim);font-size:10.5px;margin-top:-6px">
+        Auto-derived from the domain. Click to override.
+      </span>
+      <label>Region</label>
+      <select id="add-region">${regionOpts("")}</select>
+      <label>Environment</label>
+      <select id="add-env">${envOpts("production")}</select>
+      <label>Local gateway?</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px">
+        <input id="add-is-local" type="checkbox">
+        Mark this row as the LOCAL gateway (the one this portal runs on).
+        Only one row can be local at a time.
+      </label>
+      <label>Distribution</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px">
+        <input id="add-can-distribute" type="checkbox" checked>
+        Can distribute blocks to mesh peers
+      </label>
+      <label>Auto-generate keys</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px">
+        <input id="add-auto" type="checkbox" checked>
+        Generate a fresh keypair on the server
+      </label>
+      <label>Manual private key</label>
+      <textarea id="add-priv" placeholder="(only if auto-generate is off)"
+                disabled></textarea>
+      <label>Manual public key</label>
+      <textarea id="add-pub" placeholder="(only if auto-generate is off)"
+                disabled></textarea>
+      <span class="err" id="add-err"></span>
+    </div>
+    <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
+      <button class="secondary" onclick="closeSimpleModal()">Cancel</button>
+      <button id="add-submit">Register</button>
+    </div>`);
+  const auto = document.getElementById("add-auto");
+  const upd = () => {
+    document.getElementById("add-priv").disabled = auto.checked;
+    document.getElementById("add-pub").disabled  = auto.checked;
+  };
+  auto.addEventListener("change", upd);
+
+  // 1.6.7 — auto-derive gw_id from the domain. Same rules as the
+  // server's _gw_id_from_domain helper. Stops syncing the moment the
+  // operator manually edits the gw_id field.
+  const idFromDomain = (d) => {
+    if (!d) return "";
+    let s = d.toLowerCase().trim().replace(/[^a-z0-9-]+/g, "-");
+    s = s.replace(/-+/g, "-").replace(/^-+|-+$/g, "");
+    if (!s) return "";
+    s = s.slice(0, 63).replace(/-+$/g, "");
+    s = s.replace(/^[^a-z0-9]+/, "");
+    return /^[a-z0-9][a-z0-9-]{1,62}$/.test(s) ? s : "";
+  };
+  const idIn     = document.getElementById("add-id");
+  const domIn    = document.getElementById("add-domain");
+  let _idTouched = false;
+  // Initial fill from any pre-populated domain (window.location.host).
+  idIn.value = idFromDomain(domIn.value);
+  domIn.addEventListener("input", () => {
+    if (!_idTouched) idIn.value = idFromDomain(domIn.value);
+  });
+  idIn.addEventListener("input", () => { _idTouched = true; });
+
+  document.getElementById("add-submit").addEventListener("click", async () => {
+    const errEl = document.getElementById("add-err"); errEl.textContent = "";
+    const body = {
+      gw_id:       document.getElementById("add-id").value.trim().toLowerCase(),
+      domain:      document.getElementById("add-domain").value.trim().toLowerCase(),
+      region:      document.getElementById("add-region").value,
+      environment: document.getElementById("add-env").value,
+      is_local:        document.getElementById("add-is-local").checked,
+      can_distribute:  document.getElementById("add-can-distribute").checked,
+      auto_generate_keys: document.getElementById("add-auto").checked,
+    };
+    if (!body.auto_generate_keys) {
+      body.private_key = document.getElementById("add-priv").value.trim();
+      body.public_key  = document.getElementById("add-pub").value.trim();
+    }
+    if (!/^[a-z0-9][a-z0-9-]{1,62}$/.test(body.gw_id)) {
+      errEl.textContent = "gw_id must be lowercase alphanumeric + hyphens, 2-64 chars";
+      return;
+    }
+    document.getElementById("add-submit").disabled = true;
+    try {
+      const j = await api("POST", GW_BASE, body);
+      closeSimpleModal();
+      toast(`Registered ${j.gw_id}`, "ok");
+      if (j.private_key) showPrivateKeyOnce(j.gw_id, j.private_key, j.public_key, "Registration");
+      loadList();
+    } catch (e) {
+      errEl.textContent = e.message || "Registration failed";
+      document.getElementById("add-submit").disabled = false;
+    }
+  });
+}
+
+function showPrivateKeyOnce(gwId, priv, pub, context) {
+  showSimpleModal(`
+    <h3 style="margin:0 0 8px 0;color:var(--yellow)">⚠ Copy the private key now</h3>
+    <p class="desc" style="margin-bottom:10px">
+      ${escHtml(context)} produced a fresh keypair for <strong>${escHtml(gwId)}</strong>.
+      The private key is shown <strong>only once</strong> — store it in your
+      operator vault immediately. Anyone holding it can sign mesh blocks
+      as this gateway.
+    </p>
+    <div class="gw-warn"><strong>Security:</strong> private keys are
+    NEVER logged or echoed to peers. After you close this dialog the
+    server retains it (this is the local row), but it cannot be re-fetched
+    via the dashboard.</div>
+    <label class="dim" style="font-size:10.5px">PUBLIC KEY (verification handle)</label>
+    <div class="gw-key-block" id="key-pub">${escHtml(pub)}</div>
+    <label class="dim" style="font-size:10.5px;margin-top:10px;display:block">PRIVATE KEY</label>
+    <div class="gw-key-block" id="key-priv" style="color:var(--red)">${escHtml(priv)}</div>
+    <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
+      <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(priv)}).then(()=>toast('Private key copied — store it now','ok'))">Copy private</button>
+      <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(pub)}).then(()=>toast('Public key copied','ok'))">Copy public</button>
+      <button onclick="closeSimpleModal()">I have stored it</button>
+    </div>`);
+}
+
+// ── Edit / detail modal ──────────────────────────────────────────
+async function openEditModal(gwId) {
+  let row;
+  try { row = await api("GET", `${GW_BASE}/${encodeURIComponent(gwId)}`); }
+  catch (e) { return toast("Load failed: " + e.message, "err"); }
+  const isProd = row.environment === "production";
+  showSimpleModal(`
+    ${isProd ? '<div class="gw-warn"><strong>Production gateway.</strong> Changes propagate to mesh peers.</div>' : ''}
+    <h3 style="margin:0 0 12px 0;color:#fff">Gateway · ${escHtml(row.gw_id)} ${row.is_local ? '<span style="color:var(--yellow);font-size:11px">★ LOCAL</span>' : ''}</h3>
+    <div class="gw-form-grid">
+      <label>GW ID</label><div class="dim" style="font-family:ui-monospace">${escHtml(row.gw_id)}</div>
+      <label>Domain</label>
+      <input id="edit-domain" type="text" value="${escHtml(row.domain || '')}"
+             placeholder="gw-prod.example.com (optional)">
+      <label>Region</label><select id="edit-region">${regionOpts(row.region)}</select>
+      <label>Environment</label><select id="edit-env">${envOpts(row.environment)}</select>
+      <label>Status</label><select id="edit-status">${statusOpts(row.status)}</select>
+      <label>Can distribute</label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:11px">
+        <input id="edit-cd" type="checkbox" ${row.can_distribute?'checked':''}>
+        Propagate this gateway's blocks to peers
+      </label>
+      <label>Public key</label>
+      <div>
+        <div class="gw-key-block" style="color:var(--blue)">${escHtml(row.public_key)}</div>
+        <div class="dim" style="font-size:10.5px;margin-top:4px">
+          Fingerprint: <span class="gw-fp">${escHtml(row.fingerprint || "")}</span>
+          · created ${row.key_created_ts ? new Date(row.key_created_ts*1000).toISOString().replace('T',' ').slice(0,16) : '—'}
+          ${row.key_rotated_ts ? '· rotated ' + new Date(row.key_rotated_ts*1000).toISOString().replace('T',' ').slice(0,16) : ''}
+        </div>
+      </div>
+      ${row.is_local ? `
+      <label>Private key</label>
+      <div>
+        <div id="edit-priv-mask" class="gw-key-block dim">•••••••••••••••••••••••••••••••• (hidden — click reveal)</div>
+        <button class="secondary" id="edit-reveal" style="margin-top:6px">Reveal</button>
+      </div>` : ''}
+      <span class="err" id="edit-err"></span>
+    </div>
+    <div class="row-controls" style="margin-top:14px;justify-content:space-between">
+      <button class="danger" id="edit-delete" ${row.is_local ? 'disabled title="cannot delete the local gw"' : ''}>Delete…</button>
+      <div style="display:flex;gap:8px">
+        <button class="secondary" onclick="closeSimpleModal()">Cancel</button>
+        <button id="edit-save">Save</button>
+      </div>
+    </div>`);
+  if (row.is_local) {
+    document.getElementById("edit-reveal").addEventListener("click", () => {
+      const ok = confirm("Reveal the private key in clear text?\n\nAnyone seeing your screen could capture it.");
+      if (!ok) return;
+      // Opt in to the reveal flag — server logs an audit event.
+      api("GET", `${GW_BASE}/${encodeURIComponent(gwId)}?reveal=1`).then(full => {
+        document.getElementById("edit-priv-mask").innerHTML = escHtml(full.private_key || "(unset)");
+        document.getElementById("edit-priv-mask").style.color = "var(--red)";
+      }).catch(e => toast("Reveal failed: " + e.message, "err"));
+    });
+  }
+  document.getElementById("edit-save").addEventListener("click", async () => {
+    const errEl = document.getElementById("edit-err"); errEl.textContent = "";
+    const body = {
+      domain:         document.getElementById("edit-domain").value.trim().toLowerCase(),
+      region:         document.getElementById("edit-region").value,
+      environment:    document.getElementById("edit-env").value,
+      status:         document.getElementById("edit-status").value,
+      can_distribute: document.getElementById("edit-cd").checked,
+    };
+    document.getElementById("edit-save").disabled = true;
+    try {
+      await api("PATCH", `${GW_BASE}/${encodeURIComponent(gwId)}`, body);
+      closeSimpleModal();
+      toast(`Updated ${gwId}`, "ok");
+      loadList();
+    } catch (e) {
+      errEl.textContent = e.message;
+      document.getElementById("edit-save").disabled = false;
+    }
+  });
+  document.getElementById("edit-delete").addEventListener("click", () => deleteGw(gwId));
+}
+
+// ── Rotate key ───────────────────────────────────────────────────
+async function rotateKey(gwId) {
+  const reason = prompt(`Rotate the keypair for "${gwId}"?\n\nOptional reason (audit log):`, "");
+  if (reason === null) return;
+  try {
+    const j = await api("POST", `${GW_BASE}/${encodeURIComponent(gwId)}/rotate-key`,
+                         { reason });
+    toast(`Rotated ${gwId}`, "ok");
+    if (j.private_key) showPrivateKeyOnce(j.gw_id, j.private_key, j.public_key, "Key rotation");
+    loadList();
+  } catch (e) {
+    toast("Rotation failed: " + e.message, "err");
+  }
+}
+
+// ── Delete gateway (typed-confirm) ───────────────────────────────
+async function deleteGw(gwId) {
+  showSimpleModal(`
+    <h3 style="margin:0 0 10px 0;color:var(--red)">Delete gateway "${escHtml(gwId)}"?</h3>
+    <p class="desc" style="margin-bottom:10px">
+      This removes the registry row, all distribution rules referring to
+      it, and writes a <code>gw_deleted</code> audit entry. The mesh
+      peers will stop trusting blocks signed by this gateway's public
+      key. Type the gw_id below to confirm.
+    </p>
+    <div class="gw-form-grid">
+      <label>Type gw_id</label>
+      <input id="del-confirm" type="text" placeholder="${escHtml(gwId)}">
+      <span class="err" id="del-err"></span>
+    </div>
+    <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
+      <button class="secondary" onclick="closeSimpleModal()">Cancel</button>
+      <button class="danger" id="del-go">Delete</button>
+    </div>`);
+  document.getElementById("del-go").addEventListener("click", async () => {
+    if (document.getElementById("del-confirm").value !== gwId) {
+      document.getElementById("del-err").textContent = "gw_id mismatch";
+      return;
+    }
+    document.getElementById("del-go").disabled = true;
+    try {
+      await api("DELETE", `${GW_BASE}/${encodeURIComponent(gwId)}`);
+      closeSimpleModal();
+      toast(`Deleted ${gwId}`, "ok");
+      loadList();
+    } catch (e) {
+      document.getElementById("del-err").textContent = e.message;
+      document.getElementById("del-go").disabled = false;
+    }
+  });
+}
+
+// ── Distribution matrix ──────────────────────────────────────────
+async function loadMatrix() {
+  try {
+    const j = await api("GET", `${GW_BASE}/distribution/matrix`);
+    GW_STATE.matrix.gateways = j.gateways || [];
+    GW_STATE.matrix.rules    = j.rules || [];
+    GW_STATE.matrix.dirty    = new Map();
+    renderMatrix();
+  } catch (e) { toast("Matrix load failed: " + e.message, "err"); }
+}
+function matrixHas(s, t) {
+  const k = s + "|" + t;
+  if (GW_STATE.matrix.dirty.has(k)) return GW_STATE.matrix.dirty.get(k);
+  return GW_STATE.matrix.rules.some(r => r.source === s && r.target === t);
+}
+function renderMatrix() {
+  const tbl = $("gw-matrix");
+  const gws = GW_STATE.matrix.gateways;
+  if (!gws.length) {
+    tbl.innerHTML = '<tbody><tr><td><div class="gw-empty"><strong>No gateways yet.</strong> Add at least two before configuring distribution rules.</div></td></tr></tbody>';
+    return;
+  }
+  let head = "<thead><tr><th>source ↓ / target →</th>";
+  for (const g of gws) head += `<th>${escHtml(g.gw_id)}</th>`;
+  head += "</tr></thead>";
+  let body = "<tbody>";
+  for (const src of gws) {
+    body += `<tr ${src.gw_id===GW_STATE.local_gw_id?'class="gw-row-local"':''}><th>${escHtml(src.gw_id)}</th>`;
+    for (const tgt of gws) {
+      if (src.gw_id === tgt.gw_id) {
+        body += `<td class="cell disabled">—</td>`;
+      } else {
+        const on   = matrixHas(src.gw_id, tgt.gw_id);
+        const back = matrixHas(tgt.gw_id, src.gw_id);
+        const asym = on && !back;
+        body += `<td class="cell ${on?'on':''} ${asym?'asym':''}"
+                    data-s="${escHtml(src.gw_id)}" data-t="${escHtml(tgt.gw_id)}"
+                    title="${asym ? 'Asymmetric: target does NOT sync back' : ''}">${on?'✓':'·'}</td>`;
+      }
+    }
+    body += "</tr>";
+  }
+  body += "</tbody>";
+  tbl.innerHTML = head + body;
+  tbl.querySelectorAll("td.cell").forEach(c => {
+    if (c.classList.contains("disabled")) return;
+    c.addEventListener("click", () => {
+      const s = c.dataset.s, t = c.dataset.t;
+      const cur = matrixHas(s, t);
+      GW_STATE.matrix.dirty.set(s + "|" + t, !cur);
+      renderMatrix();
+    });
+  });
+}
+$("gw-matrix-save").addEventListener("click", async () => {
+  // Collapse current state into a flat rule list.
+  const gws = GW_STATE.matrix.gateways;
+  const rules = [];
+  for (const s of gws) for (const t of gws) {
+    if (s.gw_id === t.gw_id) continue;
+    if (matrixHas(s.gw_id, t.gw_id)) rules.push({ source: s.gw_id, target: t.gw_id });
+  }
+  try {
+    await api("POST", `${GW_BASE}/distribution/rules`, { rules });
+    toast(`Saved ${rules.length} rule(s)`, "ok");
+    loadMatrix();
+  } catch (e) { toast("Matrix save failed: " + e.message, "err"); }
+});
+$("gw-matrix-revert").addEventListener("click", () => {
+  GW_STATE.matrix.dirty = new Map();
+  renderMatrix();
+  toast("Pending changes discarded", "ok");
+});
+
+// ── Audit log ────────────────────────────────────────────────────
+async function loadAudit() {
+  const a = $("audit-action").value;
+  const g = $("audit-gw").value.trim().toLowerCase();
+  const params = new URLSearchParams();
+  params.set("limit",  GW_STATE.audit.limit);
+  params.set("offset", GW_STATE.audit.offset);
+  if (a) params.set("action", a);
+  if (g) params.set("gw_id",  g);
+  try {
+    const j = await api("GET", `${GW_BASE}/audit-log?${params.toString()}`);
+    GW_STATE.audit.total = j.total || 0;
+    const tb = $("audit-tbody");
+    if (!j.entries.length) {
+      tb.innerHTML = '<tr><td colspan="5" class="dim" style="text-align:center;padding:18px">No entries match the filter.</td></tr>';
+    } else {
+      tb.innerHTML = j.entries.map(e => `
+        <tr>
+          <td>${new Date((e.ts||0)*1000).toISOString().replace('T',' ').slice(0,19)}Z</td>
+          <td><code>${escHtml(e.action)}</code></td>
+          <td>${escHtml(e.gw_id || '*')}</td>
+          <td>${escHtml(e.actor || '—')}</td>
+          <td><code style="white-space:pre-wrap;word-break:break-all;font-size:10.5px">${escHtml(e.details || '')}</code></td>
+        </tr>`).join("");
+    }
+    const last = Math.min(GW_STATE.audit.offset + GW_STATE.audit.limit, GW_STATE.audit.total);
+    $("audit-pager-info").textContent = `${GW_STATE.audit.offset+1}–${last} of ${GW_STATE.audit.total}`;
+  } catch (e) { toast("Audit load failed: " + e.message, "err"); }
+}
+$("audit-refresh").addEventListener("click", () => { GW_STATE.audit.offset = 0; loadAudit(); });
+$("audit-action").addEventListener("change", () => { GW_STATE.audit.offset = 0; loadAudit(); });
+$("audit-gw").addEventListener("change",     () => { GW_STATE.audit.offset = 0; loadAudit(); });
+$("audit-prev").addEventListener("click", () => {
+  GW_STATE.audit.offset = Math.max(0, GW_STATE.audit.offset - GW_STATE.audit.limit);
+  loadAudit();
+});
+$("audit-next").addEventListener("click", () => {
+  if (GW_STATE.audit.offset + GW_STATE.audit.limit < GW_STATE.audit.total) {
+    GW_STATE.audit.offset += GW_STATE.audit.limit;
+    loadAudit();
+  }
+});
+$("audit-export").addEventListener("click", async () => {
+  try {
+    const j = await api("GET", `${GW_BASE}/audit-log?limit=500&offset=0`);
+    const csv = [
+      "ts,action,gw_id,actor,details",
+      ...j.entries.map(e => [
+        new Date((e.ts||0)*1000).toISOString(),
+        e.action, e.gw_id || "", e.actor || "",
+        (e.details || "").replace(/"/g, '""'),
+      ].map(v => '"' + String(v) + '"').join(",")),
+    ].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "gw-audit-" + new Date().toISOString().slice(0,19).replace(/[-:T]/g,"") + ".csv";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    toast("Audit CSV exported", "ok");
+  } catch (e) { toast("Export failed: " + e.message, "err"); }
+});
+
+// Auto-refresh the gateway list every 30s while the list tab is visible.
+setInterval(() => {
+  if (document.getElementById("pane-list").style.display !== "none") {
+    const last = Date.now();
+    loadList().then(() => {
+      const dt = Math.round((Date.now() - last)/1000);
+      $("gw-last-refresh").textContent = `updated ${dt}s ago`;
+    });
+  }
+}, 30000);
+
+// ── 1.6.7 — Users management ────────────────────────────────────────
+const USERS_BASE = "/antibot-appsec-gateway/secured/admin/users";
+let USERS_CURRENT = "—";
+
+async function loadUsers() {
+  try {
+    const j = await api("GET", USERS_BASE);
+    USERS_CURRENT = j.current || "—";
+    $("users-current").textContent = "logged in: " + USERS_CURRENT;
+    const tb = $("users-tbody");
+    const rows = j.users || [];
+    if (!rows.length) {
+      tb.innerHTML = `<tr><td colspan="7" class="dim" style="text-align:center;padding:18px">
+        No users yet. The bootstrap admin should appear after the first boot.
+      </td></tr>`;
+      return;
+    }
+    tb.innerHTML = rows.map(u => {
+      const isCurrent = u.username === USERS_CURRENT;
+      const onlineDot = u.online
+        ? '<span title="signed in within the last minute" style="color:var(--green);font-weight:700">● online</span>'
+        : '<span class="dim">○ offline</span>';
+      return `
+      <tr ${isCurrent ? 'style="background:rgba(217,154,32,.05)"' : ''}>
+        <td><a href="#" data-uact="sessions" data-user="${escHtml(u.username)}"
+               style="color:var(--blue);text-decoration:none;border-bottom:1px dotted var(--blue);cursor:pointer"
+               title="View active sessions">${escHtml(u.username)}</a>
+            ${isCurrent ? '<span style="color:var(--yellow);font-size:10px">(you)</span>' : ''}</td>
+        <td>${onlineDot}</td>
+        <td><span class="pill-status pill-active" style="background:rgba(88,166,255,.15);color:var(--blue)">${escHtml(u.role)}</span></td>
+        <td><span class="pill-status pill-${u.status === 'active' ? 'active' : 'decommissioned'}">${escHtml(u.status)}</span></td>
+        <td>${u.last_login_ts ? new Date(u.last_login_ts*1000).toISOString().replace('T',' ').slice(0,19) + 'Z' : '<span class="dim">—</span>'}</td>
+        <td>${u.created_ts ? new Date(u.created_ts*1000).toISOString().slice(0,10) : '—'}</td>
+        <td>
+          <button class="act-btn" data-uact="password"  data-user="${escHtml(u.username)}">Change password</button>
+          <button class="act-btn" data-uact="status"    data-user="${escHtml(u.username)}">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+          <button class="act-btn danger" data-uact="delete" data-user="${escHtml(u.username)}"
+                  ${isCurrent ? 'disabled title="cannot delete your own account"' : ''}>Delete</button>
+        </td>
+      </tr>`;
+    }).join("");
+  } catch (e) { toast("Users load failed: " + e.message, "err"); }
+}
+
+$("users-refresh").addEventListener("click", loadUsers);
+$("users-add").addEventListener("click", () => openAddUserModal());
+$("users-tbody").addEventListener("click", (ev) => {
+  const t = ev.target.closest("[data-uact]");
+  if (!t) return;
+  ev.preventDefault();
+  const u = t.dataset.user;
+  const a = t.dataset.uact;
+  if (a === "sessions") return openSessionsModal(u);
+  if (a === "password") return changeUserPassword(u);
+  if (a === "status")   return toggleUserStatus(u, t.textContent.trim());
+  if (a === "delete")   return deleteUser(u);
+});
+
+// ── 1.6.7 — Sessions tooltip / modal ──────────────────────────────
+async function openSessionsModal(username) {
+  showSimpleModal(`
+    <h3 style="margin:0 0 8px 0;color:#fff">
+      Sessions — ${escHtml(username)}
+      <span style="float:right;cursor:pointer;color:var(--dim);font-size:18px"
+            onclick="closeSimpleModal()">×</span>
+    </h3>
+    <p class="desc" style="margin-bottom:10px">
+      Every successful login mints a server-side session bound to the
+      browser's IP and User-Agent. Click <strong>Revoke</strong> on any
+      row you don't recognise — the sid stops verifying on the next
+      request, even if the cookie is in the wrong hands.
+    </p>
+    <div id="sessions-pane" class="dim" style="padding:14px;text-align:center">Loading…</div>`);
+  try {
+    const j = await api("GET", `${USERS_BASE}/${encodeURIComponent(username)}/sessions`);
+    const rows = j.sessions || [];
+    const currentSid = j.current_sid || "";
+    const pane = document.getElementById("sessions-pane");
+    if (!rows.length) {
+      pane.textContent = "No sessions recorded for this user.";
+      return;
+    }
+    pane.classList.remove("dim");
+    pane.style.padding = "0";
+    pane.style.textAlign = "left";
+    pane.innerHTML = `
+      <div style="overflow-x:auto">
+      <table class="gw-tbl">
+        <thead><tr>
+          <th>Status</th><th>IP</th><th>User-Agent</th>
+          <th>Created</th><th>Last seen</th><th>Action</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(s => {
+            const isMe = s.sid === currentSid;
+            const statusColor = s.status === "active"
+              ? (s.online ? "var(--green)" : "var(--blue)")
+              : (s.status === "revoked" ? "var(--red)" : "var(--dim)");
+            const statusLabel = s.online ? "● online"
+                              : (s.status === "active" ? "active"
+                                 : s.status);
+            const created  = s.created_ts   ? new Date(s.created_ts*1000).toISOString().replace('T',' ').slice(0,19)+'Z' : '—';
+            const lastSeen = s.last_seen_ts ? new Date(s.last_seen_ts*1000).toISOString().replace('T',' ').slice(0,19)+'Z' : '—';
+            return `
+              <tr ${isMe ? 'style="background:rgba(217,154,32,.06)"' : ''}>
+                <td><span style="color:${statusColor};font-weight:700">${statusLabel}</span>
+                    ${isMe ? '<span style="color:var(--yellow);font-size:10px">(you)</span>' : ''}</td>
+                <td><code>${escHtml(s.ip || '—')}</code></td>
+                <td style="max-width:280px;word-break:break-all"><span class="dim" style="font-size:10.5px">${escHtml(s.user_agent || '—')}</span></td>
+                <td>${created}</td>
+                <td>${lastSeen}</td>
+                <td>${
+                  s.status === "active"
+                    ? `<button class="act-btn danger" data-revoke-sid="${escHtml(s.sid)}" data-revoke-user="${escHtml(username)}">Revoke${isMe ? ' (sign me out)' : ''}</button>`
+                    : '<span class="dim">—</span>'
+                }</td>
+              </tr>`;
+          }).join("")}
+        </tbody>
+      </table></div>`;
+    pane.querySelectorAll("[data-revoke-sid]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const sid = btn.dataset.revokeSid;
+        const u   = btn.dataset.revokeUser;
+        const isMe = (sid === currentSid);
+        const msg = isMe
+          ? "Revoke YOUR current session? You will be signed out immediately."
+          : "Revoke this session? The browser holding this cookie loses access on the next request.";
+        if (!confirm(msg)) return;
+        btn.disabled = true;
+        try {
+          await api("POST", `${USERS_BASE}/${encodeURIComponent(u)}/sessions/${encodeURIComponent(sid)}/revoke`);
+          toast("Session revoked", "ok");
+          if (isMe) {
+            location.href = "/antibot-appsec-gateway/login";
+            return;
+          }
+          openSessionsModal(u);   // refresh the list
+        } catch (e) {
+          toast("Revoke failed: " + e.message, "err");
+          btn.disabled = false;
+        }
+      });
+    });
+  } catch (e) {
+    document.getElementById("sessions-pane").textContent =
+      "Load failed: " + e.message;
+  }
+}
+
+function openAddUserModal() {
+  showSimpleModal(`
+    <h3 style="margin:0 0 14px 0;color:#fff">Add a dashboard user</h3>
+    <div class="gw-form-grid">
+      <label>Username</label>
+      <input id="u-add-name" type="text" placeholder="lowercase, dot/underscore/hyphen ok"
+             pattern="[a-z0-9][a-z0-9._-]{1,62}" required>
+      <label>Password</label>
+      <input id="u-add-pw" type="password" placeholder="min 8 chars" autocomplete="new-password">
+      <label>Role</label>
+      <select id="u-add-role"><option value="admin">admin</option></select>
+      <span class="err" id="u-add-err"></span>
+    </div>
+    <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
+      <button class="secondary" onclick="closeSimpleModal()">Cancel</button>
+      <button id="u-add-go">Create</button>
+    </div>`);
+  document.getElementById("u-add-go").addEventListener("click", async () => {
+    const errEl = document.getElementById("u-add-err"); errEl.textContent = "";
+    const username = document.getElementById("u-add-name").value.trim().toLowerCase();
+    const password = document.getElementById("u-add-pw").value;
+    const role     = document.getElementById("u-add-role").value;
+    if (!/^[a-z0-9][a-z0-9._-]{1,62}$/.test(username)) {
+      errEl.textContent = "username must be lowercase alphanumeric + . _ -, 2-64 chars";
+      return;
+    }
+    if (password.length < 8) {
+      errEl.textContent = "password must be at least 8 chars";
+      return;
+    }
+    document.getElementById("u-add-go").disabled = true;
+    try {
+      await api("POST", USERS_BASE, { username, password, role });
+      closeSimpleModal();
+      toast(`User '${username}' created`, "ok");
+      loadUsers();
+    } catch (e) {
+      errEl.textContent = e.message;
+      document.getElementById("u-add-go").disabled = false;
+    }
+  });
+}
+
+function changeUserPassword(username) {
+  showSimpleModal(`
+    <h3 style="margin:0 0 12px 0;color:#fff">Change password — ${escHtml(username)}</h3>
+    <div class="gw-form-grid">
+      <label>New password</label>
+      <input id="u-pw-new" type="password" autocomplete="new-password">
+      <label>Confirm</label>
+      <input id="u-pw-confirm" type="password" autocomplete="new-password">
+      <span class="err" id="u-pw-err"></span>
+    </div>
+    <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
+      <button class="secondary" onclick="closeSimpleModal()">Cancel</button>
+      <button id="u-pw-go">Update</button>
+    </div>`);
+  document.getElementById("u-pw-go").addEventListener("click", async () => {
+    const errEl = document.getElementById("u-pw-err"); errEl.textContent = "";
+    const a = document.getElementById("u-pw-new").value;
+    const b = document.getElementById("u-pw-confirm").value;
+    if (a !== b) { errEl.textContent = "passwords do not match"; return; }
+    if (a.length < 8) { errEl.textContent = "password must be at least 8 chars"; return; }
+    document.getElementById("u-pw-go").disabled = true;
+    try {
+      await api("PATCH", `${USERS_BASE}/${encodeURIComponent(username)}`, { password: a });
+      closeSimpleModal();
+      toast(`Password updated for '${username}'`, "ok");
+      loadUsers();
+    } catch (e) {
+      errEl.textContent = e.message;
+      document.getElementById("u-pw-go").disabled = false;
+    }
+  });
+}
+
+async function toggleUserStatus(username, currentLabel) {
+  const target = currentLabel === "Disable" ? "disabled" : "active";
+  if (!confirm(`Mark ${username} as ${target}?`)) return;
+  try {
+    await api("PATCH", `${USERS_BASE}/${encodeURIComponent(username)}`, { status: target });
+    toast(`${username} → ${target}`, "ok");
+    loadUsers();
+  } catch (e) { toast("Status change failed: " + e.message, "err"); }
+}
+
+async function deleteUser(username) {
+  showSimpleModal(`
+    <h3 style="margin:0 0 10px 0;color:var(--red)">Delete user "${escHtml(username)}"?</h3>
+    <p class="desc" style="margin-bottom:10px">
+      This permanently removes the account. Type the username to confirm.
+    </p>
+    <div class="gw-form-grid">
+      <label>Type username</label>
+      <input id="u-del-confirm" type="text" placeholder="${escHtml(username)}">
+      <span class="err" id="u-del-err"></span>
+    </div>
+    <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
+      <button class="secondary" onclick="closeSimpleModal()">Cancel</button>
+      <button class="danger" id="u-del-go">Delete</button>
+    </div>`);
+  document.getElementById("u-del-go").addEventListener("click", async () => {
+    if (document.getElementById("u-del-confirm").value !== username) {
+      document.getElementById("u-del-err").textContent = "username mismatch";
+      return;
+    }
+    document.getElementById("u-del-go").disabled = true;
+    try {
+      await api("DELETE", `${USERS_BASE}/${encodeURIComponent(username)}`);
+      closeSimpleModal();
+      toast(`Deleted ${username}`, "ok");
+      loadUsers();
+    } catch (e) {
+      document.getElementById("u-del-err").textContent = e.message;
+      document.getElementById("u-del-go").disabled = false;
+    }
+  });
+}
+
+// ── 1.6.7 — Mesh sync (pending inbound) ─────────────────────────────
+const MESH_BASE = "/antibot-appsec-gateway/secured/admin/mesh-sync";
+
+async function loadMesh() {
+  try {
+    const j = await api("GET", MESH_BASE);
+    $("mesh-redis-status").textContent = j.redis_available
+      ? "redis online · publishing every 30s"
+      : "redis OFFLINE · sync inert until REDIS_URL is set";
+    $("mesh-redis-status").style.color = j.redis_available
+      ? "var(--green)" : "var(--yellow)";
+    const enabled = j.enabled_keys || [];
+    $("mesh-enabled-summary").textContent =
+      enabled.length
+        ? "enabled outbound: " + enabled.join(", ")
+        : "enabled outbound: (none — flip a toggle in Controls → External integrations)";
+    const tb = $("mesh-tbody");
+    const rows = j.pending || [];
+    if (!rows.length) {
+      tb.innerHTML = `<tr><td colspan="6" class="dim" style="text-align:center;padding:18px">
+        No pending offers. Peer gateways' shared secrets will appear here when received.
+      </td></tr>`;
+      return;
+    }
+    tb.innerHTML = rows.map(r => `
+      <tr>
+        <td>${new Date((r.received_ts||0)*1000).toISOString().replace('T',' ').slice(0,19)}Z</td>
+        <td>${escHtml(r.source_gw_id)}</td>
+        <td><code style="color:var(--blue)">${escHtml(r.key_name)}</code></td>
+        <td><span class="dim">${escHtml(r.value_preview)} (${r.value_length} chars)</span></td>
+        <td><span class="pill-status pill-inactive">${escHtml(r.status)}</span></td>
+        <td>
+          <button class="act-btn" data-mact="confirm" data-id="${r.id}">Apply</button>
+          <button class="act-btn danger" data-mact="reject" data-id="${r.id}">Reject</button>
+        </td>
+      </tr>`).join("");
+  } catch (e) { toast("Mesh load failed: " + e.message, "err"); }
+}
+
+$("mesh-refresh").addEventListener("click", loadMesh);
+$("mesh-tbody").addEventListener("click", async (ev) => {
+  const t = ev.target;
+  if (!t.classList.contains("act-btn")) return;
+  const id = t.dataset.id;
+  const action = t.dataset.mact;
+  if (!confirm(`${action === 'confirm' ? 'Apply' : 'Reject'} pending mesh offer #${id}?`)) return;
+  t.disabled = true;
+  try {
+    await api("POST", `${MESH_BASE}/pending/${encodeURIComponent(id)}/${action}`);
+    toast(`Offer #${id} ${action === 'confirm' ? 'applied' : 'rejected'}`, "ok");
+    loadMesh();
+  } catch (e) {
+    toast(action + " failed: " + e.message, "err");
+    t.disabled = false;
+  }
+});
+
+// Auto-refresh the pending list every 30s (matches the publish cadence).
+setInterval(() => {
+  if (document.getElementById("card-mesh")) loadMesh();
+}, 30000);
+
+// Auto-refresh the users list every 30s (online indicator decays in 60s).
+setInterval(() => {
+  if (document.getElementById("card-users")) loadUsers();
+}, 30000);
+
+// Initial load.
+loadList();
+loadUsers();
+loadMesh();
+
+</script>
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
+<style>
+#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:#161b22;color:#fff;border:1px solid #30363d;
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
+.gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
+  display:none;align-items:flex-start;justify-content:center;z-index:2200;
+  padding:60px 20px 20px}
+.gw-modal-overlay.show{display:flex}
+.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
+.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+  display:flex;justify-content:space-between;align-items:center}
+.gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
+.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
+.gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
+.gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
+.gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
+.gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+</style>
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
+<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="gw-modal-card">
+    <h3>
+      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
+    </h3>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+  </div>
+</div>
+<script>
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const escHtml2 = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url2 = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const pill = document.getElementById('gw-status-pill');
+  const modal = document.getElementById('gw-status-modal');
+  const modalScore = document.getElementById('gw-modal-score');
+  const modalBody = document.getElementById('gw-modal-body');
+  const lvlSelect = document.getElementById('gw-loglvl');
+  function colorFor(score){
+    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  }
+  let lastData = null;
+  async function tick(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+                            {credentials:'include'});
+      const d = await r.json();
+      lastData = d;
+      const s = d.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● GW ${s}/100`;
+    } catch(e){
+      pill.style.background = '#3d1a1a';
+      pill.style.color = '#f85149';
+      pill.textContent = '● ERR';
+    }
+  }
+  pill.onclick = () => {
+    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
+    modalScore.textContent = lastData.score|0;
+    modalScore.style.color = colorFor(lastData.score).fg;
+    const rows = (lastData.reasons||[]).map(r => `
+      <div class="gw-row">
+        <span class="key">${escHtml2(r.key)}</span>
+        <span class="badge ${escHtml2(r.status)}">${escHtml2(r.status)}</span>
+        <span class="det">${escHtml2(r.detail||'')}</span>
+        <span class="val">${escHtml2(r.value||'')}</span>
+      </div>`).join('');
+    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+    </div>`;
+    modal.classList.add('show');
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') modal.classList.remove('show');
+  });
+  tick();
+  setInterval(tick, 15000);
+
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url2('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url2('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
+})();
+</script>
+<!-- /1.6.5 GW status pill + log-level combo -->
+
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+</body></html>

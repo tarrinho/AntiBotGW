@@ -46,6 +46,10 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
 .ctrl-now:hover:not(:disabled){background:#1c3d5a}
 @media (max-width:1100px){.row,.row5{grid-template-columns:repeat(2,1fr)}}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
 <style>
@@ -55,15 +59,16 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.4 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.7 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
-  <a href="/__dashboard?key=__KEY__">Dashboard</a>
-  <a href="/__agents?key=__KEY__">Agents</a>
-  <a href="/__service?key=__KEY__" class="active">Service</a>
-  <a href="/__controls?key=__KEY__">Controls</a>
-  <a href="/__geo?key=__KEY__">GeoMap</a>
-  <a href="/__logs?key=__KEY__">Logs</a>
-</nav>
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__" class="active">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="grid">
 
@@ -134,6 +139,12 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
           <option value="180">3 h</option>
           <option value="360">6 h</option>
           <option value="720">12 h</option>
+          <!-- 1.6.5 — extended windows up to 1 month -->
+          <option value="1440">24 h</option>
+          <option value="4320">3 d</option>
+          <option value="10080">7 d</option>
+          <option value="20160">14 d</option>
+          <option value="43200">30 d</option>
         </select>
         <span class="dim" style="margin-left:6px">bucket:</span>
         <select id="bucket" class="ctrl">
@@ -170,6 +181,20 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
     <div style="position:relative;height:220px"><canvas id="chart-db"></canvas></div>
   </div>
 
+  <!-- 1.6.5 — Postgres / TimescaleDB size graph -->
+  <div class="card" id="card-pg-db">
+    <h2>PostgreSQL / TimescaleDB size · evolution
+      <span style="font-size:11px;color:var(--dim);font-weight:400;margin-left:8px">
+        (sampled once per minute when DB_BACKEND=postgres)
+      </span>
+    </h2>
+    <div style="position:relative;height:220px"><canvas id="chart-pg-db"></canvas></div>
+    <div id="pg-db-empty" class="dim" style="text-align:center;padding:30px 0;font-size:11.5px;display:none">
+      No Postgres samples yet — set <code>DB_BACKEND=postgres</code> + <code>POSTGRES_DSN</code>
+      and use the <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__" style="color:var(--blue)">Controls</a> dashboard to switch backends.
+    </div>
+  </div>
+
   <!-- ── Detail tables ─────────────────────────────── -->
   <div class="row" style="grid-template-columns:1fr 1fr 1fr">
     <div class="card">
@@ -188,6 +213,26 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
 </div>
 
+<!-- 1.6.5 — per-detector latency + cost-by-bucket -->
+<div class="row" style="grid-template-columns:1fr 1fr;margin-top:14px;gap:14px">
+  <div class="card">
+    <h2>Per-detector p99 latency <span style="font-size:10px;font-weight:400;color:var(--dim);text-transform:none;letter-spacing:0;margin-left:4px">live samples · top 12 by hits</span></h2>
+    <table id="svc-latency-tbl" style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+        <th style="padding:4px 6px">reason</th>
+        <th style="padding:4px 6px">method</th>
+        <th style="padding:4px 6px;text-align:right">hits</th>
+        <th style="padding:4px 6px;text-align:right">p99 ms</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <h2>Cost by detection bucket <span style="font-size:10px;font-weight:400;color:var(--dim);text-transform:none;letter-spacing:0;margin-left:4px">total cumulative ms across all hits</span></h2>
+    <div id="svc-cost-bars" style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:6px">loading…</div>
+  </div>
+</div>
+
 <div class="foot">refreshes every 5s · sampling every <span id="interval">5</span>s · <code id="ts"></code></div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
@@ -200,7 +245,7 @@ const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
 ['lnk-main','lnk-agents','lnk-self'].forEach((id,i)=>{
   const el = document.getElementById(id);
   if (!el) return;
-  const tgt = ['/__dashboard','/__agents','/__service'][i];
+  const tgt = ['/antibot-appsec-gateway/secured/dashboard','/antibot-appsec-gateway/secured/agents','/antibot-appsec-gateway/secured/service'][i];
   el.href = tgt + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : '');
 });
 
@@ -213,7 +258,7 @@ const fmtBytes = b => {
 };
 const fmtBps = b => fmtBytes(b) + '/s';
 
-let cpuMemChart=null, netChart=null, procChart=null, dbChart=null;
+let cpuMemChart=null, netChart=null, procChart=null, dbChart=null, pgDbChart=null;
 
 function ensureCharts(){
   if (cpuMemChart) return;
@@ -287,6 +332,26 @@ function ensureCharts(){
       }
     }
   });
+
+  // 1.6.5 — Postgres DB size chart
+  const optsBytes = {...opts,
+    plugins:{...opts.plugins, tooltip:{callbacks:{
+      label:(item) => {
+        const v = item.parsed.y || 0;
+        const fmt = v >= 1073741824 ? (v/1073741824).toFixed(2)+' GB'
+                  : v >= 1048576 ? (v/1048576).toFixed(1)+' MB'
+                  : v >= 1024 ? (v/1024).toFixed(0)+' KB' : v+' B';
+        return `${item.dataset.label}: ${fmt}`;
+      }
+    }}},
+  };
+  pgDbChart = new Chart(document.getElementById('chart-pg-db').getContext('2d'),{
+    type:'line', data:{labels:[],datasets:[
+      {label:'pg_db_bytes', data:[], borderColor:'#bc8cff',
+       backgroundColor:'rgba(188,140,255,0.18)', tension:0.25, fill:true,
+       borderWidth:2, pointRadius:0},
+    ]}, options:optsBytes,
+  });
 }
 
 const fmtTime = ts => {
@@ -340,7 +405,7 @@ async function tick(){
     });
     if (endEpoch !== null) params.set('end', endEpoch.toString());
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__service-data?'+params,{cache:'no-store',credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/service-data?'+params,{cache:'no-store',credentials:'include'});
     const d = await r.json();
     document.getElementById('live').style.background='var(--green)';
     document.getElementById('live').textContent='● LIVE';
@@ -441,6 +506,17 @@ async function tick(){
     dbChart.data.datasets[0].data = hist.map(s => s.db_db  || 0);
     dbChart.data.datasets[1].data = hist.map(s => s.db_wal || 0);
     dbChart.data.datasets[2].data = hist.map(s => s.db_shm || 0);
+
+    // 1.6.5 — Postgres / TimescaleDB size series
+    if (pgDbChart) {
+      const pgSeries = hist.map(s => (typeof s.pg_db_bytes === 'number') ? s.pg_db_bytes : null);
+      const anyPg = pgSeries.some(v => v !== null && v > 0);
+      pgDbChart.data.labels = labelsView;
+      pgDbChart.data.datasets[0].data = pgSeries;
+      const emptyEl = document.getElementById('pg-db-empty');
+      if (emptyEl) emptyEl.style.display = anyPg ? 'none' : 'block';
+      pgDbChart.update('none');
+    }
     dbChart.update('none');
 
     document.getElementById('ts').textContent = new Date().toISOString();
@@ -458,8 +534,65 @@ function _typing(){
   return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || ae.isContentEditable;
 }
 setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
+
+// 1.6.5 — per-detector latency + cost-by-bucket
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const COL = {
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+  };
+  async function loadStats(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
+      const d = await r.json();
+      const sigs = (d.signals||[]).filter(s => s.hits > 0);
+      const tb = document.querySelector('#svc-latency-tbl tbody');
+      if (tb){
+        tb.innerHTML = sigs.length ? sigs.slice(0, 12).map(s => `
+          <tr style="border-bottom:1px solid #1f2730">
+            <td style="padding:4px 6px;font-family:ui-monospace,monospace"><code>${escHtml(s.reason)}</code></td>
+            <td style="padding:4px 6px;color:${COL[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escHtml(s.method)}</td>
+            <td style="padding:4px 6px;text-align:right;font-weight:600">${s.hits}</td>
+            <td style="padding:4px 6px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
+          </tr>`).join('')
+          : '<tr><td colspan="4" class="dim" style="padding:8px">no detector hits yet</td></tr>';
+      }
+      // Cost bucket = sum(hits * p50) per method bucket
+      const costs = {};
+      for (const s of (d.signals||[])) {
+        if (!s.hits) continue;
+        const k = s.method;
+        costs[k] = (costs[k] || 0) + s.hits * s.p50_ms;
+      }
+      const entries = Object.entries(costs).sort((a,b) => b[1]-a[1]);
+      const div = document.getElementById('svc-cost-bars');
+      if (div) {
+        if (!entries.length){ div.innerHTML='<div class="dim">no detector cost data yet</div>'; return; }
+        const max = Math.max(...entries.map(([_,v])=>v));
+        div.innerHTML = entries.map(([k,v]) => {
+          const pct = max ? (v/max)*100 : 0;
+          return `<div style="display:grid;grid-template-columns:80px 1fr 70px;gap:8px;align-items:center;margin-bottom:4px">
+            <span style="color:${COL[k]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escHtml(k)}</span>
+            <span style="background:#21262d;border-radius:3px;height:12px;position:relative">
+              <span style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${COL[k]||'#8b949e'};border-radius:3px;opacity:.7"></span>
+            </span>
+            <span style="text-align:right;color:#fff;font-weight:600">${v.toFixed(1)} ms</span>
+          </div>`;
+        }).join('');
+      }
+    } catch(e){}
+  }
+  loadStats();
+  setInterval(loadStats, 5000);
+})();
 </script>
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
@@ -467,6 +600,16 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -487,6 +630,17 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
 <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
@@ -502,11 +656,12 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
-  // Linear gradient red→yellow→green over 0..100.
+  const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -515,7 +670,7 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -552,8 +707,35 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
   });
   tick();
   setInterval(tick, 15000);
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
 })();
 </script>
-<!-- /1.6.4 GW status pill -->
+<!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

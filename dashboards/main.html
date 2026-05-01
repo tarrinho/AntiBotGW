@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.6.4 · Dashboard</title>
+<title>AppSecGW_1.6.7 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -102,9 +102,13 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .modal table{width:100%}
 .modal td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace;font-size:11.5px}
 .modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.4 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.7 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.5.4 — reason drill-down modal -->
 <div class="modal-back" id="modal-back"></div>
@@ -113,13 +117,14 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
   <div id="modal-body"></div>
 </div>
 <nav class="topnav" id="topnav">
-  <a href="/__dashboard?key=__KEY__" class="active">Dashboard</a>
-  <a href="/__agents?key=__KEY__">Agents</a>
-  <a href="/__service?key=__KEY__">Service</a>
-  <a href="/__controls?key=__KEY__">Controls</a>
-  <a href="/__geo?key=__KEY__">GeoMap</a>
-  <a href="/__logs?key=__KEY__">Logs</a>
-</nav>
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__" class="active">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="grid">
 
@@ -226,8 +231,8 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 
   <!-- 1.5.1: live throughput + operator-controlled global RPS limit -->
   <!-- 1.5.5: Throughput cap card hidden by request — functionality preserved
-       (live RPS still computed in /__metrics, GLOBAL_RPS_LIMIT still tunable
-       via /__controls). -->
+       (live RPS still computed in /antibot-appsec-gateway/secured/metrics, GLOBAL_RPS_LIMIT still tunable
+       via /antibot-appsec-gateway/secured/controls). -->
   <div class="card" id="rps-card" style="display:none;align-items:center;gap:18px;flex-wrap:wrap">
     <div style="min-width:180px">
       <h2 style="margin:0 0 4px 0">Throughput cap</h2>
@@ -308,6 +313,31 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
     <div class="card">
       <h2>Live events (last 50)</h2>
       <div id="events"></div>
+    </div>
+  </div>
+
+  <!-- 1.6.5 — bot/AI detection breakdown + top methods + block-rate trend -->
+  <div class="row" style="grid-template-columns:1fr 1fr 1fr;margin-top:14px">
+    <div class="card">
+      <h2>Detection methods <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">total blocks per layer · since boot</span></h2>
+      <div id="method-bars"
+           style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:6px">loading…</div>
+    </div>
+    <div class="card">
+      <h2>Top methods <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">which technique catches most bots</span></h2>
+      <table id="top-methods-tbl"
+             style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+        <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px">
+          <th style="padding:4px 6px">method</th>
+          <th style="padding:4px 6px;text-align:right">hits</th>
+          <th style="padding:4px 6px;text-align:right">p99 ms</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Block-rate trend <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">% blocks / minute · last 60 min</span></h2>
+      <canvas id="blockrate-chart" height="120"></canvas>
     </div>
   </div>
 
@@ -423,7 +453,7 @@ function ensureChart() {
   return chart;
 }
 
-// Forward the admin key to subsequent /__metrics calls so the dashboard works
+// Forward the admin key to subsequent /antibot-appsec-gateway/secured/metrics calls so the dashboard works
 // when accessed via the protected URL (?key=...)
 const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
 
@@ -486,7 +516,7 @@ async function tick() {
     });
     if (endEpoch !== null) params.set('end', endEpoch.toString());
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
     document.getElementById('live').style.background='var(--green)';
     document.getElementById('live').textContent='● LIVE';
@@ -589,7 +619,7 @@ async function tick() {
         const id = el.dataset.id;
         const banning = !el.classList.contains('on');
         el.style.opacity = '0.5';
-        const url2 = (banning ? '/__ban' : '/__unban') + k_q_local + '&id=' + encodeURIComponent(id);
+        const url2 = (banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban') + k_q_local + '&id=' + encodeURIComponent(id);
         try {
           const r = await fetch(url2, {credentials:'include'});
           const b = await r.json().catch(()=>({}));
@@ -727,7 +757,7 @@ async function tick() {
       });
       if (endEpoch !== null) costParams.set('end', endEpoch.toString());
       if (ADMIN_KEY) costParams.set('key', ADMIN_KEY);
-      const cr = await fetch('/__cost-timeline?' + costParams.toString(),
+      const cr = await fetch('/antibot-appsec-gateway/secured/cost-timeline?' + costParams.toString(),
                             {cache:'no-store', credentials:'include'});
       if (cr.ok) {
         const cd = await cr.json();
@@ -784,6 +814,106 @@ window._userIsTyping = _userIsTyping;
 // the data is static and refreshing would just repaint the same window.
 setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
+// 1.6.5 — bot/AI detection breakdown + top methods + block-rate trend.
+// Pulls from /antibot-appsec-gateway/secured/detector-stats (fast in-memory) + the timeline data already
+// drawn above. Re-paints every 5 s.
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const COL = {
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+  };
+
+  let blockRateChart = null;
+  function paintMethodBars(methods){
+    const div = document.getElementById('method-bars');
+    if (!div) return;
+    if (!methods.length){ div.innerHTML = '<div class="dim">no detector hits yet</div>'; return; }
+    const max = Math.max(...methods.map(m => m.hits));
+    div.innerHTML = methods.map(m => {
+      const pct = max ? (m.hits / max) * 100 : 0;
+      return `<div style="display:grid;grid-template-columns:80px 1fr 50px;gap:8px;align-items:center;margin-bottom:4px">
+        <span style="color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escHtml(m.method)}</span>
+        <span style="background:#21262d;border-radius:3px;height:12px;position:relative">
+          <span style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${COL[m.method]||'#8b949e'};border-radius:3px;opacity:.7"></span>
+        </span>
+        <span style="text-align:right;color:#fff;font-weight:600">${m.hits}</span>
+      </div>`;
+    }).join('');
+  }
+  function paintTopMethods(methods){
+    const tbody = document.querySelector('#top-methods-tbl tbody');
+    if (!tbody) return;
+    if (!methods.length){ tbody.innerHTML = '<tr><td colspan="3" class="dim" style="padding:8px">no hits</td></tr>'; return; }
+    tbody.innerHTML = methods.slice(0, 8).map(m => `
+      <tr style="border-bottom:1px solid var(--line)">
+        <td style="padding:4px 6px;color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10.5px">${escHtml(m.method)}</td>
+        <td style="padding:4px 6px;text-align:right;font-weight:600">${m.hits}</td>
+        <td style="padding:4px 6px;text-align:right;font-family:ui-monospace,monospace;color:var(--dim)">${m.p99_ms}</td>
+      </tr>`).join('');
+  }
+  async function loadDetectorStats(){
+    if (_userIsTyping()) return;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
+      const d = await r.json();
+      paintMethodBars(d.methods || []);
+      paintTopMethods(d.methods || []);
+    } catch(e){}
+  }
+
+  // Block-rate trend — derive from /antibot-appsec-gateway/secured/metrics timeline (already loaded).
+  // Sample the last hour; produce a line chart of blocked/(blocked+allowed)
+  // per bucket as a percentage.
+  async function loadBlockRate(){
+    if (_userIsTyping()) return;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/metrics?range=60'), {credentials:'include'});
+      const d = await r.json();
+      const buckets = (d.timeline && d.timeline.buckets) || [];
+      const labels = buckets.map(b => new Date(b.ts*1000).toISOString().slice(11,16));
+      const data = buckets.map(b => {
+        const tot = (b.allowed||0) + (b.blocked||0) + (b.missed||0);
+        return tot > 0 ? Math.round(((b.blocked||0) / tot) * 1000)/10 : 0;
+      });
+      const ctx = document.getElementById('blockrate-chart');
+      if (!ctx) return;
+      if (blockRateChart) {
+        blockRateChart.data.labels = labels;
+        blockRateChart.data.datasets[0].data = data;
+        blockRateChart.update('none');
+      } else {
+        blockRateChart = new Chart(ctx, {
+          type: 'line',
+          data: { labels, datasets: [{
+            label: 'block %',
+            data,
+            borderColor: '#f85149',
+            backgroundColor: 'rgba(248,81,73,.15)',
+            borderWidth: 1.5, fill: true, tension: .25, pointRadius: 0,
+          }]},
+          options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { ticks: { color: '#8b949e', font: { size: 9 }, maxTicksLimit: 6 },
+                   grid: { color: '#1f2730' } },
+              y: { min: 0, max: 100, ticks: { color: '#8b949e', font: { size: 9 },
+                   callback: v => v + '%' }, grid: { color: '#1f2730' } },
+            },
+          },
+        });
+      }
+    } catch(e){}
+  }
+  loadDetectorStats(); loadBlockRate();
+  setInterval(() => { loadDetectorStats(); loadBlockRate(); }, 5000);
+})();
+
 // ── 1.5.1: throughput cap + unban actions ──────────────────────────
 (function(){
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
@@ -804,7 +934,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
   async function refreshRps(){
     try{
-      const r = await fetch('/__metrics' + k_q, {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/metrics' + k_q, {credentials:'include'});
       if (!r.ok) return;
       const d = await r.json();
       liveEl.textContent = fmt(d.live_rps);
@@ -820,7 +950,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   async function postLimit(n){
     applyEl.disabled = true;
     try{
-      const r = await fetch('/__config' + k_q, {
+      const r = await fetch('/antibot-appsec-gateway/secured/config' + k_q, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify({GLOBAL_RPS_LIMIT: n}),
@@ -852,7 +982,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     if (!confirm('Unban + reset risk score for\n' + id + '?')) return;
     btn.disabled = true; btn.textContent = '...';
     try{
-      const r = await fetch('/__unban' + k_q + '&id=' + encodeURIComponent(id),
+      const r = await fetch('/antibot-appsec-gateway/secured/unban' + k_q + '&id=' + encodeURIComponent(id),
                             {credentials:'include'});
       const b = await r.json().catch(()=>({}));
       if (r.ok && b.cleared){
@@ -951,7 +1081,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     let d = {};
     try {
-      const r = await fetch('/__path-hits?' + params, {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/path-hits?' + params, {credentials:'include'});
       d = await r.json();
     } catch(e){ d = {ips:[], total_rows:0}; }
     const ips = d.ips || [];
@@ -1011,7 +1141,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
   // 1.5.5 — Click any line on the timeline → modal with all 4 categories
   // (total/allowed/blocked/missed), with the clicked one highlighted.
-  // Reuses the /__agents-bucket endpoint (which returns detected/missed/clean).
+  // Reuses the /antibot-appsec-gateway/secured/agents-bucket endpoint (which returns detected/missed/clean).
   window.openMainBucketDetail = async function(bucketEntry, bucketSecs, datasetIndex){
     const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
     const t = bucketEntry.t;
@@ -1021,7 +1151,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     let d = {};
     try {
-      const r = await fetch('/__agents-bucket?' + params, {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
       d = await r.json();
     } catch(e) { d = {detected:[], missed:[], clean:[]}; }
     const fmt = epoch => new Date(epoch*1000).toLocaleString();
@@ -1135,7 +1265,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     // Synthetic reasons (not in RISK_WEIGHTS — emitted by middleware directly)
     "banned-silent":         {tier:"info", weight:0,  text:"Identity is currently in the hostile pool (24-h ban after risk crossed threshold OR honeypot/AI-flagged hit). Every request returns the upstream's homepage so the bot can't tell it was caught."},
     "chal-required":         {tier:"info", weight:0,  text:"Cookie gate (`JS_CHALLENGE=1`) requires a valid `chal` cookie and this request didn't carry one. Browser solves Turnstile / heuristic auto-mint to get the cookie; pure-HTTP bots get silent-decoyed."},
-    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/__metrics`, `/__dashboard`, etc. is never confirmed to outsiders."},
+    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/antibot-appsec-gateway/secured/metrics`, `/antibot-appsec-gateway/secured/dashboard`, etc. is never confirmed to outsiders."},
     "admin-ip-blocked":      {tier:"info", weight:0,  text:"`ADMIN_ALLOWED_IPS` is configured and the source IP is not on the list. Admin endpoints return upstream-404 (mirrors a real not-found, no leak)."},
     "pow-required":          {tier:"info", weight:0,  text:"`POW_REQUIRED_PATHS` includes this path and the request didn't carry a valid `X-PoW-Token`/`X-PoW-Solution`. Returns 402 with a fresh challenge."},
     "OK":                    {tier:"info", weight:0,  text:"Request was forwarded to the upstream. No detector fired."},
@@ -1174,7 +1304,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     document.getElementById('modal-close').onclick = close;
     let body = explainBlock;
     if (!offenders.length){
-      body += `<div class="empty">no client currently in memory has hits on <b>${escapeHtml(reason)}</b><br><span style="font-size:10.5px">may have been pruned (idle eviction) — check the <code>/__events</code> log for historical hits</span></div>`;
+      body += `<div class="empty">no client currently in memory has hits on <b>${escapeHtml(reason)}</b><br><span style="font-size:10.5px">may have been pruned (idle eviction) — check the <code>/antibot-appsec-gateway/secured/events</code> log for historical hits</span></div>`;
     } else {
       // 1.5.5 — show stealth_score (current accumulated, decay-aware) per
       // identity, NOT a naive weight×count multiplication.  The actual
@@ -1290,7 +1420,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
       ? {SOFT_CHALLENGE_SCORE: SOFT}
       : {RISK_BAN_THRESHOLD: BAN};
     try{
-      const r = await fetch('/__config' + k_q, {
+      const r = await fetch('/antibot-appsec-gateway/secured/config' + k_q, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
         body: JSON.stringify(body),
@@ -1324,7 +1454,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
   async function syncFromConfig(){
     try{
-      const r = await fetch('/__config' + k_q, {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/config' + k_q, {credentials:'include'});
       if (!r.ok) return;
       const j = await r.json();
       const cfg = j.state || j;
@@ -1338,7 +1468,8 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 })();
 
 </script>
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
@@ -1346,6 +1477,16 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -1366,6 +1507,17 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
 <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
@@ -1381,11 +1533,12 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
-  // Linear gradient red→yellow→green over 0..100.
+  const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -1394,7 +1547,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -1431,8 +1584,35 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   });
   tick();
   setInterval(tick, 15000);
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
 })();
 </script>
-<!-- /1.6.4 GW status pill -->
+<!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

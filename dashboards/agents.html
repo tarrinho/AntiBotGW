@@ -7,7 +7,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--orange);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
@@ -82,6 +82,10 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .popover .rsn-bar>div{height:100%;background:var(--red)}
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
 .popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
 <style>
@@ -91,15 +95,16 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.4 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.7 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
-  <a href="/__dashboard?key=__KEY__">Dashboard</a>
-  <a href="/__agents?key=__KEY__" class="active">Agents</a>
-  <a href="/__service?key=__KEY__">Service</a>
-  <a href="/__controls?key=__KEY__">Controls</a>
-  <a href="/__geo?key=__KEY__">GeoMap</a>
-  <a href="/__logs?key=__KEY__">Logs</a>
-</nav>
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__" class="active">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="grid">
 
@@ -181,6 +186,27 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
 </div>
 
+<!-- 1.6.5 — rule inventory + per-method latency -->
+<div class="row" style="grid-template-columns:1fr 1fr;margin-top:14px;gap:14px">
+  <div class="card">
+    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.6.7</span></h2>
+    <div id="rule-inv" style="font-size:11.5px;font-family:ui-monospace,Menlo,monospace;line-height:1.7">loading…</div>
+  </div>
+  <div class="card">
+    <h2>Per-method latency <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">live samples · sorted by hits</span></h2>
+    <table id="agent-latency-tbl" style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+        <th style="padding:4px 6px">reason</th>
+        <th style="padding:4px 6px">method</th>
+        <th style="padding:4px 6px;text-align:right">hits</th>
+        <th style="padding:4px 6px;text-align:right">p50 ms</th>
+        <th style="padding:4px 6px;text-align:right">p99 ms</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
 <div class="foot">refreshes every 3 s · <code id="ts"></code></div>
 
 <!-- 1.5.4 popover overlay (identity details + risk breakdown) -->
@@ -220,7 +246,7 @@ async function tick(){
   try{
     const params = new URLSearchParams({min_score: MIN, limit: 200});
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__agents-data?' + params, {cache:'no-store', credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/agents-data?' + params, {cache:'no-store', credentials:'include'});
     const d = await r.json();
     document.getElementById('live').textContent='● LIVE';
     document.getElementById('live').style.background='var(--orange)';
@@ -305,7 +331,7 @@ async function tick(){
           const banning = !el.classList.contains('on');
           el.style.opacity = '0.5';
           const k_q = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
-          const url = (banning ? '/__ban' : '/__unban') + k_q + '&id=' + encodeURIComponent(id);
+          const url = (banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban') + k_q + '&id=' + encodeURIComponent(id);
           try {
             const r = await fetch(url, {credentials:'include'});
             const b = await r.json().catch(()=>({}));
@@ -392,7 +418,7 @@ async function tickChart(){
     });
     if (tEndEpoch !== null) params.set('end', tEndEpoch.toString());
     if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-    const r = await fetch('/__agents-timeline?'+params, {cache:'no-store', credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/agents-timeline?'+params, {cache:'no-store', credentials:'include'});
     const d = await r.json();
     const c = ensureAgentChart();
     const bs = d.bucket_secs || 60;
@@ -454,6 +480,89 @@ function _typing(){
   return t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || ae.isContentEditable;
 }
 setInterval(() => { if (!_typing()) tick(); }, 3000);
+
+// 1.6.5 — rule inventory + per-method latency
+(function(){
+  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const COL = {
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+  };
+  function fmtAge(secs){
+    if (!secs) return 'never';
+    if (secs < 60) return `${secs|0}s ago`;
+    if (secs < 3600) return `${(secs/60)|0} min ago`;
+    if (secs < 86400) return `${(secs/3600)|0} h ago`;
+    return `${(secs/86400)|0} d ago`;
+  }
+  async function loadInventory(){
+    if (typeof _typing === 'function' && _typing()) return;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/lists-snapshot'), {credentials:'include'});
+      const d = await r.json();
+      const rows = [];
+      // AI-UA groups (granular bot detection)
+      const ai = Object.entries(d.ai_ua_groups || {});
+      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:6px">AI crawler groups (${ai.length})</div>`);
+      for (const [grp, info] of ai) {
+        rows.push(`<div>· <span style="color:#bc8cff">${escHtml(grp)}</span> · <code>${info.frags}</code> rules · <span style="color:${info.enabled?'#3fb950':'#8b949e'}">${info.enabled?'on':'off'}</span></div>`);
+      }
+      // Body groups
+      const bg = Object.entries(d.body_groups || {});
+      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px">Body-pattern groups (${bg.length})</div>`);
+      for (const [grp, info] of bg) {
+        rows.push(`<div>· <span style="color:#ff7b3a">${escHtml(grp)}</span> · <code>${info.patterns}</code> regex · <span style="color:${info.enabled?'#3fb950':'#8b949e'}">${info.enabled?'on':'off'}</span></div>`);
+      }
+      // DLP
+      const dlp = Object.entries(d.dlp_groups || {});
+      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px">DLP groups (${dlp.length})</div>`);
+      for (const [grp, info] of dlp) {
+        rows.push(`<div>· <span style="color:#bc8cff">${escHtml(grp)}</span> · <code>${info.patterns}</code> regex · <span style="color:${info.enabled?'#3fb950':'#8b949e'}">${info.enabled?'on':'off'}</span></div>`);
+      }
+      // Lists
+      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px">Lists & deny-feeds</div>`);
+      rows.push(`<div>UA blocklist (legacy CLI / scanners) · <code>${d.ua_blocklist_size}</code> entries</div>`);
+      rows.push(`<div>JA4 deny list · <code>${d.ja4_deny_size}</code> entries</div>`);
+      rows.push(`<div>Tor exits · <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:#3fb950">enforcing</span>':'<span style="color:#8b949e">off</span>'}</div>`);
+      rows.push(`<div>Hosting-ASN keywords · <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:#3fb950">on</span>':'<span style="color:#8b949e">off</span>'}</div>`);
+      rows.push(`<div>Honeypot paths · <code>${d.honeypot_paths_size}</code></div>`);
+      rows.push(`<div>Suspicious-path patterns · <code>${d.suspicious_path_patterns}</code></div>`);
+      rows.push(`<div>Country denylist · <code>${d.country_denylist_size}</code> · ${d.country_denylist.join(',')||'(empty)'}</div>`);
+      rows.push(`<div>Country allowlist · <code>${d.country_allowlist_size}</code> · ${d.country_allowlist.join(',')||'(empty)'}</div>`);
+      rows.push(`<div>Custom rules · <code>${d.custom_rules_size}</code></div>`);
+      rows.push(`<div>JWT validation paths · <code>${(d.jwt_paths||[]).length}</code></div>`);
+      rows.push(`<div>Endpoint policies · <code>${(d.endpoint_policies||[]).length}</code></div>`);
+      rows.push(`<div>Webhook event filter · <code>${(d.webhook_event_filter||[]).length || 'all'}</code></div>`);
+      rows.push(`<div>Admin IP allow · <code>${d.admin_ip_count}</code></div>`);
+      document.getElementById('rule-inv').innerHTML = rows.join('');
+    } catch(e){}
+  }
+  async function loadLatency(){
+    if (typeof _typing === 'function' && _typing()) return;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
+      const d = await r.json();
+      const tb = document.querySelector('#agent-latency-tbl tbody');
+      if (!tb) return;
+      const sigs = (d.signals || []).filter(s => s.hits > 0);
+      if (!sigs.length){ tb.innerHTML = '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>'; return; }
+      tb.innerHTML = sigs.slice(0, 20).map(s => `
+        <tr style="border-bottom:1px solid #1f2730">
+          <td style="padding:4px 6px;font-family:ui-monospace,monospace"><code>${escHtml(s.reason)}</code></td>
+          <td style="padding:4px 6px;color:${COL[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escHtml(s.method)}</td>
+          <td style="padding:4px 6px;text-align:right;font-weight:600">${s.hits}</td>
+          <td style="padding:4px 6px;text-align:right;color:var(--dim)">${s.p50_ms}</td>
+          <td style="padding:4px 6px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
+        </tr>`).join('');
+    } catch(e){}
+  }
+  loadInventory(); loadLatency();
+  setInterval(() => { loadInventory(); loadLatency(); }, 5000);
+})();
 // Only auto-refresh the chart when in live mode.
 setInterval(() => { if (tEndEpoch === null && !_typing()) tickChart(); }, 5000);
 
@@ -521,7 +630,7 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
   const focusKind = ['detected','missed','clean'][datasetIndex] || null;
   const params = new URLSearchParams({ t, bucket_secs: bucketSecs, min_score: MIN });
   if (ADMIN_KEY) params.set('key', ADMIN_KEY);
-  const r = await fetch('/__agents-bucket?' + params, {credentials:'include'});
+  const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
   const d = await r.json();
   const fmt = epoch => new Date(epoch*1000).toLocaleString();
   // Render order: focused first, then the other two.
@@ -649,7 +758,8 @@ function openPopover(kind, s, x, y){
   POP.style.top  = py+'px';
 }
 </script>
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
@@ -657,6 +767,16 @@ function openPopover(kind, s, x, y){
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -677,6 +797,17 @@ function openPopover(kind, s, x, y){
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
 <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
@@ -692,11 +823,12 @@ function openPopover(kind, s, x, y){
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
-  // Linear gradient red→yellow→green over 0..100.
+  const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -705,7 +837,7 @@ function openPopover(kind, s, x, y){
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -742,8 +874,35 @@ function openPopover(kind, s, x, y){
   });
   tick();
   setInterval(tick, 15000);
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
 })();
 </script>
-<!-- /1.6.4 GW status pill -->
+<!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

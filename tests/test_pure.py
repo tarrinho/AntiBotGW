@@ -263,20 +263,28 @@ def test_admin_ip_allowed_ipv6(proxy_module):
     assert proxy_module._admin_ip_allowed(_IPReq("2001:db9::1")) is False
 
 
-# ── _internal_authed (constant-time admin-key compare) ───────────────────
+# ── _internal_authed (1.6.7: session-cookie only) ────────────────────────
 
 class _AuthReq:
-    def __init__(self, header=None, query=None):
+    """Mimic enough of an aiohttp request for the auth helper. Bearer-key
+    bypass was removed in 1.6.7 — only the session cookie counts now."""
+    def __init__(self, header=None, query=None, cookie=None):
         self.headers = {"X-Admin-Key": header} if header is not None else {}
-        self.query = {"key": query} if query is not None else {}
+        self.query   = {"key": query}            if query  is not None else {}
+        self.cookies = {"agw_session": cookie}   if cookie is not None else {}
+        self._extra  = {}
+    def get(self, k, d=None): return self._extra.get(k, d)
+    def __setitem__(self, k, v): self._extra[k] = v
 
 
-def test_internal_authed_accepts_correct_header(proxy_module):
-    assert proxy_module._internal_authed(_AuthReq(header=proxy_module.INTERNAL_KEY))
-
-
-def test_internal_authed_accepts_correct_query(proxy_module):
-    assert proxy_module._internal_authed(_AuthReq(query=proxy_module.INTERNAL_KEY))
+def test_internal_authed_rejects_bearer_key_post_1_6_7(proxy_module):
+    """The shared admin-key bearer was retired in 1.6.7 — sending it via
+    `?key=` or `X-Admin-Key` MUST be ignored. Session cookie is the only
+    /secured/ entry."""
+    assert not proxy_module._internal_authed(
+        _AuthReq(header=proxy_module.INTERNAL_KEY))
+    assert not proxy_module._internal_authed(
+        _AuthReq(query=proxy_module.INTERNAL_KEY))
 
 
 def test_internal_authed_rejects_wrong_key(proxy_module):
@@ -285,3 +293,59 @@ def test_internal_authed_rejects_wrong_key(proxy_module):
 
 def test_internal_authed_rejects_empty(proxy_module):
     assert not proxy_module._internal_authed(_AuthReq())
+
+
+def _prime_session(proxy_module, username="admin"):
+    """Helper — mint a sid, prime the in-memory cache, return the token."""
+    sid = proxy_module._new_sid()
+    proxy_module._SESSION_CACHE[sid] = {
+        "username": username,
+        "expires_ts": proxy_module._t.time() + proxy_module._SESSION_TTL,
+        "revoked": False,
+    }
+    proxy_module._SESSION_CACHE_READY = True
+    return sid, proxy_module._session_sign(username, sid=sid)
+
+
+def test_internal_authed_accepts_valid_session_cookie(proxy_module):
+    _sid, token = _prime_session(proxy_module)
+    assert proxy_module._internal_authed(_AuthReq(cookie=token))
+
+
+def test_internal_authed_rejects_tampered_cookie(proxy_module):
+    _sid, token = _prime_session(proxy_module)
+    # Flip a single byte in the signature segment (last `|`-separated chunk).
+    head, sig = token.rsplit("|", 1)
+    bad = head + "|" + ("A" if sig[0] != "A" else "B") + sig[1:]
+    assert not proxy_module._internal_authed(_AuthReq(cookie=bad))
+
+
+def test_167_session_revoke_invalidates_cookie(proxy_module):
+    """Once a session is revoked, the cookie must stop verifying — even
+    though the HMAC is still valid. This is the security guarantee
+    behind "Revoke" in the Users → Sessions modal."""
+    sid, token = _prime_session(proxy_module)
+    assert proxy_module._internal_authed(_AuthReq(cookie=token))
+    assert proxy_module._session_revoke(sid, by_username="admin") is True
+    assert not proxy_module._internal_authed(_AuthReq(cookie=token))
+
+
+def test_167_session_token_format_includes_sid(proxy_module):
+    """1.6.7 — token is `username|sid|expiry|HMAC`; the old 3-part
+    `username|expiry|HMAC` format must no longer parse."""
+    sid, token = _prime_session(proxy_module)
+    assert token.count("|") == 3
+    parsed = proxy_module._session_parse(token)
+    assert parsed is not None
+    parsed_user, parsed_sid, parsed_expiry = parsed
+    assert parsed_user == "admin"
+    assert parsed_sid == sid
+    assert parsed_expiry > proxy_module._t.time()
+    # Old-format token (no sid): must be rejected.
+    import hmac as _hmac, hashlib as _h, base64 as _b
+    expiry = int(proxy_module._t.time()) + 3600
+    sig = _hmac.new(proxy_module.SESSION_KEY,
+                     f"admin|{expiry}".encode(), _h.sha256).digest()
+    sig_b = _b.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
+    legacy = f"admin|{expiry}|{sig_b}"
+    assert proxy_module._session_parse(legacy) is None
