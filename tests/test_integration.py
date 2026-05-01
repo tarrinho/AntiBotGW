@@ -199,14 +199,27 @@ def test_x_proxy_header_on_allowed_response(proxy_module):
 def test_location_rewrite_and_set_cookie_domain_strip(proxy_module):
     async def go():
         async with _spin_upstream() as up:
+            # 1.6.8 — keep os.environ["UPSTREAM"] in lockstep with the
+            # per-test upstream URL so `_echo_redirect` (which reads from
+            # os.environ) emits a Location whose netloc actually matches
+            # what the proxy is configured to forward to. Without this,
+            # the rewrite path is bypassed (lp.netloc != up_parsed.netloc),
+            # the assertion below passes by coincidence on a fresh module
+            # but breaks once any earlier test mutates os.environ.
+            os.environ["UPSTREAM"] = up
             async with _spin_proxy(proxy_module, up) as client:
                 r = await client.get("/redirect", headers=_browser_headers(),
                                      allow_redirects=False)
-                # Location must NOT contain the upstream host any more
+                # Location must NOT contain the upstream's full netloc
+                # any more (host:port) — gateway should rewrite to its
+                # own scheme://host:port. Checking by netloc rather than
+                # bare host so the test still works when both upstream
+                # and gateway run on 127.0.0.1 with different ports.
                 assert r.status == 302
                 loc = r.headers.get("Location", "")
-                assert up.split("//", 1)[1].split(":", 1)[0] not in loc, \
-                    f"Location still contains upstream host: {loc}"
+                up_netloc = up.split("//", 1)[1]
+                assert up_netloc not in loc, \
+                    f"Location still contains upstream netloc {up_netloc}: {loc}"
                 # Set-Cookie must NOT contain Domain= attribute
                 cookies = r.headers.getall("Set-Cookie", [])
                 upstream_cookie = next((c for c in cookies if c.startswith("sessid=")), None)
