@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · Sign in</title>
+<meta name="robots" content="noindex,nofollow">
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13.5px/1.45 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);min-height:100vh;
+     display:flex;align-items:center;justify-content:center;padding:14px}
+.login-card{background:var(--card);border:1px solid var(--line);
+            border-radius:10px;padding:28px 32px;width:100%;max-width:420px;
+            box-shadow:0 8px 28px rgba(0,0,0,.45)}
+h1{font-size:18px;color:#fff;margin-bottom:4px;display:flex;
+   align-items:center;gap:8px}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;
+         border-radius:10px;font-weight:700}
+.sub{color:var(--dim);font-size:11.5px;margin-bottom:18px}
+label{display:block;font-size:10.5px;color:var(--dim);text-transform:uppercase;
+      letter-spacing:.5px;font-weight:700;margin-bottom:5px;margin-top:12px}
+input[type=text],input[type=password]{width:100%;background:#0d1117;
+      border:1px solid var(--line);color:var(--fg);border-radius:5px;
+      padding:9px 11px;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+input:focus{outline:1px solid var(--blue);border-color:var(--blue)}
+button{background:var(--blue);color:#fff;border:none;padding:10px 18px;
+       border-radius:5px;font-size:13px;font-weight:600;cursor:pointer;
+       width:100%;margin-top:20px;font-family:inherit}
+button:hover{filter:brightness(1.1)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.err{color:#ffb4b4;background:rgba(248,81,73,.10);
+     border:1px solid var(--red);border-radius:6px;padding:9px 12px;
+     font-size:11.5px;margin-top:14px;display:none}
+.err.show{display:block}
+.foot{text-align:center;color:var(--dim);font-size:10.5px;margin-top:14px;
+      line-height:1.5}
+.foot code{background:#0d1117;padding:1px 5px;border-radius:3px;
+           font-size:10.5px;color:var(--fg)}
+.bootstrap-note{background:#1a2733;border-left:3px solid var(--blue);
+                padding:9px 12px;border-radius:5px;color:var(--dim);
+                font-size:11px;margin-top:12px;line-height:1.55}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
+/* Login page is a vertically-centered flex column — let the form
+   self-center and the footer settle at the bottom of the viewport. */
+body{flex-direction:column}
+.login-card{margin:auto}
+</style></head>
+<body>
+<form class="login-card" id="login-form" autocomplete="on">
+  <h1>AppSecGW <span class="pill">SIGN IN</span></h1>
+  <p class="sub">Sign in to manage gateway controls, agents, and the registry.</p>
+
+  <label for="username">Username</label>
+  <input id="username" name="username" type="text" autocomplete="username"
+         autocapitalize="none" autocorrect="off" spellcheck="false"
+         required>
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password"
+         autocomplete="current-password" required>
+
+  <button type="submit" id="submit">Sign in</button>
+  <div id="err" class="err"></div>
+
+  __BOOTSTRAP_HINT__
+
+  <div class="foot">
+    Multi-user auth is mandatory in 1.6.7 — bearer-key access
+    (<code>?key=</code> / <code>X-Admin-Key</code>) was removed.
+  </div>
+</form>
+
+<script>
+"use strict";
+const errEl = document.getElementById("err");
+const btn   = document.getElementById("submit");
+const next  = new URLSearchParams(location.search).get("next") || "/antibot-appsec-gateway/secured/dashboard";
+
+document.getElementById("login-form").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  errEl.classList.remove("show");
+  btn.disabled = true;
+  const body = new URLSearchParams({
+    username: document.getElementById("username").value.trim().toLowerCase(),
+    password: document.getElementById("password").value,
+    next,
+  });
+  try {
+    const r = await fetch("/antibot-appsec-gateway/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Origin": location.origin,
+      },
+      body, credentials: "same-origin",
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      errEl.textContent = j.error || ("Sign-in failed (HTTP " + r.status + ")");
+      errEl.classList.add("show");
+      btn.disabled = false;
+      return;
+    }
+    location.href = j.redirect || next;
+  } catch (e) {
+    errEl.textContent = "Network error: " + e.message;
+    errEl.classList.add("show");
+    btn.disabled = false;
+  }
+});
+</script>
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+</body></html>

@@ -85,22 +85,52 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .thr-minmax .lbl{color:#6e7681;font-size:9.5px;display:block}
 .thr-desc{color:var(--dim);font-size:11px;grid-column:span 5;margin-top:-4px;padding-left:200px}
 @media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
+
+/* 1.6.5 — escalate-icon tooltip (custom, no 1-2s native delay) */
+.escal-icon{position:relative;display:inline-block;margin-right:4px;vertical-align:middle;cursor:help}
+.escal-icon img{width:14px;height:14px;display:block;
+  filter:invert(60%) sepia(60%) saturate(400%) hue-rotate(0deg) brightness(95%)}
+.escal-icon .escal-tip{
+  position:absolute;left:calc(100% + 8px);top:-6px;
+  background:#0d1117;border:1px solid var(--yellow);border-radius:6px;
+  padding:8px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:11.5px;line-height:1.45;color:var(--fg);width:300px;z-index:1500;
+  box-shadow:0 4px 12px rgba(0,0,0,.45);
+  opacity:0;visibility:hidden;transition:opacity .12s ease;pointer-events:none}
+.escal-icon:hover .escal-tip{opacity:1;visibility:visible}
+.escal-icon .escal-tip h4{font-size:11.5px;font-weight:700;color:var(--yellow);
+  margin:0 0 4px 0;text-transform:uppercase;letter-spacing:.4px}
+.escal-icon .escal-tip code{background:#161b22;padding:1px 4px;border-radius:3px;
+  font-size:11px;color:var(--blue)}
+.escal-icon .escal-tip .dim{color:var(--dim);font-size:10.5px;margin-top:4px;display:block}
+
+/* Legend chip used above the scoring table */
+.escal-legend{display:inline-flex;align-items:center;gap:6px;font-size:10.5px;
+  color:var(--yellow);background:rgba(217,154,32,.10);border:1px solid rgba(217,154,32,.35);
+  padding:3px 8px;border-radius:4px;margin-left:8px}
+.escal-legend img{width:12px;height:12px;
+  filter:invert(60%) sepia(60%) saturate(400%) hue-rotate(0deg) brightness(95%)}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.6.4 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.7 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
-  <a href="/__dashboard?key=__KEY__">Dashboard</a>
-  <a href="/__agents?key=__KEY__">Agents</a>
-  <a href="/__service?key=__KEY__">Service</a>
-  <a href="/__controls?key=__KEY__" class="active">Controls</a>
-  <a href="/__geo?key=__KEY__">GeoMap</a>
-  <a href="/__logs?key=__KEY__">Logs</a>
-</nav>
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__" class="active">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <main>
   <div class="banner">
     Edit a value to flag it dirty (orange dot). Click <b>Apply changes</b> to
-    push the diff to <code>POST /__config</code>. Every applied change is
+    push the diff to <code>POST /antibot-appsec-gateway/secured/config</code>. Every applied change is
     audited in the structured log as <code>event=config_changed</code>.
     Refresh-safe: revert any unsaved edit with <b>Reset</b>.
   </div>
@@ -116,7 +146,13 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
 
   <section class="card" id="card-scoring">
-    <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
+    <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span>
+      <span class="escal-legend" id="escal-legend">
+        <img src="/antibot-appsec-gateway/assets/escalate.svg?key=__KEY__" alt="">
+        escalate-only · runs only when risk_score &ge; <code id="escal-thr-display" style="background:transparent;color:var(--yellow);padding:0">—</code>
+        <span class="dim" style="color:var(--dim)">·&nbsp;hover any icon for details</span>
+      </span>
+    </h2>
     <div class="hint" style="margin-bottom:10px">
       Each signal adds points to the identity's <code>risk_score</code>; ban
       fires when score crosses <code>RISK_BAN_THRESHOLD</code> (50) — or
@@ -228,6 +264,40 @@ button:disabled{opacity:.4;cursor:not-allowed}
     </table>
   </section>
 
+  <!-- 1.6.5 — active rules + lists snapshot + endpoint policies -->
+  <section class="card" style="margin-top:20px" id="card-active-rules">
+    <h2>Active rules <span style="font-size:11px;color:var(--dim);font-weight:400">(traffic % per rule, since process start)</span></h2>
+    <table id="active-rules-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+        <th style="padding:5px 8px">reason</th>
+        <th style="padding:5px 8px">method</th>
+        <th style="padding:5px 8px;text-align:right">hits</th>
+        <th style="padding:5px 8px;text-align:right">% of blocks</th>
+        <th style="padding:5px 8px;text-align:right">p99 ms</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+    <div id="chal-rate" class="dim" style="font-size:11px;margin-top:10px">chal-cookie mints: —</div>
+  </section>
+
+  <section class="card" style="margin-top:20px" id="card-lists-snap">
+    <h2>Allow / block lists <span style="font-size:11px;color:var(--dim);font-weight:400">(sizes + last-updated)</span></h2>
+    <div id="lists-snap" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7">loading…</div>
+  </section>
+
+  <section class="card" style="margin-top:20px" id="card-ep-policies">
+    <h2>Per-endpoint rate-limit policies <span style="font-size:11px;color:var(--dim);font-weight:400">(active <code>ENDPOINT_POLICIES</code>)</span></h2>
+    <table id="ep-policies-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+        <th style="padding:5px 8px">path glob</th>
+        <th style="padding:5px 8px">policy</th>
+        <th style="padding:5px 8px;text-align:right">rps</th>
+        <th style="padding:5px 8px;text-align:right">burst</th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
   <section class="card" style="margin-top:20px">
     <h2>Recent <code>config_changed</code> events</h2>
     <div class="audit" id="audit">loading…</div>
@@ -240,6 +310,31 @@ button:disabled{opacity:.4;cursor:not-allowed}
 const KEY = '__KEY__';
 const url = (p) => p + (p.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY);
 
+// 1.6.5 — generic modal helper (used by the DB-switch confirmation flow).
+function showSimpleModal(innerHtml){
+  let m = document.getElementById('simple-modal');
+  if (!m) {
+    m = document.createElement('div');
+    m.id = 'simple-modal';
+    m.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.65);'
+      + 'display:flex;align-items:center;justify-content:center;z-index:5000;padding:20px';
+    m.onclick = (e) => { if (e.target === m) closeSimpleModal(); };
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div style="background:var(--card);border:1px solid var(--line);
+    border-radius:8px;padding:20px 24px;max-width:560px;width:100%;
+    box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:-apple-system,'SF Pro',ui-sans-serif">
+    ${innerHtml}</div>`;
+  m.style.display = 'flex';
+}
+function closeSimpleModal(){
+  const m = document.getElementById('simple-modal');
+  if (m) m.style.display = 'none';
+}
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeSimpleModal();
+});
+
 const META = {
   // toggles
   JS_CHALLENGE:            {kind:'bool', desc:'Cookie gate engages on every non-static path; auto-mints on first qualifying GET (or via Turnstile when configured).'},
@@ -251,7 +346,7 @@ const META = {
   STRICT_ORIGIN:           {kind:'bool', desc:'On state-changing methods, require Origin to match ALLOWED_HOSTS.'},
   INJECT_SECURITY_HEADERS: {kind:'bool', desc:'XFO, nosniff, HSTS, COOP, CORP, Permissions-Policy on HTML responses.'},
   JS_CHAL_BIND_JA4:        {kind:'bool', desc:'Bind chal cookie to TLS handshake hash (when JA4 header injected).'},
-  JS_CHAL_REQUIRE_JA4:     {kind:'bool', desc:'Hard-require JA4 from a trusted peer at /__challenge.'},
+  JS_CHAL_REQUIRE_JA4:     {kind:'bool', desc:'Hard-require JA4 from a trusted peer at /antibot-appsec-gateway/challenge.'},
   JS_CHAL_STRICT_STATIC:   {kind:'bool', desc:'Refuse static-asset bypass on paths containing API hints (/api/, /v1/...).'},
   // thresholds
   RISK_BAN_THRESHOLD:      {kind:'num', min:1,    max:1000,  step:1,   desc:'Score that triggers a ban (1.4.7+).', card:'thresholds'},
@@ -269,8 +364,11 @@ const META = {
   JS_CHAL_OPEN_PATHS:      {kind:'list', card:'lists', desc:'Path prefixes that bypass the cookie gate (SPA data layer, webhooks, S2S).'},
   JA4_DENY_LIST:           {kind:'list', card:'lists', desc:'TLS handshake fingerprints to silent-decoy at Layer 0.5.'},
   // 1.6.0 — Tier A
-  COUNTRY_BLOCK_ENABLED:   {kind:'bool', desc:'Country-level geofencing using GeoLite2-City. Off → no-op.'},
-  COUNTRY_DENYLIST:        {kind:'list', card:'lists', desc:'ISO-3166-1 alpha-2 codes to deny (e.g. RU,CN,KP). Empty → none.'},
+  COUNTRY_BLOCK_ENABLED:   {kind:'bool',
+    desc:'Country-level geofencing using GeoLite2-City. Off → no-op. ⓘ Suggested deny list for most production gateways: <b>RU</b> (Russia), <b>KP</b> (North Korea), <b>CN</b> (China), <b>BY</b> (Belarus), <b>IR</b> (Iran). Tune to your threat model + compliance constraints (sanctions, export-control). Note: admin IPs ALWAYS bypass country block — you can never lock yourself out by adding your own country.',
+    inline_list: 'COUNTRY_DENYLIST'},
+  COUNTRY_DENYLIST:        {kind:'list', card:'lists',
+    desc:'ISO-3166-1 alpha-2 codes to deny. ⓘ Suggested production list: RU, KP, CN, BY, IR. Example: <code>RU,CN,KP</code>. Empty list = no country denied. Allowlist (next field) takes precedence: when COUNTRY_ALLOWLIST is non-empty, anything outside it is blocked even if not listed here.'},
   COUNTRY_ALLOWLIST:       {kind:'list', card:'lists', desc:'ISO-3166-1 alpha-2 codes to allow exclusively (whitelist mode). Empty → denylist mode.'},
   TOR_BLOCK_ENABLED:       {kind:'bool', desc:'Block Tor exit nodes — auto-fetches torbulkexitlist (weekly refresh). Fires tor-exit (+50 risk).'},
   DC_VPN_BLOCK_ENABLED:    {kind:'bool', desc:'Block datacenter / commercial-VPN ASNs — heavier weight on top of asn-hosting.'},
@@ -307,8 +405,15 @@ const META = {
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
   DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
   POSTGRES_DSN:            {kind:'text', card:'lists', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
-  // logging
-  LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'logging', desc:'Filter for stdout structured log emission.'},
+  // 1.6.5 — escalation tier + tarpit
+  ESCALATION_THRESHOLD:    {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which expensive / external detectors run (AbuseIPDB / CrowdSec / MaxMind / body-pattern / DLP). Cheap in-process detectors run on every request regardless. 0 = run all on every request (legacy).', card:'thresholds'},
+  TARPIT_ENABLED:          {kind:'bool', desc:'Tarpit mitigation — when an identity is in the soft-challenge band (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD), silent-decoy responses are delayed by TARPIT_DELAY_MS. Burns attacker iteration time without committing to a ban.'},
+  TARPIT_DELAY_MS:         {kind:'num', min:0, max:30000, step:100, desc:'Delay in ms before serving the silent decoy when tarpit fires. Default 1500. Per response — total time blow-up = delay × #soft-band hits.', card:'thresholds'},
+  BOTD_ENABLED:            {kind:'bool', desc:'FingerprintJS BotD client-side detection (open-source). Injects /antibot-appsec-gateway/assets/botd.bundle.js into HTML responses; the in-browser library checks for headless / WebDriver / automation markers and POSTs an HMAC-bound report to /antibot-appsec-gateway/botd-report. Detected = +30 risk (med tier). Off by default — adds ~16 KB JS to every HTML response.'},
+  // 1.6.5 — log-level moved out of the legacy "logging" card and into
+  // the External integrations area so operators have a single place to
+  // tune all server-side telemetry knobs.
+  LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'external', desc:'Filter for stdout structured log emission.'},
 };
 
 let serverState = {};
@@ -325,8 +430,32 @@ function renderControl(name, meta, value){
   wrap.dataset.name = name;
   const label = document.createElement('div');
   label.className = 'label';
+  // 1.6.5 — desc strings are page-literals (no user input), so we allow
+  // <b>/<code>/etc. for highlighting suggested values. Each desc that
+  // wants HTML uses ⓘ as the marker so operators see it's an info hint.
+  // Inline list rendering: a knob can declare `inline_list: 'OTHER_KNOB'`
+  // and we surface a pill row of the OTHER_KNOB's current values right
+  // next to its switch (e.g. COUNTRY_BLOCK_ENABLED renders the active
+  // COUNTRY_DENYLIST entries inline so the operator sees what's blocked
+  // without scrolling to the lists card).
+  let inlineHtml = '';
+  if (m.inline_list && Array.isArray(serverState[m.inline_list])) {
+    const items = serverState[m.inline_list];
+    if (items.length) {
+      inlineHtml = '<div class="desc" style="margin-top:4px">' +
+        '<span class="dim" style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-right:6px">currently blocked:</span>' +
+        items.map(c =>
+          `<span style="display:inline-block;background:rgba(248,81,73,.15);color:var(--red);` +
+          `padding:1px 7px;border-radius:3px;font-size:10.5px;font-weight:700;margin-right:4px;` +
+          `font-family:ui-monospace,Menlo,monospace">${escapeHtml(c)}</span>`).join('') +
+        '</div>';
+    } else {
+      inlineHtml = '<div class="desc" style="margin-top:4px;color:var(--dim);font-size:10px">' +
+        '(no countries blocked)</div>';
+    }
+  }
   label.innerHTML = `<div class="name">${escapeHtml(name)}</div>
-                     <div class="desc">${escapeHtml(m.desc||'')}</div>`;
+                     <div class="desc">${m.desc||''}</div>` + inlineHtml;
   const input = document.createElement('div');
   input.className = 'input';
 
@@ -336,10 +465,10 @@ function renderControl(name, meta, value){
     sw.onclick = async () => {
       const newVal = !sw.classList.contains('on');
       sw.classList.toggle('on', newVal);
-      // Auto-apply booleans: push instantly to /__config, no Apply click
+      // Auto-apply booleans: push instantly to /antibot-appsec-gateway/secured/config, no Apply click
       // needed. Reverts the toggle visually if the server rejects.
       try {
-        const r = await fetch(url('/__config'),
+        const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
           {method:'POST', headers:{'Content-Type':'application/json'},
            body: JSON.stringify({[name]: newVal})});
         const body = await r.json();
@@ -424,8 +553,8 @@ function showToast(msg, kind){
 }
 
 async function load(){
-  const r = await fetch(url('/__config'));
-  if (!r.ok) { showToast('Failed to load /__config (' + r.status + ')', 'err'); return; }
+  const r = await fetch(url('/antibot-appsec-gateway/secured/config'));
+  if (!r.ok) { showToast('Failed to load /antibot-appsec-gateway/secured/config (' + r.status + ')', 'err'); return; }
   const body = await r.json();
   serverState = body.state || {};
   // Group + render. Booleans (toggles) are now rendered inside the merged
@@ -457,7 +586,7 @@ async function apply(){
         payload[k] = String(v).split(',').map(s=>s.trim()).filter(Boolean);
       else payload[k] = v;
     }
-    const r = await fetch(url('/__config'),
+    const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
       {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     const body = await r.json();
     if (r.ok && body.applied && Object.keys(body.applied).length){
@@ -477,7 +606,7 @@ async function apply(){
 
 async function loadBans(){
   try {
-    const r = await fetch(url('/__metrics'));
+    const r = await fetch(url('/antibot-appsec-gateway/secured/metrics'));
     if (!r.ok) return;
     const d = await r.json();
     const banned = (d.clients || []).filter(c => (c.banned_secs||0) > 0);
@@ -539,19 +668,19 @@ async function loadBans(){
 
 async function loadAudit(){
   try {
-    const r = await fetch(url('/__metrics'));
+    const r = await fetch(url('/antibot-appsec-gateway/secured/metrics'));
     if (!r.ok) return;
     const d = await r.json();
     const lines = (d.events || [])
       .filter(e => (e.reason||'').toLowerCase() === 'config_changed' ||
-                   (e.path||'').includes('/__config'))
+                   (e.path||'').includes('/antibot-appsec-gateway/secured/config'))
       .slice(0, 30);
     $('audit').textContent = lines.length
       ? lines.map(e => {
           const t = new Date(e.ts*1000).toTimeString().split(' ')[0];
           return `${t}  ${(e.method||'').padEnd(4)} ${e.path||''}  rid=${e.rid||''}  ip=${e.ip||''}`;
         }).join('\n')
-      : '(no recent /__config interactions captured in events)';
+      : '(no recent /antibot-appsec-gateway/secured/config interactions captured in events)';
   } catch (e) { /* ignore */ }
 }
 
@@ -562,7 +691,7 @@ async function unban(scope, value){
   if (scope === 'all') qs = '&all=1';
   else qs = '&' + scope + '=' + encodeURIComponent(value);
   try{
-    const r = await fetch(url('/__unban') + qs);
+    const r = await fetch(url('/antibot-appsec-gateway/secured/unban') + qs);
     const b = await r.json().catch(()=>({}));
     if (r.ok && b.cleared !== undefined){
       msg.textContent = `cleared ${b.cleared} identit${b.cleared===1?'y':'ies'}`;
@@ -593,7 +722,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Admin IP allowlist UI ──────────────────────────────────────────
   async function loadAdminIps(){
     try {
-      const r = await fetch(url('/__admin-ips'), {credentials:'include'});
+      const r = await fetch(url('/antibot-appsec-gateway/secured/admin-ips'), {credentials:'include'});
       const d = await r.json();
       const tb = document.querySelector('#aip-tbl tbody');
       tb.innerHTML = (d.entries||[]).map(e => {
@@ -618,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
       tb.querySelectorAll('button.aip-del').forEach(b => {
         b.onclick = async () => {
           if (!confirm('Remove '+b.dataset.cidr+'?')) return;
-          const r = await fetch(url('/__admin-ips')+'&cidr='+encodeURIComponent(b.dataset.cidr),
+          const r = await fetch(url('/antibot-appsec-gateway/secured/admin-ips')+'&cidr='+encodeURIComponent(b.dataset.cidr),
                                 {method:'DELETE', credentials:'include'});
           const d = await r.json();
           $('aip-msg').textContent = d.message || (d.ok?'removed':'failed');
@@ -647,7 +776,7 @@ document.addEventListener('DOMContentLoaded', () => {
               return;
             }
             try {
-              const r = await fetch(url('/__admin-ips'),
+              const r = await fetch(url('/antibot-appsec-gateway/secured/admin-ips'),
                 {method:'PATCH', headers:{'Content-Type':'application/json'},
                  credentials:'include',
                  body: JSON.stringify({cidr, description: newDesc})});
@@ -673,7 +802,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const cidr = $('aip-cidr').value.trim();
     const description = $('aip-desc').value.trim();
     if (!cidr) { $('aip-msg').textContent = 'cidr required'; return; }
-    const r = await fetch(url('/__admin-ips'),
+    const r = await fetch(url('/antibot-appsec-gateway/secured/admin-ips'),
       {method:'POST', headers:{'Content-Type':'application/json'},
        credentials:'include',
        body: JSON.stringify({cidr, description})});
@@ -687,7 +816,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Thresholds (rich bar view) ──────────────────────────────────
   async function loadThresholds(){
     try {
-      const r = await fetch(url('/__thresholds'), {credentials:'include'});
+      const r = await fetch(url('/antibot-appsec-gateway/secured/thresholds'), {credentials:'include'});
       if (!r.ok) return;
       const d = await r.json();
       const box = $('thresholds-rich');
@@ -730,7 +859,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const parsed = v.includes('.') ? parseFloat(v) : parseInt(v, 10);
             if (Number.isNaN(parsed)) { showToast('Invalid number','err'); loadThresholds(); return; }
             try {
-              const r = await fetch(url('/__config'),
+              const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
                 {method:'POST', headers:{'Content-Type':'application/json'},
                  body: JSON.stringify({[name]: parsed})});
               const body = await r.json();
@@ -756,7 +885,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── External integrations status + cost ─────────────────────────
   async function loadExternal(){
     try {
-      const r = await fetch(url('/__external'), {credentials:'include'});
+      const r = await fetch(url('/antibot-appsec-gateway/secured/external'), {credentials:'include'});
       if (!r.ok) return;
       const d = await r.json();
       const box = $('external-list');
@@ -779,16 +908,48 @@ document.addEventListener('DOMContentLoaded', () => {
         'MaxMind GeoLite2 ASN':   'MAXMIND_ENABLED',
         'Anubis-mode (PoW)':      'ANUBIS_ENABLED',
       };
+      // 1.6.5 — DB backend cards use a special toggle (mutually exclusive,
+      // requires a process restart). Render as colour-coded pill instead
+      // of the generic switch.
+      const DB_TARGET = {
+        'SQLite event store':         'sqlite',
+        'PostgreSQL / TimescaleDB':   'postgres',
+      };
       // Server's current toggle state (so the switch reflects reality even
       // if the integration was force-disabled at runtime).
       const cfg = serverState || {};
       const renderToggle = (item) => {
+        // 1.6.5 — DB backend pills (SQLite / Postgres) get their own
+        // mutually-exclusive switch with a confirmation step + restart.
+        const dbTarget = DB_TARGET[item.name];
+        if (dbTarget) {
+          // 1.6.5 — DB-backend switch uses the SAME on/off toggle widget
+          // as CrowdSec/AbuseIPDB/etc. for visual consistency. Click on
+          // the inactive backend triggers the warning modal + restart.
+          // The active backend's switch is the green ON state; the
+          // inactive backend's is OFF (grey).
+          const isActive = item.enabled === true;
+          const credsOk  = item.credentials_present !== false;
+          const cls = (isActive ? ' on' : '') + (credsOk ? '' : ' switch-disabled');
+          const disabledAttr = (!credsOk && !isActive) ? 'data-disabled="1"' : '';
+          const tt = isActive
+            ? `${item.name} is the ACTIVE backend. To swap, click the OTHER backend's switch (a confirmation dialog will list the impact).`
+            : (credsOk
+                ? `Click to switch the active backend to ${item.name}. RESTART REQUIRED — confirmation dialog will list impact.`
+                : `Click to supply ${(item.envs_needed||[]).join(' / ')} and switch to ${item.name} in one step (RESTART REQUIRED).`);
+          return `<div class="switch${cls}" data-db-target="${dbTarget}"
+                       data-db-name="${escapeHtml(item.name)}"
+                       data-db-creds-ok="${credsOk ? '1' : '0'}"
+                       data-db-active="${isActive ? '1' : '0'}"
+                       ${disabledAttr}
+                       title="${escapeHtml(tt)}"></div>`;
+        }
         const knob = KNOB[item.name];
         if (!knob) return '';            // edge-only / planned — no toggle
         // 1.6.0 — toggle is clickable when CREDENTIALS are present (not just
         // when the integration is currently enabled). Otherwise turning an
         // integration off would lock the operator out of turning it back on
-        // from the dashboard — they'd have to curl /__config manually.
+        // from the dashboard — they'd have to curl /antibot-appsec-gateway/secured/config manually.
         // Falls back to legacy `enabled || status==='configured'` if a
         // backend pre-1.6.0 didn't ship `credentials_present`.
         const credsPresent = (typeof item.credentials_present === 'boolean')
@@ -854,7 +1015,12 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="flex:1 1 280px;display:flex;align-items:flex-start;gap:12px">
               ${renderToggle(item)}
               <div>
-                <div style="font-weight:700;font-size:14px;margin-bottom:4px">${escapeHtml(item.name)} ${statusBadge(item)}</div>
+                <div style="font-weight:700;font-size:14px;margin-bottom:4px">${escapeHtml(item.name)} ${
+                  // 1.6.5 — DB-backend cards already show their state via
+                  // the coloured pill on the left; the legacy "DISABLED"
+                  // badge would just be noise next to it.
+                  DB_TARGET[item.name] ? '' : statusBadge(item)
+                }</div>
                 <div style="color:var(--dim);font-size:11.5px">${escapeHtml(item.purpose)}</div>
               </div>
             </div>
@@ -908,8 +1074,99 @@ document.addEventListener('DOMContentLoaded', () => {
         };
       });
 
-      // Wire up the toggle clicks
-      box.querySelectorAll('.switch[data-knob]').forEach(sw => {
+      // 1.6.5 — wire DB-backend switches (mutually exclusive + restart required).
+      // Uses the same .switch widget as CrowdSec/AbuseIPDB for visual parity.
+      box.querySelectorAll('.switch[data-db-target]').forEach(pill => {
+        if (pill.dataset.dbActive === '1') {
+          // Already active — clicks do nothing (clicking the inactive
+          // pill is what swaps backends). Keep cursor default.
+          return;
+        }
+        // Both 'OFF' (creds present) and 'SET DSN' (creds missing) pills
+        // open the switch modal — the modal's DSN input handles the
+        // missing-creds case in one step.
+        pill.onclick = async (ev) => {
+          ev.stopPropagation();
+          const target = pill.dataset.dbTarget;
+          const dbName = pill.dataset.dbName;
+          const impactLines = [
+            `<b>Restart required.</b> The container will exit immediately;
+             docker's <code>--restart=unless-stopped</code> policy brings it
+             back with the new backend in 1–3 s.`,
+            `<b>Existing in-flight requests are dropped</b> for the duration
+             of the restart (~1 s blip).`,
+            `<b>Configurations are preserved.</b> <code>config_kv</code>,
+             <code>secrets_kv</code>, admin IPs, bans, clients, timeline —
+             all live in SQLite always and survive any backend swap.`,
+            `<b>Last 60 s of events are copied</b> from the source backend
+             to the target backend so the dashboard timeline keeps its tail
+             during the cut-over. Older events stay in their original
+             store (no full migration).`,
+            target === 'postgres'
+              ? `<b>Postgres readiness probed before commit.</b> If the gateway
+                 can't reach the DSN, the swap is rejected and you stay on SQLite.`
+              : `<b>SQLite is single-file zero-deps</b> — correct for the
+                 default deployment shape.`,
+          ];
+          let dsnInput = '';
+          if (target === 'postgres') {
+            dsnInput = `<div style="margin-top:14px">
+              <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">
+                Optional — supply / override <code>POSTGRES_DSN</code> (leave blank to use the current value):
+              </label>
+              <input id="db-switch-dsn" type="text" class="num"
+                     style="width:100%;text-align:left;font-size:11px;font-family:ui-monospace,monospace"
+                     placeholder="postgresql://user:pass@host:5432/db">
+            </div>`;
+          }
+          const html = `
+            <h3 style="color:#d29922">⚠ Switch active DB backend → ${escapeHtml(dbName)}</h3>
+            <ul style="margin:10px 0;padding-left:18px;font-size:12.5px;line-height:1.6;color:var(--fg)">
+              ${impactLines.map(l => '<li>' + l + '</li>').join('')}
+            </ul>
+            ${dsnInput}
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+              <button id="db-switch-cancel" class="ctrl">Cancel</button>
+              <button id="db-switch-ok" class="ctrl"
+                      style="background:#d29922;color:#000;border-color:#d29922">
+                Yes, switch &amp; restart
+              </button>
+            </div>`;
+          showSimpleModal(html);
+          document.getElementById('db-switch-cancel').onclick = closeSimpleModal;
+          document.getElementById('db-switch-ok').onclick = async () => {
+            const okBtn = document.getElementById('db-switch-ok');
+            okBtn.disabled = true; okBtn.textContent = 'Switching…';
+            const dsn = (document.getElementById('db-switch-dsn') || {}).value || '';
+            try {
+              const r = await fetch(url('/antibot-appsec-gateway/secured/db-switch?target=' + target),
+                {method:'POST', headers:{'Content-Type':'application/json'},
+                 body: JSON.stringify({dsn: dsn})});
+              const j = await r.json();
+              if (!r.ok || !j.ok) {
+                okBtn.disabled = false;
+                okBtn.textContent = 'Yes, switch & restart';
+                alert('Switch rejected: ' + (j.reason || `HTTP ${r.status}`));
+                return;
+              }
+              showSimpleModal(`<h3 style="color:#3fb950">Switching to ${escapeHtml(target)}…</h3>
+                <p style="margin-top:8px;color:var(--dim);font-size:12px">
+                  Container is exiting. Docker will restart it in ~1 s.
+                  This page will auto-reload.
+                </p>`);
+              setTimeout(() => location.reload(), 5000);
+            } catch (e) {
+              okBtn.disabled = false;
+              okBtn.textContent = 'Yes, switch & restart';
+              alert('Network error: ' + e.message);
+            }
+          };
+        };
+      });
+
+      // Wire up the toggle clicks. Skip db-target switches — those are
+      // wired separately above with the warning modal + restart flow.
+      box.querySelectorAll('.switch[data-knob]:not([data-db-target])').forEach(sw => {
         if (sw.dataset.disabled === '1') return;   // disabled (no env config)
         sw.onclick = async (ev) => {
           ev.stopPropagation();   // don't bubble up to the integration-card click
@@ -917,7 +1174,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const newVal = !sw.classList.contains('on');
           sw.classList.toggle('on', newVal);
           try {
-            const r = await fetch(url('/__config'),
+            const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
               {method:'POST', headers:{'Content-Type':'application/json'},
                body: JSON.stringify({[knob]: newVal})});
             const d = await r.json();
@@ -942,10 +1199,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // ── Defenses & scoring (merged toggles + weights view) ──────────
   async function loadScoring(){
     try {
-      const r = await fetch(url('/__scoring'), {credentials:'include'});
+      const r = await fetch(url('/antibot-appsec-gateway/secured/scoring'), {credentials:'include'});
       if (!r.ok) return;
       const d = await r.json();
       const cfg = serverState || {};
+      // 1.6.5 — keep the legend's threshold readout in sync with /antibot-appsec-gateway/secured/config.
+      const thrEl = document.getElementById('escal-thr-display');
+      if (thrEl) thrEl.textContent = (cfg.ESCALATION_THRESHOLD != null ? cfg.ESCALATION_THRESHOLD : '—');
       const tb = document.querySelector('#scoring-tbl tbody');
       const tierColor = (t) => ({
         hard:'#f85149', med:'#d29922', soft:'#3fb950',
@@ -976,14 +1236,34 @@ document.addEventListener('DOMContentLoaded', () => {
           <span style="color:var(--red)">${p99}</span>
         </td>`;
       };
+      // 1.6.5 — escalate icon with custom hover tooltip (next to detectors
+      // that only fire on identities with risk_score ≥ ESCALATION_THRESHOLD).
+      // Saves external-API quota on routine clean traffic.
+      const curThreshold = (cfg.ESCALATION_THRESHOLD != null ? cfg.ESCALATION_THRESHOLD : 1);
+      const escalateIcon = `<span class="escal-icon"
+        aria-label="escalate-only control">
+        <img src="/antibot-appsec-gateway/assets/escalate.svg?key=${encodeURIComponent(KEY)}" alt="escalate">
+        <span class="escal-tip" role="tooltip">
+          <h4>Escalate-only control</h4>
+          This detector is <b>skipped on clean traffic</b>. It only runs
+          when the identity has accumulated <code>risk_score &ge; ${curThreshold}</code>
+          (knob: <code>ESCALATION_THRESHOLD</code>).<br>
+          <span class="dim">Why: external-API calls (AbuseIPDB / CrowdSec) burn
+          quota and add latency. Body / DLP scans cost CPU. Cheap in-process
+          checks (UA / honeypot / canary) still run on every request and feed
+          the risk-score that triggers escalation.</span>
+        </span>
+      </span>`;
       const renderRow = (w) => {
         const tag = `<span style="background:${tierColor(w.tier)}22;color:${tierColor(w.tier)};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">${w.tier}</span>`;
         const wColor = w.weight >= 50 ? 'var(--red)'
                      : w.weight >= 20 ? 'var(--yellow)'
                      : w.weight > 0   ? 'var(--green)' : 'var(--dim)';
+        const sigCell = (w.escalate_only ? escalateIcon : '') +
+          `<code>${escapeHtml(w.signal)}</code>`;
         return `<tr style="border-bottom:1px solid var(--line)">
           ${toggleCell(w.toggle)}
-          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(w.signal)}</code></td>
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace">${sigCell}</td>
           <td style="padding:5px 8px;text-align:right;font-weight:600;color:${wColor}">${w.weight}</td>
           <td style="padding:5px 8px">${tag}</td>
           ${costCell(w.cost_ms)}
@@ -1030,14 +1310,14 @@ document.addEventListener('DOMContentLoaded', () => {
       }).join('');
       tb.innerHTML = weightRows + modHeader + modRows;
 
-      // Wire toggle clicks (auto-apply via /__config)
+      // Wire toggle clicks (auto-apply via /antibot-appsec-gateway/secured/config)
       tb.querySelectorAll('.switch[data-knob-scoring]').forEach(sw => {
         sw.onclick = async () => {
           const knob = sw.dataset.knobScoring;
           const newVal = !sw.classList.contains('on');
           sw.classList.toggle('on', newVal);
           try {
-            const r = await fetch(url('/__config'),
+            const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
               {method:'POST', headers:{'Content-Type':'application/json'},
                body: JSON.stringify({[knob]: newVal})});
             const body = await r.json();
@@ -1065,6 +1345,84 @@ document.addEventListener('DOMContentLoaded', () => {
   loadScoring();
   loadExternal();
   loadThresholds();
+
+  // 1.6.5 — active rules + lists snapshot + endpoint policies
+  (function(){
+    const COL_M = {
+      ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+      cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+      operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+    };
+    function fmtAge(secs){
+      if (!secs) return 'never';
+      if (secs < 60) return `${secs|0}s ago`;
+      if (secs < 3600) return `${(secs/60)|0} min ago`;
+      if (secs < 86400) return `${(secs/3600)|0} h ago`;
+      return `${(secs/86400)|0} d ago`;
+    }
+    async function loadActiveRules(){
+      try {
+        const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
+        const d = await r.json();
+        const sigs = (d.signals||[]).filter(s => s.hits > 0);
+        const total = sigs.reduce((a,b) => a + b.hits, 0);
+        const tb = document.querySelector('#active-rules-tbl tbody');
+        if (tb){
+          tb.innerHTML = sigs.length ? sigs.slice(0, 25).map(s => {
+            const pct = total ? (s.hits/total*100).toFixed(1) : 0;
+            return `<tr style="border-bottom:1px solid #1f2730">
+              <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(s.reason)}</code></td>
+              <td style="padding:5px 8px;color:${COL_M[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(s.method)}</td>
+              <td style="padding:5px 8px;text-align:right;font-weight:600">${s.hits}</td>
+              <td style="padding:5px 8px;text-align:right">${pct}%</td>
+              <td style="padding:5px 8px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
+            </tr>`;
+          }).join('')
+            : '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>';
+        }
+        const ch = d.chal || {};
+        document.getElementById('chal-rate').innerHTML =
+          `<b>${ch.minted||0}</b> chal-cookie mints / <b>${ch.required||0}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${ch.mint_rate||0}%</b>`;
+      } catch(e){}
+    }
+    async function loadLists(){
+      try {
+        const r = await fetch(url('/antibot-appsec-gateway/secured/lists-snapshot'), {credentials:'include'});
+        const d = await r.json();
+        const div = document.getElementById('lists-snap');
+        if (!div) return;
+        const lines = [
+          `UA blocklist (legacy CLI/scanners): <code>${d.ua_blocklist_size}</code> entries`,
+          `JA4 deny-list: <code>${d.ja4_deny_size}</code>`,
+          `Honeypot paths: <code>${d.honeypot_paths_size}</code>`,
+          `Suspicious-path patterns: <code>${d.suspicious_path_patterns}</code>`,
+          `Tor exits: <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:var(--green)">enforcing</span>':'<span class="dim">off</span>'}`,
+          `Hosting-ASN keywords: <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:var(--green)">on</span>':'<span class="dim">off</span>'}`,
+          `Country denylist: <code>${d.country_denylist_size}</code>${d.country_denylist.length?' · '+d.country_denylist.join(','):''}`,
+          `Country allowlist: <code>${d.country_allowlist_size}</code>${d.country_allowlist.length?' · '+d.country_allowlist.join(','):''}`,
+          `Custom rules: <code>${d.custom_rules_size}</code> · JWT paths: <code>${(d.jwt_paths||[]).length}</code> · Endpoint policies: <code>${(d.endpoint_policies||[]).length}</code>`,
+          `Webhook event filter: <code>${(d.webhook_event_filter||[]).length || 'all'}</code> · Admin IP allowlist: <code>${d.admin_ip_count}</code>`,
+        ];
+        div.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+
+        const eptb = document.querySelector('#ep-policies-tbl tbody');
+        if (eptb){
+          const eps = d.endpoint_policies || [];
+          eptb.innerHTML = eps.length ? eps.map(p => `
+            <tr style="border-bottom:1px solid #1f2730">
+              <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(p.path||'')}</code></td>
+              <td style="padding:5px 8px;color:${p.policy==='strict'?'#f85149':p.policy==='challenge'?'#d29922':p.policy==='bypass'?'#3fb950':'#8b949e'};font-weight:700">${escapeHtml(p.policy||'default')}</td>
+              <td style="padding:5px 8px;text-align:right">${p.rps == null ? '<span class="dim">—</span>' : p.rps}</td>
+              <td style="padding:5px 8px;text-align:right">${p.burst == null ? '<span class="dim">—</span>' : p.burst}</td>
+            </tr>`).join('')
+            : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>';
+        }
+      } catch(e){}
+    }
+    loadActiveRules(); loadLists();
+    setInterval(() => { loadActiveRules(); loadLists(); }, 7000);
+  })();
+
   // 1.5.5 — never repaint while the user is typing in any input.
   function _typing(){
     const ae = document.activeElement;
@@ -1100,7 +1458,7 @@ __MODAL_BACK.onclick = __closeModal;
 document.addEventListener('keydown', e => { if (e.key==='Escape') __closeModal(); });
 
 // 1.5.5 — runtime secret editor.  Opens a tiny popover anchored near the
-// clicked chip, accepts a new value, POSTs to /__secrets, never shows
+// clicked chip, accepts a new value, POSTs to /antibot-appsec-gateway/secured/secrets, never shows
 // the current value.  Includes a "Clear" button to revert to env.
 function openSecretEditor(name, anchor){
   // Remove any prior popover so only one is open at a time.
@@ -1133,6 +1491,21 @@ function openSecretEditor(name, anchor){
            style="width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--line);
                   padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;
                   font-size:12px;margin-bottom:8px">
+    <!-- 1.6.7 — mesh-sync toggle: when ON, this gateway publishes the
+         current value of this secret to Redis every 30s. Peer gateways
+         that don't have it will land it in their Pending Mesh Sync
+         queue, awaiting operator confirmation before going live. -->
+    <label data-mesh-row style="display:flex;align-items:center;gap:8px;
+           font-size:10.5px;color:var(--dim);margin:6px 0 8px 0;cursor:pointer;
+           padding:6px 8px;background:#0d1117;border:1px solid #1f2730;
+           border-radius:5px;user-select:none">
+      <input type="checkbox" data-mesh-toggle style="accent-color:var(--purple);transform:scale(1.1)">
+      <span style="flex:1">
+        <span style="color:var(--fg);font-weight:600">Share via mesh</span>
+        <span style="color:var(--dim)"> · publish to peer gateways via Redis</span>
+      </span>
+      <span data-mesh-status style="color:var(--dim);font-family:ui-monospace;font-size:10.5px">…</span>
+    </label>
     <div style="display:flex;gap:8px;justify-content:flex-end;align-items:center">
       <span class="hint" data-msg style="margin-right:auto;color:var(--dim);font-size:11px"></span>
       <button class="secondary" data-clear style="font-size:11.5px;padding:5px 10px">Clear</button>
@@ -1151,11 +1524,53 @@ function openSecretEditor(name, anchor){
     if (pr.bottom > window.innerHeight - 10) pop.style.top = (r.top - pr.height - 6) + 'px';
   }, 0);
 
-  const inp = pop.querySelector('input');
+  const inp = pop.querySelector('[type="password"], [type="text"]');
   const msg = pop.querySelector('[data-msg]');
   const closeBtn = pop.querySelector('[data-close]');
   const saveBtn  = pop.querySelector('[data-save]');
   const clearBtn = pop.querySelector('[data-clear]');
+  // 1.6.7 — mesh-sync toggle: load current state, wire on-change.
+  const meshToggle = pop.querySelector('[data-mesh-toggle]');
+  const meshStatus = pop.querySelector('[data-mesh-status]');
+  (async () => {
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/admin/mesh-sync'),
+                            { credentials: 'same-origin' });
+      const d = await r.json();
+      if (!d.redis_available) {
+        meshStatus.textContent = 'redis off';
+        meshStatus.style.color = 'var(--dim)';
+        meshToggle.disabled = true;
+      } else {
+        const on = (d.enabled_keys || []).includes(name);
+        meshToggle.checked = on;
+        meshStatus.textContent = on ? 'sharing' : 'private';
+        meshStatus.style.color = on ? 'var(--purple)' : 'var(--dim)';
+      }
+    } catch (e) {
+      meshStatus.textContent = '?'; meshToggle.disabled = true;
+    }
+  })();
+  meshToggle.onchange = async () => {
+    const enabled = meshToggle.checked;
+    meshToggle.disabled = true;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/admin/mesh-sync/'
+                                  + encodeURIComponent(name) + '/toggle'),
+        { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      meshStatus.textContent = enabled ? 'sharing' : 'private';
+      meshStatus.style.color = enabled ? 'var(--purple)' : 'var(--dim)';
+      showToast('Mesh-sync ' + (enabled ? 'on' : 'off') + ' for ' + name,
+                enabled ? 'ok' : 'ok');
+    } catch (e) {
+      meshToggle.checked = !enabled;
+      showToast('Toggle failed: ' + e.message, 'err');
+    } finally {
+      meshToggle.disabled = false;
+    }
+  };
   inp.focus();
   closeBtn.onclick = () => pop.remove();
   // Close when clicking outside
@@ -1176,7 +1591,7 @@ function openSecretEditor(name, anchor){
     if (!v) { msg.textContent = 'empty'; return; }
     saveBtn.disabled = true; msg.style.color='var(--dim)'; msg.textContent='saving…';
     try {
-      const r = await fetch(url('/__secrets'),
+      const r = await fetch(url('/antibot-appsec-gateway/secured/secrets'),
         { method:'POST', headers:{'Content-Type':'application/json'},
           body: JSON.stringify({[name]: v}) });
       const b = await r.json();
@@ -1201,7 +1616,7 @@ function openSecretEditor(name, anchor){
     if (!confirm('Clear DB-stored ' + name + ' and revert to env value?')) return;
     clearBtn.disabled = true; msg.style.color='var(--dim)'; msg.textContent='clearing…';
     try {
-      const r = await fetch(url('/__secrets') + '&name=' + encodeURIComponent(name),
+      const r = await fetch(url('/antibot-appsec-gateway/secured/secrets') + '&name=' + encodeURIComponent(name),
                             { method:'DELETE' });
       const b = await r.json();
       if (r.ok && b.ok){
@@ -1286,7 +1701,8 @@ function openBanDetails(b){
   __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
 }
 </script>
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
@@ -1294,6 +1710,16 @@ function openBanDetails(b){
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -1314,6 +1740,17 @@ function openBanDetails(b){
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
 <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
@@ -1329,11 +1766,12 @@ function openBanDetails(b){
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
-  // Linear gradient red→yellow→green over 0..100.
+  const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -1342,7 +1780,7 @@ function openBanDetails(b){
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -1379,8 +1817,35 @@ function openBanDetails(b){
   });
   tick();
   setInterval(tick, 15000);
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
 })();
 </script>
-<!-- /1.6.4 GW status pill -->
+<!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

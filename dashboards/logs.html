@@ -8,7 +8,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--blue);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
 .topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px}
@@ -78,17 +78,22 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .lvl-segctl button.dbg-on{background:var(--dim);color:#000}
 
 .label{font-size:11px;color:var(--dim);margin-right:6px}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.4 &middot; Logs <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.7 &middot; Logs <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
-  <a href="/__dashboard?key=__KEY__">Dashboard</a>
-  <a href="/__agents?key=__KEY__">Agents</a>
-  <a href="/__service?key=__KEY__">Service</a>
-  <a href="/__controls?key=__KEY__">Controls</a>
-  <a href="/__geo?key=__KEY__">GeoMap</a>
-  <a href="/__logs?key=__KEY__" class="active">Logs</a>
-</nav>
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__" class="active">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="card">
   <div class="tabs">
@@ -118,13 +123,37 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
       <option value="2000">2000</option>
     </select>
 
+    <!-- 1.6.5 — method bucket + IP type filters + CSV export -->
+    <span class="label" style="margin-left:14px">Method:</span>
+    <select id="filter-method" class="ctrl">
+      <option value="all" selected>all</option>
+      <option value="ua">ua</option>
+      <option value="body">body</option>
+      <option value="intel">intel</option>
+      <option value="behavior">behavior</option>
+      <option value="cookie">cookie</option>
+      <option value="tls">tls</option>
+      <option value="canary">canary</option>
+      <option value="operator">operator</option>
+      <option value="honeypot">honeypot</option>
+      <option value="other">other</option>
+    </select>
+    <span class="label" style="margin-left:14px">IP type:</span>
+    <select id="filter-iptype" class="ctrl">
+      <option value="all" selected>all</option>
+      <option value="tor">Tor exit</option>
+      <option value="dc">datacenter / VPN</option>
+      <option value="residential">residential</option>
+    </select>
+
     <button id="pause" class="ctrl">⏸ Pause</button>
     <button id="refresh" class="ctrl">↻ Refresh</button>
+    <button id="export" class="ctrl" title="Download filtered events as CSV">⬇ CSV</button>
     <span class="live-indicator" id="ind"><span class="dot"></span><span id="ind-txt">live · 2 s</span></span>
   </div>
 
   <div class="toolbar" style="border-top:1px solid var(--line);padding-top:10px">
-    <span class="label">Server LOG_LEVEL (push to /__config):</span>
+    <span class="label">Server LOG_LEVEL (push to /antibot-appsec-gateway/secured/config):</span>
     <div class="lvl-segctl" id="lvl-push">
       <button data-lvl="debug">debug</button>
       <button data-lvl="info">info</button>
@@ -221,11 +250,18 @@ async function tick(force){
     kind, level: document.getElementById('filter-level').value,
     limit: document.getElementById('filter-limit').value,
   });
+  // 1.6.5 — pass method bucket + IP-type filters when on requests tab
+  if (kind === 'requests') {
+    const m = document.getElementById('filter-method').value;
+    const ipt = document.getElementById('filter-iptype').value;
+    if (m && m !== 'all') params.set('method', m);
+    if (ipt && ipt !== 'all') params.set('ip_type', ipt);
+  }
   const q = document.getElementById('filter-q').value.trim();
   if (q) params.set('q', q);
   if (ADMIN_KEY) params.set('key', ADMIN_KEY);
   try {
-    const r = await fetch('/__logs-data?' + params, {credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/logs-data?' + params, {credentials:'include'});
     const d = await r.json();
     document.getElementById('m-count').textContent = (d.count||0);
     document.getElementById('m-level').textContent = d.level || '—';
@@ -258,17 +294,67 @@ document.querySelectorAll('.tab').forEach(t => {
     document.getElementById('m-tab').textContent = kind;
     document.getElementById('m-tab-sub').textContent =
       kind === 'requests' ? 'connection log (SQLite events)' : 'gw operational events (in-mem ring)';
+    if (typeof savePrefs === 'function') savePrefs();   // 1.6.5
     tick(true);
   };
 });
 
 // ── Filter changes ───────────────────────────────────────────────────
-document.getElementById('filter-level').onchange = () => tick(true);
-document.getElementById('filter-limit').onchange = () => tick(true);
+// 1.6.5 — restore + persist filter prefs across the current session
+const PREFS_KEY = 'appsecgw.logs.prefs.v1';
+function savePrefs(){
+  try {
+    sessionStorage.setItem(PREFS_KEY, JSON.stringify({
+      kind, level: document.getElementById('filter-level').value,
+      limit: document.getElementById('filter-limit').value,
+      method: document.getElementById('filter-method').value,
+      ip_type: document.getElementById('filter-iptype').value,
+      q: document.getElementById('filter-q').value,
+    }));
+  } catch(e){}
+}
+function restorePrefs(){
+  try {
+    const raw = sessionStorage.getItem(PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.level)   document.getElementById('filter-level').value   = p.level;
+    if (p.limit)   document.getElementById('filter-limit').value   = p.limit;
+    if (p.method)  document.getElementById('filter-method').value  = p.method;
+    if (p.ip_type) document.getElementById('filter-iptype').value  = p.ip_type;
+    if (p.q != null) document.getElementById('filter-q').value      = p.q;
+    if (p.kind && p.kind !== kind) {
+      const t = document.querySelector(`.tab[data-kind="${p.kind}"]`);
+      if (t) t.click();
+    }
+  } catch(e){}
+}
+restorePrefs();
+
+document.getElementById('filter-level').onchange = () => { savePrefs(); tick(true); };
+document.getElementById('filter-limit').onchange = () => { savePrefs(); tick(true); };
+// 1.6.5 — method + IP-type filter onchange
+document.getElementById('filter-method').onchange = () => { savePrefs(); tick(true); };
+document.getElementById('filter-iptype').onchange = () => { savePrefs(); tick(true); };
+// 1.6.5 — CSV export button: opens a download with current filter state
+document.getElementById('export').onclick = () => {
+  const params = new URLSearchParams({
+    level: document.getElementById('filter-level').value,
+    limit: 50000,
+  });
+  const m = document.getElementById('filter-method').value;
+  const ipt = document.getElementById('filter-iptype').value;
+  if (m && m !== 'all') params.set('method', m);
+  if (ipt && ipt !== 'all') params.set('ip_type', ipt);
+  const q = document.getElementById('filter-q').value.trim();
+  if (q) params.set('q', q);
+  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
+  window.location.href = '/antibot-appsec-gateway/secured/logs-export?' + params;
+};
 let qDebounce = null;
 document.getElementById('filter-q').oninput = () => {
   clearTimeout(qDebounce);
-  qDebounce = setTimeout(() => tick(true), 250);
+  qDebounce = setTimeout(() => { savePrefs(); tick(true); }, 250);
 };
 
 // ── Pause / refresh ──────────────────────────────────────────────────
@@ -287,7 +373,7 @@ document.getElementById('refresh').onclick = () => tick(true);
 // ── Server LOG_LEVEL push ────────────────────────────────────────────
 async function loadServerState(){
   try {
-    const r = await fetch(url('/__config'), {credentials:'include'});
+    const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
     const d = await r.json();
     serverState = d.state || {};
     paintLvlButtons();
@@ -312,7 +398,7 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
   b.onclick = async () => {
     const lvl = b.dataset.lvl;
     try {
-      const r = await fetch(url('/__config'),
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
         {method:'POST', headers:{'Content-Type':'application/json'},
          body: JSON.stringify({LOG_LEVEL: lvl})});
       const d = await r.json();
@@ -332,7 +418,8 @@ setInterval(tick, 2000);
 // refresh server LOG_LEVEL paint every 10s in case it was changed elsewhere
 setInterval(loadServerState, 10000);
 </script>
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
@@ -340,6 +427,16 @@ setInterval(loadServerState, 10000);
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -360,6 +457,17 @@ setInterval(loadServerState, 10000);
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
 <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
@@ -375,11 +483,12 @@ setInterval(loadServerState, 10000);
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
-  // Linear gradient red→yellow→green over 0..100.
+  const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -388,7 +497,7 @@ setInterval(loadServerState, 10000);
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -425,8 +534,35 @@ setInterval(loadServerState, 10000);
   });
   tick();
   setInterval(tick, 15000);
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
 })();
 </script>
-<!-- /1.6.4 GW status pill -->
+<!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

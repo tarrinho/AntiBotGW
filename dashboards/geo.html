@@ -12,7 +12,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--blue);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
 .topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px}
@@ -84,17 +84,22 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700}
 .tag.tor{background:rgba(217,154,32,.18);color:var(--yellow)}
 .tag.dc{background:rgba(188,140,255,.18);color:var(--purple)}
+
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.4 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.7 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
-  <a href="/__dashboard?key=__KEY__">Dashboard</a>
-  <a href="/__agents?key=__KEY__">Agents</a>
-  <a href="/__service?key=__KEY__">Service</a>
-  <a href="/__controls?key=__KEY__">Controls</a>
-  <a href="/__geo?key=__KEY__" class="active">GeoMap</a>
-  <a href="/__logs?key=__KEY__">Logs</a>
-</nav>
+  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__" class="active">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
@@ -151,9 +156,10 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
           <th>iso</th><th class="num">clean</th>
           <th class="num">missed</th><th class="num">blocked</th>
           <th class="num" title="blocked / (blocked + missed) — what fraction of suspicious traffic from this country we actually stopped">eff%</th>
+          <th class="num" title="missed / (blocked + missed) — what fraction of suspicious traffic from this country slipped past the gate">bypass%</th>
           <th></th>
         </tr></thead>
-        <tbody id="country-tbody"><tr><td colspan="6" class="dim">loading…</td></tr></tbody>
+        <tbody id="country-tbody"><tr><td colspan="7" class="dim">loading…</td></tr></tbody>
       </table>
       <div class="dim" style="font-size:10px;margin-top:8px">
         <code id="dl-state">denylist: —</code><br>
@@ -215,7 +221,7 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 let layerGroup = L.layerGroup().addTo(map);
-let lastData = null;          // last full /__geo-data response
+let lastData = null;          // last full /antibot-appsec-gateway/secured/geo-data response
 let scrubBucketIdx = -1;      // -1 = aggregate (default); 0..N = bucket
 let scrubBuckets = [];        // [{ts, points:{key:{c,m,b}}}]
 let playing = false;
@@ -367,12 +373,23 @@ function renderCountries(){
         const col = eff >= 80 ? '#3fb950' : eff >= 50 ? '#d29922' : '#f85149';
         effCell = `<td class="num" style="color:${col};font-weight:600">${eff.toFixed(0)}%</td>`;
       }
+      // 1.6.5 — bypass-rate proxy column. missed/(blocked+missed).
+      // Color: red >30%, yellow 10-30%, green <10%, dim if N/A.
+      const byp = c.bypass_pct;
+      let bypCell;
+      if (byp === null || byp === undefined) {
+        bypCell = `<td class="num" style="color:var(--dim)">—</td>`;
+      } else {
+        const col = byp > 30 ? '#f85149' : byp > 10 ? '#d29922' : '#3fb950';
+        bypCell = `<td class="num" style="color:${col};font-weight:600">${byp.toFixed(0)}%</td>`;
+      }
       return `<tr>
         <td class="iso">${escapeHtml(c.country)}</td>
         <td class="num" style="color:#3fb950">${c.clean}</td>
         <td class="num" style="color:#ff7b3a">${c.missed}</td>
         <td class="num" style="color:#f85149">${c.blocked}</td>
         ${effCell}
+        ${bypCell}
         <td><button class="deny-btn ${inDeny?'active':''}"
                     data-iso="${escapeHtml(c.country)}"
                     title="${inDeny?'Remove from':'Add to'} COUNTRY_DENYLIST">${inDeny?'denied':'deny'}</button></td>
@@ -393,7 +410,7 @@ function renderCountries(){
       const next = Array.from(cur).sort();
       btn.disabled = true;
       try {
-        const r = await fetch('/__config?' + (ADMIN_KEY?('key='+encodeURIComponent(ADMIN_KEY)):''),
+        const r = await fetch('/antibot-appsec-gateway/secured/config?' + (ADMIN_KEY?('key='+encodeURIComponent(ADMIN_KEY)):''),
                               {method:'POST', headers:{'Content-Type':'application/json'},
                                body: JSON.stringify({COUNTRY_DENYLIST: next, COUNTRY_BLOCK_ENABLED:true})});
         const j = await r.json();
@@ -421,7 +438,7 @@ async function openDrill(lat, lng){
   const params = new URLSearchParams({lat, lng, range});
   if (ADMIN_KEY) params.set('key', ADMIN_KEY);
   try {
-    const r = await fetch('/__geo-drill?' + params, {credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/geo-drill?' + params, {credentials:'include'});
     const d = await r.json();
     if (d.error){ body.innerHTML = '<span style="color:var(--red)">'+escapeHtml(d.error)+'</span>'; return; }
     const ipRows = (d.top_ips||[]).map(x => {
@@ -499,17 +516,43 @@ document.getElementById('play').onclick = () => {
 };
 
 // Overlay toggles → just re-render
-document.getElementById('ovly-tor').onchange = renderMap;
-document.getElementById('ovly-dc').onchange  = renderMap;
+// 1.6.5 — persist UI prefs in sessionStorage so the operator's view
+// state survives a page refresh within the same tab.
+const GEO_PREFS_KEY = 'appsecgw.geo.prefs.v1';
+function geoSavePrefs(){
+  try {
+    sessionStorage.setItem(GEO_PREFS_KEY, JSON.stringify({
+      range:      document.getElementById('range').value,
+      ovly_tor:   document.getElementById('ovly-tor').checked,
+      ovly_dc:    document.getElementById('ovly-dc').checked,
+      pin_filter: document.getElementById('pin-filter').value,
+    }));
+  } catch(e){}
+}
+function geoRestorePrefs(){
+  try {
+    const raw = sessionStorage.getItem(GEO_PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.range)         document.getElementById('range').value = p.range;
+    if (typeof p.ovly_tor === 'boolean') document.getElementById('ovly-tor').checked = p.ovly_tor;
+    if (typeof p.ovly_dc === 'boolean')  document.getElementById('ovly-dc').checked  = p.ovly_dc;
+    if (p.pin_filter)    document.getElementById('pin-filter').value = p.pin_filter;
+  } catch(e){}
+}
+geoRestorePrefs();
+
+document.getElementById('ovly-tor').onchange = () => { geoSavePrefs(); renderMap(); };
+document.getElementById('ovly-dc').onchange  = () => { geoSavePrefs(); renderMap(); };
 
 async function tick(){
   const params = new URLSearchParams({range: document.getElementById('range').value});
   if (ADMIN_KEY) params.set('key', ADMIN_KEY);
   try {
-    const r = await fetch('/__geo-data?' + params, {credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/geo-data?' + params, {credentials:'include'});
     const d = await r.json();
     const live = document.getElementById('live');
-    live.textContent = '● LIVE'; live.style.background = 'var(--blue)';
+    live.textContent = '● LIVE'; live.style.background = 'var(--green)';
     const notice = document.getElementById('notice');
     if (!d.configured) {
       notice.innerHTML =
@@ -524,7 +567,7 @@ async function tick(){
         msg.style.color = 'var(--dim)';
         msg.textContent = 'fetching mmdb…';
         try {
-          const r = await fetch('/__maxmind-fetch' + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : ''),
+          const r = await fetch('/antibot-appsec-gateway/secured/maxmind-fetch' + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : ''),
                                 {method:'POST', credentials:'include'});
           const j = await r.json();
           if (r.ok && j.ok){ msg.style.color='var(--green)'; msg.textContent='loaded — refreshing'; setTimeout(tick, 600); }
@@ -598,10 +641,10 @@ function renderAsns(){
     </tr>`).join('');
 }
 
-document.getElementById('range').onchange = () => { scrubBucketIdx = -1; tick(); };
+document.getElementById('range').onchange = () => { geoSavePrefs(); scrubBucketIdx = -1; tick(); };
 document.getElementById('refresh').onclick = tick;
 document.getElementById('now').onclick     = () => { scrubBucketIdx = -1; tick(); };
-document.getElementById('pin-filter').onchange = renderMap;     // 1.6.4
+document.getElementById('pin-filter').onchange = () => { geoSavePrefs(); renderMap(); };  // 1.6.5
 tick();
 function _typing(){
   const ae = document.activeElement; if (!ae) return false;
@@ -618,7 +661,8 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('drill-modal').classList.remove('show');
 });
 </script>
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) -->
+
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
@@ -626,6 +670,16 @@ document.addEventListener('keydown', e => {
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -646,6 +700,17 @@ document.addEventListener('keydown', e => {
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
 <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
@@ -661,11 +726,12 @@ document.addEventListener('keydown', e => {
   const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
-  // Linear gradient red→yellow→green over 0..100.
+  const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -674,7 +740,7 @@ document.addEventListener('keydown', e => {
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/__health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -711,8 +777,35 @@ document.addEventListener('keydown', e => {
   });
   tick();
   setInterval(tick, 15000);
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ alert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  setInterval(loadLogLevel, 30000);
 })();
 </script>
-<!-- /1.6.4 GW status pill -->
+<!-- /1.6.5 GW status pill + log-level combo -->
 
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

@@ -91,25 +91,25 @@ def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
 
-# ── /__live (always open, even unauthed) ─────────────────────────────────
+# ── /antibot-appsec-gateway/live (always open, even unauthed) ─────────────────────────────────
 
 def test_live_endpoint_open_no_auth(proxy_module):
     async def go():
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as client:
-                r = await client.get("/__live")
+                r = await client.get("/antibot-appsec-gateway/live")
                 assert r.status == 200
                 assert (await r.text()).strip() == "ok"
     _run(go())
 
 
-# ── /__dashboard requires admin key (silent-decoyed otherwise) ───────────
+# ── /antibot-appsec-gateway/secured/dashboard requires admin key (silent-decoyed otherwise) ───────────
 
 def test_dashboard_silent_decoy_without_key(proxy_module):
     async def go():
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as client:
-                r = await client.get("/__dashboard")
+                r = await client.get("/antibot-appsec-gateway/secured/dashboard")
                 # Silent decoy: 200 OK with NO X-Proxy header (admin handler
                 # would set X-Proxy via the dashboard response on real flows;
                 # the decoy doesn't).
@@ -118,11 +118,24 @@ def test_dashboard_silent_decoy_without_key(proxy_module):
     _run(go())
 
 
-def test_dashboard_works_with_correct_key(proxy_module, url_safe_key):
+def test_dashboard_works_with_session_cookie(proxy_module, url_safe_key):
+    """1.6.7 — bearer-key auth was removed. The dashboard reads only the
+    session cookie now: prime an admin session in the in-memory cache,
+    pass the signed cookie, expect 200."""
     async def go():
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as client:
-                r = await client.get(f"/__dashboard?key={url_safe_key}")
+                sid = proxy_module._new_sid()
+                proxy_module._SESSION_CACHE[sid] = {
+                    "username": "admin",
+                    "expires_ts": proxy_module._t.time() + proxy_module._SESSION_TTL,
+                    "revoked": False,
+                }
+                proxy_module._SESSION_CACHE_READY = True
+                cookie = proxy_module._session_sign("admin", sid=sid)
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/dashboard",
+                    cookies={proxy_module._SESSION_COOKIE: cookie})
                 body = await r.text()
                 assert r.status == 200
                 assert "AppSecGW" in body
