@@ -111,6 +111,22 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .escal-legend img{width:12px;height:12px;
   filter:invert(60%) sepia(60%) saturate(400%) hue-rotate(0deg) brightness(95%)}
 
+/* Performance-impact kind badges in the Cost column */
+.kind-badge{display:inline-block;font-size:9px;font-weight:700;letter-spacing:.3px;
+  text-transform:uppercase;padding:1px 5px;border-radius:3px;margin-bottom:3px;
+  font-family:ui-monospace,Menlo,monospace}
+.kind-in-process{background:rgba(63,185,80,.12);color:#3fb950;border:1px solid rgba(63,185,80,.3)}
+.kind-state     {background:rgba(63,185,80,.08);color:#57ab6e;border:1px solid rgba(63,185,80,.2)}
+.kind-regex     {background:rgba(210,153,34,.12);color:#d29922;border:1px solid rgba(210,153,34,.3)}
+.kind-mmdb      {background:rgba(88,166,255,.12);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
+.kind-network   {background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.3)}
+.kind-response  {background:rgba(188,140,255,.12);color:#bc8cff;border:1px solid rgba(188,140,255,.3)}
+.kind-adversary {background:rgba(88,166,255,.08);color:#79c0ff;border:1px solid rgba(88,166,255,.2)}
+
+/* Kind-legend strip above the scoring table */
+.kind-legend{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center}
+.kind-legend .lbl{font-size:10px;color:var(--dim);margin-right:4px}
+
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
@@ -162,13 +178,26 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <span style="color:var(--green)">ALWAYS ON</span> = heuristic that can't be disabled,
       modifier rows at the bottom tweak behavior without contributing weight.
     </div>
+    <div class="kind-legend">
+      <span class="lbl">Impact kind:</span>
+      <span class="kind-badge kind-in-process">in-process</span><span style="font-size:10px;color:var(--dim)">µs, no I/O</span>
+      <span class="kind-badge kind-state" style="margin-left:6px">state</span><span style="font-size:10px;color:var(--dim)">in-memory counters</span>
+      <span class="kind-badge kind-regex" style="margin-left:6px">regex</span><span style="font-size:10px;color:var(--dim)">body/path scan</span>
+      <span class="kind-badge kind-mmdb" style="margin-left:6px">mmdb</span><span style="font-size:10px;color:var(--dim)">MaxMind in-memory</span>
+      <span class="kind-badge kind-network" style="margin-left:6px">network</span><span style="font-size:10px;color:var(--dim)">external API call</span>
+      <span class="kind-badge kind-response" style="margin-left:6px">response</span><span style="font-size:10px;color:var(--dim)">DLP: scans upstream reply</span>
+      <span class="kind-badge kind-adversary" style="margin-left:6px">adversary</span><span style="font-size:10px;color:var(--dim)">intentional delay — 0 ms for legit traffic</span>
+    </div>
     <table id="scoring-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="text-align:left;color:var(--dim);font-weight:600;border-bottom:1px solid var(--line)">
         <th style="padding:6px 8px;width:60px">Toggle</th>
         <th style="padding:6px 8px">Signal / control</th>
         <th style="padding:6px 8px;text-align:right">Weight</th>
         <th style="padding:6px 8px">Tier</th>
-        <th style="padding:6px 8px;text-align:right" title="Latency added by this detector. cached/typical/p99 in ms">Cost (ms)</th>
+        <th style="padding:6px 8px;text-align:right;cursor:pointer" id="cost-col-hdr"
+            title="Latency added per request (cached / typical / p99 ms). For &#39;adversary&#39; kind the numbers are forced adversary delay — not gateway overhead on normal traffic. Click to sort by typical cost.">
+          Cost (ms) <span style="font-size:9px;color:var(--dim)">▼</span>
+        </th>
         <th style="padding:6px 8px">Description</th>
       </tr></thead>
       <tbody></tbody>
@@ -1217,22 +1246,50 @@ document.addEventListener('DOMContentLoaded', () => {
         const checked = !!cfg[knob];
         return `<td style="padding:5px 8px"><div class="switch${checked?' on':''}" data-knob-scoring="${knob}" title="Toggle ${escapeHtml(knob)}"></div></td>`;
       };
-      // Cost column: green if <1ms typical, yellow if 1-50ms, red if >50ms
+      // Cost column: kind badge + cached/typical/p99 numbers.
+      // For "adversary" kind the numbers are forced adversary delay, not gateway overhead.
+      const KIND_LABEL = {
+        'in-process': 'in-process', 'state': 'state', 'regex': 'regex',
+        'mmdb': 'mmdb', 'network': 'network', 'response': 'response', 'adversary': 'adversary',
+      };
+      const kindBadge = (k) => {
+        const lbl = KIND_LABEL[k] || k || '?';
+        return `<span class="kind-badge kind-${lbl}">${lbl}</span>`;
+      };
+      const fmtMs = (v) => {
+        if (v === 0) return '0';
+        if (v >= 1000) return (v/1000).toFixed(1) + 's';
+        if (v < 0.01) return '<0.01';
+        return v;
+      };
       const costCell = (cost) => {
         if (!cost) return '<td style="padding:5px 8px;color:var(--dim)">—</td>';
         const t = cost.typical || 0;
         const cached = cost.cached || 0;
         const p99 = cost.p99 || 0;
-        const tColor = t >= 50 ? 'var(--red)'
-                     : t >= 1  ? 'var(--yellow)'
+        const kind = cost.kind || '';
+        const isAdversary = kind === 'adversary';
+        // For adversary signals: numbers are attacker delay, never hits legit traffic
+        const tColor = isAdversary ? 'var(--blue)'
+                     : t >= 50  ? 'var(--red)'
+                     : t >= 1   ? 'var(--yellow)'
                      : 'var(--green)';
+        const numTitle = isAdversary
+          ? `adversary delay: typical ${fmtMs(t)}ms · p99 ${fmtMs(p99)}ms\n(legitimate traffic: 0 ms — never fires)`
+          : `cached ${cached}ms · typical ${t}ms · p99 ${p99}ms`;
+        const nums = isAdversary
+          ? `<span style="color:var(--blue);font-weight:600">${fmtMs(t)}</span>`
+          : `<span style="color:var(--green)">${fmtMs(cached)}</span>`
+          + `<span style="color:var(--dim)">/</span>`
+          + `<span style="color:${tColor};font-weight:600">${fmtMs(t)}</span>`
+          + `<span style="color:var(--dim)">/</span>`
+          + `<span style="color:var(--red)">${fmtMs(p99)}</span>`;
         return `<td style="padding:5px 8px;text-align:right;font-family:ui-monospace,monospace;font-size:10.5px"
-                   title="cached ${cached}ms · typical ${t}ms · p99 ${p99}ms">
-          <span style="color:var(--green)">${cached}</span>
-          <span style="color:var(--dim)">/</span>
-          <span style="color:${tColor};font-weight:600">${t}</span>
-          <span style="color:var(--dim)">/</span>
-          <span style="color:var(--red)">${p99}</span>
+                   title="${escapeHtml(numTitle)}" data-typical="${t}">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            ${kindBadge(kind)}
+            <span>${nums}</span>
+          </div>
         </td>`;
       };
       // 1.6.5 — escalate icon with custom hover tooltip (next to detectors
@@ -1308,6 +1365,59 @@ document.addEventListener('DOMContentLoaded', () => {
         </tr>`;
       }).join('');
       tb.innerHTML = weightRows + modHeader + modRows;
+
+      // Sort-by-cost click on column header
+      let _sortByCost = false;
+      const costHdr = document.getElementById('cost-col-hdr');
+      if (costHdr) {
+        costHdr.onclick = () => {
+          _sortByCost = !_sortByCost;
+          const rows = Array.from(tb.querySelectorAll('tr[style*="border-bottom"]'));
+          const sections = Array.from(tb.querySelectorAll('tr:not([style*="border-bottom"])'));
+          if (_sortByCost) {
+            // Hide section headers, sort all data rows by data-typical desc
+            sections.forEach(r => r.style.display = 'none');
+            rows.sort((a, b) => {
+              const tA = parseFloat(a.querySelector('td[data-typical]')?.dataset.typical || 0);
+              const tB = parseFloat(b.querySelector('td[data-typical]')?.dataset.typical || 0);
+              return tB - tA;
+            });
+            rows.forEach(r => tb.appendChild(r));
+            costHdr.title = 'Sorted by typical cost (high → low). Click to restore default order.';
+            costHdr.querySelector('span').textContent = '▼ sorted';
+          } else {
+            sections.forEach(r => r.style.display = '');
+            // Re-render to restore original order
+            tb.innerHTML = weightRows + modHeader + modRows;
+            // Re-wire after re-render
+            tb.querySelectorAll('.switch[data-knob-scoring]').forEach(sw => {
+              sw.onclick = async () => {
+                const knob = sw.dataset.knobScoring;
+                const newVal = !sw.classList.contains('on');
+                sw.classList.toggle('on', newVal);
+                try {
+                  const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+                    {method:'POST', headers:{'Content-Type':'application/json'},
+                     body: JSON.stringify({[knob]: newVal})});
+                  const body = await r.json();
+                  if (r.ok && body.applied && Object.keys(body.applied).length){
+                    serverState[knob] = newVal;
+                    showToast(knob + ' = ' + newVal, 'ok');
+                  } else {
+                    sw.classList.toggle('on', !newVal);
+                    const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
+                    showToast('Rejected — ' + reasons, 'err');
+                  }
+                } catch(e) {
+                  sw.classList.toggle('on', !newVal);
+                  showToast('Network error: ' + e.message, 'err');
+                }
+              };
+            });
+            costHdr.querySelector('span').textContent = '▼';
+          }
+        };
+      }
 
       // Wire toggle clicks (auto-apply via /antibot-appsec-gateway/secured/config)
       tb.querySelectorAll('.switch[data-knob-scoring]').forEach(sw => {

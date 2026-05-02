@@ -576,6 +576,58 @@ HONEY_LINK_HTML = (
     '</div>'
 )
 
+# ── 1.6.9: AI Labyrinth — tarpit maze for AI scrapers / crawlers ─────────────
+# Hidden nofollow links injected into every proxied HTML response. Any bot
+# that follows them enters a slow-drip maze of convincing fake pages; each
+# hit triggers an instant-ban event ("tarpit-walk").  Inspired by Cloudflare
+# AI Labyrinth (blog.cloudflare.com/ai-labyrinth/).
+LABYRINTH_ENABLED  = os.environ.get("LABYRINTH_ENABLED",  "1") in ("1", "true", "yes")
+LABYRINTH_SLOW_MS  = int(os.environ.get("LABYRINTH_SLOW_MS",   "600"))   # ms delay between chunks
+LABYRINTH_MAX_DEPTH = int(os.environ.get("LABYRINTH_MAX_DEPTH", "5"))    # deepest page level
+LABYRINTH_LINKS_PER = int(os.environ.get("LABYRINTH_LINKS_PER_PAGE", "3"))  # hidden links per page
+
+_TARPIT_TOPICS = [
+    ("System Configuration Reference",   "configuration"),
+    ("Internal API Documentation",        "api-reference"),
+    ("Database Schema Overview",          "schema"),
+    ("Deployment Architecture",           "deployment"),
+    ("Security Controls Summary",         "security-controls"),
+    ("Monitoring & Observability Guide",  "observability"),
+    ("Incident Response Playbook",        "incident-response"),
+    ("Data Retention Policy",             "data-retention"),
+    ("Authentication Flow Reference",     "auth-flow"),
+    ("Network Segmentation Map",          "network"),
+    ("Service Mesh Topology",             "service-mesh"),
+    ("Audit Log Reference",               "audit-log"),
+    ("Backup & Recovery Procedures",      "backup-recovery"),
+    ("Rate Limit Configuration",          "rate-limits"),
+    ("TLS Certificate Management",        "tls-certs"),
+    ("Secrets Rotation Runbook",          "secrets-rotation"),
+]
+
+_TARPIT_SENTENCES = [
+    "All credentials are rotated on a 90-day cycle and stored in the secrets manager.",
+    "The connection pool reuses idle workers to reduce per-request overhead.",
+    "Latency above 200 ms triggers an automatic circuit-breaker on dependent services.",
+    "Replica synchronisation uses a leader-follower model; reads are served from any node.",
+    "Health checks fire every 10 seconds; three failures mark the instance unhealthy.",
+    "Log rotation is configured for 7 days with gzip compression after the first 24 hours.",
+    "Outbound traffic must route through the egress proxy at proxy.internal:3128.",
+    "The schema migration tool acquires an advisory lock before any structural change.",
+    "TLS certificates are auto-renewed via ACME 30 days before expiry.",
+    "Service-to-service calls are authenticated with short-lived JWTs signed by the internal CA.",
+    "The batch job runs at 03:00 UTC and archives records beyond the retention window.",
+    "Prometheus metrics are scraped every 15 seconds and retained for 30 days.",
+    "Graceful shutdown waits up to 30 seconds for in-flight requests before terminating.",
+    "The key derivation function uses PBKDF2 with 210 000 iterations and a 32-byte salt.",
+    "All audit events are immutably appended to the append-only event store.",
+    "Rate limits are enforced per API key with a token-bucket algorithm.",
+    "The canary deployment receives 5 % of traffic before full rollout.",
+    "Circuit breaker opens after 50 % error rate over a 10-second sliding window.",
+    "Snapshots are taken hourly and replicated to the secondary availability zone.",
+    "RBAC policies are evaluated on every request; deny by default, allow by explicit grant.",
+]
+
 UA_BLOCKLIST = (
     # CLI / scripting libs
     "curl/", "wget/", "fetch/", "httpie/",
@@ -2718,9 +2770,10 @@ def _refresh_integration_state():
     after db_load_secrets() and after a successful /__secrets POST."""
     g = globals()
     g["_TURNSTILE_CONFIGURED"] = bool(g.get("TURNSTILE_SITEKEY") and g.get("TURNSTILE_SECRET"))
+    _ts_env = os.environ.get("TURNSTILE_ENABLED", "").strip().lower()
     g["TURNSTILE_ENABLED"] = (
         g["_TURNSTILE_CONFIGURED"]
-        and os.environ.get("TURNSTILE_ENABLED", "0") in ("1", "true", "yes")
+        and _ts_env not in ("0", "false", "no")
     )
     g["ABUSEIPDB_ENABLED"] = bool(g.get("ABUSEIPDB_KEY"))
     g["CROWDSEC_ENABLED"]  = bool(g.get("CROWDSEC_LAPI_URL") and g.get("CROWDSEC_API_KEY"))
@@ -2991,6 +3044,9 @@ _ADMIN_PUBLIC_SUBPATHS = (
     # here after running the BotD detector loaded from /assets/botd.bundle.js.
     "/botd-report",
     "/assets/botd.bundle.js",
+    # 1.6.9 AI Labyrinth — tarpit must be reachable by every IP; the HMAC
+    # token in the URL provides authenticity (only the gateway mints them).
+    "/tarpit/",
     # 1.6.7+: NOT in this list — admin-IP gated:
     #   /login, /logout       — see _ADMIN_LOGIN_SUBPATHS below
     #   /live                 — source IP must be loopback (HEALTHCHECK only)
@@ -3469,6 +3525,9 @@ RISK_WEIGHTS = {
     # automation / headless markers via /__botd-report. Med tier — not
     # instant ban (BotD has known FPs on privacy-focused browsers).
     "botd-detected":          30,
+    # 1.6.9 — AI Labyrinth tarpit: only a bot follows a hidden nofollow link.
+    # Near-zero false-positive; one hit = instant ban.
+    "tarpit-walk":           100,
     # ── 1.6.2: Tier-C signals (response-side DLP) ──
     # DLP fires are NOT client-malice — they're upstream leakage. Zero
     # risk added to the requester; the event is recorded for the operator.
@@ -3805,6 +3864,123 @@ def verify_pow(token: str, solution: str,
         return False, "solution already used (replay)"
     _pow_seen[pair_key] = now_ts + POW_VALID_SECS
     return True, "ok"
+
+# ── 1.6.9: AI Labyrinth — token helpers ──────────────────────────────────────
+
+def _tarpit_token(depth: int) -> str:
+    """Mint a signed tarpit token encoding maze depth."""
+    nonce = secrets.token_urlsafe(8)
+    sig = hmac.new(POW_HMAC_KEY,
+                   f"tarpit:{depth}:{nonce}".encode(),
+                   hashlib.sha256).hexdigest()[:16]
+    return f"{depth}.{nonce}.{sig}"
+
+def _tarpit_verify(token: str) -> int | None:
+    """Return depth if token is valid and depth ≤ LABYRINTH_MAX_DEPTH, else None."""
+    parts = token.split(".", 2)
+    if len(parts) != 3:
+        return None
+    depth_s, nonce, sig = parts
+    try:
+        depth = int(depth_s)
+    except ValueError:
+        return None
+    if depth < 0 or depth > LABYRINTH_MAX_DEPTH:
+        return None
+    expected = hmac.new(POW_HMAC_KEY,
+                        f"tarpit:{depth}:{nonce}".encode(),
+                        hashlib.sha256).hexdigest()[:16]
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return depth
+
+def _tarpit_page_html(depth: int, nonce: str) -> str:
+    """Generate a plausible-looking fake documentation page for the tarpit."""
+    import hashlib as _h
+    seed = int(_h.sha256(nonce.encode()).hexdigest(), 16)
+    topic_title, topic_slug = _TARPIT_TOPICS[seed % len(_TARPIT_TOPICS)]
+    # Pick 6 sentences pseudo-randomly from the pool
+    body_sentences = [
+        _TARPIT_SENTENCES[(seed + i * 7) % len(_TARPIT_SENTENCES)]
+        for i in range(6)
+    ]
+    # Build more tarpit links for the next depth level
+    link_html = ""
+    if depth < LABYRINTH_MAX_DEPTH and LABYRINTH_ENABLED:
+        links = [
+            f'<a href="/antibot-appsec-gateway/tarpit/{_tarpit_token(depth + 1)}" '
+            f'rel="nofollow noopener" style="display:none!important;visibility:hidden;'
+            f'position:absolute;left:-99999px" aria-hidden="true">{topic_slug}-{i}</a>'
+            for i in range(LABYRINTH_LINKS_PER)
+        ]
+        link_html = (
+            '<div style="display:none!important;visibility:hidden;height:0;width:0;'
+            'overflow:hidden;position:absolute;left:-99999px" aria-hidden="true">'
+            + "".join(links) + "</div>"
+        )
+    paras = "".join(f"<p>{s}</p>" for s in body_sentences)
+    return (
+        f"<!DOCTYPE html><html lang='en'><head>"
+        f"<meta charset='utf-8'><title>{topic_title}</title>"
+        f"<meta name='robots' content='noindex,nofollow'>"
+        f"</head><body>"
+        f"<h1>{topic_title}</h1>"
+        f"<p><em>Internal reference document — depth {depth}</em></p>"
+        f"{paras}"
+        f"{link_html}"
+        f"</body></html>"
+    )
+
+async def tarpit_endpoint(request: web.Request) -> web.Response:
+    """GET /antibot-appsec-gateway/tarpit/{token}
+    Any client that reaches this endpoint followed a hidden nofollow link —
+    almost certainly a bot.  We:
+      1. Validate the HMAC token (invalid → 404, no signal leak).
+      2. Record tarpit-walk + instant ban.
+      3. Slow-drip a fake HTML page to waste crawler resources.
+      4. Embed new links for the next maze depth.
+    """
+    if not LABYRINTH_ENABLED:
+        raise web.HTTPNotFound()
+
+    token = request.match_info.get("token", "")
+    depth = _tarpit_verify(token)
+    if depth is None:
+        raise web.HTTPNotFound()
+
+    ip     = get_ip(request)
+    ua     = request.headers.get("User-Agent", "")
+    tk, sid, fp, _, _ = get_identity(request)
+    ja4    = request.headers.get("X-JA4", "")
+    rid    = _new_request_id()
+
+    # Record + ban — tarpit-walk is near-zero FP; one hit = instant ban
+    await update_risk_and_maybe_ban(tk, "tarpit-walk", ip)
+    await record(ip, ua, request.path, 200, "tarpit-walk",
+                 track_key=tk, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+
+    # Extract nonce for deterministic page content
+    nonce = token.split(".", 2)[1] if "." in token else token
+    html_bytes = _tarpit_page_html(depth, nonce).encode("utf-8")
+
+    # Slow-drip: split into 256-byte chunks with a delay between each
+    chunk_size = 256
+    chunks = [html_bytes[i:i + chunk_size]
+              for i in range(0, len(html_bytes), chunk_size)]
+    delay = LABYRINTH_SLOW_MS / 1000.0
+
+    response = web.StreamResponse(
+        status=200,
+        headers={"Content-Type": "text/html; charset=utf-8",
+                 "Cache-Control": "no-store",
+                 "X-Robots-Tag": "noindex,nofollow"}
+    )
+    await response.prepare(request)
+    for chunk in chunks:
+        await response.write(chunk)
+        await asyncio.sleep(delay)
+    await response.write_eof()
+    return response
 
 def needs_pow(request: web.Request) -> bool:
     if POW_REQUIRE_ALL_WRITES and request.method in ("POST", "PUT", "PATCH", "DELETE"):
@@ -5176,7 +5352,7 @@ async def lists_snapshot_endpoint(request: web.Request):
         # Admin IPs
         "admin_ip_count":         len(globals().get("ADMIN_ALLOWED_NETS") or []),
         # Versions
-        "version":                "AppSecGW_1.6.8",
+        "version":                "AppSecGW_1.6.9",
         "ts":                     n,
     }
     return web.json_response(snapshot, headers={"Cache-Control":"no-store"})
@@ -5354,7 +5530,7 @@ async def health_score_endpoint(request: web.Request):
     return web.json_response({
         "score":       score,
         "reasons":     reasons,
-        "version":     "AppSecGW_1.6.8",
+        "version":     "AppSecGW_1.6.9",
         "upstream":    UPSTREAM,
         "db_backend":  DB_BACKEND,
         "uptime_secs": int(_t.time() - START_EPOCH),
@@ -5844,6 +6020,8 @@ async def scoring_endpoint(request: web.Request):
         "dlp-api-key":           ("intel", "Upstream response contained an API-key-shaped token (Slack / GitHub / OpenAI / labelled)"),
         "dlp-pii-email":         ("intel", "Upstream response contained an email address (off by default — noisy)"),
         "dlp-pii-ssn":           ("intel", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
+        # ── 1.6.9: AI Labyrinth ──
+        "tarpit-walk":           ("hard",  "Client followed a hidden rel=nofollow link injected into proxied HTML — only automated crawlers traverse invisible links. Near-zero FP; instant ban + response deliberately slow-dripped to exhaust crawler resources."),
     }
     # Each entry annotated with the runtime-toggle knob (if any) that
     # controls whether the detector runs. UI uses this to render a switch
@@ -5891,6 +6069,8 @@ async def scoring_endpoint(request: web.Request):
         "dlp-api-key":        "DLP_GROUP_API_KEY_ENABLED",
         "dlp-pii-email":      "DLP_GROUP_PII_EMAIL_ENABLED",
         "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
+        # 1.6.9 — AI Labyrinth
+        "tarpit-walk":        "LABYRINTH_ENABLED",
         # 1.5.4: 11 new per-detector kill-switches
         "honeypot":           "HONEYPOT_ENABLED",
         "honeypot-silent":    "HONEYPOT_ENABLED",
@@ -5909,85 +6089,103 @@ async def scoring_endpoint(request: web.Request):
         "session-flood":      "SESSION_FLOOD_ENABLED",
         "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
     }
-    # Per-signal latency cost (typical / cached / p99 in ms).
-    # External integrations can be sub-ms cached but high uncached. In-process
-    # heuristics are essentially free (set lookup, regex on path, dict ops).
+    # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
+    #
+    # kind values:
+    #   "in-process" — pure string/header checks, O(1) set/dict ops (µs range)
+    #   "state"      — accesses shared mutable state (rate buckets, risk scores, sets)
+    #   "regex"      — regex scan on path or body content (scales with body size)
+    #   "mmdb"       — in-memory MaxMind DB lookup (never network; sub-ms always)
+    #   "network"    — outbound API call to AbuseIPDB / CrowdSec LAPI
+    #   "response"   — scans upstream response body (DLP); adds to response latency, not request
+    #   "adversary"  — intentional delay; never fires for legitimate traffic
+    #
+    # For "adversary" kind, typical/p99 represent the forced adversary delay,
+    # NOT gateway overhead on normal traffic (which is 0).
     SIGNAL_COST = {
-        # External integrations (network call required)
-        "abuseipdb-high":     {"cached": 0.3,   "typical": 150,  "p99": 450},
-        "abuseipdb-med":      {"cached": 0.3,   "typical": 150,  "p99": 450},
-        "crowdsec-banned":    {"cached": 0.2,   "typical": 5,    "p99": 20},
-        "asn-hosting":        {"cached": 0.1,   "typical": 0.1,  "p99": 0.5},
-        # Body-scanning regex (per request, body-bound)
-        "suspicious-body":    {"cached": 0,     "typical": 0.5,  "p99": 3},
-        "canary-echo":        {"cached": 0,     "typical": 0.2,  "p99": 1.5},
-        "bot-trap":           {"cached": 0,     "typical": 0.1,  "p99": 1},
-        # Path-regex / set lookups
-        "suspicious-path":    {"cached": 0,     "typical": 0.05, "p99": 0.2},
-        "honeypot":           {"cached": 0,     "typical": 0.005,"p99": 0.05},
-        "honeypot-silent":    {"cached": 0,     "typical": 0.005,"p99": 0.05},
-        "ai-probe":           {"cached": 0,     "typical": 0.005,"p99": 0.05},
-        # UA / header inspection
-        "ua-empty":           {"cached": 0,     "typical": 0.001,"p99": 0.01},
-        "ua-too-short":       {"cached": 0,     "typical": 0.001,"p99": 0.01},
-        "ua-blocked":         {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        "ua-non-browser":     {"cached": 0,     "typical": 0.005,"p99": 0.02},
-        "ua-platform-mismatch": {"cached": 0,   "typical": 0.005,"p99": 0.02},
-        "ai-headers-empty":   {"cached": 0,     "typical": 0.005,"p99": 0.01},
-        "ai-headers-incomplete": {"cached": 0,  "typical": 0.005,"p99": 0.01},
-        "accept-wildcard-html": {"cached": 0,   "typical": 0.001,"p99": 0.005},
-        "headers-suspicious": {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        # Behavioural / state ops
-        "behavior":           {"cached": 0,     "typical": 0.005,"p99": 0.02},
-        "ai-enumeration":     {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        "ai-no-assets":       {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        "session-flood":      {"cached": 0,     "typical": 0.01, "p99": 0.05},
-        "session-churn":      {"cached": 0,     "typical": 0.05, "p99": 0.2},
-        "upstream-404":       {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        # Misc
-        "host-not-allowed":   {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        "tls-fingerprint":    {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        "ja4-required-missing": {"cached": 0,   "typical": 0.001,"p99": 0.005},
-        "missing-required-header": {"cached": 0,"typical": 0.005,"p99": 0.01},
-        "origin-mismatch":    {"cached": 0,     "typical": 0.005,"p99": 0.02},
-        "js-challenge":       {"cached": 0,     "typical": 0.05, "p99": 0.3},
-        "rate-limit-ip":      {"cached": 0,     "typical": 0.005,"p99": 0.02},
-        "rate-limit":         {"cached": 0,     "typical": 0.005,"p99": 0.02},
-        "fp-banned":          {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        "traffic-threshold":  {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        # 1.6.0 — Tier-A latencies
-        "country-blocked":    {"cached": 0,     "typical": 0.1,  "p99": 0.5},
-        "tor-exit":           {"cached": 0,     "typical": 0.001,"p99": 0.005},
-        "datacenter-vpn":     {"cached": 0,     "typical": 0.1,  "p99": 0.5},
-        "ua-ai-openai":       {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        "ua-ai-anthropic":    {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        "ua-ai-google":       {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        "ua-ai-perplexity":   {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        "ua-ai-meta":         {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        "ua-ai-other":        {"cached": 0,     "typical": 0.02, "p99": 0.1},
-        # 1.6.1 — Tier-B latencies
-        "custom-rule-block":  {"cached": 0,     "typical": 0.05, "p99": 0.5},
-        "rate-limit-endpoint":{"cached": 0,     "typical": 0.005,"p99": 0.02},
-        "body-sqli":          {"cached": 0,     "typical": 0.3,  "p99": 2.0},
-        "body-xss":           {"cached": 0,     "typical": 0.3,  "p99": 2.0},
-        "body-lfi":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
-        "body-rce":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
-        "body-ssrf":          {"cached": 0,     "typical": 0.2,  "p99": 1.0},
-        "body-cmd":           {"cached": 0,     "typical": 0.2,  "p99": 1.0},
-        "auth-jwt-invalid":   {"cached": 0,     "typical": 0.5,  "p99": 2.0},
-        # 1.6.5 — slow-client cost is the timeout itself (BODY_TIMEOUT default 30s)
-        "slow-client":        {"cached": 0,     "typical": 30000, "p99": 30000},
-        # 1.6.5 — BotD: client-side cost (in-browser fingerprinting); the
-        # gateway-side cost is just receiving the report POST.
-        "botd-detected":      {"cached": 0,     "typical": 0.1,   "p99": 0.5},
-        # 1.6.2 — Tier-C DLP latencies (response-side; cost is per-response not per-request)
-        "dlp-cc":             {"cached": 0,     "typical": 0.5,  "p99": 3.0},
-        "dlp-aws":            {"cached": 0,     "typical": 0.3,  "p99": 1.5},
-        "dlp-jwt":            {"cached": 0,     "typical": 0.3,  "p99": 1.5},
-        "dlp-private-key":    {"cached": 0,     "typical": 0.05, "p99": 0.5},
-        "dlp-api-key":        {"cached": 0,     "typical": 0.5,  "p99": 2.0},
-        "dlp-pii-email":      {"cached": 0,     "typical": 0.5,  "p99": 2.0},
-        "dlp-pii-ssn":        {"cached": 0,     "typical": 0.2,  "p99": 1.0},
+        # ── External integrations (network call) ─────────────────────────
+        "abuseipdb-high":       {"kind": "network",     "cached": 0.3,  "typical": 150,   "p99": 450},
+        "abuseipdb-med":        {"kind": "network",     "cached": 0.3,  "typical": 150,   "p99": 450},
+        "crowdsec-banned":      {"kind": "network",     "cached": 0.2,  "typical": 5,     "p99": 20},
+        # ── MaxMind in-memory DB lookups ──────────────────────────────────
+        "asn-hosting":          {"kind": "mmdb",        "cached": 0.1,  "typical": 0.1,   "p99": 0.5},
+        "country-blocked":      {"kind": "mmdb",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        "datacenter-vpn":       {"kind": "mmdb",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # ── Regex scans on request path / body ───────────────────────────
+        # suspicious-path: 70+ patterns (1.6.5 expansion) applied to URL path
+        "suspicious-path":      {"kind": "regex",       "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # suspicious-body: 70+ patterns across POST body; scales with UPSTREAM_MAX_BODY
+        "suspicious-body":      {"kind": "regex",       "cached": 0,    "typical": 0.8,   "p99": 5},
+        # body group scanners — separate regex families, applied on POST/PUT/PATCH bodies
+        "body-sqli":            {"kind": "regex",       "cached": 0,    "typical": 0.3,   "p99": 2.0},
+        "body-xss":             {"kind": "regex",       "cached": 0,    "typical": 0.3,   "p99": 2.0},
+        "body-lfi":             {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        "body-rce":             {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        "body-ssrf":            {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        "body-cmd":             {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        # canary-echo: dict lookup + header scan + body scan
+        "canary-echo":          {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.5},
+        # bot-trap: scan form body for hidden field value
+        "bot-trap":             {"kind": "regex",       "cached": 0,    "typical": 0.1,   "p99": 1},
+        # ── In-process checks (O(1), no I/O) ─────────────────────────────
+        "honeypot":             {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "honeypot-silent":      {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "ai-probe":             {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "ua-empty":             {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.01},
+        "ua-too-short":         {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.01},
+        # ua-blocked: substring scan across 60+ UA entries (lowercase)
+        "ua-blocked":           {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-non-browser":       {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "ua-platform-mismatch": {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "ua-ai-openai":         {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-anthropic":      {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-google":         {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-perplexity":     {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-meta":           {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-other":          {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ai-headers-empty":     {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.01},
+        "ai-headers-incomplete":{"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.01},
+        "accept-wildcard-html": {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "headers-suspicious":   {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "host-not-allowed":     {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "tls-fingerprint":      {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "ja4-required-missing": {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "missing-required-header":{"kind":"in-process", "cached": 0,    "typical": 0.005, "p99": 0.01},
+        "origin-mismatch":      {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "tor-exit":             {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        # custom-rule-block: fnmatch + dict ops on CUSTOM_RULES list
+        "custom-rule-block":    {"kind": "in-process",  "cached": 0,    "typical": 0.05,  "p99": 0.5},
+        # auth-jwt-invalid: base64 decode + HMAC-SHA-256 verify
+        "auth-jwt-invalid":     {"kind": "in-process",  "cached": 0,    "typical": 0.5,   "p99": 2.0},
+        # ── Shared-state access (rate buckets, risk counters, behavioral windows) ──
+        "behavior":             {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "ai-enumeration":       {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "ai-no-assets":         {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "session-flood":        {"kind": "state",        "cached": 0,    "typical": 0.01,  "p99": 0.05},
+        "session-churn":        {"kind": "state",        "cached": 0,    "typical": 0.05,  "p99": 0.2},
+        "upstream-404":         {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "js-challenge":         {"kind": "state",        "cached": 0,    "typical": 0.05,  "p99": 0.3},
+        "rate-limit-ip":        {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "rate-limit":           {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "rate-limit-endpoint":  {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "fp-banned":            {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "traffic-threshold":    {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        # botd-detected: receive POST report from browser-side FingerprintJS; gateway cost = JSON parse + ban
+        "botd-detected":        {"kind": "state",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # ── Response-side (DLP) — added to response latency, not request latency ──
+        "dlp-cc":               {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 3.0},
+        "dlp-aws":              {"kind": "response",     "cached": 0,    "typical": 0.3,   "p99": 1.5},
+        "dlp-jwt":              {"kind": "response",     "cached": 0,    "typical": 0.3,   "p99": 1.5},
+        "dlp-private-key":      {"kind": "response",     "cached": 0,    "typical": 0.05,  "p99": 0.5},
+        "dlp-api-key":          {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 2.0},
+        "dlp-pii-email":        {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 2.0},
+        "dlp-pii-ssn":          {"kind": "response",     "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        # ── Adversary delay — intentional; never fires for legitimate traffic ──
+        # slow-client: gateway holds connection until BODY_TIMEOUT; forces slowloris cost on attacker
+        "slow-client":          {"kind": "adversary",    "cached": 0,    "typical": 30000, "p99": 30000},
+        # tarpit-walk: HMAC verify + ban (<0.5ms) then slow-drip HTML to waste crawler resources
+        # typical = LABYRINTH_SLOW_MS × ~10 chunks; p99 = full 20-chunk page
+        "tarpit-walk":          {"kind": "adversary",    "cached": 0,    "typical": 6000,  "p99": 12000},
     }
     weights = []
     for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
@@ -7878,6 +8076,11 @@ _HOT_RELOAD_KNOBS = {
     # 1.6.5 — tarpit (artificial slowdown for soft-band identities)
     "TARPIT_ENABLED":         (_to_bool, None),
     "TARPIT_DELAY_MS":        (int, lambda v: 0 <= v <= 30000),
+    # 1.6.8 — AI Labyrinth (hidden nofollow maze for bots)
+    "LABYRINTH_ENABLED":      (_to_bool, None),
+    "LABYRINTH_SLOW_MS":      (int, lambda v: 0 <= v <= 30000),
+    "LABYRINTH_MAX_DEPTH":    (int, lambda v: 1 <= v <= 20),
+    "LABYRINTH_LINKS_PER_PAGE": (int, lambda v: 1 <= v <= 10),
     # 1.6.5 — FingerprintJS BotD client-side detection
     "BOTD_ENABLED":           (_to_bool, None),
     # Logging
@@ -8607,9 +8810,11 @@ TURNSTILE_SECRET  = os.environ.get("TURNSTILE_SECRET", "").strip()
 # toggle. Closes the deploy-time risk where leaving the test keys in env
 # silently activated Turnstile (see pentest R20).
 _TURNSTILE_CONFIGURED = bool(TURNSTILE_SITEKEY and TURNSTILE_SECRET)
+# Keys present → Turnstile auto-enables. Set TURNSTILE_ENABLED=0 to opt out.
+_ts_env = os.environ.get("TURNSTILE_ENABLED", "").strip().lower()
 TURNSTILE_ENABLED = (
     _TURNSTILE_CONFIGURED
-    and os.environ.get("TURNSTILE_ENABLED", "0") in ("1", "true", "yes")
+    and _ts_env not in ("0", "false", "no")
 )
 # 1.5.4 — show Turnstile only when identity's risk crosses this threshold.
 # 0 (default) = auto = midpoint between SOFT_CHALLENGE_SCORE and
@@ -9351,11 +9556,26 @@ def _scan_request_for_canary(request: web.Request, body_bytes: bytes = b"") -> s
     return ""
 
 
+def _tarpit_inject_html() -> str:
+    """Build the hidden tarpit link block (depth=0 entry points)."""
+    if not LABYRINTH_ENABLED:
+        return ""
+    links = [
+        f'<a href="/antibot-appsec-gateway/tarpit/{_tarpit_token(0)}" '
+        f'rel="nofollow noopener" style="display:none!important;visibility:hidden;'
+        f'position:absolute;left:-99999px" aria-hidden="true">link-{i}</a>'
+        for i in range(LABYRINTH_LINKS_PER)
+    ]
+    return (
+        '<div style="display:none!important;visibility:hidden;height:0;width:0;'
+        'overflow:hidden;position:absolute;left:-99999px" aria-hidden="true">'
+        + "".join(links) + "</div>"
+    )
+
 def _inject_honey_links(body: bytes) -> bytes:
-    """Insert honey-link block before the LAST `</body>` (document terminator).
-    Skips injection if the chosen position would land inside a `<script>` block
-    (i.e. if any `<script` token appears after the rightmost `</body>` in the
-    final 4 KiB) — prevents corrupting JS string literals."""
+    """Insert honey-link block (static traps + tarpit entry links) before the
+    LAST `</body>`.  Skips injection if the chosen position would land inside a
+    `<script>` block — prevents corrupting JS string literals."""
     if not body:
         return body
     tail = body[-4096:]
@@ -9367,7 +9587,8 @@ def _inject_honey_links(body: bytes) -> bytes:
     if b"<script" in tail[idx:].lower() or b"</script" in tail[idx:].lower():
         return body
     abs_idx = len(body) - len(tail) + idx
-    return body[:abs_idx] + HONEY_LINK_HTML.encode() + body[abs_idx:]
+    inject = (HONEY_LINK_HTML + _tarpit_inject_html()).encode()
+    return body[:abs_idx] + inject + body[abs_idx:]
 
 def _is_ws_upgrade(request: web.Request) -> bool:
     return (request.headers.get("Upgrade", "").lower() == "websocket"
@@ -9747,7 +9968,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.6.8"
+                response_headers["X-Proxy"] = "AppSecGW_1.6.9"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -9913,7 +10134,8 @@ async def on_startup(app):
               "auto-issued on the first qualifying HTML GET. Bypass cost "
               "vs determined script: ~1 RTT — combine with R7 canary "
               "echo, body-pattern, UA filter, hostile pool. For a hard "
-              "boundary set TURNSTILE_SITEKEY/SECRET.", flush=True)
+              "boundary set TURNSTILE_SITEKEY/SECRET (auto-enables on "
+              "presence).", flush=True)
     elif JS_CHALLENGE and TURNSTILE_ENABLED:
         print("[js-challenge] active (Turnstile-backed cookie gate)",
               flush=True)
@@ -10347,7 +10569,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.6.8",
+        "version":         "AppSecGW_1.6.9",
     }
     return web.json_response({
         "current":          current,
@@ -12653,6 +12875,8 @@ def make_app() -> web.Application:
         ("pow",          "GET",  pow_endpoint,                  False),
         ("solver",       "GET",  solver_endpoint,               False),
         ("botd-report",  "POST", botd_report_endpoint,          False),
+        # 1.6.9 — AI Labyrinth tarpit (public; HMAC-gated internally)
+        ("tarpit/{token}", "GET", tarpit_endpoint,              False),
         # ── secured (admin-IP + admin-key gated) ────────────────
         ("status",            "GET",    status_endpoint,                       True),
         ("dashboard",         "GET",    dashboard_endpoint,                    True),
@@ -12771,7 +12995,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.6.8    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.6.9    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     _ns_line = f"Admin namespace: {ADMIN_NS}"
     print(f"  ║ {_ns_line:<57}║")

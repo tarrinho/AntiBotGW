@@ -108,18 +108,50 @@ reason, pass/fail. Tear the harness down when done.
 
 ## 13. Documentation
 Each release MUST update:
-1. **`README.md`** — new row at the top of `Version history` table with
+1. **`CHANGELOG.md`** — add a new `## [<version>]` section at the top
+   (below `[Unreleased]` if present) containing:
+   - **Added** — every new feature, endpoint, knob, detector, or dashboard element.
+   - **Changed** — every modified behaviour, weight adjustment, or renamed item.
+   - **Fixed** — every bug fix, security finding resolution, or regression fix.
+   - **Removed** — anything deleted or deprecated.
+   - **Tests** — names of every new test added and the final pass count.
+   - **Validation** — Bandit and Trivy summary (0 H / 0 C + Mediums classified).
+   Move the current version's content out of `[Unreleased]` and stamp it with
+   the release version tag. Features developed across multiple micro-iterations
+   should be merged into a single version block — do not create entries per commit.
+
+2. **`README.md`** — new row at the top of `Version history` table with
    the feature list, hot-reload knob count, risk-weight count, and the
-   names of every new test added in this version.
-2. **`MANUAL.md`** — operational runbook (start / stop / inspect logs /
+   names of every new test added in this version. Also review and update:
+   - Architecture diagram (middleware chain layers) if new layers were added.
+   - "What it does" layer table if detection layers changed.
+   - Configuration tables for any new env vars or knobs.
+   - External-integration table for any new integrations.
+
+3. **`MANUAL.md`** — operational runbook (start / stop / inspect logs /
    tune knobs / rotate keys / handle DLP redaction / tear down).
-3. **`report.pdf`** — generated from `report.html` via Chromium headless
+   Verify that every new knob, endpoint, and operational procedure introduced
+   in this version is documented with an example command.
+
+4. **`report.pdf`** — generated from `report.html` via Chromium headless
    (WeasyPrint v62.3 is broken on the build host):
    ```
    chromium --headless --no-sandbox --print-to-pdf=report.pdf \
      --print-to-pdf-no-header file:///abs/path/to/report.html
    ```
    Author: Pedro Tarrinho. Reports must NOT reference any AI tooling.
+
+### 13a. Architecture + version consistency review
+Before declaring documentation complete, verify:
+- Version string in `proxy.py` (`AppSecGW_X.Y.Z`) matches the release tag.
+- `README.md` image tag in Quick Start, multi-site fleet examples, and
+  `Build from source` block all reference the new version.
+- `Dockerfile` and `docker-compose.yml` default image tags updated if needed.
+- `copy-to-github.sh` MANIFEST includes every new file added in this version.
+- Architecture diagram in `README.md` reflects the actual middleware chain;
+  add any new detection layer or admin endpoint introduced since last release.
+- `CHANGELOG.md` `[Unreleased]` section is empty (or absent) after the
+  release entry is stamped — nothing left undocumented.
 
 ---
 

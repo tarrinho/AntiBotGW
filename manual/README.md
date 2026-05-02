@@ -600,6 +600,47 @@ timeline:
 
 ---
 
+## 9. AI Labyrinth (1.6.9+)
+
+The AI Labyrinth injects hidden `rel="nofollow"` links into every proxied HTML response.
+Any client that follows one enters a slow-drip maze of convincing fake documentation.
+One hit fires `tarpit-walk` (weight 100 → instant ban) and the response is streamed in
+256-byte chunks with a configurable inter-chunk delay to exhaust crawler resources.
+
+### 9.1 Knobs
+
+| Knob | Default | Description |
+|---|---|---|
+| `LABYRINTH_ENABLED` | `1` | Master switch — set to `0` to disable injection entirely. |
+| `LABYRINTH_SLOW_MS` | `600` | Delay between 256-byte chunks (ms). 0 = no drip. |
+| `LABYRINTH_MAX_DEPTH` | `5` | Maximum maze depth (HMAC-signed tokens prevent forgery). |
+| `LABYRINTH_LINKS_PER_PAGE` | `3` | Hidden links injected per response page. |
+
+### 9.2 Tune the labyrinth
+
+```bash
+# Slow down the drip to 2 s per chunk (more resource exhaustion):
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"LABYRINTH_SLOW_MS": 2000}'
+
+# Disable labyrinth for testing:
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"LABYRINTH_ENABLED": false}'
+```
+
+### 9.3 Inspect tarpit-walk events
+
+```bash
+docker logs <container> 2>&1 | grep "tarpit-walk"
+```
+
+Each hit logs: `reason='tarpit-walk'`, `track_key`, `ip`, `ua`, `path` (the maze URL),
+`status=200` (slow-drip fake page). The identity is auto-banned at weight 100.
+
+---
+
 — *End of report* —
 
-Image: `appsec-antibot-gw:1.5.2` · Author: Pedro Tarrinho · 2026-04-28
+Image: `appsec-antibot-gw:1.6.8` · Author: Pedro Tarrinho · 2026-05-02

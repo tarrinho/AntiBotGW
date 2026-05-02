@@ -1414,6 +1414,8 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     "admin-ip-blocked":      {tier:"info", weight:0,  text:"`ADMIN_ALLOWED_IPS` is configured and the source IP is not on the list. Admin endpoints return upstream-404 (mirrors a real not-found, no leak)."},
     "pow-required":          {tier:"info", weight:0,  text:"`POW_REQUIRED_PATHS` includes this path and the request didn't carry a valid `X-PoW-Token`/`X-PoW-Solution`. Returns 402 with a fresh challenge."},
     "OK":                    {tier:"info", weight:0,  text:"Request was forwarded to the upstream. No detector fired."},
+    // 1.6.9 — AI Labyrinth
+    "tarpit-walk":           {tier:"hard", weight:100, text:"Client followed a hidden `rel=nofollow` link injected into a proxied page — only automated crawlers traverse invisible links. Near-zero false positive; triggers instant ban. Inspired by Cloudflare AI Labyrinth."},
   };
 
   const TIER_COLOR = { hard:"var(--red)", med:"var(--yellow)", soft:"#5fb3c0", info:"var(--dim)" };
