@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.6.8 · Dashboard</title>
+<title>AppSecGW_1.6.9 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -121,7 +121,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.8 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.9 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.5.4 — reason drill-down modal -->
 <div class="modal-back" id="modal-back"></div>
@@ -731,7 +731,7 @@ async function tick() {
       return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint}">
         <span class="dim">${escapeHtml(time)}</span>
         <span>${tagHtml}</span>
-        <span>${escapeHtml(e.ip)}</span>
+        <span>${e.is_admin_ip?'<span title="Admin IP">🔒</span> ':''}${escapeHtml(e.ip)}</span>
         <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
         <span class="dim" title="request id (X-Request-ID)" style="font-family:ui-monospace;font-size:10.5px">${escapeHtml(e.rid || '')}</span>
       </div>`;
@@ -1260,7 +1260,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
         const totalRisk = idents.reduce((sum, i) => sum + (i.risk||0), 0);
         return `<tr>
           <td>${identCell}</td>
-          <td>${escapeHtml(e.ip)}</td>
+          <td>${e.is_admin_ip?'<span title="Admin IP">🔒</span> ':''}${escapeHtml(e.ip)}</td>
           <td style="text-align:right;font-weight:600">${e.count}×</td>
           <td style="text-align:right;color:${totalRisk>=50?'var(--red)':totalRisk>=25?'var(--orange,#ff7b3a)':'var(--dim)'};font-weight:600">${totalRisk.toFixed(1)}</td>
           <td><code style="color:${rsnColor}">${escapeHtml(topRsn)}</code></td>

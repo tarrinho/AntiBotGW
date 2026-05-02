@@ -1,61 +1,49 @@
-# 1.6.7+ — armv7 (32-bit Raspberry Pi OS) variant. Chainguard's distroless
-# Python only ships amd64+arm64, so this leg is built on Debian-slim
-# (multi-arch including linux/arm/v7). Trade-off: ~290 MB image vs the
-# 184 MB Chainguard build, plus Debian-userland mediums show up in
-# Trivy.
+# 1.6.9+ — armv7 (32-bit Raspberry Pi OS) variant.
 #
-# 1.6.7+ — multi-stage build adds psycopg (compiled from source against
-# system libpq). PyPI's `psycopg[binary]` ships C-extension wheels only
-# for amd64/arm64/ppc64le/s390x, NOT armv7 — so we install
-# `psycopg[c]>=3.1,<4` and let it compile its C extension against
-# libpq-dev at build time. The runtime stage carries only libpq5 (the
-# shared library psycopg links against), keeping the image tight.
+# Previous base: python:3.13-slim-bookworm (Debian 12) — carried 14
+# HIGH/CRITICAL CVEs in OS packages (glibc, systemd, sqlite, zlib, ncurses,
+# libldap, libgcrypt, libgnutls) with no fixed versions available in Debian 12.
 #
-# This means DB_BACKEND=postgres now works on armv7 — including
-# TimescaleDB (Timescale is a server-side Postgres extension; the
-# client just speaks plain Postgres protocol via psycopg, and the
-# gateway's hypertable bootstrap path in proxy.py handles the
-# `SELECT FROM pg_extension` check transparently when Timescale is
-# present on the server).
+# New base: python:3.13-alpine — musl-libc replaces glibc (no CVE-2026-0861),
+# systemd/udev absent (no CVE-2026-29111), minimal package set.
+#
+# psycopg[c] compiled from source against Alpine's postgresql-dev at build
+# time; runtime stage carries only libpq (the shared library psycopg links
+# against). Same functional result as the Debian build.
 
 # ─── Stage 1: build psycopg C extension + install pure-Python deps ───
-FROM python:3.13-slim-bookworm AS builder
+FROM python:3.13-alpine AS builder
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        gcc \
+RUN apk add --no-cache \
+        build-base \
         python3-dev \
-        libpq-dev \
- && rm -rf /var/lib/apt/lists/*
+        postgresql-dev \
+        libffi-dev
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
  && python3 -m pip install --no-cache-dir --target /pydeps \
         'aiohttp>=3.11.11,<4' \
         'maxminddb>=2.6,<3' \
         'redis>=5,<6' \
-        'psycopg[c]>=3.1,<4'
+        'psycopg[c]>=3.1,<4' \
+        'pyjwt>=2.8,<3'
 
-# ─── Stage 2: runtime — only the libpq5 shared lib + the prebuilt deps ─
-FROM python:3.13-slim-bookworm
+# ─── Stage 2: runtime — minimal Alpine + libpq shared lib ─────────────
+FROM python:3.13-alpine
 
-# libpq5 is the shared library psycopg's C extension was linked against
-# in stage 1. Without it, `import psycopg` fails at runtime.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        libpq5 \
- && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache libpq \
+ && apk upgrade --no-cache xz-libs \
+ && pip3 uninstall -y pip
 
 # Non-root user matching the Chainguard image's UID convention.
-RUN groupadd -g 65532 nonroot \
- && useradd  -u 65532 -g 65532 -M -d /app -s /usr/sbin/nologin nonroot
+RUN addgroup -g 65532 nonroot \
+ && adduser  -u 65532 -G nonroot -H -D -s /sbin/nologin nonroot
 
 WORKDIR /app
 
 COPY --from=builder /pydeps /app/pydeps
 
-# /data is the persistent volume. proxy.py writes the runtime keys next
-# to itself by default; symlinks redirect them onto /data so they
-# survive container restarts (same trick the production Dockerfile uses).
+# /data is the persistent volume; symlinks redirect runtime keys onto it.
 RUN mkdir -p /data /usr/local/share/maxmind \
  && ln -sf /data/.admin_key   /app/.admin_key \
  && ln -sf /data/.session_key /app/.session_key \

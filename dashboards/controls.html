@@ -130,9 +130,24 @@ button:disabled{opacity:.4;cursor:not-allowed}
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+/* load-status pill */
+#load-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+  padding:3px 10px;border-radius:10px;letter-spacing:.3px;transition:background .3s,color .3s,border-color .3s;
+  border:1px solid var(--yellow);background:rgba(210,153,34,.15);color:var(--yellow)}
+#load-status.ready{border-color:var(--green);background:var(--green);color:#000}
+#load-status .dot{width:6px;height:6px;border-radius:50%;background:currentColor;
+  animation:ls-pulse 1s ease-in-out infinite}
+#load-status.ready .dot{animation:none}
+@keyframes ls-pulse{0%,100%{opacity:1}50%{opacity:.3}}
+/* signal name click-tooltip */
+.sig-name{cursor:pointer;border-bottom:1px dotted var(--blue);color:var(--blue);font-family:ui-monospace,Menlo,monospace}
+#_sig-tip{position:fixed;background:#1c2333;border:1px solid var(--blue);border-radius:6px;
+  padding:9px 13px;font-size:11.5px;color:var(--fg);max-width:380px;line-height:1.55;
+  z-index:600;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;pointer-events:none}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.6.8 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.9 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -152,7 +167,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
   </div>
 
   <section class="card" id="card-external">
-    <h2>External integrations <span style="font-size:11px;color:var(--dim);font-weight:400">(activated via container env vars OR runtime secrets below)</span></h2>
+    <h2><span id="load-status"><span class="dot"></span>Loading</span> External integrations <span style="font-size:11px;color:var(--dim);font-weight:400">(activated via container env vars OR runtime secrets below)</span></h2>
     <div class="hint" style="margin-bottom:10px">
       Each integration adds latency. Cached lookups are sub-ms; uncached
       hits the third-party API. Numbers below are typical, not guaranteed.
@@ -435,6 +450,10 @@ const META = {
   POSTGRES_DSN:            {kind:'text', card:'lists', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
   // 1.6.5 — escalation tier + tarpit
   ESCALATION_THRESHOLD:    {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which expensive / external detectors run (AbuseIPDB / CrowdSec / MaxMind / body-pattern / DLP). Cheap in-process detectors run on every request regardless. 0 = run all on every request (legacy).', card:'thresholds'},
+  LABYRINTH_ENABLED:       {kind:'bool', desc:'AI Labyrinth — banned/high-risk bots that crawl the tarpit path are trapped in an infinite maze of AI-generated plausible-looking pages linked with signed tokens. Each page is slow-streamed (LABYRINTH_SLOW_MS) to maximise crawler CPU/bandwidth burn. Toggle off to disable maze generation entirely.'},
+  LABYRINTH_JITTER_ENABLED:{kind:'bool', desc:'Tarpit timing jitter (1.6.10) — replaces the fixed LABYRINTH_SLOW_MS delay with a Gaussian-distributed random delay (200–3000 ms, σ=500 ms) per streamed chunk. A deterministic 600 ms cadence is trivially fingerprinted; jitter makes it indistinguishable from a slow upstream.'},
+  ACCEPT_FP_ENABLED:       {kind:'bool', desc:'Accept header fingerprint (1.6.10) — fires (+3 soft) when a browser-class UA navigates HTML (Sec-Fetch-Dest: document) but the Accept header lacks text/html entirely (e.g. application/json, text/plain). Real browsers always include text/html on document navigation. Catches bots that clone a Chrome UA string but forget the matching Accept profile.'},
+  HEADER_CANARY_ENABLED:   {kind:'bool', desc:'Header canary injection (1.6.10) — in addition to the HTML comment and X-Trace-Id, plants the per-identity HMAC-signed canary token in ETag (as \\"agw-c-…\\") and X-Request-Id response headers. AI frameworks such as LangChain and AutoGen that automatically replay full prior-response headers will echo the token back on the next request, triggering the canary-echo ban. Zero cost — only activates when CANARY_ECHO_DETECTION is also on.'},
   TARPIT_ENABLED:          {kind:'bool', desc:'Tarpit mitigation — when an identity is in the soft-challenge band (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD), silent-decoy responses are delayed by TARPIT_DELAY_MS. Burns attacker iteration time without committing to a ban.'},
   TARPIT_DELAY_MS:         {kind:'num', min:0, max:30000, step:100, desc:'Delay in ms before serving the silent decoy when tarpit fires. Default 1500. Per response — total time blow-up = delay × #soft-band hits.', card:'thresholds'},
   BOTD_ENABLED:            {kind:'bool', desc:'FingerprintJS BotD client-side detection (open-source). Injects /antibot-appsec-gateway/assets/botd.bundle.js into HTML responses; the in-browser library checks for headless / WebDriver / automation markers and POSTs an HMAC-bound report to /antibot-appsec-gateway/botd-report. Detected = +30 risk (med tier). Off by default — adds ~16 KB JS to every HTML response.'},
@@ -737,7 +756,7 @@ async function unban(scope, value){
 
 document.addEventListener('DOMContentLoaded', () => {
   $('apply').onclick = apply;
-  $('reset').onclick = () => { dirty = {}; load(); };
+  $('reset').onclick = () => { dirty = {}; load().then(() => loadScoring()); };
   $('unban-go').onclick = () => {
     const v = $('unban-target').value.trim();
     if (!v) { $('unban-msg').textContent = 'enter a track-key or IP'; return; }
@@ -983,7 +1002,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const credsPresent = (typeof item.credentials_present === 'boolean')
           ? item.credentials_present
           : (item.status === 'configured' || !!item.enabled);
-        const checked = !!cfg[knob];
+        const checked = (knob in cfg) ? !!cfg[knob] : !!item.enabled;
         const disabledAttr = credsPresent ? '' : 'data-disabled="1"';
         const cls = (checked ? ' on' : '') + (credsPresent ? '' : ' switch-disabled');
         const title = credsPresent
@@ -1221,6 +1240,14 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         };
       });
+      // Flip the status pill to green the first time external cards are rendered.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        const s = document.getElementById('load-status');
+        if (s && !s.classList.contains('ready')) {
+          s.classList.add('ready');
+          s.innerHTML = '<span class="dot"></span>Loading Ready';
+        }
+      }));
     } catch(e) { /* ignore */ }
   }
 
@@ -1316,7 +1343,7 @@ document.addEventListener('DOMContentLoaded', () => {
                      : w.weight >= 20 ? 'var(--yellow)'
                      : w.weight > 0   ? 'var(--green)' : 'var(--dim)';
         const sigCell = (w.escalate_only ? escalateIcon : '') +
-          `<code>${escapeHtml(w.signal)}</code>`;
+          `<code class="sig-name" data-desc="${escapeHtml(w.description)}">${escapeHtml(w.label || w.signal)}</code>`;
         return `<tr style="border-bottom:1px solid var(--line)">
           ${toggleCell(w.toggle)}
           <td style="padding:5px 8px;font-family:ui-monospace,monospace">${sigCell}</td>
@@ -1357,7 +1384,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const tag = `<span style="background:${tierColor('mod')}22;color:${tierColor('mod')};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">modifier</span>`;
         return `<tr style="border-bottom:1px solid var(--line)">
           ${cell}
-          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(m.toggle)}</code></td>
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code class="sig-name" data-desc="${escapeHtml(m.description)}">${escapeHtml(m.toggle)}</code></td>
           <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
           <td style="padding:5px 8px">${tag}</td>
           <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
@@ -1365,6 +1392,26 @@ document.addEventListener('DOMContentLoaded', () => {
         </tr>`;
       }).join('');
       tb.innerHTML = weightRows + modHeader + modRows;
+
+      // Signal-name click → floating tooltip
+      const _tip = document.getElementById('_sig-tip') || (() => {
+        const d = document.createElement('div'); d.id = '_sig-tip';
+        document.body.appendChild(d);
+        document.addEventListener('click', () => { d.style.display = 'none'; });
+        return d;
+      })();
+      tb.querySelectorAll('.sig-name').forEach(el => {
+        el.onclick = (e) => {
+          e.stopPropagation();
+          _tip.textContent = el.dataset.desc;
+          _tip.style.display = 'block';
+          const r = el.getBoundingClientRect();
+          const left = Math.min(r.left, window.innerWidth - 396);
+          const top  = r.bottom + 6 + window.scrollY;
+          _tip.style.left = left + 'px';
+          _tip.style.top  = top + 'px';
+        };
+      });
 
       // Sort-by-cost click on column header
       let _sortByCost = false;
@@ -1447,13 +1494,14 @@ document.addEventListener('DOMContentLoaded', () => {
     } catch(e) { /* ignore */ }
   }
 
-  load();
-  loadAudit();
-  loadBans();
-  loadAdminIps();
-  loadScoring();
-  loadExternal();
-  loadThresholds();
+  Promise.all([
+    load().then(() => loadScoring()),
+    loadAudit(),
+    loadBans(),
+    loadAdminIps(),
+    loadExternal(),
+    loadThresholds(),
+  ]);
 
   // 1.6.5 — active rules + lists snapshot + endpoint policies
   (function(){

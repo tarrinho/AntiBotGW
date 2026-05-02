@@ -26,6 +26,7 @@ import hashlib
 import hmac
 import json
 import fnmatch as _fnmatch
+import random
 import re
 import secrets
 import sqlite3
@@ -223,6 +224,16 @@ def _admin_ip_allowed(request) -> bool:
         return True
     try:
         ip = _ipaddress.ip_address(get_ip(request))
+    except (ValueError, TypeError):
+        return False
+    return any(ip in net for net in ADMIN_ALLOWED_NETS)
+
+def _is_admin_ip(ip_str: str) -> bool:
+    """True when ip_str is in ADMIN_ALLOWED_NETS (empty list → False)."""
+    if not ADMIN_ALLOWED_NETS or not ip_str:
+        return False
+    try:
+        ip = _ipaddress.ip_address(ip_str)
     except (ValueError, TypeError):
         return False
     return any(ip in net for net in ADMIN_ALLOWED_NETS)
@@ -581,10 +592,18 @@ HONEY_LINK_HTML = (
 # that follows them enters a slow-drip maze of convincing fake pages; each
 # hit triggers an instant-ban event ("tarpit-walk").  Inspired by Cloudflare
 # AI Labyrinth (blog.cloudflare.com/ai-labyrinth/).
-LABYRINTH_ENABLED  = os.environ.get("LABYRINTH_ENABLED",  "1") in ("1", "true", "yes")
-LABYRINTH_SLOW_MS  = int(os.environ.get("LABYRINTH_SLOW_MS",   "600"))   # ms delay between chunks
-LABYRINTH_MAX_DEPTH = int(os.environ.get("LABYRINTH_MAX_DEPTH", "5"))    # deepest page level
-LABYRINTH_LINKS_PER = int(os.environ.get("LABYRINTH_LINKS_PER_PAGE", "3"))  # hidden links per page
+LABYRINTH_ENABLED        = os.environ.get("LABYRINTH_ENABLED",        "1") in ("1", "true", "yes")
+LABYRINTH_SLOW_MS        = int(os.environ.get("LABYRINTH_SLOW_MS",        "600"))
+LABYRINTH_MAX_DEPTH      = int(os.environ.get("LABYRINTH_MAX_DEPTH",      "5"))
+LABYRINTH_LINKS_PER      = int(os.environ.get("LABYRINTH_LINKS_PER_PAGE", "3"))
+# 1.6.10 — Gaussian jitter replaces fixed delay; mean = LABYRINTH_SLOW_MS, σ=500ms, clipped [200,3000]
+LABYRINTH_JITTER_ENABLED = os.environ.get("LABYRINTH_JITTER_ENABLED",    "1") in ("1", "true", "yes")
+
+# 1.6.10 — Accept header fingerprint: fires when HTML-nav has no text/html in Accept
+ACCEPT_FP_ENABLED        = os.environ.get("ACCEPT_FP_ENABLED",           "1") in ("1", "true", "yes")
+
+# 1.6.10 — Header canary: inject per-identity token into ETag + X-Request-Id
+HEADER_CANARY_ENABLED    = os.environ.get("HEADER_CANARY_ENABLED",       "1") in ("1", "true", "yes")
 
 _TARPIT_TOPICS = [
     ("System Configuration Reference",   "configuration"),
@@ -1941,7 +1960,7 @@ def _maxmind_auto_fetch():
                   flush=True)
             with tempfile.TemporaryDirectory() as td:
                 tgz = os.path.join(td, f"{edition}.tar.gz")
-                with urllib.request.urlopen(url, timeout=60) as r:
+                with urllib.request.urlopen(url, timeout=60) as r:  # nosec B310 — hardcoded HTTPS to MaxMind; no user-controlled scheme
                     if r.status != 200:
                         print(f"[maxmind] {edition} HTTP {r.status} — "
                               "license-key invalid or rate-limited",
@@ -2575,10 +2594,19 @@ async def db_writer_loop():
                         # args = (gw_id, {col: val, ...})
                         gw_id, fields = args
                         if fields:
+                            _GW_MUTABLE = frozenset({
+                                "domain", "region", "environment", "status",
+                                "can_distribute", "public_key", "private_key",
+                                "key_created_ts", "key_rotated_ts", "last_seen_ts",
+                                "updated_ts", "is_local", "auto_apply",
+                            })
+                            bad = set(fields) - _GW_MUTABLE
+                            if bad:
+                                raise ValueError(f"gw_registry_update: unknown columns {bad}")
                             cols = ", ".join(f"{k}=?" for k in fields)
                             params = list(fields.values()) + [gw_id]
                             conn.execute(
-                                f"UPDATE gw_registry SET {cols} WHERE gw_id=?",
+                                f"UPDATE gw_registry SET {cols} WHERE gw_id=?",  # nosec B608 — cols keys validated against _GW_MUTABLE allowlist above
                                 params)
                     elif op == "gw_registry_discover":
                         # 1.6.7+ — auto-discovery from mesh-sync. Inserts a
@@ -3154,7 +3182,7 @@ def get_ip(request: web.Request) -> str:
     if xff and TRUST_XFF != "none" and _peer_is_trusted_proxy(request.remote or ""):
         parts = [p.strip() for p in xff.split(",")]
         return parts[0] if TRUST_XFF == "first" else parts[-1]
-    return request.remote or "0.0.0.0"
+    return request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
 
 # ── 1.5.0 — optional Redis-backed shared state across N instances ────────
 # When REDIS_URL is set, bans + canary tokens are shared so ALL gateway
@@ -3481,6 +3509,9 @@ RISK_WEIGHTS = {
     # ── 1.5.3: scoring-system signals (article-aligned) ──
     "ua-platform-mismatch":  30,    # 1.6.3: 25→30 — real browsers don't lie about themselves
     "accept-wildcard-html":   2,    # Accept: */* on what looks like HTML nav
+    "accept-fp":              3,    # 1.6.10: Accept lacks text/html on HTML nav (e.g. application/json)
+    "labyrinth-jitter":       0,    # 1.6.10: behavior modifier (jitter toggle, no risk score)
+    "header-canary":          0,    # 1.6.10: behavior modifier (header canary inject, no risk score)
     "ja4-required-missing":   3,    # JA4 binding required but no header from
                                     # trusted upstream (soft, opt-in scenario)
     "headers-suspicious":     2,    # generic catch-all for soft header signals
@@ -3963,11 +3994,17 @@ async def tarpit_endpoint(request: web.Request) -> web.Response:
     nonce = token.split(".", 2)[1] if "." in token else token
     html_bytes = _tarpit_page_html(depth, nonce).encode("utf-8")
 
-    # Slow-drip: split into 256-byte chunks with a delay between each
+    # Slow-drip: split into 256-byte chunks with a per-chunk delay.
+    # 1.6.10: Gaussian jitter (σ=500ms, clipped to [200,3000ms]) when enabled
+    # so bots cannot fingerprint the gateway by timing the fixed 600ms cadence.
     chunk_size = 256
     chunks = [html_bytes[i:i + chunk_size]
               for i in range(0, len(html_bytes), chunk_size)]
-    delay = LABYRINTH_SLOW_MS / 1000.0
+    if LABYRINTH_JITTER_ENABLED:
+        _mean = LABYRINTH_SLOW_MS / 1000.0
+        delay = max(0.2, min(3.0, random.gauss(_mean, 0.5)))
+    else:
+        delay = LABYRINTH_SLOW_MS / 1000.0
 
     response = web.StreamResponse(
         status=200,
@@ -4085,6 +4122,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         events.append({
             "ts": _t.time(),
             "ip": ip,
+            "is_admin_ip": _is_admin_ip(ip or ""),
             "ua": ua[:80],
             "path": path[:80],
             "method": "",   # filled by caller via closure (kept simple here)
@@ -4324,7 +4362,7 @@ async def protect(request: web.Request, handler):
     # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
     # ops) hammering the challenge endpoint with bogus solutions.
     if request.path == ADMIN_NS + "/challenge":
-        socket_ip = request.remote or "0.0.0.0"
+        socket_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
         sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
         if not sip_ok:
             return web.Response(
@@ -4840,6 +4878,16 @@ async def protect(request: web.Request, handler):
         await update_risk_and_maybe_ban(track_key, "accept-wildcard-html", ip)
         request_signals.append("accept-wildcard-html")
 
+    # 3e3b. 1.6.10 — Accept header fingerprint.
+    # Real browsers always include text/html in Accept on HTML navigation.
+    # Bots faking a Chrome UA but using application/json or similar reveal
+    # themselves here. */* is already handled above; skip to avoid double-score.
+    if (ACCEPT_FP_ENABLED and sec_fetch_dest == "document" and accept_hdr):
+        _ac = accept_hdr.strip()
+        if _ac != "*/*" and "text/html" not in _ac.lower():
+            await update_risk_and_maybe_ban(track_key, "accept-fp", ip)
+            request_signals.append("accept-fp")
+
     # 3e4. JA4 required but missing (only counts as soft penalty when the
     # operator has set up a trusted JA4 peer but THIS request didn't carry it).
     if JA4_TRUSTED_NETS and JA4_HEADER and not request.headers.get(JA4_HEADER):
@@ -4889,7 +4937,7 @@ async def protect(request: web.Request, handler):
     # 4a. H4: Socket-IP rate limit — keyed strictly by kernel-observed peer IP,
     #     defeats "rotate UA every request to get a fresh identity bucket"
     #     bypass. This bucket is INDEPENDENT from any client-supplied header.
-    socket_ip = request.remote or "0.0.0.0"
+    socket_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
     sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
     if not sip_ok:
         return await deny(429, "rate-limit-ip",
@@ -5352,7 +5400,7 @@ async def lists_snapshot_endpoint(request: web.Request):
         # Admin IPs
         "admin_ip_count":         len(globals().get("ADMIN_ALLOWED_NETS") or []),
         # Versions
-        "version":                "AppSecGW_1.6.9",
+        "version":                "AppSecGW_1.6.10",
         "ts":                     n,
     }
     return web.json_response(snapshot, headers={"Cache-Control":"no-store"})
@@ -5530,7 +5578,7 @@ async def health_score_endpoint(request: web.Request):
     return web.json_response({
         "score":       score,
         "reasons":     reasons,
-        "version":     "AppSecGW_1.6.9",
+        "version":     "AppSecGW_1.6.10",
         "upstream":    UPSTREAM,
         "db_backend":  DB_BACKEND,
         "uptime_secs": int(_t.time() - START_EPOCH),
@@ -5812,6 +5860,9 @@ def _serve_js_challenge(request: web.Request):
         canary = _new_canary()
         html = _inject_canary(html.encode(), canary).decode("utf-8")
         headers["X-Trace-Id"] = canary
+        if HEADER_CANARY_ENABLED:
+            headers["ETag"]         = f'"agw-c-{canary}"'
+            headers["X-Request-Id"] = canary
     return web.Response(status=200, text=html, content_type="text/html",
                         headers=headers)
 
@@ -5981,6 +6032,9 @@ async def scoring_endpoint(request: web.Request):
         "missing-required-header": ("med", "REQUIRED_HEADERS not all present"),
         "ua-platform-mismatch":  ("med",  "UA / Sec-Ch-Ua / platform headers contradict"),
         "accept-wildcard-html":  ("soft", "Accept: */* on HTML navigation request"),
+        "accept-fp":             ("soft", "Accept header fingerprint mismatch — browser UA on HTML navigation but Accept lacks text/html (e.g. application/json). Real browsers always include text/html on document navigation."),
+        "labyrinth-jitter":      ("modifier", "Tarpit timing jitter — Gaussian-distributed random delay (200–3000 ms, σ=500 ms) per chunk instead of fixed LABYRINTH_SLOW_MS. Makes it harder for bots to fingerprint the gateway by timing the delay cadence."),
+        "header-canary":         ("modifier", "Header canary injection — plants a per-identity HMAC-signed token in ETag and X-Request-Id response headers. AI frameworks that replay full response headers (LangChain, AutoGen) echo the token back, triggering the canary-echo ban."),
         "ja4-required-missing":  ("soft", "JA4 expected from trusted peer but absent"),
         "headers-suspicious":    ("soft", "Generic header-shape anomaly"),
         "abuseipdb-high":        ("hard", "AbuseIPDB confidence ≥ 80 — community-vetted bad IP"),
@@ -6033,6 +6087,9 @@ async def scoring_endpoint(request: web.Request):
         "bot-trap":           "BOT_TRAP_FORMS",
         "suspicious-body":    "BODY_PATTERN_MATCH",
         "canary-echo":        "CANARY_ECHO_DETECTION",
+        "accept-fp":          "ACCEPT_FP_ENABLED",
+        "labyrinth-jitter":   "LABYRINTH_JITTER_ENABLED",
+        "header-canary":      "HEADER_CANARY_ENABLED",
         "origin-mismatch":    "STRICT_ORIGIN",
         "tls-fingerprint":    None,
         "abuseipdb-high":     "ABUSEIPDB_ENABLED",
@@ -6146,6 +6203,9 @@ async def scoring_endpoint(request: web.Request):
         "ai-headers-empty":     {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.01},
         "ai-headers-incomplete":{"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.01},
         "accept-wildcard-html": {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "accept-fp":            {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "labyrinth-jitter":     {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
+        "header-canary":        {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
         "headers-suspicious":   {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
         "host-not-allowed":     {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
         "tls-fingerprint":      {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
@@ -6187,12 +6247,19 @@ async def scoring_endpoint(request: web.Request):
         # typical = LABYRINTH_SLOW_MS × ~10 chunks; p99 = full 20-chunk page
         "tarpit-walk":          {"kind": "adversary",    "cached": 0,    "typical": 6000,  "p99": 12000},
     }
+    SIGNAL_LABELS = {
+        "tarpit-walk":      "AI Labyrinth",
+        "labyrinth-jitter": "AI Labyrinth Jitter",
+        "header-canary":    "Header Canary Inject",
+        "accept-fp":        "Accept Fingerprint",
+    }
     weights = []
     for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
         tier, desc = DESCRIPTIONS.get(sig, ("?", ""))
         cost = SIGNAL_COST.get(sig, {"cached": 0, "typical": 0.001, "p99": 0.01})
         weights.append({
             "signal":      sig,
+            "label":       SIGNAL_LABELS.get(sig, sig),
             "weight":      w,
             "tier":        tier,
             "description": desc,
@@ -6789,15 +6856,16 @@ async def logs_data_endpoint(request: web.Request):
             if q and q not in blob:
                 continue
             out.append({
-                "id":     r["id"],
-                "ts":     r["ts"],
-                "level":  row_level,
-                "ip":     r["ip"],
-                "ua":     (r["ua"] or "")[:200],
-                "path":   r["path"] or "",
-                "status": r["status"],
-                "reason": reason,
-                "method": _reason_method(reason),       # 1.6.5
+                "id":          r["id"],
+                "ts":          r["ts"],
+                "level":       row_level,
+                "ip":          r["ip"],
+                "is_admin_ip": _is_admin_ip(r["ip"] or ""),
+                "ua":          (r["ua"] or "")[:200],
+                "path":        r["path"] or "",
+                "status":      r["status"],
+                "reason":      reason,
+                "method":      _reason_method(reason),  # 1.6.5
             })
             if len(out) >= limit:
                 break
@@ -7047,7 +7115,7 @@ async def agents_bucket_detail_endpoint(request: web.Request):
         conn.row_factory = sqlite3.Row
         agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
         for r in conn.execute(
-            f"SELECT ip, ua, path, reason, status FROM events "
+            f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608 — agent_q is "?,?,?" placeholders only
             f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
             (t, end, *AGENT_BLOCK_REASONS),
         ):
@@ -8077,10 +8145,13 @@ _HOT_RELOAD_KNOBS = {
     "TARPIT_ENABLED":         (_to_bool, None),
     "TARPIT_DELAY_MS":        (int, lambda v: 0 <= v <= 30000),
     # 1.6.8 — AI Labyrinth (hidden nofollow maze for bots)
-    "LABYRINTH_ENABLED":      (_to_bool, None),
-    "LABYRINTH_SLOW_MS":      (int, lambda v: 0 <= v <= 30000),
-    "LABYRINTH_MAX_DEPTH":    (int, lambda v: 1 <= v <= 20),
+    "LABYRINTH_ENABLED":        (_to_bool, None),
+    "LABYRINTH_SLOW_MS":        (int, lambda v: 0 <= v <= 30000),
+    "LABYRINTH_MAX_DEPTH":      (int, lambda v: 1 <= v <= 20),
     "LABYRINTH_LINKS_PER_PAGE": (int, lambda v: 1 <= v <= 10),
+    "LABYRINTH_JITTER_ENABLED": (_to_bool, None),
+    "ACCEPT_FP_ENABLED":        (_to_bool, None),
+    "HEADER_CANARY_ENABLED":    (_to_bool, None),
     # 1.6.5 — FingerprintJS BotD client-side detection
     "BOTD_ENABLED":           (_to_bool, None),
     # Logging
@@ -9815,7 +9886,7 @@ async def proxy(request: web.Request):
         if _matched_group:
             _reason = f"body-{_matched_group}"
             await update_risk_and_maybe_ban(
-                request.get("_track_key") or request.remote or "0.0.0.0",
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
                 _reason, get_ip(request))
             return await _silent_decoy_response(
                 get_ip(request), request.headers.get("User-Agent", ""),
@@ -9825,7 +9896,7 @@ async def proxy(request: web.Request):
                 fp=request.get("_fp", ""))
         if is_suspicious_body(body, client_ctype):
             await update_risk_and_maybe_ban(
-                request.get("_track_key") or request.remote or "0.0.0.0",
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
                 "suspicious-body", get_ip(request))   # L1: was "suspicious-path"
             return await _silent_decoy_response(
                 get_ip(request), request.headers.get("User-Agent", ""),
@@ -9841,7 +9912,7 @@ async def proxy(request: web.Request):
             echoed = _scan_request_for_canary(request, body_bytes=body)
             if echoed:
                 await update_risk_and_maybe_ban(
-                    request.get("_track_key") or request.remote or "0.0.0.0",
+                    request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
                     "canary-echo", get_ip(request))
                 return await _silent_decoy_response(
                     get_ip(request), request.headers.get("User-Agent", ""),
@@ -9857,7 +9928,7 @@ async def proxy(request: web.Request):
                  rid=request.get("_rid", ""), field=_trap_field,
                  ip=get_ip(request))
             await update_risk_and_maybe_ban(
-                request.get("_track_key") or request.remote or "0.0.0.0",
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
                 "bot-trap", get_ip(request))
             return await _silent_decoy_response(
                 get_ip(request), request.headers.get("User-Agent", ""),
@@ -9968,7 +10039,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.6.9"
+                response_headers["X-Proxy"] = "AppSecGW_1.6.10"
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -9993,6 +10064,12 @@ async def proxy(request: web.Request):
                         canary = _new_canary()
                         resp_body = _inject_canary(resp_body, canary)
                         response_headers["X-Trace-Id"] = canary
+                        # 1.6.10: also plant in ETag + X-Request-Id so AI frameworks
+                        # that replay full response headers (LangChain, AutoGen) echo
+                        # the token back and trigger canary-echo detection.
+                        if HEADER_CANARY_ENABLED:
+                            response_headers["ETag"]        = f'"agw-c-{canary}"'
+                            response_headers["X-Request-Id"] = canary
                     # 1.6.5 — BotD client-side detection (FingerprintJS).
                     # No-op until BOTD_ENABLED=1. Token bound to the
                     # requester's track_key so reports cannot be forged.
@@ -10275,7 +10352,7 @@ async def agents_timeline_endpoint(request: web.Request):
         conn.row_factory = sqlite3.Row
         agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
         for r in conn.execute(
-            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "
+            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant; agent_q is "?,?,?" placeholders
             f"COUNT(*) AS n FROM events "
             f"WHERE ts >= ? AND ts <= ? AND reason IN ({agent_q}) "
             f"GROUP BY b",
@@ -10284,7 +10361,7 @@ async def agents_timeline_endpoint(request: web.Request):
             detected[int(r["b"])] = r["n"]
 
         for r in conn.execute(
-            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "
+            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant
             f"COUNT(*) AS n FROM events "
             f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK') "
             f"GROUP BY b",
@@ -10295,7 +10372,7 @@ async def agents_timeline_endpoint(request: web.Request):
         if stealth_ips:
             ip_q = ",".join("?" * len(stealth_ips))
             for r in conn.execute(
-                f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "
+                f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant; ip_q is "?,?,?" placeholders
                 f"COUNT(*) AS n FROM events "
                 f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK') "
                 f"AND ip IN ({ip_q}) GROUP BY b",
@@ -10399,6 +10476,7 @@ async def agents_data_endpoint(request: web.Request):
             suspects.append({
                 "id": key,
                 "ip": s.last_ip or key,
+                "is_admin_ip": _is_admin_ip(s.last_ip or key),
                 "session": s.last_session,
                 "fingerprint": s.last_fingerprint,
                 "ja4": s.last_ja4,
@@ -10569,7 +10647,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.6.9",
+        "version":         "AppSecGW_1.6.10",
     }
     return web.json_response({
         "current":          current,
@@ -12995,7 +13073,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.6.9    →  {UPSTREAM:<37} ║")
+    print(f"  ║ AppSecGW_1.6.10    →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     _ns_line = f"Admin namespace: {ADMIN_NS}"
     print(f"  ║ {_ns_line:<57}║")

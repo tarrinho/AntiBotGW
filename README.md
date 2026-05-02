@@ -227,6 +227,162 @@ listens HTTP-only on `:8443`.
 
 ---
 
+## Docker Compose deployment (recommended)
+
+The bundled `docker-compose.yml` launches a **full four-service stack** and is the
+recommended way to run AppSecGW in production.
+
+### What it starts
+
+| Service | Image | Role | Host port |
+|---|---|---|---|
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.6.9` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
+| `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
+| `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
+
+Only the gateway exposes a port to the host. TimescaleDB, Redis, and CrowdSec are
+reachable only from the internal Docker network `antibot-net`, and each enforces
+authentication within that network as defence-in-depth.
+
+### Network topology
+
+```
+Internet / reverse-proxy
+        │
+        ▼  :8443
+┌───────────────────────────────────────────────────────┐
+│  Docker network: antibot-net                          │
+│                                                       │
+│  ┌─────────────────────┐                              │
+│  │  appsec-antibot-gw  │                              │
+│  │  (gateway)          │─────── Redis ban sync ──────▶│appsecgw-redis│
+│  │                     │─── CrowdSec blocklist ──────▶│crowdsec      │
+│  │                     │─── Postgres events ─────────▶│appsec-       │
+│  │                     │    (when DB_BACKEND=postgres) │timescaledb   │
+│  └─────────────────────┘                              │              │
+│           │                                           └──────────────┘
+│           ▼ UPSTREAM (env var)
+│    your application
+└───────────────────────────────────────────────────────┘
+```
+
+### Pre-requisites
+
+```bash
+# Create the shared network and persistent volumes once
+docker network create --driver bridge antibot-net
+docker volume create antibot-data
+docker volume create appsec-timescaledb-data
+docker volume create crowdsec-data
+docker volume create crowdsec-conf
+```
+
+### Configuration
+
+```bash
+cp .env.example .env
+```
+
+Minimum required fields in `.env`:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `UPSTREAM` | `https://app.internal.example.com` | Target application — all non-admin traffic is forwarded here |
+| `ADMIN_ALLOWED_IPS` | `203.0.113.10/32,127.0.0.1/32` | CIDR list of IPs allowed to reach admin dashboards |
+| `TRUSTED_PROXIES` | `172.16.0.0/12` | IPs whose `X-Forwarded-For` the gateway trusts |
+| `POSTGRES_PASSWORD` | *(strong random)* | TimescaleDB password — used by gateway DSN automatically |
+| `REDIS_PASSWORD` | *(strong random)* | Redis `requirepass` value — used by gateway `REDIS_URL` automatically |
+
+Optional but recommended:
+
+| Variable | Purpose |
+|---|---|
+| `ADMIN_KEY` | Static Bearer token for admin API. Auto-generated on first boot if unset, but setting it explicitly makes key rotation predictable. |
+| `TURNSTILE_SITEKEY` / `TURNSTILE_SECRET` | Enable Cloudflare Turnstile for real-browser gating |
+| `ABUSEIPDB_KEY` | Enable AbuseIPDB IP-reputation lookups |
+| `MAXMIND_LICENSE_KEY` | Enable weekly MaxMind GeoLite2 auto-refresh |
+
+### Launch
+
+```bash
+docker compose up -d
+```
+
+This starts all four services with `unless-stopped` restart policy. The gateway
+**waits for TimescaleDB and Redis to pass their healthchecks** before starting
+(`depends_on: condition: service_healthy`), so there is no race on first boot.
+
+Monitor startup:
+
+```bash
+docker compose logs -f appsec-antibot-gw
+# Expect: "[js-challenge] active" and "AppSecGW_1.6.9 listening …" within 5 s
+```
+
+Check that all services are healthy:
+
+```bash
+docker compose ps
+# All four services should show "healthy" or "running" (CrowdSec starts with "service_started")
+```
+
+### Post-up: register the CrowdSec bouncer
+
+CrowdSec generates the bouncer API key at runtime. After the stack is up, run
+these commands once:
+
+```bash
+BKEY=$(docker exec crowdsec cscli bouncers add appsecgw -o raw)
+echo "CROWDSEC_LAPI_KEY=$BKEY" >> .env
+echo "CROWDSEC_LAPI_URL=http://crowdsec:8080" >> .env
+docker compose up -d --force-recreate appsec-antibot-gw
+```
+
+Without this step the gateway starts without CrowdSec intel (the integration is
+gracefully skipped) and logs a warning at startup.
+
+### Access the operator dashboards
+
+All dashboards require the gateway to be reachable and the `X-Admin-Key` header
+to match the configured key.
+
+| Dashboard | URL | Description |
+|---|---|---|
+| Main | `http://host:8443/antibot-appsec-gateway/secured/dashboard` | Live counters, block-reason breakdown, event log |
+| Controls | `http://host:8443/antibot-appsec-gateway/secured/controls` | Hot-toggle all knobs, tune thresholds, switch DB backend |
+| Agents | `http://host:8443/antibot-appsec-gateway/secured/agents` | Stealth agent hunter — identities that passed every block |
+| GeoMap | `http://host:8443/antibot-appsec-gateway/secured/geo` | MaxMind-backed geographic request distribution |
+| Logs | `http://host:8443/antibot-appsec-gateway/secured/logs` | Structured event log with drill-down |
+
+### Switching between SQLite and Postgres
+
+The gateway ships with SQLite as the default backend (zero-deps, works on first
+boot). Switch to TimescaleDB at any time without migration — events accumulate
+fresh in the new backend:
+
+1. Open `/__controls` → Backend pill toggle → click **postgres**.
+2. The gateway restarts itself within ~2 s.
+3. Confirm: `docker compose logs appsec-antibot-gw | grep "db_backend=postgres"`.
+
+Switch back to SQLite the same way.
+
+### Scaling to multiple replicas (fleet mode)
+
+Add `REDIS_URL` to `.env` (defaults to the bundled sidecar). All replicas share
+the same Redis instance — bans and canary tokens propagate within ~5 s across
+the fleet. Each replica needs its own `ADMIN_KEY` or the same shared one pinned
+in `.env`.
+
+### Tear down
+
+```bash
+docker compose down          # stop + remove containers; volumes are preserved
+docker compose down -v       # stop + remove containers AND volumes (destroys event data)
+```
+
+---
+
 ## Threat model & honest posture
 
 Earlier iterations of this gateway shipped an in-process "JS challenge" that stacked client-computed primitives — SHA-256 Proof-of-Work, browser-API probe with cross-validation, anchor-fetch proof, sub-second timing windows — to try to distinguish real browsers from scripted clients. Empirically every one of those layers was bypassable in pure Python in ~1 s. They were *bot-cost amplifiers*, not security boundaries; they have been removed.
