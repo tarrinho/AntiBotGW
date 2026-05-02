@@ -6,8 +6,9 @@
 !.gitignore
 !.github/
 
-# Helper scripts that don't belong in the public repo
+# Helper scripts and local secrets — never committed
 copy-to-github.sh
+.env
 
 # ── Runtime state (live container DB + secrets) ─────────────────────────
 antibot.db

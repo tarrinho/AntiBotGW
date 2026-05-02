@@ -6,6 +6,21 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Controls dashboard — `LABYRINTH_ENABLED` toggle**: added to `META` dict so the AI Labyrinth on/off switch is now visible and clickable in the Defenses & scoring table.
+- **Signal display-name API**: scoring endpoint now returns a `label` field alongside `signal`; client uses `w.label || w.signal` so signals can have human-friendly display names without breaking internal identifiers. `tarpit-walk` → displays as **"AI Labyrinth"**.
+- **Click-to-tooltip on signal names**: every signal name in the Defenses & scoring table (and modifier rows) renders as a blue dotted-underline code element. Clicking it shows a floating tooltip with the full detector description. Click anywhere else to dismiss.
+- **Controls page load-status pill**: orange pulsing "Loading" badge in the External integrations header flips to green "Loading Ready" after the external integration cards are fully rendered and painted (double `requestAnimationFrame` inside `loadExternal()`).
+
+### Fixed
+- **`loadScoring` race condition**: scoring table previously ran concurrently with `load()`, causing all toggles to render as OFF (empty `serverState`). Fixed by sequencing: `load().then(() => loadScoring())` in the initial `Promise.all`, guaranteeing `serverState` is populated before scoring renders. Reset button updated to use the same sequence.
+- **External integration toggle state race**: `renderToggle()` used `cfg[knob]` from `serverState` which could be empty on first render. Fixed to `(knob in cfg) ? !!cfg[knob] : !!item.enabled` — falls back to the authoritative `item.enabled` from the `/secured/external` API response when config hasn't loaded yet.
+- **"Loading Ready" premature green**: pill previously flipped green from the `Promise.all .then()` which resolved before the browser painted the external cards. Moved flip inside `loadExternal()` with a `!classList.contains('ready')` guard so it fires exactly once, after DOM injection and after two paint frames.
+
+---
+
 ## [1.6.9] — 2026-05-02
 
 ### Added

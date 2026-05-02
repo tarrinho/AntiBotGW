@@ -103,8 +103,8 @@ services:
       retries:  5
 
   appsec-antibot-gw:
-    image: appsec-antibot-gw:1.6.9
-    container_name: appsec-antibot-gw1.6.9
+    image: appsec-antibot-gw:1.6.10
+    container_name: appsec-antibot-gw1.6.10
     restart: unless-stopped
     depends_on:
       appsec-timescaledb:
@@ -184,12 +184,12 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 200
     deploy:
       resources:
         limits:
           memory: 256M
           cpus: "1.0"
+          pids: 200
     volumes:
       - antibot-data:/data
     extra_hosts:
@@ -197,6 +197,18 @@ services:
 
 volumes:
   antibot-data:
+    external: true
   appsec-timescaledb-data:
+    external: true
+    name: appsec-timescaledb-data
   crowdsec-data:
+    external: true
+    name: crowdsec-data
   crowdsec-config:
+    external: true
+    name: crowdsec-conf
+
+networks:
+  default:
+    external: true
+    name: antibot-net

@@ -1048,6 +1048,9 @@ def test_165_every_knob_persists_round_trip():
         "BOTD_ENABLED": True,
         "LABYRINTH_ENABLED": True, "LABYRINTH_SLOW_MS": 400,
         "LABYRINTH_MAX_DEPTH": 3, "LABYRINTH_LINKS_PER_PAGE": 2,
+        "LABYRINTH_JITTER_ENABLED": True,
+        "ACCEPT_FP_ENABLED": True,
+        "HEADER_CANARY_ENABLED": True,
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

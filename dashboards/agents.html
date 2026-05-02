@@ -108,7 +108,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.8 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.9 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents" class="active">Agents</a>
@@ -209,7 +209,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 <!-- 1.6.5 — rule inventory + per-method latency -->
 <div class="row" style="grid-template-columns:1fr 1fr;margin-top:14px;gap:14px">
   <div class="card">
-    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.6.8</span></h2>
+    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.6.9</span></h2>
     <div id="rule-inv" style="font-size:11.5px;font-family:ui-monospace,Menlo,monospace;line-height:1.7">loading…</div>
   </div>
   <div class="card">
@@ -367,7 +367,7 @@ async function tick(){
             <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
             <td><b class="cell-click" data-pop="id" data-i="${i}" title="click for full identity details">${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim">${m.samples} samples</div></td>
             <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
-            <td>${escapeHtml(s.ip)}</td>
+            <td>${s.is_admin_ip?'<span title="Admin IP" style="margin-right:3px">🔒</span>':''}${escapeHtml(s.ip)}</td>
             <td style="color:var(--green)">${s.allowed}</td>
             <td style="color:${s.blocked?'var(--red)':'var(--dim)'}">${s.blocked}</td>
             <td>${m.avg_header_score}/7</td>
@@ -764,7 +764,7 @@ function openPopover(kind, s, x, y){
       <div class="kv">
         <span class="k">id</span>          <span class="v">${escapeHtml(s.id||'')}</span>
         <span class="k">status</span>      <span class="v">${banLine}</span>
-        <span class="k">ip</span>          <span class="v">${escapeHtml(s.ip||'')}</span>
+        <span class="k">ip</span>          <span class="v">${s.is_admin_ip?'🔒 ':'' }${escapeHtml(s.ip||'')}</span>
         <span class="k">user-agent</span>  <span class="v">${escapeHtml(s.ua||'')}</span>
         <span class="k">session</span>     <span class="v">${escapeHtml(s.session||'—')}</span>
         <span class="k">fingerprint</span> <span class="v">${escapeHtml(s.fingerprint||'—')}</span>
