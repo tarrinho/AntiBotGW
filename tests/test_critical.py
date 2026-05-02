@@ -1046,6 +1046,8 @@ def test_165_every_knob_persists_round_trip():
         "ESCALATION_THRESHOLD": 4.0,
         "TARPIT_ENABLED": True, "TARPIT_DELAY_MS": 2000,
         "BOTD_ENABLED": True,
+        "LABYRINTH_ENABLED": True, "LABYRINTH_SLOW_MS": 400,
+        "LABYRINTH_MAX_DEPTH": 3, "LABYRINTH_LINKS_PER_PAGE": 2,
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)
@@ -1432,3 +1434,104 @@ def test_165_reason_method_buckets():
     for r in must_have:
         m = proxy._reason_method(r)
         assert m != "other", f"{r} should map to a method bucket, got 'other'"
+
+
+# ── 1.6.8/1.6.9 AI Labyrinth tests ──────────────────────────────────────────
+
+def test_168_labyrinth_knobs_in_hot_reload():
+    """LABYRINTH_* hot-reload knobs are registered and validators are correct."""
+    for knob in ("LABYRINTH_ENABLED", "LABYRINTH_SLOW_MS",
+                 "LABYRINTH_MAX_DEPTH", "LABYRINTH_LINKS_PER_PAGE"):
+        assert knob in proxy._HOT_RELOAD_KNOBS, f"{knob} missing from _HOT_RELOAD_KNOBS"
+
+    _, v_ms = proxy._HOT_RELOAD_KNOBS["LABYRINTH_SLOW_MS"]
+    assert v_ms(0) is True
+    assert v_ms(600) is True
+    assert v_ms(30000) is True
+    assert v_ms(30001) is False   # above max
+
+    _, v_depth = proxy._HOT_RELOAD_KNOBS["LABYRINTH_MAX_DEPTH"]
+    assert v_depth(1) is True
+    assert v_depth(20) is True
+    assert v_depth(0) is False
+    assert v_depth(21) is False
+
+    _, v_links = proxy._HOT_RELOAD_KNOBS["LABYRINTH_LINKS_PER_PAGE"]
+    assert v_links(1) is True
+    assert v_links(10) is True
+    assert v_links(0) is False
+    assert v_links(11) is False
+
+
+def test_168_labyrinth_tarpit_walk_in_risk_weights():
+    """tarpit-walk must be in RISK_WEIGHTS with weight >= 50."""
+    assert "tarpit-walk" in proxy.RISK_WEIGHTS
+    assert proxy.RISK_WEIGHTS["tarpit-walk"] >= 50
+
+
+def test_168_labyrinth_tarpit_walk_high_weight():
+    """tarpit-walk has a high weight (>= 50) in RISK_WEIGHTS — instant ban territory."""
+    w = proxy.RISK_WEIGHTS.get("tarpit-walk", 0)
+    assert w >= 50, f"tarpit-walk weight should be >= 50, got {w}"
+
+
+def test_168_tarpit_token_roundtrip():
+    """_tarpit_token / _tarpit_verify roundtrip: valid token returns correct depth."""
+    for depth in (0, 1, 3):
+        token = proxy._tarpit_token(depth)
+        assert "." in token, "token should have dot-separated parts"
+        result = proxy._tarpit_verify(token)
+        assert result == depth, f"expected depth {depth}, got {result}"
+
+
+def test_168_tarpit_verify_rejects_tampered():
+    """_tarpit_verify rejects tokens with wrong signature or negative depth."""
+    token = proxy._tarpit_token(0)
+    parts = token.split(".", 2)
+    tampered = f"{parts[0]}.{parts[1]}.{'a' * 16}"
+    assert proxy._tarpit_verify(tampered) is None
+
+    bad_depth = f"-1.{parts[1]}.{parts[2]}"
+    assert proxy._tarpit_verify(bad_depth) is None
+
+    assert proxy._tarpit_verify("") is None
+    assert proxy._tarpit_verify("notadottedtoken") is None
+
+
+def test_168_tarpit_inject_html_adds_hidden_div():
+    """_inject_honey_links injects hidden tarpit links before </body>."""
+    html = b"<html><body><p>hello</p></body></html>"
+    result = proxy._inject_honey_links(html)
+    assert result != html, "inject should modify the HTML"
+    assert b"display:none" in result, "injected div should be hidden"
+    assert b'rel="nofollow' in result, "injected links should have rel=nofollow"
+    assert b"/antibot-appsec-gateway/tarpit/" in result, "injected links should point to tarpit"
+
+
+def test_168_tarpit_inject_html_no_body_tag_passthrough():
+    """_inject_honey_links leaves HTML without </body> tag unchanged."""
+    data = b'<p>fragment without body tag</p>'
+    assert proxy._inject_honey_links(data) == data
+
+
+def test_168_tarpit_page_html_has_fake_content():
+    """_tarpit_page_html returns non-empty HTML with convincing structure."""
+    html = proxy._tarpit_page_html(0, "test-nonce")
+    assert "<html" in html, "tarpit page should be full HTML"
+    assert "</html>" in html, "tarpit page should be complete HTML"
+    assert "/antibot-appsec-gateway/tarpit/" in html, "tarpit page should contain maze links"
+
+
+def test_168_tarpit_public_subpath_registered():
+    """/tarpit/ must be in _ADMIN_PUBLIC_SUBPATHS so bots can reach the endpoint."""
+    assert "/tarpit/" in proxy._ADMIN_PUBLIC_SUBPATHS, (
+        "/tarpit/ missing from _ADMIN_PUBLIC_SUBPATHS — tarpit endpoint is unreachable "
+        "by non-admin IPs"
+    )
+
+
+def test_168_admin_path_is_public_tarpit():
+    """_admin_path_is_public returns True for any /antibot-appsec-gateway/tarpit/* path."""
+    assert proxy._admin_path_is_public("/antibot-appsec-gateway/tarpit/0.abc.def123456789012")
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/secured/config")
+    assert not proxy._admin_path_is_public("/antibot-appsec-gateway/tarpit")  # exact match (no trailing slash)

@@ -310,3 +310,75 @@ async def test_xff_spoof_blocked_when_peer_untrusted(gw_client):
 def _has_block_reason(proxy, reason):
     """True iff the GW recorded at least one event with this reason."""
     return proxy.metrics["by_reason"].get(reason, 0) > 0
+
+
+# ── F10 — AI Labyrinth (1.6.9) functional tests ───────────────────────────
+
+@pytest.mark.asyncio
+async def test_labyrinth_links_injected_in_html_response(gw_client):
+    """Proxied HTML responses get hidden tarpit links injected before </body>."""
+    proxy.LABYRINTH_ENABLED = True
+    proxy.LABYRINTH_LINKS_PER = 2
+    resp = await gw_client.get(
+        "/",
+        headers={"User-Agent": "Mozilla/5.0 Chrome/120",
+                 "Accept": "text/html",
+                 "Accept-Language": "en-US"},
+    )
+    body = await resp.text()
+    assert "/antibot-appsec-gateway/tarpit/" in body, \
+        "Labyrinth entry links should be injected into HTML response"
+    assert 'rel="nofollow' in body, \
+        "Injected links must have rel=nofollow"
+    assert "display:none" in body, \
+        "Injected links must be hidden via CSS"
+
+
+@pytest.mark.asyncio
+async def test_tarpit_endpoint_accessible_without_admin_auth(gw_client):
+    """The tarpit endpoint must be reachable without admin credentials — it is
+    a public subpath that bots follow from injected hidden links."""
+    proxy.LABYRINTH_ENABLED = True
+    token = proxy._tarpit_token(0)
+    resp = await gw_client.get(
+        f"/antibot-appsec-gateway/tarpit/{token}",
+        headers={"User-Agent": "Mozilla/5.0 Chrome/120",
+                 "Accept": "text/html"},
+    )
+    # Should NOT get a 404 silent-decoy — the endpoint is public
+    assert resp.status != 404, (
+        "tarpit endpoint returned 404 — /tarpit/ must be in _ADMIN_PUBLIC_SUBPATHS"
+    )
+    # Should return 200 (slow-drip fake page) or at least not 403/404
+    assert resp.status == 200, f"Expected 200, got {resp.status}"
+    body = await resp.text()
+    assert "<html" in body, "tarpit response should be HTML content"
+
+
+@pytest.mark.asyncio
+async def test_tarpit_endpoint_rejects_invalid_token(gw_client):
+    """Invalid tarpit tokens (wrong HMAC) return 404, not a maze page."""
+    proxy.LABYRINTH_ENABLED = True
+    resp = await gw_client.get(
+        "/antibot-appsec-gateway/tarpit/0.fakefake.0000000000000000",
+        headers={"User-Agent": "Mozilla/5.0 Chrome/120",
+                 "Accept": "text/html"},
+    )
+    assert resp.status == 404, f"Invalid token should 404, got {resp.status}"
+
+
+@pytest.mark.asyncio
+async def test_tarpit_endpoint_disabled_returns_404(gw_client):
+    """When LABYRINTH_ENABLED=False the endpoint returns 404."""
+    orig = proxy.LABYRINTH_ENABLED
+    proxy.LABYRINTH_ENABLED = False
+    try:
+        token = proxy._tarpit_token(0)
+        resp = await gw_client.get(
+            f"/antibot-appsec-gateway/tarpit/{token}",
+            headers={"User-Agent": "Mozilla/5.0 Chrome/120",
+                     "Accept": "text/html"},
+        )
+        assert resp.status == 404, f"Disabled labyrinth should 404, got {resp.status}"
+    finally:
+        proxy.LABYRINTH_ENABLED = orig
