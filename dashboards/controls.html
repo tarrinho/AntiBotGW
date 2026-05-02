@@ -118,13 +118,13 @@ button:disabled{opacity:.4;cursor:not-allowed}
 
 <h1 class="page-title">AppSecGW_1.6.8 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__" class="active">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings">Settings</a>
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <main>
@@ -148,7 +148,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
   <section class="card" id="card-scoring">
     <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span>
       <span class="escal-legend" id="escal-legend">
-        <img src="/antibot-appsec-gateway/assets/escalate.svg?key=__KEY__" alt="">
+        <img src="/antibot-appsec-gateway/assets/escalate.svg" alt="">
         escalate-only · runs only when risk_score &ge; <code id="escal-thr-display" style="background:transparent;color:var(--yellow);padding:0">—</code>
         <span class="dim" style="color:var(--dim)">·&nbsp;hover any icon for details</span>
       </span>
@@ -307,8 +307,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 <div class="toast" id="toast"></div>
 
 <script>
-const KEY = '__KEY__';
-const url = (p) => p + (p.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(KEY);
+const url = (p) => p;
 
 // 1.6.5 — generic modal helper (used by the DB-switch confirmation flow).
 function showSimpleModal(innerHtml){
@@ -1242,7 +1241,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const curThreshold = (cfg.ESCALATION_THRESHOLD != null ? cfg.ESCALATION_THRESHOLD : 1);
       const escalateIcon = `<span class="escal-icon"
         aria-label="escalate-only control">
-        <img src="/antibot-appsec-gateway/assets/escalate.svg?key=${encodeURIComponent(KEY)}" alt="escalate">
+        <img src="/antibot-appsec-gateway/assets/escalate.svg" alt="escalate">
         <span class="escal-tip" role="tooltip">
           <h4>Escalate-only control</h4>
           This detector is <b>skipped on clean traffic</b>. It only runs
@@ -1763,10 +1762,9 @@ function openBanDetails(b){
 </div>
 <script>
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -1780,7 +1778,7 @@ function openBanDetails(b){
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;

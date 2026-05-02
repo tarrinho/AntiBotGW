@@ -123,6 +123,61 @@ Each release MUST update:
 
 ---
 
+## 14. Multi-arch build + Harbor push
+Run only after steps 1–13 all pass (or pre-existing failures are classified).
+
+### 14a. Disk space pre-check
+```
+df -h /var/lib/docker
+```
+**Pass criterion:** At least **10 GB free** before starting builds. Abort if less — prune
+dangling images first:
+```
+docker image prune -f
+```
+
+### 14b. Build all three arches
+```
+# amd64 (primary — Chainguard distroless)
+docker build --platform linux/amd64 -t appsec-antibot-gw:<version>-amd64 .
+
+# arm64 (secondary — Chainguard distroless)
+docker build --platform linux/arm64 -t appsec-antibot-gw:<version>-arm64 .
+
+# armv7 (Debian slim — no Chainguard armv7 base)
+docker build --platform linux/arm/v7 -f Dockerfile.armv7 \
+  -t appsec-antibot-gw:<version>-armv7 .
+```
+**Pass criterion:** All three builds exit 0 with no layer errors.
+
+### 14c. Tag and push to Harbor
+Registry: `>harbor</antibotappsecgw/antibotappsecgw`
+```
+HARBOR=>harbor</antibotappsecgw/antibotappsecgw
+VER=<version>
+
+docker tag appsec-antibot-gw:${VER}-amd64 ${HARBOR}:${VER}-amd64
+docker tag appsec-antibot-gw:${VER}-arm64 ${HARBOR}:${VER}-arm64
+docker tag appsec-antibot-gw:${VER}-armv7 ${HARBOR}:${VER}-armv7
+
+docker push ${HARBOR}:${VER}-amd64
+docker push ${HARBOR}:${VER}-arm64
+docker push ${HARBOR}:${VER}-armv7
+```
+**Pass criterion:** All three pushes succeed (digest printed per arch).
+
+### 14d. Create and push manifest list
+```
+docker manifest create ${HARBOR}:${VER} \
+  --amend ${HARBOR}:${VER}-amd64 \
+  --amend ${HARBOR}:${VER}-arm64 \
+  --amend ${HARBOR}:${VER}-armv7
+docker manifest push ${HARBOR}:${VER}
+```
+**Pass criterion:** Manifest digest printed. Harbor shows the multi-arch tag in the UI.
+
+---
+
 ## Findings policy
 **Fix before declaring the build done.** Pre-existing failures (e.g.
 the JS-challenge HTML tests broken since 1.5.4 risk-gating Turnstile)
@@ -135,5 +190,7 @@ are classified at the top of the report — never silently inherited.
 - Bandit:        0 High / 0 Critical · M Mediums (all confirmed FP)
 - Trivy:         0 Critical / 0 High / 0 Medium CVEs
 - Pentest:       N probes, 0 bypasses
+- Disk free:     X GB before build
+- Harbor:        amd64 ✓ · arm64 ✓ · armv7 ✓ · manifest ✓
 - Pre-existing failures: <list or "none">
 ```

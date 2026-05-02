@@ -5512,7 +5512,7 @@ async def metrics_endpoint(request: web.Request):
                 "enabled":    bool(globals().get("CROWDSEC_ENABLED", False)),
             },
             "maxmind": {
-                "loaded":  globals().get("_geoip_asn_reader") is not None,
+                "loaded":  globals().get("_asn_reader") is not None,
                 "enabled": bool(globals().get("MAXMIND_ENABLED", False)),
             },
             "turnstile": {
@@ -5589,14 +5589,8 @@ async def metrics_endpoint(request: web.Request):
                     "X-Content-Type-Options": "nosniff"})
 
 async def dashboard_endpoint(request: web.Request):
-    """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics).
-    1.5.1: pre-fills the top-nav __KEY__ placeholders so admin auth threads
-    cleanly when the user clicks across to the agents / service / controls
-    dashboards."""
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = DASHBOARD_HTML.replace(
-        "__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics)."""
+    body = DASHBOARD_HTML
     return web.Response(
         text=body,
         content_type="text/html",
@@ -6280,7 +6274,8 @@ async def geo_data_endpoint(request: web.Request):
             key = (round(lat * 2) / 2, round(lng * 2) / 2)
             if key not in points:
                 points[key] = {"country": country, "city": city,
-                               "clean": 0, "missed": 0, "blocked": 0}
+                               "clean": 0, "missed": 0, "blocked": 0,
+                               "tor_hits": 0, "dc_hits": 0, "methods": {}}
             points[key]["missed"] += s.allowed_count
 
     # 1.6.4 — classify each cell into a "pin type" so the front-end can
@@ -6506,10 +6501,7 @@ async def geo_drill_endpoint(request: web.Request):
 
 async def geo_dashboard_endpoint(request: web.Request):
     """HTML dashboard rendering the world-map geo view."""
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = GEO_DASHBOARD_HTML.replace(
-        "__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    body = GEO_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -6710,10 +6702,7 @@ async def logs_export_endpoint(request: web.Request):
 
 async def logs_dashboard_endpoint(request: web.Request):
     """HTML dashboard for the Logs viewer (request log + GW log + level toggle)."""
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = LOGS_DASHBOARD_HTML.replace(
-        "__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    body = LOGS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -10232,10 +10221,7 @@ async def agents_data_endpoint(request: web.Request):
 AGENTS_DASHBOARD_HTML  = (_DASHBOARDS_DIR / "agents.html").read_text(encoding="utf-8")
 
 async def agents_dashboard_endpoint(request: web.Request):
-    # Pre-fill the admin key into the in-page links so navigation keeps auth.
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = AGENTS_DASHBOARD_HTML.replace("__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    body = AGENTS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -10390,13 +10376,8 @@ SETTINGS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "settings.html").read_text(encoding
 LOGIN_DASHBOARD_HTML    = (_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8")
 
 async def controls_dashboard_endpoint(request: web.Request):
-    """1.5.1: ops dashboard with on/off switches + thresholds for every
-    hot-reloadable knob. Uses /__config under the hood; admin-IP +
-    admin-key gated like every other /__* route."""
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = CONTROLS_DASHBOARD_HTML.replace(
-        "__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    """Ops dashboard with on/off switches + thresholds for every hot-reloadable knob."""
+    body = CONTROLS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -10407,10 +10388,7 @@ async def controls_dashboard_endpoint(request: web.Request):
         })
 
 async def service_dashboard_endpoint(request: web.Request):
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = SERVICE_DASHBOARD_HTML.replace(
-        "__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    body = SERVICE_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -10433,10 +10411,7 @@ async def service_dashboard_endpoint(request: web.Request):
 # ── 1.6.6: Settings dashboard — export / import config as zipped XML ─────
 async def settings_dashboard_endpoint(request: web.Request):
     """GET /__settings — render the Settings dashboard (admin-IP gated)."""
-    key = request.query.get("key", "") or request.headers.get("X-Admin-Key", "")
-    body = SETTINGS_DASHBOARD_HTML.replace(
-        "__KEY__",
-        key.replace("&","").replace("<","").replace(">","").replace('"',"")[:64])
+    body = SETTINGS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={

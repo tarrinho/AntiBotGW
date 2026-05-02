@@ -38,6 +38,11 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 table{width:100%;border-collapse:collapse;font-size:12px}
 table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
+th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+th.sortable:hover{color:var(--fg,#e6edf3)}
+th.sortable::after{content:' ↕';opacity:.55;font-size:10px;text-transform:none}
+th.sort-asc::after{content:' ▲';opacity:1;color:var(--blue,#58a6ff);text-transform:none}
+th.sort-desc::after{content:' ▼';opacity:1;color:var(--blue,#58a6ff);text-transform:none}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
 .tag.OK{background:#1f4830;color:var(--green)}
@@ -125,13 +130,13 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
   <div id="modal-body"></div>
 </div>
 <nav class="topnav" id="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__" class="active">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/secured/dashboard" class="active">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings">Settings</a>
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="grid">
@@ -304,10 +309,15 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
     <h2>Clients (top by request count)</h2>
     <table id="clients-tbl">
       <thead><tr>
-        <th>Identity</th><th>Last IP</th><th>Total</th><th>Allowed</th><th>Blocked</th>
-        <th title="Stealth score — combination of header completeness, asset discipline, path enumeration, behavioural timing, accumulated risk, and 404 rate. Higher = more bot-like.">Score</th>
-        <th>Banned</th><th>Tokens</th><th>Last seen</th><th>Last UA</th><th>Last path</th>
-        <th>Action</th>
+        <th>Identity</th><th>Last IP</th>
+        <th class="sortable" data-sort="requests">Total</th>
+        <th class="sortable" data-sort="allowed">Allowed</th>
+        <th class="sortable" data-sort="blocked">Blocked</th>
+        <th class="sortable" data-sort="score" title="Stealth score — combination of header completeness, asset discipline, path enumeration, behavioural timing, accumulated risk, and 404 rate. Higher = more bot-like.">Score</th>
+        <th class="sortable" data-sort="banned">Banned</th>
+        <th class="sortable" data-sort="tokens">Tokens</th>
+        <th class="sortable" data-sort="last_seen">Last seen</th>
+        <th>Last UA</th><th>Last path</th><th>Action</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -461,9 +471,44 @@ function ensureChart() {
   return chart;
 }
 
-// Forward the admin key to subsequent /antibot-appsec-gateway/secured/metrics calls so the dashboard works
-// when accessed via the protected URL (?key=...)
-const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
+
+// ── Client table sort state ───────────────────────────────────────────────
+let _cliSort = { col: 'requests', dir: 'desc' };
+const _CLI_KEY = {
+  requests: c => c.requests || 0,
+  allowed:  c => c.allowed  || 0,
+  blocked:  c => c.blocked  || 0,
+  score:    c => c.stealth_score || 0,
+  banned:   c => c.banned_secs || 0,
+  tokens:   c => c.tokens  || 0,
+  last_seen: c => -(c.last_seen_secs_ago ?? 1e9),  // negate: most recent = highest
+};
+function _sortClients(arr) {
+  const fn = _CLI_KEY[_cliSort.col];
+  if (!fn) return arr;
+  const d = _cliSort.dir === 'asc' ? 1 : -1;
+  return [...arr].sort((a, b) => d * ((fn(a) ?? -1e9) - (fn(b) ?? -1e9)));
+}
+function _updateCliSortHeaders() {
+  document.querySelectorAll('#clients-tbl th[data-sort]').forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.sort === _cliSort.col)
+      th.classList.add(_cliSort.dir === 'asc' ? 'sort-asc' : 'sort-desc');
+  });
+}
+// Elements are already in DOM (thead is above this script block).
+document.querySelectorAll('#clients-tbl th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    if (_cliSort.col === th.dataset.sort) {
+      _cliSort.dir = _cliSort.dir === 'desc' ? 'asc' : 'desc';
+    } else {
+      _cliSort.col = th.dataset.sort;
+      _cliSort.dir = 'desc';
+    }
+    tick();
+  });
+});
+_updateCliSortHeaders();
 
 // Timeline navigation state
 let endEpoch = null;   // null = live (now); number = scrolled-back epoch (right edge of window)
@@ -523,7 +568,6 @@ async function tick() {
       bucket: getBucketSec().toString(),
     });
     if (endEpoch !== null) params.set('end', endEpoch.toString());
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
     document.getElementById('live').style.background='var(--green)';
@@ -578,9 +622,8 @@ async function tick() {
 
     // Clients
     const tbody = document.querySelector('#clients-tbl tbody');
-    // 1.5.4 — stash for identity popover lookup on click.
-    window._clientsList = d.clients || [];
-    tbody.innerHTML = (d.clients || []).slice(0, 25).map((c, i) => {
+    window._clientsList = _sortClients(d.clients || []);
+    tbody.innerHTML = window._clientsList.slice(0, 25).map((c, i) => {
       const banned = c.banned_secs > 0 ? `<span class="tag banned">${c.banned_secs}s</span>` : '<span class="dim">—</span>';
       const id = (c.id || c.ip || '');
       const lastIp = c.last_ip || '?';
@@ -618,8 +661,8 @@ async function tick() {
         <td>${switchHtml}</td>
       </tr>`;
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+    _updateCliSortHeaders();
     // 1.5.5 — wire ban/unban switches (same flow as agents dashboard).
-    const ADMIN_KEY_LOCAL = new URLSearchParams(location.search).get('key') || '';
     tbody.querySelectorAll('.ban-switch').forEach(el => {
       el.onclick = async (ev) => {
         ev.stopPropagation();
@@ -628,7 +671,6 @@ async function tick() {
         el.style.opacity = '0.5';
         const base2 = banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban';
         const p2 = new URLSearchParams({id: id});
-        if (ADMIN_KEY_LOCAL) p2.set('key', ADMIN_KEY_LOCAL);
         const url2 = base2 + '?' + p2.toString();
         try {
           const r = await fetch(url2, {credentials:'include'});
@@ -755,8 +797,13 @@ async function tick() {
       const sorted = Object.entries(dh).sort((a,b)=>b[1]-a[1]);
       dEl.innerHTML = sorted.length
         ? sorted.map(([k,v]) =>
-            `<span class="lbl">${escapeHtml(k)}</span><span class="val" style="color:${v>0?'var(--red)':'var(--dim)'}">${v|0}</span>`).join('')
+            `<span class="lbl det-drill" data-reason="${escapeHtml(k)}" title="click for details + offending identities"
+                   style="cursor:pointer;border-bottom:1px dotted var(--blue)">${escapeHtml(k)}</span>` +
+            `<span class="val" style="color:${v>0?'var(--red)':'var(--dim)'}">${v|0}</span>`).join('')
         : '<span class="dim">no hits yet</span>';
+      dEl.querySelectorAll('.det-drill').forEach(el => {
+        el.onclick = () => openReasonDrill(el.dataset.reason);
+      });
     } catch(e) {}
 
     // 1.5.4 — fetch cost timeline alongside the metrics one (same window)
@@ -766,7 +813,6 @@ async function tick() {
         bucket: getBucketSec().toString(),
       });
       if (endEpoch !== null) costParams.set('end', endEpoch.toString());
-      if (ADMIN_KEY) costParams.set('key', ADMIN_KEY);
       const cr = await fetch('/antibot-appsec-gateway/secured/cost-timeline?' + costParams.toString(),
                             {cache:'no-store', credentials:'include'});
       if (cr.ok) {
@@ -828,8 +874,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 // Pulls from /antibot-appsec-gateway/secured/detector-stats (fast in-memory) + the timeline data already
 // drawn above. Re-paints every 5 s.
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url = (p) => p;
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const COL = {
@@ -926,8 +971,6 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
 // ── 1.5.1: throughput cap + unban actions ──────────────────────────
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-  const k_q       = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
   const liveEl    = document.getElementById('live-rps');
   const limEl     = document.getElementById('rps-limit-badge');
   const inputEl   = document.getElementById('rps-input');
@@ -1182,9 +1225,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
   // 1.5.5 — Click any row in the Top-paths table → modal with offender IPs.
   window.openPathDrill = async function(path){
-    const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
     const params = new URLSearchParams({ path, range: 1440, limit: 100 });
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     let d = {};
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/path-hits?' + params, {credentials:'include'});
@@ -1249,12 +1290,10 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   // (total/allowed/blocked/missed), with the clicked one highlighted.
   // Reuses the /antibot-appsec-gateway/secured/agents-bucket endpoint (which returns detected/missed/clean).
   window.openMainBucketDetail = async function(bucketEntry, bucketSecs, datasetIndex){
-    const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
     const t = bucketEntry.t;
     // datasetIndex: 0=total, 1=allowed, 2=blocked, 3=missed
     const focusKind = ['total','allowed','blocked','missed'][datasetIndex] || null;
     const params = new URLSearchParams({ t, bucket_secs: bucketSecs });
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     let d = {};
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
@@ -1461,8 +1500,6 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 
 // ── 1.5.4 Defense thresholds slider ─────────────────────────────────
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-  const k_q = ADMIN_KEY ? ('?key=' + encodeURIComponent(ADMIN_KEY)) : '';
   const sliderEl = document.getElementById('thr-slider');
   const msgEl    = document.getElementById('thr-msg');
   const MAX = 100;          // visual scale upper bound (1.5.5 — 0..100)
@@ -1636,10 +1673,9 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
 </div>
 <script>
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -1653,7 +1689,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;

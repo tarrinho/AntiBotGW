@@ -133,13 +133,13 @@ button.danger{background:var(--red)}
 <body>
 <h1 class="page-title">AppSecGW_1.6.8 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__" class="active">Settings</a>
+  <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings" class="active">Settings</a>
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <main>
@@ -326,8 +326,7 @@ button.danger{background:var(--red)}
         Dashboard sign-in accounts. The first user (<code>admin</code>) is
         bootstrapped on first boot using the gateway's startup-issued
         admin key as the password — change it here, then add other
-        operators. Bearer-key auth (<code>?key=…</code>) keeps working
-        for scripted clients regardless of which users exist.
+        operators. Login is session-cookie based.
       </p>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
@@ -367,7 +366,7 @@ button.danger{background:var(--red)}
         here when the local value is empty. Each row stays in
         <em>waiting for confirmation</em> until you Apply or Reject —
         nothing reaches the live integration without an explicit click.
-        Outbound sharing is enabled per-secret in <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__" style="color:var(--blue)">Controls → External integrations</a>.
+        Outbound sharing is enabled per-secret in <a href="/antibot-appsec-gateway/secured/controls" style="color:var(--blue)">Controls → External integrations</a>.
       </p>
     </div>
     <div style="display:flex;gap:6px;align-items:center">
@@ -466,7 +465,6 @@ button.danger{background:var(--red)}
 
 <script>
 "use strict";
-const KEY = "__KEY__";
 const $ = (id) => document.getElementById(id);
 const toast = (msg, kind) => {
   const t = $("toast"); t.textContent = msg; t.className = "toast show " + (kind || "");
@@ -479,8 +477,7 @@ const toast = (msg, kind) => {
 $("gw-host").textContent = window.location.host || "—";
 (async () => {
   try {
-    const r = await fetch("/antibot-appsec-gateway/secured/health-score?key=" +
-                          encodeURIComponent(KEY), { credentials: "same-origin" });
+    const r = await fetch("/antibot-appsec-gateway/secured/health-score", { credentials: "same-origin" });
     if (!r.ok) return;
     const j = await r.json();
     if (j.upstream)         $("gw-upstream").textContent = j.upstream;
@@ -498,8 +495,7 @@ $("gw-host").textContent = window.location.host || "—";
 // 1.6.7 — fill the "Logged in as" cell from /secured/whoami.
 (async () => {
   try {
-    const r = await fetch("/antibot-appsec-gateway/secured/whoami?key=" +
-                          encodeURIComponent(KEY), { credentials: "same-origin" });
+    const r = await fetch("/antibot-appsec-gateway/secured/whoami", { credentials: "same-origin" });
     if (!r.ok) return;
     const j = await r.json();
     const who = j.username + (j.via === "admin-key" ? " (via key)" : "");
@@ -510,7 +506,7 @@ $("gw-host").textContent = window.location.host || "—";
 // ── Export ─────────────────────────────────────────────────────────
 $("btn-export").addEventListener("click", async () => {
   const inc = $("export-include-secrets").checked ? "1" : "0";
-  const url = "/antibot-appsec-gateway/secured/settings-export?key=" + encodeURIComponent(KEY) + "&include_secrets=" + inc;
+  const url = "/antibot-appsec-gateway/secured/settings-export?include_secrets=" + inc;
   const status = $("export-status");
   const result = $("export-result");
   result.className = "result";
@@ -588,8 +584,7 @@ $("btn-import").addEventListener("click", async () => {
   if (!pending) return;
   const ow = $("import-overwrite-secrets").checked ? "1" : "0";
   const dry = $("import-dry-run").checked ? "1" : "0";
-  const url = "/antibot-appsec-gateway/secured/settings-import?key=" + encodeURIComponent(KEY) +
-              "&overwrite_secrets=" + ow + "&dry_run=" + dry;
+  const url = "/antibot-appsec-gateway/secured/settings-import?overwrite_secrets=" + ow + "&dry_run=" + dry;
   const result = $("import-result");
   result.className = "result";
   btnImport.disabled = true;
@@ -655,7 +650,7 @@ function renderSyncCell(sync) {
   const m = map[sync.state] || map.offline;
   return `<span title="${escHtml(m.title)}" style="color:${m.color};font-weight:600;font-family:ui-monospace,Menlo,monospace;font-size:11px">${m.label}</span>`;
 }
-const apiUrl = (p) => p + (p.includes("?") ? "&" : "?") + "key=" + encodeURIComponent(KEY);
+const apiUrl = (p) => p;
 async function api(method, path, body) {
   const opts = { method, credentials: "same-origin",
                  headers: { "Origin": location.origin } };
@@ -1734,10 +1729,9 @@ loadMesh();
 </div>
 <script>
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml2 = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const url2 = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url2 = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -1751,7 +1745,7 @@ loadMesh();
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;

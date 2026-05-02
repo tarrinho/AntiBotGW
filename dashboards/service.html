@@ -21,12 +21,19 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .metric.fd{color:var(--yellow)}
 .metric.net{color:#5fb3c0}
 .metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
-.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:6px}
-.bar>div{height:100%;background:var(--blue);transition:width 0.3s}
+.bar-wrap{position:relative;margin-top:6px}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden}
+.bar>div{height:100%;background:var(--blue);transition:width 0.3s,background 0.3s}
 .bar.mem>div{background:var(--purple)}
 .bar.cpu>div{background:var(--blue)}
 .bar.disk>div{background:var(--orange)}
 .bar.danger>div{background:var(--red)}
+.thr-tick{position:absolute;top:0;width:2px;height:8px;border-radius:1px;pointer-events:none}
+.thr-tick.warn{background:var(--yellow);opacity:.85}
+.thr-tick.crit{background:var(--red);opacity:.85}
+.thr-legend{display:flex;gap:8px;font-size:9.5px;color:var(--dim);margin-top:3px;flex-wrap:wrap}
+.thr-legend .tw{color:var(--yellow)}
+.thr-legend .tc{color:var(--red)}
 table{width:100%;border-collapse:collapse;font-size:12px}
 table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
@@ -61,13 +68,13 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 </style>
 <h1>AppSecGW_1.6.8 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__" class="active">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service" class="active">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings">Settings</a>
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="grid">
@@ -77,17 +84,40 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
     <div class="card stat-card" data-stat="cpu_pct" data-label="CPU usage" data-unit="%"><h2>CPU</h2>
       <div class="metric cpu" id="m-cpu">—</div>
       <div class="metric-sub" id="m-load">load —</div>
-      <div class="bar cpu"><div id="b-cpu" style="width:0%"></div></div>
+      <div class="bar-wrap">
+        <div class="bar cpu"><div id="b-cpu" style="width:0%"></div></div>
+        <div class="thr-tick warn" style="left:75%"></div>
+        <div class="thr-tick crit" style="left:90%"></div>
+      </div>
+      <div class="thr-legend">
+        <span class="tw">▲ 75% warn</span><span class="tc">▲ 90% crit</span>
+      </div>
     </div>
     <div class="card stat-card" data-stat="mem_pct" data-label="Memory usage" data-unit="%"><h2>Memory</h2>
       <div class="metric mem" id="m-mem">—</div>
       <div class="metric-sub" id="m-mem-sub">— used / —</div>
-      <div class="bar mem"><div id="b-mem" style="width:0%"></div></div>
+      <div class="bar-wrap">
+        <div class="bar mem"><div id="b-mem" style="width:0%"></div></div>
+        <div class="thr-tick warn" style="left:75%"></div>
+        <div class="thr-tick crit" style="left:90%"></div>
+      </div>
+      <div class="thr-legend">
+        <span class="tw">▲ 75% warn</span><span class="tc">▲ 90% crit</span>
+      </div>
     </div>
     <div class="card stat-card" data-stat="disk_used" data-label="Disk used" data-unit="bytes"><h2>Disk (/data)</h2>
       <div class="metric disk" id="m-disk">—</div>
-      <div class="metric-sub" id="m-disk-sub">— used / —</div>
-      <div class="bar disk"><div id="b-disk" style="width:0%"></div></div>
+      <div class="metric-sub" id="m-disk-sub">— used / — avail / — total</div>
+      <div class="bar-wrap">
+        <div class="bar disk"><div id="b-disk" style="width:0%"></div></div>
+        <div class="thr-tick warn" id="disk-thr75" style="left:75%"></div>
+        <div class="thr-tick crit" id="disk-thr90" style="left:90%"></div>
+      </div>
+      <div class="thr-legend">
+        <span class="tw">▲ 75% = <span id="disk-thr75-val">—</span></span>
+        <span class="tc">▲ 90% = <span id="disk-thr90-val">—</span></span>
+        <span>total: <span id="disk-total-val">—</span></span>
+      </div>
     </div>
     <div class="card stat-card" data-stat="procs" data-label="Process count" data-unit="count"><h2>Processes</h2>
       <div class="metric proc" id="m-procs">—</div>
@@ -108,6 +138,15 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
     <div class="card stat-card" data-stat="cg_pct" data-label="cgroup memory" data-unit="%"><h2>cgroup memory</h2>
       <div class="metric" style="color:var(--purple)" id="m-cg">—</div>
       <div class="metric-sub" id="m-cg-sub">— / —</div>
+      <div class="bar-wrap">
+        <div class="bar mem"><div id="b-cg" style="width:0%"></div></div>
+        <div class="thr-tick warn" style="left:75%"></div>
+        <div class="thr-tick crit" style="left:90%"></div>
+      </div>
+      <div class="thr-legend">
+        <span class="tw">▲ 75% = <span id="cg-thr75-val">—</span></span>
+        <span class="tc">▲ 90% = <span id="cg-thr90-val">—</span></span>
+      </div>
     </div>
     <div class="card stat-card" data-stat="identities_count" data-label="Identities tracked" data-unit="count"><h2>Identities</h2>
       <div class="metric" style="color:var(--blue)" id="m-id">—</div>
@@ -216,7 +255,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
     <div style="position:relative;height:220px"><canvas id="chart-pg-db"></canvas></div>
     <div id="pg-db-empty" class="dim" style="text-align:center;padding:30px 0;font-size:11.5px;display:none">
       No Postgres samples yet — set <code>DB_BACKEND=postgres</code> + <code>POSTGRES_DSN</code>
-      and use the <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__" style="color:var(--blue)">Controls</a> dashboard to switch backends.
+      and use the <a href="/antibot-appsec-gateway/secured/controls" style="color:var(--blue)">Controls</a> dashboard to switch backends.
     </div>
   </div>
 
@@ -264,14 +303,13 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
         integrity="sha384-e6nUZLBkQ86NJ6TVVKAeSaK8jWa3NhkYWZFomE39AvDbQWeie9PlQqM3pmYW5d1g"
         crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
-const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
 // Legacy nav links removed in 1.5.1 (replaced by server-rendered topnav).
 // Defensively patch any matching IDs that might still exist.
 ['lnk-main','lnk-agents','lnk-self'].forEach((id,i)=>{
   const el = document.getElementById(id);
   if (!el) return;
   const tgt = ['/antibot-appsec-gateway/secured/dashboard','/antibot-appsec-gateway/secured/agents','/antibot-appsec-gateway/secured/service'][i];
-  el.href = tgt + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : '');
+  el.href = tgt;
 });
 
 const fmtBytes = b => {
@@ -302,6 +340,10 @@ function ensureCharts(){
         tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
       {label:'Memory %', data:[], borderColor:'#bc8cff', backgroundColor:'rgba(188,140,255,0.10)',
         tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
+      {label:'⚠ warn 75%', data:[], borderColor:'rgba(210,153,34,0.75)', borderDash:[5,4],
+        tension:0, fill:false, borderWidth:1.5, pointRadius:0, yAxisID:'y'},
+      {label:'✕ crit 90%', data:[], borderColor:'rgba(248,81,73,0.75)', borderDash:[5,4],
+        tension:0, fill:false, borderWidth:1.5, pointRadius:0, yAxisID:'y'},
     ]}, options:{...opts, scales:{...opts.scales,
       y:{...opts.scales.y, max:100, title:{text:'%',color:'#8b949e',display:true}}}}
   });
@@ -429,7 +471,6 @@ async function tick(){
       bucket: getBucketSec().toString(),
     });
     if (endEpoch !== null) params.set('end', endEpoch.toString());
-    if (ADMIN_KEY) params.set('key', ADMIN_KEY);
     const r = await fetch('/antibot-appsec-gateway/secured/service-data?'+params,{cache:'no-store',credentials:'include'});
     const d = await r.json();
     document.getElementById('live').style.background='var(--green)';
@@ -437,17 +478,40 @@ async function tick(){
     document.getElementById('interval').textContent = d.interval_secs;
 
     const c = d.current || {};
-    document.getElementById('m-cpu').textContent     = (c.cpu_pct ?? 0).toFixed(1) + '%';
-    document.getElementById('b-cpu').style.width     = Math.min(100, c.cpu_pct ?? 0) + '%';
-    document.getElementById('m-load').textContent    = `load ${c.load1 ?? 0} · ${c.load5 ?? 0} · ${c.load15 ?? 0}`;
 
-    document.getElementById('m-mem').textContent     = (c.mem_pct ?? 0).toFixed(1) + '%';
+    // Helper: pick bar fill color based on threshold crossings
+    function thrColor(pct, defaultColor) {
+      if (pct >= 90) return 'var(--red)';
+      if (pct >= 75) return 'var(--yellow)';
+      return defaultColor;
+    }
+
+    const cpuPct = c.cpu_pct ?? 0;
+    document.getElementById('m-cpu').textContent  = cpuPct.toFixed(1) + '%';
+    document.getElementById('m-cpu').style.color  = thrColor(cpuPct, 'var(--blue)');
+    document.getElementById('b-cpu').style.width  = Math.min(100, cpuPct) + '%';
+    document.getElementById('b-cpu').style.background = thrColor(cpuPct, 'var(--blue)');
+    document.getElementById('m-load').textContent = `load ${c.load1 ?? 0} · ${c.load5 ?? 0} · ${c.load15 ?? 0}`;
+
+    const memPct = c.mem_pct ?? 0;
+    document.getElementById('m-mem').textContent     = memPct.toFixed(1) + '%';
+    document.getElementById('m-mem').style.color     = thrColor(memPct, 'var(--purple)');
     document.getElementById('m-mem-sub').textContent = `${fmtBytes(c.mem_used)} / ${fmtBytes(c.mem_total)}`;
-    document.getElementById('b-mem').style.width     = Math.min(100, c.mem_pct ?? 0) + '%';
+    document.getElementById('b-mem').style.width     = Math.min(100, memPct) + '%';
+    document.getElementById('b-mem').style.background = thrColor(memPct, 'var(--purple)');
 
-    document.getElementById('m-disk').textContent     = (c.disk_pct ?? 0).toFixed(1) + '%';
-    document.getElementById('m-disk-sub').textContent = `${fmtBytes(c.disk_used)} used · ${fmtBytes(c.disk_avail)} free`;
-    document.getElementById('b-disk').style.width     = Math.min(100, c.disk_pct ?? 0) + '%';
+    const diskPct   = c.disk_pct ?? 0;
+    const diskTotal = c.disk_total ?? 0;
+    document.getElementById('m-disk').textContent     = diskPct.toFixed(1) + '%';
+    document.getElementById('m-disk').style.color     = thrColor(diskPct, 'var(--orange)');
+    document.getElementById('m-disk-sub').textContent = `${fmtBytes(c.disk_used)} used / ${fmtBytes(c.disk_avail)} avail / ${fmtBytes(diskTotal)} total`;
+    document.getElementById('b-disk').style.width     = Math.min(100, diskPct) + '%';
+    document.getElementById('b-disk').style.background = thrColor(diskPct, 'var(--orange)');
+    if (diskTotal) {
+      document.getElementById('disk-thr75-val').textContent = fmtBytes(diskTotal * 0.75);
+      document.getElementById('disk-thr90-val').textContent = fmtBytes(diskTotal * 0.90);
+      document.getElementById('disk-total-val').textContent = fmtBytes(diskTotal);
+    }
 
     document.getElementById('m-procs').textContent     = c.procs ?? '—';
     document.getElementById('m-procs-sub').textContent = `${c.open_fds ?? 0} open FDs`;
@@ -460,10 +524,18 @@ async function tick(){
     document.getElementById('m-db').textContent     = fmtBytes(c.db_db ?? 0);
     document.getElementById('m-db-sub').textContent =
       `+ wal ${fmtBytes(c.db_wal ?? 0)} · + shm ${fmtBytes(c.db_shm ?? 0)} · total ${fmtBytes(c.db_total ?? 0)}`;
-    document.getElementById('m-cg').textContent =
-      (c.cg_pct ?? 0).toFixed(1) + '%';
+    const cgPct   = c.cg_pct ?? 0;
+    const cgLimit = c.cg_limit ?? 0;
+    document.getElementById('m-cg').textContent  = cgPct.toFixed(1) + '%';
+    document.getElementById('m-cg').style.color  = thrColor(cgPct, 'var(--purple)');
     document.getElementById('m-cg-sub').textContent =
-      `${fmtBytes(c.cg_used ?? 0)} / ${c.cg_limit > 0 ? fmtBytes(c.cg_limit) : '∞'}`;
+      `${fmtBytes(c.cg_used ?? 0)} / ${cgLimit > 0 ? fmtBytes(cgLimit) : '∞'}`;
+    document.getElementById('b-cg').style.width      = Math.min(100, cgPct) + '%';
+    document.getElementById('b-cg').style.background = thrColor(cgPct, 'var(--purple)');
+    if (cgLimit > 0) {
+      document.getElementById('cg-thr75-val').textContent = fmtBytes(cgLimit * 0.75);
+      document.getElementById('cg-thr90-val').textContent = fmtBytes(cgLimit * 0.90);
+    }
     const a2 = d.app || {};
     document.getElementById('m-id').textContent     = (a2.identities ?? 0).toLocaleString();
     document.getElementById('m-buckets').textContent = `${a2.ip_buckets ?? 0} IP buckets`;
@@ -537,6 +609,8 @@ async function tick(){
     cpuMemChart.data.labels = labelsView;
     cpuMemChart.data.datasets[0].data = hist.map(s => s.cpu_pct);
     cpuMemChart.data.datasets[1].data = hist.map(s => s.mem_pct);
+    cpuMemChart.data.datasets[2].data = hist.map(() => 75);
+    cpuMemChart.data.datasets[3].data = hist.map(() => 90);
     cpuMemChart.update('none');
 
     netChart.data.labels = labelsView;
@@ -584,8 +658,7 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
 
 // 1.6.5 — per-detector latency + cost-by-bucket
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url = (p) => p;
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const COL = {
@@ -700,10 +773,9 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
 </div>
 <script>
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -717,7 +789,7 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
@@ -854,8 +926,7 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
 </div>
 <script>
 (function(){
-  const KEY = new URLSearchParams(location.search).get('key') || '';
-  const url = (p) => p + (KEY?(p.includes('?')?'&':'?')+'key='+encodeURIComponent(KEY):'');
+  const url = (p) => p;
   const fmt = {
     'bytes':   (v) => {
       if (v == null) return '—';
@@ -925,6 +996,36 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
        avg: <b>${fmtFn(avg)}</b> ·
        samples: <b>${valid.length}</b>`;
 
+    // Build threshold datasets for stats that have meaningful limits.
+    const thrDatasets = [];
+    const current = j.current || {};
+    if (unit === '%') {
+      thrDatasets.push({
+        label: '⚠ warn 75%', data: hist.map(() => 75),
+        borderColor: 'rgba(210,153,34,.8)', borderDash: [5,4],
+        borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0,
+      });
+      thrDatasets.push({
+        label: '✕ crit 90%', data: hist.map(() => 90),
+        borderColor: 'rgba(248,81,73,.8)', borderDash: [5,4],
+        borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0,
+      });
+    } else if (key === 'disk_used') {
+      const total = current.disk_total || 0;
+      if (total > 0) {
+        thrDatasets.push({
+          label: `⚠ warn 75% (${fmtFn(total*0.75)})`, data: hist.map(() => total * 0.75),
+          borderColor: 'rgba(210,153,34,.8)', borderDash: [5,4],
+          borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0,
+        });
+        thrDatasets.push({
+          label: `✕ crit 90% (${fmtFn(total*0.90)})`, data: hist.map(() => total * 0.90),
+          borderColor: 'rgba(248,81,73,.8)', borderDash: [5,4],
+          borderWidth: 1.5, pointRadius: 0, fill: false, tension: 0,
+        });
+      }
+    }
+
     if (chart) chart.destroy();
     chart = new Chart(document.getElementById('sm-chart').getContext('2d'), {
       type: 'line',
@@ -940,14 +1041,26 @@ setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5000);
           tension: 0.2,
           pointRadius: 0,
           pointHoverRadius: 4,
-        }]
+        }, ...thrDatasets]
       },
       options: {
         responsive: true, maintainAspectRatio: false,
         animation: false,
         plugins: {
-          legend: {display:false},
-          tooltip: {callbacks: {label: (ctx) => `${label}: ${fmtFn(ctx.parsed.y)}`}}
+          legend: {
+            display: thrDatasets.length > 0,
+            labels: {color:'#8b949e', font:{size:10},
+              filter: (item) => item.datasetIndex === 0 || thrDatasets.length > 0}
+          },
+          tooltip: {
+            mode: 'index', intersect: false,
+            callbacks: {
+              label: (ctx) => {
+                if (ctx.datasetIndex === 0) return `${label}: ${fmtFn(ctx.parsed.y)}`;
+                return `${ctx.dataset.label}: ${fmtFn(ctx.parsed.y)}`;
+              }
+            }
+          }
         },
         scales: {
           x: {ticks:{color:'#8b949e',maxTicksLimit:10},grid:{color:'#21262d'}},
