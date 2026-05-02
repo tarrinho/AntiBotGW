@@ -92,13 +92,13 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 <body>
 <h1>AppSecGW_1.6.8 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard?key=__KEY__">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents?key=__KEY__">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service?key=__KEY__">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls?key=__KEY__">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo?key=__KEY__" class="active">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs?key=__KEY__">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings?key=__KEY__">Settings</a>
+  <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
+  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+  <a href="/antibot-appsec-gateway/secured/service">Service</a>
+  <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+  <a href="/antibot-appsec-gateway/secured/geo" class="active">GeoMap</a>
+  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+  <a href="/antibot-appsec-gateway/secured/settings">Settings</a>
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="card">
@@ -207,8 +207,6 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin=""></script>
 <script>
-const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
-const k_q       = ADMIN_KEY ? ('&key=' + encodeURIComponent(ADMIN_KEY)) : '';
 const escapeHtml = s => String(s||'').replace(/[&<>"']/g, c =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
@@ -410,7 +408,7 @@ function renderCountries(){
       const next = Array.from(cur).sort();
       btn.disabled = true;
       try {
-        const r = await fetch('/antibot-appsec-gateway/secured/config?' + (ADMIN_KEY?('key='+encodeURIComponent(ADMIN_KEY)):''),
+        const r = await fetch('/antibot-appsec-gateway/secured/config',
                               {method:'POST', headers:{'Content-Type':'application/json'},
                                body: JSON.stringify({COUNTRY_DENYLIST: next, COUNTRY_BLOCK_ENABLED:true})});
         const j = await r.json();
@@ -436,7 +434,6 @@ async function openDrill(lat, lng){
   modal.classList.add('show');
   const range = document.getElementById('range').value;
   const params = new URLSearchParams({lat, lng, range});
-  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
   try {
     const r = await fetch('/antibot-appsec-gateway/secured/geo-drill?' + params, {credentials:'include'});
     const d = await r.json();
@@ -547,7 +544,6 @@ document.getElementById('ovly-dc').onchange  = () => { geoSavePrefs(); renderMap
 
 async function tick(){
   const params = new URLSearchParams({range: document.getElementById('range').value});
-  if (ADMIN_KEY) params.set('key', ADMIN_KEY);
   try {
     const r = await fetch('/antibot-appsec-gateway/secured/geo-data?' + params, {credentials:'include'});
     const d = await r.json();
@@ -567,7 +563,7 @@ async function tick(){
         msg.style.color = 'var(--dim)';
         msg.textContent = 'fetching mmdb…';
         try {
-          const r = await fetch('/antibot-appsec-gateway/secured/maxmind-fetch' + (ADMIN_KEY ? ('?key='+encodeURIComponent(ADMIN_KEY)) : ''),
+          const r = await fetch('/antibot-appsec-gateway/secured/maxmind-fetch',
                                 {method:'POST', credentials:'include'});
           const j = await r.json();
           if (r.ok && j.ok){ msg.style.color='var(--green)'; msg.textContent='loaded — refreshing'; setTimeout(tick, 600); }
@@ -723,10 +719,9 @@ document.addEventListener('keydown', e => {
 </div>
 <script>
 (function(){
-  const ADMIN_KEY = new URLSearchParams(location.search).get('key') || '';
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const url = (p) => p + (p.includes('?')?'&':'?') + 'key=' + encodeURIComponent(ADMIN_KEY);
+  const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -740,7 +735,7 @@ document.addEventListener('keydown', e => {
   let lastData = null;
   async function tick(){
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score' + (ADMIN_KEY?('?key='+encodeURIComponent(ADMIN_KEY)):''),
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
