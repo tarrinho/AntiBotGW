@@ -392,3 +392,48 @@ def test_167_session_token_format_includes_sid(proxy_module):
     sig_b = _b.urlsafe_b64encode(sig).rstrip(b"=").decode("ascii")
     legacy = f"admin|{expiry}|{sig_b}"
     assert proxy_module._session_parse(legacy) is None
+
+
+# ── version consistency ───────────────────────────────────────────────────
+
+_EXPECTED_VERSION = "AppSecGW_1.7.1"
+
+def test_gw_version_constant():
+    """GW_VERSION in config.py must match the expected release string."""
+    import config
+    assert config.GW_VERSION == _EXPECTED_VERSION, (
+        f"config.GW_VERSION={config.GW_VERSION!r} — update GW_VERSION to {_EXPECTED_VERSION!r}"
+    )
+
+
+def test_no_stale_version_strings_in_source():
+    """No source file may contain a hardcoded version string other than the
+    current release.  Comments (# …) and test fixtures are excluded."""
+    import re, pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent
+    # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.1\b)\d+\.\d+')
+    # Files that intentionally reference old versions (changelogs, docs, test fixtures).
+    skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
+    skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
+    hits = []
+    for path in root.rglob("*"):
+        if path.is_dir():
+            continue
+        if any(part in skip_dirs for part in path.parts):
+            continue
+        if path.name in skip_files:
+            continue
+        if path.suffix not in {".py", ".yml", ".yaml", ".sh", ".md"}:
+            continue
+        try:
+            text = path.read_text(errors="replace")
+        except OSError:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith("#"):   # comment — version-introduced annotation
+                continue
+            if stale_re.search(line):
+                hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.1:\n" + "\n".join(hits)

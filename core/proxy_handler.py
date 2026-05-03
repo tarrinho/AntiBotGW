@@ -81,11 +81,13 @@ from detection.canary import (  # noqa: F401
     _new_canary, _inject_canary, _inject_honey_links, _inject_botd,
     _botd_token_for, _scan_request_for_canary,
 )
+from detection.automation import _inject_automation_probe  # noqa: F401
 from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
-from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens  # noqa: F401
+from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
 from admin.mesh import _gw_local_id  # noqa: F401
 from dashboards.service_metrics import _disk_usage  # noqa: F401
+from dashboards.controls import GEO_DASHBOARD_HTML, LOGS_DASHBOARD_HTML  # noqa: F401
 from detection.paths import _bot_trap_triggered, _inject_bot_trap  # noqa: F401
 from identity import _is_library_headers  # noqa: F401
 from integrations.endpoint_policy import _endpoint_rule  # noqa: F401
@@ -747,7 +749,7 @@ async def proxy(request: web.Request):
 
                     response_headers.add(k, v)
 
-                response_headers["X-Proxy"] = "AppSecGW_1.7.0"
+                response_headers["X-Proxy"] = GW_VERSION
 
                 # Inject baseline security response headers on HTML responses
                 # (the upstream may not set them; we add them at the edge so
@@ -776,7 +778,7 @@ async def proxy(request: web.Request):
                         # that replay full response headers (LangChain, AutoGen) echo
                         # the token back and trigger canary-echo detection.
                         if HEADER_CANARY_ENABLED:
-                            response_headers["ETag"]        = f'"agw-c-{canary}"'
+                            response_headers["ETag"]        = f'"{canary}"'
                             response_headers["X-Request-Id"] = canary
                     # 1.6.5 — BotD client-side detection (FingerprintJS).
                     # No-op until BOTD_ENABLED=1. Token bound to the
@@ -784,6 +786,12 @@ async def proxy(request: web.Request):
                     if BOTD_ENABLED:
                         resp_body = _inject_botd(resp_body,
                                                   request.get("_track_key", ""))
+                    # 1.7.1 — Self-hosted automation probe (navigator.webdriver
+                    # + headless indicators). No external bundle; fires on ≥2
+                    # indicators detected client-side.
+                    if AUTOMATION_PROBE_ENABLED:
+                        resp_body = _inject_automation_probe(
+                            resp_body, request.get("_track_key", ""))
 
                 # 1.6.10 — JSON API canary: inject a "_ref" token into JSON
                 # object responses. LLM agents that cache and replay API
@@ -2094,6 +2102,7 @@ async def protect(request: web.Request, handler):
         if len(_s_early.unique_paths) > 400:
             _s_early.unique_paths.pop()
         _early_unique_n = len(_s_early.unique_paths)
+        _s_early.path_sequence.append(request.path)  # 1.7.1: journey tracking
         if request.method == "GET":
             if request.path.endswith((".css", ".js", ".png", ".jpg", ".jpeg",
                                       ".gif", ".svg", ".webp", ".woff", ".woff2",
@@ -2102,6 +2111,9 @@ async def protect(request: web.Request, handler):
             elif request.path == "/" or request.path.endswith((".html", ".htm")):
                 _s_early.html_loads += 1
         _early_no_static = (_s_early.html_loads >= 25 and _s_early.static_loads == 0)
+        _early_html_loads   = _s_early.html_loads
+        _early_static_loads = _s_early.static_loads
+        _early_req_count    = _s_early.request_count
 
     # 1.6.5 — escalation gate: skip the expensive / external intel layer
     # for identities with zero accumulated risk. ESCALATION_THRESHOLD=0
@@ -2136,6 +2148,22 @@ async def protect(request: web.Request, handler):
             # 1.6.0 — heavier `datacenter-vpn` tag when explicit toggle is on.
             if DC_VPN_BLOCK_ENABLED:
                 await update_risk_and_maybe_ban(identity, "datacenter-vpn", ip)
+        # 1.7.1 — Coordinated-attack clustering: N≥THRESHOLD distinct identities
+        # from the same ASN hitting the same path prefix within the same minute.
+        if COORDINATED_ATTACK_ENABLED and asn and _should_run_signal("coordinated-probe", _esc_score):
+            _minute = int(_t.time() / 60)
+            _prefix = request.path.split("/")[1] if "/" in request.path else request.path
+            _ck = (asn, _prefix, _minute)
+            _cluster = _asn_path_clusters.setdefault(_ck, set())
+            _cluster.add(identity)
+            if len(_cluster) >= COORDINATED_ATTACK_THRESHOLD:
+                await update_risk_and_maybe_ban(identity, "coordinated-probe", ip)
+            # Prune stale cluster keys (older than 2 minutes)
+            if len(_asn_path_clusters) > 10000:
+                _now_min = int(_t.time() / 60)
+                _stale_ck = [k for k in list(_asn_path_clusters) if k[2] < _now_min - 2]
+                for _k in _stale_ck:
+                    _asn_path_clusters.pop(_k, None)
 
     # 1.6.0 — Tor exit-node check (Tier A). O(1) set membership; the feed
     # is refreshed weekly in `_tor_refresh_loop`. Tor exits are not blocked
@@ -2464,6 +2492,20 @@ async def protect(request: web.Request, handler):
             if _locale_geo_mismatch(_lc_country, accept_lang):
                 await update_risk_and_maybe_ban(track_key, "locale-geo-mismatch", ip)
                 request_signals.append("locale-geo-mismatch")
+
+    # 1.7.1 — Direct-API-probe: browser UA that only hits API paths, never
+    # loads HTML or static assets. Fires when request_count≥5, html_loads=0,
+    # static_loads=0, and this path looks like an API endpoint. Second-order
+    # signal — only adds risk when identity has existing suspicion.
+    _api_prefixes = ("/api/", "/v1/", "/v2/", "/graphql", "/rest/", "/rpc/")
+    if (JOURNEY_CHECK_ENABLED
+            and _should_run_signal("direct-api-probe", _esc_score)
+            and _early_html_loads == 0
+            and _early_static_loads == 0
+            and _early_req_count >= 5
+            and any(path.startswith(p) for p in _api_prefixes)):
+        await update_risk_and_maybe_ban(track_key, "direct-api-probe", ip)
+        request_signals.append("direct-api-probe")
 
     # Stash request_signals for the response wrapper to log
     request["_signals"] = request_signals
@@ -3041,7 +3083,7 @@ async def lists_snapshot_endpoint(request: web.Request):
         # Admin IPs
         "admin_ip_count":         len(globals().get("ADMIN_ALLOWED_NETS") or []),
         # Versions
-        "version":                "AppSecGW_1.6.10",
+        "version":                GW_VERSION,
         "ts":                     n,
     }
     return web.json_response(snapshot, headers={"Cache-Control":"no-store"})
@@ -3219,7 +3261,7 @@ async def health_score_endpoint(request: web.Request):
     return web.json_response({
         "score":       score,
         "reasons":     reasons,
-        "version":     "AppSecGW_1.6.10",
+        "version":     GW_VERSION,
         "upstream":    UPSTREAM,
         "db_backend":  DB_BACKEND,
         "uptime_secs": int(_t.time() - START_EPOCH),
@@ -3265,6 +3307,7 @@ async def metrics_endpoint(request: web.Request):
                 "last_path": s.last_path,
                 "risk_score": round(s.risk_score, 1),
                 "stealth_score": _ssc,
+                "is_admin_ip": _is_admin_ip(s.last_ip or key),
             })
         recent_events = list(events)[-50:]
         recent_events.reverse()  # newest first
@@ -4558,7 +4601,7 @@ async def path_hits_endpoint(request: web.Request):
                                   status=400, headers={"Cache-Control":"no-store"})
     try:
         range_min = max(1, min(43200, int(request.query.get("range", "1440"))))
-        limit = max(1, min(1000, int(request.query.get("limit", "100"))))
+        limit = max(1, min(1000, int(request.query.get("limit", "500"))))
     except ValueError:
         range_min, limit = 1440, 100
     start_epoch = _t.time() - range_min * 60
@@ -4583,6 +4626,7 @@ async def path_hits_endpoint(request: web.Request):
         ip = r["ip"] or "?"
         e = by_ip.setdefault(ip, {
             "ip": ip, "ua": r["ua"] or "", "count": 0,
+            "is_admin_ip": _is_admin_ip(ip),
             "last_seen_secs_ago": None, "reasons": {}, "statuses": {},
             "first_ts": r["ts"], "last_ts": r["ts"],
         })
@@ -4674,6 +4718,7 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             ip = r["ip"] or "?"
             entry = detected_set.setdefault(ip, {
                 "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "is_admin_ip": _is_admin_ip(ip),
                 "reasons": {}, "last_path": r["path"] or "",
                 "identities": ip_to_idents.get(ip, []),
             })
@@ -4682,12 +4727,13 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             entry["last_path"] = r["path"] or entry["last_path"]
         for r in conn.execute(
             "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND (reason='' OR reason='OK') LIMIT 5000",
+            "WHERE ts >= ? AND ts < ? AND (reason='' OR reason='OK') LIMIT 20000",
             (t, end),
         ):
             ip = r["ip"] or "?"
             entry = clean_set.setdefault(ip, {
                 "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "is_admin_ip": _is_admin_ip(ip),
                 "last_path": r["path"] or "",
                 "identities": ip_to_idents.get(ip, []),
             })
@@ -4714,10 +4760,12 @@ async def agents_bucket_detail_endpoint(request: web.Request):
                 continue
             seen_epoch = _t.time() - (n_now - s.last_seen)
             if t <= seen_epoch < end:
+                _mip = s.last_ip or key
                 missed_list.append({
-                    "id": key, "ip": s.last_ip or key,
+                    "id": key, "ip": _mip,
                     "ua": s.last_user_agent, "stealth_score": score,
                     "risk_score": round(s.risk_score, 1),
+                    "is_admin_ip": _is_admin_ip(_mip),
                     "allowed": s.allowed_count, "blocked": s.blocked_count,
                     "last_path": s.last_path,
                 })
@@ -4725,9 +4773,9 @@ async def agents_bucket_detail_endpoint(request: web.Request):
     payload = {
         "bucket_t":     t,
         "bucket_secs":  bucket,
-        "detected":     sorted(detected_set.values(), key=lambda r: r["count"], reverse=True)[:200],
-        "missed":       sorted(missed_list,           key=lambda r: r["stealth_score"], reverse=True)[:200],
-        "clean":        sorted(clean_set.values(),    key=lambda r: r["count"], reverse=True)[:200],
+        "detected":     sorted(detected_set.values(), key=lambda r: r["count"], reverse=True)[:500],
+        "missed":       sorted(missed_list,           key=lambda r: r["stealth_score"], reverse=True)[:500],
+        "clean":        sorted(clean_set.values(),    key=lambda r: r["count"], reverse=True)[:500],
     }
     if kind in ("detected","missed","clean"):
         payload["only"] = kind

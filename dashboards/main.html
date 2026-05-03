@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.6.10 · Dashboard</title>
+<title>AppSecGW_1.7.1 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -7,7 +7,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;
         padding:6px 0;border-bottom:1px solid var(--line)}
@@ -118,6 +118,8 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .modal table{width:100%}
 .modal td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace;font-size:11.5px}
 .modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
+.act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
+.act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}
 
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
@@ -134,7 +136,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   text-transform:uppercase;letter-spacing:.5px}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.10 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.1 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- column-header tooltip -->
 <div id="col-tip-pop"></div>
@@ -589,8 +591,10 @@ async function tick() {
     if (endEpoch !== null) params.set('end', endEpoch.toString());
     const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
-    document.getElementById('live').style.background='var(--green)';
-    document.getElementById('live').textContent='● LIVE';
+    const _liveEl = document.getElementById('live');
+    _liveEl.style.background='var(--green)';
+    _liveEl.textContent='● LIVE';
+    _liveEl.title='Gateway reachable · metrics OK · updated ' + new Date().toLocaleTimeString();
 
     document.getElementById('total').textContent = d.total.toLocaleString();
     document.getElementById('allowed').textContent = d.allowed.toLocaleString();
@@ -860,8 +864,10 @@ async function tick() {
 
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch (err) {
-    document.getElementById('live').style.background='var(--red)';
-    document.getElementById('live').textContent='○ ERR';
+    const _errEl = document.getElementById('live');
+    _errEl.style.background='var(--red)';
+    _errEl.textContent='○ ERR';
+    _errEl.title='Error fetching metrics: ' + (err && err.message ? err.message : String(err));
   }
 }
 function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
@@ -1323,46 +1329,75 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     // datasetIndex: 0=total, 1=allowed, 2=blocked, 3=missed
     const focusKind = ['total','allowed','blocked','missed'][datasetIndex] || null;
     const params = new URLSearchParams({ t, bucket_secs: bucketSecs });
-    let d = {};
+    let d = {}, _fetchErr = null;
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       d = await r.json();
-    } catch(e) { d = {detected:[], missed:[], clean:[]}; }
+    } catch(e) { d = {detected:[], missed:[], clean:[]}; _fetchErr = String(e); }
     const fmt = epoch => new Date(epoch*1000).toLocaleString();
+    const adminNs = '/antibot-appsec-gateway/secured';
+    async function ipAction(btn, url){
+      btn.disabled = true; btn.textContent = '…';
+      try {
+        const r = await fetch(url, {method:'POST', credentials:'include'});
+        btn.textContent = r.ok ? '✓' : '✗';
+        btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+      } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; }
+    }
+    function actionBtns(ip, id){
+      const enc = encodeURIComponent(ip);
+      const encId = id ? encodeURIComponent(id) : null;
+      const banUrl  = encId
+        ? `${adminNs}/ban?id=${encId}&secs=3600&reason=manual-ban`
+        : `${adminNs}/ban?ip=${enc}&secs=3600&reason=manual-ban`;
+      const hbanUrl = encId
+        ? `${adminNs}/ban?id=${encId}&secs=2678400&reason=hard-ban`
+        : `${adminNs}/ban?ip=${enc}&secs=2678400&reason=hard-ban`;
+      const allowUrl = `${adminNs}/unban?ip=${enc}`;
+      return `<span class="act-btns" data-ban="${banUrl}" data-hban="${hbanUrl}" data-allow="${allowUrl}">`+
+        `<button class="act ban"  title="Ban 1 h">Ban</button>`+
+        `<button class="act hban" title="Hard ban 31 d">Hard ban</button>`+
+        `<button class="act allow" title="Unban / allow">Allow</button>`+
+        `</span>`;
+    }
     const renderClean = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
-        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Last path</th>
+        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Last path</th><th>Actions</th>
       </tr></thead><tbody>` +
       list.map(e => `<tr>
-        <td>${escapeHtml(e.ip)}</td>
+        <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
         <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+        <td>${actionBtns(e.ip)}</td>
       </tr>`).join('') + '</tbody></table>';
     const renderBlocked = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
-        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th>
+        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th><th>Actions</th>
       </tr></thead><tbody>` +
       list.map(e => {
         const top = Object.entries(e.reasons||{}).sort((a,b)=>b[1]-a[1])[0]||['—',0];
         return `<tr>
-          <td>${escapeHtml(e.ip)}</td>
+          <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
           <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
           <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
           <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
           <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+          <td>${actionBtns(e.ip)}</td>
         </tr>`;
       }).join('') + '</tbody></table>';
     const renderMissed = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
-        <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th style="text-align:left">Last path</th>
+        <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th style="text-align:left">Last path</th><th>Actions</th>
       </tr></thead><tbody>` +
       list.map(e => `<tr>
         <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
-        <td>${escapeHtml(e.ip)}</td>
+        <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
         <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
         <td style="text-align:right">${e.risk_score}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+        <td>${actionBtns(e.ip, e.id)}</td>
       </tr>`).join('') + '</tbody></table>';
     // Combine clean + detected for "total" (everything seen in the bucket).
     const totalCount = (d.clean||[]).length + (d.detected||[]).length + (d.missed||[]).length;
@@ -1389,7 +1424,13 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
       `Bucket · ${fmt(t)} +${bucketSecs}s · ${totalCount} entries (${focusKind||'all'} clicked)
        <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
-    document.getElementById('modal-body').innerHTML = body;
+    const modalBody = document.getElementById('modal-body');
+    modalBody.innerHTML = (_fetchErr ? `<div class="empty" style="color:var(--red);margin-bottom:10px">Fetch error: ${escapeHtml(_fetchErr)}</div>` : '') + body;
+    modalBody.querySelectorAll('.act-btns').forEach(span => {
+      span.querySelector('.ban' ).onclick = e => { e.preventDefault(); ipAction(e.target, span.dataset.ban);   };
+      span.querySelector('.hban').onclick = e => { e.preventDefault(); ipAction(e.target, span.dataset.hban);  };
+      span.querySelector('.allow').onclick= e => { e.preventDefault(); ipAction(e.target, span.dataset.allow); };
+    });
     back.classList.add('show'); modal.classList.add('show');
   };
 

@@ -191,10 +191,12 @@ Each release MUST update:
 
 ### 13a. Architecture + version consistency review
 Before declaring documentation complete, verify:
-- Version string in `proxy.py` (`AppSecGW_X.Y.Z`) matches the release tag.
+- `config.py` `GW_VERSION` constant matches the release tag (e.g. `AppSecGW_1.7.0`).
+- Run `pytest tests/test_pure.py::test_gw_version_constant tests/test_pure.py::test_no_stale_version_strings_in_source` — both must PASS.  The second test scans all `.py/.yml/.yaml/.sh/.md` source files for `AppSecGW_X.Y` strings that do not match the current release (excluding comments, CHANGELOG, README, rules.md, and the validation/ directory).
 - `README.md` image tag in Quick Start, multi-site fleet examples, and
   `Build from source` block all reference the new version.
 - `Dockerfile` and `docker-compose.yml` default image tags updated if needed.
+- `Dockerfile.armv7` COPY block kept in sync with main `Dockerfile` whenever new modules are added.
 - `copy-to-github.sh` MANIFEST includes every new file added in this version.
 - Architecture diagram in `README.md` reflects the actual middleware chain;
   add any new detection layer or admin endpoint introduced since last release.
@@ -210,11 +212,29 @@ Run only after steps 1–13 all pass (or pre-existing failures are classified).
 ```
 df -h /var/lib/docker
 ```
-**Pass criterion:** At least **10 GB free** before starting builds. Abort if less — prune
-dangling images first:
+**Pass criterion:** At least **10 GB free** before starting builds. If below threshold, run
+the following cleanup sequence in order until the threshold is met:
+
 ```
+# 1. APT package cache (~900 MB typical)
+apt clean
+
+# 2. pip download cache (~100–200 MB)
+pip cache purge
+
+# 3. Unused APT packages — removes orphaned runtimes (golang, OpenJDK, etc.)
+apt autoremove --purge -y
+
+# 4. Docker buildx/BuildKit cache — largest single gain (~4 GB typical)
+docker builder prune -f
+
+# 5. Dangling images (stop here if threshold already met)
 docker image prune -f
 ```
+
+Re-check with `df -h /var/lib/docker` after each step. Stop once ≥ 10 GB is free.
+Step 4 (`docker builder prune -f`) invalidates the layer cache — next build will be
+slower but functionally identical.
 
 ### 14b. Build all three arches
 ```

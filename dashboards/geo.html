@@ -12,7 +12,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
 .topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px}
@@ -90,7 +90,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.10 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.1 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -549,6 +549,7 @@ async function tick(){
     const d = await r.json();
     const live = document.getElementById('live');
     live.textContent = '● LIVE'; live.style.background = 'var(--green)';
+    live.title = 'Geo data refreshed · updated ' + new Date().toLocaleTimeString();
     const notice = document.getElementById('notice');
     if (!d.configured) {
       notice.innerHTML =
@@ -593,8 +594,10 @@ async function tick(){
     renderAsns();         // 1.6.4
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch(e) {
-    document.getElementById('live').style.background = 'var(--red)';
-    document.getElementById('live').textContent = '○ ERR';
+    const _errEl = document.getElementById('live');
+    _errEl.style.background = 'var(--red)';
+    _errEl.textContent = '○ ERR';
+    _errEl.title = 'Error fetching geo data: ' + (e && e.message ? e.message : String(e));
   }
 }
 

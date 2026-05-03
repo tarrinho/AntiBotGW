@@ -51,6 +51,8 @@ class IpState:
     header_scores: deque = field(default_factory=lambda: deque(maxlen=20))
     upstream_404_count: int = 0
     last_allowed_paths: deque = field(default_factory=lambda: deque(maxlen=10))
+    # 1.7.1 — journey sequence for direct-API-probe detection
+    path_sequence: deque = field(default_factory=lambda: deque(maxlen=5))
 
 
 # ── Primary identity state ─────────────────────────────────────────────────
@@ -109,6 +111,10 @@ _pow_seen: Dict[tuple, float] = {}
 
 # ── AI-agent canary tokens: token -> expiry_epoch ─────────────────────────
 _canary_tokens: dict = {}
+
+# ── 1.7.1: Coordinated-attack clustering ─────────────────────────────────
+# (asn:int|None, path_prefix:str, minute:int) → set of identity strings
+_asn_path_clusters: dict = {}
 
 # ── Admin session management ───────────────────────────────────────────────
 # 1.6.7 — last-seen-ts per signed-in user. Bumped on every cookie-

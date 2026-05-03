@@ -328,7 +328,7 @@ def _serve_js_challenge(request: web.Request):
         html = _inject_canary(html.encode(), canary).decode("utf-8")
         headers["X-Trace-Id"] = canary
         if HEADER_CANARY_ENABLED:
-            headers["ETag"]         = f'"agw-c-{canary}"'
+            headers["ETag"]         = f'"{canary}"'
             headers["X-Request-Id"] = canary
     return web.Response(status=200, text=html, content_type="text/html",
                         headers=headers)
