@@ -1,0 +1,355 @@
+"""
+reputation/maxmind.py — MaxMind GeoLite2 ASN/City lookups + AI-crawler range
+                        verification + locale/geo consistency check.
+Extracted from proxy.py as part of Phase 5 modular refactoring.
+
+Local mmdb lookups (~0.1 ms each, no network). MAXMIND_ENABLED and
+MAXMIND_CITY_ENABLED start False and are set to True by _init_maxmind().
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import time as _t
+from collections import deque
+
+import aiohttp
+import ipaddress as _ipaddress
+
+from config import *   # noqa: F401,F403
+from state import *    # noqa: F401,F403
+from helpers import slog, now
+
+
+# ── Constants ──────────────────────────────────────────────────────────────
+
+MAXMIND_ASN_DB_PATH = os.environ.get("MAXMIND_ASN_DB_PATH", "/data/GeoLite2-ASN.mmdb")
+MAXMIND_CITY_DB_PATH = os.environ.get("MAXMIND_CITY_DB_PATH", "/data/GeoLite2-City.mmdb")
+HOSTING_ASN_KEYWORDS = tuple(
+    s.strip().lower() for s in os.environ.get(
+        "HOSTING_ASN_KEYWORDS",
+        "hetzner,ovh,digitalocean,linode,contabo,vultr,scaleway,"
+        "amazon,aws,google,gce,oracle,alibaba,m247,leaseweb,"
+        "datacamp,packet,equinix,choopa,namecheap,colocrossing,"
+        "psychz,tencent,quadranet"
+    ).split(",") if s.strip())
+
+COUNTRY_BLOCK_ENABLED = os.environ.get("COUNTRY_BLOCK_ENABLED", "0") in ("1", "true", "yes")
+COUNTRY_DENYLIST = {
+    s.strip().upper() for s in os.environ.get("COUNTRY_DENYLIST", "").split(",")
+    if s.strip() and len(s.strip()) == 2
+}
+COUNTRY_ALLOWLIST = {
+    s.strip().upper() for s in os.environ.get("COUNTRY_ALLOWLIST", "").split(",")
+    if s.strip() and len(s.strip()) == 2
+}
+
+# ── Mutable module-level flags (set to True by _init_maxmind()) ────────────
+
+_asn_reader = None
+_city_reader = None     # GeoLite2-City reader (lat/lng for geo dashboard)
+MAXMIND_ENABLED = False
+MAXMIND_CITY_ENABLED = False
+
+# ── Telemetry ──────────────────────────────────────────────────────────────
+
+_asn_stats = {
+    "lookups_total": 0, "hits_hosting": 0, "errors": 0, "last_error": "",
+    "last_latency_ms": 0.0, "avg_latency_ms": 0.0,
+}
+_asn_recent_latencies: deque = deque(maxlen=200)
+
+
+# ── Seed / fetch helpers ───────────────────────────────────────────────────
+
+def _maxmind_seed_from_image():
+    """Copy bundled mmdbs from the image's /usr/local/share/maxmind/ into
+    /data/ when /data/ doesn't have them yet. The image ships fresh mmdbs at
+    build time so the GeoMap dashboard works out-of-the-box on a brand-new
+    volume; operators can later replace them or use MAXMIND_LICENSE_KEY to
+    auto-refresh in-process every 30 days."""
+    seed_dir = "/usr/local/share/maxmind"
+    if not os.path.isdir(seed_dir):
+        return
+    pairs = [
+        (os.path.join(seed_dir, "GeoLite2-ASN.mmdb"),  MAXMIND_ASN_DB_PATH),
+        (os.path.join(seed_dir, "GeoLite2-City.mmdb"), MAXMIND_CITY_DB_PATH),
+    ]
+    for src, dest in pairs:
+        if not os.path.isfile(src):
+            continue
+        if os.path.exists(dest):
+            continue   # operator already supplied
+        try:
+            os.makedirs(os.path.dirname(dest) or "/data", exist_ok=True)
+            with open(src, "rb") as r, open(dest, "wb") as w:
+                while chunk := r.read(64 * 1024):
+                    w.write(chunk)
+            size_mb = os.path.getsize(dest) / (1024 * 1024)
+            print(f"[maxmind] seeded {os.path.basename(dest)} from image "
+                  f"({size_mb:.1f} MB)", flush=True)
+        except OSError as e:
+            print(f"[maxmind] seed copy failed for {dest}: {e}", flush=True)
+
+
+def _maxmind_auto_fetch():
+    """First-boot convenience. When MAXMIND_LICENSE_KEY is set AND a target
+    mmdb is missing, download it directly from MaxMind into /data/<edition>.mmdb.
+    Lets operators just `docker run -e MAXMIND_LICENSE_KEY=…` and skip the
+    host-side maxmind-refresh.sh entirely."""
+    key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
+    if not key:
+        return
+    targets = [
+        ("GeoLite2-ASN",  MAXMIND_ASN_DB_PATH),
+        ("GeoLite2-City", MAXMIND_CITY_DB_PATH),
+    ]
+    import urllib.request, urllib.error, tarfile, tempfile
+    for edition, dest in targets:
+        if os.path.exists(dest):
+            continue   # already there (mounted volume from previous run)
+        try:
+            url = (f"https://download.maxmind.com/app/geoip_download"
+                   f"?edition_id={edition}&license_key={key}&suffix=tar.gz")
+            print(f"[maxmind] {dest} missing — downloading {edition}…",
+                  flush=True)
+            with tempfile.TemporaryDirectory() as td:
+                tgz = os.path.join(td, f"{edition}.tar.gz")
+                with urllib.request.urlopen(url, timeout=60) as r:  # nosec B310 — hardcoded HTTPS to MaxMind; no user-controlled scheme
+                    if r.status != 200:
+                        print(f"[maxmind] {edition} HTTP {r.status} — "
+                              "license-key invalid or rate-limited",
+                              flush=True)
+                        continue
+                    with open(tgz, "wb") as f:
+                        while chunk := r.read(64 * 1024):
+                            f.write(chunk)
+                with tarfile.open(tgz) as tar:
+                    member = next(
+                        (m for m in tar.getmembers()
+                         if m.isfile() and m.name.endswith(f"{edition}.mmdb")),
+                        None,
+                    )
+                    if member is None:
+                        print(f"[maxmind] {edition}.mmdb not in archive",
+                              flush=True)
+                        continue
+                    fobj = tar.extractfile(member)
+                    if fobj is None:
+                        continue
+                    os.makedirs(os.path.dirname(dest) or "/data", exist_ok=True)
+                    with open(dest, "wb") as out:
+                        while chunk := fobj.read(64 * 1024):
+                            out.write(chunk)
+            size_mb = os.path.getsize(dest) / (1024 * 1024)
+            print(f"[maxmind] {edition} → {dest} ({size_mb:.1f} MB)",
+                  flush=True)
+        except (urllib.error.URLError, OSError, tarfile.TarError) as e:
+            print(f"[maxmind] {edition} fetch failed: {e}", flush=True)
+
+
+async def _maxmind_refresh_loop():
+    """Every 30 days, re-fetch any mmdb older than that AND reload the
+    in-memory readers. Means an operator who only sets MAXMIND_LICENSE_KEY
+    never has to babysit the dbs (no host-side cron needed)."""
+    global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    if not os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+        return  # nothing to refresh — operator hasn't opted in
+    THIRTY_DAYS = 30 * 86400
+    while True:
+        await asyncio.sleep(86400)   # check daily, refresh monthly
+        try:
+            stale = []
+            for path in (MAXMIND_ASN_DB_PATH, MAXMIND_CITY_DB_PATH):
+                if os.path.exists(path) and (_t.time() - os.path.getmtime(path)) > THIRTY_DAYS:
+                    stale.append(path)
+            if not stale:
+                continue
+            print(f"[maxmind] {len(stale)} db(s) older than 30d — refreshing",
+                  flush=True)
+            for p in stale:
+                try: os.remove(p)
+                except OSError: pass
+            _maxmind_auto_fetch()
+            try:
+                import maxminddb
+                if os.path.exists(MAXMIND_ASN_DB_PATH):
+                    _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+                    MAXMIND_ENABLED = True
+                if os.path.exists(MAXMIND_CITY_DB_PATH):
+                    _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
+                    MAXMIND_CITY_ENABLED = True
+                print("[maxmind] readers refreshed", flush=True)
+            except Exception as e:
+                print(f"[maxmind] reload failed: {e}", flush=True)
+        except Exception as e:
+            print(f"[maxmind] refresh loop error: {e}", flush=True)
+
+
+def _init_maxmind():
+    """Lazy-load the mmdb. Called at startup; logs and stays disabled if
+    the file is missing or malformed. Auto-fetches the dbs first when
+    MAXMIND_LICENSE_KEY is set and /data/ doesn't already have them.
+    Also seeds from the image-bundled mmdbs at /usr/local/share/maxmind/."""
+    global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    _maxmind_seed_from_image()
+    _maxmind_auto_fetch()
+    try:
+        import maxminddb
+    except Exception as e:
+        print(f"[maxmind] maxminddb python lib missing: {e}", flush=True)
+        return
+    if os.path.exists(MAXMIND_ASN_DB_PATH):
+        try:
+            _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+            MAXMIND_ENABLED = True
+            print(f"[maxmind] ASN DB loaded from {MAXMIND_ASN_DB_PATH}", flush=True)
+        except Exception as e:
+            _asn_stats["last_error"] = f"init: {e}"[:200]
+            print(f"[maxmind] failed to load {MAXMIND_ASN_DB_PATH}: {e}", flush=True)
+    if os.path.exists(MAXMIND_CITY_DB_PATH):
+        try:
+            _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
+            MAXMIND_CITY_ENABLED = True
+            print(f"[maxmind] City DB loaded from {MAXMIND_CITY_DB_PATH}", flush=True)
+        except Exception as e:
+            print(f"[maxmind] failed to load {MAXMIND_CITY_DB_PATH}: {e}", flush=True)
+
+
+# ── Lookup functions ───────────────────────────────────────────────────────
+
+def _city_lookup(ip: str):
+    """Return (lat, lng, country_code, city_name) or None if unknown.
+    City DB lookup latency ~0.1ms — same DB family as ASN."""
+    if _city_reader is None or not ip:
+        return None
+    try:
+        rec = _city_reader.get(ip)
+        if not rec:
+            return None
+        loc = rec.get("location") or {}
+        lat = loc.get("latitude"); lng = loc.get("longitude")
+        if lat is None or lng is None:
+            return None
+        country = (rec.get("country") or {}).get("iso_code") or ""
+        city    = ((rec.get("city") or {}).get("names") or {}).get("en") or ""
+        return (float(lat), float(lng), country, city)
+    except Exception:
+        return None
+
+
+def _asn_lookup(ip: str):
+    """Returns (asn:int|None, organisation:str, is_hosting:bool, source:str)."""
+    if not MAXMIND_ENABLED or _asn_reader is None:
+        return None, "", False, "disabled"
+    try:
+        ipa = _ipaddress.ip_address(ip)
+        if ipa.is_private or ipa.is_loopback or ipa.is_link_local:
+            return None, "", False, "private"
+    except (ValueError, TypeError):
+        return None, "", False, "invalid"
+    _asn_stats["lookups_total"] += 1
+    t0 = _t.time()
+    try:
+        rec = _asn_reader.get(ip) or {}
+    except Exception as e:
+        _asn_stats["errors"] += 1
+        _asn_stats["last_error"] = f"{type(e).__name__}: {str(e)[:120]}"
+        return None, "", False, "error"
+    finally:
+        latency_ms = (_t.time() - t0) * 1000.0
+        _asn_stats["last_latency_ms"] = round(latency_ms, 3)
+        _asn_recent_latencies.append(latency_ms)
+        if _asn_recent_latencies:
+            _asn_stats["avg_latency_ms"] = round(
+                sum(_asn_recent_latencies) / len(_asn_recent_latencies), 3)
+    asn = rec.get("autonomous_system_number")
+    org = (rec.get("autonomous_system_organization") or "")[:120]
+    org_lower = org.lower()
+    is_hosting = any(k in org_lower for k in HOSTING_ASN_KEYWORDS)
+    if is_hosting:
+        _asn_stats["hits_hosting"] += 1
+    return asn, org, is_hosting, "ok"
+
+
+# ── AI-crawler IP-range verification ──────────────────────────────────────
+# OpenAI publishes their crawler IP ranges at openai.com/gptbot-ranges.txt.
+# When a request claims to be an OpenAI/Perplexity crawler (UA match) but
+# the source IP is not in the declared range, we add ai-ua-ip-mismatch (+30).
+
+_ai_crawler_nets: dict = {}          # vendor → list[ip_network]; populated at startup
+_AI_CRAWLER_RANGE_URLS = {
+    "openai": "https://openai.com/gptbot-ranges.txt",  # nosec B310
+}
+
+
+async def _refresh_ai_crawler_ranges():
+    """Fetch published IP ranges for AI crawlers and refresh every 24 h."""
+    while True:
+        for vendor, url in _AI_CRAWLER_RANGE_URLS.items():
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as _s:
+                    async with _s.get(url) as _r:
+                        if _r.status == 200:
+                            text = await _r.text()
+                            nets = []
+                            for _line in text.splitlines():
+                                _line = _line.strip()
+                                if _line and not _line.startswith("#"):
+                                    try:
+                                        nets.append(_ipaddress.ip_network(_line, strict=False))
+                                    except ValueError:
+                                        pass
+                            _ai_crawler_nets[vendor] = nets
+                            slog("ai_ranges_refreshed", level="info",
+                                 vendor=vendor, count=len(nets))
+            except Exception as _e:
+                slog("ai_ranges_failed", level="warn",
+                     vendor=vendor, error=str(_e)[:80])
+        await asyncio.sleep(86400)
+
+
+def _ip_in_ai_range(ip: str, vendor: str) -> bool:
+    """True if ip is in vendor's published crawler range (or range unknown)."""
+    nets = _ai_crawler_nets.get(vendor, [])
+    if not nets:
+        return True   # no data loaded — can't verify, don't penalise
+    try:
+        ipa = _ipaddress.ip_address(ip)
+        return any(ipa in net for net in nets)
+    except (ValueError, TypeError):
+        return True   # unparseable IP → don't penalise
+
+
+# ── Accept-Language / GeoIP locale consistency ────────────────────────────
+# Map ISO-3166 country code → set of plausible primary language tags.
+# Only covers codes with a single dominant language; multi-lingual countries
+# are excluded (avoiding false-positives on CH, BE, CA, SG, etc.).
+
+_COUNTRY_LANG_MAP: dict = {
+    "US": {"en"}, "GB": {"en"}, "AU": {"en"}, "NZ": {"en"}, "IE": {"en"},
+    "FR": {"fr"}, "DE": {"de"}, "AT": {"de"},
+    "ES": {"es"}, "MX": {"es"}, "AR": {"es"}, "CO": {"es"}, "CL": {"es"},
+    "PT": {"pt"}, "BR": {"pt"},
+    "IT": {"it"}, "RU": {"ru"}, "UA": {"uk"},
+    "CN": {"zh"}, "TW": {"zh"}, "JP": {"ja"}, "KR": {"ko"},
+    "NL": {"nl"}, "PL": {"pl"}, "SE": {"sv"}, "NO": {"no", "nb"},
+    "DK": {"da"}, "FI": {"fi"}, "CZ": {"cs"}, "HU": {"hu"}, "RO": {"ro"},
+    "TR": {"tr"}, "SA": {"ar"}, "AE": {"ar"}, "EG": {"ar"},
+    "TH": {"th"}, "VN": {"vi"}, "ID": {"id"},
+}
+
+
+def _locale_geo_mismatch(country_code: str, accept_lang: str) -> bool:
+    """True when primary Accept-Language tag is implausible for the GeoIP country.
+    Returns False when the country or language is unknown (avoids false-positives).
+    'en' is treated as a universal fallback and never flagged as a mismatch."""
+    expected = _COUNTRY_LANG_MAP.get((country_code or "").upper())
+    if not expected:
+        return False
+    primary = accept_lang.split(",")[0].split(";")[0].strip().split("-")[0].lower()
+    if not primary or primary in ("*", "en"):
+        return False
+    return primary not in expected

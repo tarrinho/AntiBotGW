@@ -98,6 +98,16 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
 .popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
 
+/* column-header tooltip */
+.col-tip-i{font-style:normal;font-weight:400;font-size:9px;
+  vertical-align:super;margin-left:3px;opacity:.4;user-select:none;color:var(--blue)}
+th[data-col-tip]:hover .col-tip-i{opacity:.9}
+#col-tip-pop{position:fixed;z-index:110;background:var(--card);border:1px solid var(--line);
+  border-radius:6px;padding:9px 12px;max-width:280px;font-size:11.5px;line-height:1.55;
+  color:var(--fg);box-shadow:0 6px 24px rgba(0,0,0,.55);display:none;pointer-events:none}
+#col-tip-pop b{color:var(--blue);display:block;margin-bottom:3px;font-size:11px;
+  text-transform:uppercase;letter-spacing:.5px}
+
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
@@ -190,17 +200,21 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
     <h2>Suspicious identities / IPs (passed all blocks but exhibit stealth signals)</h2>
     <table id="sus-tbl">
       <thead><tr>
-        <th class="sortable" data-sort="score">Score</th>
-        <th>Identity</th><th>UA</th><th>IP</th>
-        <th class="sortable" data-sort="allowed">Allowed</th>
-        <th class="sortable" data-sort="blocked">Blocked</th>
-        <th class="sortable" data-sort="header">Headers avg</th>
-        <th class="sortable" data-sort="html">HTML/Static</th>
-        <th class="sortable" data-sort="paths">Paths/req</th>
-        <th class="sortable" data-sort="timing">Timing σ/μ</th>
-        <th class="sortable" data-sort="fours">404s</th>
-        <th class="sortable" data-sort="risk">Risk</th>
-        <th>Last path</th><th>Status</th><th></th>
+        <th class="sortable" data-sort="score" data-col-tip="Score|0–100 composite stealth-bot likelihood. Combines 6 signals: header completeness, asset ratio, path enumeration, timing regularity, risk score, and 404 rate. Higher = more bot-like.">Score<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="UA|Last observed User-Agent string sent by this identity.">UA<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="IP|Source IP address last seen for this identity.">IP<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="allowed" data-col-tip="Allowed|Requests that passed all controls and were proxied to the upstream application.">Allowed<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="blocked" data-col-tip="Blocked|Requests caught by a detector and silently served a decoy response instead of the real upstream.">Blocked<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="header" data-col-tip="Headers avg|Average browser-header completeness score (0–7). Real browsers send ~6–7 standard headers (Accept, Accept-Language, Accept-Encoding, etc.). Bots often omit several.">Headers avg<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="html" data-col-tip="HTML/Static|HTML page loads vs static asset (CSS/JS/image) loads. Real browsers fetch assets after every page. A high HTML count with zero static loads is a strong bot signal.">HTML/Static<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="paths" data-col-tip="Paths/req|Unique paths divided by allowed requests. A high ratio means the identity is hitting many different endpoints — typical of scanners and crawlers.">Paths/req<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="timing" data-col-tip="Timing σ/μ|Coefficient of variation (std-dev / mean) of inter-request intervals. Real users are irregular (CV > 0.5). Bots are machine-paced and score low (< 0.20).">Timing σ/μ<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="fours" data-col-tip="404s|Number of HTTP 404 responses received from the upstream. A high count indicates probing for hidden endpoints, admin panels, or known CVE paths.">404s<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="risk" data-col-tip="Risk|Raw accumulated detector score (decays over time). Triggers a ban when it exceeds RISK_BAN_THRESHOLD. This is one of the six inputs into Score — not the same thing.">Risk<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Last path|Most recently observed request path for this identity.">Last path<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Status|Current ban/allow state for this identity. Click the button in the row to manually ban or unban.">Status<span class="col-tip-i">ℹ</span></th>
+        <th></th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -230,6 +244,9 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 </div>
 
 <div class="foot">refreshes every 3 s · <code id="ts"></code></div>
+
+<!-- column-header tooltip (no backdrop, pointer-events:none) -->
+<div id="col-tip-pop"></div>
 
 <!-- 1.5.4 popover overlay (identity details + risk breakdown) -->
 <div class="pop-back" id="pop-back"></div>
@@ -746,6 +763,24 @@ function closePopover(){
 POP_BACK.onclick = closePopover;
 document.getElementById('pop-close').onclick = closePopover;
 document.addEventListener('keydown', e => { if (e.key==='Escape') closePopover(); });
+
+// ── column-header tooltips (hover to show, click still sorts) ────────────
+(function(){
+  const tip = document.getElementById('col-tip-pop');
+  function hideTip(){ tip.style.display='none'; }
+  document.querySelectorAll('th[data-col-tip]').forEach(th=>{
+    th.addEventListener('mouseenter', ()=>{
+      const parts = th.dataset.colTip.split('|');
+      tip.innerHTML = `<b>${parts[0]}</b>${parts.slice(1).join('')}`;
+      tip.style.display = 'block';
+      const r = th.getBoundingClientRect();
+      const left = Math.min(r.left, window.innerWidth - tip.offsetWidth - 8);
+      tip.style.left = Math.max(8, left) + 'px';
+      tip.style.top  = (r.bottom + 6) + 'px';
+    });
+    th.addEventListener('mouseleave', hideTip);
+  });
+})();
 
 function fmtSecs(s){
   if (s == null) return '—';

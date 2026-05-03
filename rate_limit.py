@@ -1,0 +1,132 @@
+"""
+rate_limit.py — Token-bucket rate limiting + background prune loop.
+Extracted from proxy.py as part of Phase 3 modular refactoring.
+
+Dependency rule: imports from config, state, helpers only.
+"""
+
+import asyncio
+import os as _os
+
+from config import (
+    RATE_LIMIT_BURST,
+    RATE_LIMIT_REFILL,
+)
+from state import (
+    ip_state,
+    ip_buckets,
+    ip_new_sessions,
+    state_lock,
+)
+from helpers import slog, now
+
+# ── Socket-IP bucket constants ─────────────────────────────────────────────
+# H4: socket-IP secondary bucket — runs BEFORE per-identity bucket so an
+# attacker rotating UAs/cookies from the same source IP cannot multiply their
+# rate by spawning new identities. Keyed strictly by request.remote (the
+# kernel-observed peer IP), independent of any client-supplied header.
+
+IP_BURST  = int(_os.environ.get("IP_BURST",  "30"))
+IP_REFILL = float(_os.environ.get("IP_REFILL", "5.0"))
+
+# ── Prune-loop constants ───────────────────────────────────────────────────
+
+MAX_IDENTITIES     = int(_os.environ.get("MAX_IDENTITIES", "100000"))
+PRUNE_IDLE_SECS    = int(_os.environ.get("PRUNE_IDLE_SECS", "86400"))   # 24 h
+ENUM_THRESHOLD     = int(_os.environ.get("ENUM_THRESHOLD", "300"))      # >N unique paths → ai-enumeration
+PRUNE_INTERVAL_SECS = 600  # run every 10 min
+
+
+# ── Token-bucket: socket-IP ────────────────────────────────────────────────
+
+async def take_socket_ip_token(socket_ip: str) -> tuple:
+    """Atomic token-bucket per kernel-observed peer IP. Returns (allowed, retry_after).
+    N6: no inline O(n) eviction — _prune_state_loop trims this dict periodically.
+    Hard cap is enforced by REJECTING new IPs only when over 2× MAX_IDENTITIES
+    (which means the prune cycle hasn't run yet under extreme flooding)."""
+    async with state_lock:
+        n = now()
+        b = ip_buckets.get(socket_ip)
+        if b is None:
+            if len(ip_buckets) > MAX_IDENTITIES * 2:
+                # Hard backpressure under extreme flood — block this new IP
+                # rather than do O(n) eviction synchronously.
+                return False, 1.0
+            b = {"tokens": float(IP_BURST), "last": n}
+            ip_buckets[socket_ip] = b
+        elapsed = n - b["last"]
+        b["tokens"] = min(IP_BURST, b["tokens"] + elapsed * IP_REFILL)
+        b["last"] = n
+        if b["tokens"] >= 1.0:
+            b["tokens"] -= 1.0
+            return True, 0.0
+        retry = (1.0 - b["tokens"]) / IP_REFILL
+        return False, retry
+
+
+# ── Token-bucket: per-identity ─────────────────────────────────────────────
+
+async def take_token(ip: str) -> tuple:
+    """Returns (allowed, retry_after_secs, tokens_remaining)."""
+    async with state_lock:
+        s = ip_state[ip]
+        n = now()
+        elapsed = n - s.last_refill
+        s.tokens = min(RATE_LIMIT_BURST, s.tokens + elapsed * RATE_LIMIT_REFILL)
+        s.last_refill = n
+        s.request_count += 1
+        s.request_times.append(n)
+        if s.tokens >= 1.0:
+            s.tokens -= 1.0
+            return True, 0.0, int(s.tokens)
+        retry = (1.0 - s.tokens) / RATE_LIMIT_REFILL
+        return False, retry, 0
+
+
+# ── Background prune loop ──────────────────────────────────────────────────
+
+async def _prune_state_loop():
+    """Background coroutine: evict idle identities + cap total count.
+    Defends against unbounded growth from XFF spoofing or UA rotation."""
+    while True:
+        try:
+            await asyncio.sleep(PRUNE_INTERVAL_SECS)
+            async with state_lock:
+                n = now()
+                # 1. Evict by idle time
+                idle = [k for k, s in ip_state.items()
+                        if s.banned_until <= n
+                        and (n - s.last_seen) > PRUNE_IDLE_SECS]
+                for k in idle:
+                    del ip_state[k]
+                # 2. Cap total count — drop oldest-last-seen first
+                if len(ip_state) > MAX_IDENTITIES:
+                    overflow = len(ip_state) - MAX_IDENTITIES
+                    candidates = sorted(
+                        ((k, s.last_seen) for k, s in ip_state.items()
+                         if s.banned_until <= n),
+                        key=lambda kv: kv[1],
+                    )[:overflow]
+                    for k, _ in candidates:
+                        del ip_state[k]
+                # 3. Prune the per-IP new-session identity map
+                stale_ips = [ip for ip, m in ip_new_sessions.items()
+                             if not m or max(m.values()) < n - 3600]
+                for ip in stale_ips:
+                    del ip_new_sessions[ip]
+                # 4. N7: prune the socket-IP token-bucket dict (idle > 1h).
+                stale_buckets = [ip for ip, b in ip_buckets.items()
+                                 if (n - b["last"]) > 3600]
+                for ip in stale_buckets:
+                    del ip_buckets[ip]
+                # 4b. Hard cap on ip_buckets — trim oldest if still over.
+                if len(ip_buckets) > MAX_IDENTITIES:
+                    overflow = len(ip_buckets) - MAX_IDENTITIES
+                    candidates = sorted(ip_buckets.items(),
+                                        key=lambda kv: kv[1]["last"])[:overflow]
+                    for k, _ in candidates:
+                        del ip_buckets[k]
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            print(f"[prune] error: {e}")

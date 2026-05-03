@@ -1,0 +1,4804 @@
+"""core/proxy_handler.py — main proxy handler + gateway admin endpoints.
+
+Extracted from proxy.py (Phase 9).  Contains:
+  • Module-level proxy constants (ALLOWED_METHODS, HOP_BY_HOP_*, etc.)
+  • _silent_decoy_response() / _fetch_upstream_404() / _serve_mirrored_404()
+  • _is_ws_upgrade() / proxy_websocket() / proxy()  — the core forwarding layer
+  • debug_xff()
+  • Admin endpoint functions not yet in admin/ or dashboards/:
+    thresholds_endpoint, external_endpoint, integration_check_endpoint,
+    signal_orders_endpoint, admin_ips_endpoint, ban_endpoint,
+    secrets_endpoint, rotate_keys_endpoint, config_endpoint, status_endpoint
+  • _to_bool / _to_path_list / _to_ja4_set / _to_method_set / _to_host_set /
+    _to_country_set / _to_endpoint_policies / _to_custom_rules /
+    _eval_custom_rules  — already in integrations/endpoint_policy.py and
+    re-exported here for backwards compatibility
+  • _HOT_RELOAD_KNOBS / _ENV_PROVIDED_KNOBS / _read_hot_reload_state()
+"""
+
+import asyncio
+import json
+import os
+import re
+import secrets
+import sqlite3
+import time as _t
+
+import aiohttp
+from aiohttp import web, ClientSession, ClientTimeout
+
+from config import *   # noqa: F401,F403
+from state import *    # noqa: F401,F403
+from helpers import *  # noqa: F401,F403
+from helpers import (  # noqa: F401 — underscore names not exported by import *
+    _new_request_id, _is_admin_path, _admin_path_is_public,
+    _strip_admin_key_from_qs, _strip_own_session_cookie,
+)
+from db import *       # noqa: F401,F403
+from identity import *     # noqa: F401,F403
+from rate_limit import *   # noqa: F401,F403
+from detection import *    # noqa: F401,F403
+from scoring import *      # noqa: F401,F403
+from scoring import _escalation_score, _decay_risk  # noqa: F401 — underscore names not in import *
+from reputation import *   # noqa: F401,F403
+from challenge import *    # noqa: F401,F403
+from integrations import * # noqa: F401,F403
+# _to_* converter functions start with _ so are skipped by import *; import explicitly
+from integrations.endpoint_policy import (  # noqa: F401
+    _to_bool, _to_path_list, _to_ja4_set, _to_method_set,
+    _to_host_set, _to_country_set, _to_endpoint_policies,
+    _to_custom_rules, _eval_custom_rules,
+)
+from admin import *        # noqa: F401,F403
+from core.metrics import record, _timeline_bump, _bucket_now  # noqa: F401
+from config import _DASHBOARDS_DIR  # noqa: F401 — leading underscore not in *
+from config import _LOG_LEVELS, _LOG_LEVEL_N  # noqa: F401 — leading underscore not in *
+from config import _REQUEST_ID_HEADER, _REQUEST_ID_RE  # noqa: F401 — leading underscore not in *
+from config import (  # noqa: F401 — more underscore config constants
+    _CANARY_PREFIX, _CANARY_USED_MAX, _CANARY_RE,
+    _ADMIN_PUBLIC_SUBPATHS, _ADMIN_LOGIN_SUBPATHS,
+    _HOSTILE_REASONS, _JS_CHAL_OPEN_PATHS_RAW,
+    _TURNSTILE_CONFIGURED, _PROC,
+)
+from dashboards.agents import _stealth_score, AGENT_BLOCK_REASONS  # noqa: F401
+# Underscore-prefixed functions not exported by import * — explicit imports required
+from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed  # noqa: F401
+from integrations.ja4 import _request_ja4, _tls_fingerprint_blocked  # noqa: F401
+from integrations.redis import _shared_ban_set  # noqa: F401
+from integrations.webhook import _post_webhook  # noqa: F401
+from reputation.abuseipdb import _abuseipdb_lookup, _abuseipdb_stats  # noqa: F401
+from reputation.maxmind import _asn_lookup, _city_lookup, _asn_stats, _city_reader, _asn_reader  # noqa: F401
+from reputation.crowdsec import _crowdsec_check, _crowdsec_stats  # noqa: F401
+from reputation.tor import _tor_exits, _tor_feed_stats  # noqa: F401
+from challenge.js_challenge import (  # noqa: F401
+    _js_challenge_applicable, _js_challenge_required,
+    _make_chal_cookie, _serve_js_challenge,
+)
+from db.postgres import _postgres_load_module, _migrate_recent_events  # noqa: F401
+from integrations.endpoint_policy import _endpoint_rate_consume  # noqa: F401
+from identity import _sign_session, _verify_session, _record_chal_mint, _fp_hash  # noqa: F401
+from detection.canary import (  # noqa: F401
+    _new_canary, _inject_canary, _inject_honey_links, _inject_botd,
+    _botd_token_for, _scan_request_for_canary,
+)
+from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
+from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens  # noqa: F401
+from db.sqlite import _SECRET_KEYS  # noqa: F401
+from admin.mesh import _gw_local_id  # noqa: F401
+from dashboards.service_metrics import _disk_usage  # noqa: F401
+from detection.paths import _bot_trap_triggered, _inject_bot_trap  # noqa: F401
+from identity import _is_library_headers  # noqa: F401
+from integrations.endpoint_policy import _endpoint_rule  # noqa: F401
+from integrations.jwt import _jwt_required_for, _verify_jwt_hs256  # noqa: F401
+from reputation.maxmind import (  # noqa: F401
+    _ip_in_ai_range, _locale_geo_mismatch,
+    _maxmind_auto_fetch, _maxmind_seed_from_image,
+)
+from scoring import _save_signal_order, _should_run_signal, _signal_runtime_order  # noqa: F401
+from challenge.js_challenge import _ip_tier  # noqa: F401
+from db.sqlite import _refresh_integration_state  # noqa: F401
+
+
+STRICT_ORIGIN = os.environ.get("STRICT_ORIGIN", "0") in ("1", "true", "yes")
+_OPEN_ORIGIN_PATHS_RAW = os.environ.get("OPEN_ORIGIN_PATHS", "").strip()
+OPEN_ORIGIN_PATHS = [p.strip() for p in _OPEN_ORIGIN_PATHS_RAW.split(",") if p.strip()]
+
+_REQUIRED_HEADERS_RAW = os.environ.get("REQUIRED_HEADERS", "").strip()
+REQUIRED_HEADERS = [h.strip() for h in _REQUIRED_HEADERS_RAW.split(",") if h.strip()]
+
+
+def _origin_check_failed(request) -> bool:
+    """Returns True iff STRICT_ORIGIN is on AND the request fails the check."""
+    if not STRICT_ORIGIN:
+        return False
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return False
+    if any(request.path.startswith(p) for p in OPEN_ORIGIN_PATHS):
+        return False
+    origin = request.headers.get("Origin", "").strip()
+    if not origin:
+        return True   # missing Origin on a state-change → reject
+    try:
+        from urllib.parse import urlparse
+        host = (urlparse(origin).netloc or "").split(":", 1)[0].lower()
+    except Exception:
+        return True
+    if not ALLOWED_HOSTS:
+        return False  # nothing to compare against; let it through
+    return host not in ALLOWED_HOSTS
+
+
+def _missing_required_header(request) -> bool:
+    if not REQUIRED_HEADERS:
+        return False
+    if _is_admin_path(request.path):
+        return False
+    if request.path.endswith((
+            ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif",
+            ".svg", ".webp", ".avif", ".ico", ".woff", ".woff2",
+            ".ttf", ".otf", ".eot", ".map")):
+        return False
+    return any(h not in request.headers for h in REQUIRED_HEADERS)
+
+
+def _city_reader_is_loaded() -> bool:
+    """Return True iff a MaxMind city reader is available in any known location.
+    Checked in priority order: proxy module globals (test patches land here),
+    then reputation.maxmind module, then this module's own _city_reader global.
+    This avoids the lambda-captures-globals() problem where the validator
+    only sees its defining module's namespace."""
+    import sys
+    # 1. Test patches / hot-reload knobs set it on proxy.
+    _proxy = sys.modules.get("proxy")
+    if _proxy is not None and getattr(_proxy, "_city_reader", None) is not None:
+        return True
+    # 2. Normal runtime: reputation.maxmind owns the reader.
+    _mm = sys.modules.get("reputation.maxmind")
+    if _mm is not None and getattr(_mm, "_city_reader", None) is not None:
+        return True
+    # 3. Fallback: check this module's own global (set by maxmind_fetch_endpoint).
+    return globals().get("_city_reader") is not None
+
+
+# ── Proxy constants ────────────────────────────────────────────────────────
+# F3: tighten default to the safe-for-WAF set. Operators who proxy a REST API
+# can opt-in via env (e.g. ALLOWED_METHODS=GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS).
+_ALLOWED_METHODS_DEFAULT = "GET,HEAD,POST,OPTIONS"
+ALLOWED_METHODS = {
+    m.strip().upper()
+    for m in os.environ.get("ALLOWED_METHODS", _ALLOWED_METHODS_DEFAULT).split(",")
+    if m.strip()
+}
+
+# F1: optional Host header allowlist. Comma-sep hostnames; default empty
+# (no enforcement, current behaviour). When set, Host headers outside the
+# list get silent-decoyed at Layer 0 — defends against host-header attacks
+# at OUR gate (in addition to the existing X-Forwarded-Host overwrite).
+_allowed_hosts_raw = os.environ.get("ALLOWED_HOSTS", "").strip()
+ALLOWED_HOSTS = {
+    h.strip().lower() for h in _allowed_hosts_raw.split(",") if h.strip()
+} if _allowed_hosts_raw else set()
+
+# Hop-by-hop headers (RFC 7230 §6.1) + ones the proxy must own.
+HOP_BY_HOP_REQUEST = {
+    "host", "content-length", "transfer-encoding", "connection",
+    "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "trailers", "upgrade",
+    # Path-rewrite / source-IP spoof headers — proxy sets its own values below.
+    "x-forwarded-for", "x-real-ip", "x-forwarded-host", "x-forwarded-proto",
+    "x-original-url", "x-rewrite-url", "x-original-host",
+    "x-admin-key",  # never forward operator credential
+}
+HOP_BY_HOP_RESPONSE = {
+    "transfer-encoding", "content-encoding", "content-length", "connection",
+    "keep-alive", "proxy-authenticate", "proxy-authorization",
+    "te", "trailer", "trailers", "upgrade",
+}
+
+UPSTREAM_MAX_BODY = int(os.environ.get("UPSTREAM_MAX_BODY", str(2 * 1024 * 1024)))  # 2 MiB
+UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(8 * 1024 * 1024)))  # 8 MiB
+
+# ── v1.4: Slowloris guard (default ON with sensible timeouts) ────────────
+HEADERS_TIMEOUT = float(os.environ.get("HEADERS_TIMEOUT", "10"))   # secs to receive full headers
+BODY_TIMEOUT    = float(os.environ.get("BODY_TIMEOUT",    "30"))   # secs to receive full body
+
+# ── App debug ───────────────────────────────────────────────────────────────
+DEBUG_ENABLED = os.environ.get("DEBUG", "0") not in ("", "0", "false", "False", "no")
+_REDACT_HEADERS = {"cookie", "authorization", "x-admin-key", "x-pow-token", "x-pow-solution"}
+
+
+# ── Silent decoy: serves upstream / contents to banned attackers ───────────
+# Cache also stores the upstream's HTTP status so the decoy mirrors it. A
+# previous design hard-coded 200 OK while serving the upstream's 404 body —
+# that status/content mismatch was a clean fingerprint for an agent to
+# detect blocked vs forwarded responses. We now match upstream verbatim.
+_decoy_cache = {"body": None, "ctype": None, "status": 200, "fetched_at": 0.0}
+_DECOY_TTL = 60.0  # cache the homepage for 60s
+
+# 1.5.4: upstream 404 mirror — blocked admin endpoints serve the upstream's
+# real 404 page so the gateway is indistinguishable from "this path doesn't
+# exist on the upstream". Refreshed hourly.
+_upstream_404_cache = {
+    "body":   None,
+    "ctype":  "text/plain; charset=utf-8",
+    "status": 404,
+    "fetched_at": 0.0,
+}
+_UPSTREAM_404_TTL = 3600  # 1 h
+
+
+async def _fetch_upstream_404() -> bool:
+    """GET a guaranteed-non-existent path from upstream and cache the
+    response. Returns True on success."""
+    probe = f"/__appsecgw-probe-{secrets.token_hex(8)}"
+    try:
+        timeout = ClientTimeout(total=5)
+        async with ClientSession(timeout=timeout) as session:
+            async with session.get(UPSTREAM + probe, ssl=False,
+                                    allow_redirects=False) as resp:
+                _upstream_404_cache["body"]   = await resp.read()
+                _upstream_404_cache["ctype"]  = resp.headers.get(
+                    "Content-Type", "text/html; charset=utf-8")
+                # Preserve actual upstream status (almost always 404; some
+                # apps return 200 with an error template — we mirror).
+                _upstream_404_cache["status"] = resp.status
+                _upstream_404_cache["fetched_at"] = _t.time()
+                return True
+    except Exception as e:
+        slog("upstream-404-fetch-failed", level="warn", error=str(e)[:120])
+        return False
+
+
+async def _periodic_404_refresh_loop():
+    """Refresh the cached upstream 404 hourly."""
+    while True:
+        try:
+            await asyncio.sleep(_UPSTREAM_404_TTL)
+            await _fetch_upstream_404()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            slog("upstream-404-refresh-error", level="warn", error=str(e)[:120])
+
+
+async def _serve_mirrored_404() -> web.Response:
+    """Serve a 404 that matches the upstream's 404 page. On first call (cache
+    cold) the upstream is fetched synchronously; on cache miss/expiry the
+    serving path uses whatever's cached and a background refresh kicks in."""
+    n = _t.time()
+    if (not _upstream_404_cache["body"]
+            or n - _upstream_404_cache["fetched_at"] > _UPSTREAM_404_TTL):
+        await _fetch_upstream_404()
+    body   = _upstream_404_cache["body"] or b"Not Found\n"
+    ctype  = _upstream_404_cache["ctype"]
+    status = _upstream_404_cache["status"] or 404
+    return web.Response(status=status, body=body, headers={
+        "Content-Type": ctype,
+        "Cache-Control": "no-store",
+    })
+
+
+_decoy_fetch_lock = asyncio.Lock()
+
+
+async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
+                                  track_key: str = None, sid: str = "",
+                                  fp: str = "", ja4: str = "",
+                                  request_id: str = ""):
+    """
+    Stealth response for blocked clients.
+    Returns upstream's `/` content with upstream's actual status code, so a
+    blocked request looks indistinguishable from a forwarded request that
+    happened to land on `/`. The block IS still recorded under the hybrid
+    identity (track_key), keyed on the cookie+fingerprint so a single bad
+    actor in a NAT pool doesn't poison all peers.
+    1.6.5 — also bumps the per-reason hit/latency telemetry consumed by
+    the Dashboard / Agents / Service surfaces.
+    """
+    import time
+    _decoy_t0 = time.perf_counter()
+    n = _t.time()
+    # N2: serialize the upstream fetch — many concurrent blocked requests
+    # mustn't fan out a thundering herd. Double-check inside the lock.
+    if not _decoy_cache["body"] or (n - _decoy_cache["fetched_at"]) > _DECOY_TTL:
+        async with _decoy_fetch_lock:
+            n = _t.time()
+            if not _decoy_cache["body"] or (n - _decoy_cache["fetched_at"]) > _DECOY_TTL:
+                try:
+                    async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+                        async with session.get(UPSTREAM + "/", allow_redirects=False) as resp:
+                            _decoy_cache["body"] = await resp.read()
+                            _decoy_cache["ctype"] = resp.headers.get("Content-Type", "text/html; charset=utf-8")
+                            _decoy_cache["status"] = resp.status
+                            _decoy_cache["fetched_at"] = n
+                except Exception:
+                    _decoy_cache["body"] = (
+                        b"<!doctype html><html><head><title>Welcome</title></head>"
+                        b"<body><h1>Welcome</h1><p>Service operational.</p></body></html>"
+                    )
+                    _decoy_cache["ctype"] = "text/html; charset=utf-8"
+                    _decoy_cache["status"] = 200
+                    _decoy_cache["fetched_at"] = n
+    decoy_status = int(_decoy_cache.get("status") or 200)
+    await record(ip, ua, path, decoy_status, reason, track_key=track_key, sid=sid,
+                 fp=fp, ja4=ja4, request_id=request_id)
+    # 1.6.5 — TARPIT mitigation: identities in the soft-challenge band
+    # (between SOFT_CHALLENGE_SCORE and RISK_BAN_THRESHOLD) get a
+    # configurable delay before the silent-decoy response. Burns attacker
+    # iteration time without committing to a ban. Skipped for the
+    # requester's first contact (no track_key yet) so legitimate cold
+    # browsers aren't tarpitted.
+    if TARPIT_ENABLED and TARPIT_DELAY_MS > 0 and track_key:
+        s = ip_state.get(track_key)
+        if s is not None:
+            try:
+                _decay_risk(s, _t.time())
+                if (SOFT_CHALLENGE_SCORE > 0 and
+                        SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD):
+                    await asyncio.sleep(TARPIT_DELAY_MS / 1000.0)
+            except Exception:
+                pass
+    # 1.6.5 — per-detector hit + latency telemetry. Drives the Dashboard
+    # "Top methods", Agents "rule inventory" and Service "detector latency"
+    # surfaces. Cheap (deque append + dict bump).
+    _detector_record(reason, (time.perf_counter() - _decoy_t0) * 1000.0)
+    if reason == "chal-required":
+        global _chal_required_count
+        _chal_required_count += 1
+    headers = {
+        "Content-Type": _decoy_cache["ctype"],
+        "Cache-Control": "no-store",
+    }
+    if request_id:
+        headers[_REQUEST_ID_HEADER] = request_id
+    return web.Response(
+        status=decoy_status,
+        body=_decoy_cache["body"],
+        headers=headers,
+    )
+
+
+# ── WebSocket + main proxy ─────────────────────────────────────────────────
+
+def _is_ws_upgrade(request: web.Request) -> bool:
+    return (request.headers.get("Upgrade", "").lower() == "websocket"
+            and "upgrade" in request.headers.get("Connection", "").lower())
+
+
+async def proxy_websocket(request: web.Request):
+    """Bidirectional WebSocket bridge to upstream. Headers/cookies/origin
+    rewrites match the HTTP path; aiohttp manages the Sec-WebSocket-* dance."""
+    from urllib.parse import urlparse
+    u = urlparse(UPSTREAM)
+    upstream_host = u.netloc
+    upstream_scheme_host = f"{u.scheme}://{u.netloc}"
+    ws_scheme = "wss" if u.scheme == "https" else "ws"
+    target = f"{ws_scheme}://{upstream_host}{_strip_admin_key_from_qs(request.path_qs)}"
+
+    fwd_headers = {}
+    for k, v in request.headers.items():
+        kl = k.lower()
+        # Hop-by-hop + WS-specific (aiohttp client sets its own).
+        if kl in HOP_BY_HOP_REQUEST or kl.startswith("sec-websocket"):
+            continue
+        if kl == "cookie":
+            cleaned = _strip_own_session_cookie(v)
+            if cleaned:
+                fwd_headers[k] = cleaned
+            continue
+        if kl == "origin":
+            fwd_headers[k] = upstream_scheme_host
+            continue
+        if kl == "referer":
+            try:
+                rp = urlparse(v)
+                if rp.scheme and rp.netloc:
+                    new_ref = upstream_scheme_host + (rp.path or "/")
+                    if rp.query:
+                        new_ref += "?" + rp.query
+                    fwd_headers[k] = new_ref
+                    continue
+            except Exception:
+                pass
+        fwd_headers[k] = v
+
+    gw_ip = get_ip(request)
+    fwd_headers["X-Forwarded-For"] = gw_ip
+    fwd_headers["X-Real-IP"] = gw_ip
+    fwd_headers["X-Forwarded-Proto"] = "https" if request.secure else "http"
+    if request.host:
+        fwd_headers["X-Forwarded-Host"] = request.host
+
+    # Sub-protocol negotiation (e.g. STOMP, GraphQL-WS).
+    proto_hdr = request.headers.get("Sec-WebSocket-Protocol", "")
+    protocols = tuple(p.strip() for p in proto_hdr.split(",") if p.strip())
+
+    ws_server = web.WebSocketResponse(protocols=protocols, heartbeat=30, autoping=True)
+    await ws_server.prepare(request)
+
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=None, sock_connect=10)) as session:
+            async with session.ws_connect(
+                target, headers=fwd_headers, protocols=protocols,
+                heartbeat=30, autoping=True, max_msg_size=4 * 1024 * 1024,
+            ) as ws_client:
+                async def srv_to_up():
+                    async for msg in ws_server:
+                        t = msg.type
+                        if t == aiohttp.WSMsgType.TEXT:
+                            await ws_client.send_str(msg.data)
+                        elif t == aiohttp.WSMsgType.BINARY:
+                            await ws_client.send_bytes(msg.data)
+                        elif t in (aiohttp.WSMsgType.CLOSE,
+                                   aiohttp.WSMsgType.CLOSING,
+                                   aiohttp.WSMsgType.CLOSED,
+                                   aiohttp.WSMsgType.ERROR):
+                            return
+                async def up_to_srv():
+                    async for msg in ws_client:
+                        t = msg.type
+                        if t == aiohttp.WSMsgType.TEXT:
+                            await ws_server.send_str(msg.data)
+                        elif t == aiohttp.WSMsgType.BINARY:
+                            await ws_server.send_bytes(msg.data)
+                        elif t in (aiohttp.WSMsgType.CLOSE,
+                                   aiohttp.WSMsgType.CLOSING,
+                                   aiohttp.WSMsgType.CLOSED,
+                                   aiohttp.WSMsgType.ERROR):
+                            return
+                done, pending = await asyncio.wait(
+                    [asyncio.create_task(srv_to_up()),
+                     asyncio.create_task(up_to_srv())],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+    except aiohttp.WSServerHandshakeError as e:
+        if not ws_server.closed:
+            await ws_server.close(code=1011,
+                                  message=f"upstream handshake: {e.status}".encode())
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        if not ws_server.closed:
+            await ws_server.close(code=1011, message=str(e)[:120].encode())
+    finally:
+        if not ws_server.closed:
+            await ws_server.close()
+    return ws_server
+
+
+async def proxy(request: web.Request):
+    # WebSocket upgrade — bridge to upstream.
+    if _is_ws_upgrade(request):
+        return await proxy_websocket(request)
+
+    # M2: method allowlist — block TRACE/CONNECT/anything unusual.
+    if request.method not in ALLOWED_METHODS:
+        return web.Response(status=405, text="method not allowed\n")
+
+    target = UPSTREAM + _strip_admin_key_from_qs(request.path_qs)
+
+    # C3 + H5: build forwarded headers from an allowlist-by-exclusion list.
+    # All hop-by-hop and source-spoof headers stripped. Cookie has our own
+    # SESSION_COOKIE removed before forwarding so signed token never leaves us.
+    fwd_headers = {}
+    for k, v in request.headers.items():
+        kl = k.lower()
+        if kl in HOP_BY_HOP_REQUEST:
+            continue
+        if kl == "cookie":
+            cleaned = _strip_own_session_cookie(v)
+            if cleaned:
+                fwd_headers[k] = cleaned
+            continue
+        fwd_headers[k] = v
+
+    # Re-assert source-IP semantics: replace any client-supplied XFF with our
+    # gateway-computed IP (defends against ACL bypass on backends that trust XFF).
+    gw_ip = get_ip(request)
+    fwd_headers["X-Forwarded-For"] = gw_ip
+    fwd_headers["X-Real-IP"] = gw_ip
+    fwd_headers["X-Forwarded-Proto"] = request.scheme or "http"
+    if request.host:
+        fwd_headers["X-Forwarded-Host"] = request.host
+
+    # Rewrite Origin / Referer / Host so upstream's CSRF / origin-validation
+    # sees its own canonical origin instead of the gateway's public hostname.
+    # Without this, upstream reverse-proxy aware backends (Keycloak, UFE) 403
+    # CORS preflight + auth POSTs because Origin != upstream's expected scheme://host.
+    upstream_origin = UPSTREAM.rstrip("/")
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(upstream_origin)
+        upstream_host = u.netloc
+        upstream_scheme_host = f"{u.scheme}://{u.netloc}"
+    except Exception:
+        upstream_host, upstream_scheme_host = "", upstream_origin
+
+    if upstream_host:
+        # Host header MUST match upstream's expected vhost or TLS SNI fails / wrong vhost served.
+        fwd_headers["Host"] = upstream_host
+        if "origin" in {k.lower() for k in fwd_headers}:
+            for k in list(fwd_headers):
+                if k.lower() == "origin":
+                    fwd_headers[k] = upstream_scheme_host
+        if "referer" in {k.lower() for k in fwd_headers}:
+            # Replace client-side scheme://host prefix with upstream's, keep the path
+            for k in list(fwd_headers):
+                if k.lower() == "referer":
+                    ref = fwd_headers[k]
+                    try:
+                        rp = urlparse(ref)
+                        if rp.scheme and rp.netloc:
+                            new_ref = upstream_scheme_host + (rp.path or "/")
+                            if rp.query:
+                                new_ref += "?" + rp.query
+                            fwd_headers[k] = new_ref
+                    except Exception:
+                        pass
+
+    # H6+v1.4: stream the body, bound it, AND apply a slowloris timeout.
+    # Reject if larger than UPSTREAM_MAX_BODY or if it takes longer than
+    # BODY_TIMEOUT to fully arrive.
+    # 1.6.5 — slow body now surfaces a discrete `slow-client` reason via
+    # the silent-decoy path, so the dashboards count it like any other
+    # detector and the operator sees how many requests stalled out.
+    body = None
+    if request.body_exists and request.method in ("POST", "PUT", "PATCH", "DELETE"):
+        try:
+            async def _drain():
+                chunks = []
+                total = 0
+                async for c in request.content.iter_any():
+                    total += len(c)
+                    if total > UPSTREAM_MAX_BODY:
+                        raise web.HTTPRequestEntityTooLarge(
+                            max_size=UPSTREAM_MAX_BODY, actual_size=total)
+                    chunks.append(c)
+                return b"".join(chunks) if chunks else None
+            body = await asyncio.wait_for(_drain(), timeout=BODY_TIMEOUT)
+        except asyncio.TimeoutError:
+            # 1.6.5 — bump risk + surface as 'slow-client'. Silent decoy
+            # so the attacker can't distinguish a slowloris-block from any
+            # other 200/404 path. The risk model decides whether to ban.
+            _ip = get_ip(request)
+            _ua = request.headers.get("User-Agent", "")
+            _tk = request.get("_track_key")
+            if _tk:
+                await update_risk_and_maybe_ban(_tk, "slow-client", _ip)
+            return await _silent_decoy_response(
+                _ip, _ua, request.path, "slow-client",
+                track_key=_tk,
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""),
+                ja4=_request_ja4(request),
+                request_id=request.get("_rid", ""))
+        except web.HTTPRequestEntityTooLarge:
+            return web.Response(status=413, text="payload too large\n")
+        except Exception:
+            return web.Response(status=400, text="bad request\n")
+
+    # v1.4 #4 — body pattern matching (extends Layer 3 to bodies).
+    # 1.6.1 — managed groups fire FIRST (per-group reason); the legacy
+    # blanket `suspicious-body` is the catch-all for anything not covered
+    # by a group OR when all groups are toggled off.
+    # 1.6.10 — body scans are 3rd-order (escalate-only): re-read the
+    # current score because protect() has already accumulated any 1st/2nd
+    # order hits for this request. ESCALATION_THRESHOLD=0 disables the gate.
+    _proxy_esc = (ESCALATION_THRESHOLD <= 0) or (
+        _escalation_score(request.get("_track_key") or request.remote or "0.0.0.0")  # nosec B104
+        >= ESCALATION_THRESHOLD
+    )
+    if body is not None and _proxy_esc:
+        client_ctype = request.headers.get("Content-Type", "")
+        _matched_group = match_body_group(body, client_ctype)
+        if _matched_group:
+            _reason = f"body-{_matched_group}"
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                _reason, get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, _reason,
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+        if is_suspicious_body(body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                "suspicious-body", get_ip(request))   # L1: was "suspicious-path"
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "suspicious-body",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+        # R7: also scan POST/PUT bodies for echoed canaries — LLM agents
+        # frequently splice prior-response text into the new prompt, which
+        # then becomes the request body.
+        if CANARY_ECHO_DETECTION:
+            echoed = _scan_request_for_canary(request, body_bytes=body)
+            if echoed:
+                await update_risk_and_maybe_ban(
+                    request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                    "canary-echo", get_ip(request))
+                return await _silent_decoy_response(
+                    get_ip(request), request.headers.get("User-Agent", ""),
+                    request.path, "canary-echo",
+                    track_key=request.get("_track_key"),
+                    sid=request.get("_sid", ""),
+                    fp=request.get("_fp", ""))
+
+        # v1.4 #6 — bot-trap form fields (multiple decoys since 1.5.4)
+        _trap_hit, _trap_field = _bot_trap_triggered(body, client_ctype)
+        if _trap_hit:
+            slog("bot-trap-hit", level="warn",
+                 rid=request.get("_rid", ""), field=_trap_field,
+                 ip=get_ip(request))
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                "bot-trap", get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "bot-trap",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+    try:
+        async with ClientSession(timeout=ClientTimeout(total=30)) as session:
+            async with session.request(
+                request.method, target, headers=fwd_headers, data=body,
+                allow_redirects=False,
+            ) as resp:
+                # H6: bound the upstream response body too — defends the proxy
+                # itself against a malicious upstream sending unbounded data.
+                # Stream-read in chunks so we don't truncate (a single
+                # `read(N)` returns only what's in the buffer at that moment).
+                chunks = []
+                total = 0
+                async for chunk in resp.content.iter_any():
+                    total += len(chunk)
+                    if total > UPSTREAM_MAX_RESP:
+                        return web.Response(status=502,
+                                            text="upstream response too large\n")
+                    chunks.append(chunk)
+                resp_body = b"".join(chunks)
+
+                # 1.6.2 — Tier C: outbound DLP scan. Looks for sensitive
+                # data leaving the upstream (PII / credentials / tokens).
+                # Records `dlp-<group>` events and optionally redacts
+                # matches before forwarding. Off by default (DLP_ENABLED=1).
+                if DLP_ENABLED:
+                    _dlp_ctype = resp.headers.get("Content-Type", "")
+                    _dlp_hits = dlp_scan(resp_body, _dlp_ctype)
+                    if _dlp_hits:
+                        _ip = get_ip(request)
+                        _ua = request.headers.get("User-Agent", "")
+                        _hit_groups = sorted({h[0] for h in _dlp_hits})
+                        for _grp in _hit_groups:
+                            await record(_ip, _ua, request.path, resp.status,
+                                         f"dlp-{_grp}",
+                                         track_key=request.get("_track_key"),
+                                         sid=request.get("_sid", ""),
+                                         fp=request.get("_fp", ""),
+                                         request_id=request.get("_rid", ""))
+                        if WEBHOOK_URL:
+                            asyncio.create_task(_post_webhook({
+                                "event":  "dlp_leak",
+                                "ts":     _t.time(),
+                                "ip":     _ip,
+                                "path":   request.path,
+                                "status": resp.status,
+                                "groups": _hit_groups,
+                                "count":  len(_dlp_hits),
+                                "redacted": DLP_REDACT,
+                            }))
+                        if DLP_REDACT:
+                            resp_body = dlp_redact(resp_body, _dlp_hits)
+
+                # L4: complete hop-by-hop response strip. Use a multidict so
+                # repeated headers (notably Set-Cookie) survive intact.
+                from multidict import CIMultiDict
+                response_headers = CIMultiDict()
+                from urllib.parse import urlparse as _urlparse
+                up_parsed = _urlparse(UPSTREAM)
+                client_scheme = (request.headers.get("X-Forwarded-Proto")
+                                 or ("https" if request.secure else "http"))
+                client_host = request.host or up_parsed.netloc
+
+                for k, v in resp.headers.items():
+                    kl = k.lower()
+                    if kl in HOP_BY_HOP_RESPONSE:
+                        continue
+
+                    # SSO flow #1: rewrite Location header in 3xx redirects
+                    # so the browser keeps coming back through the gateway.
+                    if kl == "location" and 300 <= resp.status < 400:
+                        try:
+                            lp = _urlparse(v)
+                            if lp.scheme and lp.netloc and lp.netloc == up_parsed.netloc:
+                                rewritten = f"{client_scheme}://{client_host}{lp.path or ''}"
+                                if lp.query:    rewritten += "?" + lp.query
+                                if lp.fragment: rewritten += "#" + lp.fragment
+                                v = rewritten
+                            else:
+                                # External IdP redirect (e.g. Keycloak). Rewrite
+                                # any embedded `scheme://upstream-host` references
+                                # (URL-encoded or not) inside the URL — typically
+                                # the redirect_uri / state OAuth2 params — so the
+                                # IdP sends the user back THROUGH the gateway.
+                                up_url_raw = f"{up_parsed.scheme}://{up_parsed.netloc}"
+                                gw_url_raw = f"{client_scheme}://{client_host}"
+                                from urllib.parse import quote as _q
+                                v = v.replace(up_url_raw, gw_url_raw)
+                                v = v.replace(_q(up_url_raw, safe=""),
+                                              _q(gw_url_raw, safe=""))
+                                v = v.replace(_q(up_url_raw, safe=":/"),
+                                              _q(gw_url_raw, safe=":/"))
+                        except Exception:
+                            pass
+
+                    # SSO flow #2: strip the Domain= attribute from Set-Cookie
+                    # — without this the browser rejects upstream-domain-scoped
+                    # cookies when it's actually visiting our gateway hostname.
+                    if kl == "set-cookie":
+                        v = re.sub(r";\s*[Dd]omain=[^;]+", "", v)
+
+                    response_headers.add(k, v)
+
+                response_headers["X-Proxy"] = "AppSecGW_1.7.0"
+
+                # Inject baseline security response headers on HTML responses
+                # (the upstream may not set them; we add them at the edge so
+                # browser-side defenses kick in).  Each header can be disabled
+                # individually via env or overridden by an upstream value
+                # already present in the response.
+                ctype = response_headers.get("Content-Type", "").lower().lstrip()
+                if ctype.startswith("text/html") and INJECT_SECURITY_HEADERS:
+                    for hk, hv in SECURITY_HEADERS.items():
+                        if hv and hk.lower() not in {k.lower() for k in response_headers}:
+                            response_headers[hk] = hv
+
+                # H7/N1: inject honey-links only when Content-Type begins with
+                # text/html (rejects `application/text/html-foo` substrings).
+                if ctype.startswith("text/html"):
+                    resp_body = _inject_honey_links(resp_body)
+                    # v1.4 #6 — bot-trap form fields (no-op when disabled).
+                    resp_body = _inject_bot_trap(resp_body)
+                    # R7: plant a unique canary so we can detect LLM-agent
+                    # echo behaviour on subsequent requests from this client.
+                    if CANARY_ECHO_DETECTION:
+                        canary = _new_canary()
+                        resp_body = _inject_canary(resp_body, canary)
+                        response_headers["X-Trace-Id"] = canary
+                        # 1.6.10: also plant in ETag + X-Request-Id so AI frameworks
+                        # that replay full response headers (LangChain, AutoGen) echo
+                        # the token back and trigger canary-echo detection.
+                        if HEADER_CANARY_ENABLED:
+                            response_headers["ETag"]        = f'"agw-c-{canary}"'
+                            response_headers["X-Request-Id"] = canary
+                    # 1.6.5 — BotD client-side detection (FingerprintJS).
+                    # No-op until BOTD_ENABLED=1. Token bound to the
+                    # requester's track_key so reports cannot be forged.
+                    if BOTD_ENABLED:
+                        resp_body = _inject_botd(resp_body,
+                                                  request.get("_track_key", ""))
+
+                # 1.6.10 — JSON API canary: inject a "_ref" token into JSON
+                # object responses. LLM agents that cache and replay API
+                # responses will echo the token back, triggering canary-echo.
+                elif ctype.startswith("application/json") and JSON_CANARY_ENABLED and CANARY_ECHO_DETECTION:
+                    try:
+                        _j = json.loads(resp_body)
+                        if isinstance(_j, dict):
+                            canary = _new_canary()
+                            _j["_ref"] = canary
+                            resp_body = json.dumps(_j).encode()
+                            response_headers["X-Trace-Id"] = canary
+                    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+                        pass
+
+                return web.Response(status=resp.status, body=resp_body, headers=response_headers)
+    except aiohttp.ClientError:
+        return web.Response(status=502, text="upstream error\n")
+    except asyncio.TimeoutError:
+        return web.Response(status=504, text="upstream timeout\n")
+
+
+# ── Debug endpoint ──────────────────────────────────────────────────────────
+
+async def debug_xff(request):
+    if not DEBUG_ENABLED:
+        return web.Response(status=404, text="not found\n")
+    safe_headers = {
+        k: ("<redacted>" if k.lower() in _REDACT_HEADERS else v)
+        for k, v in request.headers.items()
+    }
+    return web.json_response({
+        "remote": request.remote,
+        "xff_raw": request.headers.get("X-Forwarded-For"),
+        "trust_xff_mode": TRUST_XFF,
+        "computed_ip": get_ip(request),
+        "headers": safe_headers,
+    }, headers={"Cache-Control": "no-store"})
+
+
+# ── Admin / gateway endpoints ───────────────────────────────────────────────
+
+async def thresholds_endpoint(request: web.Request):
+    """Read-only enriched view of numeric thresholds: min/max/current + an
+    'impact_direction' hint so the UI can colour the value bar (red = looser,
+    green = stricter). 'lower-is-stricter' for ban triggers / burst caps;
+    'higher-is-stricter' for ban duration."""
+    SPECS = [
+        # name, min, max, impact_direction, description
+        ("RISK_BAN_THRESHOLD",     1,    1000,    "lower-is-stricter",
+         "Score that triggers a ban for a normal IP"),
+        ("RATE_LIMIT_BURST",       1,    500,     "lower-is-stricter",
+         "Per-identity token-bucket capacity"),
+        ("RATE_LIMIT_REFILL",      0.1,  100,     "lower-is-stricter",
+         "Per-identity tokens added per second"),
+        ("IP_BURST",               1,    500,     "lower-is-stricter",
+         "Per-socket-IP token-bucket capacity"),
+        ("IP_REFILL",              0.1,  100,     "lower-is-stricter",
+         "Per-socket-IP tokens added per second"),
+        ("HOSTILE_BAN_SECS",       60,   2678400, "higher-is-stricter",
+         "Ban duration (24 h default = 86400)"),
+        ("CANARY_TTL_S",           30,   86400,   "higher-is-stricter",
+         "Canary token validity window"),
+        ("GLOBAL_RPS_LIMIT",       0,    10000,   "lower-is-stricter",
+         "Global throttle (0 = disabled)"),
+        ("SESSION_CHURN_WINDOW_S", 5,    3600,    "higher-is-stricter",
+         "Window for session-rotation detector"),
+        ("SESSION_CHURN_MAX",      1,    100,     "lower-is-stricter",
+         "Max chal cookies per fingerprint per window"),
+        ("JA4_AUTODENY_THRESHOLD", 1,    100,     "lower-is-stricter",
+         "Distinct bans on a JA4 before auto-deny"),
+    ]
+    g = globals()
+    out = []
+    for name, lo, hi, direction, desc in SPECS:
+        if name not in g:
+            continue
+        cur = g[name]
+        # Normalised position 0.0..1.0 in [lo, hi]
+        try:
+            pos = max(0.0, min(1.0, (float(cur) - lo) / (hi - lo))) if hi > lo else 0.5
+        except (TypeError, ValueError):
+            pos = 0.5
+        out.append({
+            "name":             name,
+            "current":          cur,
+            "min":              lo,
+            "max":              hi,
+            "position":         round(pos, 4),
+            "impact_direction": direction,    # for UI colour gradient
+            "description":      desc,
+        })
+    return web.json_response({"thresholds": out},
+                              headers={"Cache-Control": "no-store"})
+
+
+async def external_endpoint(request: web.Request):
+    """Status + cost telemetry of every external integration. Read-only —
+    activation is via container env (the secrets must NOT be hot-reloadable
+    via /__config because that would let an admin-key holder enable IP
+    intel keys arbitrarily and burn quota)."""
+    integrations = []
+
+    # 1. Cloudflare Turnstile — already wired
+    integrations.append({
+        "name":         "Cloudflare Turnstile",
+        "purpose":      "Real-browser challenge minted by Cloudflare's siteverify. The only chal-cookie path that's not client-computable.",
+        "vendor_url":   "https://www.cloudflare.com/products/turnstile/",
+        "docs_url":     "https://developers.cloudflare.com/turnstile/",
+        "trigger":      "Shown only when identity's risk_score >= TURNSTILE_RISK_THRESHOLD (default = mid-orange band). Below that, fresh clients fall through to cookie auto-mint.",
+        "weight":       "0 risk added directly — solving the challenge mints the chal cookie that bypasses the gate. Failing it = silent decoy.",
+        "data_egress":  "Each verify POSTs the user's token + remote IP to challenges.cloudflare.com/turnstile/v0/siteverify",
+        "status":       "configured" if TURNSTILE_ENABLED else "disabled",
+        "enabled":      TURNSTILE_ENABLED,
+        # 1.6.0 — distinguish "creds present, currently off" (toggleable from
+        # the dashboard) from "creds missing" (cannot enable). Without this
+        # the controls switch greys out the moment an operator turns it off.
+        "credentials_present": _TURNSTILE_CONFIGURED,
+        "envs_needed":  ["TURNSTILE_SITEKEY", "TURNSTILE_SECRET", "JS_CHALLENGE=1"],
+        "free_tier":    "unlimited",
+        "cost_typical_ms":  150.0,    # CF challenge widget round-trip
+        "cost_p99_ms":      400.0,
+        "cost_cached_ms":   0.0,      # cookie reuse — no per-request call
+        "telemetry": {
+            "active": JS_CHALLENGE and TURNSTILE_ENABLED,
+        },
+    })
+
+    # 2. AbuseIPDB
+    integrations.append({
+        "name":         "AbuseIPDB",
+        "purpose":      "Crowdsourced IP reputation. High score -> +50 risk; medium -> +15.",
+        "vendor_url":   "https://www.abuseipdb.com/",
+        "docs_url":     "https://docs.abuseipdb.com/",
+        "trigger":      "Every request — looks up the source IP. SQLite-cached for 6h to stay under the 1000 req/day free quota.",
+        "weight":       f"abuseipdb-high (>={ABUSEIPDB_HIGH_THRESHOLD}) = +50 risk · abuseipdb-med (>={ABUSEIPDB_MED_THRESHOLD}) = +15 risk",
+        "data_egress":  "Each uncached lookup sends the IP to api.abuseipdb.com/api/v2/check",
+        "status":       "configured" if ABUSEIPDB_ENABLED else "disabled",
+        "enabled":      ABUSEIPDB_ENABLED,
+        "credentials_present": bool(ABUSEIPDB_KEY),
+        "envs_needed":  ["ABUSEIPDB_KEY"],
+        "free_tier":    "1000 lookups/day",
+        "cost_typical_ms":  150.0,
+        "cost_p99_ms":      450.0,
+        "cost_cached_ms":   0.3,
+        "telemetry": dict(_abuseipdb_stats, **{
+            "cache_hit_rate": (
+                round(100.0 * _abuseipdb_stats["lookups_cached"] /
+                      max(1, _abuseipdb_stats["lookups_total"]), 1)),
+            "thresholds": {
+                "high": ABUSEIPDB_HIGH_THRESHOLD,
+                "med":  ABUSEIPDB_MED_THRESHOLD,
+            },
+            "cache_hours": ABUSEIPDB_CACHE_HOURS,
+        }),
+    })
+
+    # 3. CrowdSec
+    integrations.append({
+        "name":         "CrowdSec",
+        "purpose":      "Community blocklist — IP listed in CrowdSec LAPI hits +70 risk (one-shot ban for normal IPs).",
+        "vendor_url":   "https://www.crowdsec.net/",
+        "docs_url":     "https://docs.crowdsec.net/docs/local_api/intro",
+        "trigger":      "Every request — queries the local LAPI for an active decision on the source IP. In-process cached for CROWDSEC_CACHE_SECS (default 60s).",
+        "weight":       "crowdsec-banned = +70 risk (above the 50 ban threshold -> instant 24h hostile pool)",
+        "data_egress":  "Outbound to your self-hosted LAPI only — no internet calls.",
+        "status":       "configured" if CROWDSEC_ENABLED else "disabled",
+        "enabled":      CROWDSEC_ENABLED,
+        "credentials_present": bool(CROWDSEC_LAPI_URL and CROWDSEC_API_KEY),
+        "envs_needed":  ["CROWDSEC_LAPI_URL", "CROWDSEC_API_KEY"],
+        "free_tier":    "open source (self-hosted LAPI)",
+        "cost_typical_ms":  5.0,
+        "cost_p99_ms":      20.0,
+        "cost_cached_ms":   0.2,
+        "telemetry": dict(_crowdsec_stats, **{
+            "cache_hit_rate": (
+                round(100.0 * _crowdsec_stats["lookups_cached"] /
+                      max(1, _crowdsec_stats["lookups_total"]), 1)),
+            "cache_secs": CROWDSEC_CACHE_SECS,
+            "lapi_url": CROWDSEC_LAPI_URL or "",
+        }),
+    })
+
+    # 4. MaxMind GeoLite2 ASN
+    integrations.append({
+        "name":         "MaxMind GeoLite2 ASN",
+        "purpose":      "Local ASN tagging — IPs from hosting providers get +5 risk (soft signal).",
+        "vendor_url":   "https://www.maxmind.com/",
+        "docs_url":     "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data",
+        "trigger":      "Every request — looks up the ASN of the source IP in the local mmdb. Pure-local, ~0.1ms.",
+        "weight":       "asn-hosting = +5 risk (soft — just a hint that the IP isn't residential)",
+        "data_egress":  "None. Reads from /data/GeoLite2-ASN.mmdb. Refresh script downloads from MaxMind monthly via cron.",
+        "status":       ("configured" if MAXMIND_ENABLED
+                         else ("missing-db" if not os.path.exists(MAXMIND_ASN_DB_PATH)
+                               else "disabled")),
+        "enabled":      MAXMIND_ENABLED,
+        "credentials_present": os.path.exists(MAXMIND_ASN_DB_PATH),
+        "envs_needed":  ["MAXMIND_ASN_DB_PATH (DB file at /data/GeoLite2-ASN.mmdb)"],
+        "free_tier":    "free DB download — monthly refresh",
+        "cost_typical_ms":  0.1,
+        "cost_p99_ms":      0.5,
+        "cost_cached_ms":   0.1,
+        "telemetry": dict(_asn_stats, **{
+            "db_path": MAXMIND_ASN_DB_PATH,
+            "hosting_keywords": list(HOSTING_ASN_KEYWORDS),
+        }),
+    })
+
+    # 5. Anubis-mode — in-process strict PoW gate (1.5.4)
+    eff_diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
+    integrations.append({
+        "name":         "Anubis-mode (PoW)",
+        "purpose":      "In-process strict PoW gate inspired by github.com/TecharoHQ/anubis. When enabled, raises PoW difficulty by ANUBIS_DIFFICULTY_BOOST (each +1 ~= 16x harder). Scrapers / LLM agents tank, humans pass after one round trip.",
+        "vendor_url":   "https://github.com/TecharoHQ/anubis",
+        "docs_url":     "https://anubis.techaro.lol/docs",
+        "trigger":      f"When ANUBIS_ENABLED=1, the existing PoW challenges (/__pow + verify) require {eff_diff} leading hex zeros (base {POW_DIFFICULTY} + boost {ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0}).",
+        "weight":       "0 risk added — failing PoW returns 402 with a fresh challenge; no ban accrual.",
+        "data_egress":  "None. Pure SHA-256 challenge / verify in-process.",
+        "status":       "configured",   # always available — no external service
+        "enabled":      ANUBIS_ENABLED,
+        "credentials_present": True,
+        "envs_needed":  ["ANUBIS_ENABLED=1", "ANUBIS_DIFFICULTY_BOOST (0..6)"],
+        "free_tier":    "in-process — no external service",
+        "cost_typical_ms":  0.05,    # SHA-256 verify on cookie path
+        "cost_p99_ms":      0.5,
+        "cost_cached_ms":   0.0,
+        "telemetry": {
+            "base_difficulty":   POW_DIFFICULTY,
+            "boost":             ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0,
+            "effective_diff":    eff_diff,
+            "leading_zeros_req": eff_diff,
+            "active":            ANUBIS_ENABLED,
+        },
+    })
+
+    # 6. SQLite event store — always present (the gateway can't run without it)
+    try:
+        sqlite_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    except Exception:
+        sqlite_size = 0
+    sqlite_rows = 0
+    try:
+        if os.path.exists(DB_PATH):
+            _c = sqlite3.connect(DB_PATH)
+            sqlite_rows = int(_c.execute("SELECT COUNT(*) FROM events").fetchone()[0])
+            _c.close()
+    except Exception:
+        pass
+    integrations.append({
+        "name":         "SQLite event store",
+        "purpose":      "Default event store. Single-file zero-deps; correct for <=100 RPS sustained.",
+        "vendor_url":   "https://www.sqlite.org/",
+        "docs_url":     "https://www.sqlite.org/docs.html",
+        "trigger":      "Every request — events table append + per-client snapshot upsert. WAL mode.",
+        "weight":       "0 risk added — pure persistence.",
+        "data_egress":  "None. Lives on the /data Docker volume.",
+        "status":       "configured" if DB_BACKEND == "sqlite" else "disabled",
+        "enabled":      DB_BACKEND == "sqlite",
+        "credentials_present": True,                   # always available
+        "envs_needed":  ["DB_PATH (default /data/antibot.db)"],
+        "free_tier":    "free / open source",
+        "cost_typical_ms":  0.05,
+        "cost_p99_ms":      1.0,
+        "cost_cached_ms":   0.0,
+        "telemetry": {
+            "active":      DB_BACKEND == "sqlite",
+            "endpoint":    DB_PATH,
+            "size_bytes":  sqlite_size,
+            "events_rows": sqlite_rows,
+        },
+    })
+
+    # 7. PostgreSQL / TimescaleDB event store — opt-in via DB_BACKEND=postgres
+    pg_status = ("configured" if (DB_BACKEND == "postgres" and _postgres_available)
+                 else ("disabled" if DB_BACKEND != "postgres"
+                        else "missing-driver"))
+    pg_telemetry = {"active": DB_BACKEND == "postgres" and _postgres_available}
+    if DB_BACKEND == "postgres" and _postgres_available:
+        size = pg_db_size()
+        if size.get("ok"):
+            pg_telemetry["size_bytes"]  = size["db_bytes"]
+            pg_telemetry["events_rows"] = size["events_rows"]
+    if POSTGRES_DSN:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(POSTGRES_DSN)
+            pg_telemetry["endpoint"] = (
+                f"{p.scheme}://{p.username or '<user>'}:****@"
+                f"{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}"
+                f"{p.path or ''}")
+        except Exception:
+            pg_telemetry["endpoint"] = "(redacted)"
+    integrations.append({
+        "name":         "PostgreSQL / TimescaleDB",
+        "purpose":      "High-volume event store backed by Postgres + the TimescaleDB extension (compression + continuous aggregates + hypertable). Required for >100 RPS sustained or multi-instance fleet mode.",
+        "vendor_url":   "https://www.timescale.com/",
+        "docs_url":     "https://docs.timescale.com/",
+        "trigger":      "Every request when DB_BACKEND=postgres — events row inserted via psycopg, fire-and-forget.",
+        "weight":       "0 risk added — pure persistence.",
+        "data_egress":  "Outbound to your Postgres / Timescale instance (POSTGRES_DSN).",
+        "status":       pg_status,
+        "enabled":      DB_BACKEND == "postgres" and _postgres_available,
+        "credentials_present": bool(POSTGRES_DSN),
+        "envs_needed":  ["DB_BACKEND=postgres", "POSTGRES_DSN"],
+        "free_tier":    "free / open source (self-hosted)",
+        "cost_typical_ms":  2.0,
+        "cost_p99_ms":      10.0,
+        "cost_cached_ms":   0.0,
+        "telemetry": pg_telemetry,
+    })
+
+    return web.json_response({"integrations": integrations},
+                              headers={"Cache-Control": "no-store"})
+
+
+# 1.6.10 — Integration live health-check.
+# GET /secured/integration-check?name=<name>
+# Returns {ok, latency_ms, detail} without side effects.
+async def integration_check_endpoint(request: web.Request):
+    name = (request.rel_url.query.get("name") or "").strip()
+    import time as _chk_time
+    async def _check() -> dict:
+        if name == "AbuseIPDB":
+            if not ABUSEIPDB_ENABLED:
+                return {"ok": False, "detail": "not configured — ABUSEIPDB_KEY missing"}
+            t0 = _chk_time.monotonic()
+            try:
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as sess:
+                    async with sess.get(
+                        "https://api.abuseipdb.com/api/v2/check",
+                        params={"ipAddress": "127.0.0.1", "maxAgeInDays": "90"},
+                        headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json"},
+                        timeout=_aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        ok = resp.status in (200, 422)   # 422 = valid key, invalid IP ok
+                        return {"ok": ok, "detail": f"HTTP {resp.status}"}
+            except Exception as e:
+                return {"ok": False, "detail": str(e)}
+            finally:
+                pass
+        if name == "CrowdSec":
+            if not CROWDSEC_ENABLED:
+                return {"ok": False, "detail": "not configured — CROWDSEC_LAPI_URL / CROWDSEC_API_KEY missing"}
+            t0 = _chk_time.monotonic()
+            try:
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as sess:
+                    async with sess.get(
+                        CROWDSEC_LAPI_URL.rstrip("/") + "/v1/decisions",
+                        params={"ip": "127.0.0.1"},
+                        headers={"X-Api-Key": CROWDSEC_API_KEY},
+                        timeout=_aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        ok = resp.status in (200, 204)
+                        return {"ok": ok, "detail": f"HTTP {resp.status}"}
+            except Exception as e:
+                return {"ok": False, "detail": str(e)}
+            finally:
+                pass
+        if name in ("MaxMind GeoLite2 ASN", "MaxMind"):
+            if _asn_reader is None:
+                path = MAXMIND_ASN_DB_PATH
+                exists = os.path.exists(path)
+                return {"ok": False, "detail": f"reader not loaded — DB {'missing' if not exists else 'exists but not initialised'}"}
+            return {"ok": True, "detail": f"reader loaded · {MAXMIND_ASN_DB_PATH}"}
+        if name in ("Cloudflare Turnstile", "Turnstile"):
+            return {"ok": _TURNSTILE_CONFIGURED,
+                    "detail": "credentials present" if _TURNSTILE_CONFIGURED else "TURNSTILE_SITEKEY / TURNSTILE_SECRET not configured"}
+        if name in ("SQLite event store", "SQLite"):
+            exists = os.path.exists(DB_PATH)
+            return {"ok": exists, "detail": f"{DB_PATH} {'found' if exists else 'not found'}"}
+        if name in ("PostgreSQL / TimescaleDB", "PostgreSQL"):
+            if not POSTGRES_DSN:
+                return {"ok": False, "detail": "POSTGRES_DSN not set"}
+            pg = _postgres_load_module()
+            if not pg:
+                return {"ok": False, "detail": "psycopg driver not installed"}
+            t0 = _chk_time.monotonic()
+            try:
+                with pg.connect(POSTGRES_DSN, connect_timeout=5) as conn:
+                    conn.execute("SELECT 1")
+                return {"ok": True, "detail": f"connected in {(_chk_time.monotonic()-t0)*1000:.0f} ms"}
+            except Exception as e:
+                return {"ok": False, "detail": str(e)}
+        return {"ok": None, "detail": f"no health-check defined for '{name}'"}
+
+    t_start = _chk_time.monotonic()
+    result = await _check()
+    result["latency_ms"] = round((_chk_time.monotonic() - t_start) * 1000, 1)
+    return web.json_response(result, headers={"Cache-Control": "no-store"})
+
+
+# 1.6.10 — Signal activation-order API.
+# GET  /secured/signal-orders  -> {orders: {sig: n, ...}, gw_id: "..."}
+# POST /secured/signal-orders  body: {signal: "...", order: 1|2|3}
+async def signal_orders_endpoint(request: web.Request):
+    gw_id = _gw_local_id()
+    if request.method == "GET":
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = conn.execute(
+                "SELECT signal, activation_order, updated_ts, updated_by "
+                "FROM signal_orders WHERE gw_id = ?", (gw_id,)
+            ).fetchall()
+            conn.close()
+        except Exception:
+            rows = []
+        orders = {sig: {"order": n, "updated_ts": ts, "updated_by": by}
+                  for sig, n, ts, by in rows}
+        return web.json_response(
+            {"orders": orders, "gw_id": gw_id},
+            headers={"Cache-Control": "no-store"})
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        sig   = (body or {}).get("signal", "")
+        order = (body or {}).get("order")
+        if not sig:
+            return web.json_response({"ok": False, "error": "signal required"}, status=400)
+        if order not in (1, 2, 3):
+            return web.json_response({"ok": False, "error": "order must be 1, 2 or 3"}, status=400)
+        actor = request.headers.get("X-Admin-User", "dashboard")
+        _save_signal_order(sig, order, actor)
+        return web.json_response(
+            {"ok": True, "signal": sig, "order": order, "gw_id": gw_id},
+            headers={"Cache-Control": "no-store"})
+    return web.Response(status=405)
+
+
+async def admin_ips_endpoint(request: web.Request):
+    """Admin: read / add / remove entries from the admin-IP allowlist.
+
+      GET    /__admin-ips?key=...
+                 -> {entries: [{cidr, description, source, added_ts}, ...]}
+      POST   /__admin-ips?key=...   body: {cidr, description}
+                 -> {ok, message, entries}
+      PATCH  /__admin-ips?key=...   body: {cidr, description}
+                 -> {ok, message, entries}    (in-place description update)
+      DELETE /__admin-ips?key=...&cidr=...
+                 -> {ok, message, entries}
+
+    Persisted to the `admin_ips` table; hot-reloaded into ADMIN_ALLOWED_NETS.
+    Env-seeded entries are persisted on first boot and CAN be removed via
+    this endpoint (DB authoritative after first boot).
+    """
+    if request.method == "GET":
+        return web.json_response(
+            {"entries": list(ADMIN_ALLOWED_ENTRIES),
+             "env_seed": ADMIN_ENV_SEED},
+            headers={"Cache-Control": "no-store"})
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cidr = (body or {}).get("cidr", "")
+        note = (body or {}).get("note", "")
+        description = (body or {}).get("description", "")
+        ok, msg = await admin_ip_add(cidr, note, source="manual",
+                                      description=description)
+        return web.json_response(
+            {"ok": ok, "message": msg, "entries": list(ADMIN_ALLOWED_ENTRIES)},
+            status=200 if ok else 400,
+            headers={"Cache-Control": "no-store"})
+    if request.method == "PATCH":
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        cidr = (body or {}).get("cidr", "")
+        description = (body or {}).get("description", "")
+        ok, msg = await admin_ip_update_description(cidr, description)
+        return web.json_response(
+            {"ok": ok, "message": msg, "entries": list(ADMIN_ALLOWED_ENTRIES)},
+            status=200 if ok else 400,
+            headers={"Cache-Control": "no-store"})
+    if request.method == "DELETE":
+        cidr = request.query.get("cidr", "")
+        ok, msg = await admin_ip_remove(cidr)
+        return web.json_response(
+            {"ok": ok, "message": msg, "entries": list(ADMIN_ALLOWED_ENTRIES)},
+            status=200 if ok else 400,
+            headers={"Cache-Control": "no-store"})
+    return web.json_response({"error": "method not allowed"}, status=405)
+
+
+async def ban_endpoint(request: web.Request):
+    """Admin: ban a single identity (track-key) or all identities behind an
+    IP for `secs` seconds. Mirror of /__unban so the controls/agents
+    dashboards can drive bans without restarting or rewriting state.
+
+    Query params:
+      ?id=<identity>   — ban one identity (track_key)
+      ?ip=<ip>         — ban every identity whose last_ip matches
+      &secs=<int>      — ban duration (default HOSTILE_BAN_SECS, max 31 d)
+      &reason=<text>   — recorded in audit log + risk-score reasons
+    """
+    target_id = request.query.get("id")
+    target_ip = request.query.get("ip")
+    try:
+        secs = int(request.query.get("secs", str(HOSTILE_BAN_SECS)))
+    except ValueError:
+        secs = HOSTILE_BAN_SECS
+    secs = max(60, min(secs, 31 * 86400))
+    reason = (request.query.get("reason", "manual-ban") or "manual-ban")[:64]
+    if not target_id and not target_ip:
+        return web.json_response({"error": "provide id= or ip="},
+                                  status=400,
+                                  headers={"Cache-Control": "no-store"})
+    banned_count = 0
+    async with state_lock:
+        n = now()
+        for k, s in ip_state.items():
+            if (target_id and k == target_id) or (
+                    target_ip and s.last_ip == target_ip):
+                s.banned_until = n + secs
+                banned_count += 1
+    # Propagate to shared store + write to DB.
+    ts = _t.time()
+    if target_id and banned_count:
+        await _shared_ban_set(target_id, ts + secs, reason)
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("ban", (target_id, ts + secs, reason, ts)))
+            except asyncio.QueueFull:
+                pass
+    elif target_ip and banned_count:
+        # ip-scoped: write a row per matched identity. Best effort.
+        async with state_lock:
+            matched_ids = [k for k, s in ip_state.items()
+                           if s.last_ip == target_ip]
+        for tk in matched_ids:
+            await _shared_ban_set(tk, ts + secs, reason)
+            if db_queue is not None:
+                try:
+                    db_queue.put_nowait(("ban", (tk, ts + secs, reason, ts)))
+                except asyncio.QueueFull:
+                    pass
+    slog("manual_ban", level="warn", rid=request.get("_rid", ""),
+         id=target_id or "", ip=target_ip or "", secs=secs,
+         reason=reason, count=banned_count)
+    return web.json_response(
+        {"banned": banned_count, "secs": secs, "reason": reason,
+         "scope": ("id=" + target_id if target_id else "ip=" + target_ip)},
+        headers={"Cache-Control": "no-store"})
+
+
+async def secrets_endpoint(request: web.Request):
+    """1.5.5 — runtime integration secret management (admin-gated).
+
+      GET   /__secrets?key=...  -> write-only status (which keys are
+                                 configured, never the values themselves)
+      POST  /__secrets?key=...   body: JSON object with any subset of:
+                                {TURNSTILE_SITEKEY, TURNSTILE_SECRET,
+                                 ABUSEIPDB_KEY, CROWDSEC_LAPI_URL,
+                                 CROWDSEC_LAPI_KEY, MAXMIND_LICENSE_KEY}
+      DELETE /__secrets?key=...&name=KEY  -> clear one secret + revert to
+                                 env (which may also be empty).
+
+    Persists to `secrets_kv`. Re-applies dependent state immediately
+    (e.g. flips ABUSEIPDB_ENABLED true when ABUSEIPDB_KEY is set).
+    Env vars STILL win at boot — the DB value is only used when env is
+    empty for that key.
+
+    The values are NEVER returned via GET — operators must read them from
+    the SQLite DB directly if they need to recover one. That keeps the
+    dashboard non-leaky on a captured admin session.
+    """
+    g = globals()
+    if request.method == "GET":
+        out = {}
+        for public_name, (global_name, env_name) in _SECRET_KEYS.items():
+            cur = g.get(global_name) or ""
+            out[public_name] = {
+                "configured": bool(cur),
+                "source":     ("env" if os.environ.get(env_name, "").strip()
+                               else ("db" if cur else "unset")),
+                "length":     len(cur),
+            }
+        return web.json_response(
+            {"secrets": out,
+             "integration_state": {
+                 "_TURNSTILE_CONFIGURED": _TURNSTILE_CONFIGURED,
+                 "TURNSTILE_ENABLED":     TURNSTILE_ENABLED,
+                 "ABUSEIPDB_ENABLED":     ABUSEIPDB_ENABLED,
+                 "CROWDSEC_ENABLED":      CROWDSEC_ENABLED,
+                 "MAXMIND_ENABLED":       MAXMIND_ENABLED,
+                 "MAXMIND_CITY_ENABLED":  MAXMIND_CITY_ENABLED,
+             }},
+            headers={"Cache-Control": "no-store"})
+
+    if request.method == "DELETE":
+        public_name = request.query.get("name", "")
+        if public_name not in _SECRET_KEYS:
+            return web.json_response({"error": "unknown secret name"},
+                                      status=400, headers={"Cache-Control":"no-store"})
+        global_name, env_name = _SECRET_KEYS[public_name]
+        # Clear DB
+        if db_queue is not None:
+            try: db_queue.put_nowait(("del_secret", (public_name,)))
+            except asyncio.QueueFull: pass
+        # Revert global to env (or empty)
+        g[global_name] = os.environ.get(env_name, "").strip()
+        _refresh_integration_state()
+        # Special: license-key clear -> don't re-fetch on next request
+        if public_name == "MAXMIND_LICENSE_KEY":
+            pass   # mmdbs persist on disk; nothing to undo
+        slog("secret_deleted", level="warn", rid=request.get("_rid", ""),
+             name=public_name)
+        return web.json_response(
+            {"ok": True, "deleted": public_name, "now_source": "env" if g[global_name] else "unset"},
+            headers={"Cache-Control": "no-store"})
+
+    if request.method != "POST":
+        return web.json_response({"error": "method not allowed"}, status=405)
+
+    try:
+        raw = await asyncio.wait_for(request.content.read(64 * 1024),
+                                      timeout=BODY_TIMEOUT)
+        updates = json.loads(raw.decode("utf-8") or "{}")
+        if not isinstance(updates, dict):
+            raise ValueError("body must be a JSON object")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"},
+                                  status=400, headers={"Cache-Control":"no-store"})
+
+    applied, rejected = {}, {}
+    for k, raw_v in updates.items():
+        if k not in _SECRET_KEYS:
+            rejected[k] = "unknown secret name"
+            continue
+        v = (str(raw_v) if raw_v is not None else "").strip()
+        if v == "":
+            rejected[k] = "empty value (use DELETE to clear)"
+            continue
+        if len(v) > 1024:
+            rejected[k] = "value too long (max 1024 bytes)"
+            continue
+        global_name, _env_name = _SECRET_KEYS[k]
+        # POSTGRES_DSN sentinel: if the password component is "****", substitute
+        # the password from the currently stored DSN so callers can update
+        # host/port/db/user without re-entering the password.
+        if k == "POSTGRES_DSN" and ":****@" in v:
+            try:
+                from urllib.parse import urlparse as _up
+                _cur_pass = (_up(g.get("POSTGRES_DSN") or "")).password or ""
+                if _cur_pass:
+                    v = v.replace(":****@", f":{_cur_pass}@", 1)
+            except Exception:
+                pass
+        g[global_name] = v
+        applied[k] = {"length": len(v)}
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("set_secret", (k, v, _t.time())))
+            except asyncio.QueueFull:
+                pass
+
+    if applied:
+        _refresh_integration_state()
+        # If MaxMind license was newly set, kick off a fetch (returns fast;
+        # the actual download runs async in the executor).
+        if "MAXMIND_LICENSE_KEY" in applied:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(None, _maxmind_auto_fetch)
+            except Exception:
+                pass
+        slog("secrets_changed", level="warn", rid=request.get("_rid", ""),
+             applied=list(applied.keys()),
+             rejected=list(rejected.keys()))
+
+    return web.json_response({
+        "applied":  applied, "rejected": rejected,
+        "integration_state": {
+            "_TURNSTILE_CONFIGURED": _TURNSTILE_CONFIGURED,
+            "TURNSTILE_ENABLED":     TURNSTILE_ENABLED,
+            "ABUSEIPDB_ENABLED":     ABUSEIPDB_ENABLED,
+            "CROWDSEC_ENABLED":      CROWDSEC_ENABLED,
+            "MAXMIND_ENABLED":       MAXMIND_ENABLED,
+        },
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def rotate_keys_endpoint(request: web.Request):
+    """1.4.5: rotate the SESSION_KEY (and optionally POW key) atomically.
+
+    Every cookie HMAC-signed under the old key fails verification immediately
+    after this returns. Useful after upgrading the gateway, after an
+    incident, or on a schedule via cron. The new key is persisted to disk
+    (`.session_key` / `.pow_key`) so subsequent restarts pick it up.
+
+    Query params:
+      ?scope=session  (default) — rotate SESSION_KEY only (chal + session
+                                  cookies invalidated; PoW challenges still
+                                  validate against existing pow key).
+      ?scope=pow                — rotate POW_HMAC_KEY only (PoW challenges
+                                  in flight invalidated).
+      ?scope=all                — rotate both.
+    """
+    global SESSION_KEY, POW_HMAC_KEY
+    scope = request.query.get("scope", "session").lower()
+    rotated = []
+    if scope in ("session", "all"):
+        new_sess = secrets.token_bytes(32)
+        try:
+            with open(_SESS_KEY_FILE, "w") as f:
+                f.write(new_sess.hex())
+            try:
+                os.chmod(_SESS_KEY_FILE, 0o600)
+            except OSError:
+                pass
+        except OSError as e:
+            return web.json_response(
+                {"error": f"persist failed: {e}"}, status=500,
+                headers={"Cache-Control": "no-store"})
+        SESSION_KEY = new_sess
+        rotated.append("session")
+    if scope in ("pow", "all"):
+        new_pow = secrets.token_bytes(32)
+        try:
+            with open(_POW_KEY_FILE, "w") as f:
+                f.write(new_pow.hex())
+            try:
+                os.chmod(_POW_KEY_FILE, 0o600)
+            except OSError:
+                pass
+        except OSError as e:
+            return web.json_response(
+                {"error": f"persist failed: {e}"}, status=500,
+                headers={"Cache-Control": "no-store"})
+        POW_HMAC_KEY = new_pow
+        rotated.append("pow")
+    if not rotated:
+        return web.json_response(
+            {"error": "scope must be one of: session, pow, all"},
+            status=400, headers={"Cache-Control": "no-store"})
+    print(f"[rotate-keys] rotated: {','.join(rotated)} "
+          f"(every cookie issued before this point now fails HMAC)",
+          flush=True)
+    return web.json_response(
+        {"rotated": rotated,
+         "note": "all chal/session cookies issued before this call now fail "
+                 "HMAC verification. The next legitimate visitor will be "
+                 "issued a fresh cookie."},
+        headers={"Cache-Control": "no-store"})
+
+
+# ── 1.4.7 — hot-reload admin endpoint ─────────────────────────────────────
+# A small whitelist of runtime knobs that ops can read or update without
+# bouncing the container. Each entry is (parser, validator). Anything not
+# on this list is rejected explicitly so the endpoint can never be used to
+# clobber the SESSION_KEY, alter the upstream URL, or otherwise reach into
+# state that is intentionally bound at startup.
+# NOTE: _to_bool / _to_path_list / _to_ja4_set etc. come from integrations.*
+
+# name -> (parser, optional validator returning bool)
+_HOT_RELOAD_KNOBS = {
+    # Toggles (booleans)
+    "JS_CHALLENGE":            (_to_bool, None),
+    "BOT_TRAP_FORMS":          (_to_bool, None),
+    "BODY_PATTERN_MATCH":      (_to_bool, None),
+    "CANARY_ECHO_DETECTION":   (_to_bool, None),
+    "STRICT_ORIGIN":           (_to_bool, None),
+    "INJECT_SECURITY_HEADERS": (_to_bool, None),
+    "JS_CHAL_BIND_JA4":        (_to_bool, None),
+    "JS_CHAL_REQUIRE_JA4":     (_to_bool, None),
+    "JS_CHAL_STRICT_STATIC":   (_to_bool, None),
+    # 1.5.4: external integration kill-switches. Setting to True is rejected
+    # when the underlying credentials/files aren't configured (no point
+    # enabling an integration whose required env is missing). Setting False
+    # is always accepted — operator can disable a live integration without
+    # restart.
+    "ABUSEIPDB_ENABLED":  (_to_bool, lambda v: (not v) or bool(globals().get("ABUSEIPDB_KEY"))),
+    "CROWDSEC_ENABLED":   (_to_bool, lambda v: (not v) or bool(globals().get("CROWDSEC_LAPI_URL") and globals().get("CROWDSEC_API_KEY"))),
+    "MAXMIND_ENABLED":    (_to_bool, lambda v: (not v) or globals().get("_asn_reader") is not None),
+    "TURNSTILE_ENABLED":  (_to_bool, lambda v: (not v) or bool(globals().get("TURNSTILE_SITEKEY") and globals().get("TURNSTILE_SECRET"))),
+    # 1.5.4: per-detector kill-switches (default ON). Operator can mute a
+    # noisy heuristic without a container restart.
+    "HONEYPOT_ENABLED":            (_to_bool, None),
+    "SUSPICIOUS_PATH_ENABLED":     (_to_bool, None),
+    "AI_PROBE_ENABLED":            (_to_bool, None),
+    "UA_FILTER_ENABLED":           (_to_bool, None),
+    "UA_PLATFORM_CHECK_ENABLED":   (_to_bool, None),
+    "HEADER_COMPLETENESS_ENABLED": (_to_bool, None),
+    "BEHAVIORAL_CHECK_ENABLED":    (_to_bool, None),
+    "AI_ENUMERATION_ENABLED":      (_to_bool, None),
+    "AI_NO_ASSETS_ENABLED":        (_to_bool, None),
+    "SESSION_FLOOD_ENABLED":       (_to_bool, None),
+    "UPSTREAM_404_TRACKING_ENABLED": (_to_bool, None),
+    # 1.5.4 Anubis-mode (strict PoW gate)
+    "ANUBIS_ENABLED":              (_to_bool, None),
+    "ANUBIS_DIFFICULTY_BOOST":     (int,   lambda v: 0 <= v <= 6),
+    # 1.5.4 — risk threshold (>=this) above which Turnstile is shown to a
+    # cookieless client. 0 = auto = midpoint of orange band.
+    "TURNSTILE_RISK_THRESHOLD":    (float, lambda v: 0.0 <= v <= 100000.0),
+    # Numeric thresholds (with sane bounds)
+    "RISK_BAN_THRESHOLD":     (int,   lambda v: 1 <= v <= 100000),
+    "SOFT_CHALLENGE_SCORE":   (float, lambda v: 0.0 <= v <= 100000.0),
+    "RATE_LIMIT_BURST":       (int,   lambda v: 1 <= v <= 100000),
+    "RATE_LIMIT_REFILL":      (float, lambda v: 0.0 < v <= 10000.0),
+    "IP_BURST":               (int,   lambda v: 1 <= v <= 100000),
+    "IP_REFILL":              (float, lambda v: 0.0 < v <= 10000.0),
+    "HOSTILE_BAN_SECS":       (int,   lambda v: 60 <= v <= 31 * 86400),
+    "CANARY_TTL_S":           (int,   lambda v: 30 <= v <= 86400),
+    "GLOBAL_RPS_LIMIT":       (int,   lambda v: 0 <= v <= 1000000),
+    "SESSION_CHURN_WINDOW_S": (int,   lambda v: 5 <= v <= 86400),
+    "SESSION_CHURN_MAX":      (int,   lambda v: 1 <= v <= 10000),
+    "JA4_AUTODENY_THRESHOLD": (int,   lambda v: 1 <= v <= 1000),
+    # Lists (comma-separated str -> list/set)
+    "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
+    "JA4_DENY_LIST":          (_to_ja4_set,   None),
+    # 1.6.0 — country-level geo block (requires GeoLite2-City)
+    "COUNTRY_BLOCK_ENABLED":  (_to_bool,
+                                lambda v: (not v) or _city_reader_is_loaded()),
+    "COUNTRY_DENYLIST":       (_to_country_set, None),
+    "COUNTRY_ALLOWLIST":      (_to_country_set, None),
+    # 1.6.0 — AI-crawler granular groups
+    "AI_UA_OPENAI_ENABLED":     (_to_bool, None),
+    "AI_UA_ANTHROPIC_ENABLED":  (_to_bool, None),
+    "AI_UA_GOOGLE_ENABLED":     (_to_bool, None),
+    "AI_UA_PERPLEXITY_ENABLED": (_to_bool, None),
+    "AI_UA_META_ENABLED":       (_to_bool, None),
+    "AI_UA_OTHER_ENABLED":      (_to_bool, None),
+    # 1.6.0 — network-list integration (Tor + DC/VPN)
+    "TOR_BLOCK_ENABLED":      (_to_bool, None),
+    "DC_VPN_BLOCK_ENABLED":   (_to_bool, None),
+    # 1.6.0 — per-endpoint policy engine (JSON array)
+    "ENDPOINT_POLICIES":      (_to_endpoint_policies, None),
+    # 1.6.1 — Tier-B knobs
+    "CUSTOM_RULES":           (_to_custom_rules, None),
+    "BODY_GROUP_SQLI_ENABLED":(_to_bool, None),
+    "BODY_GROUP_XSS_ENABLED": (_to_bool, None),
+    "BODY_GROUP_LFI_ENABLED": (_to_bool, None),
+    "BODY_GROUP_RCE_ENABLED": (_to_bool, None),
+    "BODY_GROUP_SSRF_ENABLED":(_to_bool, None),
+    "BODY_GROUP_CMD_ENABLED": (_to_bool, None),
+    "JWT_VALIDATE_PATHS":     (_to_path_list, None),
+    "JWT_REQUIRED_ISSUER":    (str, lambda v: len(v) <= 256),
+    "JWT_REQUIRED_AUDIENCE":  (str, lambda v: len(v) <= 256),
+    # 1.6.2 — Tier-C: outbound DLP knobs
+    "DLP_ENABLED":            (_to_bool, None),
+    "DLP_REDACT":             (_to_bool, None),
+    "DLP_MAX_BYTES":          (int, lambda v: 1024 <= v <= 16 * 1024 * 1024),
+    "DLP_GROUP_CC_ENABLED":           (_to_bool, None),
+    "DLP_GROUP_AWS_ENABLED":          (_to_bool, None),
+    "DLP_GROUP_JWT_ENABLED":          (_to_bool, None),
+    "DLP_GROUP_PRIVATE_KEY_ENABLED":  (_to_bool, None),
+    "DLP_GROUP_API_KEY_ENABLED":      (_to_bool, None),
+    "DLP_GROUP_PII_EMAIL_ENABLED":    (_to_bool, None),
+    "DLP_GROUP_PII_SSN_ENABLED":      (_to_bool, None),
+    # 1.6.2 — webhook event filter (CSV of reasons)
+    "WEBHOOK_EVENT_FILTER":   (_to_path_list, None),
+    # 1.6.4 — event-store backend selector. The runtime knob is REFLECTED
+    # in /__config but the backend itself is bound at startup; mutating
+    # this value at runtime updates the displayed setting (useful for
+    # operators staging a migration) but won't switch live connections
+    # until the container restarts.
+    "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
+    "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
+    # 1.6.5 — escalation threshold (cost gate for expensive / 3rd-order detectors)
+    "ESCALATION_THRESHOLD":   (float, lambda v: 0.0 <= v <= 100000.0),
+    # 1.6.10 — 2nd-order gate threshold (behavioral / enumeration detectors)
+    "SECOND_ORDER_THRESHOLD": (float, lambda v: 0.0 <= v <= 100000.0),
+    # 1.6.5 — tarpit (artificial slowdown for soft-band identities)
+    "TARPIT_ENABLED":         (_to_bool, None),
+    "TARPIT_DELAY_MS":        (int, lambda v: 0 <= v <= 30000),
+    # 1.6.8 — AI Labyrinth (hidden nofollow maze for bots)
+    "LABYRINTH_ENABLED":        (_to_bool, None),
+    "LABYRINTH_SLOW_MS":        (int, lambda v: 0 <= v <= 30000),
+    "LABYRINTH_MAX_DEPTH":      (int, lambda v: 1 <= v <= 20),
+    "LABYRINTH_LINKS_PER_PAGE": (int, lambda v: 1 <= v <= 10),
+    "LABYRINTH_JITTER_ENABLED": (_to_bool, None),
+    "ACCEPT_FP_ENABLED":        (_to_bool, None),
+    "HEADER_CANARY_ENABLED":    (_to_bool, None),
+    # 1.6.10 — new detection knobs
+    "HEADER_ORDER_FP_ENABLED":   (_to_bool, None),
+    "AI_CRAWLER_VERIFY_ENABLED": (_to_bool, None),
+    "JA4_FAIL_CLOSED":           (_to_bool, None),
+    "JSON_CANARY_ENABLED":       (_to_bool, None),
+    "LOCALE_GEO_CHECK_ENABLED":  (_to_bool, lambda v: (not v) or _city_reader_is_loaded()),
+    "ROBOTS_MONITOR_ENABLED":    (_to_bool, None),
+    "H2_FP_ENABLED":             (_to_bool, None),
+    "POW_MIN_SOLVE_MS":          (int, lambda v: 0 <= v <= 5000),
+    # 1.6.5 — FingerprintJS BotD client-side detection
+    "BOTD_ENABLED":           (_to_bool, None),
+    # Logging
+    "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
+    # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
+    "JS_CHALLENGE_TTL":       (int,   lambda v: 60 <= v <= 86400 * 7),
+    "ENUM_THRESHOLD":         (int,   lambda v: 10 <= v <= 100000),
+    "TIMELINE_RETAIN_SECS":   (int,   lambda v: 60 <= v <= 31536000),     # up to 1 year
+    "SVC_DB_RETENTION_HOURS": (int,   lambda v: 1 <= v <= 8760),          # up to 1 year
+    # 1.5.5 — Tier 2 promotions (lower frequency but useful)
+    "COST_RETAIN_SECS":       (int,   lambda v: 60 <= v <= 2592000),
+    "LOG_FORMAT":             (str,   lambda v: v.lower() in ("json", "text")),
+    "POW_REQUIRED_PATHS":     (_to_path_list, None),
+    "ALLOWED_METHODS":        (_to_method_set,
+                               lambda v: bool(v) and all(m in {"GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS"} for m in v)),
+    # 1.5.5 — Tier 3 promotions (advanced — change with care)
+    "ALLOWED_HOSTS":          (_to_host_set, None),   # empty set = no enforcement
+    "MAX_IDENTITIES":         (int,   lambda v: 100 <= v <= 10000000),
+    "PRUNE_IDLE_SECS":        (int,   lambda v: 60 <= v <= 31 * 86400),
+    "UPSTREAM_MAX_BODY":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),  # up to 1 GiB
+    "UPSTREAM_MAX_RESP":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),
+}
+
+# 1.5.5 — env-override detection.  By default the DB takes precedence over
+# env (operators tuning live via /__config get their changes back on
+# restart).  Set `CONFIG_KV_STRICT_ENV=1` for GitOps-style determinism
+# where env values are authoritative and dashboard mutations are rejected
+# at runtime.
+_ENV_PROVIDED_KNOBS = (
+    {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
+    if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes")
+    else set()
+)
+# DB_BACKEND is always env-pinned when explicitly set: a stale config_kv row
+# from a previous run must not silently override the operator's .env choice.
+# The Controls dashboard switch flow writes the new value AND restarts, so
+# after a UI-driven switch both the DB row and the env agree.
+if "DB_BACKEND" in os.environ:
+    _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
+
+
+def _read_hot_reload_state() -> dict:
+    out = {}
+    g = globals()
+    for k in _HOT_RELOAD_KNOBS:
+        if k not in g:
+            continue
+        v = g[k]
+        # Sets are not JSON-serialisable directly.
+        if isinstance(v, set):
+            v = sorted(v)
+        out[k] = v
+    return out
+
+
+async def config_endpoint(request: web.Request):
+    """GET  /__config?key=...              -> current state of all hot-reloadable knobs.
+    POST /__config?key=...  + JSON body -> apply updates, return {applied,rejected,state}.
+    POST body must be a JSON object whose keys are knob names; values are
+    type-coerced and bounds-checked. Anything not in the whitelist is
+    rejected (explicit allowlist — never an attribute-write attack)."""
+    if request.method == "GET":
+        return web.json_response({"state": _read_hot_reload_state()},
+                                  headers={"Cache-Control": "no-store"})
+    if request.method != "POST":
+        return web.json_response({"error": "method not allowed"}, status=405,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        raw = await asyncio.wait_for(request.content.read(64 * 1024),
+                                      timeout=BODY_TIMEOUT)
+        updates = json.loads(raw.decode("utf-8") or "{}")
+        if not isinstance(updates, dict):
+            raise ValueError("body must be a JSON object")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    applied, rejected = {}, {}
+    g = globals()
+    for k, raw_v in updates.items():
+        spec = _HOT_RELOAD_KNOBS.get(k)
+        if spec is None:
+            rejected[k] = "not-hot-reloadable"
+            continue
+        # 1.5.5 — env precedence. If the operator pinned this knob in
+        # the container env, reject runtime mutations so GitOps-managed
+        # deploys stay deterministic.
+        if k in _ENV_PROVIDED_KNOBS:
+            rejected[k] = "env-pinned (set via container env, not mutable at runtime)"
+            continue
+        parser, validator = spec
+        try:
+            value = parser(raw_v)
+            if validator is not None and not validator(value):
+                rejected[k] = "validation failed"
+                continue
+            g[k] = value
+            # Propagate to all loaded modules (including proxy) so test patches
+            # and hot-reload state are visible everywhere that reads this flag.
+            import sys as _sys_hr
+            for _hr_m in list(_sys_hr.modules.values()):
+                if (_hr_m is not None and _hr_m is not _sys_hr.modules.get(__name__)
+                        and hasattr(_hr_m, k)):
+                    try:
+                        setattr(_hr_m, k, value)
+                    except (AttributeError, TypeError):
+                        pass
+            applied[k] = sorted(value) if isinstance(value, set) else value
+            # 1.5.5 — persist to DB so the change survives container restart.
+            # JSON-encode so ints / floats / bools / strings / lists round-trip.
+            if db_queue is not None:
+                try:
+                    db_queue.put_nowait((
+                        "set_config",
+                        (k, json.dumps(applied[k]), _t.time()),
+                    ))
+                except asyncio.QueueFull:
+                    pass
+        except (ValueError, TypeError) as e:
+            rejected[k] = str(e)[:120]
+    if applied:
+        slog("config_changed", level="warn",
+             rid=request.get("_rid", ""), applied=list(applied.keys()),
+             rejected=list(rejected.keys()))
+    return web.json_response(
+        {"applied": applied, "rejected": rejected,
+         "state": _read_hot_reload_state()},
+        headers={"Cache-Control": "no-store"})
+
+
+async def status_endpoint(request: web.Request):
+    async with state_lock:
+        out = {}
+        n = now()
+        for ip, s in ip_state.items():
+            elapsed = n - s.last_refill
+            tokens = min(RATE_LIMIT_BURST, s.tokens + elapsed * RATE_LIMIT_REFILL)
+            out[ip] = {
+                "tokens": round(tokens, 2),
+                "request_count": s.request_count,
+                "banned_until": max(0, round(s.banned_until - n, 1)),
+                "first_seen_secs_ago": round(n - s.first_seen, 1),
+            }
+    return web.json_response({"clients": out, "config": {
+        "burst": RATE_LIMIT_BURST, "refill_per_sec": RATE_LIMIT_REFILL,
+        "pow_difficulty": POW_DIFFICULTY, "honeypot_ban_secs": HONEYPOT_BAN_SECS,
+    }})
+@web.middleware
+async def protect(request: web.Request, handler):
+    # 1.4.6 — request correlation. Honour an inbound X-Request-ID if it's
+    # safe-looking (so a CDN / front-proxy / load balancer that already
+    # tagged the request keeps its trace), otherwise mint a fresh short id.
+    inbound_rid = request.headers.get(_REQUEST_ID_HEADER, "").strip()
+    rid = (inbound_rid if inbound_rid and _REQUEST_ID_RE.match(inbound_rid)
+           else _new_request_id())
+    request["_rid"] = rid
+
+    # L3+N5: reject paths/query with ANY ASCII control byte (0x00-0x1F or 0x7F).
+    # CR/LF would enable header injection on legacy backends; NUL truncates
+    # in C parsers; other control chars confuse normalisers. Whitespace stays
+    # outside this range (0x20+) so legitimate URLs are unaffected.
+    def _has_ctrl(s: str) -> bool:
+        return any(ord(c) < 0x20 or ord(c) == 0x7F for c in s)
+    if _has_ctrl(request.path) or _has_ctrl(request.query_string or ""):
+        return web.Response(status=400, text="bad request\n",
+                            headers={_REQUEST_ID_HEADER: rid})
+
+    # 1.6.7+: liveness probe is loopback-only. The container's HEALTHCHECK
+    # connects via the container's own loopback (request.remote=127.0.0.1),
+    # which is the only legitimate caller. Anyone else gets the upstream
+    # 404 silent decoy — same as every other locked admin path.
+    if request.path == ADMIN_NS + "/live":
+        src = get_ip(request) or ""
+        if src in ("127.0.0.1", "::1"):
+            return web.Response(text="ok",
+                                headers={"Cache-Control": "no-store",
+                                         "Content-Type": "text/plain; charset=utf-8",
+                                         _REQUEST_ID_HEADER: rid})
+        ua = request.headers.get("User-Agent", "")
+        await record(src, ua, request.path,
+                      _upstream_404_cache.get("status") or 404,
+                      "live-not-loopback", request_id=rid)
+        return await _serve_mirrored_404()
+
+    # v1.4 #1 — JS challenge: solver POSTs back here. Rate-limit by socket-IP
+    # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
+    # ops) hammering the challenge endpoint with bogus solutions.
+    if request.path == ADMIN_NS + "/challenge":
+        socket_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
+        sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
+        if not sip_ok:
+            return web.Response(
+                status=429, text="rate limit\n",
+                headers={"Retry-After": str(int(sip_retry) + 1),
+                         "Cache-Control": "no-store"})
+        return await js_challenge_endpoint(request)
+
+    # NOTE: JS challenge gate moved BELOW the stealth-block checks (host /
+    # TLS / origin / required-headers). Reason: on those checks we already
+    # silent-decoy without revealing the gateway, and the challenge gate
+    # must not preempt them with an explicit response.
+
+    # 1.5.1: operator-controlled global throughput limit. When the rolling
+    # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
+    # request. Internal admin paths are exempt so health-checks and admin
+    # tools keep working under load. Operator drives this via the main
+    # dashboard slider (or POST <NS>/secured/config GLOBAL_RPS_LIMIT=N).
+    if GLOBAL_RPS_LIMIT > 0 and not _is_admin_path(request.path):
+        n_ts = _t.time()
+        cutoff = n_ts - 1.0
+        # Lazy-trim
+        while _global_rps_window and _global_rps_window[0] < cutoff:
+            _global_rps_window.popleft()
+        if len(_global_rps_window) >= GLOBAL_RPS_LIMIT:
+            ip = get_ip(request)
+            ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(
+                ip, ua, request.path, "traffic-threshold",
+                ja4=_request_ja4(request), request_id=rid)
+        _global_rps_window.append(n_ts)
+
+    # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
+    # limit / behavioral could preempt with their own response. Internal
+    # admin routes accept any method (HEAD probes, OPTIONS preflight).
+    if not _is_admin_path(request.path) and request.method not in ALLOWED_METHODS:
+        return web.Response(status=405, text="method not allowed\n",
+                            headers={"Allow": ", ".join(sorted(ALLOWED_METHODS))})
+
+    # F1: Host header allowlist (D-i-D). When ALLOWED_HOSTS is configured,
+    # silently decoy any request whose Host header is not on the list. This
+    # complements the existing X-Forwarded-Host strip+overwrite by also
+    # blocking host-header-based reconnaissance / cache poisoning attempts at
+    # OUR gate. The hostname-only comparison strips the port (request.host
+    # may be "example.com:8443").
+    if ALLOWED_HOSTS:
+        host = (request.host or "").split(":", 1)[0].lower()
+        if host not in ALLOWED_HOSTS:
+            ip = get_ip(request)
+            ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(ip, ua, request.path,
+                                                "host-not-allowed",
+                                                ja4=_request_ja4(request), request_id=rid)
+
+    # ── 1.6.1 Layer 0.4: Custom rules engine (Tier B). Operator-defined
+    # IF/THEN runs *before* standard detectors so an `allow` rule can
+    # short-circuit the chain (legitimate internal callers / IP-pinned
+    # automation), and a `block` rule can deny on operator-specific
+    # conditions the built-in detectors don't cover.
+    if CUSTOM_RULES:
+        _ip = get_ip(request)
+        _action, _tag = _eval_custom_rules(request, _ip)
+        if _action == "allow":
+            request["_custom_rule_allow"] = True   # surfaced in record()
+            # Skip the rest of the security chain — forward to upstream.
+            return await handler(request)
+        if _action == "block":
+            _ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(_ip, _ua, request.path,
+                                                "custom-rule-block",
+                                                ja4=_request_ja4(request),
+                                                request_id=rid)
+        if _action == "challenge":
+            request["_custom_rule_force_challenge"] = True
+        elif _action == "tag":
+            request["_custom_rule_tag"] = _tag
+
+    # ── 1.6.1 Layer 0.45: JWT/Bearer validation (Tier B). When the path
+    # matches JWT_VALIDATE_PATHS, the request must carry a valid HS256
+    # JWT in `Authorization: Bearer …`. Mismatches fire `auth-jwt-invalid`
+    # (weight 25) and silent-decoy. Doesn't replace upstream auth — adds
+    # an edge gate so probing this route without a token never reaches
+    # the application.
+    if JWT_VALIDATE_PATHS and _jwt_required_for(request.path):
+        _auth = request.headers.get("Authorization", "")
+        _ok = False
+        if _auth.lower().startswith("bearer "):
+            _ok, _ = _verify_jwt_hs256(_auth[7:].strip())
+        if not _ok:
+            _ip = get_ip(request)
+            _ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(_ip, _ua, request.path,
+                                                "auth-jwt-invalid",
+                                                ja4=_request_ja4(request),
+                                                request_id=rid)
+
+    # ── v1.4.2 Layer 0.5: TLS fingerprint deny-list (JA3/JA4) ─────────────
+    # The upstream TLS terminator (cloudflared, nginx, ALB) injects the
+    # client's handshake fingerprint as a header. Off by default — operator
+    # opts in via JA4_DENY_LIST.
+    if _tls_fingerprint_blocked(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "tls-fingerprint",
+                                            ja4=_request_ja4(request), request_id=rid)
+
+    # ── v1.4.2 Layer 0.6: Strict Origin / Referer enforcement ─────────────
+    # On state-changing methods, require the Origin header to match
+    # ALLOWED_HOSTS. Off by default (STRICT_ORIGIN=1 to enable).
+    if _origin_check_failed(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "origin-mismatch",
+                                            ja4=_request_ja4(request), request_id=rid)
+
+    # ── v1.4.2 Layer 0.7: Required custom-header presence ───────────────
+    # Operator-defined headers (REQUIRED_HEADERS=X-Client-Version,...) must
+    # be present on every non-/__/  /  non-static request.
+    if _missing_required_header(request):
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        return await _silent_decoy_response(ip, ua, request.path,
+                                            "missing-required-header",
+                                            ja4=_request_ja4(request), request_id=rid)
+
+    # ── v1.4 #1 — JS challenge gate (V8 fix) ────────────────────────────
+    # The chal cookie is REQUIRED on every non-static, non-admin, non-opted-
+    # -out path — not only HTML. Browsers carry the cookie on XHR/fetch
+    # transparently; pure-HTTP bots don't and get blocked.
+    #   - HTML GET without cookie → serve interactive challenge page.
+    #   - Everything else without cookie → silent decoy (preserves stealth;
+    #     does NOT leak that the gateway exists by returning 401).
+    # Placed AFTER host/TLS/origin/required-header stealth checks so those
+    # block paths take precedence and remain undetectable.
+    if _js_challenge_required(request):
+        if _js_challenge_applicable(request):
+            return _serve_js_challenge(request)
+        # 1.4.4: heuristic auto-mint mode (no Turnstile). HTML GETs are
+        # allowed through; the response gets the cookie set after the
+        # request completes the rest of the layered checks. Non-HTML or
+        # non-GET requests without a cookie still silent-decoy so APIs
+        # cannot be used directly without first visiting an HTML page.
+        # 1.5.4 — when Turnstile is configured but the identity's risk
+        # hasn't crossed `_turnstile_active_threshold()`, also fall through
+        # to auto-mint (most users never see Turnstile, only suspected bots).
+        if (request.method == "GET"
+                and "text/html" in request.headers.get("Accept", "")):
+            request["_auto_mint_chal"] = True
+            # fall through to the rest of the middleware so UA filter,
+            # header completeness, behavioural, body-pattern, canary echo
+            # etc. still apply before we hand back a cookie.
+        else:
+            ip = get_ip(request)
+            ua = request.headers.get("User-Agent", "")
+            return await _silent_decoy_response(ip, ua, request.path,
+                                                "chal-required",
+                                                ja4=_request_ja4(request), request_id=rid)
+
+    # Internal endpoints: only authenticated operator gets through.
+    # Anyone else sees the silent decoy — they don't even learn that the
+    # admin namespace exists. When ADMIN_ALLOWED_IPS is configured, the
+    # source IP MUST also match — silent decoy on IP mismatch (no leak
+    # that the IP check is what blocked).
+    if _is_admin_path(request.path):
+        # Public sub-paths (liveness, JS-challenge plumbing, BotD callback,
+        # asset bundle) are always reachable. The BotD bundle is fetched
+        # by browsers when the injected <script> runs and the report
+        # endpoint validates its own HMAC bound to the requester's
+        # track_key — no admin-IP / admin-key gating needed there.
+        if _admin_path_is_public(request.path):
+            return await handler(request)
+        # 1.6.7+: /login + /logout require the admin-IP allowlist but
+        # do NOT require a session cookie (there's no cookie until
+        # after login). Hides the login form entirely from anyone
+        # whose source IP isn't allowed — the form 404-decoys like
+        # any other admin path on un-allowed IPs.
+        sub = request.path[len(ADMIN_NS):]
+        if sub in _ADMIN_LOGIN_SUBPATHS:
+            if _admin_ip_allowed(request):
+                return await handler(request)
+            # else: fall through to silent decoy
+        elif _admin_ip_allowed(request) and _internal_authed(request):
+            return await handler(request)
+        ip = get_ip(request)
+        ua = request.headers.get("User-Agent", "")
+        reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)
+                  else "internal-probe")
+        # 1.5.4: serve the upstream's actual 404 page (cached at startup,
+        # refreshed hourly). An attacker probing the admin namespace sees
+        # the same response as if they'd hit any non-existent path on the
+        # upstream.
+        await record(ip, ua, request.path,
+                      _upstream_404_cache.get("status") or 404,
+                      reason, request_id=rid)
+        return await _serve_mirrored_404()
+
+    # 1.6.7+ — Authenticated-operator bypass. When the request carries a
+    # valid `agw_session` cookie AND comes from an admin-allowed IP, we
+    # treat it as a signed-in operator and forward DIRECTLY to the upstream
+    # handler. This guards against the operator being silent-decoyed by a
+    # detector their own dashboard work is supposed to oversee:
+    #   - they may be testing the upstream from the same browser tab the
+    #     dashboard is open in,
+    #   - their IP may have scored high on AbuseIPDB / CrowdSec or even
+    #     hit the internal ban list during a prior probing session,
+    #   - they may have triggered RPS / ai-headers / honeypot etc. while
+    #     debugging — none of which should lock them out of the system
+    #     they are actively administering.
+    # The request is still recorded so it surfaces in the Logs dashboard
+    # with reason='operator-passthrough' (visible signal that a detector
+    # WOULD have fired but was bypassed for an authenticated operator).
+    if _internal_authed(request) and _admin_ip_allowed(request):
+        request["_operator_bypass"] = True
+        return await handler(request)
+
+    # ── Hybrid identity (primary tracking key) ──
+    # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,
+    # OR HMAC(fp + ip) for cookieless scripts (still stable per device).
+    identity, sid, fp, is_new_session, id_mode = get_identity(request)
+    ip = get_ip(request)            # IP for session-creation guard + display
+
+    # Stamp arrival time + path/asset telemetry on the track_key entry NOW,
+    # before any detector may return early. Without this, blocked identities
+    # never accumulate html_loads / static_loads / unique_paths / request_times
+    # and all agents-dashboard columns show 0 for everything except risk_score.
+    # (rate_limit.py only stamps ip_state[ip], a separate entry from track_key.)
+    async with state_lock:
+        _s_early = ip_state[identity]
+        _s_early.request_times.append(now())
+        _s_early.unique_paths.add(request.path)
+        if len(_s_early.unique_paths) > 400:
+            _s_early.unique_paths.pop()
+        _early_unique_n = len(_s_early.unique_paths)
+        if request.method == "GET":
+            if request.path.endswith((".css", ".js", ".png", ".jpg", ".jpeg",
+                                      ".gif", ".svg", ".webp", ".woff", ".woff2",
+                                      ".ttf", ".ico", ".map")):
+                _s_early.static_loads += 1
+            elif request.path == "/" or request.path.endswith((".html", ".htm")):
+                _s_early.html_loads += 1
+        _early_no_static = (_s_early.html_loads >= 25 and _s_early.static_loads == 0)
+
+    # 1.6.5 — escalation gate: skip the expensive / external intel layer
+    # for identities with zero accumulated risk. ESCALATION_THRESHOLD=0
+    # reverts to legacy "run on every request" behaviour. Saves AbuseIPDB
+    # quota + CrowdSec round-trip on the 99% of requests that are clean.
+    _esc_score    = _escalation_score(identity)
+    _escalate     = (ESCALATION_THRESHOLD <= 0)    or (_esc_score >= ESCALATION_THRESHOLD)
+    _second_order = (SECOND_ORDER_THRESHOLD <= 0)  or (_esc_score >= SECOND_ORDER_THRESHOLD)
+
+    # ── 1.5.3: external IP-intel layer (AbuseIPDB) — escalate-only ──
+    # Cached in SQLite — typical cost is ~0.1ms cached, 100-300ms uncached
+    # (CloudFront RTT). Bumps risk but never blocks outright.
+    if ABUSEIPDB_ENABLED and _should_run_signal("abuseipdb-high", _esc_score):
+        ab_score, ab_country, ab_source = await _abuseipdb_lookup(ip)
+        if ab_score >= ABUSEIPDB_HIGH_THRESHOLD:
+            await update_risk_and_maybe_ban(identity, "abuseipdb-high", ip)
+        elif ab_score >= ABUSEIPDB_MED_THRESHOLD:
+            await update_risk_and_maybe_ban(identity, "abuseipdb-med", ip)
+
+    # 1.5.3: CrowdSec community-blocklist check — escalate-only (~5ms LAPI)
+    if CROWDSEC_ENABLED and _should_run_signal("crowdsec-banned", _esc_score):
+        cs_decision, cs_source = await _crowdsec_check(ip)
+        if cs_decision:  # any active decision = community-vetted bad actor
+            await update_risk_and_maybe_ban(identity, "crowdsec-banned", ip)
+
+    # 1.5.3: MaxMind ASN tagging — escalate-only (cheap but only useful on
+    # suspects; soft signal anyway).
+    if MAXMIND_ENABLED and _should_run_signal("asn-hosting", _esc_score):
+        asn, asn_org, is_hosting, _src = _asn_lookup(ip)
+        if is_hosting:
+            await update_risk_and_maybe_ban(identity, "asn-hosting", ip)
+            # 1.6.0 — heavier `datacenter-vpn` tag when explicit toggle is on.
+            if DC_VPN_BLOCK_ENABLED:
+                await update_risk_and_maybe_ban(identity, "datacenter-vpn", ip)
+
+    # 1.6.0 — Tor exit-node check (Tier A). O(1) set membership; the feed
+    # is refreshed weekly in `_tor_refresh_loop`. Tor exits are not blocked
+    # outright (some legitimate users) — they get a +50 risk tag which is
+    # the ban threshold, so a single hit silent-decoys + bans by default.
+    if TOR_BLOCK_ENABLED and ip in _tor_exits:
+        await update_risk_and_maybe_ban(identity, "tor-exit", ip)
+        return await _silent_decoy_response(
+            ip, request.headers.get("User-Agent", ""), request.path,
+            "tor-exit", track_key=identity, sid=sid, fp=fp,
+            ja4=_request_ja4(request), request_id=rid)
+
+    # 1.6.0 — Country-level geo block (Tier A, Akamai Kona-style geofencing).
+    # Uses existing GeoLite2-City lookup (~0.1ms). Allowlist beats denylist:
+    # if COUNTRY_ALLOWLIST is non-empty, anything outside it is blocked even
+    # when the country isn't explicitly listed in COUNTRY_DENYLIST.
+    # 1.6.5 — admin IPs ALWAYS bypass country block. Prevents the operator
+    # from locking themselves out by accidentally adding their own country
+    # to the denylist (the lesson learned from a stale test entry on
+    # 2026-05-01 — PT was added during a probe and persisted in
+    # config_kv, silent-decoying the operator's own browser).
+    if (COUNTRY_BLOCK_ENABLED and _city_reader is not None
+            and not _admin_ip_allowed(request)):
+        _geo = _city_lookup(ip)
+        if _geo:
+            _, _, _cc, _ = _geo
+            _cc_u = (_cc or "").upper()
+            _block = False
+            if COUNTRY_ALLOWLIST and _cc_u and _cc_u not in COUNTRY_ALLOWLIST:
+                _block = True
+            elif _cc_u and _cc_u in COUNTRY_DENYLIST:
+                _block = True
+            if _block:
+                await update_risk_and_maybe_ban(identity, "country-blocked", ip)
+                return await _silent_decoy_response(
+                    ip, request.headers.get("User-Agent", ""), request.path,
+                    "country-blocked", track_key=identity, sid=sid, fp=fp,
+                    ja4=_request_ja4(request), request_id=rid)
+    request["_sid"]    = sid
+    request["_is_new"] = is_new_session
+    request["_id_mode"] = id_mode
+    request["_fp"]     = fp                   # v1.4: expose to proxy() body checks
+    request["_track_key"] = identity          # v1.4: same
+
+    # Anti cookie-rotation: limit how many DISTINCT new identities one IP can
+    # spawn per minute. Counts unique identities (not requests), so parallel
+    # cookieless SPA sub-resource fetches that all share one fp+ip identity
+    # register as 1.
+    if is_new_session:
+        # 1.6.10 — use tighter threshold for hosting ASNs (bots in datacenters
+        # spin up many sessions faster than consumer ISPs).
+        _session_is_hosting = False
+        if MAXMIND_ENABLED and _asn_reader is not None:
+            _, _, _session_is_hosting, _ = _asn_lookup(ip)
+        async with state_lock:
+            now_ts = now()
+            id_map = ip_new_sessions[ip]
+            # Evict identities older than 60s
+            stale = [k for k, ts in id_map.items() if ts < now_ts - 60]
+            for k in stale:
+                del id_map[k]
+            id_map[identity] = now_ts
+            new_session_rate = len(id_map)
+        _flood_threshold = (NEW_SESSIONS_PER_IP_PER_MIN_HOSTING
+                            if _session_is_hosting
+                            else NEW_SESSIONS_PER_IP_PER_MIN)
+        if SESSION_FLOOD_ENABLED and new_session_rate > _flood_threshold:
+            return await _silent_decoy_response(
+                ip, request.headers.get("User-Agent",""), request.path, "session-flood"
+            )
+
+    ua = request.headers.get("User-Agent", "")
+    path = request.path
+    # R0: capture JA4 once for the whole decision path (telemetry only).
+    ja4 = _request_ja4(request)
+    # From here on, all per-client tracking uses 'identity' as the key.
+    # 'ip' is recorded as the last-seen IP for dashboard display only.
+    track_key = identity
+
+    async def deny(status, reason, body, extra_headers=None):
+        """
+        STEALTH MODE: every block returns the upstream homepage as 200 OK,
+        EXCEPT for pow-required which must return 402 + JSON challenge so
+        the legitimate client can solve and retry. Risk-score still bumps.
+        """
+        await update_risk_and_maybe_ban(track_key, reason, ip)
+        if reason == "pow-required":
+            await record(ip, ua, path, status, reason,
+                         track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+            return web.json_response(
+                body, status=status,
+                headers={**(extra_headers or {}), "Cache-Control": "no-store",
+                         _REQUEST_ID_HEADER: rid},
+            )
+        return await _silent_decoy_response(
+            ip, ua, path, reason, track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
+        )
+
+    # 1. Banned check (per-identity, not per-IP) → SILENT decoy
+    banned, remaining = await is_banned(track_key)
+    if banned:
+        return await _silent_decoy_response(
+            ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
+        )
+
+    # 1b. 1.5.0 — fingerprint-level ban check. The session-churn detector
+    # bans by `_fp_hash(ua,ip_tier,ja4)`, not by track_key — because the
+    # offender's pattern is to rotate cookies (and therefore track_keys)
+    # while keeping the fingerprint stable. Future requests with the same
+    # fingerprint hit this gate even if they carry a fresh chal cookie.
+    fp_hash_key = _fp_hash(ua, _ip_tier(ip), ja4)
+    fp_banned, _ = await is_banned(fp_hash_key)
+    if fp_banned:
+        return await _silent_decoy_response(
+            ip, ua, path, "fp-banned", track_key=track_key, sid=sid,
+            fp=fp, ja4=ja4, request_id=rid)
+
+    # 1.6.1 — Layer 1.7: per-endpoint rate-limit (Tier B). When an
+    # ENDPOINT_POLICIES rule has rps/burst set, run a token-bucket per
+    # (path_glob, identity). Over-budget requests return the silent decoy
+    # but accrue zero risk (throttle is not a malicious signal).
+    _ep_rule = _endpoint_rule(request.path)
+    if _ep_rule and _ep_rule.get("rps"):
+        if not await _endpoint_rate_consume(_ep_rule, track_key):
+            return await _silent_decoy_response(
+                ip, ua, path, "rate-limit-endpoint",
+                track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+
+    # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
+    #    Threshold-based: at NAT-like IPs, requires accumulated badness.
+    if HONEYPOT_ENABLED and request.path in HONEYPOT_PATHS:
+        await update_risk_and_maybe_ban(track_key, "honeypot-silent", ip)
+        return await _silent_decoy_response(
+            ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
+        )
+
+    # 2b. Suspicious path PATTERN (flag-hunting, file-hunting, CTF recon).
+    #     Catches /flag.txt, /myflag, /backup.sql, /id_rsa, /.git/HEAD, etc.
+    if SUSPICIOUS_PATH_ENABLED and is_suspicious_path(request.path):
+        await update_risk_and_maybe_ban(track_key, "suspicious-path", ip)
+        return await _silent_decoy_response(
+            ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
+        )
+
+    # 2c. R7 — AI-canary echo. The agent has quoted our prior response back
+    # at us (URL, header, or body), which is something only an LLM-driven
+    # client does (it summarises the previous page into its prompt context
+    # and re-emits fragments). Big risk bump + immediate silent decoy.
+    # Body scanning is deferred to the proxy() function for POSTs since the
+    # body isn't read yet here; the URL + headers cover the common case.
+    if CANARY_ECHO_DETECTION:
+        echoed = _scan_request_for_canary(request)
+        if echoed:
+            await update_risk_and_maybe_ban(track_key, "canary-echo", ip)
+            return await _silent_decoy_response(
+                ip, ua, path, "canary-echo",
+                track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+
+    # 3a-c. UA filter family (gated by UA_FILTER_ENABLED)
+    request_signals = []                       # collected for log
+    ua_stripped = ua.strip()
+    ua_lower = ua_stripped.lower()
+    if UA_FILTER_ENABLED:
+        if not ua_stripped:
+            return await deny(403, "ua-empty",
+                              {"error": "missing User-Agent header"})
+        if len(ua_stripped) < 12:
+            return await deny(403, "ua-too-short",
+                              {"error": "User-Agent too short", "ua": ua_stripped})
+        # 1.6.0 — AI-crawler granular groups (Tier A). Per-group toggle lets
+        # an enterprise allowlist a specific vendor's crawler. Checked BEFORE
+        # the legacy UA_BLOCKLIST so a disabled group can pass through.
+        _ai_group_state = {
+            "openai":     AI_UA_OPENAI_ENABLED,
+            "anthropic":  AI_UA_ANTHROPIC_ENABLED,
+            "google":     AI_UA_GOOGLE_ENABLED,
+            "perplexity": AI_UA_PERPLEXITY_ENABLED,
+            "meta":       AI_UA_META_ENABLED,
+            "other":      AI_UA_OTHER_ENABLED,
+        }
+        for _grp, _frags in AI_UA_GROUPS.items():
+            if not _ai_group_state.get(_grp, True):
+                continue
+            for _f in _frags:
+                if _f in ua_lower:
+                    # 1.6.10 — robots.txt compliance: declared AI bot = robots.txt violation
+                    if ROBOTS_MONITOR_ENABLED:
+                        await update_risk_and_maybe_ban(track_key, "robots-violation", ip)
+                        request_signals.append("robots-violation")
+                    # 1.6.10 — IP-range verification: flag when IP not in vendor's
+                    # published CIDR range (spoof detection).
+                    if AI_CRAWLER_VERIFY_ENABLED and not _ip_in_ai_range(ip, _grp):
+                        await update_risk_and_maybe_ban(track_key, "ai-ua-ip-mismatch", ip)
+                        request_signals.append("ai-ua-ip-mismatch")
+                    return await deny(403, f"ua-ai-{_grp}",
+                                      {"error": "AI crawler blocked",
+                                       "vendor": _grp, "matched": _f})
+        for blocked in UA_BLOCKLIST:
+            if blocked in ua_lower:
+                return await deny(403, "ua-blocked",
+                                  {"error": "user-agent blocked", "matched": blocked})
+        if not any(t in ua_lower for t in ("mozilla", "safari", "chrome", "firefox", "edge", "opera", "trident")):
+            return await deny(403, "ua-non-browser",
+                              {"error": "User-Agent does not look like a browser",
+                               "ua": ua_stripped[:80]})
+
+    # 3d. AI agent probe paths → risk_score += 30 (no immediate ban)
+    if AI_PROBE_ENABLED and request.path in AI_PROBE_PATHS:
+        await update_risk_and_maybe_ban(track_key, "ai-probe", ip)
+        return await deny(403, "ai-probe",
+                          {"error": "AI-probe endpoint requested"})
+
+    # 3e. Header completeness — real browsers send rich headers, agents are minimal
+    accept_lang = request.headers.get("Accept-Language", "")
+    accept_enc  = request.headers.get("Accept-Encoding", "")
+    accept_hdr  = request.headers.get("Accept", "")
+    sec_fetch_site = request.headers.get("Sec-Fetch-Site")
+    sec_fetch_mode = request.headers.get("Sec-Fetch-Mode")
+    sec_fetch_dest = request.headers.get("Sec-Fetch-Dest")
+    sec_ch_ua      = request.headers.get("Sec-Ch-Ua")
+
+    # Score header completeness (0-7) — gated by HEADER_COMPLETENESS_ENABLED
+    score = (
+        bool(accept_lang) + bool(accept_enc) + bool(accept_hdr)
+        + bool(sec_fetch_site) + bool(sec_fetch_mode)
+        + bool(sec_fetch_dest) + bool(sec_ch_ua)
+    )
+    if HEADER_COMPLETENESS_ENABLED:
+        if score < 2 and "chrome" in ua_lower:
+            return await deny(403, "ai-headers-incomplete",
+                              {"error": "Chrome UA without browser headers",
+                               "header_score": score})
+        if score == 0:
+            return await deny(403, "ai-headers-empty",
+                              {"error": "no Accept-* nor Sec-Fetch-* headers — not a real browser",
+                               "header_score": score})
+
+    # ── 1.5.3: soft signals (article alignment) ───────────────────────────
+    # These don't deny — they bump the risk score and feed signals[] in logs.
+    sec_ch_ua_plat = request.headers.get("Sec-Ch-Ua-Platform", "")
+
+    # 3e2. UA <-> Sec-Ch-Ua consistency
+    # Chrome ≥ 89 sends Sec-Ch-Ua; Firefox / Safari don't. A forged Chrome UA
+    # without Sec-Ch-Ua, or non-Chrome UA emitting Sec-Ch-Ua, is a strong tell.
+    is_chrome_ua = "chrome" in ua_lower and "edg" not in ua_lower
+    is_firefox_ua = "firefox" in ua_lower
+    is_safari_ua = "safari" in ua_lower and not is_chrome_ua
+    if UA_PLATFORM_CHECK_ENABLED and is_chrome_ua and not sec_ch_ua:
+        await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+        request_signals.append("ua-platform-mismatch")
+    elif UA_PLATFORM_CHECK_ENABLED and (is_firefox_ua or is_safari_ua) and sec_ch_ua:
+        await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+        request_signals.append("ua-platform-mismatch")
+    elif UA_PLATFORM_CHECK_ENABLED and is_chrome_ua and sec_ch_ua and sec_ch_ua_plat:
+        # Cross-check OS hint: UA "Windows NT 10.0" vs Sec-Ch-Ua-Platform
+        plat_norm = sec_ch_ua_plat.strip('"').lower()
+        ua_lower_check = ua_lower
+        if plat_norm == "windows" and "windows" not in ua_lower_check:
+            await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+            request_signals.append("ua-platform-mismatch")
+        elif plat_norm == "macos" and ("mac os" not in ua_lower_check and "macintosh" not in ua_lower_check):
+            await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+            request_signals.append("ua-platform-mismatch")
+        elif plat_norm == "linux" and "linux" not in ua_lower_check and "android" not in ua_lower_check:
+            await update_risk_and_maybe_ban(track_key, "ua-platform-mismatch", ip)
+            request_signals.append("ua-platform-mismatch")
+
+    # 3e3. Accept: */* on what looks like HTML nav (Sec-Fetch-Dest=document)
+    # Browsers always send a richer Accept on document navigation.
+    if (sec_fetch_dest == "document" and accept_hdr.strip() == "*/*"):
+        await update_risk_and_maybe_ban(track_key, "accept-wildcard-html", ip)
+        request_signals.append("accept-wildcard-html")
+
+    # 3e3b. 1.6.10 — Accept header fingerprint.
+    # Real browsers always include text/html in Accept on HTML navigation.
+    # Bots faking a Chrome UA but using application/json or similar reveal
+    # themselves here. */* is already handled above; skip to avoid double-score.
+    if (ACCEPT_FP_ENABLED and sec_fetch_dest == "document" and accept_hdr):
+        _ac = accept_hdr.strip()
+        if _ac != "*/*" and "text/html" not in _ac.lower():
+            await update_risk_and_maybe_ban(track_key, "accept-fp", ip)
+            request_signals.append("accept-fp")
+
+    # 3e4. JA4 required but missing.
+    # 1.6.10 — JA4_FAIL_CLOSED: when the operator configures trusted JA4 peers,
+    # they can opt-in to hard-deny (instead of soft-score) when the header is
+    # absent. Static assets are exempt so CDN pre-fetch doesn't break.
+    if JA4_TRUSTED_NETS and JA4_HEADER and not request.headers.get(JA4_HEADER):
+        if JA4_FAIL_CLOSED and not path.endswith(
+                (".css", ".js", ".png", ".jpg", ".jpeg", ".gif",
+                 ".svg", ".webp", ".woff", ".woff2", ".ttf", ".ico",
+                 ".map", ".txt", ".xml", ".json")):
+            return await deny(403, "ja4-required-missing",
+                              {"error": "JA4 fingerprint required from trusted peer"})
+        else:
+            await update_risk_and_maybe_ban(track_key, "ja4-required-missing", ip)
+            request_signals.append("ja4-required-missing")
+
+    # 3e5. 1.6.10 — Header-order library fingerprint.
+    # Real browsers send 10+ diverse headers in a well-known browser order.
+    # Common HTTP libraries (requests, curl, Go net/http, httpx) emit a
+    # predictable minimal set with a characteristic ordering. Fires only when
+    # the exact ordered-name hash matches a known library signature.
+    if HEADER_ORDER_FP_ENABLED and _is_library_headers(request):
+        await update_risk_and_maybe_ban(track_key, "header-order-fp", ip)
+        request_signals.append("header-order-fp")
+
+    # 3e6. 1.6.10 — HTTP/2 fingerprint fallback.
+    # Modern browsers always use HTTP/2 on HTTPS. HTTP/1.1 + TLS + modern UA
+    # is a mild signal that a library/tool is spoofing a browser UA.
+    # X-Forwarded-Proto is injected by the TLS-terminating front proxy;
+    # H2_FP_ENABLED=0 by default since the signal is weak without TLS context.
+    if H2_FP_ENABLED:
+        _proto = (request.headers.get("X-Forwarded-Proto") or "").lower()
+        if (_proto == "https" and request.version.major == 1
+                and any(t in ua_lower for t in ("chrome/", "firefox/", "safari/", "edg/"))):
+            await update_risk_and_maybe_ban(track_key, "h2-fp", ip)
+            request_signals.append("h2-fp")
+
+    # 3e7. 1.6.10 — Accept-Language / GeoIP locale consistency.
+    # Escalate-gated (cheap MMDB lookup but want to skip zero-risk clean traffic).
+    if LOCALE_GEO_CHECK_ENABLED and _city_reader is not None and _should_run_signal("locale-geo-mismatch", _esc_score):
+        _geo_lc = _city_lookup(ip)
+        if _geo_lc:
+            _, _, _lc_country, _ = _geo_lc
+            if _locale_geo_mismatch(_lc_country, accept_lang):
+                await update_risk_and_maybe_ban(track_key, "locale-geo-mismatch", ip)
+                request_signals.append("locale-geo-mismatch")
+
+    # Stash request_signals for the response wrapper to log
+    request["_signals"] = request_signals
+
+    # 3f. Path-discovery rate: too many distinct paths from same identity = enumeration
+    # (values already computed in the early tracking block above)
+    unique_n = _early_unique_n
+    no_static = _early_no_static
+
+    # >300 distinct paths from same identity = enumeration scan.
+    # SPAs (Angular/React UFE-style apps) routinely load 50–200 chunked JS
+    # modules on one page; the previous 50 threshold was a false-positive
+    # magnet for legit users. Operator can override via env if needed.
+    if AI_ENUMERATION_ENABLED and _should_run_signal("ai-enumeration", _esc_score) and unique_n > ENUM_THRESHOLD:
+        return await deny(403, "ai-enumeration",
+                          {"error": "too many distinct paths from this identity",
+                           "unique_paths": unique_n})
+    if AI_NO_ASSETS_ENABLED and _should_run_signal("ai-no-assets", _esc_score) and no_static:
+        return await deny(403, "ai-no-assets",
+                          {"error": "browser UA but never fetched any asset — likely AI agent",
+                           "html_loads": s.html_loads, "static_loads": s.static_loads})
+
+    # 4a. H4: Socket-IP rate limit — keyed strictly by kernel-observed peer IP,
+    #     defeats "rotate UA every request to get a fresh identity bucket"
+    #     bypass. This bucket is INDEPENDENT from any client-supplied header.
+    socket_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
+    sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
+    if not sip_ok:
+        return await deny(429, "rate-limit-ip",
+                          {"error": "ip rate limit exceeded",
+                           "retry_after": int(sip_retry) + 1},
+                          extra_headers={
+                              "Retry-After": str(int(sip_retry) + 1),
+                              "X-RateLimit-Limit": str(IP_BURST),
+                              "X-RateLimit-Remaining": "0",
+                          })
+
+    # 4b. Per-identity bucket (one user in the office doesn't consume the
+    #     whole company's tokens — secondary, finer-grained limit).
+    #     Skip for static-asset GETs: browsers burst-load CSS/JS/img/font on
+    #     every page render, exhausting the bucket and breaking the page UI.
+    #     Socket-IP bucket (Layer 8) still throttles flooders.
+    is_static_asset_get = (request.method == "GET" and request.path.endswith((
+        ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+        ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf",
+        ".eot", ".map", ".mp4", ".webm", ".mp3", ".ogg")))
+    if not is_static_asset_get:
+        allowed, retry, remaining_tokens = await take_token(track_key)
+        if not allowed:
+            return await deny(429, "rate-limit",
+                              {"error": "rate limit exceeded", "retry_after": int(retry) + 1},
+                              extra_headers={
+                                  "Retry-After": str(int(retry) + 1),
+                                  "X-RateLimit-Limit": str(RATE_LIMIT_BURST),
+                                  "X-RateLimit-Remaining": "0",
+                              })
+
+    # 5. Behavioral (per-identity).
+    #    Skip for established (cookied) sessions — once a browser has accepted
+    #    our HMAC-signed session cookie it is NOT a cookieless bot. Skip for
+    #    static-asset GETs because SPA frameworks queue them with very regular
+    #    timing (false positive on legitimate users).
+    if id_mode != "session" and not is_static_asset_get:
+        suspicious, reason = (False, "")
+        if BEHAVIORAL_CHECK_ENABLED:
+            suspicious, reason = await behavioral_check(track_key)
+        if suspicious:
+            return await deny(403, "behavior",
+                              {"error": "suspicious behavior", "reason": reason})
+
+    # 6. PoW
+    if needs_pow(request):
+        token = request.headers.get("X-PoW-Token", "")
+        solution = request.headers.get("X-PoW-Solution", "")
+        ok, why = verify_pow(token, solution, request.method, request.path)
+        if not ok:
+            # 1.6.10 — pass current risk_score so difficulty scales with threat level
+            async with state_lock:
+                _pow_risk = int(ip_state[track_key].risk_score)
+            challenge = make_pow_challenge(request.method, request.path, risk_score=_pow_risk)
+            eff_diff = int(challenge.split("|")[2])   # diff is baked into the signed payload
+            return await deny(402, "pow-required",
+                              {"error": "Proof-of-Work required",
+                               "reason": why,
+                               "challenge": challenge,
+                               "difficulty": eff_diff,
+                               "valid_for_seconds": POW_VALID_SECS,
+                               "instructions": "Use /__solver"},
+                              extra_headers={
+                                  "X-PoW-Challenge": challenge,
+                                  "X-PoW-Difficulty": str(eff_diff),
+                              })
+
+    # Allowed → forward upstream and record under the identity
+    response = await handler(request)
+
+    # 1.4.4: heuristic auto-mint of the chal cookie. The request reached
+    # this point because (a) JS_CHALLENGE=1, (b) Turnstile is OFF, (c) it
+    # was an HTML GET without a valid chal cookie, and (d) every layer
+    # above (UA filter, header completeness, behavioural, body pattern,
+    # canary echo, rate limits, ...) has waved it through. Issue a cookie
+    # bound to UA + IP-tier-hash + JA4-hash so subsequent API/XHR calls
+    # from this client carry a session marker. NOT a hard wall — the
+    # gate is a friction layer that combined with the heuristic stack
+    # raises bot cost without any third-party dependency.
+    if request.get("_auto_mint_chal"):
+        ip_tier_h = _ip_tier(get_ip(request))
+        bind_ja4 = ja4 if (JS_CHAL_BIND_JA4 and ja4) else ""
+        cookie = _make_chal_cookie(ua, "", ip_tier_h, bind_ja4)
+        response.set_cookie(
+            CHAL_COOKIE, cookie,
+            httponly=True,
+            samesite=SESSION_SAMESITE,
+            secure=SESSION_SECURE,
+            path="/", max_age=JS_CHALLENGE_TTL)
+        # 1.5.0: log this mint into the per-fingerprint churn detector. If
+        # the same UA+IP-tier+JA4 has minted > SESSION_CHURN_MAX cookies in
+        # the last SESSION_CHURN_WINDOW_S seconds, the fingerprint enters
+        # the hostile pool (24 h shared ban).
+        await _record_chal_mint(ua, ip_tier_h, ja4, ip, rid=rid)
+
+    # Pull current risk score for this identity to log alongside signals[].
+    _score_now = 0.0
+    async with state_lock:
+        _s = ip_state.get(track_key)
+        if _s:
+            _decay_risk(_s, now())
+            _score_now = _s.risk_score
+    _rec_reason = "operator-passthrough" if request.get("_operator_bypass") else ""
+    await record(ip, ua, path, response.status, _rec_reason,
+                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid,
+                 signals=request.get("_signals", []),
+                 score=_score_now)
+    # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
+    async with state_lock:
+        st = ip_state[track_key]
+        st.header_scores.append(score)
+        st.last_allowed_paths.append({
+            "ts": _t.time(), "path": path[:120], "status": response.status,
+            "header_score": score,
+        })
+        if response.status == 404 and not request.path.endswith((
+            ".ico", ".png", ".jpg", ".jpeg", ".gif", ".svg",
+            ".css", ".js", ".webp", ".woff", ".woff2", ".ttf", ".map")):
+            st.upstream_404_count += 1
+    # Treat upstream 404 as a small enumeration signal — repeated misses
+    # accumulate risk until ban (legitimate users rarely hit many 404s).
+    # Skip for static asset extensions (favicon misses are normal).
+    if UPSTREAM_404_TRACKING_ENABLED and response.status == 404:
+        if not request.path.endswith((".ico", ".png", ".jpg", ".jpeg", ".gif",
+                                      ".svg", ".css", ".js", ".webp",
+                                      ".woff", ".woff2", ".ttf", ".map")):
+            await update_risk_and_maybe_ban(track_key, "upstream-404", ip)
+    # 1.4.6: stamp the response with the request id so the client can grep
+    # logs from this side using the same id.
+    if rid and _REQUEST_ID_HEADER not in response.headers:
+        response.headers[_REQUEST_ID_HEADER] = rid
+    return response
+
+# ── Internal endpoints ─────────────────────────────────────────────────────
+async def pow_endpoint(request: web.Request):
+    """Issue a fresh PoW challenge bound to (method, path) supplied via query.
+    Example: /__pow?method=POST&path=/login
+    """
+    method = (request.query.get("method", "POST") or "POST").upper()
+    path = request.query.get("path", "/") or "/"
+    # 1.6.10 — pass caller's current risk_score for difficulty scaling
+    ip = request.remote or ""
+    identity, _, _, _, _ = get_identity(request)
+    async with state_lock:
+        _risk = int(ip_state[identity].risk_score)
+    challenge = make_pow_challenge(method, path, risk_score=_risk)
+    eff_diff = int(challenge.split("|")[2])
+    return web.json_response({
+        "challenge": challenge,
+        "difficulty": eff_diff,
+        "valid_for_seconds": POW_VALID_SECS,
+        "bound_to": {"method": method, "path": path},
+        "anubis_mode": ANUBIS_ENABLED,
+    }, headers={"Cache-Control": "no-store"})
+
+# 1.6.10 — robots.txt endpoint: serve a gateway-controlled robots.txt that
+# disallows all known AI crawlers. When ROBOTS_MONITOR_ENABLED=1, any request
+# from a declared AI crawler UA fires robots-violation (+5) alongside ua-ai-*.
+_ROBOTS_TXT_CONTENT = """\
+User-agent: *
+Disallow: /api/
+Disallow: /admin
+Disallow: /_internal/
+Disallow: /staff/
+Allow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Googlebot-Extended
+Disallow: /
+
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+"""
+
+async def robots_txt_endpoint(request: web.Request):
+    return web.Response(
+        text=_ROBOTS_TXT_CONTENT,
+        content_type="text/plain",
+        headers={"Cache-Control": "public, max-age=86400", "X-Robots-Tag": "noindex"},
+    )
+
+async def solver_endpoint(request: web.Request):
+    return web.Response(
+        text=r"""<!doctype html><meta charset=utf-8>
+<title>PoW solver</title><h2>Anti-bot PoW solver</h2>
+<form id=f><label>Challenge: <input id=c size=80></label>
+<button>Solve</button></form><pre id=o></pre>
+<script>
+async function sha256(s){const b=new TextEncoder().encode(s);
+  const h=await crypto.subtle.digest('SHA-256',b);
+  return [...new Uint8Array(h)].map(x=>x.toString(16).padStart(2,'0')).join('')}
+document.getElementById('f').onsubmit=async e=>{e.preventDefault();
+  const c=document.getElementById('c').value.trim(),o=document.getElementById('o');
+  const [nonce,,d]=c.split('|');const z='0'.repeat(parseInt(d)||5);
+  const t0=performance.now();
+  for(let i=0;;i++){const x=i.toString();
+    const h=await sha256(nonce+x);
+    if(h.startsWith(z)){
+      o.textContent=`Found: X=${x}\nhash=${h}\ntook ${(performance.now()-t0).toFixed(0)}ms (${i} attempts)
+\nUse:\nX-PoW-Token: ${c}\nX-PoW-Solution: ${x}`;break}
+    if(i%1000===0)o.textContent=`tried ${i}…`}}
+</script>""",
+        content_type="text/html",
+    )
+
+async def detector_stats_endpoint(request: web.Request):
+    """1.6.5 — per-detector latency & hit count, plus method-bucket
+    aggregation. Used by:
+      • Dashboard "Top detection methods" + bot/AI breakdown
+      • Agents "Per-method latency" panel
+      • Service "Detector-latency / cost-by-bucket" panels
+
+    Latency is computed from the rolling 200-sample deque per reason
+    (recorded in _detector_record on every fire). Cost bucket totals
+    are cumulative since process start.
+    """
+    out_signals = []
+    for reason, dq in _detector_latency.items():
+        samples = list(dq) if dq else []
+        if not samples:
+            typical = p99 = 0.0
+        else:
+            ss = sorted(samples)
+            n = len(ss)
+            typical = ss[n // 2]
+            p99 = ss[max(0, int(n * 0.99) - 1)]
+        out_signals.append({
+            "reason":  reason,
+            "method":  _reason_method(reason),
+            "hits":    _detector_hits.get(reason, 0),
+            "p50_ms":  round(typical, 3),
+            "p99_ms":  round(p99, 3),
+            "samples": len(samples),
+        })
+    out_signals.sort(key=lambda x: -x["hits"])
+
+    # Per-method aggregation (sum hits + worst p99 per bucket)
+    by_method = {}
+    for s in out_signals:
+        m = s["method"]
+        by_method.setdefault(m, {"method": m, "hits": 0, "p99_ms": 0.0,
+                                  "reasons": 0})
+        by_method[m]["hits"]   += s["hits"]
+        by_method[m]["p99_ms"]  = max(by_method[m]["p99_ms"], s["p99_ms"])
+        by_method[m]["reasons"] += 1
+    methods = sorted(by_method.values(), key=lambda x: -x["hits"])
+
+    return web.json_response({
+        "signals": out_signals,
+        "methods": methods,
+        "chal":    {"required":   _chal_required_count,
+                     "minted":     _chal_mint_count,
+                     "mint_rate":  (round(_chal_mint_count / _chal_required_count * 100.0, 1)
+                                    if _chal_required_count else 0.0)},
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def db_switch_endpoint(request: web.Request):
+    """1.6.5 — operator-triggered swap of the active DB backend.
+
+    POST /__db-switch?key=…&target=sqlite|postgres
+
+    Persists `DB_BACKEND` (and on first switch to postgres, the supplied
+    `dsn` body field as `POSTGRES_DSN`) to `config_kv`, then calls
+    `os._exit(0)` so docker's `--restart=unless-stopped` policy brings the
+    process back with the new backend bound.
+
+    Validates:
+      • target ∈ {"sqlite","postgres"}
+      • on target=postgres: psycopg is loadable AND POSTGRES_DSN is set
+        (current value or supplied in body), AND the gateway can reach
+        the DB end-to-end (round-trip probe before commit).
+
+    Impact warned by the dashboard:
+      • all in-flight requests are dropped (~1 s blip)
+      • SQLite events table is NOT migrated to Postgres or vice versa
+      • bans, config_kv, admin_ips persist (they live in SQLite always)
+    """
+    target = (request.query.get("target", "") or "").strip().lower()
+    if target not in ("sqlite", "postgres"):
+        return web.json_response(
+            {"ok": False, "reason": "target must be sqlite or postgres"},
+            status=400, headers={"Cache-Control": "no-store"})
+
+    # On switch-to-postgres we may receive a fresh DSN in the body.
+    body_dsn = ""
+    if request.method == "POST":
+        try:
+            raw = await asyncio.wait_for(request.content.read(8192),
+                                          timeout=BODY_TIMEOUT)
+            body = json.loads(raw.decode("utf-8") or "{}")
+            if isinstance(body, dict):
+                body_dsn = str(body.get("dsn", "")).strip()
+        except (asyncio.TimeoutError, ValueError, json.JSONDecodeError):
+            return web.json_response(
+                {"ok": False, "reason": "bad json body"},
+                status=400, headers={"Cache-Control": "no-store"})
+
+    if target == "postgres":
+        if _postgres_load_module() is None:
+            return web.json_response(
+                {"ok": False,
+                 "reason": "psycopg not installed in this image"},
+                status=400, headers={"Cache-Control": "no-store"})
+        dsn = body_dsn or POSTGRES_DSN
+        if not dsn:
+            return web.json_response(
+                {"ok": False,
+                 "reason": "no POSTGRES_DSN configured (set it before switching)"},
+                status=400, headers={"Cache-Control": "no-store"})
+        # Probe the DB end-to-end before committing — we don't want to
+        # re-exec the container into a state that won't connect.
+        try:
+            saved_dsn = globals().get("POSTGRES_DSN", "")
+            globals()["POSTGRES_DSN"] = dsn
+            globals()["DB_BACKEND"]   = "postgres"
+            probe = pg_test_roundtrip()
+        finally:
+            globals()["POSTGRES_DSN"] = saved_dsn
+            globals()["DB_BACKEND"]   = DB_BACKEND  # noqa
+        if not probe.get("ok"):
+            return web.json_response(
+                {"ok": False,
+                 "reason": f"DB connectivity probe failed: {probe.get('reason')}"},
+                status=400, headers={"Cache-Control": "no-store"})
+
+    # 1.6.5 — copy the last 60 s of events from the source backend to the
+    # target backend so the dashboard timeline doesn't lose its tail
+    # during the cut-over. config_kv / secrets_kv / admin_ips / bans /
+    # clients / timeline ALL live in SQLite regardless of DB_BACKEND so
+    # they survive automatically — only the events split between the two.
+    # Apply the DSN temporarily so _migrate_recent_events sees the same
+    # connection state the post-restart gateway will use.
+    saved_dsn = globals().get("POSTGRES_DSN", "")
+    if target == "postgres" and body_dsn:
+        globals()["POSTGRES_DSN"] = body_dsn
+    try:
+        loop = asyncio.get_event_loop()
+        migration = await loop.run_in_executor(
+            None, _migrate_recent_events, target, 60)
+    finally:
+        globals()["POSTGRES_DSN"] = saved_dsn
+    slog("db_switch_migration", level="warn", **migration,
+         target=target)
+
+    # Persist the new backend (and DSN if supplied) to config_kv. Uses the
+    # async writer queue so the change is durable BEFORE we exit. The
+    # config_kv table itself stays in SQLite across both backends, so
+    # this also serves as the cross-backend operational state vault.
+    if db_queue is not None:
+        n = _t.time()
+        try:
+            db_queue.put_nowait(("set_config",
+                                  ("DB_BACKEND", json.dumps(target), n)))
+            if target == "postgres" and body_dsn:
+                db_queue.put_nowait(("set_config",
+                                      ("POSTGRES_DSN", json.dumps(body_dsn), n)))
+        except asyncio.QueueFull:
+            return web.json_response(
+                {"ok": False, "reason": "config_kv queue full"},
+                status=503, headers={"Cache-Control": "no-store"})
+        # Give the queue a tick to flush.
+        await asyncio.sleep(0.5)
+
+    slog("db_switch", level="warn", target=target,
+         dsn_set=bool(body_dsn),
+         rid=request.get("_rid", ""))
+
+    # Reply BEFORE exiting so the dashboard's POST gets a clean 200.
+    response = web.json_response(
+        {"ok": True, "target": target,
+         "events_copied": migration.get("copied", 0),
+         "events_copy_direction": migration.get("direction", ""),
+         "events_copy_ok": migration.get("ok", False),
+         "events_copy_reason": migration.get("reason", ""),
+         "message": "DB_BACKEND persisted; container will restart in 1 s"},
+        headers={"Cache-Control": "no-store"})
+
+    async def _delayed_exit():
+        await asyncio.sleep(1.0)
+        slog("db_switch_restart", level="warn", target=target)
+        os._exit(0)
+    asyncio.create_task(_delayed_exit())
+    return response
+
+
+async def db_test_endpoint(request: web.Request):
+    """1.6.5 — DB connectivity probe used by the Controls dashboard
+    'External integrations · Postgres / TimescaleDB' card.
+    Returns a structured payload describing both backends:
+      • sqlite:    file size, row counts, WAL state
+      • postgres:  version, db name, round-trip ms, events row count
+                    (or `ok=false` + reason when not configured / unreachable)
+
+    1.6.10 — optional `?dsn=<url>` query param probes a candidate DSN without
+    committing to it.  Returns only `{ok, probe}` so the switch modal can gate
+    the confirm button on a successful connectivity check before the user
+    triggers the destructive restart."""
+    # 1.6.10 — pre-flight probe mode: caller supplies a candidate DSN.
+    probe_dsn = request.query.get("dsn", "").strip()
+    if probe_dsn:
+        if _postgres_load_module() is None:
+            return web.json_response(
+                {"ok": False, "reason": "psycopg not installed in this image"},
+                status=200, headers={"Cache-Control": "no-store"})
+        saved_dsn     = globals().get("POSTGRES_DSN", "")
+        saved_backend = globals().get("DB_BACKEND", DB_BACKEND)
+        try:
+            globals()["POSTGRES_DSN"] = probe_dsn
+            globals()["DB_BACKEND"]   = "postgres"
+            probe = pg_test_roundtrip()
+        finally:
+            globals()["POSTGRES_DSN"] = saved_dsn
+            globals()["DB_BACKEND"]   = saved_backend
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(probe_dsn)
+            masked = f"{p.scheme}://{p.username or '<user>'}:****@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
+        except Exception:
+            masked = "(redacted)"
+        return web.json_response(
+            {"ok": probe.get("ok", False),
+             "reason": probe.get("reason", ""),
+             "probe": {**probe, "dsn_masked": masked}},
+            headers={"Cache-Control": "no-store"})
+
+    sqlite_info = {"ok": False}
+    try:
+        if os.path.exists(DB_PATH):
+            sqlite_info["ok"] = True
+            sqlite_info["path"] = DB_PATH
+            sqlite_info["size_bytes"] = os.path.getsize(DB_PATH)
+            wal = DB_PATH + "-wal"
+            if os.path.exists(wal):
+                sqlite_info["wal_size_bytes"] = os.path.getsize(wal)
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                cur = conn.execute("SELECT COUNT(*) FROM events")
+                sqlite_info["events_rows"] = int(cur.fetchone()[0])
+                conn.close()
+            except Exception as e:
+                sqlite_info["events_rows_error"] = str(e)[:120]
+    except Exception as e:
+        sqlite_info["error"] = f"{type(e).__name__}: {str(e)[:120]}"
+
+    postgres_info = pg_test_roundtrip()
+    if postgres_info.get("ok"):
+        size = pg_db_size()
+        if size.get("ok"):
+            postgres_info["db_bytes"] = size["db_bytes"]
+            postgres_info["events_rows"] = size["events_rows"]
+    # Mask credentials in the DSN so the endpoint can be shown in dashboards.
+    masked_dsn = ""
+    if POSTGRES_DSN:
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(POSTGRES_DSN)
+            masked_dsn = f"{p.scheme}://{p.username or '<user>'}:****@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
+        except Exception:
+            masked_dsn = "(redacted)"
+    return web.json_response({
+        "active_backend": DB_BACKEND,
+        "sqlite":   sqlite_info,
+        "postgres": {**postgres_info,
+                      "dsn_masked": masked_dsn,
+                      "available": _postgres_available},
+        "ts": _t.time(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def lists_snapshot_endpoint(request: web.Request):
+    """1.6.5 — static-config snapshot: sizes of every allow / deny / pattern
+    list, with last-updated timestamps where available. Powers the Controls
+    dashboard's 'Allow/block list sizes' card and the Agents 'rule inventory'."""
+    n = _t.time()
+    snapshot = {
+        # UA blocklist (legacy + AI groups)
+        "ua_blocklist_size":      len(UA_BLOCKLIST),
+        "ai_ua_groups": {
+            grp: {"frags": len(frags),
+                   "enabled": bool(globals().get(f"AI_UA_{grp.upper()}_ENABLED"))}
+            for grp, frags in AI_UA_GROUPS.items()
+        },
+        # Country lists
+        "country_block_enabled":  bool(COUNTRY_BLOCK_ENABLED),
+        "country_denylist_size":  len(COUNTRY_DENYLIST or set()),
+        "country_allowlist_size": len(COUNTRY_ALLOWLIST or set()),
+        "country_denylist":       sorted(COUNTRY_DENYLIST or set()),
+        "country_allowlist":      sorted(COUNTRY_ALLOWLIST or set()),
+        # JA4 deny-list
+        "ja4_deny_size":          len(globals().get("JA4_DENY_LIST") or set()),
+        # Tor exits + DC
+        "tor_block_enabled":      bool(TOR_BLOCK_ENABLED),
+        "tor_exits_size":         len(_tor_exits),
+        "tor_loaded_at":          _tor_feed_stats.get("loaded_at", 0),
+        "tor_age_secs":           int(n - _tor_feed_stats["loaded_at"]) if _tor_feed_stats.get("loaded_at") else None,
+        "dc_vpn_block_enabled":   bool(DC_VPN_BLOCK_ENABLED),
+        "hosting_keywords_size":  len(HOSTING_ASN_KEYWORDS),
+        # Honeypot paths
+        "honeypot_paths_size":    len(HONEYPOT_PATHS),
+        # Body groups
+        "body_groups": {
+            grp: {"patterns": len(pats),
+                   "enabled": bool(globals().get(f"BODY_GROUP_{grp.upper()}_ENABLED"))}
+            for grp, pats in BODY_PATTERN_GROUPS.items()
+        },
+        # Suspicious-path patterns
+        "suspicious_path_patterns": len(SUSPICIOUS_PATH_PATTERNS),
+        # Custom rules
+        "custom_rules_size":      len(CUSTOM_RULES),
+        # Endpoint policies (with rate-limit summary)
+        "endpoint_policies":      [
+            {"path": p["path"] if isinstance(p, dict) else p[0],
+             "policy": p["policy"] if isinstance(p, dict) else p[1],
+             "rps":    (p.get("rps")   if isinstance(p, dict) else None),
+             "burst":  (p.get("burst") if isinstance(p, dict) else None)}
+            for p in (ENDPOINT_POLICIES or [])
+        ],
+        # JWT
+        "jwt_paths":              list(JWT_VALIDATE_PATHS or []),
+        # DLP groups
+        "dlp_groups": {
+            grp: {"patterns": len(pats),
+                   "enabled": bool(globals().get(f"DLP_GROUP_{grp.upper().replace('-','_')}_ENABLED"))}
+            for grp, pats in DLP_PATTERN_GROUPS.items()
+        },
+        # Webhook event filter
+        "webhook_event_filter":   list(WEBHOOK_EVENT_FILTER or []),
+        # Admin IPs
+        "admin_ip_count":         len(globals().get("ADMIN_ALLOWED_NETS") or []),
+        # Versions
+        "version":                "AppSecGW_1.6.10",
+        "ts":                     n,
+    }
+    return web.json_response(snapshot, headers={"Cache-Control":"no-store"})
+
+
+async def health_score_endpoint(request: web.Request):
+    """1.6.4 — single-number gateway health (0..100, green at 100, red at 0)
+    with a per-reason breakdown so operators can see what's pulling the
+    score down. Composed of:
+      • disk         : free space % at the data volume        (penalty if <30%)
+      • memory       : RSS vs system memory ceiling           (penalty if >70%)
+      • db           : SQLite file size vs sane ceiling       (penalty >2 GiB)
+      • integrations : configured external integrations green (penalty if any
+                       configured-but-failing AbuseIPDB / CrowdSec / MaxMind)
+      • bans         : count of currently-banned identities    (info only)
+      • errors       : recent block-rate vs total              (info only)
+    Each reason returns: {key, status (ok/warn/bad), value, weight, detail}.
+    The score is 100 minus the sum of weights of `bad`/`warn` reasons,
+    floored at 0."""
+    n = now()
+    reasons = []
+    score = 100
+
+    # 1. Disk free
+    disk = _disk_usage(os.path.dirname(_DATA_PATH) or "/")
+    free_pct = max(0, 100 - disk.get("pct", 0)) if disk else 0
+    if disk:
+        if free_pct < 5:
+            status, weight = "bad", 30
+        elif free_pct < 15:
+            status, weight = "warn", 15
+        elif free_pct < 30:
+            status, weight = "warn", 5
+        else:
+            status, weight = "ok", 0
+        reasons.append({
+            "key": "disk", "status": status, "weight": weight,
+            "value": f"{free_pct:.1f}% free",
+            "detail": f"{(disk.get('avail',0)/(1024**3)):.2f} GiB free of "
+                       f"{(disk.get('total',0)/(1024**3)):.2f} GiB on "
+                       f"{os.path.dirname(_DATA_PATH) or '/'}",
+        })
+        score -= weight
+    else:
+        reasons.append({"key": "disk", "status": "warn", "weight": 5,
+                        "value": "unknown", "detail": "statvfs failed"})
+        score -= 5
+
+    # 2. Memory (RSS) — soft ceiling at 256 MiB, hard at 1 GiB
+    rss = 0
+    try:
+        with open(f"{_PROC}/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1]) * 1024
+                    break
+    except Exception:
+        pass
+    rss_mib = rss / (1024 * 1024) if rss else 0
+    if rss_mib == 0:
+        status, weight = "warn", 3
+        detail = "could not read /proc/self/status"
+    elif rss_mib > 1024:
+        status, weight = "bad", 25
+        detail = f"RSS {rss_mib:.0f} MiB (>1 GiB) — investigate"
+    elif rss_mib > 512:
+        status, weight = "warn", 10
+        detail = f"RSS {rss_mib:.0f} MiB (>512 MiB)"
+    elif rss_mib > 256:
+        status, weight = "warn", 3
+        detail = f"RSS {rss_mib:.0f} MiB (>256 MiB)"
+    else:
+        status, weight = "ok", 0
+        detail = f"RSS {rss_mib:.0f} MiB"
+    reasons.append({"key": "memory", "status": status, "weight": weight,
+                    "value": f"{rss_mib:.0f} MiB", "detail": detail})
+    score -= weight
+
+    # 3. DB file size — soft ceiling 2 GiB, hard ceiling 10 GiB on SQLite
+    db_size = 0
+    try:
+        if os.path.exists(DB_PATH):
+            db_size = os.path.getsize(DB_PATH)
+    except Exception:
+        pass
+    db_mib = db_size / (1024 * 1024)
+    if db_mib > 10240:
+        status, weight = "bad", 20
+        detail = f"DB {db_mib:.0f} MiB — consider DB_BACKEND=postgres"
+    elif db_mib > 2048:
+        status, weight = "warn", 8
+        detail = f"DB {db_mib:.0f} MiB — approaching SQLite comfort limit"
+    else:
+        status, weight = "ok", 0
+        detail = f"DB {db_mib:.0f} MiB on {DB_BACKEND}"
+    reasons.append({"key": "db", "status": status, "weight": weight,
+                    "value": f"{db_mib:.0f} MiB", "detail": detail})
+    score -= weight
+
+    # 4. Integrations — penalty when something is CONFIGURED but failing
+    int_problems = []
+    if ABUSEIPDB_KEY and _abuseipdb_stats.get("last_error"):
+        int_problems.append(f"AbuseIPDB: {_abuseipdb_stats['last_error'][:80]}")
+    if CROWDSEC_LAPI_URL and _crowdsec_stats.get("last_error"):
+        int_problems.append(f"CrowdSec: {_crowdsec_stats['last_error'][:80]}")
+    if not MAXMIND_CITY_ENABLED and os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+        int_problems.append("MaxMind: license key set but City DB not loaded")
+    if int_problems:
+        if len(int_problems) >= 2:
+            status, weight = "bad", 20
+        else:
+            status, weight = "warn", 8
+        detail = " · ".join(int_problems)
+    else:
+        status, weight = "ok", 0
+        detail = "all configured integrations healthy"
+    reasons.append({
+        "key": "integrations", "status": status, "weight": weight,
+        "value": f"{len(int_problems)} problem(s)" if int_problems else "OK",
+        "detail": detail,
+    })
+    score -= weight
+
+    # 5. Active bans (informational — large numbers can mean we're under
+    # attack, which is the gateway working as designed; flag yellow only
+    # when the ban list is unusually large to surface NAT-style bans)
+    async with state_lock:
+        banned_now = sum(1 for s in ip_state.values() if s.banned_until > n)
+    if banned_now > 1000:
+        status, weight = "warn", 5
+        detail = f"{banned_now} active bans (large — review NAT bans)"
+    else:
+        status, weight = "ok", 0
+        detail = f"{banned_now} active bans"
+    reasons.append({"key": "bans", "status": status, "weight": weight,
+                    "value": str(banned_now), "detail": detail})
+    score -= weight
+
+    # 6. Recent error / block ratio (last hour)
+    blocked = clean = 0
+    try:
+        cutoff = _t.time() - 3600
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT reason, COUNT(*) FROM events WHERE ts >= ? GROUP BY reason",
+            (cutoff,)).fetchall()
+        conn.close()
+        for reason, count in rows:
+            if reason and reason != "OK":
+                blocked += count
+            else:
+                clean += count
+    except Exception:
+        pass
+    total = blocked + clean
+    block_ratio = blocked / total if total else 0
+    if total < 100:
+        status, weight = "ok", 0
+        detail = f"only {total} requests in last hour (low traffic)"
+    elif block_ratio > 0.95:
+        status, weight = "warn", 5
+        detail = (f"{block_ratio*100:.0f}% blocks "
+                  f"({blocked}/{total}) — likely under sustained attack")
+    elif block_ratio > 0.50:
+        status, weight = "warn", 3
+        detail = f"{block_ratio*100:.0f}% blocks ({blocked}/{total})"
+    else:
+        status, weight = "ok", 0
+        detail = f"{block_ratio*100:.0f}% blocks ({blocked}/{total})"
+    reasons.append({"key": "block_rate", "status": status, "weight": weight,
+                    "value": f"{block_ratio*100:.0f}%", "detail": detail})
+    score -= weight
+
+    score = max(0, min(100, score))
+    return web.json_response({
+        "score":       score,
+        "reasons":     reasons,
+        "version":     "AppSecGW_1.6.10",
+        "upstream":    UPSTREAM,
+        "db_backend":  DB_BACKEND,
+        "uptime_secs": int(_t.time() - START_EPOCH),
+        "ts":          _t.time(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def metrics_endpoint(request: web.Request):
+    """JSON metrics dump consumed by the dashboard."""
+    async with state_lock:
+        n = now()
+        clients = []
+        for key, s in sorted(ip_state.items(),
+                             key=lambda kv: kv[1].request_count, reverse=True):
+            elapsed = n - s.last_refill
+            tokens = min(RATE_LIMIT_BURST, s.tokens + elapsed * RATE_LIMIT_REFILL)
+            # Apply decay before reporting current score
+            _decay_risk(s, n)
+            # 1.5.5 — also compute stealth_score so the main-dashboard
+            # Clients table can show it (synthetic fallback from
+            # risk_score / blocked_count when no allowed-traffic signal).
+            _ssc, _, _ = _stealth_score(s)
+            if _ssc == 0:
+                if s.risk_score > 0:
+                    _ssc = min(100, int(s.risk_score))
+                elif s.blocked_count > 0:
+                    _ssc = min(100, 30 + min(50, s.blocked_count * 2))
+            clients.append({
+                "id": key,
+                "ip": key,
+                "last_ip": s.last_ip or key,
+                "last_session": s.last_session,
+                "last_fingerprint": s.last_fingerprint,
+                "tokens": round(tokens, 1),
+                "requests": s.request_count,
+                "allowed": s.allowed_count,
+                "blocked": s.blocked_count,
+                "blocks_by_reason": dict(s.blocks_by_reason),
+                "banned_secs": max(0, round(s.banned_until - n, 0)),
+                "last_seen_secs_ago": round(n - s.last_seen, 1),
+                "first_seen_secs_ago": round(n - s.first_seen, 1),
+                "last_ua": s.last_user_agent,
+                "last_path": s.last_path,
+                "risk_score": round(s.risk_score, 1),
+                "stealth_score": _ssc,
+            })
+        recent_events = list(events)[-50:]
+        recent_events.reverse()  # newest first
+        top_paths = sorted(metrics["by_path"].items(),
+                           key=lambda kv: kv[1], reverse=True)[:10]
+
+        # Build a timeline window with configurable granularity + scroll position.
+        #   ?range=N    → window length in minutes (5..1440)
+        #   ?bucket=S   → bucket width in seconds (60, 300, 900, 3600, 86400)
+        #   ?end=EPOCH  → right edge of the window (defaults to now)
+        try:
+            range_min = max(5, min(10080, int(request.query.get("range", "60"))))  # up to 7 days
+        except ValueError:
+            range_min = 60
+        try:
+            bucket_secs = int(request.query.get("bucket", "60"))
+            if bucket_secs not in (60, 300, 900, 3600, 86400):
+                bucket_secs = 60
+        except ValueError:
+            bucket_secs = 60
+        try:
+            end_epoch = int(request.query.get("end", str(int(_t.time()))))
+        except ValueError:
+            end_epoch = int(_t.time())
+
+        # Round end to bucket boundary for stable X-axis ticks
+        end_b = (end_epoch // bucket_secs) * bucket_secs
+        window_secs = range_min * 60
+        # Cap number of points at ~250 to avoid mega-payloads
+        bucket_count = min(250, max(2, window_secs // bucket_secs))
+        start_b = end_b - (bucket_count - 1) * bucket_secs
+
+        # If bucket >= 1m, aggregate the in-memory minute buckets into coarser ones.
+        # For older data outside in-memory retention, query the DB.
+        timeline_out = []
+        # In-memory available range
+        in_mem_oldest = end_b - TIMELINE_RETAIN_SECS
+        # DB fallback only if needed
+        db_buckets = {}
+        if start_b < in_mem_oldest:
+            try:
+                conn = sqlite3.connect(DB_PATH)
+                conn.row_factory = sqlite3.Row
+                for row in conn.execute(
+                    "SELECT bucket_minute, total, allowed, blocked, missed FROM timeline "
+                    "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
+                    (start_b, end_b + 60)
+                ):
+                    db_buckets[row["bucket_minute"]] = row
+                conn.close()
+            except Exception:
+                pass
+
+        for slot in range(start_b, end_b + 1, bucket_secs):
+            agg = {"total": 0, "allowed": 0, "blocked": 0, "missed": 0}
+            # Sum every 1-min bucket falling inside [slot, slot + bucket_secs)
+            for m in range(slot, slot + bucket_secs, 60):
+                d = timeline.get(m)
+                if not d:
+                    d = db_buckets.get(m)
+                if d:
+                    agg["total"] += d["total"]
+                    agg["allowed"] += d["allowed"]
+                    agg["blocked"] += d["blocked"]
+                    # `missed` only present in 1.5.4+ rows
+                    try:
+                        agg["missed"] += (d["missed"] if d["missed"] is not None else 0)
+                    except (IndexError, KeyError):
+                        pass
+            timeline_out.append({"t": slot, **agg})
+
+        # 1.5.1: live throughput from the rolling 1-second window. Used by
+        # the main-dashboard threshold slider to show current load vs limit.
+        cur_n = _t.time()
+        live_rps = sum(1 for ts in _global_rps_window if ts > cur_n - 1.0)
+
+        # 1.5.4 — services / external integrations health.
+        # We surface lightweight counters here so the dashboard can show the
+        # operator at a glance which extras are wired up + their hit/miss.
+        services = {
+            "redis": {
+                "url":       REDIS_URL or None,
+                "connected": _redis is not None,
+            },
+            # 1.5.5 — SQLite persistence layer status
+            "db": {
+                "backend":   DB_BACKEND,         # 1.6.5 — active selection
+                "path":      DB_PATH,
+                "exists":    os.path.exists(DB_PATH),
+                "size_bytes": (os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0),
+                "wal_size_bytes": (os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0),
+                "configured": True,
+                "enabled":    DB_BACKEND == "sqlite",
+            },
+            # 1.6.5 — Postgres / TimescaleDB persistence layer status
+            "db_postgres": {
+                "configured": bool(POSTGRES_DSN),
+                "enabled":    DB_BACKEND == "postgres" and _postgres_available,
+                "available":  _postgres_available,
+                **({"db_bytes":  pg_db_size().get("db_bytes"),
+                    "events_rows": pg_db_size().get("events_rows")}
+                   if (DB_BACKEND == "postgres" and _postgres_available) else {}),
+            },
+            "abuseipdb": {
+                "configured": bool(ABUSEIPDB_KEY),
+                "enabled":    ABUSEIPDB_ENABLED,
+            },
+            "crowdsec": {
+                "configured": bool(globals().get("CROWDSEC_LAPI_URL", "")),
+                "enabled":    bool(globals().get("CROWDSEC_ENABLED", False)),
+            },
+            "maxmind": {
+                "loaded":  globals().get("_asn_reader") is not None,
+                "enabled": bool(globals().get("MAXMIND_ENABLED", False)),
+            },
+            "turnstile": {
+                "configured": _TURNSTILE_CONFIGURED,
+                "enabled":    TURNSTILE_ENABLED and JS_CHALLENGE,
+            },
+            "anubis": {
+                "enabled":          ANUBIS_ENABLED,
+                "difficulty_boost": ANUBIS_DIFFICULTY_BOOST,
+                "effective_diff":   POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0),
+            },
+        }
+
+        # 1.5.4 — per-detector hit counts (derived from blocks_by_reason on
+        # global metrics). The dashboard renders these alongside services so
+        # the operator sees which detectors are actually firing.
+        detector_hits = {
+            "honeypot":            metrics["by_reason"].get("honeypot-silent", 0) + metrics["by_reason"].get("honeypot", 0),
+            "suspicious_path":     metrics["by_reason"].get("suspicious-path", 0),
+            "ai_probe":            metrics["by_reason"].get("ai-probe", 0),
+            "ai_enumeration":      metrics["by_reason"].get("ai-enumeration", 0),
+            "ai_no_assets":        metrics["by_reason"].get("ai-no-assets", 0),
+            "ua_filter":           sum(metrics["by_reason"].get(k, 0) for k in
+                                       ("ua-empty","ua-too-short","ua-blocked","ua-non-browser")),
+            "ua_platform_check":   metrics["by_reason"].get("ua-platform-mismatch", 0),
+            "header_completeness": sum(metrics["by_reason"].get(k, 0) for k in
+                                       ("ai-headers-empty","ai-headers-incomplete","missing-required-header")),
+            "behavioral_check":    metrics["by_reason"].get("behavior", 0),
+            "session_flood":       metrics["by_reason"].get("session-flood", 0),
+            "upstream_404":        metrics["by_reason"].get("upstream-404", 0),
+            "rate_limit_ip":       metrics["by_reason"].get("rate-limit-ip", 0),
+            "rate_limit_session":  metrics["by_reason"].get("rate-limit", 0),
+            "bot_trap":            metrics["by_reason"].get("bot-trap", 0),
+            "canary_echo":         metrics["by_reason"].get("canary-echo", 0),
+            "ja4_banned":          metrics["by_reason"].get("fp-banned", 0),
+            "host_not_allowed":    metrics["by_reason"].get("host-not-allowed", 0),
+            "abuseipdb":           sum(metrics["by_reason"].get(k, 0) for k in
+                                       ("abuseipdb-high","abuseipdb-med")),
+            "crowdsec":            metrics["by_reason"].get("crowdsec-banned", 0),
+            "asn_hosting":         metrics["by_reason"].get("asn-hosting", 0),
+            "js_challenge":        metrics["by_reason"].get("chal-required", 0),
+            "missed_medium_risk":  metrics.get("missed", 0),
+        }
+
+        return web.json_response({
+            "uptime_secs": int(_t.time() - START_EPOCH),
+            "total": metrics["total_requests"],
+            "allowed": metrics["allowed"],
+            "blocked": metrics["blocked"],
+            "missed": metrics.get("missed", 0),
+            "by_reason": dict(metrics["by_reason"]),
+            "by_status": {str(k): v for k, v in metrics["by_status"].items()},
+            "top_paths": [{"path": p, "count": c} for p, c in top_paths],
+            "clients": clients,
+            "events": recent_events,
+            "live_rps": live_rps,
+            "global_rps_limit": GLOBAL_RPS_LIMIT,
+            "timeline": timeline_out,
+            "timeline_range_min": range_min,
+            "timeline_bucket_secs": bucket_secs,
+            "timeline_end_epoch": end_b,
+            "timeline_is_live": end_epoch >= int(_t.time()) - 30,
+            "services":      services,
+            "detector_hits": detector_hits,
+            "config": {
+                "burst": RATE_LIMIT_BURST,
+                "refill": RATE_LIMIT_REFILL,
+                "trust_xff": TRUST_XFF,
+                "upstream": UPSTREAM,
+                "honeypot_ban_secs": HONEYPOT_BAN_SECS,
+                "pow_difficulty": POW_DIFFICULTY,
+            },
+        }, headers={"Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff"})
+
+async def dashboard_endpoint(request: web.Request):
+    """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics)."""
+    body = DASHBOARD_HTML
+    return web.Response(
+        text=body,
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+DASHBOARD_HTML         = (_DASHBOARDS_DIR / "main.html").read_text(encoding="utf-8")
+
+async def unban_endpoint(request: web.Request):
+    """Admin: clear ban + risk score for an identity (or all). Useful when a
+    false-positive pushed someone over threshold.
+      ?id=<identity>   — unban a single identity (track_key)
+      ?ip=<ip>         — unban every identity whose last_ip matches
+      ?all=1           — clear ALL bans + reset risk_score on every identity
+    """
+    target_id = request.query.get("id")
+    target_ip = request.query.get("ip")
+    do_all = request.query.get("all") in ("1", "true", "yes")
+    cleared = 0
+    async with state_lock:
+        n = now()
+        for k, s in ip_state.items():
+            match = (do_all
+                     or (target_id and k == target_id)
+                     or (target_ip and s.last_ip == target_ip))
+            if match:
+                if s.banned_until > n:
+                    s.banned_until = 0.0
+                s.risk_score = 0.0
+                cleared += 1
+        # Also clear DB bans table for matched IPs (best-effort).
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            if do_all:
+                conn.execute("DELETE FROM bans")
+                conn.execute("UPDATE clients SET banned_until_epoch=0")
+            elif target_ip:
+                conn.execute("DELETE FROM bans WHERE ip=?", (target_ip,))
+                conn.execute("UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
+                             (target_ip,))
+            elif target_id:
+                conn.execute("DELETE FROM bans WHERE ip=?", (target_id,))
+                conn.execute("UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
+                             (target_id,))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[unban] db error: {e}")
+    return web.json_response({"cleared": cleared, "scope":
+        "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
+        headers={"Cache-Control": "no-store"})
+
+async def scoring_endpoint(request: web.Request):
+    """Read-only view of the bot scoring config: per-signal weight, ban
+    thresholds, decay, and a short description per signal so the operator
+    can reason about why a given identity got banned."""
+    DESCRIPTIONS = {
+        "honeypot":              ("hard", "Hit a honeypot path (/.git/HEAD, /.env, /wp-admin, …)"),
+        "honeypot-silent":       ("hard", "Honeypot hit — silently decoyed (same severity)"),
+        "suspicious-path":       ("hard", "Path matches CTF/file-hunting/SQLi/LFI regex"),
+        "ai-probe":              ("med",  "Hit an AI-probe endpoint (/openapi.json, /llms.txt, …)"),
+        "ai-enumeration":        ("med",  ">300 distinct paths per identity (scanner)"),
+        "behavior":              ("soft", "Inter-arrival σ/μ < 0.05 — robotic timing"),
+        "ua-empty":              ("med",  "User-Agent header missing"),
+        "ua-blocked":            ("med",  "UA matched blocklist (curl, python-requests, sqlmap, …)"),
+        "ua-non-browser":        ("med",  "UA does not look like a browser"),
+        "ai-headers-empty":      ("med",  "No Accept-* nor Sec-Fetch-* headers"),
+        "ua-too-short":          ("soft", "UA suspiciously short (< 12 chars)"),
+        "ai-headers-incomplete": ("soft", "Browser UA but Sec-Ch-Ua / Sec-Fetch-* absent"),
+        "upstream-404":          ("soft", "Upstream returned 404 (small enumeration tick)"),
+        "ai-no-assets":          ("soft", "≥25 HTML loads, 0 static asset fetches"),
+        "session-flood":         ("soft", "Many distinct identities minted from same IP"),
+        "rate-limit-ip":         ("soft", "Per-IP rate limit hit (no risk; just throttle)"),
+        "rate-limit":            ("soft", "Per-identity rate limit hit (no risk; just throttle)"),
+        "host-not-allowed":      ("med",  "Host header not in ALLOWED_HOSTS"),
+        "suspicious-body":       ("med",  "POST body matches SQLi/XSS/SSTI/cmd patterns"),
+        "bot-trap":              ("hard", "Hidden honey field in form was filled"),
+        "canary-echo":           ("hard", "Echoed back an agw-c-* canary token (LLM agent)"),
+        "session-churn":         ("hard", "Same UA+IP-tier+JA4 minted N cookies in window"),
+        "fp-banned":             ("info", "Already-banned fingerprint hit (counter only)"),
+        "traffic-threshold":     ("info", "Operator-set GLOBAL_RPS_LIMIT cap"),
+        "js-challenge":          ("soft", "Unsolved JS challenge attempt"),
+        "tls-fingerprint":       ("med",  "JA3/JA4 in JA4_DENY_LIST"),
+        "origin-mismatch":       ("med",  "STRICT_ORIGIN: Origin header mismatch"),
+        "missing-required-header": ("med", "REQUIRED_HEADERS not all present"),
+        "ua-platform-mismatch":  ("med",  "UA / Sec-Ch-Ua / platform headers contradict"),
+        "accept-wildcard-html":  ("soft", "Accept: */* on HTML navigation request"),
+        "accept-fp":             ("soft", "Accept header fingerprint mismatch — browser UA on HTML navigation but Accept lacks text/html (e.g. application/json). Real browsers always include text/html on document navigation."),
+        "labyrinth-jitter":      ("modifier", "Tarpit timing jitter — Gaussian-distributed random delay (200–3000 ms, σ=500 ms) per chunk instead of fixed LABYRINTH_SLOW_MS. Makes it harder for bots to fingerprint the gateway by timing the delay cadence."),
+        "header-canary":         ("modifier", "Header canary injection — plants a per-identity HMAC-signed token in ETag and X-Request-Id response headers. AI frameworks that replay full response headers (LangChain, AutoGen) echo the token back, triggering the canary-echo ban."),
+        # ── 1.6.10 ──
+        "header-order-fp":       ("soft",     "Header-order library fingerprint (+8) — the ordered set of HTTP header names matches a known library pattern (python-requests, curl, Go net/http, httpx). Real browsers send 10+ headers in a consistent browser-defined order."),
+        "ai-ua-ip-mismatch":     ("med",      "AI-crawler UA / IP mismatch (+30) — claimed to be an OpenAI/Perplexity crawler but source IP is not in the vendor's published CIDR range. Strong spoof indicator."),
+        "locale-geo-mismatch":   ("soft",     "Accept-Language / GeoIP mismatch (+10) — primary language tag in Accept-Language is implausible for the GeoIP country (e.g. Accept-Language: ru from a US IP). Fires only for countries with a single dominant language."),
+        "robots-violation":      ("soft",     "robots.txt violation (+5) — declared AI-crawler UA ignored the gateway's robots.txt (Disallow: / for all known AI bots). Fires alongside ua-ai-* to add violation context to the event log."),
+        "h2-fp":                 ("soft",     "HTTP/2 fingerprint fallback (+3) — HTTP/1.1 request from a modern-browser UA behind a TLS proxy. Real browsers always negotiate HTTP/2 on HTTPS; libraries default to HTTP/1.1. Requires H2_FP_ENABLED=1."),
+        "json-canary":           ("modifier", "JSON canary injection — plants a \"_ref\" token in JSON object responses. LLM agents that cache and replay API responses echo the token back, triggering canary-echo detection."),
+        "ja4-required-missing":  ("soft", "JA4 expected from trusted peer but absent"),
+        "headers-suspicious":    ("soft", "Generic header-shape anomaly"),
+        "abuseipdb-high":        ("hard", "AbuseIPDB confidence ≥ 80 — community-vetted bad IP"),
+        "abuseipdb-med":         ("med",  "AbuseIPDB confidence in [40,80)"),
+        "crowdsec-banned":       ("hard", "CrowdSec LAPI returned an active decision for this IP"),
+        "asn-hosting":           ("soft", "Source IP belongs to a hosting/cloud provider ASN"),
+        # ── 1.6.0: Tier-A signals ──
+        "country-blocked":       ("hard", "Source country in COUNTRY_DENYLIST (or outside COUNTRY_ALLOWLIST)"),
+        "tor-exit":              ("hard", "Source IP is a known Tor exit node"),
+        "datacenter-vpn":        ("med",  "Source IP is in a known datacenter/VPN feed"),
+        "ua-ai-openai":          ("med",  "AI-crawler UA: OpenAI / GPTBot / ChatGPT-User / OAI-SearchBot"),
+        "ua-ai-anthropic":       ("med",  "AI-crawler UA: ClaudeBot / Claude-Web / anthropic-ai"),
+        "ua-ai-google":          ("med",  "AI-crawler UA: Google-Extended / Bard / Gemini"),
+        "ua-ai-perplexity":      ("med",  "AI-crawler UA: PerplexityBot"),
+        "ua-ai-meta":            ("med",  "AI-crawler UA: Meta-ExternalAgent / FacebookBot"),
+        "ua-ai-other":           ("med",  "Other AI-crawler UAs (Bytespider, CCBot, Cohere, etc.)"),
+        # ── 1.6.1: Tier-B signals ──
+        "custom-rule-block":     ("hard", "Operator-defined CUSTOM_RULES IF/THEN block matched"),
+        "rate-limit-endpoint":   ("info", "Per-endpoint rate limit hit (no risk; just throttle)"),
+        "body-sqli":             ("hard", "Body matched SQL-injection pattern group"),
+        "body-xss":              ("hard", "Body matched cross-site-scripting pattern group"),
+        "body-lfi":              ("hard", "Body matched local-file-inclusion pattern group"),
+        "body-rce":              ("hard", "Body matched remote-code-execution pattern group"),
+        "body-ssrf":             ("hard", "Body matched server-side-request-forgery pattern group"),
+        "body-cmd":              ("hard", "Body matched OS-command-injection pattern group"),
+        "auth-jwt-invalid":      ("med",  "JWT missing / invalid signature on JWT_VALIDATE_PATHS route"),
+        "slow-client":           ("soft", "Body upload exceeded BODY_TIMEOUT (slowloris guard)"),
+        "botd-detected":         ("med",  "FingerprintJS BotD client-side library reported the visitor as a bot (headless / WebDriver / automation markers)"),
+        # ── 1.6.2: Tier-C DLP (response-side) ──
+        # 1.6.3 — promoted from "info" to "intel" tier. DLP fires aren't
+        # operational chatter (rate-limit) — they're upstream leaks the
+        # operator must investigate. Distinct tier + colour in dashboards.
+        "dlp-cc":                ("intel", "Upstream response contained a Luhn-valid credit-card number"),
+        "dlp-aws":               ("intel", "Upstream response contained an AWS access-key / secret"),
+        "dlp-jwt":               ("intel", "Upstream response contained a JWT (eyJ…)"),
+        "dlp-private-key":       ("intel", "Upstream response contained a PEM private key"),
+        "dlp-api-key":           ("intel", "Upstream response contained an API-key-shaped token (Slack / GitHub / OpenAI / labelled)"),
+        "dlp-pii-email":         ("intel", "Upstream response contained an email address (off by default — noisy)"),
+        "dlp-pii-ssn":           ("intel", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
+        # ── 1.6.9: AI Labyrinth ──
+        "tarpit-walk":           ("hard",  "Client followed a hidden rel=nofollow link injected into proxied HTML — only automated crawlers traverse invisible links. Near-zero FP; instant ban + response deliberately slow-dripped to exhaust crawler resources."),
+    }
+    # Each entry annotated with the runtime-toggle knob (if any) that
+    # controls whether the detector runs. UI uses this to render a switch
+    # next to the weight, merging the old "Toggles" and "Bot scoring
+    # weights" cards into a single table.
+    SIGNAL_KNOB = {
+        # Operator-toggleable detectors → runtime ON/OFF switch
+        "js-challenge":       "JS_CHALLENGE",
+        "bot-trap":           "BOT_TRAP_FORMS",
+        "suspicious-body":    "BODY_PATTERN_MATCH",
+        "canary-echo":        "CANARY_ECHO_DETECTION",
+        "accept-fp":          "ACCEPT_FP_ENABLED",
+        "labyrinth-jitter":   "LABYRINTH_JITTER_ENABLED",
+        "header-canary":      "HEADER_CANARY_ENABLED",
+        "origin-mismatch":    "STRICT_ORIGIN",
+        "tls-fingerprint":    None,
+        "abuseipdb-high":     "ABUSEIPDB_ENABLED",
+        "abuseipdb-med":      "ABUSEIPDB_ENABLED",
+        "crowdsec-banned":    "CROWDSEC_ENABLED",
+        "asn-hosting":        "MAXMIND_ENABLED",
+        # 1.6.0 — Tier-A toggles
+        "country-blocked":    "COUNTRY_BLOCK_ENABLED",
+        "tor-exit":           "TOR_BLOCK_ENABLED",
+        "datacenter-vpn":     "DC_VPN_BLOCK_ENABLED",
+        "ua-ai-openai":       "AI_UA_OPENAI_ENABLED",
+        "ua-ai-anthropic":    "AI_UA_ANTHROPIC_ENABLED",
+        "ua-ai-google":       "AI_UA_GOOGLE_ENABLED",
+        "ua-ai-perplexity":   "AI_UA_PERPLEXITY_ENABLED",
+        "ua-ai-meta":         "AI_UA_META_ENABLED",
+        "ua-ai-other":        "AI_UA_OTHER_ENABLED",
+        # 1.6.1 — Tier-B toggles
+        "custom-rule-block":  None,                       # always-on (rules opt-in)
+        "rate-limit-endpoint": None,                      # part of ENDPOINT_POLICIES
+        "body-sqli":          "BODY_GROUP_SQLI_ENABLED",
+        "body-xss":           "BODY_GROUP_XSS_ENABLED",
+        "body-lfi":           "BODY_GROUP_LFI_ENABLED",
+        "body-rce":           "BODY_GROUP_RCE_ENABLED",
+        "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
+        "body-cmd":           "BODY_GROUP_CMD_ENABLED",
+        "auth-jwt-invalid":   None,                       # gated by JWT_VALIDATE_PATHS
+        "slow-client":        None,                       # always-on (BODY_TIMEOUT structural)
+        "botd-detected":      "BOTD_ENABLED",              # 1.6.5 — client-side fingerprintjs/botd
+        # 1.6.2 — Tier-C DLP toggles
+        "dlp-cc":             "DLP_GROUP_CC_ENABLED",
+        "dlp-aws":            "DLP_GROUP_AWS_ENABLED",
+        "dlp-jwt":            "DLP_GROUP_JWT_ENABLED",
+        "dlp-private-key":    "DLP_GROUP_PRIVATE_KEY_ENABLED",
+        "dlp-api-key":        "DLP_GROUP_API_KEY_ENABLED",
+        "dlp-pii-email":      "DLP_GROUP_PII_EMAIL_ENABLED",
+        "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
+        # 1.6.9 — AI Labyrinth
+        "tarpit-walk":        "LABYRINTH_ENABLED",
+        # 1.6.10
+        "header-order-fp":    "HEADER_ORDER_FP_ENABLED",
+        "ai-ua-ip-mismatch":  "AI_CRAWLER_VERIFY_ENABLED",
+        "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
+        "robots-violation":   "ROBOTS_MONITOR_ENABLED",
+        "h2-fp":              "H2_FP_ENABLED",
+        "json-canary":        "JSON_CANARY_ENABLED",
+        # 1.5.4: 11 new per-detector kill-switches
+        "honeypot":           "HONEYPOT_ENABLED",
+        "honeypot-silent":    "HONEYPOT_ENABLED",
+        "suspicious-path":    "SUSPICIOUS_PATH_ENABLED",
+        "ai-probe":           "AI_PROBE_ENABLED",
+        "ua-empty":           "UA_FILTER_ENABLED",
+        "ua-blocked":         "UA_FILTER_ENABLED",
+        "ua-too-short":       "UA_FILTER_ENABLED",
+        "ua-non-browser":     "UA_FILTER_ENABLED",
+        "ua-platform-mismatch": "UA_PLATFORM_CHECK_ENABLED",
+        "ai-headers-empty":   "HEADER_COMPLETENESS_ENABLED",
+        "ai-headers-incomplete": "HEADER_COMPLETENESS_ENABLED",
+        "behavior":           "BEHAVIORAL_CHECK_ENABLED",
+        "ai-enumeration":     "AI_ENUMERATION_ENABLED",
+        "ai-no-assets":       "AI_NO_ASSETS_ENABLED",
+        "session-flood":      "SESSION_FLOOD_ENABLED",
+        "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
+    }
+    # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
+    #
+    # kind values:
+    #   "in-process" — pure string/header checks, O(1) set/dict ops (µs range)
+    #   "state"      — accesses shared mutable state (rate buckets, risk scores, sets)
+    #   "regex"      — regex scan on path or body content (scales with body size)
+    #   "mmdb"       — in-memory MaxMind DB lookup (never network; sub-ms always)
+    #   "network"    — outbound API call to AbuseIPDB / CrowdSec LAPI
+    #   "response"   — scans upstream response body (DLP); adds to response latency, not request
+    #   "adversary"  — intentional delay; never fires for legitimate traffic
+    #
+    # For "adversary" kind, typical/p99 represent the forced adversary delay,
+    # NOT gateway overhead on normal traffic (which is 0).
+    SIGNAL_COST = {
+        # ── External integrations (network call) ─────────────────────────
+        "abuseipdb-high":       {"kind": "network",     "cached": 0.3,  "typical": 150,   "p99": 450},
+        "abuseipdb-med":        {"kind": "network",     "cached": 0.3,  "typical": 150,   "p99": 450},
+        "crowdsec-banned":      {"kind": "network",     "cached": 0.2,  "typical": 5,     "p99": 20},
+        # ── MaxMind in-memory DB lookups ──────────────────────────────────
+        "asn-hosting":          {"kind": "mmdb",        "cached": 0.1,  "typical": 0.1,   "p99": 0.5},
+        "country-blocked":      {"kind": "mmdb",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        "datacenter-vpn":       {"kind": "mmdb",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # ── Regex scans on request path / body ───────────────────────────
+        # suspicious-path: 70+ patterns (1.6.5 expansion) applied to URL path
+        "suspicious-path":      {"kind": "regex",       "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # suspicious-body: 70+ patterns across POST body; scales with UPSTREAM_MAX_BODY
+        "suspicious-body":      {"kind": "regex",       "cached": 0,    "typical": 0.8,   "p99": 5},
+        # body group scanners — separate regex families, applied on POST/PUT/PATCH bodies
+        "body-sqli":            {"kind": "regex",       "cached": 0,    "typical": 0.3,   "p99": 2.0},
+        "body-xss":             {"kind": "regex",       "cached": 0,    "typical": 0.3,   "p99": 2.0},
+        "body-lfi":             {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        "body-rce":             {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        "body-ssrf":            {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        "body-cmd":             {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        # canary-echo: dict lookup + header scan + body scan
+        "canary-echo":          {"kind": "regex",       "cached": 0,    "typical": 0.2,   "p99": 1.5},
+        # bot-trap: scan form body for hidden field value
+        "bot-trap":             {"kind": "regex",       "cached": 0,    "typical": 0.1,   "p99": 1},
+        # ── In-process checks (O(1), no I/O) ─────────────────────────────
+        "honeypot":             {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "honeypot-silent":      {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "ai-probe":             {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "ua-empty":             {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.01},
+        "ua-too-short":         {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.01},
+        # ua-blocked: substring scan across 60+ UA entries (lowercase)
+        "ua-blocked":           {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-non-browser":       {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "ua-platform-mismatch": {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "ua-ai-openai":         {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-anthropic":      {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-google":         {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-perplexity":     {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-meta":           {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ua-ai-other":          {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "ai-headers-empty":     {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.01},
+        "ai-headers-incomplete":{"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.01},
+        "accept-wildcard-html": {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "accept-fp":            {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "labyrinth-jitter":     {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
+        "header-canary":        {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
+        # 1.6.10
+        "header-order-fp":      {"kind": "in-process",  "cached": 0,    "typical": 0.01,  "p99": 0.05},
+        "ai-ua-ip-mismatch":    {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "locale-geo-mismatch":  {"kind": "mmdb",        "cached": 0.1,  "typical": 0.1,   "p99": 0.5},
+        "robots-violation":     {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "h2-fp":                {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "json-canary":          {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
+        "headers-suspicious":   {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "host-not-allowed":     {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "tls-fingerprint":      {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "ja4-required-missing": {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "missing-required-header":{"kind":"in-process", "cached": 0,    "typical": 0.005, "p99": 0.01},
+        "origin-mismatch":      {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "tor-exit":             {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        # custom-rule-block: fnmatch + dict ops on CUSTOM_RULES list
+        "custom-rule-block":    {"kind": "in-process",  "cached": 0,    "typical": 0.05,  "p99": 0.5},
+        # auth-jwt-invalid: base64 decode + HMAC-SHA-256 verify
+        "auth-jwt-invalid":     {"kind": "in-process",  "cached": 0,    "typical": 0.5,   "p99": 2.0},
+        # ── Shared-state access (rate buckets, risk counters, behavioral windows) ──
+        "behavior":             {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "ai-enumeration":       {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "ai-no-assets":         {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "session-flood":        {"kind": "state",        "cached": 0,    "typical": 0.01,  "p99": 0.05},
+        "session-churn":        {"kind": "state",        "cached": 0,    "typical": 0.05,  "p99": 0.2},
+        "upstream-404":         {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "js-challenge":         {"kind": "state",        "cached": 0,    "typical": 0.05,  "p99": 0.3},
+        "rate-limit-ip":        {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "rate-limit":           {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "rate-limit-endpoint":  {"kind": "state",        "cached": 0,    "typical": 0.005, "p99": 0.02},
+        "fp-banned":            {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "traffic-threshold":    {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
+        # botd-detected: receive POST report from browser-side FingerprintJS; gateway cost = JSON parse + ban
+        "botd-detected":        {"kind": "state",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # ── Response-side (DLP) — added to response latency, not request latency ──
+        "dlp-cc":               {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 3.0},
+        "dlp-aws":              {"kind": "response",     "cached": 0,    "typical": 0.3,   "p99": 1.5},
+        "dlp-jwt":              {"kind": "response",     "cached": 0,    "typical": 0.3,   "p99": 1.5},
+        "dlp-private-key":      {"kind": "response",     "cached": 0,    "typical": 0.05,  "p99": 0.5},
+        "dlp-api-key":          {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 2.0},
+        "dlp-pii-email":        {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 2.0},
+        "dlp-pii-ssn":          {"kind": "response",     "cached": 0,    "typical": 0.2,   "p99": 1.0},
+        # ── Adversary delay — intentional; never fires for legitimate traffic ──
+        # slow-client: gateway holds connection until BODY_TIMEOUT; forces slowloris cost on attacker
+        "slow-client":          {"kind": "adversary",    "cached": 0,    "typical": 30000, "p99": 30000},
+        # tarpit-walk: HMAC verify + ban (<0.5ms) then slow-drip HTML to waste crawler resources
+        # typical = LABYRINTH_SLOW_MS × ~10 chunks; p99 = full 20-chunk page
+        "tarpit-walk":          {"kind": "adversary",    "cached": 0,    "typical": 6000,  "p99": 12000},
+    }
+    SIGNAL_LABELS = {
+        "tarpit-walk":        "AI Labyrinth",
+        "labyrinth-jitter":   "AI Labyrinth Jitter",
+        "header-canary":      "Header Canary Inject",
+        "accept-fp":          "Accept Fingerprint",
+        "header-order-fp":    "Header Order Fingerprint",
+        "ai-ua-ip-mismatch":  "AI Crawler IP Mismatch",
+        "locale-geo-mismatch":"Locale / GeoIP Mismatch",
+        "robots-violation":   "robots.txt Violation",
+        "h2-fp":              "HTTP/2 Fingerprint",
+        "json-canary":        "JSON Canary Inject",
+    }
+    weights = []
+    for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
+        tier, desc = DESCRIPTIONS.get(sig, ("?", ""))
+        cost = SIGNAL_COST.get(sig, {"cached": 0, "typical": 0.001, "p99": 0.01})
+        weights.append({
+            "signal":      sig,
+            "label":       SIGNAL_LABELS.get(sig, sig),
+            "weight":      w,
+            "tier":        tier,
+            "description": desc,
+            "toggle":      SIGNAL_KNOB.get(sig),    # None = always-on
+            "cost_ms":     cost,
+            "escalate_only": sig in ESCALATE_ONLY_REASONS,   # 1.6.5
+            "activation_order": _signal_runtime_order(sig),      # 1.6.10
+        })
+    # Modifier-only toggles — no weight, but operator-tunable.
+    # Surface them at the bottom of the merged table.
+    modifiers = [
+        ("INJECT_SECURITY_HEADERS", "Inject HSTS/XFO/CSP/etc. on HTML responses"),
+        ("JS_CHAL_BIND_JA4",        "Bind chal cookie to JA4 fingerprint (when injected)"),
+        ("JS_CHAL_REQUIRE_JA4",     "Hard-require JA4 from a trusted peer at /__challenge"),
+        ("JS_CHAL_STRICT_STATIC",   "Refuse static-asset bypass on API-shaped paths"),
+        ("ANUBIS_ENABLED",          "Anubis-mode (1.5.4): strict PoW gate on every first request, raises difficulty by ANUBIS_DIFFICULTY_BOOST"),
+    ]
+    return web.json_response({
+        "weights":   weights,
+        "modifiers": [{"toggle": k, "description": d} for k, d in modifiers],
+        "thresholds": {
+            "RISK_BAN_THRESHOLD":      RISK_BAN_THRESHOLD,
+            "RISK_BAN_THRESHOLD_NAT":  RISK_BAN_THRESHOLD_NAT,
+            "NAT_IDENTITIES_THRESHOLD": NAT_IDENTITIES_THRESHOLD,
+            "RISK_BAN_DURATION_SECS":  RISK_BAN_DURATION_SECS,
+            "RISK_DECAY_HALFLIFE_SECS": RISK_DECAY_HALFLIFE_SECS,
+            "SOFT_CHALLENGE_SCORE":    SOFT_CHALLENGE_SCORE,
+        },
+    }, headers={"Cache-Control": "no-store"})
+
+async def maxmind_fetch_endpoint(request: web.Request):
+    """1.5.5 — operator-triggered MaxMind DB load. POST /__maxmind-fetch:
+    (1) copies the image-bundled mmdbs into /data if missing (no internet
+    needed); (2) if MAXMIND_LICENSE_KEY is set, also runs a fresh fetch
+    from MaxMind. Used by the GeoMap "Refresh DB" button so operators
+    never have to drop into a shell."""
+    global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
+    try:
+        # Step 1 — seed from image always works offline.
+        _maxmind_seed_from_image()
+        # Step 2 — license-keyed fetch only if env var present.
+        if os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, _maxmind_auto_fetch)
+        # Re-open readers in place.
+        try:
+            import maxminddb
+            if os.path.exists(MAXMIND_ASN_DB_PATH):
+                _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
+                MAXMIND_ENABLED = True
+            if os.path.exists(MAXMIND_CITY_DB_PATH):
+                _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
+                MAXMIND_CITY_ENABLED = True
+        except Exception as e:
+            return web.json_response(
+                {"ok": False, "error": f"reader reload failed: {e}"},
+                status=500, headers={"Cache-Control": "no-store"})
+        return web.json_response({
+            "ok": True,
+            "asn_loaded":  MAXMIND_ENABLED,
+            "city_loaded": MAXMIND_CITY_ENABLED,
+            "asn_path":    MAXMIND_ASN_DB_PATH if MAXMIND_ENABLED else None,
+            "city_path":   MAXMIND_CITY_DB_PATH if MAXMIND_CITY_ENABLED else None,
+        }, headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response(
+            {"ok": False, "error": str(e)[:200]},
+            status=500, headers={"Cache-Control": "no-store"})
+
+
+# 1.6.5 — per-detector latency observability. Every entry in deny() hot path
+# bumps the corresponding counter + records a wall-time sample. The /__detector-stats
+# endpoint exposes this for the Service / Agents / Dashboard surfaces. Bounded
+# at 200 samples per reason (rolling window) so memory stays trivial.
+_detector_latency: dict = {}   # reason → deque(ms samples, maxlen=200)
+_detector_hits:    dict = {}   # reason → int
+
+def _detector_record(reason: str, elapsed_ms: float) -> None:
+    """1.6.5 — internal: add a per-reason latency sample. Called from every
+    detector's deny() / silent-decoy emission. Never raises."""
+    try:
+        _detector_hits[reason] = _detector_hits.get(reason, 0) + 1
+        dq = _detector_latency.get(reason)
+        if dq is None:
+            from collections import deque as _dq
+            _detector_latency[reason] = _dq(maxlen=200)
+            dq = _detector_latency[reason]
+        dq.append(float(elapsed_ms))
+    except Exception:
+        pass
+
+# 1.6.5 — challenge-cookie mint counters. Lets the Controls dashboard show
+# the chal-cookie success rate (mints / chal-required hits).
+_chal_mint_count = 0
+_chal_required_count = 0
+
+
+# 1.6.4 — categorise each block reason into a "method bucket" so the GeoMap
+# can show WHICH detection layer is firing per region. Anti-bot focus per the
+# user roadmap: UA filter / body group / external intel / behavioural /
+# cookie gate / TLS fingerprint / canary / operator-defined / other.
+_REASON_METHOD = {
+    # UA filter family
+    "ua-empty": "ua", "ua-blocked": "ua", "ua-too-short": "ua",
+    "ua-non-browser": "ua", "ua-platform-mismatch": "ua",
+    "ua-ai-openai": "ua", "ua-ai-anthropic": "ua", "ua-ai-google": "ua",
+    "ua-ai-perplexity": "ua", "ua-ai-meta": "ua", "ua-ai-other": "ua",
+    # Body / payload signature groups
+    "body-sqli": "body", "body-xss": "body", "body-lfi": "body",
+    "body-rce": "body", "body-ssrf": "body", "body-cmd": "body",
+    "suspicious-body": "body",
+    # External intel layer
+    "abuseipdb-high": "intel", "abuseipdb-med": "intel",
+    "crowdsec-banned": "intel", "country-blocked": "intel",
+    "tor-exit": "intel", "datacenter-vpn": "intel", "asn-hosting": "intel",
+    # Behavioural / fingerprint
+    "behavior": "behavior", "ai-enumeration": "behavior",
+    "ai-no-assets": "behavior", "ai-headers-empty": "behavior",
+    "ai-headers-incomplete": "behavior",
+    "session-flood": "behavior", "session-churn": "behavior",
+    "upstream-404": "behavior",
+    # 1.6.5 — slowloris signal (slow body upload) lives in the behavioral bucket
+    "slow-client": "behavior",
+    # 1.6.5 — FingerprintJS BotD client-side detection
+    "botd-detected": "behavior",
+    # Cookie / challenge gate
+    "chal-required": "cookie", "js-challenge": "cookie",
+    # TLS fingerprint
+    "tls-fingerprint": "tls", "ja4-required-missing": "tls",
+    # Canary echo (R7) — distinct family
+    "canary-echo": "canary",
+    # Operator-defined / structural rules
+    "custom-rule-block": "operator", "host-not-allowed": "operator",
+    "suspicious-path": "operator", "ai-probe": "operator",
+    "auth-jwt-invalid": "operator", "rate-limit-endpoint": "operator",
+    "honeypot": "honeypot", "honeypot-silent": "honeypot",
+    "bot-trap": "honeypot",
+}
+def _reason_method(reason: str) -> str:
+    """Return the method bucket for a reason or 'other' for unknowns."""
+    return _REASON_METHOD.get(reason, "other")
+
+
+async def geo_data_endpoint(request: web.Request):
+    """1.5.4 — geo aggregation for the world-map dashboard.
+    Returns counts per (lat,lng) split into kind=clean/missed/blocked.
+    Time-window controls mirror /__metrics.
+
+    Source: events table (SQLite). Each event row is bucketed by IP →
+    (lat,lng) via the GeoLite2-City mmdb. Cached in-process for 60s to
+    avoid hammering both SQLite + the mmdb on every dashboard tick.
+    """
+    if not MAXMIND_CITY_ENABLED:
+        return web.json_response(
+            {"points": [], "configured": False,
+             "hint": "drop GeoLite2-City.mmdb into /data and restart, "
+                     "or set MAXMIND_CITY_DB_PATH"},
+            headers={"Cache-Control": "no-store"})
+    try:
+        range_min = max(5, min(10080, int(request.query.get("range", "60"))))
+    except ValueError:
+        range_min = 60
+    try:
+        end_epoch = int(request.query.get("end", str(int(_t.time()))))
+    except ValueError:
+        end_epoch = int(_t.time())
+    start_epoch = end_epoch - range_min * 60
+
+    # In-process cache key: bucket the params on a 60s grain so live mode
+    # doesn't run a fresh SQL query per dashboard tick.
+    cache_key = (range_min, end_epoch // 60)
+    cached = _GEO_CACHE.get(cache_key)
+    if cached and cached[0] > _t.time():
+        return web.json_response(
+            cached[1], headers={"Cache-Control": "no-store"})
+
+    # Pull events. We need: ts, ip, reason. Allowed = reason='' or 'OK'.
+    # Risk-bin classification (clean / missed / blocked) is done from the
+    # current per-identity risk_score for that IP — best-effort.
+    # 1.6.3 — also fetch ts so the front-end scrubber can replay frames.
+    points = {}  # {(lat_round, lng_round): {"country","city","clean","missed","blocked","tor_hits","dc_hits"}}
+    countries = {}  # {iso: {"clean","missed","blocked"}}
+    events_sample = []  # for the time scrubber (capped)
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ts, ip, reason FROM events WHERE ts >= ? AND ts <= ? LIMIT 200000",
+            (start_epoch, end_epoch),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response(
+            {"error": f"db: {e}", "points": []}, status=500,
+            headers={"Cache-Control": "no-store"})
+
+    # Resolve each unique IP only once. 1.6.3 — also flag Tor exits and
+    # hosting ASNs so the dashboard can render them with distinct markers.
+    # 1.6.4 — also resolve ASN org so we can rank top providers globally.
+    ip_geo = {}
+    ip_flags = {}   # ip → {"tor": bool, "dc": bool, "asn_org": str}
+    asn_totals = {}  # asn_org → {clean, blocked}
+    for r in rows:
+        ip = r["ip"]
+        if not ip:
+            continue
+        if ip not in ip_geo:
+            ip_geo[ip] = _city_lookup(ip)
+            tor_hit = ip in _tor_exits
+            dc_hit = False
+            asn_org = ""
+            if MAXMIND_ENABLED:
+                _asn, _org, _is_hosting, _ = _asn_lookup(ip)
+                dc_hit = bool(_is_hosting)
+                asn_org = (_org or "")[:80]
+            ip_flags[ip] = {"tor": tor_hit, "dc": dc_hit, "asn_org": asn_org}
+        loc = ip_geo[ip]
+        if loc is None:
+            continue
+        lat, lng, country, city = loc
+        # Round to 0.5° to merge nearby cities into a single bubble
+        key = (round(lat * 2) / 2, round(lng * 2) / 2)
+        if key not in points:
+            # 1.6.4 — `methods` counts blocks per detection-method bucket
+            # at this cell. Operators see WHICH layer is doing the work.
+            points[key] = {"country": country, "city": city,
+                           "clean": 0, "missed": 0, "blocked": 0,
+                           "tor_hits": 0, "dc_hits": 0,
+                           "methods": {}}
+        reason = (r["reason"] or "")
+        kind = "blocked" if (reason and reason != "OK") else "clean"
+        points[key][kind] += 1
+        # 1.6.4 — bucket the block reason by method
+        if kind == "blocked":
+            method = _reason_method(reason)
+            points[key]["methods"][method] = points[key]["methods"].get(method, 0) + 1
+        # Country aggregation (also methods + asn_org per country)
+        if country:
+            if country not in countries:
+                countries[country] = {"clean": 0, "missed": 0, "blocked": 0,
+                                       "methods": {}}
+            countries[country][kind] += 1
+            if kind == "blocked":
+                method = _reason_method(reason)
+                countries[country]["methods"][method] = (
+                    countries[country]["methods"].get(method, 0) + 1)
+        # Tor / DC counts at this point
+        flags = ip_flags.get(ip) or {}
+        if flags.get("tor"):
+            points[key]["tor_hits"] += 1
+        if flags.get("dc"):
+            points[key]["dc_hits"] += 1
+        # 1.6.4 — global ASN totals (top providers per range)
+        org = (flags.get("asn_org") or "").strip()
+        if org:
+            asn_totals.setdefault(org, {"clean": 0, "blocked": 0})
+            asn_totals[org][kind] += 1
+        # Sample for time-scrubber playback (cap at 5000 events)
+        if len(events_sample) < 5000:
+            events_sample.append([float(r["ts"]), lat, lng, kind])
+
+    # We don't have per-event "missed" classification in the events table.
+    # Approximate "missed" via current per-identity risk band: any client
+    # whose risk_score is in the medium band contributes to missed at its
+    # current location.
+    async with state_lock:
+        for key_id, s in ip_state.items():
+            ip = s.last_ip or key_id
+            if ip not in ip_geo:
+                ip_geo[ip] = _city_lookup(ip)
+            loc = ip_geo.get(ip)
+            if not loc:
+                continue
+            if not (SOFT_CHALLENGE_SCORE > 0 and
+                    SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD):
+                continue
+            lat, lng, country, city = loc
+            key = (round(lat * 2) / 2, round(lng * 2) / 2)
+            if key not in points:
+                points[key] = {"country": country, "city": city,
+                               "clean": 0, "missed": 0, "blocked": 0,
+                               "tor_hits": 0, "dc_hits": 0, "methods": {}}
+            points[key]["missed"] += s.allowed_count
+
+    # 1.6.4 — classify each cell into a "pin type" so the front-end can
+    # filter by behaviour family:
+    #   bot-ai          — UA / canary / behaviour blocks dominate
+    #   high-risk       — external intel (AbuseIPDB / CrowdSec / Tor / DC) dominates
+    #   fp-suspect      — high block ratio AND most blocks are "soft" (cookie / behaviour)
+    #   normal          — clean traffic dominates (default)
+    def _classify(p):
+        m = p.get("methods") or {}
+        total = sum(m.values())
+        if not total:
+            return "normal"
+        ai_share   = (m.get("ua", 0) + m.get("canary", 0) + m.get("behavior", 0)) / total
+        intel_sh   = m.get("intel", 0) / total
+        soft_sh    = (m.get("cookie", 0) + m.get("behavior", 0)) / total
+        block_rat  = p["blocked"] / max(1, p["blocked"] + p["clean"])
+        if intel_sh >= 0.5:
+            return "high-risk"
+        if ai_share >= 0.5:
+            return "bot-ai"
+        if block_rat >= 0.7 and soft_sh >= 0.6:
+            return "fp-suspect"
+        return "normal"
+
+    # Project to a flat list
+    out_points = [
+        {"lat": lat, "lng": lng,
+         "country": p["country"], "city": p["city"],
+         "clean": p["clean"], "missed": p["missed"], "blocked": p["blocked"],
+         "tor_hits": p["tor_hits"], "dc_hits": p["dc_hits"],
+         "methods":  p.get("methods") or {},                # 1.6.4
+         "pin_type": _classify(p),                          # 1.6.4
+         "total": p["clean"] + p["missed"] + p["blocked"]}
+        for (lat, lng), p in points.items()
+    ]
+    out_points.sort(key=lambda d: d["total"], reverse=True)
+    out_points = out_points[:1000]  # cap payload
+
+    # 1.6.3 — country leaderboard (top 30)
+    # 1.6.4 — also include methods + block_effectiveness per country
+    out_countries = []
+    for cc, counts in countries.items():
+        clean   = counts["clean"]
+        missed  = counts["missed"]
+        blocked = counts["blocked"]
+        seen    = clean + missed + blocked
+        # block-effectiveness = blocked / (blocked + missed) — i.e., when
+        # we suspected something, did we actually stop it? When missed=0,
+        # effectiveness = 100% if there were any blocks (perfect), else N/A.
+        susp = blocked + missed
+        eff  = (blocked / susp * 100.0) if susp > 0 else None
+        out_countries.append({
+            "country":   cc,
+            "clean":     clean,
+            "missed":    missed,
+            "blocked":   blocked,
+            "total":     seen,
+            "methods":   counts.get("methods") or {},      # 1.6.4
+            "effectiveness_pct": eff,                       # 1.6.4
+            # 1.6.5 — bypass-rate proxy: missed / (blocked + missed) — i.e.,
+            # of suspicious traffic, what fraction got through (fell into the
+            # soft-challenge "missed" band rather than triggering a ban).
+            "bypass_pct": ((missed / susp * 100.0) if susp > 0 else None),
+        })
+    out_countries.sort(key=lambda d: d["total"], reverse=True)
+    out_countries = out_countries[:30]
+
+    # 1.6.4 — top ASN providers (by block + total) globally
+    out_asns = sorted(
+        ({"asn_org": org,
+          "blocked": v["blocked"], "clean": v["clean"],
+          "total":   v["blocked"] + v["clean"]}
+         for org, v in asn_totals.items()),
+        key=lambda d: d["blocked"], reverse=True)[:20]
+
+    # 1.6.3 — read-only snapshot of geo-block list state for the UI
+    geo_state = {
+        "country_block_enabled": bool(globals().get("COUNTRY_BLOCK_ENABLED")),
+        "country_denylist":  sorted(globals().get("COUNTRY_DENYLIST")  or []),
+        "country_allowlist": sorted(globals().get("COUNTRY_ALLOWLIST") or []),
+    }
+
+    # 1.6.4 — global method totals across all blocks
+    method_totals = {}
+    for p in out_points:
+        for k, v in (p.get("methods") or {}).items():
+            method_totals[k] = method_totals.get(k, 0) + v
+
+    payload = {
+        "configured": True,
+        "points":     out_points,
+        "countries":  out_countries,                     # 1.6.3 + 1.6.4 (methods, eff)
+        "asns":       out_asns,                          # 1.6.4 — top ASN providers
+        "events":     events_sample,                     # 1.6.3 — for scrubber
+        "geo_state":  geo_state,                         # 1.6.3
+        "summary": {
+            "total_points":  len(out_points),
+            "total_events":  sum(p["total"] for p in out_points),
+            "total_blocked": sum(p["blocked"] for p in out_points),
+            "total_missed":  sum(p["missed"]  for p in out_points),
+            "total_clean":   sum(p["clean"]   for p in out_points),
+            "total_tor":     sum(p["tor_hits"] for p in out_points),
+            "total_dc":      sum(p["dc_hits"] for p in out_points),
+            "method_totals": method_totals,              # 1.6.4
+            "range_min":     range_min,
+            "end_epoch":     end_epoch,
+            "start_epoch":   start_epoch,
+        },
+    }
+    _GEO_CACHE[cache_key] = (_t.time() + 60, payload)
+    if len(_GEO_CACHE) > 64:
+        # cheap LRU: drop the oldest 16
+        for k in sorted(_GEO_CACHE.keys())[:16]:
+            _GEO_CACHE.pop(k, None)
+    return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+
+_GEO_CACHE: dict = {}
+
+
+async def geo_drill_endpoint(request: web.Request):
+    """1.6.3 — click-circle drill-down. Given a (lat, lng) cell and the
+    same time window as the geo-data view, return:
+      • top 25 IPs at that cell (with country, city, asn_org, tor/dc flags, hits)
+      • top 10 block reasons (count desc)
+      • top 10 paths (count desc)
+    The cell granularity matches geo_data_endpoint (0.5° rounding)."""
+    if not MAXMIND_CITY_ENABLED:
+        return web.json_response(
+            {"error": "MaxMind City DB not loaded"}, status=503,
+            headers={"Cache-Control": "no-store"})
+    try:
+        lat = float(request.query.get("lat", "nan"))
+        lng = float(request.query.get("lng", "nan"))
+        range_min = max(5, min(10080, int(request.query.get("range", "60"))))
+        end_epoch = int(request.query.get("end", str(int(_t.time()))))
+    except (ValueError, TypeError):
+        return web.json_response(
+            {"error": "bad lat/lng/range"}, status=400,
+            headers={"Cache-Control": "no-store"})
+    if lat != lat or lng != lng:    # NaN check
+        return web.json_response({"error": "lat/lng required"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    start_epoch = end_epoch - range_min * 60
+    target_key = (round(lat * 2) / 2, round(lng * 2) / 2)
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ip, ua, path, reason, ts FROM events "
+            "WHERE ts >= ? AND ts <= ? LIMIT 200000",
+            (start_epoch, end_epoch),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response(
+            {"error": f"db: {e}"}, status=500,
+            headers={"Cache-Control": "no-store"})
+
+    ip_map = {}              # ip → {country, city, asn_org, tor, dc, hits, last_seen, last_reason}
+    reasons: dict = defaultdict(int)
+    paths:   dict = defaultdict(int)
+    ip_geo_cache: dict = {}
+    asn_cache: dict = {}
+    for r in rows:
+        ip = r["ip"]
+        if not ip:
+            continue
+        if ip not in ip_geo_cache:
+            ip_geo_cache[ip] = _city_lookup(ip)
+        loc = ip_geo_cache[ip]
+        if not loc:
+            continue
+        ilat, ilng, country, city = loc
+        key = (round(ilat * 2) / 2, round(ilng * 2) / 2)
+        if key != target_key:
+            continue
+        # In-cell event — accumulate.
+        reason = (r["reason"] or "OK")
+        reasons[reason] += 1
+        path = r["path"] or "/"
+        paths[path] += 1
+        if ip not in ip_map:
+            asn_org = ""
+            is_hosting = False
+            if MAXMIND_ENABLED:
+                if ip not in asn_cache:
+                    _, _org, _h, _ = _asn_lookup(ip)
+                    asn_cache[ip] = (_org, _h)
+                asn_org, is_hosting = asn_cache[ip]
+            ip_map[ip] = {
+                "ip": ip, "country": country, "city": city,
+                "asn_org": asn_org,
+                "tor": (ip in _tor_exits),
+                "dc":  is_hosting,
+                "hits": 0, "blocked": 0,
+                "last_seen": 0.0, "last_reason": "",
+            }
+        rec = ip_map[ip]
+        rec["hits"] += 1
+        if reason and reason != "OK":
+            rec["blocked"] += 1
+        rec["last_seen"] = float(r["ts"])
+        rec["last_reason"] = reason
+
+    top_ips = sorted(ip_map.values(), key=lambda d: d["hits"],
+                      reverse=True)[:25]
+    top_reasons = sorted(reasons.items(), key=lambda kv: -kv[1])[:10]
+    top_paths   = sorted(paths.items(),   key=lambda kv: -kv[1])[:10]
+
+    return web.json_response({
+        "lat": target_key[0], "lng": target_key[1],
+        "range_min": range_min, "end_epoch": end_epoch,
+        "ip_count":   len(ip_map),
+        "event_count": sum(reasons.values()),
+        "top_ips":    top_ips,
+        "top_reasons":[{"reason": r, "count": c} for r, c in top_reasons],
+        "top_paths":  [{"path":   p, "count": c} for p, c in top_paths],
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def geo_dashboard_endpoint(request: web.Request):
+    """HTML dashboard rendering the world-map geo view."""
+    body = GEO_DASHBOARD_HTML
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
+                "style-src 'self' https://unpkg.com 'unsafe-inline'; "
+                "img-src 'self' data: https://*.basemaps.cartocdn.com; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+
+# ── 1.6.3: Logs dashboard endpoints ──────────────────────────────────────
+async def logs_data_endpoint(request: web.Request):
+    """Live log feed for the Logs dashboard.
+
+    Query:
+      kind=requests | gw                (default: requests)
+      level=debug|info|warn|error|critical  (filter; default: debug = all)
+      limit=N                            (default: 200, max: 2000)
+      q=<substring>                      (optional case-insensitive search)
+
+    `requests` reads the SQLite `events` table (full history, paginated).
+    `gw` reads the in-memory `_GW_LOG_RING` (last 2000 non-request events).
+    """
+    kind  = (request.query.get("kind", "requests") or "requests").lower()
+    if kind not in ("requests", "gw"):
+        return web.json_response({"error": "kind must be requests|gw"},
+                                  status=400, headers={"Cache-Control":"no-store"})
+    level = (request.query.get("level", "debug") or "debug").lower()
+    if level not in _LOG_LEVELS:
+        level = "debug"
+    level_n = _LOG_LEVELS[level]
+    try:
+        limit = max(1, min(2000, int(request.query.get("limit", "200"))))
+    except ValueError:
+        limit = 200
+    q = (request.query.get("q", "") or "").strip().lower()
+
+    if kind == "requests":
+        # 1.6.5 — extra filters
+        method_filter = (request.query.get("method", "all") or "all").lower()
+        iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.row_factory = sqlite3.Row
+            # 1.6.5 — pull more rows than `limit` so we can post-filter
+            # (method/ip_type) without paginating multiple SQL queries.
+            sql_cap = max(limit * 4, 1000) if (method_filter != "all" or
+                                                 iptype_filter != "all") else limit
+            rows = conn.execute(
+                "SELECT id, ts, ip, ua, path, status, reason FROM events "
+                "ORDER BY id DESC LIMIT ?", (sql_cap,)
+            ).fetchall()
+            conn.close()
+        except Exception as e:
+            return web.json_response({"error": f"db: {e}"}, status=500,
+                                      headers={"Cache-Control":"no-store"})
+        out = []
+        for r in rows:
+            reason = (r["reason"] or "")
+            row_level = "warn" if (reason and reason != "OK") else "info"
+            if _LOG_LEVELS[row_level] < level_n:
+                continue
+            # 1.6.5 — method bucket filter (via _reason_method)
+            if method_filter != "all" and _reason_method(reason) != method_filter:
+                continue
+            # 1.6.5 — IP-type filter: tor / dc / residential
+            if iptype_filter != "all":
+                ip_v = r["ip"] or ""
+                is_tor = ip_v in _tor_exits
+                is_dc = False
+                if MAXMIND_ENABLED:
+                    _, _, _is_hosting, _ = _asn_lookup(ip_v)
+                    is_dc = bool(_is_hosting)
+                if iptype_filter == "tor" and not is_tor: continue
+                if iptype_filter == "dc"  and not is_dc:  continue
+                if iptype_filter == "residential" and (is_tor or is_dc): continue
+            blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
+            if q and q not in blob:
+                continue
+            out.append({
+                "id":          r["id"],
+                "ts":          r["ts"],
+                "level":       row_level,
+                "ip":          r["ip"],
+                "is_admin_ip": _is_admin_ip(r["ip"] or ""),
+                "ua":          (r["ua"] or "")[:200],
+                "path":        r["path"] or "",
+                "status":      r["status"],
+                "reason":      reason,
+                "method":      _reason_method(reason),  # 1.6.5
+            })
+            if len(out) >= limit:
+                break
+        return web.json_response(
+            {"kind": "requests", "level": level, "limit": limit,
+             "count": len(out), "rows": out},
+            headers={"Cache-Control":"no-store"})
+
+    # kind == "gw" — in-memory ring buffer.
+    out = []
+    # Iterate newest-first.
+    for entry in list(_GW_LOG_RING)[::-1]:
+        if _LOG_LEVELS.get(entry.get("level"), 20) < level_n:
+            continue
+        if q:
+            blob = " ".join(f"{k}={v}" for k, v in entry.items()).lower()
+            if q not in blob:
+                continue
+        out.append(entry)
+        if len(out) >= limit:
+            break
+    return web.json_response(
+        {"kind": "gw", "level": level, "limit": limit,
+         "count": len(out), "rows": out,
+         "ring_size": len(_GW_LOG_RING)},
+        headers={"Cache-Control":"no-store"})
+
+
+async def logs_export_endpoint(request: web.Request):
+    """1.6.5 — stream the events table as CSV. Honours the same
+    method/ip_type/level/q filters as /__logs-data. Capped at 100 000 rows
+    for safety. Used by the Logs dashboard 'Download CSV' button."""
+    level = (request.query.get("level", "debug") or "debug").lower()
+    if level not in _LOG_LEVELS: level = "debug"
+    level_n = _LOG_LEVELS[level]
+    method_filter = (request.query.get("method", "all") or "all").lower()
+    iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
+    q = (request.query.get("q", "") or "").strip().lower()
+    try:
+        cap = max(1, min(100000, int(request.query.get("limit", "10000"))))
+    except ValueError:
+        cap = 10000
+    resp = web.StreamResponse(status=200, headers={
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": "attachment; filename=appsecgw_events.csv",
+        "Cache-Control": "no-store",
+    })
+    await resp.prepare(request)
+    await resp.write(b"id,ts,iso_ts,ip,ua,path,status,reason,method,ip_type\r\n")
+    written = 0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        # Stream from the cursor — don't load everything in memory.
+        for r in conn.execute(
+            "SELECT id, ts, ip, ua, path, status, reason FROM events "
+            "ORDER BY id DESC LIMIT ?", (cap * 2,)
+        ):
+            reason = (r["reason"] or "")
+            row_level = "warn" if (reason and reason != "OK") else "info"
+            if _LOG_LEVELS[row_level] < level_n:
+                continue
+            if method_filter != "all" and _reason_method(reason) != method_filter:
+                continue
+            ip_v = r["ip"] or ""
+            ip_type = "residential"
+            if ip_v in _tor_exits:
+                ip_type = "tor"
+            elif MAXMIND_ENABLED:
+                _, _, _is_hosting, _ = _asn_lookup(ip_v)
+                if _is_hosting: ip_type = "dc"
+            if iptype_filter != "all" and ip_type != iptype_filter:
+                continue
+            blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
+            if q and q not in blob:
+                continue
+            iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["ts"]))
+            # CSV escape: wrap in double-quotes if needed, double up internal quotes
+            def esc(v):
+                s = "" if v is None else str(v)
+                if any(c in s for c in ',"\r\n'):
+                    return '"' + s.replace('"', '""') + '"'
+                return s
+            line = ",".join([
+                esc(r["id"]), esc(round(r["ts"], 3)), iso,
+                esc(r["ip"]), esc((r["ua"] or "")[:200]),
+                esc(r["path"]), esc(r["status"]),
+                esc(reason), esc(_reason_method(reason)), ip_type,
+            ]) + "\r\n"
+            await resp.write(line.encode("utf-8"))
+            written += 1
+            if written >= cap:
+                break
+        conn.close()
+    except Exception as e:
+        await resp.write(f"# error: {e}\r\n".encode("utf-8"))
+    await resp.write_eof()
+    return resp
+
+
+async def logs_dashboard_endpoint(request: web.Request):
+    """HTML dashboard for the Logs viewer (request log + GW log + level toggle)."""
+    body = LOGS_DASHBOARD_HTML
+    return web.Response(
+        text=body, content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
+
+
+async def path_hits_endpoint(request: web.Request):
+    """1.5.5 — drill-down for the Top-paths table on the main dashboard.
+    Returns the IPs / identities that hit a given path, grouped, with
+    their per-path hit count, last-seen, and recorded reason (if any).
+    Reads from the `events` SQLite table (full history) so even pruned
+    in-memory identities still show up.
+
+    Query:
+      ?path=<exact path>     (required)
+      ?range=<minutes>       (default 1440 = 24h)
+      ?limit=<n>             (default 100, max 1000)
+    """
+    p = request.query.get("path", "").strip()
+    if not p or len(p) > 512:
+        return web.json_response({"error": "missing or invalid 'path' param"},
+                                  status=400, headers={"Cache-Control":"no-store"})
+    try:
+        range_min = max(1, min(43200, int(request.query.get("range", "1440"))))
+        limit = max(1, min(1000, int(request.query.get("limit", "100"))))
+    except ValueError:
+        range_min, limit = 1440, 100
+    start_epoch = _t.time() - range_min * 60
+
+    rows = []
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ip, ua, reason, status, ts FROM events "
+            "WHERE path = ? AND ts >= ? ORDER BY ts DESC LIMIT 50000",
+            (p, start_epoch),
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response({"error": f"db: {e}"}, status=500,
+                                  headers={"Cache-Control":"no-store"})
+
+    # Group by IP
+    by_ip = {}
+    for r in rows:
+        ip = r["ip"] or "?"
+        e = by_ip.setdefault(ip, {
+            "ip": ip, "ua": r["ua"] or "", "count": 0,
+            "last_seen_secs_ago": None, "reasons": {}, "statuses": {},
+            "first_ts": r["ts"], "last_ts": r["ts"],
+        })
+        e["count"] += 1
+        e["last_ts"] = max(e["last_ts"], r["ts"])
+        e["first_ts"] = min(e["first_ts"], r["ts"])
+        rsn = r["reason"] or "OK"
+        e["reasons"][rsn] = e["reasons"].get(rsn, 0) + 1
+        st = str(r["status"] or "?")
+        e["statuses"][st] = e["statuses"].get(st, 0) + 1
+
+    # Add per-IP identities from in-memory ip_state (best-effort — multiple
+    # identities can share an IP via NAT)
+    async with state_lock:
+        ip_to_idents = {}
+        for k, st in ip_state.items():
+            if st.last_ip:
+                ip_to_idents.setdefault(st.last_ip, []).append({
+                    "id":      k,
+                    "ua":      st.last_user_agent,
+                    "risk":    round(st.risk_score, 1),
+                    "blocked": st.blocked_count,
+                    "allowed": st.allowed_count,
+                    "banned":  st.banned_until > now(),
+                })
+
+    now_epoch = _t.time()
+    for ip, e in by_ip.items():
+        e["last_seen_secs_ago"] = round(now_epoch - e["last_ts"], 1)
+        e["first_seen_secs_ago"] = round(now_epoch - e["first_ts"], 1)
+        e["identities"] = ip_to_idents.get(ip, [])
+        # Compact statuses + reasons → top-3 for display
+        e["top_reason"] = max(e["reasons"].items(), key=lambda kv: kv[1])[0] if e["reasons"] else "OK"
+        del e["first_ts"]; del e["last_ts"]
+
+    out = sorted(by_ip.values(), key=lambda d: d["count"], reverse=True)[:limit]
+    return web.json_response({
+        "path":       p,
+        "range_min":  range_min,
+        "total_rows": len(rows),
+        "ips":        out,
+    }, headers={"Cache-Control":"no-store"})
+
+
+async def agents_bucket_detail_endpoint(request: web.Request):
+    """1.5.4 — drill-down for the agents-dashboard timeline.
+    Given a bucket epoch + width, return the IPs / identities active during
+    that window, classified as detected / missed / clean.
+    Query params:
+      ?t=<epoch>           bucket left edge (rounded to width)
+      ?bucket_secs=<int>   bucket width (60 / 300 / 900 / 3600 / 86400)
+      ?kind=detected|missed|clean|all   filter (default 'all')
+    """
+    try:
+        t       = int(request.query.get("t", "0"))
+        bucket  = int(request.query.get("bucket_secs", "60"))
+    except ValueError:
+        return web.json_response({"error":"bad params"}, status=400)
+    if bucket not in (60, 300, 900, 3600, 86400):
+        bucket = 60
+    kind = request.query.get("kind", "all")
+    end = t + bucket
+
+    # 1.5.4 — best-effort IP→identity lookup so the drill-down shows the same
+    # `id` (HMAC track_key) used everywhere else, not only the IP. Multiple
+    # identities may share an IP (NAT) — we attach all of them.
+    ip_to_idents: dict = {}
+    async with state_lock:
+        for k, st in ip_state.items():
+            if st.last_ip:
+                ip_to_idents.setdefault(st.last_ip, []).append({
+                    "id": k, "ua": st.last_user_agent,
+                    "session": st.last_session, "fingerprint": st.last_fingerprint,
+                    "ja4": st.last_ja4,
+                    "risk_score": round(st.risk_score, 1),
+                    "allowed": st.allowed_count, "blocked": st.blocked_count,
+                })
+
+    detected_set, clean_set = {}, {}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
+        for r in conn.execute(
+            f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608 — agent_q is "?,?,?" placeholders only
+            f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
+            (t, end, *AGENT_BLOCK_REASONS),
+        ):
+            ip = r["ip"] or "?"
+            entry = detected_set.setdefault(ip, {
+                "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "reasons": {}, "last_path": r["path"] or "",
+                "identities": ip_to_idents.get(ip, []),
+            })
+            entry["count"] += 1
+            entry["reasons"][r["reason"]] = entry["reasons"].get(r["reason"], 0) + 1
+            entry["last_path"] = r["path"] or entry["last_path"]
+        for r in conn.execute(
+            "SELECT ip, ua, path FROM events "
+            "WHERE ts >= ? AND ts < ? AND (reason='' OR reason='OK') LIMIT 5000",
+            (t, end),
+        ):
+            ip = r["ip"] or "?"
+            entry = clean_set.setdefault(ip, {
+                "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "last_path": r["path"] or "",
+                "identities": ip_to_idents.get(ip, []),
+            })
+            entry["count"] += 1
+            entry["last_path"] = r["path"] or entry["last_path"]
+        conn.close()
+    except Exception as e:
+        return web.json_response({"error": f"db: {e}"}, status=500)
+
+    # `missed` IPs = currently have stealth_score >= MIN and were last_seen
+    # inside this bucket window. Best-effort using live state.
+    missed_list = []
+    try:
+        min_score = max(0, min(100, int(request.query.get("min_score", "20"))))
+    except ValueError:
+        min_score = 20
+    async with state_lock:
+        n_now = now()
+        for key, s in ip_state.items():
+            if s.allowed_count == 0:
+                continue
+            score, _, _ = _stealth_score(s)
+            if score < min_score:
+                continue
+            seen_epoch = _t.time() - (n_now - s.last_seen)
+            if t <= seen_epoch < end:
+                missed_list.append({
+                    "id": key, "ip": s.last_ip or key,
+                    "ua": s.last_user_agent, "stealth_score": score,
+                    "risk_score": round(s.risk_score, 1),
+                    "allowed": s.allowed_count, "blocked": s.blocked_count,
+                    "last_path": s.last_path,
+                })
+
+    payload = {
+        "bucket_t":     t,
+        "bucket_secs":  bucket,
+        "detected":     sorted(detected_set.values(), key=lambda r: r["count"], reverse=True)[:200],
+        "missed":       sorted(missed_list,           key=lambda r: r["stealth_score"], reverse=True)[:200],
+        "clean":        sorted(clean_set.values(),    key=lambda r: r["count"], reverse=True)[:200],
+    }
+    if kind in ("detected","missed","clean"):
+        payload["only"] = kind
+    return web.json_response(payload, headers={"Cache-Control":"no-store"})
+
+
+async def cost_timeline_endpoint(request: web.Request):
+    """1.5.4 — timeline of avg/p99 middleware wall-time (ms) per minute bucket.
+    Mirrors the params of /__metrics so the dashboard can drive both with the
+    same time-window controls.
+    Query params:
+      ?range=N    window in minutes (5..43200 = up to 30 d, default 60)
+      ?bucket=S   bucket width in seconds (60,300,900,3600 — default 60)
+      ?end=EPOCH  right edge (default now)
+    1.6.5 — range cap raised from 720 → 43200 minutes (30 d) so the
+    Service dashboard can graph long Postgres / DB-size trends.
+    """
+    try:
+        range_min = max(5, min(43200, int(request.query.get("range", "60"))))
+    except ValueError:
+        range_min = 60
+    try:
+        bucket_secs = int(request.query.get("bucket", "60"))
+        if bucket_secs not in (60, 300, 900, 3600):
+            bucket_secs = 60
+    except ValueError:
+        bucket_secs = 60
+    try:
+        end_epoch = int(request.query.get("end", str(int(_t.time()))))
+    except ValueError:
+        end_epoch = int(_t.time())
+
+    end_b = (end_epoch // bucket_secs) * bucket_secs
+    bucket_count = min(250, max(2, (range_min * 60) // bucket_secs))
+    start_b = end_b - (bucket_count - 1) * bucket_secs
+
+    out = []
+    async with state_lock:
+        for slot in range(start_b, end_b + 1, bucket_secs):
+            agg_sum, agg_count, agg_max = 0.0, 0, 0.0
+            for m in range(slot, slot + bucket_secs, 60):
+                d = cost_timeline.get(m)
+                if d:
+                    agg_sum   += d["sum_ms"]
+                    agg_count += d["count"]
+                    if d["max_ms"] > agg_max:
+                        agg_max = d["max_ms"]
+            avg_ms = (agg_sum / agg_count) if agg_count else 0.0
+            out.append({
+                "t": slot,
+                "avg_ms": round(avg_ms, 2),
+                "max_ms": round(agg_max, 2),
+                "count":  agg_count,
+            })
+
+    # Headline figures across the whole window
+    total_count = sum(b["count"] for b in out)
+    total_sum   = sum(b["avg_ms"] * b["count"] for b in out)
+    overall_avg = (total_sum / total_count) if total_count else 0.0
+    overall_max = max((b["max_ms"] for b in out), default=0.0)
+
+    return web.json_response({
+        "timeline":            out,
+        "timeline_bucket_secs": bucket_secs,
+        "timeline_range_min":   range_min,
+        "timeline_end_epoch":   end_b,
+        "summary": {
+            "overall_avg_ms": round(overall_avg, 2),
+            "overall_max_ms": round(overall_max, 2),
+            "total_requests": total_count,
+        },
+    }, headers={"Cache-Control": "no-store"})
+
+

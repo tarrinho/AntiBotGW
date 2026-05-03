@@ -267,6 +267,133 @@ async def test_config_validator_rejects_out_of_range(gw_client):
     assert "RISK_BAN_THRESHOLD" in body["rejected"]
 
 
+# ── F7b — db_load_config: credential-gated knobs rejected without creds ──────
+#
+# KNOWN STARTUP INFO (not a bug):
+#   [config-kv] ABUSEIPDB_ENABLED failed validator — env default kept
+#   [config-kv] TURNSTILE_ENABLED failed validator — env default kept
+#
+# These lines appear at startup when the DB holds ABUSEIPDB_ENABLED=true or
+# TURNSTILE_ENABLED=true but the matching credentials are absent from the env:
+#   • ABUSEIPDB_ENABLED validator: (not v) or bool(ABUSEIPDB_KEY)
+#   • TURNSTILE_ENABLED validator: (not v) or bool(TURNSTILE_SITEKEY and TURNSTILE_SECRET)
+# This is intentional — enabling an integration without credentials would silently
+# break all lookups, so db_load_config keeps the env default (False) and logs.
+# The tests below document and verify this contract.
+
+def test_db_load_config_rejects_abuseipdb_enabled_without_key(tmp_path):
+    """db_load_config must reject ABUSEIPDB_ENABLED=true when ABUSEIPDB_KEY absent."""
+    import sqlite3, importlib, importlib.util, sys, os
+
+    db = str(tmp_path / "test.db")
+    # Seed DB with ABUSEIPDB_ENABLED=true
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE config_kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)")
+    conn.execute("INSERT INTO config_kv VALUES ('ABUSEIPDB_ENABLED', 'true', 0)")
+    conn.commit()
+    conn.close()
+
+    # Load proxy with no ABUSEIPDB_KEY
+    env_backup = {k: os.environ.pop(k, None) for k in ("ABUSEIPDB_KEY",)}
+    os.environ["DB_PATH"] = db
+    os.environ["UPSTREAM"] = "http://127.0.0.1:1"
+
+    proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
+    spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb", proxy_path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
+    g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
+    g["ABUSEIPDB_KEY"] = ""          # ensure absent
+
+    from db.sqlite import db_load_config
+    db_load_config(g)
+
+    # Validator must have rejected it — stays False
+    assert not g.get("ABUSEIPDB_ENABLED"), (
+        "ABUSEIPDB_ENABLED should stay False when ABUSEIPDB_KEY is absent; "
+        "startup log line '[config-kv] ABUSEIPDB_ENABLED failed validator' is expected."
+    )
+
+    # Restore env
+    for k, v in env_backup.items():
+        if v is not None:
+            os.environ[k] = v
+
+
+def test_db_load_config_rejects_turnstile_enabled_without_creds(tmp_path):
+    """db_load_config must reject TURNSTILE_ENABLED=true when Turnstile creds absent."""
+    import sqlite3, importlib, importlib.util, os
+
+    db = str(tmp_path / "test2.db")
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE config_kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)")
+    conn.execute("INSERT INTO config_kv VALUES ('TURNSTILE_ENABLED', 'true', 0)")
+    conn.commit()
+    conn.close()
+
+    env_backup = {k: os.environ.pop(k, None) for k in ("TURNSTILE_SITEKEY", "TURNSTILE_SECRET")}
+    os.environ["DB_PATH"] = db
+    os.environ["UPSTREAM"] = "http://127.0.0.1:1"
+
+    proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
+    spec = importlib.util.spec_from_file_location("_test_proxy_turnstile", proxy_path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
+    g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
+    g["TURNSTILE_SITEKEY"] = ""
+    g["TURNSTILE_SECRET"] = ""
+
+    from db.sqlite import db_load_config
+    db_load_config(g)
+
+    assert not g.get("TURNSTILE_ENABLED"), (
+        "TURNSTILE_ENABLED should stay False when TURNSTILE_SITEKEY/SECRET absent; "
+        "startup log line '[config-kv] TURNSTILE_ENABLED failed validator' is expected."
+    )
+
+    for k, v in env_backup.items():
+        if v is not None:
+            os.environ[k] = v
+
+
+def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
+    """db_load_config MUST apply ABUSEIPDB_ENABLED=true when ABUSEIPDB_KEY is present."""
+    import sqlite3, importlib, importlib.util, os
+
+    db = str(tmp_path / "test3.db")
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE config_kv (key TEXT PRIMARY KEY, value TEXT, updated_at REAL)")
+    conn.execute("INSERT INTO config_kv VALUES ('ABUSEIPDB_ENABLED', 'true', 0)")
+    conn.commit()
+    conn.close()
+
+    os.environ["DB_PATH"] = db
+    os.environ["UPSTREAM"] = "http://127.0.0.1:1"
+    os.environ["ABUSEIPDB_KEY"] = "fake-test-key-12345"
+
+    proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
+    spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb2", proxy_path)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+
+    g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
+    g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
+    g["ABUSEIPDB_KEY"] = "fake-test-key-12345"
+
+    from db.sqlite import db_load_config
+    db_load_config(g)
+
+    assert g.get("ABUSEIPDB_ENABLED") is True, (
+        "ABUSEIPDB_ENABLED should be applied when ABUSEIPDB_KEY is present."
+    )
+
+    os.environ.pop("ABUSEIPDB_KEY", None)
+
+
 # ── F8 — risk-decay across the wire ───────────────────────────────────────
 @pytest.mark.asyncio
 async def test_risk_increments_on_block(gw_client):

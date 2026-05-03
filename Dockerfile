@@ -21,8 +21,21 @@ RUN mkdir -p /rootfs/app /rootfs/data /rootfs/usr/local/share/maxmind \
  && ln -sf /data/.session_key /rootfs/app/.session_key \
  && ln -sf /data/.pow_key     /rootfs/app/.pow_key
 
-COPY proxy.py /rootfs/app/proxy.py
-COPY dashboards /rootfs/app/dashboards
+COPY proxy.py      /rootfs/app/proxy.py
+COPY config.py     /rootfs/app/config.py
+COPY state.py      /rootfs/app/state.py
+COPY helpers.py    /rootfs/app/helpers.py
+COPY identity.py   /rootfs/app/identity.py
+COPY rate_limit.py /rootfs/app/rate_limit.py
+COPY scoring.py    /rootfs/app/scoring.py
+COPY admin        /rootfs/app/admin
+COPY challenge    /rootfs/app/challenge
+COPY core         /rootfs/app/core
+COPY dashboards   /rootfs/app/dashboards
+COPY db           /rootfs/app/db
+COPY detection    /rootfs/app/detection
+COPY integrations /rootfs/app/integrations
+COPY reputation   /rootfs/app/reputation
 # 1.5.5 — bundled GeoLite2 mmdbs at a path NOT shadowed by /data volume.
 # proxy.py copies these into /data on first boot so the GeoMap dashboard
 # works out-of-the-box. Operators may override by dropping fresher mmdbs
