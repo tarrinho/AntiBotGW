@@ -127,7 +127,7 @@ Notes:
 
 ---
 
-## Step 9 — Static hardening (Bandit)
+## Step 9 — Static hardening (Bandit + Semgrep)
 
 ```
 bandit -ll proxy.py
@@ -149,15 +149,49 @@ Medium classifications:
 | B608 | numeric-controlled SQL | confirmed FP |
 | _(others)_ | | |
 
+```
+semgrep scan --config=auto proxy.py dashboards/
+```
+
+| | |
+|---|---|
+| Result | PASS / FAIL |
+| Errors | 0 |
+| Warnings | 0 new (vs last release) |
+| New findings classified | none / list |
+
+Semgrep finding classifications:
+
+| Rule ID | File | Finding | Classification |
+|---|---|---|---|
+| _(none)_ | | | |
+
+### SonarQube
+
+| | |
+|---|---|
+| Result | PASS / FAIL |
+| Quality Gate | PASSED / FAILED |
+| New Blockers / Criticals | 0 |
+| New Majors triaged | none / list |
+
+SonarQube finding classifications:
+
+| Issue | Severity | Resolution |
+|---|---|---|
+| _(none)_ | | |
+
 ---
 
-## Step 10 — Image CVE scan (Trivy)
+## Step 10 — Image CVE scan (Trivy + Aikido)
 
 ```
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
   --quiet appsec-antibot-gw:<VERSION>
 ```
+
+### Trivy
 
 | Arch | Critical | High | Medium | Result |
 |---|---|---|---|---|
@@ -167,9 +201,41 @@ docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
 
 Notes / findings:
 
+### Aikido
+
+| | |
+|---|---|
+| Result | PASS / FAIL |
+| Critical | 0 |
+| High | 0 |
+| Mediums triaged | none / list |
+
+Aikido finding classifications:
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| _(none)_ | | |
+
 ---
 
-## Step 11 — Secure code review
+## Step 11 — Automated code review (CodeRabbit)
+
+| | |
+|---|---|
+| Result | PASS / FAIL |
+| High / Critical findings | 0 |
+| Actionable findings resolved | X / X |
+| Deferred nitpicks | none / list |
+
+Finding classifications:
+
+| Finding | Severity | Resolution |
+|---|---|---|
+| _(none)_ | | |
+
+---
+
+## Step 11a — Secure code review
 
 | Check | Result |
 |---|---|

@@ -73,23 +73,62 @@ At every input surface (URL path, query, body, headers, cookies):
 - All admin endpoints must return 404 silent-decoy when an unauthorised
   IP probes them (no `admin-key` leak in headers / body).
 
-## 9. Static hardening (Bandit)
+## 9. Static hardening (Bandit + Semgrep + SonarQube)
+
 ```
 bandit -ll proxy.py
 ```
-**Pass criterion:** 0 High / 0 Critical. Mediums must each be classified
+**Pass criterion (Bandit):** 0 High / 0 Critical. Mediums must each be classified
 as confirmed false-positive in the report (B310 fixed-https / B104
 intentional gateway binding / B608 numeric-controlled SQL are accepted).
 
-## 10. Image CVE scan (Trivy)
+```
+semgrep scan --config=auto proxy.py dashboards/
+```
+Run in OSS mode — no token or login required. Do NOT use `semgrep mcp` or set `SEMGREP_APP_TOKEN`.
+
+**Pass criterion (Semgrep):** 0 ERROR / 0 WARNING findings not previously
+classified. Any new finding must be triaged: confirmed false-positive → document
+in report; real finding → fix before release. Use `# nosemgrep: <rule-id>` only
+after explicit classification (never blanket-suppress).
+
+Run a **SonarQube** analysis against the project (via `sonar-scanner` or the
+SonarQube CI integration). Review the Quality Gate result in the SonarQube UI.
+
+**Pass criterion (SonarQube):** Quality Gate = PASSED. No new BLOCKER or
+CRITICAL issues introduced by this version. Major issues must be triaged;
+accepted-risk items require a note in the validation record. Code smells and
+info-level findings do not block release but should be noted.
+
+## 10. Image CVE scan (Trivy + Aikido)
+
 ```
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
   --quiet appsec-antibot-gw:<version>
 ```
-**Pass criterion:** 0 CRITICAL / 0 HIGH / 0 MEDIUM CVEs.
+**Pass criterion (Trivy):** 0 CRITICAL / 0 HIGH / 0 MEDIUM CVEs.
 
-## 11. Secure code review
+Push the built image to Harbor and trigger an **Aikido Security** scan from the
+Aikido dashboard (or via the Aikido CLI / CI integration). Aikido scans the
+image for CVEs, secrets, misconfigurations, and SAST findings across the full
+dependency tree.
+
+**Pass criterion (Aikido):** 0 CRITICAL / 0 HIGH open findings. Mediums must be
+triaged; accepted-risk items require a note in the validation record. Aikido
+findings that duplicate Trivy CVEs already classified are inherited — do not
+re-classify.
+
+## 11. Automated code review (CodeRabbit)
+
+Run CodeRabbit on all changes in this version using the `/coderabbit:coderabbit-review`
+skill (or via the CodeRabbit GitHub integration on the release PR).
+
+**Pass criterion:** All actionable findings resolved or explicitly classified as
+false-positive in the report. Nitpicks may be deferred with a note. No finding
+rated **high** or **critical** by CodeRabbit may be left open.
+
+## 11a. Secure code review
 Read every line of code added or modified in this version. Check for:
 - Hardcoded credentials / keys / tokens
 - Unbounded loops / unbounded buffers (DoS amplifier)

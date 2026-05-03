@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.6.7` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.6.10` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -17,7 +17,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/antibot-appsec-gateway/secured/{dashboard, agents, service, controls, geo, logs, settings}` (DB-backed, click-to-drill) |
 
-## Architecture (1.6.7)
+## Architecture (1.6.10)
 
 ```
                                 ┌─────────────────────┐
@@ -201,7 +201,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.6.7 \
+docker run -d --name appsec-antibot-gw1.6.10 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.6.7 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.6.7 \
+  appsec-antibot-gw:1.6.10 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.6.9` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.6.10` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -317,7 +317,7 @@ Monitor startup:
 
 ```bash
 docker compose logs -f appsec-antibot-gw
-# Expect: "[js-challenge] active" and "AppSecGW_1.6.9 listening …" within 5 s
+# Expect: "[js-challenge] active" and "AppSecGW_1.6.10 listening …" within 5 s
 ```
 
 Check that all services are healthy:
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.6.7
+  appsec-antibot-gw:1.6.10
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.6.7 .
-trivy image appsec-antibot-gw:1.6.7        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.6.10 .
+trivy image appsec-antibot-gw:1.6.10        # expect 0 findings
 ```
 
 Multi-stage build:

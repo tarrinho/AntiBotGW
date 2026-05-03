@@ -85,6 +85,23 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .thr-minmax .lbl{color:#6e7681;font-size:9.5px;display:block}
 .thr-desc{color:var(--dim);font-size:11px;grid-column:span 5;margin-top:-4px;padding-left:200px}
 @media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
+/* 1.6.10 — order-threshold slider (Defenses & Scoring) */
+#ord-slider .ord-track{position:absolute;left:0;right:0;top:22px;height:14px;border-radius:7px;
+  background:linear-gradient(to right,#58a6ff 0%,#58a6ff var(--s2-pct,15%),#d29922 var(--s2-pct,15%),#d29922 var(--s3-pct,30%),#f85149 var(--s3-pct,30%),#f85149 100%);
+  border:1px solid var(--line)}
+#ord-slider .ord-scale{position:absolute;left:0;right:0;top:42px;display:flex;justify-content:space-between;font:10px ui-monospace,monospace;color:var(--dim);pointer-events:none}
+#ord-slider .ord-knob{position:absolute;top:14px;width:30px;height:30px;border-radius:50%;
+  background:#161b22;border:3px solid #fff;cursor:grab;transform:translateX(-50%);
+  display:flex;align-items:center;justify-content:center;font:700 11px ui-monospace;color:#fff;
+  box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:2;user-select:none;transition:opacity .15s}
+#ord-slider .ord-knob:hover{box-shadow:0 0 0 4px rgba(255,255,255,.08)}
+#ord-slider .ord-knob.drag{cursor:grabbing;box-shadow:0 4px 12px rgba(0,0,0,.6)}
+#ord-slider .ord-knob.s2{border-color:#d29922}
+#ord-slider .ord-knob.s3{border-color:#f85149}
+#ord-slider .ord-knob-val{position:absolute;top:0;font:600 10px ui-monospace,Menlo,monospace;
+  transform:translateX(-50%);white-space:nowrap;pointer-events:none;transition:opacity .15s}
+#ord-slider .ord-knob-val.s2{color:#d29922}
+#ord-slider .ord-knob-val.s3{color:#f85149}
 
 /* 1.6.5 — escalate-icon tooltip (custom, no 1-2s native delay) */
 .escal-icon{position:relative;display:inline-block;margin-right:4px;vertical-align:middle;cursor:help}
@@ -122,6 +139,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .kind-network   {background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.3)}
 .kind-response  {background:rgba(188,140,255,.12);color:#bc8cff;border:1px solid rgba(188,140,255,.3)}
 .kind-adversary {background:rgba(88,166,255,.08);color:#79c0ff;border:1px solid rgba(88,166,255,.2)}
+.kind-modifier  {background:rgba(139,148,158,.08);color:#8b949e;border:1px solid rgba(139,148,158,.2)}
 
 /* Kind-legend strip above the scoring table */
 .kind-legend{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center}
@@ -140,14 +158,155 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #load-status.ready .dot{animation:none}
 @keyframes ls-pulse{0%,100%{opacity:1}50%{opacity:.3}}
 /* signal name click-tooltip */
-.sig-name{cursor:pointer;border-bottom:1px dotted var(--blue);color:var(--blue);font-family:ui-monospace,Menlo,monospace}
-#_sig-tip{position:fixed;background:#1c2333;border:1px solid var(--blue);border-radius:6px;
-  padding:9px 13px;font-size:11.5px;color:var(--fg);max-width:380px;line-height:1.55;
-  z-index:600;box-shadow:0 4px 18px rgba(0,0,0,.5);display:none;
-  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;pointer-events:none}
+.sig-name{cursor:pointer;border-bottom:1px dotted var(--blue);color:var(--blue);
+  font-family:ui-monospace,Menlo,monospace;transition:color .1s}
+.sig-name:hover{color:#79c0ff}
+#_sig-tip{position:fixed;background:#1c2333;border:1px solid rgba(88,166,255,.4);border-radius:8px;
+  padding:0;font-size:12px;color:var(--fg);max-width:500px;min-width:300px;line-height:1.5;
+  z-index:600;box-shadow:0 8px 32px rgba(0,0,0,.65);display:none;overflow:hidden;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;pointer-events:auto}
+.stip-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:10px 14px 9px;border-bottom:1px solid var(--line);background:#1a2540}
+.stip-hdr-left{display:flex;align-items:center;gap:8px;min-width:0}
+.stip-hdr code{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#79c0ff;
+  font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stip-badges{display:flex;gap:5px;flex-shrink:0;align-items:center}
+.stip-ver{font-size:9.5px;padding:1px 6px;border-radius:10px;font-weight:700;
+  background:rgba(88,166,255,.15);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
+.stip-tier{font-size:9.5px;padding:1px 6px;border-radius:10px;font-weight:700}
+.stip-body{padding:11px 14px 12px}
+.stip-desc{color:#c9d1d9;font-size:11.5px;line-height:1.6;margin-bottom:11px}
+.stip-meta{display:grid;grid-template-columns:auto 1fr;row-gap:5px;column-gap:14px;font-size:11px}
+.stip-meta .mk{color:var(--dim);font-weight:600;white-space:nowrap;padding-top:1px}
+.stip-meta .mv{color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.stip-meta .mv code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+  background:rgba(88,166,255,.1);color:#79c0ff;padding:0 4px;border-radius:3px}
+.stip-cfg{margin-top:11px;padding:8px 11px;background:rgba(63,185,80,.06);
+  border:1px solid rgba(63,185,80,.2);border-radius:5px;font-size:10.5px;color:var(--dim);line-height:1.55}
+.stip-cfg strong{color:#3fb950}
+.stip-cfg code{font-family:ui-monospace,Menlo,monospace;color:#3fb950;font-size:10.5px;
+  background:rgba(63,185,80,.1);padding:0 4px;border-radius:3px}
+.stip-warn{margin-top:8px;padding:6px 10px;background:rgba(248,81,73,.07);
+  border:1px solid rgba(248,81,73,.25);border-radius:5px;font-size:10.5px;color:#f0908a;line-height:1.5}
+.stip-lists{margin-top:12px;border-top:1px solid var(--line);padding-top:10px}
+.stip-lists-hdr{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);
+  font-weight:700;margin-bottom:8px}
+.stip-list-editor{margin-bottom:9px}
+.stip-list-label{font-size:10px;color:var(--dim);margin-bottom:3px;display:flex;align-items:center;gap:5px}
+.stip-list-label code{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;
+  background:rgba(88,166,255,.1);color:#79c0ff;padding:0 3px;border-radius:2px}
+.stip-list-field{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid var(--line);
+  color:var(--fg);font-family:ui-monospace,Menlo,monospace;font-size:11px;border-radius:4px;
+  padding:5px 7px;resize:vertical;min-height:54px;outline:none;transition:border-color .15s}
+.stip-list-field:focus{border-color:rgba(88,166,255,.5)}
+input.stip-list-field{min-height:unset;height:28px;resize:none}
+.stip-list-row{display:flex;align-items:center;gap:6px;margin-top:4px}
+.stip-list-save{background:rgba(63,185,80,.15);border:1px solid rgba(63,185,80,.35);color:#3fb950;
+  font-size:10px;font-weight:700;padding:3px 10px;border-radius:4px;cursor:pointer;
+  transition:opacity .15s}
+.stip-list-save:disabled{opacity:.4;cursor:default}
+.stip-list-save:not(:disabled):hover{background:rgba(63,185,80,.25)}
+.stip-list-msg{font-size:10px;flex:1}
+.stip-example{margin:0 0 9px;padding:6px 9px;background:#0d1117;border-radius:4px;
+  border-left:2px solid rgba(88,166,255,.3);font-family:ui-monospace,Menlo,monospace;
+  font-size:10px;color:#8b949e;line-height:1.6;white-space:pre-wrap;word-break:break-all}
+.stip-example-lbl{font-size:9px;text-transform:uppercase;letter-spacing:.4px;
+  color:var(--dim);font-weight:700;margin-bottom:3px;display:block}
+.cs-wrap{margin-bottom:4px}
+.cs-input{width:100%;box-sizing:border-box;background:#0d1117;border:1px solid var(--line);
+  color:var(--fg);font-size:11px;border-radius:4px;padding:4px 7px;outline:none;
+  transition:border-color .15s}
+.cs-input:focus{border-color:rgba(88,166,255,.5)}
+.cs-results{background:#1c2333;border:1px solid rgba(88,166,255,.3);border-radius:4px;
+  max-height:120px;overflow-y:auto;margin-top:3px;display:none}
+.cs-item{padding:4px 8px;cursor:pointer;font-size:11px;display:flex;gap:7px;align-items:center}
+.cs-item:hover,.cs-item.focused{background:rgba(88,166,255,.1)}
+.cs-item code{font-family:ui-monospace,Menlo,monospace;font-size:10px;flex-shrink:0;
+  background:rgba(88,166,255,.1);color:#79c0ff;padding:0 4px;border-radius:2px}
+.cs-item .cs-name{color:var(--fg);font-size:10.5px}
+.cs-item .cs-added{font-size:9px;color:#3fb950;margin-left:auto}
+.stip-val-err{font-size:10px;color:#f85149;margin-top:3px;padding:3px 6px;
+  background:rgba(248,81,73,.07);border-radius:3px}
+/* Defenses & scoring filter bar */
+#scoring-filters{margin:10px 0 6px;display:flex;flex-direction:column;gap:5px}
+.sf-row{display:flex;align-items:center;flex-wrap:wrap;gap:4px}
+.sf-label{font-size:10px;color:var(--dim);font-weight:700;text-transform:uppercase;
+  letter-spacing:.4px;min-width:38px;flex-shrink:0;margin-right:2px}
+.sf-chip{font-size:10.5px;padding:2px 9px;border-radius:12px;cursor:pointer;
+  background:rgba(139,148,158,.1);border:1px solid rgba(139,148,158,.25);
+  color:var(--dim);transition:all .12s;font-weight:600;line-height:1.6}
+.sf-chip:hover{background:rgba(139,148,158,.2);color:var(--fg)}
+.sf-chip.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:#58a6ff}
+.sf-chip[data-filter="tier:hard"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.4);color:#f85149}
+.sf-chip[data-filter="tier:med"].active{background:rgba(210,153,34,.15);border-color:rgba(210,153,34,.4);color:#d29922}
+.sf-chip[data-filter="tier:soft"].active{background:rgba(63,185,80,.15);border-color:rgba(63,185,80,.4);color:#3fb950}
+.sf-chip[data-filter="tier:info"].active{background:rgba(139,148,158,.15);border-color:rgba(139,148,158,.35);color:#8b949e}
+.sf-chip[data-filter="tier:intel"].active{background:rgba(188,140,255,.15);border-color:rgba(188,140,255,.4);color:#bc8cff}
+.sf-chip[data-filter="tier:modifier"].active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.4);color:#79c0ff}
+.sf-clear{font-size:10px;padding:2px 8px;border-radius:12px;cursor:pointer;
+  background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#f85149;
+  font-weight:700;margin-left:4px}
+.sf-count{font-size:10px;color:var(--dim);margin-left:6px}
+/* DB backend choice toggle */
+.db-choice-wrap{display:flex;align-items:center;gap:14px;padding:2px 0}
+.db-side{flex:1;padding:10px 12px;border-radius:6px;border:1px solid transparent;cursor:pointer;transition:all .15s;opacity:.65}
+.db-side.db-side-active{border-color:rgba(63,185,80,.3);background:rgba(63,185,80,.05);opacity:1;cursor:default}
+.db-side:not(.db-side-active):hover{background:rgba(88,166,255,.06);border-color:rgba(88,166,255,.2);opacity:1}
+.db-side-title{font-weight:700;font-size:14px;color:var(--fg)}
+.db-side-sub{font-size:10.5px;color:var(--dim);margin-top:1px}
+.db-side-badge{font-size:9px;color:#3fb950;font-weight:700;text-transform:uppercase;margin-top:6px;letter-spacing:.3px}
+.db-toggle-track{flex-shrink:0;width:60px;height:32px;background:var(--green);border-radius:16px;
+  position:relative;cursor:pointer;transition:background .15s;box-shadow:0 0 8px rgba(63,185,80,.25)}
+.db-toggle-track .db-toggle-thumb{position:absolute;top:4px;left:4px;width:24px;height:24px;
+  background:#fff;border-radius:50%;transition:left .22s cubic-bezier(.4,0,.2,1);
+  box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.db-toggle-track.db-toggle-right .db-toggle-thumb{left:32px}
+/* Activation order badges */
+.sig-order{display:inline-flex;align-items:center;justify-content:center;
+  width:16px;height:16px;border-radius:50%;font-size:9px;font-weight:800;
+  cursor:pointer;margin-right:4px;flex-shrink:0;vertical-align:middle;
+  transition:all .12s;user-select:none;line-height:1}
+.sig-order.o1{background:rgba(63,185,80,.15);color:#3fb950;border:1px solid rgba(63,185,80,.4)}
+.sig-order.o2{background:rgba(210,153,34,.18);color:#d29922;border:1px solid rgba(210,153,34,.45)}
+.sig-order.o3{background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.35)}
+.sig-order:hover{filter:brightness(1.3);transform:scale(1.15)}
+/* Order change popover */
+.order-pop{position:fixed;z-index:700;background:#1c2333;border:1px solid rgba(88,166,255,.3);
+  border-radius:7px;padding:8px 10px;box-shadow:0 6px 20px rgba(0,0,0,.55);min-width:185px}
+.order-pop-title{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:6px}
+.order-pop-btns{display:flex;gap:5px}
+.order-pop-btn{flex:1;padding:5px 4px;border-radius:5px;cursor:pointer;text-align:center;font-size:10px;font-weight:700;border:1px solid transparent;transition:all .12s}
+.order-pop-btn.o1{background:rgba(63,185,80,.1);color:#3fb950;border-color:rgba(63,185,80,.3)}
+.order-pop-btn.o2{background:rgba(210,153,34,.1);color:#d29922;border-color:rgba(210,153,34,.3)}
+.order-pop-btn.o3{background:rgba(248,81,73,.1);color:#f85149;border-color:rgba(248,81,73,.3)}
+.order-pop-btn:hover{filter:brightness(1.3)}
+.order-pop-btn.active{box-shadow:0 0 0 2px currentColor;font-weight:900}
+/* Order definitions panel */
+.order-defs-wrap{margin-bottom:8px}
+.order-defs-hdr{display:flex;align-items:center;gap:6px;font-size:10.5px;color:var(--dim);cursor:pointer;user-select:none;padding:2px 0}
+.order-defs-hdr .od-toggle{transition:transform .15s;display:inline-block;font-size:9px}
+.order-defs-hdr .od-toggle.open{transform:rotate(90deg)}
+.order-defs{display:none;gap:8px;flex-wrap:wrap;margin-top:7px}
+.order-defs.open{display:flex}
+.order-def{flex:1;min-width:190px;padding:8px 11px;border-radius:6px;font-size:10.5px;line-height:1.55}
+.order-def.o1{background:rgba(63,185,80,.06);border:1px solid rgba(63,185,80,.2)}
+.order-def.o2{background:rgba(210,153,34,.06);border:1px solid rgba(210,153,34,.2)}
+.order-def.o3{background:rgba(248,81,73,.05);border:1px solid rgba(248,81,73,.18)}
+.od-head{display:flex;align-items:center;gap:5px;margin-bottom:5px}
+.od-num{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;font-size:10px;font-weight:800;flex-shrink:0}
+.o1 .od-num{background:rgba(63,185,80,.2);color:#3fb950;border:1px solid rgba(63,185,80,.4)}
+.o2 .od-num{background:rgba(210,153,34,.2);color:#d29922;border:1px solid rgba(210,153,34,.45)}
+.o3 .od-num{background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.4)}
+.od-title{font-weight:700;color:var(--fg);font-size:11px}
+.od-body{color:var(--dim);font-size:10.5px}
+.od-trigger{font-size:10px;color:var(--blue);margin-top:5px;padding-top:4px;border-top:1px solid rgba(255,255,255,.06)}
+/* Order filter chips active states */
+.sf-chip[data-filter="order:1"].active{background:rgba(63,185,80,.15);border-color:rgba(63,185,80,.4);color:#3fb950}
+.sf-chip[data-filter="order:2"].active{background:rgba(210,153,34,.15);border-color:rgba(210,153,34,.4);color:#d29922}
+.sf-chip[data-filter="order:3"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.35);color:#f85149}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.6.9 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.6.10 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -173,17 +332,13 @@ button:disabled{opacity:.4;cursor:not-allowed}
       hits the third-party API. Numbers below are typical, not guaranteed.
     </div>
     <div id="external-list">loading…</div>
+    <div id="ext-misc"></div>
+    <div id="external-log" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"></div>
   </section>
 
 
   <section class="card" id="card-scoring">
-    <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span>
-      <span class="escal-legend" id="escal-legend">
-        <img src="/antibot-appsec-gateway/assets/escalate.svg" alt="">
-        escalate-only · runs only when risk_score &ge; <code id="escal-thr-display" style="background:transparent;color:var(--yellow);padding:0">—</code>
-        <span class="dim" style="color:var(--dim)">·&nbsp;hover any icon for details</span>
-      </span>
-    </h2>
+    <h2>Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
     <div class="hint" style="margin-bottom:10px">
       Each signal adds points to the identity's <code>risk_score</code>; ban
       fires when score crosses <code>RISK_BAN_THRESHOLD</code> (50) — or
@@ -202,6 +357,88 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <span class="kind-badge kind-network" style="margin-left:6px">network</span><span style="font-size:10px;color:var(--dim)">external API call</span>
       <span class="kind-badge kind-response" style="margin-left:6px">response</span><span style="font-size:10px;color:var(--dim)">DLP: scans upstream reply</span>
       <span class="kind-badge kind-adversary" style="margin-left:6px">adversary</span><span style="font-size:10px;color:var(--dim)">intentional delay — 0 ms for legit traffic</span>
+    </div>
+    <div class="order-defs-wrap">
+      <div class="order-defs-hdr" id="order-defs-hdr">
+        <span class="od-toggle" id="od-toggle">▶</span>
+        <span>Activation order — when to enable each tier</span>
+      </div>
+      <div class="order-defs" id="order-defs">
+        <div class="order-def o1">
+          <div class="od-head"><span class="od-num">1</span><span class="od-title">1st Order — Baseline</span></div>
+          <div class="od-body">Always active. Zero-config, microsecond cost, near-zero false-positive risk. Catches obvious bots: bad/empty UA, basic flood, canary traps, header fingerprints. Safe to enable on day 1 before any traffic analysis.</div>
+          <div class="od-trigger">Enable when: deploying the gateway — no prior evidence needed.</div>
+        </div>
+        <div class="order-def o2">
+          <div class="od-head"><span class="od-num">2</span><span class="od-title">2nd Order — Elevated Suspicion</span></div>
+          <div class="od-body">Enable when bot patterns appear in logs. Behavioral and AI-specific signals, regex body scans, IP reputation basics (Tor, ASN). May occasionally flag API clients — review false positives before locking in.</div>
+          <div class="od-trigger">Enable when: logs show suspicious patterns OR risk_score frequently hits 15–30 range.</div>
+        </div>
+        <div class="order-def o3">
+          <div class="od-head"><span class="od-num">3</span><span class="od-title">3rd Order — Confirmed Attack</span></div>
+          <div class="od-body">Aggressive or expensive controls: external API calls (AbuseIPDB, CrowdSec), geo/DC blocking, JS challenges, tarpits. Require configuration and have latency cost or collateral damage risk. Use when 1st+2nd order is insufficient.</div>
+          <div class="od-trigger">Enable when: active attack confirmed OR escalation_threshold frequently reached OR 1st+2nd insufficient.</div>
+        </div>
+      </div>
+    </div>
+    <!-- 1.6.10 — order-threshold slider -->
+    <div style="margin:10px 0 14px;padding:10px 12px;background:#0d1117;border:1px solid var(--line);border-radius:6px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <span style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">
+          Score thresholds
+          <span style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">drag the markers to change live · 0 = always active</span>
+        </span>
+        <span id="ord-slider-msg" style="font-size:11px;color:var(--dim)"></span>
+      </div>
+      <div id="ord-slider" style="position:relative;height:58px;margin:0 4px"></div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px;font-size:11px">
+        <div><span style="color:#58a6ff;font-size:14px;line-height:1">●</span> <b>1st order</b> — always active
+          <div style="color:var(--dim);margin-top:2px">score 0 → &lt;<span id="ord-s2-label" style="font-family:ui-monospace;font-weight:600">—</span></div>
+        </div>
+        <div><span style="color:#d29922;font-size:14px;line-height:1">●</span> <b>2nd order</b> — activated at ≥ <span id="ord-s2-val" style="font-family:ui-monospace;font-weight:700;color:#d29922">—</span>
+          <div style="color:var(--dim);margin-top:2px">behavioral / MMDB signals</div>
+        </div>
+        <div><span style="color:#f85149;font-size:14px;line-height:1">●</span> <b>3rd order</b> — activated at ≥ <span id="ord-s3-val" style="font-family:ui-monospace;font-weight:700;color:#f85149">—</span>
+          <div style="color:var(--dim);margin-top:2px">external APIs / expensive checks</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="scoring-filters">
+      <div class="sf-row">
+        <span class="sf-label">Kind</span>
+        <button class="sf-chip" data-filter="kind:in-process">in-process</button>
+        <button class="sf-chip" data-filter="kind:state">state</button>
+        <button class="sf-chip" data-filter="kind:regex">regex</button>
+        <button class="sf-chip" data-filter="kind:mmdb">mmdb</button>
+        <button class="sf-chip" data-filter="kind:network">network</button>
+        <button class="sf-chip" data-filter="kind:response">response</button>
+        <button class="sf-chip" data-filter="kind:adversary">adversary</button>
+      </div>
+      <div class="sf-row">
+        <span class="sf-label">Tier</span>
+        <button class="sf-chip" data-filter="tier:hard">hard</button>
+        <button class="sf-chip" data-filter="tier:med">med</button>
+        <button class="sf-chip" data-filter="tier:soft">soft</button>
+        <button class="sf-chip" data-filter="tier:info">info</button>
+        <button class="sf-chip" data-filter="tier:intel">intel</button>
+        <button class="sf-chip" data-filter="tier:modifier">modifier</button>
+      </div>
+      <div class="sf-row">
+        <span class="sf-label">Tag</span>
+        <button class="sf-chip" data-filter="tag:ai">AI / crawler</button>
+        <button class="sf-chip" data-filter="tag:cfg-required">Config required</button>
+        <button class="sf-chip" data-filter="tag:ip">IP / geo</button>
+        <button class="sf-chip" data-filter="tag:ua">User Agent</button>
+      </div>
+      <div class="sf-row">
+        <span class="sf-label">Order</span>
+        <button class="sf-chip" data-filter="order:1">① 1st order</button>
+        <button class="sf-chip" data-filter="order:2">② 2nd order</button>
+        <button class="sf-chip" data-filter="order:3">③ 3rd order</button>
+        <button id="sf-clear" class="sf-clear" style="display:none">✕ Clear</button>
+        <span id="sf-count" class="sf-count"></span>
+      </div>
     </div>
     <table id="scoring-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
       <thead><tr style="text-align:left;color:var(--dim);font-weight:600;border-bottom:1px solid var(--line)">
@@ -261,16 +498,6 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <code>↓</code> lower = stricter &nbsp;·&nbsp; <code>↑</code> higher = stricter
     </div>
     <div id="thresholds-rich"></div>
-  </section>
-
-  <section class="card section-list" id="card-lists">
-    <h2>Lists (comma-separated)</h2>
-    <div id="lists"></div>
-  </section>
-
-  <section class="card">
-    <h2>Logging</h2>
-    <div id="logging"></div>
   </section>
 
   <div class="actions">
@@ -404,15 +631,15 @@ const META = {
   SESSION_CHURN_MAX:       {kind:'num', min:1,    max:1000,  step:1,   desc:'Max chal cookies a single fingerprint may mint per window.', card:'thresholds'},
   JA4_AUTODENY_THRESHOLD:  {kind:'num', min:1,    max:100,   step:1,   desc:'Distinct bans on a JA4 before auto-adding it to the deny list.', card:'thresholds'},
   // lists
-  JS_CHAL_OPEN_PATHS:      {kind:'list', card:'lists', desc:'Path prefixes that bypass the cookie gate (SPA data layer, webhooks, S2S).'},
-  JA4_DENY_LIST:           {kind:'list', card:'lists', desc:'TLS handshake fingerprints to silent-decoy at Layer 0.5.'},
+  JS_CHAL_OPEN_PATHS:      {kind:'list', desc:'Path prefixes that bypass the cookie gate (SPA data layer, webhooks, S2S).'},
+  JA4_DENY_LIST:           {kind:'list', desc:'TLS handshake fingerprints to silent-decoy at Layer 0.5.'},
   // 1.6.0 — Tier A
   COUNTRY_BLOCK_ENABLED:   {kind:'bool',
     desc:'Country-level geofencing using GeoLite2-City. Off → no-op. ⓘ Suggested deny list for most production gateways: <b>RU</b> (Russia), <b>KP</b> (North Korea), <b>CN</b> (China), <b>BY</b> (Belarus), <b>IR</b> (Iran). Tune to your threat model + compliance constraints (sanctions, export-control). Note: admin IPs ALWAYS bypass country block — you can never lock yourself out by adding your own country.',
     inline_list: 'COUNTRY_DENYLIST'},
-  COUNTRY_DENYLIST:        {kind:'list', card:'lists',
+  COUNTRY_DENYLIST:        {kind:'list',
     desc:'ISO-3166-1 alpha-2 codes to deny. ⓘ Suggested production list: RU, KP, CN, BY, IR. Example: <code>RU,CN,KP</code>. Empty list = no country denied. Allowlist (next field) takes precedence: when COUNTRY_ALLOWLIST is non-empty, anything outside it is blocked even if not listed here.'},
-  COUNTRY_ALLOWLIST:       {kind:'list', card:'lists', desc:'ISO-3166-1 alpha-2 codes to allow exclusively (whitelist mode). Empty → denylist mode.'},
+  COUNTRY_ALLOWLIST:       {kind:'list', desc:'ISO-3166-1 alpha-2 codes to allow exclusively (whitelist mode). Empty → denylist mode.'},
   TOR_BLOCK_ENABLED:       {kind:'bool', desc:'Block Tor exit nodes — auto-fetches torbulkexitlist (weekly refresh). Fires tor-exit (+50 risk).'},
   DC_VPN_BLOCK_ENABLED:    {kind:'bool', desc:'Block datacenter / commercial-VPN ASNs — heavier weight on top of asn-hosting.'},
   AI_UA_OPENAI_ENABLED:    {kind:'bool', desc:'Block OpenAI / GPTBot / ChatGPT-User crawlers (granular toggle).'},
@@ -421,18 +648,18 @@ const META = {
   AI_UA_PERPLEXITY_ENABLED:{kind:'bool', desc:'Block PerplexityBot (granular toggle).'},
   AI_UA_META_ENABLED:      {kind:'bool', desc:'Block Meta-ExternalAgent / FacebookBot (granular toggle).'},
   AI_UA_OTHER_ENABLED:     {kind:'bool', desc:'Block Bytespider / CCBot / Cohere / Mistral / generic AI crawlers.'},
-  ENDPOINT_POLICIES:       {kind:'list', card:'lists', desc:'Per-endpoint policy + rate-limit JSON: [{"path":"/api/*","policy":"bypass","rps":5,"burst":10}].'},
+  ENDPOINT_POLICIES:       {kind:'list', desc:'Per-endpoint policy + rate-limit JSON: [{"path":"/api/*","policy":"bypass","rps":5,"burst":10}].'},
   // 1.6.1 — Tier B
-  CUSTOM_RULES:            {kind:'list', card:'lists', desc:'Custom IF/THEN JSON rules. [{"if":{"path":"/x","ip_cidr":"10.0/8"},"then":"allow"}]. Actions: allow|block|challenge|tag.'},
+  CUSTOM_RULES:            {kind:'list', desc:'Custom IF/THEN JSON rules. [{"if":{"path":"/x","ip_cidr":"10.0/8"},"then":"allow"}]. Actions: allow|block|challenge|tag.'},
   BODY_GROUP_SQLI_ENABLED: {kind:'bool', desc:'Body-pattern group: SQL injection (UNION SELECT, OR 1=1, etc.). Fires body-sqli (+40 risk).'},
   BODY_GROUP_XSS_ENABLED:  {kind:'bool', desc:'Body-pattern group: cross-site-scripting (<script>, javascript:, on*=). Fires body-xss (+40 risk).'},
   BODY_GROUP_LFI_ENABLED:  {kind:'bool', desc:'Body-pattern group: local-file-inclusion / path traversal. Fires body-lfi (+40 risk).'},
   BODY_GROUP_RCE_ENABLED:  {kind:'bool', desc:'Body-pattern group: remote-code-execution incl. Log4Shell. Fires body-rce (+50 risk → ban).'},
   BODY_GROUP_SSRF_ENABLED: {kind:'bool', desc:'Body-pattern group: server-side-request-forgery (loopback / IMDS / gopher). Fires body-ssrf (+40 risk).'},
   BODY_GROUP_CMD_ENABLED:  {kind:'bool', desc:'Body-pattern group: OS-command-injection (; cat / `whoami` / $()). Fires body-cmd (+50 risk → ban).'},
-  JWT_VALIDATE_PATHS:      {kind:'list', card:'lists', desc:'fnmatch globs requiring a valid HS256 JWT in Authorization: Bearer (verifies against JWT_HMAC_SECRET).'},
-  JWT_REQUIRED_ISSUER:     {kind:'text', card:'lists', desc:'Require the iss claim to equal this value (empty = no enforcement).'},
-  JWT_REQUIRED_AUDIENCE:   {kind:'text', card:'lists', desc:'Require the aud claim to contain this value (empty = no enforcement).'},
+  JWT_VALIDATE_PATHS:      {kind:'list', desc:'fnmatch globs requiring a valid HS256 JWT in Authorization: Bearer (verifies against JWT_HMAC_SECRET).'},
+  JWT_REQUIRED_ISSUER:     {kind:'text', desc:'Require the iss claim to equal this value (empty = no enforcement).'},
+  JWT_REQUIRED_AUDIENCE:   {kind:'text', desc:'Require the aud claim to contain this value (empty = no enforcement).'},
   // 1.6.2 — Tier C: outbound DLP + webhook event filter
   DLP_ENABLED:             {kind:'bool', desc:'Outbound DLP — scan upstream response bodies for PII / API keys / JWTs / private keys leaving the gateway. Bounded by DLP_MAX_BYTES.'},
   DLP_REDACT:              {kind:'bool', desc:'When DLP_ENABLED is on, replace matched bytes with [REDACTED-<group>] before forwarding.'},
@@ -444,23 +671,31 @@ const META = {
   DLP_GROUP_API_KEY_ENABLED:     {kind:'bool', desc:'DLP group: API-key shapes (Slack xoxb-, GitHub ghp_/gho_, OpenAI sk-, labelled high-entropy secrets).'},
   DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
   DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
-  WEBHOOK_EVENT_FILTER:    {kind:'list', card:'lists', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
+  WEBHOOK_EVENT_FILTER:    {kind:'list', card:'ext-misc', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
   DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
-  POSTGRES_DSN:            {kind:'text', card:'lists', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
+  POSTGRES_DSN:            {kind:'text', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
   // 1.6.5 — escalation tier + tarpit
-  ESCALATION_THRESHOLD:    {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which expensive / external detectors run (AbuseIPDB / CrowdSec / MaxMind / body-pattern / DLP). Cheap in-process detectors run on every request regardless. 0 = run all on every request (legacy).', card:'thresholds'},
+  SECOND_ORDER_THRESHOLD:  {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which 2nd-order behavioral detectors run (ai-enumeration, ai-no-assets, locale-geo-mismatch, tls-fingerprint, ja4-required-missing). Default 15 = any single soft-tier hit activates them. 0 = always run (no gate).', card:'thresholds'},
+  ESCALATION_THRESHOLD:    {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which 3rd-order expensive / external detectors run (AbuseIPDB / CrowdSec / MaxMind / body-pattern / DLP). 0 = run all on every request (legacy).', card:'thresholds'},
   LABYRINTH_ENABLED:       {kind:'bool', desc:'AI Labyrinth — banned/high-risk bots that crawl the tarpit path are trapped in an infinite maze of AI-generated plausible-looking pages linked with signed tokens. Each page is slow-streamed (LABYRINTH_SLOW_MS) to maximise crawler CPU/bandwidth burn. Toggle off to disable maze generation entirely.'},
   LABYRINTH_JITTER_ENABLED:{kind:'bool', desc:'Tarpit timing jitter (1.6.10) — replaces the fixed LABYRINTH_SLOW_MS delay with a Gaussian-distributed random delay (200–3000 ms, σ=500 ms) per streamed chunk. A deterministic 600 ms cadence is trivially fingerprinted; jitter makes it indistinguishable from a slow upstream.'},
   ACCEPT_FP_ENABLED:       {kind:'bool', desc:'Accept header fingerprint (1.6.10) — fires (+3 soft) when a browser-class UA navigates HTML (Sec-Fetch-Dest: document) but the Accept header lacks text/html entirely (e.g. application/json, text/plain). Real browsers always include text/html on document navigation. Catches bots that clone a Chrome UA string but forget the matching Accept profile.'},
   HEADER_CANARY_ENABLED:   {kind:'bool', desc:'Header canary injection (1.6.10) — in addition to the HTML comment and X-Trace-Id, plants the per-identity HMAC-signed canary token in ETag (as \\"agw-c-…\\") and X-Request-Id response headers. AI frameworks such as LangChain and AutoGen that automatically replay full prior-response headers will echo the token back on the next request, triggering the canary-echo ban. Zero cost — only activates when CANARY_ECHO_DETECTION is also on.'},
+  HEADER_ORDER_FP_ENABLED: {kind:'bool', desc:'Header-order library fingerprint (1.6.10) — fires (+8 soft) when the ordered set of HTTP request header names matches a known library signature (python-requests, curl, Go net/http, httpx). Real browsers send 10+ headers in a consistent browser-defined order; bot libraries emit a predictable minimal set. Zero false-positive risk for real browsers.'},
+  AI_CRAWLER_VERIFY_ENABLED:{kind:'bool', desc:'AI crawler IP-range verification (1.6.10) — when a UA matches a declared AI crawler (OpenAI GPTBot etc.), verifies the source IP is in the vendor\'s published CIDR range. IP mismatch fires ai-ua-ip-mismatch (+30). Ranges fetched from openai.com/gptbot-ranges.txt at startup, cached 24 h.'},
+  JA4_FAIL_CLOSED:         {kind:'bool', desc:'JA4 fail-closed (1.6.10) — when JA4_TRUSTED_NETS is configured, hard-deny (instead of soft-score) any non-static request that arrives without a JA4 header. Turns the soft ja4-required-missing signal into a hard block. Enable only after confirming all legitimate traffic paths inject the JA4 header.'},
+  JSON_CANARY_ENABLED:     {kind:'bool', desc:'JSON API canary poisoning (1.6.10) — injects a \\"_ref\\":\\"agw-c-…\\" token into JSON object responses. LLM agents that cache and replay API responses will echo the _ref value back in a subsequent request body, triggering canary-echo detection (+40 ban). Zero visible effect on real users. Requires CANARY_ECHO_DETECTION=1.'},
+  LOCALE_GEO_CHECK_ENABLED:{kind:'bool', desc:'Accept-Language / GeoIP locale consistency (1.6.10) — fires (+10 soft) when the primary language tag in Accept-Language is implausible for the GeoIP country (e.g. Accept-Language: ru from a US IP). Only checks countries with a single dominant language; \'en\' is never flagged as a mismatch. Escalate-gated (only runs on identities with accumulated risk).'},
+  ROBOTS_MONITOR_ENABLED:  {kind:'bool', desc:'robots.txt compliance monitoring (1.6.10) — fires (+5 soft) when a declared AI-crawler UA (any ua-ai-* group) makes a request, since the gateway\'s robots.txt already says Disallow: / for all known AI bots. Serves as a robots.txt violation marker alongside the ua-ai-* block. Gateway robots.txt served at /robots.txt.'},
+  H2_FP_ENABLED:           {kind:'bool', desc:'HTTP/2 fingerprint fallback (1.6.10, default OFF) — fires (+3 soft) when a modern-browser UA makes HTTP/1.1 requests via a TLS proxy (X-Forwarded-Proto: https). Real browsers always negotiate HTTP/2 on HTTPS; bot libraries default to HTTP/1.1. Disabled by default because TLS-terminating proxies may already normalise versions.'},
   TARPIT_ENABLED:          {kind:'bool', desc:'Tarpit mitigation — when an identity is in the soft-challenge band (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD), silent-decoy responses are delayed by TARPIT_DELAY_MS. Burns attacker iteration time without committing to a ban.'},
   TARPIT_DELAY_MS:         {kind:'num', min:0, max:30000, step:100, desc:'Delay in ms before serving the silent decoy when tarpit fires. Default 1500. Per response — total time blow-up = delay × #soft-band hits.', card:'thresholds'},
   BOTD_ENABLED:            {kind:'bool', desc:'FingerprintJS BotD client-side detection (open-source). Injects /antibot-appsec-gateway/assets/botd.bundle.js into HTML responses; the in-browser library checks for headless / WebDriver / automation markers and POSTs an HMAC-bound report to /antibot-appsec-gateway/botd-report. Detected = +30 risk (med tier). Off by default — adds ~16 KB JS to every HTML response.'},
   // 1.6.5 — log-level moved out of the legacy "logging" card and into
   // the External integrations area so operators have a single place to
   // tune all server-side telemetry knobs.
-  LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'external', desc:'Filter for stdout structured log emission.'},
+  LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'external-log', desc:'Filter for stdout structured log emission.'},
 };
 
 let serverState = {};
@@ -606,8 +841,8 @@ async function load(){
   serverState = body.state || {};
   // Group + render. Booleans (toggles) are now rendered inside the merged
   // "Defenses & scoring" table (see loadScoring), so skip them here.
-  ['thresholds','lists','logging'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
-  const map = {num:'thresholds', list:'lists', select:'logging'};
+  ['thresholds','ext-misc','external-log'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  const map = {num:'thresholds'};
   for (const [name, meta] of Object.entries(META)){
     if (!(name in serverState)) continue;
     if (meta.kind === 'bool') continue;        // moved to scoring table
@@ -962,6 +1197,49 @@ document.addEventListener('DOMContentLoaded', () => {
         'SQLite event store':         'sqlite',
         'PostgreSQL / TimescaleDB':   'postgres',
       };
+      const dbItemMap = {};
+      (d.integrations||[]).forEach(item => { const t = DB_TARGET[item.name]; if (t) dbItemMap[t] = item; });
+      const sqlItem  = dbItemMap['sqlite'];
+      const pgItem   = dbItemMap['postgres'];
+      const pgActive = !!(pgItem && pgItem.enabled);
+      const pgCredsOk = pgItem ? pgItem.credentials_present !== false : false;
+      const renderDbCard = () => {
+        if (!sqlItem && !pgItem) return '';
+        const sqlPurp = sqlItem ? escapeHtml(sqlItem.purpose||'Zero-dependency single-file event store') : 'Zero-dependency single-file event store';
+        const pgPurp  = pgItem  ? escapeHtml(pgItem.purpose||'High-volume / multi-instance deployments')  : 'High-volume / multi-instance deployments';
+        return `<div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <span style="font-weight:700;font-size:13px">Database backend</span>
+            <span style="font-size:10px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:2px 8px;border-radius:3px">CHANGE REQUIRES RESTART</span>
+          </div>
+          <div class="db-choice-wrap">
+            <div class="db-side${!pgActive?' db-side-active':''}"
+                 data-db-target="sqlite"
+                 data-db-name="${escapeHtml(sqlItem ? sqlItem.name : 'SQLite event store')}"
+                 data-db-active="${pgActive?'0':'1'}" data-db-creds-ok="1"
+                 title="${!pgActive?'Active backend':'Switch to SQLite (no DSN required)'}">
+              <div class="db-side-title">SQLite</div>
+              <div class="db-side-sub">event store</div>
+              <div style="color:var(--dim);font-size:10px;margin-top:4px;line-height:1.4">${sqlPurp}</div>
+              ${!pgActive ? '<div class="db-side-badge">&#9679; active</div>' : ''}
+            </div>
+            <div class="db-toggle-track${pgActive?' db-toggle-right':''}" data-db-toggle>
+              <div class="db-toggle-thumb"></div>
+            </div>
+            <div class="db-side${pgActive?' db-side-active':''}"
+                 data-db-target="postgres"
+                 data-db-name="${escapeHtml(pgItem ? pgItem.name : 'PostgreSQL / TimescaleDB')}"
+                 data-db-active="${pgActive?'1':'0'}" data-db-creds-ok="${pgCredsOk?'1':'0'}"
+                 title="${pgActive?'Active backend':(pgCredsOk?'Switch to PostgreSQL (RESTART REQUIRED)':'Set POSTGRES_DSN first')}">
+              <div class="db-side-title">PostgreSQL</div>
+              <div class="db-side-sub">/ TimescaleDB</div>
+              <div style="color:var(--dim);font-size:10px;margin-top:4px;line-height:1.4">${pgPurp}</div>
+              ${pgActive ? '<div class="db-side-badge">&#9679; active</div>' : ''}
+              ${!pgCredsOk&&!pgActive ? '<div style="font-size:9px;color:var(--dim);margin-top:3px">set POSTGRES_DSN to enable</div>' : ''}
+            </div>
+          </div>
+        </div>`;
+      };
       // Server's current toggle state (so the switch reflects reality even
       // if the integration was force-disabled at runtime).
       const cfg = serverState || {};
@@ -984,12 +1262,7 @@ document.addEventListener('DOMContentLoaded', () => {
             : (credsOk
                 ? `Click to switch the active backend to ${item.name}. RESTART REQUIRED — confirmation dialog will list impact.`
                 : `Click to supply ${(item.envs_needed||[]).join(' / ')} and switch to ${item.name} in one step (RESTART REQUIRED).`);
-          return `<div class="switch${cls}" data-db-target="${dbTarget}"
-                       data-db-name="${escapeHtml(item.name)}"
-                       data-db-creds-ok="${credsOk ? '1' : '0'}"
-                       data-db-active="${isActive ? '1' : '0'}"
-                       ${disabledAttr}
-                       title="${escapeHtml(tt)}"></div>`;
+          return '';  // rendered as combined DB card above
         }
         const knob = KNOB[item.name];
         if (!knob) return '';            // edge-only / planned — no toggle
@@ -1010,7 +1283,7 @@ document.addEventListener('DOMContentLoaded', () => {
           : 'Cannot enable — set ' + (item.envs_needed||[]).join(' / ') + ' in container env first';
         return `<div class="switch${cls}" data-knob="${knob}" ${disabledAttr} title="${escapeHtml(title)}"></div>`;
       };
-      box.innerHTML = (d.integrations||[]).map(item => {
+      box.innerHTML = renderDbCard() + (d.integrations||[]).filter(i => !DB_TARGET[i.name]).map(item => {
         const tel = item.telemetry || {};
         let extra = '';
         if (item.name === 'AbuseIPDB' && item.enabled) {
@@ -1121,21 +1394,8 @@ document.addEventListener('DOMContentLoaded', () => {
         };
       });
 
-      // 1.6.5 — wire DB-backend switches (mutually exclusive + restart required).
-      // Uses the same .switch widget as CrowdSec/AbuseIPDB for visual parity.
-      box.querySelectorAll('.switch[data-db-target]').forEach(pill => {
-        if (pill.dataset.dbActive === '1') {
-          // Already active — clicks do nothing (clicking the inactive
-          // pill is what swaps backends). Keep cursor default.
-          return;
-        }
-        // Both 'OFF' (creds present) and 'SET DSN' (creds missing) pills
-        // open the switch modal — the modal's DSN input handles the
-        // missing-creds case in one step.
-        pill.onclick = async (ev) => {
-          ev.stopPropagation();
-          const target = pill.dataset.dbTarget;
-          const dbName = pill.dataset.dbName;
+      // Wire DB backend choice toggle
+      const openDbModal = async (target, dbName) => {
           const impactLines = [
             `<b>Restart required.</b> The container will exit immediately;
              docker's <code>--restart=unless-stopped</code> policy brings it
@@ -1155,15 +1415,22 @@ document.addEventListener('DOMContentLoaded', () => {
               : `<b>SQLite is single-file zero-deps</b> — correct for the
                  default deployment shape.`,
           ];
+          const needsTest = (target === 'postgres');
           let dsnInput = '';
           if (target === 'postgres') {
             dsnInput = `<div style="margin-top:14px">
               <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">
                 Optional — supply / override <code>POSTGRES_DSN</code> (leave blank to use the current value):
               </label>
-              <input id="db-switch-dsn" type="text" class="num"
-                     style="width:100%;text-align:left;font-size:11px;font-family:ui-monospace,monospace"
-                     placeholder="postgresql://user:pass@host:5432/db">
+              <div style="display:flex;gap:6px;align-items:center">
+                <input id="db-switch-dsn" type="text" class="num"
+                       style="flex:1;text-align:left;font-size:11px;font-family:ui-monospace,monospace"
+                       placeholder="postgresql://user:pass@host:5432/db">
+                <button id="db-test-btn" class="ctrl" style="white-space:nowrap;flex-shrink:0">
+                  Test connection
+                </button>
+              </div>
+              <div id="db-test-result" style="margin-top:8px;font-size:11.5px;min-height:20px"></div>
             </div>`;
           }
           const html = `
@@ -1175,12 +1442,60 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
               <button id="db-switch-cancel" class="ctrl">Cancel</button>
               <button id="db-switch-ok" class="ctrl"
-                      style="background:#d29922;color:#000;border-color:#d29922">
+                      style="background:#d29922;color:#000;border-color:#d29922"
+                      ${needsTest ? 'disabled title="Run connection test first"' : ''}>
                 Yes, switch &amp; restart
               </button>
             </div>`;
           showSimpleModal(html);
           document.getElementById('db-switch-cancel').onclick = closeSimpleModal;
+
+          if (needsTest) {
+            document.getElementById('db-test-btn').onclick = async () => {
+              const testBtn   = document.getElementById('db-test-btn');
+              const resultEl  = document.getElementById('db-test-result');
+              const okBtn     = document.getElementById('db-switch-ok');
+              const dsnVal    = (document.getElementById('db-switch-dsn') || {}).value || '';
+              testBtn.disabled = true;
+              testBtn.textContent = 'Testing…';
+              resultEl.textContent = '';
+              okBtn.disabled = true;
+              try {
+                const qs = dsnVal ? '?dsn=' + encodeURIComponent(dsnVal) : '';
+                const r = await fetch(url('/antibot-appsec-gateway/secured/db-test' + qs),
+                  {credentials:'include'});
+                const j = await r.json();
+                if (j.ok) {
+                  const p = j.probe || j.postgres || {};
+                  const ver  = p.version  ? `<b>PostgreSQL ${escapeHtml(String(p.version))}</b>` : '';
+                  const db   = p.db_name  ? ` · db <code>${escapeHtml(p.db_name)}</code>` : '';
+                  const ms   = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
+                  const rows = p.events_rows  != null ? ` · ${p.events_rows} events` : '';
+                  resultEl.innerHTML = `<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`;
+                  okBtn.disabled = false;
+                  okBtn.title = '';
+                } else {
+                  const reason = j.reason || (j.probe && j.probe.reason) || 'unreachable';
+                  resultEl.innerHTML = `<span style="color:var(--red)">✗ ${escapeHtml(reason)}</span>`;
+                  okBtn.disabled = true;
+                }
+              } catch (e) {
+                resultEl.innerHTML = `<span style="color:var(--red)">✗ Network error: ${escapeHtml(e.message)}</span>`;
+                okBtn.disabled = true;
+              } finally {
+                testBtn.disabled = false;
+                testBtn.textContent = 'Test connection';
+              }
+            };
+            const dsnField = document.getElementById('db-switch-dsn');
+            if (dsnField) {
+              dsnField.addEventListener('input', () => {
+                document.getElementById('db-switch-ok').disabled = true;
+                document.getElementById('db-test-result').textContent = '';
+              });
+            }
+          }
+
           document.getElementById('db-switch-ok').onclick = async () => {
             const okBtn = document.getElementById('db-switch-ok');
             okBtn.disabled = true; okBtn.textContent = 'Switching…';
@@ -1208,8 +1523,20 @@ document.addEventListener('DOMContentLoaded', () => {
               alert('Network error: ' + e.message);
             }
           };
-        };
+      };
+      box.querySelectorAll('.db-side[data-db-target]').forEach(side => {
+        if (side.dataset.dbActive === '1') return;
+        side.onclick = () => openDbModal(side.dataset.dbTarget, side.dataset.dbName);
       });
+      const dbTrack = box.querySelector('[data-db-toggle]');
+      if (dbTrack) {
+        dbTrack.onclick = () => {
+          const isPgActive = dbTrack.classList.contains('db-toggle-right');
+          const target = isPgActive ? 'sqlite' : 'postgres';
+          const side = box.querySelector(`.db-side[data-db-target="${target}"]`);
+          if (side && side.dataset.dbActive !== '1') side.click();
+        };
+      }
 
       // Wire up the toggle clicks. Skip db-target switches — those are
       // wired separately above with the warning modal + restart flow.
@@ -1258,14 +1585,11 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) return;
       const d = await r.json();
       const cfg = serverState || {};
-      // 1.6.5 — keep the legend's threshold readout in sync with /antibot-appsec-gateway/secured/config.
-      const thrEl = document.getElementById('escal-thr-display');
-      if (thrEl) thrEl.textContent = (cfg.ESCALATION_THRESHOLD != null ? cfg.ESCALATION_THRESHOLD : '—');
       const tb = document.querySelector('#scoring-tbl tbody');
       const tierColor = (t) => ({
         hard:'#f85149', med:'#d29922', soft:'#3fb950',
-        info:'#8b949e', mod:'#79c0ff',
-        intel:'#bc8cff',                              // 1.6.3 — DLP / OSINT leaks
+        info:'#8b949e', mod:'#79c0ff', modifier:'#79c0ff',
+        intel:'#bc8cff',
       }[t] || '#8b949e');
       const toggleCell = (knob) => {
         if (!knob) return '<td style="padding:5px 8px;color:var(--green);font-size:9.5px;font-weight:600">ALWAYS&nbsp;ON</td>';
@@ -1319,32 +1643,116 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
         </td>`;
       };
-      // 1.6.5 — escalate icon with custom hover tooltip (next to detectors
-      // that only fire on identities with risk_score ≥ ESCALATION_THRESHOLD).
-      // Saves external-API quota on routine clean traffic.
-      const curThreshold = (cfg.ESCALATION_THRESHOLD != null ? cfg.ESCALATION_THRESHOLD : 1);
-      const escalateIcon = `<span class="escal-icon"
-        aria-label="escalate-only control">
-        <img src="/antibot-appsec-gateway/assets/escalate.svg" alt="escalate">
-        <span class="escal-tip" role="tooltip">
-          <h4>Escalate-only control</h4>
-          This detector is <b>skipped on clean traffic</b>. It only runs
-          when the identity has accumulated <code>risk_score &ge; ${curThreshold}</code>
-          (knob: <code>ESCALATION_THRESHOLD</code>).<br>
-          <span class="dim">Why: external-API calls (AbuseIPDB / CrowdSec) burn
-          quota and add latency. Body / DLP scans cost CPU. Cheap in-process
-          checks (UA / honeypot / canary) still run on every request and feed
-          the risk-score that triggers escalation.</span>
-        </span>
-      </span>`;
+      const SIGNAL_TAGS = {
+        'ua-ai-openai':        ['ai','ua'], 'ua-ai-anthropic':     ['ai','ua'],
+        'ua-ai-google':        ['ai','ua'], 'ua-ai-perplexity':    ['ai','ua'],
+        'ua-ai-meta':          ['ai','ua'], 'ua-ai-other':         ['ai','ua'],
+        'ai-probe':            ['ai'],      'ai-enumeration':      ['ai'],
+        'ai-headers-empty':    ['ai','ua'], 'ai-headers-incomplete':['ai','ua'],
+        'ai-no-assets':        ['ai'],      'ai-ua-ip-mismatch':   ['ai','ip','ua'],
+        'robots-violation':    ['ai'],      'canary-echo':         ['ai'],
+        'header-canary':       ['ai'],      'json-canary':         ['ai'],
+        'tarpit-walk':         ['ai'],      'labyrinth-jitter':    ['ai'],
+        'botd-detected':       ['ai'],
+        'country-blocked':     ['ip','cfg-required'], 'tor-exit':          ['ip'],
+        'datacenter-vpn':      ['ip','cfg-required'], 'asn-hosting':       ['ip','cfg-required'],
+        'abuseipdb-high':      ['ip','cfg-required'], 'abuseipdb-med':     ['ip','cfg-required'],
+        'crowdsec-banned':     ['ip','cfg-required'], 'session-flood':     ['ip'],
+        'rate-limit-ip':       ['ip'],                'locale-geo-mismatch':['ip','cfg-required'],
+        'tls-fingerprint':     ['ip','cfg-required'], 'ja4-required-missing':['ip'],
+        'ua-empty':            ['ua'], 'ua-blocked':           ['ua'],
+        'ua-non-browser':      ['ua'], 'ua-too-short':         ['ua'],
+        'ua-platform-mismatch':['ua'], 'header-order-fp':      ['ua'],
+        'accept-fp':           ['ua'], 'accept-wildcard-html': ['ua'],
+        'h2-fp':               ['ua'], 'behavior':             ['ua'],
+        'ai-headers-empty':    ['ai','ua'], 'ai-headers-incomplete':['ai','ua'],
+        'js-challenge':        ['cfg-required'], 'rate-limit-endpoint': ['cfg-required'],
+        'custom-rule-block':   ['cfg-required'], 'auth-jwt-invalid':    ['cfg-required'],
+      };
+
+      // Activation order defaults: 1=baseline, 2=elevated suspicion, 3=confirmed attack
+      const SIGNAL_ORDER_DEFAULTS = {
+        // ── 1st order: always safe, no config, µs cost ──────────────────────
+        'ua-empty':1,'ua-blocked':1,'ua-too-short':1,'ua-non-browser':1,
+        'ua-platform-mismatch':1,'accept-fp':1,'accept-wildcard-html':1,
+        'header-order-fp':1,'h2-fp':1,'behavior':1,
+        'rate-limit-ip':1,'session-flood':1,
+        'header-canary':1,'json-canary':1,'canary-echo':1,
+        // ── 2nd order: behavioral / AI signals, regex scans, basic IP ───────
+        'ua-ai-openai':2,'ua-ai-anthropic':2,'ua-ai-google':2,
+        'ua-ai-perplexity':2,'ua-ai-meta':2,'ua-ai-other':2,
+        'ai-probe':2,'ai-enumeration':2,'ai-headers-empty':2,
+        'ai-headers-incomplete':2,'ai-no-assets':2,'ai-ua-ip-mismatch':2,
+        'robots-violation':2,'tor-exit':2,'asn-hosting':2,
+        'locale-geo-mismatch':2,'tls-fingerprint':2,'ja4-required-missing':2,
+        'suspicious-path':2,'body-sqli':2,'body-xss':2,'body-cmd':2,
+        'body-lfi':2,'body-rce':2,'body-ssrf':2,
+        // ── 3rd order: expensive, aggressive, cfg-required, escalate-only ───
+        'country-blocked':3,'datacenter-vpn':3,
+        'abuseipdb-high':3,'abuseipdb-med':3,'crowdsec-banned':3,
+        'js-challenge':3,'rate-limit-endpoint':3,
+        'custom-rule-block':3,'auth-jwt-invalid':3,
+        'tarpit-walk':3,'labyrinth-jitter':3,'botd-detected':3,
+      };
+
+      const _ORDER_LS_KEY = 'agw_sig_order';
+      const getOrderOverrides = () => {
+        try { return JSON.parse(localStorage.getItem(_ORDER_LS_KEY) || '{}'); }
+        catch(_){ return {}; }
+      };
+      const setOrderOverride = (sig, n) => {
+        // persist locally first for instant UI feedback
+        const ov = getOrderOverrides();
+        ov[sig] = n;
+        localStorage.setItem(_ORDER_LS_KEY, JSON.stringify(ov));
+        // persist to server (fire-and-forget; localStorage is the fallback)
+        fetch(url('/antibot-appsec-gateway/secured/signal-orders'), {
+          method: 'POST', credentials: 'include',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({signal: sig, order: n}),
+        }).catch(() => {});
+      };
+      const getSignalOrder = (sig, w) => {
+        const ov = getOrderOverrides();
+        if (ov[sig]) return ov[sig];
+        // Server-side activation_order is authoritative when present (1.6.10)
+        if (w && w.activation_order) return w.activation_order;
+        if (SIGNAL_ORDER_DEFAULTS[sig]) return SIGNAL_ORDER_DEFAULTS[sig];
+        // Heuristic fallback
+        if (w && w.escalate_only) return 3;
+        if (w && (w.cost_ms||{}).kind === 'network') return 3;
+        if (w && (w.cost_ms||{}).kind === 'adversary') return 3;
+        if (w && w.tier === 'hard') return 2;
+        return 1;
+      };
+
       const renderRow = (w) => {
         const tag = `<span style="background:${tierColor(w.tier)}22;color:${tierColor(w.tier)};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">${w.tier}</span>`;
         const wColor = w.weight >= 50 ? 'var(--red)'
                      : w.weight >= 20 ? 'var(--yellow)'
                      : w.weight > 0   ? 'var(--green)' : 'var(--dim)';
-        const sigCell = (w.escalate_only ? escalateIcon : '') +
-          `<code class="sig-name" data-desc="${escapeHtml(w.description)}">${escapeHtml(w.label || w.signal)}</code>`;
-        return `<tr style="border-bottom:1px solid var(--line)">
+        const ord = getSignalOrder(w.signal, w);
+        const orderBadge = `<span class="sig-order o${ord}" data-sig="${escapeHtml(w.signal)}" data-order="${ord}" title="Activation order ${ord} — click to change">${ord}</span>`;
+        const sigCell = orderBadge +
+          `<code class="sig-name"
+            data-signal="${escapeHtml(w.signal)}"
+            data-label="${escapeHtml(w.label||w.signal)}"
+            data-desc="${escapeHtml(w.description)}"
+            data-weight="${w.weight}"
+            data-tier="${escapeHtml(w.tier||'')}"
+            data-toggle="${escapeHtml(w.toggle||'')}"
+            data-escalate="${w.escalate_only?'1':''}"
+            data-cost-kind="${escapeHtml((w.cost_ms||{}).kind||'')}"
+            data-cost-typical="${(w.cost_ms||{}).typical||0}"
+            data-cost-p99="${(w.cost_ms||{}).p99||0}"
+          >${escapeHtml(w.label || w.signal)}</code>`;
+        const sigTags = (SIGNAL_TAGS[w.signal] || []).join(',');
+        return `<tr style="border-bottom:1px solid var(--line)"
+            data-filter-signal="${escapeHtml(w.signal)}"
+            data-filter-tier="${escapeHtml(w.tier||'')}"
+            data-filter-kind="${escapeHtml((w.cost_ms||{}).kind||'')}"
+            data-filter-tags="${escapeHtml(sigTags)}"
+            data-filter-order="${ord}">
           ${toggleCell(w.toggle)}
           <td style="padding:5px 8px;font-family:ui-monospace,monospace">${sigCell}</td>
           <td style="padding:5px 8px;text-align:right;font-weight:600;color:${wColor}">${w.weight}</td>
@@ -1382,9 +1790,28 @@ document.addEventListener('DOMContentLoaded', () => {
           ? `<td style="padding:5px 8px"><div class="switch${checked?' on':''}" data-knob-scoring="${m.toggle}" title="Toggle ${escapeHtml(m.toggle)}"></div></td>`
           : '<td style="padding:5px 8px;color:var(--dim);font-size:10px">—</td>';
         const tag = `<span style="background:${tierColor('mod')}22;color:${tierColor('mod')};padding:1px 7px;border-radius:3px;font-size:10px;font-weight:600">modifier</span>`;
-        return `<tr style="border-bottom:1px solid var(--line)">
+        const modTags = (SIGNAL_TAGS[m.toggle] || []).join(',');
+        const modOrd = getSignalOrder(m.toggle, null);
+        const modOrderBadge = `<span class="sig-order o${modOrd}" data-sig="${escapeHtml(m.toggle)}" data-order="${modOrd}" title="Activation order ${modOrd} — click to change">${modOrd}</span>`;
+        return `<tr style="border-bottom:1px solid var(--line)"
+            data-filter-signal="${escapeHtml(m.toggle)}"
+            data-filter-tier="modifier"
+            data-filter-kind="modifier"
+            data-filter-tags="${escapeHtml(modTags)}"
+            data-filter-order="${modOrd}">
           ${cell}
-          <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code class="sig-name" data-desc="${escapeHtml(m.description)}">${escapeHtml(m.toggle)}</code></td>
+          <td style="padding:5px 8px;font-family:ui-monospace,monospace">${modOrderBadge}<code class="sig-name"
+            data-signal="${escapeHtml(m.toggle)}"
+            data-label="${escapeHtml(m.toggle)}"
+            data-desc="${escapeHtml(m.description)}"
+            data-weight="0"
+            data-tier="modifier"
+            data-toggle="${escapeHtml(m.toggle)}"
+            data-escalate=""
+            data-cost-kind="modifier"
+            data-cost-typical="0"
+            data-cost-p99="0"
+          >${escapeHtml(m.toggle)}</code></td>
           <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
           <td style="padding:5px 8px">${tag}</td>
           <td style="padding:5px 8px;text-align:right;color:var(--dim)">—</td>
@@ -1393,24 +1820,454 @@ document.addEventListener('DOMContentLoaded', () => {
       }).join('');
       tb.innerHTML = weightRows + modHeader + modRows;
 
-      // Signal-name click → floating tooltip
+      // Filter bar logic
+      const applyFilters = () => {
+        const active = [...document.querySelectorAll('#scoring-filters .sf-chip.active')]
+          .map(c => c.dataset.filter);
+        const clearBtn = document.getElementById('sf-clear');
+        const countEl  = document.getElementById('sf-count');
+        if (clearBtn) clearBtn.style.display = active.length ? '' : 'none';
+        const dataRows = tb.querySelectorAll('tr[data-filter-signal]');
+        if (!active.length) {
+          dataRows.forEach(r => r.style.display = '');
+          tb.querySelectorAll('tr:not([data-filter-signal])').forEach(r => r.style.display = '');
+          if (countEl) countEl.textContent = '';
+          return;
+        }
+        let visible = 0;
+        dataRows.forEach(row => {
+          const tier  = row.dataset.filterTier  || '';
+          const kind  = row.dataset.filterKind  || '';
+          const tags  = (row.dataset.filterTags || '').split(',').filter(Boolean);
+          const order = row.dataset.filterOrder || '1';
+          const match = active.some(f =>
+            f.startsWith('kind:')  ? kind  === f.slice(5) :
+            f.startsWith('tier:')  ? tier  === f.slice(5) :
+            f.startsWith('tag:')   ? tags.includes(f.slice(4)) :
+            f.startsWith('order:') ? order === f.slice(6) : false);
+          row.style.display = match ? '' : 'none';
+          if (match) visible++;
+        });
+        // Hide section-header rows when all their child data rows are hidden
+        const allRows = Array.from(tb.querySelectorAll('tr'));
+        let i = 0;
+        while (i < allRows.length) {
+          if (!allRows[i].hasAttribute('data-filter-signal')) {
+            let hasVis = false, j = i + 1;
+            while (j < allRows.length && allRows[j].hasAttribute('data-filter-signal')) {
+              if (allRows[j].style.display !== 'none') hasVis = true;
+              j++;
+            }
+            allRows[i].style.display = hasVis ? '' : 'none';
+            i = j;
+          } else { i++; }
+        }
+        if (countEl) countEl.textContent = `${visible} of ${dataRows.length} signals`;
+      };
+
+      // Wire filter chips (only once; guard with dataset flag)
+      const filterBar = document.getElementById('scoring-filters');
+      if (filterBar && !filterBar.dataset.wired) {
+        filterBar.dataset.wired = '1';
+        filterBar.querySelectorAll('.sf-chip').forEach(chip => {
+          chip.addEventListener('click', () => { chip.classList.toggle('active'); applyFilters(); });
+        });
+        const clearBtn = document.getElementById('sf-clear');
+        if (clearBtn) clearBtn.addEventListener('click', () => {
+          filterBar.querySelectorAll('.sf-chip.active').forEach(c => c.classList.remove('active'));
+          applyFilters();
+        });
+      }
+      applyFilters();
+
+      // Wire collapsible order definitions panel (once)
+      const _odHdr = document.getElementById('order-defs-hdr');
+      if (_odHdr && !_odHdr.dataset.wired) {
+        _odHdr.dataset.wired = '1';
+        _odHdr.addEventListener('click', () => {
+          const panel = document.getElementById('order-defs');
+          const tog   = document.getElementById('od-toggle');
+          if (!panel) return;
+          const open = panel.classList.toggle('open');
+          if (tog) { tog.textContent = open ? '▼' : '▶'; tog.classList.toggle('open', open); }
+        });
+      }
+
+      // Order badge click → popover to reassign order
+      const wireOrderBadges = () => {
+        let _pop = null;
+        const closePop = () => { if (_pop) { _pop.remove(); _pop = null; } };
+        document.addEventListener('click', (ev) => {
+          if (_pop && !_pop.contains(ev.target) && !ev.target.classList.contains('sig-order')) closePop();
+        }, true);
+
+        tb.querySelectorAll('.sig-order').forEach(badge => {
+          badge.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            closePop();
+            const sig = badge.dataset.sig;
+            const cur = parseInt(badge.dataset.order || '1', 10);
+            _pop = document.createElement('div');
+            _pop.className = 'order-pop';
+            _pop.innerHTML = `<div class="order-pop-title">Change activation order</div>
+              <div class="order-pop-btns">
+                ${[1,2,3].map(n => `<div class="order-pop-btn o${n}${cur===n?' active':''}" data-n="${n}">
+                  ${n===1?'①':n===2?'②':'③'} ${n===1?'1st':n===2?'2nd':'3rd'}</div>`).join('')}
+              </div>`;
+            const rect = badge.getBoundingClientRect();
+            _pop.style.cssText = `top:${rect.bottom+4}px;left:${Math.max(4,rect.left-40)}px`;
+            document.body.appendChild(_pop);
+            _pop.querySelectorAll('.order-pop-btn').forEach(btn => {
+              btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const n = parseInt(btn.dataset.n, 10);
+                setOrderOverride(sig, n);
+                // Update all badges + tr for this signal
+                tb.querySelectorAll(`.sig-order[data-sig="${sig}"]`).forEach(b => {
+                  b.className = `sig-order o${n}`;
+                  b.dataset.order = n;
+                  b.textContent = n;
+                  const row = b.closest('tr[data-filter-signal]');
+                  if (row) row.dataset.filterOrder = n;
+                });
+                closePop();
+                applyFilters();
+              });
+            });
+          });
+        });
+      };
+      wireOrderBadges();
+
+      // 1.6.10 — order-threshold drag slider
+      (function(){
+        const sliderEl = document.getElementById('ord-slider');
+        const msgEl    = document.getElementById('ord-slider-msg');
+        if (!sliderEl) return;
+        const MAX = 100;
+        let S2 = 15, S3 = 30, dragging = null;
+
+        sliderEl.innerHTML = `
+          <div class="ord-track" id="ord-track"></div>
+          <div class="ord-scale"><span>0</span><span>25</span><span>50</span><span>75</span><span>${MAX}</span></div>
+          <div class="ord-knob s2" id="ord-knob-s2" title="2nd order threshold (SECOND_ORDER_THRESHOLD) — drag to change">②</div>
+          <div class="ord-knob s3" id="ord-knob-s3" title="3rd order threshold (ESCALATION_THRESHOLD) — drag to change">③</div>
+          <div class="ord-knob-val s2" id="ord-knob-s2-val">—</div>
+          <div class="ord-knob-val s3" id="ord-knob-s3-val">—</div>`;
+
+        const knobS2    = document.getElementById('ord-knob-s2');
+        const knobS3    = document.getElementById('ord-knob-s3');
+        const knobS2Val = document.getElementById('ord-knob-s2-val');
+        const knobS3Val = document.getElementById('ord-knob-s3-val');
+        const track     = document.getElementById('ord-track');
+
+        function render(){
+          const s2Off = S2 <= 0, s3Off = S3 <= 0;
+          const s2Pct = s2Off ? 0 : Math.max(0, Math.min(100, (S2/MAX)*100));
+          const s3Pct = s3Off ? 0 : Math.max(0, Math.min(100, (S3/MAX)*100));
+
+          // Collapse yellow band when 2nd-order is off
+          track.style.setProperty('--s2-pct', (s2Off ? s3Pct : s2Pct) + '%');
+          track.style.setProperty('--s3-pct', (s3Off ? 100  : s3Pct) + '%');
+
+          knobS2.style.left    = s2Pct + '%';
+          knobS3.style.left    = s3Pct + '%';
+          knobS2Val.style.left = s2Pct + '%';
+          knobS3Val.style.left = s3Pct + '%';
+          knobS2Val.textContent = s2Off ? 'off' : S2;
+          knobS3Val.textContent = s3Off ? 'off' : S3;
+
+          knobS2.style.opacity       = s2Off ? '0.3' : '1';
+          knobS2.style.pointerEvents = s2Off ? 'none' : '';
+          knobS2Val.style.opacity    = s2Off ? '0'   : '1';
+          knobS3.style.opacity       = s3Off ? '0.3' : '1';
+          knobS3.style.pointerEvents = s3Off ? 'none' : '';
+          knobS3Val.style.opacity    = s3Off ? '0'   : '1';
+
+          const s2Lbl = document.getElementById('ord-s2-label');
+          const s2V   = document.getElementById('ord-s2-val');
+          const s3V   = document.getElementById('ord-s3-val');
+          if (s2Lbl) s2Lbl.textContent = s2Off ? '∞' : S2;
+          if (s2V)   s2V.textContent   = s2Off ? 'off' : S2;
+          if (s3V)   s3V.textContent   = s3Off ? 'off' : S3;
+        }
+
+        function dragStart(which, ev){
+          dragging = which;
+          (which === 's2' ? knobS2 : knobS3).classList.add('drag');
+          ev.preventDefault();
+        }
+        function dragMove(ev){
+          if (!dragging) return;
+          const rect = sliderEl.getBoundingClientRect();
+          const x    = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
+          const pct  = Math.max(0, Math.min(1, x / rect.width));
+          const v    = Math.round(pct * MAX);
+          if (dragging === 's2') S2 = Math.min(v, S3 - 1);
+          else                   S3 = Math.max(v, S2 + 1);
+          render();
+        }
+        async function dragEnd(){
+          if (!dragging) return;
+          knobS2.classList.remove('drag');
+          knobS3.classList.remove('drag');
+          const which = dragging; dragging = null;
+          const body  = which === 's2'
+            ? {SECOND_ORDER_THRESHOLD: S2}
+            : {ESCALATION_THRESHOLD:  S3};
+          try {
+            const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {
+              method: 'POST', credentials: 'include',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(body),
+            });
+            const b = await r.json();
+            if (r.ok && b.applied && Object.keys(b.applied).length){
+              msgEl.style.color = 'var(--green)';
+              msgEl.textContent = `${which === 's2' ? '2nd' : '3rd'} order threshold = ${which === 's2' ? S2 : S3}`;
+            } else {
+              msgEl.style.color = 'var(--red)';
+              msgEl.textContent = 'rejected — ' + (b.rejected ? JSON.stringify(b.rejected) : 'unknown');
+              await syncFromConfig();
+            }
+            setTimeout(() => { msgEl.textContent = ''; }, 2500);
+          } catch(e) {
+            msgEl.style.color = 'var(--red)';
+            msgEl.textContent = 'error: ' + e.message;
+          }
+        }
+
+        knobS2.addEventListener('mousedown',  e => dragStart('s2', e));
+        knobS3.addEventListener('mousedown',  e => dragStart('s3', e));
+        knobS2.addEventListener('touchstart', e => dragStart('s2', e), {passive:false});
+        knobS3.addEventListener('touchstart', e => dragStart('s3', e), {passive:false});
+        document.addEventListener('mousemove', dragMove);
+        document.addEventListener('touchmove', dragMove, {passive:false});
+        document.addEventListener('mouseup',   dragEnd);
+        document.addEventListener('touchend',  dragEnd);
+
+        async function syncFromConfig(){
+          try {
+            const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+            if (!r.ok) return;
+            const j = await r.json();
+            const cfg = j.state || j;
+            if (typeof cfg.SECOND_ORDER_THRESHOLD === 'number') S2 = Math.round(cfg.SECOND_ORDER_THRESHOLD);
+            if (typeof cfg.ESCALATION_THRESHOLD   === 'number') S3 = Math.round(cfg.ESCALATION_THRESHOLD);
+            render();
+          } catch(e) {}
+        }
+        syncFromConfig();
+        setInterval(() => { if (!dragging) syncFromConfig(); }, 8000);
+      })();
+
+      // Signal-name click → rich floating tooltip panel
       const _tip = document.getElementById('_sig-tip') || (() => {
         const d = document.createElement('div'); d.id = '_sig-tip';
         document.body.appendChild(d);
-        document.addEventListener('click', () => { d.style.display = 'none'; });
+        document.addEventListener('click', (ev) => { if (!d.contains(ev.target)) d.style.display = 'none'; });
+        document.addEventListener('keydown', e => { if(e.key==='Escape') d.style.display='none'; });
         return d;
       })();
+
+      // Version → approx release date mapping
+      const VER_DATE = {
+        '1.4':'Q4 2024','1.4.1':'Q4 2024','1.4.2':'Q4 2024','1.4.3':'Q4 2024',
+        '1.4.4':'Q4 2024','1.5':'Jan 2025','1.5.0':'Jan 2025','1.5.3':'Feb 2025',
+        '1.5.4':'Mar 2025','1.5.5':'Apr 2025','1.6.0':'Jan 2026','1.6.1':'Jan 2026',
+        '1.6.2':'Feb 2026','1.6.3':'Feb 2026','1.6.4':'Mar 2026','1.6.5':'Mar 2026',
+        '1.6.6':'Apr 2026','1.6.7':'Apr 2026','1.6.8':'Apr 2026','1.6.9':'May 2026',
+        '1.6.10':'May 2026',
+      };
+
+      const extractVer = (desc) => {
+        // Match patterns like "(1.6.10)", "1.6.10 —", "v1.5.4", "1.4.x"
+        const m = desc.match(/\b(1\.\d+(?:\.\d+)?)\b/);
+        return m ? m[1] : null;
+      };
+
+      // Signal → list/text knobs editable inline in the tooltip
+      const SIGNAL_LIST_KNOBS = {
+        'js-challenge':        [['JS_CHAL_OPEN_PATHS',   'list', 'Open paths (bypass cookie gate)']],
+        'tls-fingerprint':     [['JA4_DENY_LIST',        'list', 'JA4 deny list']],
+        'country-blocked':     [
+          ['COUNTRY_DENYLIST',   'list', 'Country deny list (ISO-3166-1 alpha-2)'],
+          ['COUNTRY_ALLOWLIST',  'list', 'Country allow list (allowlist mode, takes precedence)'],
+        ],
+        'rate-limit-endpoint': [['ENDPOINT_POLICIES',   'list', 'Endpoint policies (JSON array)']],
+        'custom-rule-block':   [['CUSTOM_RULES',        'list', 'Custom rules (JSON array)']],
+        'auth-jwt-invalid':    [
+          ['JWT_VALIDATE_PATHS',   'list', 'Paths requiring JWT (fnmatch globs)'],
+          ['JWT_REQUIRED_ISSUER',  'text', 'Required iss claim (empty = no check)'],
+          ['JWT_REQUIRED_AUDIENCE','text', 'Required aud claim (empty = no check)'],
+        ],
+      };
+
+      const buildTipHTML = (el) => {
+        const sig    = el.dataset.signal || '';
+        const label  = el.dataset.label  || sig;
+        const desc   = el.dataset.desc   || '';
+        const weight = parseInt(el.dataset.weight||'0', 10);
+        const tier   = el.dataset.tier   || '';
+        const toggle = el.dataset.toggle || '';
+        const escalate = el.dataset.escalate === '1';
+        const costKind = el.dataset.costKind || '';
+        const costTyp  = parseFloat(el.dataset.costTypical||'0');
+        const costP99  = parseFloat(el.dataset.costP99||'0');
+
+        // Extract version from description
+        const ver = extractVer(desc);
+        const verDate = ver ? (VER_DATE[ver] ? `${ver} · ${VER_DATE[ver]}` : ver) : null;
+
+        // Tier badge
+        const tc = tierColor(tier);
+        const tierBadge = tier
+          ? `<span class="stip-tier" style="background:${tc}22;color:${tc};border:1px solid ${tc}44">${tier}</span>`
+          : '';
+        const verBadge = verDate
+          ? `<span class="stip-ver">${escapeHtml(verDate)}</span>` : '';
+
+        // Weight display
+        const wColor = weight >= 50 ? '#f85149' : weight >= 20 ? '#d29922' : weight > 0 ? '#3fb950' : 'var(--dim)';
+        const wDisplay = weight > 0
+          ? `<span style="font-weight:700;color:${wColor}">+${weight}</span> points added to risk_score`
+          : tier === 'modifier'
+          ? '<span style="color:var(--dim)">0 — behavior modifier only</span>'
+          : '<span style="color:var(--dim)">0 — informational / no risk bump</span>';
+
+        // Cost display
+        const fmtMs = v => v===0?'0 ms':v>=1000?(v/1000).toFixed(1)+'s':v+'ms';
+        const costDisplay = costKind
+          ? `<span class="kind-badge kind-${costKind}" style="font-size:9px">${costKind}</span> `
+            + (costKind==='adversary'
+              ? `<span style="color:#79c0ff">${fmtMs(costTyp)}</span> adversary delay`
+              : `typical <span style="color:${costTyp>=50?'#f85149':costTyp>=1?'#d29922':'#3fb950'};font-weight:600">${fmtMs(costTyp)}</span>, p99 ${fmtMs(costP99)}`)
+          : '—';
+
+        // Configuration block
+        let cfgHTML = '';
+        if (toggle) {
+          cfgHTML = `<div class="stip-cfg">
+            <strong>Toggle:</strong> <code>${escapeHtml(toggle)}</code>
+            — flip live in this table, or set env <code>${escapeHtml(toggle)}=0</code> / <code>=1</code> in <code>.env</code> and recreate the container.
+          </div>`;
+        } else if (tier !== 'modifier') {
+          cfgHTML = `<div class="stip-cfg" style="background:rgba(139,148,158,.06);border-color:rgba(139,148,158,.2)">
+            <span style="color:var(--dim)">Always-on — no toggle. Structural heuristic; cannot be disabled at runtime.</span>
+          </div>`;
+        }
+
+        // Escalate-only / 2nd-order gating warning
+        const sigOrd = getSignalOrder(sig, el.dataset);
+        const escalateHTML = escalate
+          ? `<div class="stip-warn">⚡ <strong>3rd order — escalate-only</strong> — skipped on clean traffic; runs only when accumulated risk_score ≥ <code>ESCALATION_THRESHOLD</code>.</div>`
+          : sigOrd === 2
+          ? `<div class="stip-warn" style="border-color:rgba(210,153,34,.35);color:#d29922">② <strong>2nd order — elevated suspicion</strong> — skipped until accumulated risk_score ≥ <code>SECOND_ORDER_THRESHOLD</code> (default 15).</div>`
+          : '';
+
+        // List/text knob editors for this signal
+        const listKnobDefs = SIGNAL_LIST_KNOBS[sig] || [];
+        let listEditorsHTML = '';
+        if (listKnobDefs.length) {
+          listEditorsHTML = `<div class="stip-lists"><div class="stip-lists-hdr">⚙ Configuration</div>`;
+          for (const [knob, kind, lbl] of listKnobDefs) {
+            const cur = cfg[knob];
+            const dispVal = Array.isArray(cur) ? cur.join(', ') : (cur || '');
+            const fieldTag = kind === 'text'
+              ? `<input class="stip-list-field" type="text" data-knob="${escapeHtml(knob)}" data-kind="text" value="${escapeHtml(dispVal)}" placeholder="(empty)">`
+              : `<textarea class="stip-list-field" data-knob="${escapeHtml(knob)}" data-kind="list" rows="3" placeholder="(empty)">${escapeHtml(dispVal)}</textarea>`;
+            listEditorsHTML += `
+              <div class="stip-list-editor">
+                <div class="stip-list-label">${escapeHtml(lbl)} <code>${escapeHtml(knob)}</code></div>
+                ${fieldTag}
+                <div class="stip-list-row">
+                  <span class="stip-list-msg"></span>
+                  <button class="stip-list-save" disabled>Save</button>
+                </div>
+              </div>`;
+          }
+          listEditorsHTML += '</div>';
+        }
+
+        return `
+          <div class="stip-hdr">
+            <div class="stip-hdr-left">
+              <code>${escapeHtml(label !== sig ? label + ' · ' + sig : sig)}</code>
+            </div>
+            <div class="stip-badges">${verBadge}${tierBadge}</div>
+          </div>
+          <div class="stip-body">
+            <div class="stip-desc">${escapeHtml(desc)}</div>
+            <div class="stip-meta">
+              <span class="mk">Impact</span><span class="mv">${wDisplay}</span>
+              <span class="mk">Cost</span><span class="mv">${costDisplay}</span>
+              ${sigOrd > 1 ? `<span class="mk">Order</span><span class="mv" style="color:${sigOrd===3?'#f85149':'#d29922'}">${sigOrd===3?'③ 3rd':'② 2nd'} — gated by score threshold</span>` : ''}
+            </div>
+            ${cfgHTML}
+            ${escalateHTML && !cfgHTML ? escalateHTML : ''}
+            ${listEditorsHTML}
+          </div>`;
+      };
+
+      const wireListEditors = () => {
+        _tip.querySelectorAll('.stip-list-editor').forEach(editor => {
+          const field = editor.querySelector('.stip-list-field');
+          const saveBtn = editor.querySelector('.stip-list-save');
+          const msgEl = editor.querySelector('.stip-list-msg');
+          if (!field || !saveBtn) return;
+          const knob = field.dataset.knob;
+          const kind = field.dataset.kind;
+          field.addEventListener('input', () => { saveBtn.disabled = false; msgEl.textContent = ''; });
+          saveBtn.addEventListener('click', async () => {
+            saveBtn.disabled = true;
+            msgEl.textContent = '…';
+            msgEl.style.color = 'var(--dim)';
+            const raw = field.value.trim();
+            const payload = kind === 'list'
+              ? {[knob]: raw.split(',').map(s => s.trim()).filter(Boolean)}
+              : {[knob]: raw};
+            try {
+              const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+                {method:'POST', headers:{'Content-Type':'application/json'}, credentials:'include',
+                 body: JSON.stringify(payload)});
+              const body = await r.json();
+              if (r.ok && body.applied && Object.keys(body.applied).length) {
+                serverState[knob] = body.applied[knob] ?? (kind === 'list' ? payload[knob] : raw);
+                msgEl.textContent = '✓ Saved';
+                msgEl.style.color = '#3fb950';
+              } else {
+                const why = body.rejected ? Object.values(body.rejected).join('; ') : 'rejected';
+                msgEl.textContent = '✗ ' + why;
+                msgEl.style.color = '#f85149';
+                saveBtn.disabled = false;
+              }
+            } catch (err) {
+              msgEl.textContent = '✗ Network error';
+              msgEl.style.color = '#f85149';
+              saveBtn.disabled = false;
+            }
+          });
+        });
+      };
+
+      const openTip = (el) => {
+        _tip.innerHTML = buildTipHTML(el);
+        wireListEditors();
+        _tip.style.display = 'block';
+        const r = el.getBoundingClientRect();
+        const tipW = 500;
+        let left = Math.min(r.left, window.innerWidth - tipW - 12);
+        left = Math.max(8, left);
+        let top = r.bottom + 6;
+        if (r.bottom + 340 > window.innerHeight) {
+          top = r.top - (_tip.offsetHeight || 340) - 6;
+        }
+        _tip.style.left = left + 'px';
+        _tip.style.top  = top + 'px';
+      };
+
       tb.querySelectorAll('.sig-name').forEach(el => {
-        el.onclick = (e) => {
-          e.stopPropagation();
-          _tip.textContent = el.dataset.desc;
-          _tip.style.display = 'block';
-          const r = el.getBoundingClientRect();
-          const left = Math.min(r.left, window.innerWidth - 396);
-          const top  = r.bottom + 6 + window.scrollY;
-          _tip.style.left = left + 'px';
-          _tip.style.top  = top + 'px';
-        };
+        el.onclick = (e) => { e.stopPropagation(); openTip(el); };
       });
 
       // Sort-by-cost click on column header
@@ -1461,7 +2318,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
               };
             });
+            // Re-wire sig-name tooltips after re-render
+            tb.querySelectorAll('.sig-name').forEach(el => {
+              el.onclick = (e) => { e.stopPropagation(); openTip(el); };
+            });
             costHdr.querySelector('span').textContent = '▼';
+            applyFilters();
           }
         };
       }
@@ -1493,6 +2355,22 @@ document.addEventListener('DOMContentLoaded', () => {
       });
     } catch(e) { /* ignore */ }
   }
+
+  // 1.6.10 — seed localStorage overrides from server-persisted signal-orders
+  (async () => {
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/signal-orders'), {credentials:'include'});
+      if (r.ok) {
+        const d = await r.json();
+        const ov = getOrderOverrides();
+        let changed = false;
+        Object.entries(d.orders || {}).forEach(([sig, rec]) => {
+          if (!ov[sig] || ov[sig] !== rec.order) { ov[sig] = rec.order; changed = true; }
+        });
+        if (changed) localStorage.setItem(_ORDER_LS_KEY, JSON.stringify(ov));
+      }
+    } catch(_) {}
+  })();
 
   Promise.all([
     load().then(() => loadScoring()),
@@ -1796,37 +2674,100 @@ function openSecretEditor(name, anchor){
 
 function openIntegrationDetails(it){
   const tel = it.telemetry || {};
-  const tx = (k) => `<tr><td class="dim" style="padding:4px 8px 4px 0;text-align:right;white-space:nowrap;color:var(--dim)">${escapeHtml(k)}</td><td style="padding:4px 0;font-family:ui-monospace,monospace;font-size:11.5px;word-break:break-all">${arguments[1]}</td></tr>`;
-  const link = (url, label) => url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" style="color:var(--blue);text-decoration:underline">${escapeHtml(label||url)} ↗</a>` : '<span class="dim">—</span>';
-  const telRows = Object.entries(tel)
-    .map(([k,v]) => {
-      const vs = (typeof v === 'object' && v !== null)
-        ? `<code style="font-size:10.5px;color:var(--blue)">${escapeHtml(JSON.stringify(v))}</code>`
-        : `<code style="font-size:11px">${escapeHtml(String(v))}</code>`;
-      return `<tr><td class="dim" style="padding:3px 8px 3px 0;text-align:right;color:var(--dim);font-size:10.5px">${escapeHtml(k)}</td><td style="padding:3px 0">${vs}</td></tr>`;
-    }).join('');
+  const sec = (title, body) =>
+    `<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px">
+       <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--dim);margin-bottom:6px">${title}</div>
+       ${body}
+     </div>`;
+  const row = (label, val) =>
+    `<div style="display:flex;gap:8px;align-items:baseline;margin-bottom:4px;font-size:12px">
+       <span style="min-width:110px;text-align:right;color:var(--dim);flex-shrink:0">${escapeHtml(label)}</span>
+       <span style="font-family:ui-monospace,monospace;word-break:break-all">${val}</span>
+     </div>`;
+
+  // Status badge
+  const statusColor = it.enabled ? 'var(--green)' : 'var(--dim)';
+  const statusLabel = it.enabled ? 'ACTIVE' : (it.status === 'missing-db' ? 'MISSING DB' : 'INACTIVE');
+  const statusBg    = it.enabled ? '#1f4830' : '#21262d';
+
+  // Usage summary from telemetry
+  const usageLines = [];
+  if (tel.lookups_total != null) usageLines.push(row('total lookups', `<b>${tel.lookups_total.toLocaleString()}</b>`));
+  if (tel.lookups_cached != null) usageLines.push(row('cached hits', `<b style="color:var(--green)">${tel.lookups_cached.toLocaleString()}</b>${tel.cache_hit_rate != null ? ' <span style="color:var(--dim)">(' + tel.cache_hit_rate + '% hit rate)</span>' : ''}`));
+  if (tel.hits != null)          usageLines.push(row('signals fired', `<b style="color:var(--yellow)">${tel.hits.toLocaleString()}</b>`));
+  if (tel.errors != null && tel.errors > 0) usageLines.push(row('errors', `<b style="color:var(--red)">${tel.errors.toLocaleString()}</b>`));
+  if (tel.events_rows != null)   usageLines.push(row('events stored', `<b>${tel.events_rows.toLocaleString()}</b>`));
+  if (tel.size_bytes != null)    usageLines.push(row('DB size', `<b>${(tel.size_bytes/1024/1024).toFixed(1)} MB</b>`));
+  if (tel.active != null && usageLines.length === 0) usageLines.push(row('in-process', `<b style="color:${tel.active?'var(--green)':'var(--dim)'}">${tel.active ? 'running' : 'idle'}</b>`));
+  if (tel.effective_diff != null) usageLines.push(row('difficulty', `<b>${tel.effective_diff}</b> leading zeros (base ${tel.base_difficulty} + boost ${tel.boost})`));
+  if (tel.endpoint != null)      usageLines.push(row('endpoint', `<code style="font-size:10.5px;color:var(--blue)">${escapeHtml(tel.endpoint)}</code>`));
+  if (tel.cache_secs != null)    usageLines.push(row('cache TTL', `<b>${tel.cache_secs}s</b>`));
+  if (tel.cache_hours != null)   usageLines.push(row('cache TTL', `<b>${tel.cache_hours}h</b>`));
+
   __MODAL.innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-      <div>
-        <div style="font-weight:700;font-size:16px">${escapeHtml(it.name)}</div>
-        <div class="dim" style="font-size:11.5px;margin-top:2px">${escapeHtml(it.purpose||'')}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
+      <div style="flex:1">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:15px">${escapeHtml(it.name)}</span>
+          <span style="background:${statusBg};color:${statusColor};padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700">${statusLabel}</span>
+          ${it.docs_url ? `<a href="${escapeHtml(it.docs_url)}" target="_blank" rel="noopener"
+            style="font-size:11px;color:var(--blue);text-decoration:none;border:1px solid var(--blue);
+                   border-radius:3px;padding:1px 7px;white-space:nowrap">Docs ↗</a>` : ''}
+          ${it.vendor_url ? `<a href="${escapeHtml(it.vendor_url)}" target="_blank" rel="noopener"
+            style="font-size:11px;color:var(--dim);text-decoration:none;border:1px solid var(--line);
+                   border-radius:3px;padding:1px 7px;white-space:nowrap">${escapeHtml(it.vendor_url ? new URL(it.vendor_url).hostname : '')} ↗</a>` : ''}
+        </div>
       </div>
-      <span style="cursor:pointer;color:var(--dim);font-size:18px" id="ext-modal-close">×</span>
+      <span style="cursor:pointer;color:var(--dim);font-size:18px;line-height:1;flex-shrink:0" id="ext-modal-close">×</span>
     </div>
-    <table style="width:100%">
-      ${tx('vendor', link(it.vendor_url, it.vendor_url ? new URL(it.vendor_url).hostname : ''))}
-      ${tx('docs',   link(it.docs_url,   it.docs_url   ? 'Documentation' : ''))}
-      ${tx('status', `<b style="color:${it.enabled?'var(--green)':'var(--dim)'}">${escapeHtml(it.status||'')}</b>${it.enabled?'  · enabled':'  · disabled'}`)}
-      ${tx('trigger', escapeHtml(it.trigger||'—'))}
-      ${tx('weight',  escapeHtml(it.weight||'—'))}
-      ${tx('data egress', escapeHtml(it.data_egress||'—'))}
-      ${tx('free tier',   escapeHtml(it.free_tier||'—'))}
-      ${tx('cost / req',  `<b style="color:var(--green)">${it.cost_cached_ms} ms</b> cached · <b style="color:var(--yellow)">${it.cost_typical_ms} ms</b> typical · <b style="color:var(--red)">${it.cost_p99_ms} ms</b> p99`)}
-      ${tx('required env', (it.envs_needed||[]).map(e=>`<code style="color:var(--blue);font-size:10.5px">${escapeHtml(e)}</code>`).join(' '))}
-    </table>
-    ${telRows ? `<h4 style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-top:14px;margin-bottom:6px">Live telemetry</h4><table style="width:100%">${telRows}</table>` : ''}
+
+    ${sec('Goal', `<p style="margin:0;font-size:12.5px;line-height:1.55;color:var(--fg)">${escapeHtml(it.purpose||'No description available.')}</p>
+      ${it.trigger ? `<p style="margin:6px 0 0;font-size:11.5px;color:var(--dim)"><b style="color:var(--fg)">When it runs:</b> ${escapeHtml(it.trigger)}</p>` : ''}
+      ${it.weight  ? `<p style="margin:4px 0 0;font-size:11.5px;color:var(--dim)"><b style="color:var(--fg)">Risk impact:</b> ${escapeHtml(it.weight)}</p>` : ''}`)}
+
+    ${sec('Status', `
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:12px">
+          ${it.enabled
+            ? `<b style="color:var(--green)">Active</b> — integration is running`
+            : `<b style="color:var(--dim)">Inactive</b>${it.credentials_present ? ' — credentials present but disabled' : ' — credentials not configured'}`}
+        </span>
+        <button id="int-check-btn" style="font-size:11px;padding:3px 10px;background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:4px;cursor:pointer">
+          Test connection
+        </button>
+        <span id="int-check-result" style="font-size:11px;color:var(--dim)"></span>
+      </div>
+      ${(it.envs_needed||[]).length ? `<div style="margin-top:6px;font-size:11px;color:var(--dim)">Required: ${(it.envs_needed||[]).map(e=>`<code style="color:var(--blue)">${escapeHtml(e)}</code>`).join(' ')}</div>` : ''}`)}
+
+    ${usageLines.length ? sec('Current usage', usageLines.join('')) : ''}
+
+    ${sec('Performance &amp; data', `
+      ${row('latency', `<b style="color:var(--green)">${it.cost_cached_ms} ms</b> cached · <b style="color:var(--yellow)">${it.cost_typical_ms} ms</b> typical · <b style="color:var(--red)">${it.cost_p99_ms} ms</b> p99`)}
+      ${row('data egress', escapeHtml(it.data_egress||'—'))}
+      ${row('free tier', escapeHtml(it.free_tier||'—'))}`)}
   `;
+
   document.getElementById('ext-modal-close').onclick = __closeModal;
+
+  // Wire "Test connection" button
+  document.getElementById('int-check-btn').onclick = async function(){
+    const btn = this;
+    const res = document.getElementById('int-check-result');
+    btn.disabled = true; res.style.color = 'var(--dim)'; res.textContent = 'checking…';
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/integration-check')
+        + '&name=' + encodeURIComponent(it.name), {credentials:'include'});
+      const d = await r.json();
+      res.style.color = d.ok ? 'var(--green)' : (d.ok === false ? 'var(--red)' : 'var(--yellow)');
+      res.textContent = (d.ok ? '✓ reachable' : (d.ok === false ? '✗ unreachable' : '? unknown'))
+        + (d.latency_ms ? ` · ${d.latency_ms} ms` : '')
+        + (d.detail ? ` — ${d.detail}` : '');
+    } catch(e) {
+      res.style.color = 'var(--red)'; res.textContent = 'network error';
+    }
+    btn.disabled = false;
+  };
+
   __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
 }
 
@@ -1834,8 +2775,11 @@ function openIntegrationDetails(it){
 function openBanDetails(b){
   const fmtSecs = s => s == null ? '—' : (s<60?Math.round(s)+'s':s<3600?Math.round(s/60)+'m':s<86400?(s/3600).toFixed(1)+'h':(s/86400).toFixed(1)+'d');
   const tx = (k, v) => `<tr><td class="dim" style="padding:4px 8px 4px 0;text-align:right;white-space:nowrap;color:var(--dim)">${escapeHtml(k)}</td><td style="padding:4px 0;font-family:ui-monospace,monospace;font-size:11.5px;word-break:break-all">${v}</td></tr>`;
-  const banLine = b.banned_secs > 0
-    ? `<span style="color:var(--red);font-weight:600">BANNED · ~${fmtSecs(b.banned_secs)} remaining</span>`
+  const _cbs = b.banned_secs || 0;
+  const banLine = _cbs > 86400
+    ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${fmtSecs(_cbs)} remaining</span>`
+    : _cbs > 0
+    ? `<span style="color:#d29922;font-weight:600">Banned · ~${fmtSecs(_cbs)} remaining</span>`
     : `<span style="color:var(--green)">cleared</span>`;
   __MODAL.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
