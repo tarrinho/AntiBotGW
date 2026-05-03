@@ -256,11 +256,139 @@ def test_host_allowlist_blocks_mismatch(proxy_module):
             async with _spin_proxy(proxy_module, up) as client:
                 r = await client.get("/api/x",
                                      headers=_browser_headers({"Host": "evil.example.com"}))
-                # silent decoy: 200, but X-Proxy NOT set (decoy doesn't set it)
+                # silent decoy: 200, but X-Proxy must NOT be set (decoy must not fingerprint the gateway)
                 assert r.status == 200
-                assert "X-Proxy" not in r.headers \
-                    or r.headers.get("X-Proxy") != "AppSecGW_1.3"
+                assert "X-Proxy" not in r.headers
     try:
         _run(go())
     finally:
         proxy_module.ALLOWED_HOSTS = set()
+
+
+# ── agents-bucket drill-down endpoint (1.5.4 / 1.7.1) ───────────────────
+
+def _make_admin_session(proxy_module):
+    """Inject a valid admin session into the module cache and return the signed cookie."""
+    sid = proxy_module._new_sid()
+    proxy_module._SESSION_CACHE[sid] = {
+        "username": "admin",
+        "expires_ts": proxy_module._t.time() + proxy_module._SESSION_TTL,
+        "revoked": False,
+    }
+    proxy_module._SESSION_CACHE_READY = True
+    return proxy_module._session_sign("admin", sid=sid)
+
+
+def test_agents_bucket_decoy_without_auth(proxy_module):
+    """Unauthenticated request to /secured/agents-bucket returns a silent
+    decoy (200 OK) — the response must NOT contain 'bucket_t'."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/agents-bucket",
+                    params={"t": "0", "bucket_secs": "60"})
+                assert r.status == 200
+                text = await r.text()
+                assert "bucket_t" not in text
+    _run(go())
+
+
+def test_agents_bucket_shape_with_auth(proxy_module):
+    """Authenticated request returns JSON with detected/missed/clean lists,
+    each with bucket_t and bucket_secs. Every entry in detected/clean must
+    carry an 'ip' field (regression: IPs were absent from dashboard popover)."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _make_admin_session(proxy_module)
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/agents-bucket",
+                    params={"t": "0", "bucket_secs": "60"},
+                    cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 200
+                data = await r.json()
+                for key in ("detected", "missed", "clean", "bucket_t", "bucket_secs"):
+                    assert key in data, f"response missing '{key}'"
+                assert isinstance(data["detected"], list)
+                assert isinstance(data["missed"],   list)
+                assert isinstance(data["clean"],     list)
+                for entry in data["detected"]:
+                    assert "ip"      in entry, f"detected entry missing 'ip': {entry}"
+                    assert "count"   in entry, f"detected entry missing 'count': {entry}"
+                    assert "reasons" in entry, f"detected entry missing 'reasons': {entry}"
+                for entry in data["clean"]:
+                    assert "ip"    in entry, f"clean entry missing 'ip': {entry}"
+                    assert "count" in entry, f"clean entry missing 'count': {entry}"
+                for entry in data["missed"]:
+                    assert "ip" in entry, f"missed entry missing 'ip': {entry}"
+    _run(go())
+
+
+def test_agents_bucket_bad_t_param_returns_400(proxy_module):
+    """Non-integer 't' param returns HTTP 400 with an 'error' key."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _make_admin_session(proxy_module)
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/agents-bucket",
+                    params={"t": "notanint", "bucket_secs": "60"},
+                    cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 400
+                data = await r.json()
+                assert "error" in data
+    _run(go())
+
+
+def test_agents_bucket_invalid_bucket_secs_falls_back_to_60(proxy_module):
+    """bucket_secs not in the allowed set (60/300/900/3600/86400) silently
+    falls back to 60; response must reflect bucket_secs == 60."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _make_admin_session(proxy_module)
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/agents-bucket",
+                    params={"t": "0", "bucket_secs": "999"},
+                    cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 200
+                data = await r.json()
+                assert data.get("bucket_secs") == 60, \
+                    f"expected fallback to 60, got {data.get('bucket_secs')}"
+    _run(go())
+
+
+def test_agents_bucket_list_cap_500(proxy_module):
+    """Each list in the response is capped at 500 entries server-side."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _make_admin_session(proxy_module)
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/agents-bucket",
+                    params={"t": "0", "bucket_secs": "86400"},
+                    cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 200
+                data = await r.json()
+                assert len(data.get("detected", [])) <= 500, "detected exceeds 500-entry cap"
+                assert len(data.get("missed",   [])) <= 500, "missed exceeds 500-entry cap"
+                assert len(data.get("clean",    [])) <= 500, "clean exceeds 500-entry cap"
+    _run(go())
+
+
+def test_agents_bucket_kind_filter(proxy_module):
+    """?kind=detected adds 'only':'detected' to the response payload."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _make_admin_session(proxy_module)
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/agents-bucket",
+                    params={"t": "0", "bucket_secs": "60", "kind": "detected"},
+                    cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 200
+                data = await r.json()
+                assert data.get("only") == "detected", \
+                    f"expected 'only':'detected', got {data.get('only')!r}"
+    _run(go())

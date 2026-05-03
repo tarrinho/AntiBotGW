@@ -49,8 +49,21 @@ RUN mkdir -p /data /usr/local/share/maxmind \
  && ln -sf /data/.session_key /app/.session_key \
  && ln -sf /data/.pow_key     /app/.pow_key
 
-COPY proxy.py /app/proxy.py
-COPY dashboards /app/dashboards
+COPY proxy.py      /app/proxy.py
+COPY config.py     /app/config.py
+COPY state.py      /app/state.py
+COPY helpers.py    /app/helpers.py
+COPY identity.py   /app/identity.py
+COPY rate_limit.py /app/rate_limit.py
+COPY scoring.py    /app/scoring.py
+COPY admin        /app/admin
+COPY challenge    /app/challenge
+COPY core         /app/core
+COPY dashboards   /app/dashboards
+COPY db           /app/db
+COPY detection    /app/detection
+COPY integrations /app/integrations
+COPY reputation   /app/reputation
 COPY _seed/ /usr/local/share/maxmind/
 
 RUN chown -R 65532:65532 /app /data

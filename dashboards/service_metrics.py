@@ -393,7 +393,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
-        "version":         "AppSecGW_1.6.10",
+        "version":         GW_VERSION,
     }
     return web.json_response({
         "current":          current,

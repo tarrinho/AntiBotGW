@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.7.0 — entry point only.
+Anti-bot reverse proxy v1.7.1 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -56,6 +56,7 @@ from helpers import (  # noqa: F401
 )
 from identity import _sign_session, _verify_session
 from detection.canary import _inject_honey_links, _inject_botd, _botd_token_for
+from detection.automation import automation_report_endpoint  # noqa: F401
 from detection.paths import _bot_trap_triggered  # noqa: F401
 from admin.auth import _internal_authed, _admin_ip_allowed
 from admin.users import (  # noqa: F401
@@ -354,11 +355,12 @@ def make_app() -> web.Application:
     # (path_suffix, method, handler, secured?)
     _ROUTES = [
         # ── public (no admin-key required) ──────────────────────
-        ("pow",          "GET",  pow_endpoint,                  False),
-        ("solver",       "GET",  solver_endpoint,               False),
-        ("botd-report",  "POST", botd_report_endpoint,          False),
+        ("pow",                "GET",  pow_endpoint,                  False),
+        ("solver",             "GET",  solver_endpoint,               False),
+        ("botd-report",        "POST", botd_report_endpoint,          False),
+        ("automation-report",  "POST", automation_report_endpoint,    False),
         # 1.6.9 — AI Labyrinth tarpit (public; HMAC-gated internally)
-        ("tarpit/{token}", "GET", tarpit_endpoint,              False),
+        ("tarpit/{token}",     "GET",  tarpit_endpoint,               False),
         # ── secured (admin-IP + admin-key gated) ────────────────
         ("status",            "GET",    status_endpoint,                       True),
         ("dashboard",         "GET",    dashboard_endpoint,                    True),
@@ -891,7 +893,7 @@ if __name__ == "__main__":
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
-    print(f"  ║ AppSecGW_1.7.0     →  {UPSTREAM:<37} ║")
+    print(f"  ║ {GW_VERSION:<10}     →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     _ns_line = f"Admin namespace: {ADMIN_NS}"
     print(f"  ║ {_ns_line:<57}║")

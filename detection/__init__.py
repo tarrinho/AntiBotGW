@@ -7,3 +7,4 @@ from detection.paths import *
 from detection.headers import *
 from detection.behavioral import *
 from detection.canary import *
+from detection.automation import *

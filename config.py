@@ -22,6 +22,8 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
+GW_VERSION = "AppSecGW_1.7.1"
+
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
 from pathlib import Path
@@ -549,6 +551,7 @@ ADMIN_NS_SECURED = ADMIN_NS + "/secured"
 _ADMIN_PUBLIC_SUBPATHS = (
     "/pow", "/solver", "/challenge",
     "/botd-report",
+    "/automation-report",
     "/assets/botd.bundle.js",
     "/tarpit/",
 )
@@ -630,6 +633,10 @@ RISK_WEIGHTS = {
     "robots-violation":       5,
     "h2-fp":                  3,
     "json-canary":            0,
+    # 1.7.1 — new signals
+    "webdriver-detected":    30,
+    "coordinated-probe":     25,
+    "direct-api-probe":      15,
 }
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
@@ -637,6 +644,14 @@ ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "30"))
 SECOND_ORDER_THRESHOLD = float(os.environ.get("SECOND_ORDER_THRESHOLD", "15"))
 
 BOTD_ENABLED = os.environ.get("BOTD_ENABLED", "0") in ("1", "true", "yes")
+
+# ── 1.7.1 — Browser automation probe (self-hosted, no external bundle) ─────────
+AUTOMATION_PROBE_ENABLED     = os.environ.get("AUTOMATION_PROBE_ENABLED",   "1") in ("1", "true", "yes")
+# 1.7.1 — Coordinated ASN attack clustering
+COORDINATED_ATTACK_ENABLED   = os.environ.get("COORDINATED_ATTACK_ENABLED", "1") in ("1", "true", "yes")
+COORDINATED_ATTACK_THRESHOLD = int(os.environ.get("COORDINATED_ATTACK_THRESHOLD", "5"))
+# 1.7.1 — User journey: flag identities that probe API directly without HTML load
+JOURNEY_CHECK_ENABLED        = os.environ.get("JOURNEY_CHECK_ENABLED",      "1") in ("1", "true", "yes")
 _BOTD_REPORT_TTL = 300  # report valid for 5 minutes after the page loads
 
 TARPIT_ENABLED = os.environ.get("TARPIT_ENABLED", "0") in ("1", "true", "yes")
@@ -646,6 +661,7 @@ ESCALATE_ONLY_REASONS = {
     "abuseipdb-high", "abuseipdb-med",
     "crowdsec-banned",
     "asn-hosting", "datacenter-vpn",
+    "coordinated-probe",
     "body-sqli", "body-xss", "body-lfi", "body-rce", "body-ssrf", "body-cmd",
     "suspicious-body",
     "dlp-cc", "dlp-aws", "dlp-jwt", "dlp-private-key",
@@ -658,6 +674,7 @@ SECOND_ORDER_REASONS = {
     "locale-geo-mismatch",
     "tls-fingerprint",
     "ja4-required-missing",
+    "direct-api-probe",
 }
 
 RISK_BAN_THRESHOLD       = 50

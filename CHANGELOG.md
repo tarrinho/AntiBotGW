@@ -6,6 +6,34 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.1] — 2026-05-03
+
+### Added
+- **Browser automation probe** (`AUTOMATION_PROBE_ENABLED=1`, default on) — self-hosted JS snippet injected into HTML responses that checks `navigator.webdriver`, `navigator.plugins.length === 0`, `screen.colorDepth < 24`, and missing `window.chrome` object. POSTs result to new public endpoint `/antibot-appsec-gateway/automation-report`. Fires `webdriver-detected` (+30 risk) when ≥ 2 indicators set. No external JS bundle; HMAC token bound to `track_key` so reports cannot be forged. Mirrors BotD pattern in `detection/canary.py`.
+- **Coordinated ASN clustering** (`COORDINATED_ATTACK_ENABLED=1`, default on) — detects when N≥5 (`COORDINATED_ATTACK_THRESHOLD`) distinct identities from the same ASN hit the same path prefix within the same 60-second window. Fires `coordinated-probe` (+25 risk) on each member of the cluster. Cluster state stored in `state._asn_path_clusters`; pruned automatically when >10000 entries. Escalate-only signal.
+- **User journey sequences / direct-API-probe** (`JOURNEY_CHECK_ENABLED=1`, default on) — second-order signal that fires when an identity has made ≥5 requests with `html_loads=0` and `static_loads=0` while hitting an API-style path prefix (`/api/`, `/v1/`, `/v2/`, `/graphql`, `/rest/`, `/rpc/`). Fires `direct-api-probe` (+15 risk). Gated by `SECOND_ORDER_THRESHOLD` so it only accumulates risk on already-suspicious identities. Added `path_sequence: deque(maxlen=5)` field to `IpState` for future journey analysis.
+- **New risk signals**: `webdriver-detected` (+30), `coordinated-probe` (+25), `direct-api-probe` (+15).
+- **New config knobs** (all hot-reloadable): `AUTOMATION_PROBE_ENABLED`, `COORDINATED_ATTACK_ENABLED`, `COORDINATED_ATTACK_THRESHOLD`, `JOURNEY_CHECK_ENABLED`.
+- **New public endpoint**: `POST /antibot-appsec-gateway/automation-report` — receives browser automation probe reports. Added to `_ADMIN_PUBLIC_SUBPATHS` so it bypasses admin-IP gating.
+- **New module**: `detection/automation.py` — `_inject_automation_probe()`, `automation_report_endpoint()`, `_automation_token_for()`.
+
+### Fixed
+- **`dashboards/agents.html`** — bucket detail popover had no `max-height` / `overflow-y`. With `position:fixed` centering, content taller than the viewport was clipped at the top — hiding the IP list. Fixed: `maxHeight:'85vh'; overflowY:'auto'` applied on open; cleared on close.
+- **`dashboards/agents.html`** — `openBucketDetail` had no try/catch; any fetch error silently killed the popover. Fixed: added try/catch that displays a styled error message in the popover body.
+- **`dashboards/main.html`** — `openMainBucketDetail` catch block swallowed fetch errors and showed empty lists with no diagnostic. Fixed: `_fetchErr` stored and prepended as a red error div in the modal body.
+
+### Tests
+- **187 tests passing**: 181 unit + 22 functional + 16 integration + 98 regression. 0 failures (individually).
+- +6 integration tests (`test_integration.py`): `test_agents_bucket_decoy_without_auth`, `test_agents_bucket_shape_with_auth`, `test_agents_bucket_bad_t_param_returns_400`, `test_agents_bucket_invalid_bucket_secs_falls_back_to_60`, `test_agents_bucket_list_cap_500`, `test_agents_bucket_kind_filter`. Guards `agents-bucket` endpoint auth, response shape (including `ip` field presence), input validation, param sanitisation, and 500-entry list cap.
+
+### Validation
+- Bandit: 0 High · 0 Critical · 0 Medium (including new `detection/automation.py`).
+- Semgrep: 0 findings on new module (151 rules, 0 findings).
+- Trivy (arm64): 0 Critical / 0 High / 0 Medium CVEs.
+- See `validation/1.7.1.md` for full record.
+
+---
+
 ## [1.7.0] — 2026-05-03
 
 ### Changed

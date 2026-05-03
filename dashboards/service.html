@@ -7,7 +7,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
@@ -66,7 +66,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.10 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.1 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -473,8 +473,10 @@ async function tick(){
     if (endEpoch !== null) params.set('end', endEpoch.toString());
     const r = await fetch('/antibot-appsec-gateway/secured/service-data?'+params,{cache:'no-store',credentials:'include'});
     const d = await r.json();
-    document.getElementById('live').style.background='var(--green)';
-    document.getElementById('live').textContent='● LIVE';
+    const _liveEl = document.getElementById('live');
+    _liveEl.style.background='var(--green)';
+    _liveEl.textContent='● LIVE';
+    _liveEl.title='Service metrics OK · updated ' + new Date().toLocaleTimeString();
     document.getElementById('interval').textContent = d.interval_secs;
 
     const c = d.current || {};
@@ -642,8 +644,10 @@ async function tick(){
 
     document.getElementById('ts').textContent = new Date().toISOString();
   }catch(e){
-    document.getElementById('live').style.background='var(--red)';
-    document.getElementById('live').textContent='○ ERR';
+    const _errEl = document.getElementById('live');
+    _errEl.style.background='var(--red)';
+    _errEl.textContent='○ ERR';
+    _errEl.title='Error fetching service data: ' + (e && e.message ? e.message : String(e));
   }
 }
 tick();

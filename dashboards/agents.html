@@ -7,7 +7,7 @@
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);padding:14px}
 h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
+h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
@@ -97,6 +97,8 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .popover .rsn-bar>div{height:100%;background:var(--red)}
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
 .popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
+.act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
+.act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}
 
 /* column-header tooltip */
 .col-tip-i{font-style:normal;font-weight:400;font-size:9px;
@@ -120,7 +122,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.6.10 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.1 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents" class="active">Agents</a>
@@ -225,7 +227,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <!-- 1.6.5 — rule inventory + per-method latency -->
 <div class="row" style="grid-template-columns:1fr 1fr;margin-top:14px;gap:14px">
   <div class="card">
-    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.6.10</span></h2>
+    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.7.1</span></h2>
     <div id="rule-inv" style="font-size:11.5px;font-family:ui-monospace,Menlo,monospace;line-height:1.7">loading…</div>
   </div>
   <div class="card">
@@ -325,8 +327,10 @@ async function tick(){
     const params = new URLSearchParams({min_score: MIN, limit: 200});
     const r = await fetch('/antibot-appsec-gateway/secured/agents-data?' + params, {cache:'no-store', credentials:'include'});
     const d = await r.json();
-    document.getElementById('live').textContent='● LIVE';
-    document.getElementById('live').style.background='var(--orange)';
+    const _liveEl = document.getElementById('live');
+    _liveEl.textContent='● LIVE';
+    _liveEl.style.background='var(--orange)';
+    _liveEl.title='Agent data refreshed · updated ' + new Date().toLocaleTimeString();
 
     const sum = d.summary;
     document.getElementById('m-total').textContent = sum.total_with_allowed;
@@ -447,8 +451,10 @@ async function tick(){
     }
     document.getElementById('ts').textContent = new Date().toISOString();
   }catch(e){
-    document.getElementById('live').style.background='var(--red)';
-    document.getElementById('live').textContent='○ ERR';
+    const _errEl = document.getElementById('live');
+    _errEl.style.background='var(--red)';
+    _errEl.textContent='○ ERR';
+    _errEl.title='Error fetching agent data: ' + (e && e.message ? e.message : String(e));
   }
 }
 // Detection-vs-miss timeline chart
@@ -660,51 +666,76 @@ function _identCell(idents){
     return `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`;
   return `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
 }
+const _adminNs = '/antibot-appsec-gateway/secured';
+async function _ipAction(btn, url){
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const r = await fetch(url, {method:'POST', credentials:'include'});
+    btn.textContent = r.ok ? '✓' : '✗';
+    btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+  } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; }
+}
+function _actionBtns(ip, id){
+  const enc = encodeURIComponent(ip);
+  const encId = id ? encodeURIComponent(id) : null;
+  const banUrl  = encId ? `${_adminNs}/ban?id=${encId}&secs=3600&reason=manual-ban`    : `${_adminNs}/ban?ip=${enc}&secs=3600&reason=manual-ban`;
+  const hbanUrl = encId ? `${_adminNs}/ban?id=${encId}&secs=2678400&reason=hard-ban`   : `${_adminNs}/ban?ip=${enc}&secs=2678400&reason=hard-ban`;
+  const allowUrl = `${_adminNs}/unban?ip=${enc}`;
+  return `<span class="act-btns" data-ban="${banUrl}" data-hban="${hbanUrl}" data-allow="${allowUrl}">`+
+    `<button class="act ban"  title="Ban 1 h">Ban</button>`+
+    `<button class="act hban" title="Hard ban 31 d">Hard ban</button>`+
+    `<button class="act allow" title="Unban / allow">Allow</button>`+
+    `</span>`;
+}
+
 function _renderDetected(list){
   if (!list.length) return '<div class="empty">no entries</div>';
   return `<table style="width:100%"><thead><tr>
       <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
-      <th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Top reason</th><th style="text-align:left">Last path</th><th>Actions</th>
     </tr></thead><tbody>` +
     list.map(e => {
       const top = Object.entries(e.reasons||{}).sort((a,b)=>b[1]-a[1])[0]||['—',0];
       return `<tr>
         <td>${_identCell(e.identities)}</td>
-        <td>${escapeHtml(e.ip)}</td>
+        <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
         <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+        <td>${_actionBtns(e.ip)}</td>
       </tr>`;
     }).join('') + '</tbody></table>';
 }
 function _renderMissed(list){
   if (!list.length) return '<div class="empty">no entries</div>';
   return `<table style="width:100%"><thead><tr>
-      <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th>Allowed</th><th>Blocked</th><th style="text-align:left">Last path</th>
+      <th style="text-align:left">Identity</th><th>IP</th><th>Stealth</th><th>Risk</th><th>Allowed</th><th>Blocked</th><th style="text-align:left">Last path</th><th>Actions</th>
     </tr></thead><tbody>` +
     list.map(e => `<tr>
       <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
-      <td>${escapeHtml(e.ip)}</td>
+      <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
       <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
       <td style="text-align:right">${e.risk_score}</td>
       <td style="color:var(--green)">${e.allowed}</td>
       <td style="color:${e.blocked?'var(--red)':'var(--dim)'}">${e.blocked}</td>
       <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      <td>${_actionBtns(e.ip, e.id)}</td>
     </tr>`).join('') + '</tbody></table>';
 }
 function _renderClean(list){
   if (!list.length) return '<div class="empty">no entries</div>';
   return `<table style="width:100%"><thead><tr>
       <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
-      <th style="text-align:left">UA</th><th style="text-align:left">Last path</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Last path</th><th>Actions</th>
     </tr></thead><tbody>` +
     list.map(e => `<tr>
       <td>${_identCell(e.identities)}</td>
-      <td>${escapeHtml(e.ip)}</td>
+      <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
       <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
       <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
       <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      <td>${_actionBtns(e.ip)}</td>
     </tr>`).join('') + '</tbody></table>';
 }
 
@@ -713,8 +744,20 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
   // datasetIndex: 0=detected, 1=missed, 2=clean.  Highlight that section.
   const focusKind = ['detected','missed','clean'][datasetIndex] || null;
   const params = new URLSearchParams({ t, bucket_secs: bucketSecs, min_score: MIN });
-  const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
-  const d = await r.json();
+  let d = {};
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    d = await r.json();
+  } catch(err) {
+    POP.style.maxWidth = '560px'; POP.style.maxHeight = ''; POP.style.overflowY = '';
+    document.getElementById('pop-title').innerHTML = `Bucket · error <span class="x" id="pop-close">×</span>`;
+    document.getElementById('pop-close').onclick = closePopover;
+    document.getElementById('pop-body').innerHTML = `<div class="empty" style="color:var(--red)">Failed to load bucket data: ${escapeHtml(String(err))}</div>`;
+    POP.style.left = '50%'; POP.style.top = '50%'; POP.style.transform = 'translate(-50%, -50%)';
+    POP.classList.add('show'); POP_BACK.classList.add('show'); POP.style.display = 'block';
+    return;
+  }
   const fmt = epoch => new Date(epoch*1000).toLocaleString();
   // Render order: focused first, then the other two.
   const sections = [
@@ -735,12 +778,18 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
       ${s.render(s.list)}
     </div>`;
   }).join('');
-  POP.style.maxWidth = '900px';
+  POP.style.maxWidth = '900px'; POP.style.maxHeight = '85vh'; POP.style.overflowY = 'auto';
   document.getElementById('pop-title').innerHTML =
     `Bucket · ${fmt(t)} +${bucketSecs}s · ${(d.detected||[]).length}+${(d.missed||[]).length}+${(d.clean||[]).length} entries
      <span class="x" id="pop-close">×</span>`;
   document.getElementById('pop-close').onclick = closePopover;
-  document.getElementById('pop-body').innerHTML = body;
+  const popBody = document.getElementById('pop-body');
+  popBody.innerHTML = body;
+  popBody.querySelectorAll('.act-btns').forEach(span => {
+    span.querySelector('.ban' ).onclick = e => { e.preventDefault(); _ipAction(e.target, span.dataset.ban);   };
+    span.querySelector('.hban').onclick = e => { e.preventDefault(); _ipAction(e.target, span.dataset.hban);  };
+    span.querySelector('.allow').onclick= e => { e.preventDefault(); _ipAction(e.target, span.dataset.allow); };
+  });
   POP.style.left = '50%'; POP.style.top = '50%';
   POP.style.transform = 'translate(-50%, -50%)';
   POP.classList.add('show'); POP_BACK.classList.add('show'); POP.style.display='block';
@@ -759,6 +808,8 @@ function closePopover(){
   POP.style.display = '';
   POP.style.transform = '';
   POP.style.maxWidth = '';
+  POP.style.maxHeight = '';
+  POP.style.overflowY = '';
 }
 POP_BACK.onclick = closePopover;
 document.getElementById('pop-close').onclick = closePopover;
@@ -862,9 +913,11 @@ function openPopover(kind, s, x, y){
   POP.style.display = 'block';
   POP.classList.add('show');
   POP_BACK.classList.add('show');
-  // 1.5.4 — clear any centered transform left over from openBucketDetail()
+  // 1.5.4 — clear any centered transform / size overrides from openBucketDetail()
   POP.style.transform = '';
   POP.style.maxWidth = '';
+  POP.style.maxHeight = '';
+  POP.style.overflowY = '';
   const rect = POP.getBoundingClientRect();
   let px = x + 10, py = y + 10;
   if (px + rect.width  > window.innerWidth - 10) px = window.innerWidth - rect.width - 10;
