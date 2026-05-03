@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.6.9 · Dashboard</title>
+<title>AppSecGW_1.6.10 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -18,14 +18,16 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
 .btn-unban:hover{background:#e6ad29}
 .btn-unban:disabled{opacity:.5;cursor:not-allowed}
-/* 1.5.5 — ban-switch (mirror of agents.html) */
-.ban-switch{display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
-.ban-track{position:relative;width:34px;height:18px;background:var(--green);border-radius:9px;transition:background .15s;display:inline-block;vertical-align:middle}
-.ban-knob{position:absolute;top:2px;left:2px;width:14px;height:14px;background:#fff;border-radius:50%;transition:left .15s}
-.ban-switch.on .ban-track{background:var(--red)}
-.ban-switch.on .ban-knob{left:18px}
-.ban-label{font:600 9.5px ui-monospace,Menlo,monospace;letter-spacing:.5px;color:var(--green);text-transform:uppercase}
-.ban-switch.on .ban-label{color:var(--red)}
+/* 3-state ban control */
+.ban-ctrl{display:inline-flex;border-radius:4px;overflow:hidden;border:1px solid var(--line)}
+.ban-btn{font:600 9px ui-monospace,Menlo,monospace;letter-spacing:.3px;text-transform:uppercase;
+  padding:3px 7px;cursor:pointer;border:none;background:transparent;color:var(--dim);
+  transition:all .12s;white-space:nowrap}
+.ban-btn:hover:not(.active){background:rgba(139,148,158,.15);color:var(--fg)}
+.ban-btn+.ban-btn{border-left:1px solid var(--line)}
+.ban-btn.allow.active{background:rgba(63,185,80,.2);color:#3fb950}
+.ban-btn.banned.active{background:rgba(210,153,34,.2);color:#d29922}
+.ban-btn.really-banned.active{background:rgba(248,81,73,.2);color:#f85149}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
@@ -46,7 +48,8 @@ th.sort-desc::after{content:' ▼';opacity:1;color:var(--blue,#58a6ff);text-tran
 table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
 .tag.OK{background:#1f4830;color:var(--green)}
-.tag.banned{background:#4a1a1a;color:var(--red)}
+.tag.banned{background:#3d2a00;color:#d29922}
+.tag.really-banned{background:#4a1a1a;color:var(--red)}
 .tag.honeypot{background:#3d1a4a;color:var(--purple)}
 .tag.ua-blocked{background:#4a3a1a;color:var(--yellow)}
 .tag.rate-limit{background:#4a1a1a;color:var(--red)}
@@ -121,7 +124,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.6.9 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.6.10 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.5.4 — reason drill-down modal -->
 <div class="modal-back" id="modal-back"></div>
@@ -624,7 +627,10 @@ async function tick() {
     const tbody = document.querySelector('#clients-tbl tbody');
     window._clientsList = _sortClients(d.clients || []);
     tbody.innerHTML = window._clientsList.slice(0, 25).map((c, i) => {
-      const banned = c.banned_secs > 0 ? `<span class="tag banned">${c.banned_secs}s</span>` : '<span class="dim">—</span>';
+      const _bsec = c.banned_secs || 0;
+      const banned = _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
+                   : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
+                   : '<span class="dim">—</span>';
       const id = (c.id || c.ip || '');
       const lastIp = c.last_ip || '?';
       const score = c.stealth_score || 0;
@@ -633,14 +639,13 @@ async function tick() {
                        : score >= 40 ? 'var(--yellow)'
                        : score >= 20 ? 'var(--blue)'
                        : 'var(--dim)';
-      // 1.5.5 — ban-switch toggle (mirror of agents dashboard).
-      const isBanned = (c.banned_secs || 0) > 0;
+      const _mbs = c.banned_secs || 0;
+      const _mst = _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
       const switchHtml = `
-        <div class="ban-switch ${isBanned?'on':''}"
-             data-id="${escapeHtml(id)}"
-             title="${isBanned?('banned for ~'+c.banned_secs+'s — click to unban'):'click to ban for 24h'}">
-          <span class="ban-track"><span class="ban-knob"></span></span>
-          <span class="ban-label">${isBanned?'BANNED':'allow'}</span>
+        <div class="ban-ctrl" data-id="${escapeHtml(id)}">
+          <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
+          <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
+          <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
         </div>`;
       return `<tr>
         <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
@@ -662,29 +667,32 @@ async function tick() {
       </tr>`;
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
     _updateCliSortHeaders();
-    // 1.5.5 — wire ban/unban switches (same flow as agents dashboard).
-    tbody.querySelectorAll('.ban-switch').forEach(el => {
-      el.onclick = async (ev) => {
-        ev.stopPropagation();
-        const id = el.dataset.id;
-        const banning = !el.classList.contains('on');
-        el.style.opacity = '0.5';
-        const base2 = banning ? '/antibot-appsec-gateway/secured/ban' : '/antibot-appsec-gateway/secured/unban';
-        const p2 = new URLSearchParams({id: id});
-        const url2 = base2 + '?' + p2.toString();
-        try {
-          const r = await fetch(url2, {credentials:'include'});
-          const b = await r.json().catch(()=>({}));
-          if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
-            el.classList.toggle('on', banning);
-            el.querySelector('.ban-label').textContent = banning ? 'BANNED' : 'allow';
-            setTimeout(tick, 300);
-          } else {
-            alert((banning?'Ban':'Unban') + ' failed (' + r.status + ')');
-          }
-        } catch(e){ alert('Network error: ' + e.message); }
-        el.style.opacity = '1';
-      };
+    // Wire 3-state ban controls.
+    tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
+      ctrl.querySelectorAll('.ban-btn').forEach(btn => {
+        btn.addEventListener('click', async (ev) => {
+          ev.stopPropagation();
+          if (btn.classList.contains('active')) return;
+          const id = ctrl.dataset.id;
+          const secs = parseInt(btn.dataset.secs, 10);
+          ctrl.style.opacity = '0.5';
+          const endpoint = secs === 0
+            ? '/antibot-appsec-gateway/secured/unban?id=' + encodeURIComponent(id)
+            : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
+          try {
+            const r = await fetch(endpoint, {credentials:'include'});
+            const b = await r.json().catch(()=>({}));
+            if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
+              ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
+              btn.classList.add('active');
+              setTimeout(tick, 300);
+            } else {
+              alert('Action failed (' + r.status + ')');
+            }
+          } catch(e){ alert('Network error: ' + e.message); }
+          ctrl.style.opacity = '1';
+        });
+      });
     });
     // Wire identity / risk popovers (1.5.4 — same UX as the agents dashboard)
     tbody.querySelectorAll('.cell-click').forEach(el => {
@@ -969,6 +977,8 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   setInterval(() => { loadDetectorStats(); loadBlockRate(); }, 5000);
 })();
 
+const k_q = '';  // secured endpoints use cookie auth — no key query param needed
+
 // ── 1.5.1: throughput cap + unban actions ──────────────────────────
 (function(){
   const liveEl    = document.getElementById('live-rps');
@@ -1079,8 +1089,11 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
     let title, body;
     if (kind === 'id-main'){
       title = 'Identity details';
-      const banLine = c.banned_secs > 0
-        ? `<span style="color:var(--red);font-weight:600">BANNED · ~${c.banned_secs}s remaining</span>`
+      const _pbs = c.banned_secs || 0;
+      const banLine = _pbs > 86400
+        ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(_pbs/86400).toFixed(1)}d remaining</span>`
+        : _pbs > 0
+        ? `<span style="color:#d29922;font-weight:600">Banned · ~${(_pbs/3600).toFixed(1)}h remaining</span>`
         : `<span style="color:var(--green)">allowed</span>`;
       const blocksRows = Object.entries(c.blocks_by_reason || {})
         .sort((a,b)=>b[1]-a[1])
@@ -1255,7 +1268,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
         const topRsn = e.top_reason || 'OK';
         const rsnColor = topRsn === 'OK' ? 'var(--green)' : 'var(--red)';
         const banned = idents.some(i => i.banned)
-          ? `<span style="color:var(--red);font-weight:700">BANNED</span>`
+          ? `<span style="color:var(--red);font-weight:700">Banned</span>`
           : `<span style="color:var(--green)">allowed</span>`;
         const totalRisk = idents.reduce((sum, i) => sum + (i.risk||0), 0);
         return `<tr>
@@ -1461,7 +1474,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
         const r = o.risk || 0;
         const ss = o.score != null ? o.score : 0;
         const decision = o.banned
-          ? `<span style="color:var(--red);font-weight:700">BANNED</span>`
+          ? `<span style="color:var(--red);font-weight:700">Banned</span>`
           : (r >= 25
               ? `<span style="color:var(--orange,#ff7b3a);font-weight:600">missed (medium risk)</span>`
               : `<span style="color:var(--green)">allowed</span>`);
@@ -1523,18 +1536,32 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   const track    = document.getElementById('thr-track');
 
   function render(){
-    const softPct = Math.max(0, Math.min(100, (SOFT/MAX)*100));
-    const banPct  = Math.max(0, Math.min(100, (BAN/MAX)*100));
-    track.style.setProperty('--soft-pct', softPct + '%');
+    const softOff = SOFT <= 0;
+    const banOff  = BAN  <= 0;
+    const softPct = softOff ? 0 : Math.max(0, Math.min(100, (SOFT/MAX)*100));
+    const banPct  = banOff  ? 0 : Math.max(0, Math.min(100, (BAN/MAX)*100));
+
+    // When soft=0 (off), collapse the orange band so track goes green→red directly
+    track.style.setProperty('--soft-pct', softOff ? banPct + '%' : softPct + '%');
     track.style.setProperty('--ban-pct',  banPct  + '%');
+
     knobSoft.style.left = softPct + '%';
     knobBan.style.left  = banPct  + '%';
     knobSoftVal.style.left = softPct + '%';
     knobBanVal.style.left  = banPct  + '%';
-    knobSoftVal.textContent = SOFT;
-    knobBanVal.textContent  = BAN;
-    document.getElementById('thr-soft-val').textContent = SOFT;
-    document.getElementById('thr-ban-val').textContent  = BAN;
+    knobSoftVal.textContent = softOff ? 'off' : SOFT;
+    knobBanVal.textContent  = banOff  ? 'off' : BAN;
+
+    // Dim knob + disable drag when value = 0 (off state)
+    knobSoft.style.opacity       = softOff ? '0.3' : '1';
+    knobSoft.style.pointerEvents = softOff ? 'none' : '';
+    knobSoftVal.style.opacity    = softOff ? '0'   : '1';
+    knobBan.style.opacity        = banOff  ? '0.3' : '1';
+    knobBan.style.pointerEvents  = banOff  ? 'none': '';
+    knobBanVal.style.opacity     = banOff  ? '0'   : '1';
+
+    document.getElementById('thr-soft-val').textContent = softOff ? 'off' : SOFT;
+    document.getElementById('thr-ban-val').textContent  = banOff  ? 'off' : BAN;
   }
 
   function dragStart(which, ev){

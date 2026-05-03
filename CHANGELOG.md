@@ -6,18 +6,34 @@ Author: Pedro Tarrinho
 
 ---
 
-## [Unreleased]
+## [1.6.10] — 2026-05-02
 
 ### Added
-- **Controls dashboard — `LABYRINTH_ENABLED` toggle**: added to `META` dict so the AI Labyrinth on/off switch is now visible and clickable in the Defenses & scoring table.
-- **Signal display-name API**: scoring endpoint now returns a `label` field alongside `signal`; client uses `w.label || w.signal` so signals can have human-friendly display names without breaking internal identifiers. `tarpit-walk` → displays as **"AI Labyrinth"**.
-- **Click-to-tooltip on signal names**: every signal name in the Defenses & scoring table (and modifier rows) renders as a blue dotted-underline code element. Clicking it shows a floating tooltip with the full detector description. Click anywhere else to dismiss.
-- **Controls page load-status pill**: orange pulsing "Loading" badge in the External integrations header flips to green "Loading Ready" after the external integration cards are fully rendered and painted (double `requestAnimationFrame` inside `loadExternal()`).
+- **10 new detection signals** — 5 HIGH + 5 MEDIUM impact:
+  - `header-order-fp` (+8) — HTTP library fingerprint via ordered header-name hash (requests/curl/Go/httpx signatures).
+  - `ai-ua-ip-mismatch` (+30) — AI-crawler UA but source IP not in vendor's published CIDR range (OpenAI gptbot-ranges.txt, refreshed 24h).
+  - `locale-geo-mismatch` (+10) — primary Accept-Language tag implausible for GeoIP country; escalate-gated.
+  - `robots-violation` (+5) — declared AI-crawler UA ignores gateway `/robots.txt` (`Disallow: /`).
+  - `h2-fp` (+3, default OFF) — HTTP/1.1 + modern-browser UA behind TLS proxy.
+  - `header-order-fp`, `ai-ua-ip-mismatch`, `locale-geo-mismatch`, `robots-violation`, `h2-fp`, `json-canary` all appear in Controls dashboard with toggles.
+- **PoW difficulty scaling by risk_score** — `make_pow_challenge()` now accepts `risk_score`; maps 0–19→d=5, 20–50→d=7, >50→d=9. Anubis-mode still takes precedence.
+- **PoW minimum solve time** (`POW_MIN_SOLVE_MS=200`) — `verify_pow()` rejects solutions arriving < (MIN−1000) ms after token issuance; blocks pre-computed replay attacks.
+- **JSON API canary poisoning** (`JSON_CANARY_ENABLED=1`) — injects `"_ref": "agw-c-…"` token into JSON object responses; LLM agents replaying cached API responses echo the token, triggering `canary-echo` ban.
+- **JA4 fail-closed** (`JA4_FAIL_CLOSED=0` default) — when `JA4_TRUSTED_NETS` configured, hard-deny non-static requests missing the JA4 header.
+- **Session churn threshold scaling** — hosting ASNs use `NEW_SESSIONS_PER_HOSTING=10` (vs 30 for consumer ISPs); ASN lookup performed on new-session path only.
+- **`/robots.txt` endpoint** — gateway serves a static robots.txt disallowing all known AI crawlers (`GPTBot`, `ChatGPT-User`, `PerplexityBot`, `ClaudeBot`, `anthropic-ai`, `FacebookBot`, `meta-externalagent`).
+- **AI crawler IP-range verification** — startup task fetches `openai.com/gptbot-ranges.txt`; cached 24h; no-op when ranges unavailable (fail-open).
+- **Controls tooltip — rich signal panel** — clicking any signal name in Defenses & Scoring now shows a structured panel: version/date badge, tier badge, description, impact (+N pts with colour), cost (kind badge + ms), and configuration block (toggle knob + env var instruction or "always-on" notice). `Esc` or click-away to dismiss.
+- **`kind-modifier` CSS badge** — modifier signals now render a grey badge in the cost column instead of `—`.
 
 ### Fixed
-- **`loadScoring` race condition**: scoring table previously ran concurrently with `load()`, causing all toggles to render as OFF (empty `serverState`). Fixed by sequencing: `load().then(() => loadScoring())` in the initial `Promise.all`, guaranteeing `serverState` is populated before scoring renders. Reset button updated to use the same sequence.
-- **External integration toggle state race**: `renderToggle()` used `cfg[knob]` from `serverState` which could be empty on first render. Fixed to `(knob in cfg) ? !!cfg[knob] : !!item.enabled` — falls back to the authoritative `item.enabled` from the `/secured/external` API response when config hasn't loaded yet.
-- **"Loading Ready" premature green**: pill previously flipped green from the `Promise.all .then()` which resolved before the browser painted the external cards. Moved flip inside `loadExternal()` with a `!classList.contains('ready')` guard so it fires exactly once, after DOM injection and after two paint frames.
+- **`pow_endpoint` difficulty** — previously hardcoded `ANUBIS_DIFFICULTY_BOOST`; now passes caller's risk_score to `make_pow_challenge` and reads `eff_diff` from the signed payload.
+
+### Tests
+- 153 unit tests passing (102 critical + 51 pure). New knobs added to `test_165_every_knob_persists_round_trip`.
+
+### Bandit
+- 0 High · 0 Critical · 0 Medium (unchanged).
 
 ---
 

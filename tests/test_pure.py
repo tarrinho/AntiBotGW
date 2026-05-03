@@ -330,6 +330,49 @@ def test_167_session_revoke_invalidates_cookie(proxy_module):
     assert not proxy_module._internal_authed(_AuthReq(cookie=token))
 
 
+# ── Dashboard static analysis: k_q defined before use ────────────────────
+# Regression: k_q was used in four fetch() calls in main.html but never
+# declared, causing ReferenceError → defense-threshold slider (B and S)
+# showed 0 and the throughput cap widget failed silently.
+
+def _main_html_lines():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    return src.splitlines()
+
+
+def test_main_html_k_q_declared():
+    """k_q must have an explicit declaration (const/let/var) somewhere in
+    main.html. Absence means every fetch call throws ReferenceError."""
+    lines = _main_html_lines()
+    decls = [i for i, ln in enumerate(lines)
+             if "k_q" in ln and any(kw in ln for kw in ("const ", "let ", "var "))]
+    assert decls, "k_q is not declared in main.html — will throw ReferenceError"
+
+
+def test_main_html_k_q_declaration_precedes_all_uses():
+    """The k_q declaration must appear before every fetch call that appends it.
+    Out-of-order declaration still triggers ReferenceError in the IIFE that
+    runs first."""
+    import re
+    lines = _main_html_lines()
+    # Declaration: (const|let|var) k_q = ...
+    _decl_re = re.compile(r'\b(const|let|var)\s+k_q\b')
+    # Usage: k_q appears but NOT as the declared variable name
+    _use_re  = re.compile(r'\bk_q\b')
+    decl_lines = [i for i, ln in enumerate(lines) if _decl_re.search(ln)]
+    use_lines  = [i for i, ln in enumerate(lines)
+                  if _use_re.search(ln) and not _decl_re.search(ln)]
+    assert decl_lines, "k_q not declared"
+    assert use_lines,  "k_q not used anywhere — test is stale"
+    first_decl = min(decl_lines)
+    first_use  = min(use_lines)
+    assert first_decl < first_use, (
+        f"k_q declared on line {first_decl+1} but first use on line {first_use+1}; "
+        "declaration must precede all uses"
+    )
+
+
 def test_167_session_token_format_includes_sid(proxy_module):
     """1.6.7 — token is `username|sid|expiry|HMAC`; the old 3-part
     `username|expiry|HMAC` format must no longer parse."""

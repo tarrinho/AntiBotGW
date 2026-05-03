@@ -902,6 +902,105 @@ def test_v9_legacy_cookie_format_still_validates(proxy_module):
         cookie, ua, proxy_module._ip_tier("198.51.100.7")) is True
 
 
+# ── Defense-threshold slider (B and S) regression ───────────────────────
+# Regression: k_q ReferenceError in main.html caused syncFromConfig() to
+# crash before populating SOFT_CHALLENGE_SCORE (S) and RISK_BAN_THRESHOLD (B),
+# leaving both knobs visually stuck at 0.
+
+def test_defense_threshold_config_get_returns_numeric_soft_and_ban(proxy_module):
+    """GET /secured/config must include SOFT_CHALLENGE_SCORE and
+    RISK_BAN_THRESHOLD as numeric values. The slider's syncFromConfig()
+    reads exactly these two keys to position S and B on page load."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                r = await client.get("/antibot-appsec-gateway/secured/config",
+                                     cookies=_admin_cookie(proxy_module))
+                assert r.status == 200
+                body = _json.loads(await r.text())
+                state = body["state"]
+                assert "SOFT_CHALLENGE_SCORE" in state, \
+                    "SOFT_CHALLENGE_SCORE missing from /secured/config — S knob will read 0"
+                assert "RISK_BAN_THRESHOLD" in state, \
+                    "RISK_BAN_THRESHOLD missing from /secured/config — B knob will read 0"
+                assert isinstance(state["SOFT_CHALLENGE_SCORE"], (int, float)), \
+                    "SOFT_CHALLENGE_SCORE must be numeric"
+                assert isinstance(state["RISK_BAN_THRESHOLD"], (int, float)), \
+                    "RISK_BAN_THRESHOLD must be numeric"
+    _run(go())
+
+
+def test_defense_threshold_defaults_are_nonzero(proxy_module):
+    """Default SOFT_CHALLENGE_SCORE and RISK_BAN_THRESHOLD must be > 0.
+    Zero defaults would make the slider initialise at the far left and
+    silently disable risk-based banning."""
+    assert proxy_module.SOFT_CHALLENGE_SCORE > 0, \
+        "SOFT_CHALLENGE_SCORE default is 0 — S knob will appear at 0"
+    assert proxy_module.RISK_BAN_THRESHOLD > 0, \
+        "RISK_BAN_THRESHOLD default is 0 — B knob will appear at 0 and no bans will fire"
+
+
+def test_defense_threshold_soft_persists_via_config_post(proxy_module):
+    """POST SOFT_CHALLENGE_SCORE then GET — value must round-trip. Covers the
+    slider dragEnd() → syncFromConfig() flow for the S knob."""
+    import json as _json
+    pre = proxy_module.SOFT_CHALLENGE_SCORE
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _admin_cookie(proxy_module)
+                r = await client.post("/antibot-appsec-gateway/secured/config",
+                    data=_json.dumps({"SOFT_CHALLENGE_SCORE": 7}),
+                    headers={"Content-Type": "application/json"},
+                    cookies=cookie)
+                assert r.status == 200
+                body = _json.loads(await r.text())
+                assert "SOFT_CHALLENGE_SCORE" in body["applied"], \
+                    "SOFT_CHALLENGE_SCORE not applied"
+                assert body["applied"]["SOFT_CHALLENGE_SCORE"] == 7
+
+                r2 = await client.get("/antibot-appsec-gateway/secured/config",
+                                      cookies=cookie)
+                state = _json.loads(await r2.text())["state"]
+                assert state["SOFT_CHALLENGE_SCORE"] == 7, \
+                    "SOFT_CHALLENGE_SCORE did not persist — S knob will show stale value"
+    try:
+        _run(go())
+    finally:
+        proxy_module.SOFT_CHALLENGE_SCORE = pre
+
+
+def test_defense_threshold_ban_persists_via_config_post(proxy_module):
+    """POST RISK_BAN_THRESHOLD then GET — value must round-trip. Covers the
+    slider dragEnd() → syncFromConfig() flow for the B knob."""
+    import json as _json
+    pre = proxy_module.RISK_BAN_THRESHOLD
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                cookie = _admin_cookie(proxy_module)
+                r = await client.post("/antibot-appsec-gateway/secured/config",
+                    data=_json.dumps({"RISK_BAN_THRESHOLD": 60}),
+                    headers={"Content-Type": "application/json"},
+                    cookies=cookie)
+                assert r.status == 200
+                body = _json.loads(await r.text())
+                assert "RISK_BAN_THRESHOLD" in body["applied"], \
+                    "RISK_BAN_THRESHOLD not applied"
+                assert body["applied"]["RISK_BAN_THRESHOLD"] == 60
+
+                r2 = await client.get("/antibot-appsec-gateway/secured/config",
+                                      cookies=cookie)
+                state = _json.loads(await r2.text())["state"]
+                assert state["RISK_BAN_THRESHOLD"] == 60, \
+                    "RISK_BAN_THRESHOLD did not persist — B knob will show stale value"
+    try:
+        _run(go())
+    finally:
+        proxy_module.RISK_BAN_THRESHOLD = pre
+
+
 # ── UA-substring alone is NOT the gate ──────────────────────────────────
 
 def test_mozilla_ua_alone_does_not_grant_access(proxy_module):

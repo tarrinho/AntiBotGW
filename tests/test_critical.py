@@ -1044,6 +1044,7 @@ def test_165_every_knob_persists_round_trip():
         "WEBHOOK_EVENT_FILTER": ["canary-echo", "dlp-*"],
         "DB_BACKEND": "sqlite", "POSTGRES_DSN": "",
         "ESCALATION_THRESHOLD": 4.0,
+        "SECOND_ORDER_THRESHOLD": 20.0,
         "TARPIT_ENABLED": True, "TARPIT_DELAY_MS": 2000,
         "BOTD_ENABLED": True,
         "LABYRINTH_ENABLED": True, "LABYRINTH_SLOW_MS": 400,
@@ -1051,6 +1052,15 @@ def test_165_every_knob_persists_round_trip():
         "LABYRINTH_JITTER_ENABLED": True,
         "ACCEPT_FP_ENABLED": True,
         "HEADER_CANARY_ENABLED": True,
+        # 1.6.10
+        "HEADER_ORDER_FP_ENABLED": True,
+        "AI_CRAWLER_VERIFY_ENABLED": True,
+        "JA4_FAIL_CLOSED": False,
+        "JSON_CANARY_ENABLED": True,
+        "LOCALE_GEO_CHECK_ENABLED": True,
+        "ROBOTS_MONITOR_ENABLED": True,
+        "H2_FP_ENABLED": False,
+        "POW_MIN_SOLVE_MS": 200,
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)
@@ -1538,3 +1548,223 @@ def test_168_admin_path_is_public_tarpit():
     assert proxy._admin_path_is_public("/antibot-appsec-gateway/tarpit/0.abc.def123456789012")
     assert not proxy._admin_path_is_public("/antibot-appsec-gateway/secured/config")
     assert not proxy._admin_path_is_public("/antibot-appsec-gateway/tarpit")  # exact match (no trailing slash)
+
+
+# ── 1.6.10 — signal activation-order regression suite ─────────────────────
+# These tests guard against regressions in the three-tier signal-gating system
+# introduced in 1.6.10: 1st-order (always), 2nd-order (score >= S2),
+# 3rd-order (score >= S3).  Every test maps directly to a fix made in this
+# release; a failure means the underlying bug has been reintroduced.
+
+def test_1610_second_order_threshold_default():
+    """SECOND_ORDER_THRESHOLD must default to 15 (not 0 or 1)."""
+    assert proxy.SECOND_ORDER_THRESHOLD == 15.0, (
+        f"SECOND_ORDER_THRESHOLD default regressed: got {proxy.SECOND_ORDER_THRESHOLD}")
+
+
+def test_1610_escalation_threshold_default():
+    """ESCALATION_THRESHOLD must default to 30 (not 1).
+    Default of 1 defeats the tiering system by running all 3rd-order signals
+    on every request with any accumulated risk."""
+    assert proxy.ESCALATION_THRESHOLD == 30.0, (
+        f"ESCALATION_THRESHOLD default regressed: got {proxy.ESCALATION_THRESHOLD}")
+
+
+def test_1610_signal_runtime_order_hardcoded_sets():
+    """_signal_runtime_order returns 3 for ESCALATE_ONLY_REASONS,
+    2 for SECOND_ORDER_REASONS, 1 for everything else."""
+    for sig in proxy.ESCALATE_ONLY_REASONS:
+        assert proxy._signal_runtime_order(sig) == 3, \
+            f"{sig} should be 3rd-order but _signal_runtime_order returned != 3"
+    for sig in proxy.SECOND_ORDER_REASONS:
+        assert proxy._signal_runtime_order(sig) == 2, \
+            f"{sig} should be 2nd-order but _signal_runtime_order returned != 2"
+    # First-order signals are not in either set
+    for sig in ("ua-empty", "suspicious-path", "rate-limit", "honeypot"):
+        assert proxy._signal_runtime_order(sig) == 1, \
+            f"{sig} should be 1st-order"
+
+
+def test_1610_signal_runtime_order_db_cache_overrides_hardcoded():
+    """DB cache takes priority over hardcoded sets in _signal_runtime_order.
+    Regression: if the cache lookup is bypassed the operator's DB-stored
+    overrides are silently ignored."""
+    orig = dict(proxy._signal_order_cache)
+    try:
+        # Override a normally 1st-order signal to 3rd-order via cache
+        proxy._signal_order_cache["ua-empty"] = 3
+        assert proxy._signal_runtime_order("ua-empty") == 3, \
+            "DB cache override not respected by _signal_runtime_order"
+        # Override a 3rd-order signal down to 1st-order
+        sample_3rd = next(iter(proxy.ESCALATE_ONLY_REASONS))
+        proxy._signal_order_cache[sample_3rd] = 1
+        assert proxy._signal_runtime_order(sample_3rd) == 1, \
+            "DB cache downgrade to 1st-order not respected"
+    finally:
+        proxy._signal_order_cache.clear()
+        proxy._signal_order_cache.update(orig)
+
+
+def test_1610_should_run_signal_1st_order_always_runs():
+    """1st-order signals must run regardless of esc_score."""
+    for score in (0.0, 1.0, 5.0, 50.0, 200.0):
+        assert proxy._should_run_signal("ua-empty", score), \
+            f"1st-order signal 'ua-empty' should run at score={score}"
+
+
+def test_1610_should_run_signal_2nd_order_gated():
+    """2nd-order signals must be suppressed below SECOND_ORDER_THRESHOLD
+    and allowed at or above it."""
+    sig = next(iter(proxy.SECOND_ORDER_REASONS))
+    orig_s2 = proxy.SECOND_ORDER_THRESHOLD
+    try:
+        proxy.SECOND_ORDER_THRESHOLD = 15.0
+        assert not proxy._should_run_signal(sig, 0.0), \
+            f"2nd-order {sig} must not run at score=0"
+        assert not proxy._should_run_signal(sig, 14.9), \
+            f"2nd-order {sig} must not run at score=14.9"
+        assert proxy._should_run_signal(sig, 15.0), \
+            f"2nd-order {sig} must run at score=15"
+        assert proxy._should_run_signal(sig, 100.0), \
+            f"2nd-order {sig} must run at score=100"
+    finally:
+        proxy.SECOND_ORDER_THRESHOLD = orig_s2
+
+
+def test_1610_should_run_signal_3rd_order_gated():
+    """3rd-order signals must be suppressed below ESCALATION_THRESHOLD
+    and allowed at or above it."""
+    sig = next(iter(proxy.ESCALATE_ONLY_REASONS))
+    orig_s3 = proxy.ESCALATION_THRESHOLD
+    try:
+        proxy.ESCALATION_THRESHOLD = 30.0
+        assert not proxy._should_run_signal(sig, 0.0), \
+            f"3rd-order {sig} must not run at score=0"
+        assert not proxy._should_run_signal(sig, 29.9), \
+            f"3rd-order {sig} must not run at score=29.9"
+        assert proxy._should_run_signal(sig, 30.0), \
+            f"3rd-order {sig} must run at score=30"
+    finally:
+        proxy.ESCALATION_THRESHOLD = orig_s3
+
+
+def test_1610_should_run_signal_zero_threshold_disables_gate():
+    """Setting SECOND_ORDER_THRESHOLD=0 or ESCALATION_THRESHOLD=0 disables
+    the gate entirely (always-run mode, legacy behaviour)."""
+    sig2 = next(iter(proxy.SECOND_ORDER_REASONS))
+    sig3 = next(iter(proxy.ESCALATE_ONLY_REASONS))
+    orig_s2, orig_s3 = proxy.SECOND_ORDER_THRESHOLD, proxy.ESCALATION_THRESHOLD
+    try:
+        proxy.SECOND_ORDER_THRESHOLD = 0.0
+        assert proxy._should_run_signal(sig2, 0.0), \
+            "2nd-order signal must run when threshold=0 (gate disabled)"
+        proxy.ESCALATION_THRESHOLD = 0.0
+        assert proxy._should_run_signal(sig3, 0.0), \
+            "3rd-order signal must run when threshold=0 (gate disabled)"
+    finally:
+        proxy.SECOND_ORDER_THRESHOLD = orig_s2
+        proxy.ESCALATION_THRESHOLD   = orig_s3
+
+
+def test_1610_save_and_load_signal_order_roundtrip():
+    """_save_signal_order + _load_signal_order_cache must round-trip through
+    SQLite.  Regression: if the DB write or read is broken, operator overrides
+    are silently lost on restart."""
+    import sqlite3, time as _t
+    db = proxy.DB_PATH
+    proxy.db_init()
+    orig_cache = dict(proxy._signal_order_cache)
+    try:
+        proxy._save_signal_order("ua-empty", 3, "pytest")
+        proxy._save_signal_order("honeypot",  2, "pytest")
+        # Verify written to DB
+        conn = sqlite3.connect(db)
+        rows = dict(conn.execute(
+            "SELECT signal, activation_order FROM signal_orders WHERE gw_id = ?",
+            (proxy._gw_local_id(),)
+        ).fetchall())
+        conn.close()
+        assert rows.get("ua-empty") == 3, "ua-empty order not persisted to DB"
+        assert rows.get("honeypot")  == 2, "honeypot order not persisted to DB"
+        # Clear cache and reload
+        proxy._signal_order_cache.clear()
+        proxy._load_signal_order_cache()
+        assert proxy._signal_order_cache.get("ua-empty") == 3, \
+            "ua-empty order not loaded back into cache"
+        assert proxy._signal_order_cache.get("honeypot")  == 2, \
+            "honeypot order not loaded back into cache"
+    finally:
+        # Clean up test rows
+        conn = sqlite3.connect(db)
+        conn.execute("DELETE FROM signal_orders WHERE updated_by = 'pytest'")
+        conn.commit(); conn.close()
+        proxy._signal_order_cache.clear()
+        proxy._signal_order_cache.update(orig_cache)
+
+
+def test_1610_scoring_endpoint_uses_runtime_order():
+    """The scoring endpoint must use _signal_runtime_order() (DB-aware) not a
+    hardcoded inline ternary.  Regression: if it reverts to the inline ternary,
+    DB overrides are visible in the cache but not reflected in the scoring API
+    response."""
+    orig_cache = dict(proxy._signal_order_cache)
+    try:
+        # Override ua-empty to 3rd-order in the cache
+        proxy._signal_order_cache["ua-empty"] = 3
+        order = proxy._signal_runtime_order("ua-empty")
+        assert order == 3, (
+            "scoring_endpoint would return wrong activation_order — "
+            "_signal_runtime_order does not respect DB cache override")
+    finally:
+        proxy._signal_order_cache.clear()
+        proxy._signal_order_cache.update(orig_cache)
+
+
+def test_1610_second_order_threshold_in_hot_reload_knobs():
+    """SECOND_ORDER_THRESHOLD must be a hot-reload knob so operators can tune
+    it from the dashboard without restarting the container."""
+    assert "SECOND_ORDER_THRESHOLD" in proxy._HOT_RELOAD_KNOBS, \
+        "SECOND_ORDER_THRESHOLD missing from _HOT_RELOAD_KNOBS"
+
+
+def test_1610_signal_orders_routes_registered():
+    """GET and POST /secured/signal-orders + GET /secured/integration-check
+    must be in _ROUTES so the endpoints are reachable."""
+    import asyncio
+    app = proxy.make_app()
+    route_keys = {(r.method, r.resource.canonical) for r in app.router.routes()}
+    sec = "/antibot-appsec-gateway/secured"
+    assert ("GET",  f"{sec}/signal-orders")     in route_keys, \
+        "GET /secured/signal-orders not registered"
+    assert ("POST", f"{sec}/signal-orders")     in route_keys, \
+        "POST /secured/signal-orders not registered"
+    assert ("GET",  f"{sec}/integration-check") in route_keys, \
+        "GET /secured/integration-check not registered"
+
+
+def test_1610_escalate_only_reasons_are_3rd_order_by_default():
+    """Every signal in ESCALATE_ONLY_REASONS must return 3 from
+    _signal_runtime_order when the cache is empty (no DB overrides)."""
+    orig_cache = dict(proxy._signal_order_cache)
+    proxy._signal_order_cache.clear()
+    try:
+        for sig in proxy.ESCALATE_ONLY_REASONS:
+            assert proxy._signal_runtime_order(sig) == 3, \
+                f"{sig} in ESCALATE_ONLY_REASONS returned order != 3"
+    finally:
+        proxy._signal_order_cache.clear()
+        proxy._signal_order_cache.update(orig_cache)
+
+
+def test_1610_second_order_reasons_are_2nd_order_by_default():
+    """Every signal in SECOND_ORDER_REASONS must return 2 from
+    _signal_runtime_order when the cache is empty."""
+    orig_cache = dict(proxy._signal_order_cache)
+    proxy._signal_order_cache.clear()
+    try:
+        for sig in proxy.SECOND_ORDER_REASONS:
+            assert proxy._signal_runtime_order(sig) == 2, \
+                f"{sig} in SECOND_ORDER_REASONS returned order != 2"
+    finally:
+        proxy._signal_order_cache.clear()
+        proxy._signal_order_cache.update(orig_cache)

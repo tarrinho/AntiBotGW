@@ -404,6 +404,30 @@ def browser_fingerprint(request) -> str:
     ]
     return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
 
+# 1.6.10 — header-order library fingerprint helpers.
+# sha256[:12] of ":"-joined lowercase non-host header names in request order.
+# Covers common HTTP bot libraries that send a predictable minimal header set.
+def _header_order_sig(request) -> str:
+    names = ":".join(k.lower() for k in request.headers.keys() if k.lower() != "host")
+    return hashlib.sha256(names[:300].encode()).hexdigest()[:12]
+
+_LIBRARY_HEADER_SIGS: frozenset = frozenset({
+    # python-requests 2.x (default: UA, Accept-Encoding, Accept, Connection)
+    hashlib.sha256(b"user-agent:accept-encoding:accept:connection").hexdigest()[:12],
+    hashlib.sha256(b"user-agent:accept-encoding:accept").hexdigest()[:12],
+    # curl default (UA + Accept only)
+    hashlib.sha256(b"user-agent:accept").hexdigest()[:12],
+    # Go net/http (UA + Accept-Encoding)
+    hashlib.sha256(b"user-agent:accept-encoding").hexdigest()[:12],
+    # httpx async (Python) — Accept first, then UA
+    hashlib.sha256(b"accept:accept-encoding:accept-language:user-agent:connection").hexdigest()[:12],
+    hashlib.sha256(b"accept:accept-encoding:accept-language:user-agent").hexdigest()[:12],
+})
+
+def _is_library_headers(request) -> bool:
+    """True when header order matches a known HTTP library signature."""
+    return _header_order_sig(request) in _LIBRARY_HEADER_SIGS
+
 def get_identity(request):
     """
     Returns (identity, session_id, fingerprint, is_new_session, mode).
@@ -604,6 +628,25 @@ ACCEPT_FP_ENABLED        = os.environ.get("ACCEPT_FP_ENABLED",           "1") in
 
 # 1.6.10 — Header canary: inject per-identity token into ETag + X-Request-Id
 HEADER_CANARY_ENABLED    = os.environ.get("HEADER_CANARY_ENABLED",       "1") in ("1", "true", "yes")
+
+# 1.6.10 — Header-order library fingerprint
+HEADER_ORDER_FP_ENABLED   = os.environ.get("HEADER_ORDER_FP_ENABLED",   "1") in ("1", "true", "yes")
+# 1.6.10 — AI crawler IP-range verification (OpenAI published ranges)
+AI_CRAWLER_VERIFY_ENABLED = os.environ.get("AI_CRAWLER_VERIFY_ENABLED", "1") in ("1", "true", "yes")
+# 1.6.10 — JA4 fail-closed: hard deny (not soft score) when JA4_TRUSTED_NETS set + header missing
+JA4_FAIL_CLOSED           = os.environ.get("JA4_FAIL_CLOSED",           "0") in ("1", "true", "yes")
+# 1.6.10 — JSON API canary: inject _ref token into JSON object responses
+JSON_CANARY_ENABLED       = os.environ.get("JSON_CANARY_ENABLED",       "1") in ("1", "true", "yes")
+# 1.6.10 — Accept-Language / GeoIP locale consistency
+LOCALE_GEO_CHECK_ENABLED  = os.environ.get("LOCALE_GEO_CHECK_ENABLED",  "1") in ("1", "true", "yes")
+# 1.6.10 — robots.txt compliance monitoring (serve + flag known bots that ignore it)
+ROBOTS_MONITOR_ENABLED    = os.environ.get("ROBOTS_MONITOR_ENABLED",    "1") in ("1", "true", "yes")
+# 1.6.10 — HTTP/2 fingerprint fallback (H2_FP_ENABLED=0 by default; off unless TLS-terminating)
+H2_FP_ENABLED             = os.environ.get("H2_FP_ENABLED",             "0") in ("1", "true", "yes")
+# 1.6.10 — PoW minimum solve time (ms): reject solutions that arrive suspiciously fast
+POW_MIN_SOLVE_MS          = int(os.environ.get("POW_MIN_SOLVE_MS",      "200"))
+# 1.6.10 — tighter session-churn threshold for hosting/datacenter ASNs
+NEW_SESSIONS_PER_IP_PER_MIN_HOSTING = int(os.environ.get("NEW_SESSIONS_PER_HOSTING", "10"))
 
 _TARPIT_TOPICS = [
     ("System Configuration Reference",   "configuration"),
@@ -1182,6 +1225,19 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                       );
                       CREATE INDEX IF NOT EXISTS idx_gw_sync_pending_status
                           ON gw_sync_pending(status, received_ts);
+
+                      -- 1.6.10: per-gateway signal activation-order overrides.
+                      CREATE TABLE IF NOT EXISTS signal_orders (
+                        gw_id            TEXT NOT NULL,
+                        signal           TEXT NOT NULL,
+                        activation_order INTEGER NOT NULL
+                            CHECK (activation_order IN (1,2,3)),
+                        updated_ts       DOUBLE PRECISION NOT NULL,
+                        updated_by       TEXT,
+                        PRIMARY KEY (gw_id, signal)
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_signal_orders_gw
+                          ON signal_orders(gw_id);
                     """)
                     # 1.6.7+ — additive column upgrades from the central
                     # registry. Adds any missing column listed in
@@ -1658,6 +1714,21 @@ def db_init():
     );
     CREATE INDEX IF NOT EXISTS idx_user_sessions_user
         ON user_sessions(username, status);
+
+    -- 1.6.10: per-gateway signal activation-order overrides. Each row
+    -- records an operator's decision to run a named signal at order 1, 2,
+    -- or 3, overriding the hardcoded defaults. Gateway-scoped so a future
+    -- multi-gw mesh can carry different postures per instance.
+    CREATE TABLE IF NOT EXISTS signal_orders (
+        gw_id            TEXT NOT NULL
+                           REFERENCES gw_registry(gw_id) ON DELETE CASCADE,
+        signal           TEXT NOT NULL,
+        activation_order INTEGER NOT NULL CHECK (activation_order IN (1,2,3)),
+        updated_ts       REAL NOT NULL,
+        updated_by       TEXT,
+        PRIMARY KEY (gw_id, signal)
+    );
+    CREATE INDEX IF NOT EXISTS idx_signal_orders_gw ON signal_orders(gw_id);
     """)
     # 1.6.7+ — additive column upgrades driven by the central registry.
     # See `_SCHEMA_MIGRATIONS` above; new releases append entries there.
@@ -2117,6 +2188,83 @@ def _asn_lookup(ip: str):
     if is_hosting:
         _asn_stats["hits_hosting"] += 1
     return asn, org, is_hosting, "ok"
+
+# ── 1.6.10: AI crawler IP-range verification ─────────────────────────────────
+# OpenAI publishes their crawler IP ranges at openai.com/gptbot-ranges.txt.
+# When a request claims to be an OpenAI/Perplexity crawler (UA match) but the
+# source IP is not in the declared range, we add ai-ua-ip-mismatch (+30) —
+# a strong signal the UA is being spoofed.
+_ai_crawler_nets: dict = {}          # vendor → list[ip_network]; populated at startup
+_AI_CRAWLER_RANGE_URLS = {
+    "openai": "https://openai.com/gptbot-ranges.txt",  # nosec B310
+}
+
+async def _refresh_ai_crawler_ranges():
+    """Fetch published IP ranges for AI crawlers and refresh every 24 h."""
+    while True:
+        for vendor, url in _AI_CRAWLER_RANGE_URLS.items():
+            try:
+                async with aiohttp.ClientSession(
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as _s:
+                    async with _s.get(url) as _r:
+                        if _r.status == 200:
+                            text = await _r.text()
+                            nets = []
+                            for _line in text.splitlines():
+                                _line = _line.strip()
+                                if _line and not _line.startswith("#"):
+                                    try:
+                                        nets.append(_ipaddress.ip_network(_line, strict=False))
+                                    except ValueError:
+                                        pass
+                            _ai_crawler_nets[vendor] = nets
+                            slog("ai_ranges_refreshed", level="info",
+                                 vendor=vendor, count=len(nets))
+            except Exception as _e:
+                slog("ai_ranges_failed", level="warn",
+                     vendor=vendor, error=str(_e)[:80])
+        await asyncio.sleep(86400)
+
+def _ip_in_ai_range(ip: str, vendor: str) -> bool:
+    """True if ip is in vendor's published crawler range (or range unknown)."""
+    nets = _ai_crawler_nets.get(vendor, [])
+    if not nets:
+        return True   # no data loaded — can't verify, don't penalise
+    try:
+        ipa = _ipaddress.ip_address(ip)
+        return any(ipa in net for net in nets)
+    except (ValueError, TypeError):
+        return True   # unparseable IP → don't penalise
+
+# ── 1.6.10: Accept-Language / GeoIP locale consistency ───────────────────────
+# Map ISO-3166 country code → set of plausible primary language tags.
+# Only covers codes with a single dominant language; multi-lingual countries
+# are excluded (avoiding false-positives on CH, BE, CA, SG, etc.).
+_COUNTRY_LANG_MAP: dict = {
+    "US": {"en"}, "GB": {"en"}, "AU": {"en"}, "NZ": {"en"}, "IE": {"en"},
+    "FR": {"fr"}, "DE": {"de"}, "AT": {"de"},
+    "ES": {"es"}, "MX": {"es"}, "AR": {"es"}, "CO": {"es"}, "CL": {"es"},
+    "PT": {"pt"}, "BR": {"pt"},
+    "IT": {"it"}, "RU": {"ru"}, "UA": {"uk"},
+    "CN": {"zh"}, "TW": {"zh"}, "JP": {"ja"}, "KR": {"ko"},
+    "NL": {"nl"}, "PL": {"pl"}, "SE": {"sv"}, "NO": {"no", "nb"},
+    "DK": {"da"}, "FI": {"fi"}, "CZ": {"cs"}, "HU": {"hu"}, "RO": {"ro"},
+    "TR": {"tr"}, "SA": {"ar"}, "AE": {"ar"}, "EG": {"ar"},
+    "TH": {"th"}, "VN": {"vi"}, "ID": {"id"},
+}
+
+def _locale_geo_mismatch(country_code: str, accept_lang: str) -> bool:
+    """True when primary Accept-Language tag is implausible for the GeoIP country.
+    Returns False when the country or language is unknown (avoids false-positives).
+    'en' is treated as a universal fallback and never flagged as a mismatch."""
+    expected = _COUNTRY_LANG_MAP.get((country_code or "").upper())
+    if not expected:
+        return False
+    primary = accept_lang.split(",")[0].split(";")[0].strip().split("-")[0].lower()
+    if not primary or primary in ("*", "en"):
+        return False
+    return primary not in expected
 
 # ── 1.6.0: Tor exit + DC/VPN feeds (Tier A, network-list integration) ────
 # Tor exit list: https://check.torproject.org/torbulkexitlist (one IP per line)
@@ -3569,6 +3717,13 @@ RISK_WEIGHTS = {
     "dlp-api-key":            0,
     "dlp-pii-email":          0,
     "dlp-pii-ssn":            0,
+    # ── 1.6.10: new detection signals ────────────────────────��───────────────
+    "header-order-fp":        8,   # library-pattern header ordering (not real browser)
+    "ai-ua-ip-mismatch":     30,   # claimed AI-crawler UA but IP not in vendor's published range
+    "locale-geo-mismatch":   10,   # Accept-Language primary tag ≠ expected language for GeoIP country
+    "robots-violation":       5,   # known-bot UA requests path disallowed by gateway robots.txt
+    "h2-fp":                  3,   # HTTP/1.1 + modern-browser UA behind TLS proxy (H2 FP fallback)
+    "json-canary":            0,   # modifier: JSON canary injected (no risk; echo handled by canary-echo)
 }
 # 1.5.3: soft-challenge tier — when the score sits between SOFT_CHALLENGE_SCORE
 # and RISK_BAN_THRESHOLD the request is forwarded but the next request from
@@ -3581,7 +3736,12 @@ SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
 # accumulated risk. Lets the cheap in-process detectors run on every
 # request, while AbuseIPDB / CrowdSec / MaxMind-City spend their quota
 # only on suspects. ESCALATION_THRESHOLD=0 reverts to "always run".
-ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "1"))
+ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "30"))
+
+# 1.6.10 — 2nd-order gate: skip behavioral / enumeration detectors for
+# identities with no prior suspicion. Default 15 = "any single soft-tier
+# signal has fired". Set to 0 to revert to "always run".
+SECOND_ORDER_THRESHOLD = float(os.environ.get("SECOND_ORDER_THRESHOLD", "15"))
 
 # 1.6.5 — BotD client-side detection (FingerprintJS open-source library).
 # Off by default. When enabled, every text/html response from the upstream
@@ -3625,6 +3785,104 @@ ESCALATE_ONLY_REASONS = {
     "dlp-cc", "dlp-aws", "dlp-jwt", "dlp-private-key",
     "dlp-api-key", "dlp-pii-email", "dlp-pii-ssn",
 }
+
+# 1.6.10 — 2nd-order signals: run only when score >= SECOND_ORDER_THRESHOLD.
+# These are behavioral checks that could produce occasional false positives
+# on clean identities and are skipped when there is zero prior suspicion.
+SECOND_ORDER_REASONS = {
+    "ai-enumeration",       # path-count scanner — fires only after many requests anyway
+    "ai-no-assets",         # no-asset heuristic — noisy on API-heavy apps with no FE
+    "locale-geo-mismatch",  # Accept-Language vs GeoIP — FP risk for VPN users
+    "tls-fingerprint",      # JA4 deny-list check — only meaningful on repeat offenders
+    "ja4-required-missing", # hard JA4 requirement — operator-tuned, gate on suspicion
+}
+
+# 1.6.10 — per-gateway signal-order overrides, loaded from signal_orders at
+# startup.  Maps signal → 1|2|3; empty = use hardcoded set defaults above.
+_signal_order_cache: dict[str, int] = {}
+
+
+def _signal_runtime_order(sig: str) -> int:
+    """Effective activation order for `sig`: DB override → set defaults → 1."""
+    o = _signal_order_cache.get(sig)
+    if o:
+        return o
+    if sig in ESCALATE_ONLY_REASONS:
+        return 3
+    if sig in SECOND_ORDER_REASONS:
+        return 2
+    return 1
+
+
+def _should_run_signal(sig: str, esc_score: float) -> bool:
+    """Return True iff the signal's order gate is satisfied at `esc_score`."""
+    o = _signal_runtime_order(sig)
+    if o == 3:
+        return (ESCALATION_THRESHOLD <= 0) or (esc_score >= ESCALATION_THRESHOLD)
+    if o == 2:
+        return (SECOND_ORDER_THRESHOLD <= 0) or (esc_score >= SECOND_ORDER_THRESHOLD)
+    return True  # order 1 — always run
+
+
+def _load_signal_order_cache() -> None:
+    """Load per-gateway signal-order overrides from SQLite into _signal_order_cache."""
+    global _signal_order_cache
+    gw_id = _gw_local_id()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT signal, activation_order FROM signal_orders WHERE gw_id = ?",
+            (gw_id,),
+        ).fetchall()
+        conn.close()
+        _signal_order_cache = {sig: n for sig, n in rows if n in (1, 2, 3)}
+        if _signal_order_cache:
+            print(f"[signal-orders] {len(_signal_order_cache)} override(s) loaded "
+                  f"for {gw_id}", flush=True)
+    except Exception as exc:
+        print(f"[signal-orders] load failed: {exc}", flush=True)
+
+
+def _save_signal_order(sig: str, order: int, actor: str) -> None:
+    """Persist a single signal-order override to SQLite (and mirror to PG)."""
+    global _signal_order_cache
+    gw_id = _gw_local_id()
+    ts    = _t.time()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """INSERT INTO signal_orders (gw_id, signal, activation_order, updated_ts, updated_by)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(gw_id, signal) DO UPDATE SET
+                   activation_order = excluded.activation_order,
+                   updated_ts       = excluded.updated_ts,
+                   updated_by       = excluded.updated_by""",
+            (gw_id, sig, order, ts, actor),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        print(f"[signal-orders] save failed: {exc}", flush=True)
+        return
+    _signal_order_cache[sig] = order
+    # Mirror to Postgres if available
+    pg = _postgres_load_module()
+    if pg and POSTGRES_DSN:
+        try:
+            with pg.connect(POSTGRES_DSN, connect_timeout=3, autocommit=True) as pgc:
+                with pgc.cursor() as cur:
+                    cur.execute(
+                        """INSERT INTO signal_orders
+                               (gw_id, signal, activation_order, updated_ts, updated_by)
+                           VALUES (%s, %s, %s, %s, %s)
+                           ON CONFLICT (gw_id, signal) DO UPDATE SET
+                               activation_order = EXCLUDED.activation_order,
+                               updated_ts       = EXCLUDED.updated_ts,
+                               updated_by       = EXCLUDED.updated_by""",
+                        (gw_id, sig, order, ts, actor),
+                    )
+        except Exception:
+            pass  # PG mirror is best-effort; SQLite is authoritative
 
 def _escalation_score(track_key: str) -> float:
     """1.6.5 — return the current decayed risk_score for `track_key`,
@@ -3840,13 +4098,22 @@ def _pow_bind(method: str, path: str) -> str:
 _pow_seen: Dict[tuple, float] = {}
 _POW_SEEN_MAX = 10000
 
-def make_pow_challenge(method: str = "*", path: str = "*") -> str:
+def make_pow_challenge(method: str = "*", path: str = "*", risk_score: int = 0) -> str:
     nonce  = secrets.token_hex(8)
     issued = str(int(time.time()))
     bind = _pow_bind(method, path)
-    # 1.5.4 — Anubis-mode boost to make scripted solving ~16× harder per
+    # 1.6.10 — risk-score-scaled difficulty: higher accumulated risk → more work.
+    # Anubis-mode (global strict gate) takes precedence over per-identity scaling.
+    # 1.5.4 — base: Anubis-mode boost makes scripted solving ~16× harder per
     # additional zero (default boost=1 → 6 leading zeros instead of 5).
-    diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
+    if ANUBIS_ENABLED:
+        diff = POW_DIFFICULTY + ANUBIS_DIFFICULTY_BOOST
+    elif risk_score >= 50:
+        diff = 9   # high risk  → 9 leading zeros
+    elif risk_score >= 20:
+        diff = 7   # medium risk → 7 leading zeros
+    else:
+        diff = max(POW_DIFFICULTY, 5)   # low risk → at least 5
     payload = f"{nonce}|{issued}|{diff}|{bind}"
     sig = hmac.new(POW_HMAC_KEY, payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}|{sig}"
@@ -3869,9 +4136,16 @@ def verify_pow(token: str, solution: str,
         return False, "bad signature"
     if not hmac.compare_digest(bind, _pow_bind(method, path)):
         return False, "token not bound to this method+path"
-    age = int(time.time()) - int(issued)
+    now_float = time.time()
+    age = int(now_float) - int(issued)
     if age > POW_VALID_SECS:
         return False, f"expired ({age}s old)"
+    # 1.6.10 — minimum solve time: a pre-computed or replayed solution arrives
+    # before any real CPU work could have completed. Clocks can drift ~1s so
+    # we tolerate up to 1s slack below POW_MIN_SOLVE_MS.
+    elapsed_ms = (now_float - float(issued)) * 1000
+    if elapsed_ms < max(0.0, POW_MIN_SOLVE_MS - 1000):
+        return False, f"solved too quickly ({elapsed_ms:.0f} ms < {POW_MIN_SOLVE_MS} ms minimum)"
     try:
         diff_int = int(diff)
     except ValueError:
@@ -4594,13 +4868,14 @@ async def protect(request: web.Request, handler):
     # for identities with zero accumulated risk. ESCALATION_THRESHOLD=0
     # reverts to legacy "run on every request" behaviour. Saves AbuseIPDB
     # quota + CrowdSec round-trip on the 99% of requests that are clean.
-    _esc_score = _escalation_score(identity)
-    _escalate  = (ESCALATION_THRESHOLD <= 0) or (_esc_score >= ESCALATION_THRESHOLD)
+    _esc_score    = _escalation_score(identity)
+    _escalate     = (ESCALATION_THRESHOLD <= 0)    or (_esc_score >= ESCALATION_THRESHOLD)
+    _second_order = (SECOND_ORDER_THRESHOLD <= 0)  or (_esc_score >= SECOND_ORDER_THRESHOLD)
 
     # ── 1.5.3: external IP-intel layer (AbuseIPDB) — escalate-only ──
     # Cached in SQLite — typical cost is ~0.1ms cached, 100-300ms uncached
     # (CloudFront RTT). Bumps risk but never blocks outright.
-    if ABUSEIPDB_ENABLED and _escalate:
+    if ABUSEIPDB_ENABLED and _should_run_signal("abuseipdb-high", _esc_score):
         ab_score, ab_country, ab_source = await _abuseipdb_lookup(ip)
         if ab_score >= ABUSEIPDB_HIGH_THRESHOLD:
             await update_risk_and_maybe_ban(identity, "abuseipdb-high", ip)
@@ -4608,14 +4883,14 @@ async def protect(request: web.Request, handler):
             await update_risk_and_maybe_ban(identity, "abuseipdb-med", ip)
 
     # 1.5.3: CrowdSec community-blocklist check — escalate-only (~5ms LAPI)
-    if CROWDSEC_ENABLED and _escalate:
+    if CROWDSEC_ENABLED and _should_run_signal("crowdsec-banned", _esc_score):
         cs_decision, cs_source = await _crowdsec_check(ip)
         if cs_decision:  # any active decision = community-vetted bad actor
             await update_risk_and_maybe_ban(identity, "crowdsec-banned", ip)
 
     # 1.5.3: MaxMind ASN tagging — escalate-only (cheap but only useful on
     # suspects; soft signal anyway).
-    if MAXMIND_ENABLED and _escalate:
+    if MAXMIND_ENABLED and _should_run_signal("asn-hosting", _esc_score):
         asn, asn_org, is_hosting, _src = _asn_lookup(ip)
         if is_hosting:
             await update_risk_and_maybe_ban(identity, "asn-hosting", ip)
@@ -4671,6 +4946,11 @@ async def protect(request: web.Request, handler):
     # cookieless SPA sub-resource fetches that all share one fp+ip identity
     # register as 1.
     if is_new_session:
+        # 1.6.10 — use tighter threshold for hosting ASNs (bots in datacenters
+        # spin up many sessions faster than consumer ISPs).
+        _session_is_hosting = False
+        if MAXMIND_ENABLED and _asn_reader is not None:
+            _, _, _session_is_hosting, _ = _asn_lookup(ip)
         async with state_lock:
             now_ts = now()
             id_map = ip_new_sessions[ip]
@@ -4680,7 +4960,10 @@ async def protect(request: web.Request, handler):
                 del id_map[k]
             id_map[identity] = now_ts
             new_session_rate = len(id_map)
-        if SESSION_FLOOD_ENABLED and new_session_rate > NEW_SESSIONS_PER_IP_PER_MIN:
+        _flood_threshold = (NEW_SESSIONS_PER_IP_PER_MIN_HOSTING
+                            if _session_is_hosting
+                            else NEW_SESSIONS_PER_IP_PER_MIN)
+        if SESSION_FLOOD_ENABLED and new_session_rate > _flood_threshold:
             return await _silent_decoy_response(
                 ip, request.headers.get("User-Agent",""), request.path, "session-flood"
             )
@@ -4773,6 +5056,7 @@ async def protect(request: web.Request, handler):
                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
 
     # 3a-c. UA filter family (gated by UA_FILTER_ENABLED)
+    request_signals = []                       # collected for log
     ua_stripped = ua.strip()
     ua_lower = ua_stripped.lower()
     if UA_FILTER_ENABLED:
@@ -4798,6 +5082,15 @@ async def protect(request: web.Request, handler):
                 continue
             for _f in _frags:
                 if _f in ua_lower:
+                    # 1.6.10 — robots.txt compliance: declared AI bot = robots.txt violation
+                    if ROBOTS_MONITOR_ENABLED:
+                        await update_risk_and_maybe_ban(track_key, "robots-violation", ip)
+                        request_signals.append("robots-violation")
+                    # 1.6.10 — IP-range verification: flag when IP not in vendor's
+                    # published CIDR range (spoof detection).
+                    if AI_CRAWLER_VERIFY_ENABLED and not _ip_in_ai_range(ip, _grp):
+                        await update_risk_and_maybe_ban(track_key, "ai-ua-ip-mismatch", ip)
+                        request_signals.append("ai-ua-ip-mismatch")
                     return await deny(403, f"ua-ai-{_grp}",
                                       {"error": "AI crawler blocked",
                                        "vendor": _grp, "matched": _f})
@@ -4844,7 +5137,6 @@ async def protect(request: web.Request, handler):
     # ── 1.5.3: soft signals (article alignment) ───────────────────────────
     # These don't deny — they bump the risk score and feed signals[] in logs.
     sec_ch_ua_plat = request.headers.get("Sec-Ch-Ua-Platform", "")
-    request_signals = []                       # collected for log
 
     # 3e2. UA <-> Sec-Ch-Ua consistency
     # Chrome ≥ 89 sends Sec-Ch-Ua; Firefox / Safari don't. A forged Chrome UA
@@ -4888,13 +5180,51 @@ async def protect(request: web.Request, handler):
             await update_risk_and_maybe_ban(track_key, "accept-fp", ip)
             request_signals.append("accept-fp")
 
-    # 3e4. JA4 required but missing (only counts as soft penalty when the
-    # operator has set up a trusted JA4 peer but THIS request didn't carry it).
+    # 3e4. JA4 required but missing.
+    # 1.6.10 — JA4_FAIL_CLOSED: when the operator configures trusted JA4 peers,
+    # they can opt-in to hard-deny (instead of soft-score) when the header is
+    # absent. Static assets are exempt so CDN pre-fetch doesn't break.
     if JA4_TRUSTED_NETS and JA4_HEADER and not request.headers.get(JA4_HEADER):
-        # Only soft-score; don't deny (the JS_CHAL_REQUIRE_JA4 hard check is
-        # elsewhere). Helps populate signals[] for telemetry.
-        await update_risk_and_maybe_ban(track_key, "ja4-required-missing", ip)
-        request_signals.append("ja4-required-missing")
+        if JA4_FAIL_CLOSED and not path.endswith(
+                (".css", ".js", ".png", ".jpg", ".jpeg", ".gif",
+                 ".svg", ".webp", ".woff", ".woff2", ".ttf", ".ico",
+                 ".map", ".txt", ".xml", ".json")):
+            return await deny(403, "ja4-required-missing",
+                              {"error": "JA4 fingerprint required from trusted peer"})
+        else:
+            await update_risk_and_maybe_ban(track_key, "ja4-required-missing", ip)
+            request_signals.append("ja4-required-missing")
+
+    # 3e5. 1.6.10 — Header-order library fingerprint.
+    # Real browsers send 10+ diverse headers in a well-known browser order.
+    # Common HTTP libraries (requests, curl, Go net/http, httpx) emit a
+    # predictable minimal set with a characteristic ordering. Fires only when
+    # the exact ordered-name hash matches a known library signature.
+    if HEADER_ORDER_FP_ENABLED and _is_library_headers(request):
+        await update_risk_and_maybe_ban(track_key, "header-order-fp", ip)
+        request_signals.append("header-order-fp")
+
+    # 3e6. 1.6.10 — HTTP/2 fingerprint fallback.
+    # Modern browsers always use HTTP/2 on HTTPS. HTTP/1.1 + TLS + modern UA
+    # is a mild signal that a library/tool is spoofing a browser UA.
+    # X-Forwarded-Proto is injected by the TLS-terminating front proxy;
+    # H2_FP_ENABLED=0 by default since the signal is weak without TLS context.
+    if H2_FP_ENABLED:
+        _proto = (request.headers.get("X-Forwarded-Proto") or "").lower()
+        if (_proto == "https" and request.version.major == 1
+                and any(t in ua_lower for t in ("chrome/", "firefox/", "safari/", "edg/"))):
+            await update_risk_and_maybe_ban(track_key, "h2-fp", ip)
+            request_signals.append("h2-fp")
+
+    # 3e7. 1.6.10 — Accept-Language / GeoIP locale consistency.
+    # Escalate-gated (cheap MMDB lookup but want to skip zero-risk clean traffic).
+    if LOCALE_GEO_CHECK_ENABLED and _city_reader is not None and _should_run_signal("locale-geo-mismatch", _esc_score):
+        _geo_lc = _city_lookup(ip)
+        if _geo_lc:
+            _, _, _lc_country, _ = _geo_lc
+            if _locale_geo_mismatch(_lc_country, accept_lang):
+                await update_risk_and_maybe_ban(track_key, "locale-geo-mismatch", ip)
+                request_signals.append("locale-geo-mismatch")
 
     # Stash request_signals for the response wrapper to log
     request["_signals"] = request_signals
@@ -4925,11 +5255,11 @@ async def protect(request: web.Request, handler):
     # SPAs (Angular/React UFE-style apps) routinely load 50–200 chunked JS
     # modules on one page; the previous 50 threshold was a false-positive
     # magnet for legit users. Operator can override via env if needed.
-    if AI_ENUMERATION_ENABLED and unique_n > ENUM_THRESHOLD:
+    if AI_ENUMERATION_ENABLED and _should_run_signal("ai-enumeration", _esc_score) and unique_n > ENUM_THRESHOLD:
         return await deny(403, "ai-enumeration",
                           {"error": "too many distinct paths from this identity",
                            "unique_paths": unique_n})
-    if AI_NO_ASSETS_ENABLED and no_static:
+    if AI_NO_ASSETS_ENABLED and _should_run_signal("ai-no-assets", _esc_score) and no_static:
         return await deny(403, "ai-no-assets",
                           {"error": "browser UA but never fetched any asset — likely AI agent",
                            "html_loads": s.html_loads, "static_loads": s.static_loads})
@@ -4988,8 +5318,11 @@ async def protect(request: web.Request, handler):
         solution = request.headers.get("X-PoW-Solution", "")
         ok, why = verify_pow(token, solution, request.method, request.path)
         if not ok:
-            challenge = make_pow_challenge(request.method, request.path)
-            eff_diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
+            # 1.6.10 — pass current risk_score so difficulty scales with threat level
+            async with state_lock:
+                _pow_risk = int(ip_state[track_key].risk_score)
+            challenge = make_pow_challenge(request.method, request.path, risk_score=_pow_risk)
+            eff_diff = int(challenge.split("|")[2])   # diff is baked into the signed payload
             return await deny(402, "pow-required",
                               {"error": "Proof-of-Work required",
                                "reason": why,
@@ -5074,14 +5407,66 @@ async def pow_endpoint(request: web.Request):
     """
     method = (request.query.get("method", "POST") or "POST").upper()
     path = request.query.get("path", "/") or "/"
-    eff_diff = POW_DIFFICULTY + (ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0)
+    # 1.6.10 — pass caller's current risk_score for difficulty scaling
+    ip = request.remote or ""
+    identity, _, _, _, _ = get_identity(request)
+    async with state_lock:
+        _risk = int(ip_state[identity].risk_score)
+    challenge = make_pow_challenge(method, path, risk_score=_risk)
+    eff_diff = int(challenge.split("|")[2])
     return web.json_response({
-        "challenge": make_pow_challenge(method, path),
+        "challenge": challenge,
         "difficulty": eff_diff,
         "valid_for_seconds": POW_VALID_SECS,
         "bound_to": {"method": method, "path": path},
         "anubis_mode": ANUBIS_ENABLED,
     }, headers={"Cache-Control": "no-store"})
+
+# 1.6.10 — robots.txt endpoint: serve a gateway-controlled robots.txt that
+# disallows all known AI crawlers. When ROBOTS_MONITOR_ENABLED=1, any request
+# from a declared AI crawler UA fires robots-violation (+5) alongside ua-ai-*.
+_ROBOTS_TXT_CONTENT = """\
+User-agent: *
+Disallow: /api/
+Disallow: /admin
+Disallow: /_internal/
+Disallow: /staff/
+Allow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: OAI-SearchBot
+Disallow: /
+
+User-agent: PerplexityBot
+Disallow: /
+
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Googlebot-Extended
+Disallow: /
+
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: meta-externalagent
+Disallow: /
+"""
+
+async def robots_txt_endpoint(request: web.Request):
+    return web.Response(
+        text=_ROBOTS_TXT_CONTENT,
+        content_type="text/plain",
+        headers={"Cache-Control": "public, max-age=86400", "X-Robots-Tag": "noindex"},
+    )
 
 async def solver_endpoint(request: web.Request):
     return web.Response(
@@ -5294,7 +5679,40 @@ async def db_test_endpoint(request: web.Request):
     Returns a structured payload describing both backends:
       • sqlite:    file size, row counts, WAL state
       • postgres:  version, db name, round-trip ms, events row count
-                    (or `ok=false` + reason when not configured / unreachable)"""
+                    (or `ok=false` + reason when not configured / unreachable)
+
+    1.6.10 — optional `?dsn=<url>` query param probes a candidate DSN without
+    committing to it.  Returns only `{ok, probe}` so the switch modal can gate
+    the confirm button on a successful connectivity check before the user
+    triggers the destructive restart."""
+    # 1.6.10 — pre-flight probe mode: caller supplies a candidate DSN.
+    probe_dsn = request.query.get("dsn", "").strip()
+    if probe_dsn:
+        if _postgres_load_module() is None:
+            return web.json_response(
+                {"ok": False, "reason": "psycopg not installed in this image"},
+                status=200, headers={"Cache-Control": "no-store"})
+        saved_dsn     = globals().get("POSTGRES_DSN", "")
+        saved_backend = globals().get("DB_BACKEND", DB_BACKEND)
+        try:
+            globals()["POSTGRES_DSN"] = probe_dsn
+            globals()["DB_BACKEND"]   = "postgres"
+            probe = pg_test_roundtrip()
+        finally:
+            globals()["POSTGRES_DSN"] = saved_dsn
+            globals()["DB_BACKEND"]   = saved_backend
+        try:
+            from urllib.parse import urlparse
+            p = urlparse(probe_dsn)
+            masked = f"{p.scheme}://{p.username or '<user>'}:****@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
+        except Exception:
+            masked = "(redacted)"
+        return web.json_response(
+            {"ok": probe.get("ok", False),
+             "reason": probe.get("reason", ""),
+             "probe": {**probe, "dsn_masked": masked}},
+            headers={"Cache-Control": "no-store"})
+
     sqlite_info = {"ok": False}
     try:
         if os.path.exists(DB_PATH):
@@ -6035,6 +6453,13 @@ async def scoring_endpoint(request: web.Request):
         "accept-fp":             ("soft", "Accept header fingerprint mismatch — browser UA on HTML navigation but Accept lacks text/html (e.g. application/json). Real browsers always include text/html on document navigation."),
         "labyrinth-jitter":      ("modifier", "Tarpit timing jitter — Gaussian-distributed random delay (200–3000 ms, σ=500 ms) per chunk instead of fixed LABYRINTH_SLOW_MS. Makes it harder for bots to fingerprint the gateway by timing the delay cadence."),
         "header-canary":         ("modifier", "Header canary injection — plants a per-identity HMAC-signed token in ETag and X-Request-Id response headers. AI frameworks that replay full response headers (LangChain, AutoGen) echo the token back, triggering the canary-echo ban."),
+        # ── 1.6.10 ──
+        "header-order-fp":       ("soft",     "Header-order library fingerprint (+8) — the ordered set of HTTP header names matches a known library pattern (python-requests, curl, Go net/http, httpx). Real browsers send 10+ headers in a consistent browser-defined order."),
+        "ai-ua-ip-mismatch":     ("med",      "AI-crawler UA / IP mismatch (+30) — claimed to be an OpenAI/Perplexity crawler but source IP is not in the vendor's published CIDR range. Strong spoof indicator."),
+        "locale-geo-mismatch":   ("soft",     "Accept-Language / GeoIP mismatch (+10) — primary language tag in Accept-Language is implausible for the GeoIP country (e.g. Accept-Language: ru from a US IP). Fires only for countries with a single dominant language."),
+        "robots-violation":      ("soft",     "robots.txt violation (+5) — declared AI-crawler UA ignored the gateway's robots.txt (Disallow: / for all known AI bots). Fires alongside ua-ai-* to add violation context to the event log."),
+        "h2-fp":                 ("soft",     "HTTP/2 fingerprint fallback (+3) — HTTP/1.1 request from a modern-browser UA behind a TLS proxy. Real browsers always negotiate HTTP/2 on HTTPS; libraries default to HTTP/1.1. Requires H2_FP_ENABLED=1."),
+        "json-canary":           ("modifier", "JSON canary injection — plants a \"_ref\" token in JSON object responses. LLM agents that cache and replay API responses echo the token back, triggering canary-echo detection."),
         "ja4-required-missing":  ("soft", "JA4 expected from trusted peer but absent"),
         "headers-suspicious":    ("soft", "Generic header-shape anomaly"),
         "abuseipdb-high":        ("hard", "AbuseIPDB confidence ≥ 80 — community-vetted bad IP"),
@@ -6128,6 +6553,13 @@ async def scoring_endpoint(request: web.Request):
         "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
         # 1.6.9 — AI Labyrinth
         "tarpit-walk":        "LABYRINTH_ENABLED",
+        # 1.6.10
+        "header-order-fp":    "HEADER_ORDER_FP_ENABLED",
+        "ai-ua-ip-mismatch":  "AI_CRAWLER_VERIFY_ENABLED",
+        "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
+        "robots-violation":   "ROBOTS_MONITOR_ENABLED",
+        "h2-fp":              "H2_FP_ENABLED",
+        "json-canary":        "JSON_CANARY_ENABLED",
         # 1.5.4: 11 new per-detector kill-switches
         "honeypot":           "HONEYPOT_ENABLED",
         "honeypot-silent":    "HONEYPOT_ENABLED",
@@ -6206,6 +6638,13 @@ async def scoring_endpoint(request: web.Request):
         "accept-fp":            {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
         "labyrinth-jitter":     {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
         "header-canary":        {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
+        # 1.6.10
+        "header-order-fp":      {"kind": "in-process",  "cached": 0,    "typical": 0.01,  "p99": 0.05},
+        "ai-ua-ip-mismatch":    {"kind": "in-process",  "cached": 0,    "typical": 0.02,  "p99": 0.1},
+        "locale-geo-mismatch":  {"kind": "mmdb",        "cached": 0.1,  "typical": 0.1,   "p99": 0.5},
+        "robots-violation":     {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "h2-fp":                {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
+        "json-canary":          {"kind": "modifier",    "cached": 0,    "typical": 0,     "p99": 0},
         "headers-suspicious":   {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
         "host-not-allowed":     {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
         "tls-fingerprint":      {"kind": "in-process",  "cached": 0,    "typical": 0.001, "p99": 0.005},
@@ -6248,10 +6687,16 @@ async def scoring_endpoint(request: web.Request):
         "tarpit-walk":          {"kind": "adversary",    "cached": 0,    "typical": 6000,  "p99": 12000},
     }
     SIGNAL_LABELS = {
-        "tarpit-walk":      "AI Labyrinth",
-        "labyrinth-jitter": "AI Labyrinth Jitter",
-        "header-canary":    "Header Canary Inject",
-        "accept-fp":        "Accept Fingerprint",
+        "tarpit-walk":        "AI Labyrinth",
+        "labyrinth-jitter":   "AI Labyrinth Jitter",
+        "header-canary":      "Header Canary Inject",
+        "accept-fp":          "Accept Fingerprint",
+        "header-order-fp":    "Header Order Fingerprint",
+        "ai-ua-ip-mismatch":  "AI Crawler IP Mismatch",
+        "locale-geo-mismatch":"Locale / GeoIP Mismatch",
+        "robots-violation":   "robots.txt Violation",
+        "h2-fp":              "HTTP/2 Fingerprint",
+        "json-canary":        "JSON Canary Inject",
     }
     weights = []
     for sig, w in sorted(RISK_WEIGHTS.items(), key=lambda kv: -kv[1]):
@@ -6266,6 +6711,7 @@ async def scoring_endpoint(request: web.Request):
             "toggle":      SIGNAL_KNOB.get(sig),    # None = always-on
             "cost_ms":     cost,
             "escalate_only": sig in ESCALATE_ONLY_REASONS,   # 1.6.5
+            "activation_order": _signal_runtime_order(sig),      # 1.6.10
         })
     # Modifier-only toggles — no weight, but operator-tunable.
     # Surface them at the bottom of the merged table.
@@ -7521,6 +7967,118 @@ async def external_endpoint(request: web.Request):
     return web.json_response({"integrations": integrations},
                               headers={"Cache-Control": "no-store"})
 
+# 1.6.10 — Integration live health-check.
+# GET /secured/integration-check?name=<name>
+# Returns {ok, latency_ms, detail} without side effects.
+async def integration_check_endpoint(request: web.Request):
+    name = (request.rel_url.query.get("name") or "").strip()
+    import time as _chk_time
+    async def _check() -> dict:
+        if name == "AbuseIPDB":
+            if not ABUSEIPDB_ENABLED:
+                return {"ok": False, "detail": "not configured — ABUSEIPDB_KEY missing"}
+            t0 = _chk_time.monotonic()
+            try:
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as sess:
+                    async with sess.get(
+                        "https://api.abuseipdb.com/api/v2/check",
+                        params={"ipAddress": "127.0.0.1", "maxAgeInDays": "90"},
+                        headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json"},
+                        timeout=_aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        ok = resp.status in (200, 422)   # 422 = valid key, invalid IP ok
+                        return {"ok": ok, "detail": f"HTTP {resp.status}"}
+            except Exception as e:
+                return {"ok": False, "detail": str(e)}
+            finally:
+                pass
+        if name == "CrowdSec":
+            if not CROWDSEC_ENABLED:
+                return {"ok": False, "detail": "not configured — CROWDSEC_LAPI_URL / CROWDSEC_API_KEY missing"}
+            t0 = _chk_time.monotonic()
+            try:
+                import aiohttp as _aiohttp
+                async with _aiohttp.ClientSession() as sess:
+                    async with sess.get(
+                        f"{CROWDSEC_LAPI_URL.rstrip('/')}/v1/heartbeat",
+                        headers={"X-Api-Key": CROWDSEC_API_KEY},
+                        timeout=_aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        ok = resp.status == 200
+                        return {"ok": ok, "detail": f"HTTP {resp.status}"}
+            except Exception as e:
+                return {"ok": False, "detail": str(e)}
+        if name in ("MaxMind GeoLite2 ASN", "MaxMind"):
+            if _asn_reader is None:
+                path = MAXMIND_ASN_DB_PATH
+                exists = os.path.exists(path)
+                return {"ok": False, "detail": f"reader not loaded — DB {'missing' if not exists else 'exists but not initialised'}"}
+            return {"ok": True, "detail": f"reader loaded · {MAXMIND_ASN_DB_PATH}"}
+        if name in ("Cloudflare Turnstile", "Turnstile"):
+            return {"ok": _TURNSTILE_CONFIGURED,
+                    "detail": "credentials present" if _TURNSTILE_CONFIGURED else "TURNSTILE_SITEKEY / TURNSTILE_SECRET not configured"}
+        if name in ("SQLite event store", "SQLite"):
+            exists = os.path.exists(DB_PATH)
+            return {"ok": exists, "detail": f"{DB_PATH} {'found' if exists else 'not found'}"}
+        if name in ("PostgreSQL / TimescaleDB", "PostgreSQL"):
+            if not POSTGRES_DSN:
+                return {"ok": False, "detail": "POSTGRES_DSN not set"}
+            pg = _postgres_load_module()
+            if not pg:
+                return {"ok": False, "detail": "psycopg driver not installed"}
+            t0 = _chk_time.monotonic()
+            try:
+                with pg.connect(POSTGRES_DSN, connect_timeout=5) as conn:
+                    conn.execute("SELECT 1")
+                return {"ok": True, "detail": f"connected in {(_chk_time.monotonic()-t0)*1000:.0f} ms"}
+            except Exception as e:
+                return {"ok": False, "detail": str(e)}
+        return {"ok": None, "detail": f"no health-check defined for '{name}'"}
+
+    t_start = _chk_time.monotonic()
+    result = await _check()
+    result["latency_ms"] = round((_chk_time.monotonic() - t_start) * 1000, 1)
+    return web.json_response(result, headers={"Cache-Control": "no-store"})
+
+# 1.6.10 — Signal activation-order API.
+# GET  /secured/signal-orders  → {orders: {sig: n, …}, gw_id: "…"}
+# POST /secured/signal-orders  body: {signal: "…", order: 1|2|3}
+async def signal_orders_endpoint(request: web.Request):
+    gw_id = _gw_local_id()
+    if request.method == "GET":
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = conn.execute(
+                "SELECT signal, activation_order, updated_ts, updated_by "
+                "FROM signal_orders WHERE gw_id = ?", (gw_id,)
+            ).fetchall()
+            conn.close()
+        except Exception:
+            rows = []
+        orders = {sig: {"order": n, "updated_ts": ts, "updated_by": by}
+                  for sig, n, ts, by in rows}
+        return web.json_response(
+            {"orders": orders, "gw_id": gw_id},
+            headers={"Cache-Control": "no-store"})
+    if request.method == "POST":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False, "error": "invalid JSON"}, status=400)
+        sig   = (body or {}).get("signal", "")
+        order = (body or {}).get("order")
+        if not sig:
+            return web.json_response({"ok": False, "error": "signal required"}, status=400)
+        if order not in (1, 2, 3):
+            return web.json_response({"ok": False, "error": "order must be 1, 2 or 3"}, status=400)
+        actor = request.headers.get("X-Admin-User", "dashboard")
+        _save_signal_order(sig, order, actor)
+        return web.json_response(
+            {"ok": True, "signal": sig, "order": order, "gw_id": gw_id},
+            headers={"Cache-Control": "no-store"})
+    return web.Response(status=405)
+
 async def admin_ips_endpoint(request: web.Request):
     """Admin: read / add / remove entries from the admin-IP allowlist.
 
@@ -8139,8 +8697,10 @@ _HOT_RELOAD_KNOBS = {
     # until the container restarts.
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
     "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
-    # 1.6.5 — escalation threshold (cost gate for expensive detectors)
+    # 1.6.5 — escalation threshold (cost gate for expensive / 3rd-order detectors)
     "ESCALATION_THRESHOLD":   (float, lambda v: 0.0 <= v <= 100000.0),
+    # 1.6.10 — 2nd-order gate threshold (behavioral / enumeration detectors)
+    "SECOND_ORDER_THRESHOLD": (float, lambda v: 0.0 <= v <= 100000.0),
     # 1.6.5 — tarpit (artificial slowdown for soft-band identities)
     "TARPIT_ENABLED":         (_to_bool, None),
     "TARPIT_DELAY_MS":        (int, lambda v: 0 <= v <= 30000),
@@ -8152,6 +8712,15 @@ _HOT_RELOAD_KNOBS = {
     "LABYRINTH_JITTER_ENABLED": (_to_bool, None),
     "ACCEPT_FP_ENABLED":        (_to_bool, None),
     "HEADER_CANARY_ENABLED":    (_to_bool, None),
+    # 1.6.10 — new detection knobs
+    "HEADER_ORDER_FP_ENABLED":   (_to_bool, None),
+    "AI_CRAWLER_VERIFY_ENABLED": (_to_bool, None),
+    "JA4_FAIL_CLOSED":           (_to_bool, None),
+    "JSON_CANARY_ENABLED":       (_to_bool, None),
+    "LOCALE_GEO_CHECK_ENABLED":  (_to_bool, lambda v: (not v) or globals().get("_city_reader") is not None),
+    "ROBOTS_MONITOR_ENABLED":    (_to_bool, None),
+    "H2_FP_ENABLED":             (_to_bool, None),
+    "POW_MIN_SOLVE_MS":          (int, lambda v: 0 <= v <= 5000),
     # 1.6.5 — FingerprintJS BotD client-side detection
     "BOTD_ENABLED":           (_to_bool, None),
     # Logging
@@ -9880,7 +10449,14 @@ async def proxy(request: web.Request):
     # 1.6.1 — managed groups fire FIRST (per-group reason); the legacy
     # blanket `suspicious-body` is the catch-all for anything not covered
     # by a group OR when all groups are toggled off.
-    if body is not None:
+    # 1.6.10 — body scans are 3rd-order (escalate-only): re-read the
+    # current score because protect() has already accumulated any 1st/2nd
+    # order hits for this request. ESCALATION_THRESHOLD=0 disables the gate.
+    _proxy_esc = (ESCALATION_THRESHOLD <= 0) or (
+        _escalation_score(request.get("_track_key") or request.remote or "0.0.0.0")  # nosec B104
+        >= ESCALATION_THRESHOLD
+    )
+    if body is not None and _proxy_esc:
         client_ctype = request.headers.get("Content-Type", "")
         _matched_group = match_body_group(body, client_ctype)
         if _matched_group:
@@ -10077,6 +10653,20 @@ async def proxy(request: web.Request):
                         resp_body = _inject_botd(resp_body,
                                                   request.get("_track_key", ""))
 
+                # 1.6.10 — JSON API canary: inject a "_ref" token into JSON
+                # object responses. LLM agents that cache and replay API
+                # responses will echo the token back, triggering canary-echo.
+                elif ctype.startswith("application/json") and JSON_CANARY_ENABLED and CANARY_ECHO_DETECTION:
+                    try:
+                        _j = json.loads(resp_body)
+                        if isinstance(_j, dict):
+                            canary = _new_canary()
+                            _j["_ref"] = canary
+                            resp_body = json.dumps(_j).encode()
+                            response_headers["X-Trace-Id"] = canary
+                    except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
+                        pass
+
                 return web.Response(status=resp.status, body=resp_body, headers=response_headers)
     except aiohttp.ClientError:
         return web.Response(status=502, text="upstream error\n")
@@ -10133,6 +10723,8 @@ async def on_startup(app):
     db_load_config()
     # 1.5.5 — load DB-persisted integration secrets (env wins when set).
     db_load_secrets()
+    # 1.6.10 — load per-gateway signal activation-order overrides from DB.
+    _load_signal_order_cache()
     db_queue = asyncio.Queue(maxsize=10000)
     db_writer_task = asyncio.create_task(db_writer_loop())
     db_load_admin_ips()
@@ -10199,6 +10791,10 @@ async def on_startup(app):
     await _shared_init()
     # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
     asyncio.create_task(_refresh_ja4_denylist_loop())
+    # 1.6.10 — fetch AI crawler IP ranges (OpenAI gptbot-ranges.txt) at startup;
+    # refreshes every 24 h. No-op when AI_CRAWLER_VERIFY_ENABLED=0.
+    if AI_CRAWLER_VERIFY_ENABLED:
+        asyncio.create_task(_refresh_ai_crawler_ranges())
     # 1.6.7 — mesh-sync of integration secrets (no-op without REDIS_URL).
     global _mesh_sync_task
     _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
@@ -12979,6 +13575,9 @@ def make_app() -> web.Application:
         ("db-switch",         "POST",   db_switch_endpoint,                    True),
         ("maxmind-fetch",     "POST",   maxmind_fetch_endpoint,                True),
         ("external",          "GET",    external_endpoint,                     True),
+        ("integration-check", "GET",    integration_check_endpoint,            True),
+        ("signal-orders",     "GET",    signal_orders_endpoint,                True),
+        ("signal-orders",     "POST",   signal_orders_endpoint,                True),
         ("admin-ips",         "GET",    admin_ips_endpoint,                    True),
         ("admin-ips",         "POST",   admin_ips_endpoint,                    True),
         ("admin-ips",         "PATCH",  admin_ips_endpoint,                    True),
@@ -13058,6 +13657,10 @@ def make_app() -> web.Application:
     async def _live_stub(_r):
         return web.Response(text="ok", content_type="text/plain")
     app.router.add_get(PUBLIC + "/live", _live_stub)
+
+    # 1.6.10 — robots.txt: served before the catch-all proxy so the gateway
+    # controls the content regardless of what the upstream serves at /robots.txt.
+    app.router.add_get("/robots.txt", robots_txt_endpoint)
 
     # Static dashboard assets (botd.bundle.js, escalate.svg, …) —
     # browser-callable (BotD bundle is fetched by regular users).
