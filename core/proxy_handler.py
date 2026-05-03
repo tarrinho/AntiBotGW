@@ -4705,16 +4705,27 @@ async def agents_bucket_detail_endpoint(request: web.Request):
                     "allowed": st.allowed_count, "blocked": st.blocked_count,
                 })
 
+    # all_blocks=1 → include every non-OK reason (for main dashboard).
+    # Default (agents page) → only AGENT_BLOCK_REASONS.
+    all_blocks = request.query.get("all_blocks", "0") == "1"
     detected_set, clean_set = {}, {}
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
-        for r in conn.execute(
-            f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608 — agent_q is "?,?,?" placeholders only
-            f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
-            (t, end, *AGENT_BLOCK_REASONS),
-        ):
+        if all_blocks:
+            block_rows = conn.execute(
+                "SELECT ip, ua, path, reason, status FROM events "
+                "WHERE ts >= ? AND ts < ? AND reason != '' AND reason != 'OK'",
+                (t, end),
+            )
+        else:
+            agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
+            block_rows = conn.execute(
+                f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608
+                f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
+                (t, end, *AGENT_BLOCK_REASONS),
+            )
+        for r in block_rows:
             ip = r["ip"] or "?"
             entry = detected_set.setdefault(ip, {
                 "ip": ip, "ua": r["ua"] or "", "count": 0,
