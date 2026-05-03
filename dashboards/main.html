@@ -1328,7 +1328,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     const t = bucketEntry.t;
     // datasetIndex: 0=total, 1=allowed, 2=blocked, 3=missed
     const focusKind = ['total','allowed','blocked','missed'][datasetIndex] || null;
-    const params = new URLSearchParams({ t, bucket_secs: bucketSecs });
+    const params = new URLSearchParams({ t, bucket_secs: bucketSecs, all_blocks: '1' });
     let d = {}, _fetchErr = null;
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/agents-bucket?' + params, {credentials:'include'});
