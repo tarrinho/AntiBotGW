@@ -6,6 +6,40 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.0] — 2026-05-03
+
+### Changed
+- **Modular refactor (Phase 5–8)** — 13,696-line `proxy.py` monolith split into 30+ modules:
+  `config`, `state`, `helpers`, `identity`, `rate_limit`, `scoring`, `admin/*`, `challenge/*`,
+  `core/*`, `dashboards/*`, `db/*`, `detection/*`, `integrations/*`, `reputation/*`.
+  Public API and all behaviour unchanged; no new features.
+
+### Fixed
+- `Dockerfile` — v1.7.0 module directories were not copied; caused `ModuleNotFoundError` at container startup. Added `COPY` for all 15 module packages and top-level modules.
+- `dashboards/service_metrics.py` — `_postgres_available` NameError at svc-metrics sample time (underscore name excluded by `import *`). Added explicit import.
+- `dashboards/service_metrics.py` — NaN/Inf injection in `end=` query parameter: raw value flowed into `float()` without guard. Added string rejection for all NaN/Inf spellings before cast.
+- `core/proxy_handler.py` — `_global_rps_window`, `_pow_seen`, `_canary_tokens` NameErrors. Added explicit state imports.
+- `proxy.py` — Namespace-aware `tarpit_endpoint` wrapper reads `LABYRINTH_ENABLED` from proxy globals; fixes `test_tarpit_endpoint_disabled_returns_404` in exec_module test context.
+- `proxy.py` — Patches `core.proxy_handler.get_ip` at module level so `TRUSTED_PROXIES_NETS` test patches propagate; fixes `test_xff_spoof_blocked_when_peer_untrusted`.
+- `scoring.py` — `_HOSTILE_REASONS` NameError (underscore excluded by `import *`). Added explicit import from config.
+- `proxy.py` `db_load_config()` — test-isolation regression: removed sys.modules propagation loop from `db/sqlite.py`; wrapper now cascades via `_ProxyModule.__setattr__` only when the calling module is the registered `sys.modules["proxy"]` object, preventing cross-contamination in exec_module test contexts.
+- `db/sqlite.py` `db_load_config()` — `DB_PATH` now resolved as `g.get("DB_PATH") or os.environ.get("DB_PATH") or DB_PATH` so callers that override `DB_PATH` via env (e.g. isolation tests) connect to the correct database.
+- `db/sqlite.py` `db_load_config()` — credential keys (`ABUSEIPDB_KEY` etc.) from the passed globals dict are now synced into `core.proxy_handler` before validators run, so credential-gated validators (e.g. `ABUSEIPDB_ENABLED`'s `lambda v: (not v) or bool(globals().get("ABUSEIPDB_KEY"))`) see the correct state when called in isolation without a prior `db_load_secrets`.
+
+### Tests
+- **309 tests passing**: 179 unit (116 critical + 53 pure + 10 async) + 22 functional + 10 integration + 98 regression. 0 failures.
+- +3 functional tests: `test_db_load_config_accepts_abuseipdb_enabled_with_key`, `test_config_hot_reload_roundtrip`, `test_db_load_config_rejects_invalid_knob` (all pass with above fixes).
+- +4 regression tests (new coverage added to test_v14.py / test_v142.py).
+- Two previously failing functional tests fixed: `test_xff_spoof_blocked_when_peer_untrusted`, `test_tarpit_endpoint_disabled_returns_404`.
+
+### Validation
+- Bandit: 0 High · 0 Critical · 0 Medium.
+- Semgrep: 0 findings (1 NaN-injection fixed before release).
+- Trivy (amd64): 0 Critical / 0 High / 0 Medium CVEs.
+- See `validation/1.7.0.md` for full record.
+
+---
+
 ## [1.6.10] — 2026-05-02
 
 ### Added

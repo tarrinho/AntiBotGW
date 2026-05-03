@@ -122,9 +122,22 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+
+/* column-header tooltip */
+.col-tip-i{font-style:normal;font-weight:400;font-size:9px;
+  vertical-align:super;margin-left:3px;opacity:.4;user-select:none;color:var(--blue)}
+th[data-col-tip]:hover .col-tip-i{opacity:.9}
+#col-tip-pop{position:fixed;z-index:110;background:var(--card);border:1px solid var(--line);
+  border-radius:6px;padding:9px 12px;max-width:280px;font-size:11.5px;line-height:1.55;
+  color:var(--fg);box-shadow:0 6px 24px rgba(0,0,0,.55);display:none;pointer-events:none}
+#col-tip-pop b{color:var(--blue);display:block;margin-bottom:3px;font-size:11px;
+  text-transform:uppercase;letter-spacing:.5px}
 </style></head>
 <body>
 <h1>AppSecGW_1.6.10 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+
+<!-- column-header tooltip -->
+<div id="col-tip-pop"></div>
 
 <!-- 1.5.4 — reason drill-down modal -->
 <div class="modal-back" id="modal-back"></div>
@@ -312,15 +325,18 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
     <h2>Clients (top by request count)</h2>
     <table id="clients-tbl">
       <thead><tr>
-        <th>Identity</th><th>Last IP</th>
-        <th class="sortable" data-sort="requests">Total</th>
-        <th class="sortable" data-sort="allowed">Allowed</th>
-        <th class="sortable" data-sort="blocked">Blocked</th>
-        <th class="sortable" data-sort="score" title="Stealth score — combination of header completeness, asset discipline, path enumeration, behavioural timing, accumulated risk, and 404 rate. Higher = more bot-like.">Score</th>
-        <th class="sortable" data-sort="banned">Banned</th>
-        <th class="sortable" data-sort="tokens">Tokens</th>
-        <th class="sortable" data-sort="last_seen">Last seen</th>
-        <th>Last UA</th><th>Last path</th><th>Action</th>
+        <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Last IP|Most recently observed source IP address for this identity.">Last IP<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="requests" data-col-tip="Total|Total requests seen from this identity (allowed + blocked).">Total<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="allowed" data-col-tip="Allowed|Requests that passed all controls and were proxied to the upstream application.">Allowed<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="blocked" data-col-tip="Blocked|Requests caught by a detector and silently served a decoy response instead of the real upstream.">Blocked<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="score" data-col-tip="Score|0–100 composite stealth-bot likelihood. Combines 6 signals: header completeness, asset ratio, path enumeration, timing regularity, risk score, and 404 rate. Higher = more bot-like.">Score<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="banned" data-col-tip="Banned|Whether this identity is currently banned and the remaining duration.">Banned<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="tokens" data-col-tip="Tokens|Number of Cloudflare Turnstile tokens successfully validated for this identity.">Tokens<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="last_seen" data-col-tip="Last seen|Time elapsed since the last request from this identity.">Last seen<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Last UA|Most recently observed User-Agent string.">Last UA<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Last path|Most recently observed request path.">Last path<span class="col-tip-i">ℹ</span></th>
+        <th>Action</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -1637,6 +1653,24 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
   }
   syncFromConfig();
   setInterval(() => { if (!dragging && (!window._userIsTyping || !window._userIsTyping())) syncFromConfig(); }, 6000);
+})();
+
+// ── column-header tooltips (hover to show, click still sorts) ────────────
+(function(){
+  const tip = document.getElementById('col-tip-pop');
+  function hideTip(){ tip.style.display='none'; }
+  document.querySelectorAll('th[data-col-tip]').forEach(th=>{
+    th.addEventListener('mouseenter', ()=>{
+      const parts = th.dataset.colTip.split('|');
+      tip.innerHTML = `<b>${parts[0]}</b>${parts.slice(1).join('')}`;
+      tip.style.display = 'block';
+      const r = th.getBoundingClientRect();
+      const left = Math.min(r.left, window.innerWidth - tip.offsetWidth - 8);
+      tip.style.left = Math.max(8, left) + 'px';
+      tip.style.top  = (r.bottom + 6) + 'px';
+    });
+    th.addEventListener('mouseleave', hideTip);
+  });
 })();
 
 </script>

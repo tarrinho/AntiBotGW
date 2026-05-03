@@ -1230,9 +1230,10 @@ document.addEventListener('DOMContentLoaded', () => {
                  data-db-target="postgres"
                  data-db-name="${escapeHtml(pgItem ? pgItem.name : 'PostgreSQL / TimescaleDB')}"
                  data-db-active="${pgActive?'1':'0'}" data-db-creds-ok="${pgCredsOk?'1':'0'}"
-                 title="${pgActive?'Active backend':(pgCredsOk?'Switch to PostgreSQL (RESTART REQUIRED)':'Set POSTGRES_DSN first')}">
+                 data-pg-item="${pgItem ? encodeURIComponent(JSON.stringify(pgItem)) : ''}"
+                 title="${pgActive?'Active backend · click for details':(pgCredsOk?'Switch to PostgreSQL (RESTART REQUIRED) · click for details':'Set POSTGRES_DSN first · click for details')}">
               <div class="db-side-title">PostgreSQL</div>
-              <div class="db-side-sub">/ TimescaleDB</div>
+              <div class="db-side-sub">/ TimescaleDB <span style="font-size:9px;opacity:.5;font-style:normal">ℹ</span></div>
               <div style="color:var(--dim);font-size:10px;margin-top:4px;line-height:1.4">${pgPurp}</div>
               ${pgActive ? '<div class="db-side-badge">&#9679; active</div>' : ''}
               ${!pgCredsOk&&!pgActive ? '<div style="font-size:9px;color:var(--dim);margin-top:3px">set POSTGRES_DSN to enable</div>' : ''}
@@ -1525,6 +1526,18 @@ document.addEventListener('DOMContentLoaded', () => {
           };
       };
       box.querySelectorAll('.db-side[data-db-target]').forEach(side => {
+        // Postgres card always opens the details popover on click.
+        // Switching backends is done via the toggle track.
+        if (side.dataset.dbTarget === 'postgres') {
+          side.style.cursor = 'pointer';
+          side.onclick = (ev) => {
+            if (!side.dataset.pgItem) return;
+            try { openPgDetails(JSON.parse(decodeURIComponent(side.dataset.pgItem))); }
+            catch(e) {}
+          };
+          return;
+        }
+        // SQLite side: inactive → opens switch modal
         if (side.dataset.dbActive === '1') return;
         side.onclick = () => openDbModal(side.dataset.dbTarget, side.dataset.dbName);
       });
@@ -2492,6 +2505,192 @@ function __closeModal(){ __MODAL_BACK.style.display='none'; __MODAL.style.displa
 __MODAL_BACK.onclick = __closeModal;
 document.addEventListener('keydown', e => { if (e.key==='Escape') __closeModal(); });
 
+// PostgreSQL / TimescaleDB details popover
+function openPgDetails(it){
+  const tel = it.telemetry || {};
+  const isActive = !!it.enabled;
+  const credsOk  = !!it.credentials_present;
+  const statusColor = isActive ? 'var(--green)' : (credsOk ? 'var(--yellow)' : 'var(--dim)');
+  const statusLabel = isActive ? 'active' : (credsOk ? 'configured · inactive' : 'not configured');
+
+  // Parse the masked endpoint to pre-fill non-sensitive fields.
+  // tel.endpoint format: "postgresql://user:****@host:port/db"
+  let _pre = { host: '', port: '5432', db: '', user: '' };
+  if (tel.endpoint) {
+    try {
+      const u = new URL(tel.endpoint);
+      _pre.host = u.hostname || '';
+      _pre.port = String(u.port || 5432);
+      _pre.db   = (u.pathname || '').replace(/^\//, '');
+      _pre.user = u.username || '';
+    } catch(_){}
+  }
+
+  const statsHtml = (tel.size_bytes != null || tel.events_rows != null) ? `
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
+      ${tel.events_rows != null ? `<div style="background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px">
+        <div style="font-size:10px;color:var(--dim)">events stored</div>
+        <div style="font-size:15px;font-weight:700">${tel.events_rows.toLocaleString()}</div>
+      </div>` : ''}
+      ${tel.size_bytes != null ? `<div style="background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px">
+        <div style="font-size:10px;color:var(--dim)">DB size</div>
+        <div style="font-size:15px;font-weight:700">${(tel.size_bytes/1024/1024).toFixed(1)} MB</div>
+      </div>` : ''}
+    </div>` : '';
+
+  const inp = (id, label, val, type='text', ph='') =>
+    `<div style="display:flex;flex-direction:column;gap:3px">
+      <label style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px">${label}</label>
+      <div style="position:relative">
+        <input id="${id}" type="${type}" value="${escapeHtml(val)}" placeholder="${escapeHtml(ph)}"
+               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
+               style="width:100%;box-sizing:border-box;background:#0d1117;color:var(--fg);
+                      border:1px solid var(--line);padding:6px ${type==='password'?'32px':'8px'} 6px 8px;
+                      border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+        ${type === 'password' ? `<span data-eye="${id}" title="Reveal / hide"
+               style="position:absolute;right:8px;top:50%;transform:translateY(-50%);
+                      cursor:pointer;color:var(--dim);font-size:13px;user-select:none">👁</span>` : ''}
+      </div>
+    </div>`;
+
+  __MODAL.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
+      <div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="font-weight:700;font-size:15px">PostgreSQL / TimescaleDB</span>
+          <span style="background:rgba(0,0,0,.3);color:${statusColor};border:1px solid ${statusColor};
+                       padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700">${statusLabel}</span>
+          <a href="https://docs.timescale.com/" target="_blank" rel="noopener"
+             style="font-size:11px;color:var(--blue);text-decoration:none;border:1px solid var(--blue);
+                    border-radius:3px;padding:1px 7px;white-space:nowrap">Docs ↗</a>
+        </div>
+        <p style="margin:8px 0 0;font-size:12px;color:var(--dim);line-height:1.5">${escapeHtml(it.purpose||'')}</p>
+      </div>
+      <span style="cursor:pointer;color:var(--dim);font-size:18px;line-height:1;flex-shrink:0" id="ext-modal-close">×</span>
+    </div>
+
+    ${statsHtml}
+
+    <div style="border:1px solid var(--line);border-radius:6px;padding:14px;margin-bottom:12px">
+      <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">
+        Connection configuration
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 80px;gap:8px;margin-bottom:8px">
+        ${inp('pg-host', 'Host', _pre.host, 'text', 'appsec-timescaledb')}
+        ${inp('pg-port', 'Port', _pre.port, 'text', '5432')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        ${inp('pg-db',   'Database', _pre.db,   'text', 'appsec')}
+        ${inp('pg-user', 'Username', _pre.user, 'text', 'appsec')}
+      </div>
+      <div style="margin-bottom:10px">
+        ${inp('pg-pass', 'Password', '', 'password', credsOk ? 'leave blank to keep current' : 'required')}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <button id="pg-save-btn" style="font-size:11.5px;padding:5px 14px;background:var(--blue);
+               color:#000;border:1px solid var(--blue);border-radius:4px;cursor:pointer;font-weight:600">
+          Save
+        </button>
+        <button id="pg-test-btn" style="font-size:11.5px;padding:5px 12px;background:#21262d;color:var(--fg);
+               border:1px solid var(--line);border-radius:4px;cursor:pointer">
+          Test connection
+        </button>
+        <span id="pg-test-result" style="font-size:11px;color:var(--dim)"></span>
+      </div>
+      <div id="pg-save-msg" style="margin-top:8px;font-size:11px;min-height:16px"></div>
+    </div>
+
+    <div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;font-size:11.5px;color:var(--dim);line-height:1.6">
+      <div><b style="color:var(--fg)">When it runs:</b> ${escapeHtml(it.trigger||'—')}</div>
+      <div style="margin-top:4px"><b style="color:var(--fg)">Risk impact:</b> ${escapeHtml(it.weight||'—')}</div>
+      <div style="margin-top:4px"><b style="color:var(--fg)">Latency:</b>
+        <span style="color:var(--yellow)">${it.cost_typical_ms||0} ms</span> typical ·
+        <span style="color:var(--red)">${it.cost_p99_ms||0} ms</span> p99
+      </div>
+    </div>`;
+
+  document.getElementById('ext-modal-close').onclick = __closeModal;
+
+  // Reveal / hide password toggle
+  __MODAL.querySelectorAll('[data-eye]').forEach(eye => {
+    const input = document.getElementById(eye.dataset.eye);
+    eye.onclick = () => {
+      input.type = input.type === 'password' ? 'text' : 'password';
+      eye.style.opacity = input.type === 'text' ? '1' : '.45';
+    };
+    eye.style.opacity = '.45';
+  });
+
+  // Build DSN from fields and POST to secrets endpoint
+  document.getElementById('pg-save-btn').onclick = async function(){
+    const host = document.getElementById('pg-host').value.trim();
+    const port = document.getElementById('pg-port').value.trim() || '5432';
+    const db   = document.getElementById('pg-db').value.trim();
+    const user = document.getElementById('pg-user').value.trim();
+    const pass = document.getElementById('pg-pass').value;
+    const msg  = document.getElementById('pg-save-msg');
+    if (!host || !db || !user) {
+      msg.style.color = 'var(--red)'; msg.textContent = 'Host, database and username are required.'; return;
+    }
+    // If password is blank and creds already exist, send sentinel so backend keeps current password.
+    // If no creds exist yet, password is required.
+    if (!pass && !credsOk) {
+      msg.style.color = 'var(--red)'; msg.textContent = 'Password is required for a new connection.'; return;
+    }
+    const passEnc = pass ? encodeURIComponent(pass) : '****';
+    const dsn = `postgresql://${encodeURIComponent(user)}:${passEnc}@${host}:${port}/${db}`;
+    this.disabled = true; msg.style.color = 'var(--dim)'; msg.textContent = 'Saving…';
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/secrets'),
+        { method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ POSTGRES_DSN: dsn }), credentials: 'include' });
+      const d = await r.json();
+      if (r.ok && d.ok) {
+        msg.style.color = 'var(--green)';
+        msg.textContent = '✓ Saved. Restart the container to apply.';
+      } else {
+        msg.style.color = 'var(--red)';
+        msg.textContent = '✗ ' + (d.error || d.detail || 'Save failed');
+      }
+    } catch(e) {
+      msg.style.color = 'var(--red)'; msg.textContent = '✗ Network error';
+    }
+    this.disabled = false;
+  };
+
+  document.getElementById('pg-test-btn').onclick = async function(){
+    const host = document.getElementById('pg-host').value.trim();
+    const port = document.getElementById('pg-port').value.trim() || '5432';
+    const db   = document.getElementById('pg-db').value.trim();
+    const user = document.getElementById('pg-user').value.trim();
+    const pass = document.getElementById('pg-pass').value;
+    const res  = document.getElementById('pg-test-result');
+    this.disabled = true; res.style.color = 'var(--dim)'; res.textContent = 'checking…';
+    try {
+      // Build a test DSN from the form fields; omit dsn param to test with current stored creds.
+      let dsnParam = '';
+      if (host && db && user && pass) {
+        const dsnTest = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`;
+        dsnParam = '&dsn=' + encodeURIComponent(dsnTest);
+      }
+      const r = await fetch(url('/antibot-appsec-gateway/secured/integration-check')
+        + '?name=' + encodeURIComponent('PostgreSQL / TimescaleDB') + dsnParam,
+        {credentials:'include'});
+      const d = await r.json();
+      res.style.color = d.ok ? 'var(--green)' : 'var(--red)';
+      res.textContent = (d.ok ? '✓ reachable' : '✗ unreachable')
+        + (d.latency_ms ? ` · ${d.latency_ms} ms` : '')
+        + (d.detail ? ` — ${d.detail}` : '');
+    } catch(e) {
+      res.style.color = 'var(--red)'; res.textContent = '✗ network error';
+    }
+    this.disabled = false;
+  };
+
+  __MODAL_BACK.style.display = 'block';
+  __MODAL.style.display = 'block';
+}
+
 // 1.5.5 — runtime secret editor.  Opens a tiny popover anchored near the
 // clicked chip, accepts a new value, POSTs to /antibot-appsec-gateway/secured/secrets, never shows
 // the current value.  Includes a "Clear" button to revert to env.
@@ -2499,6 +2698,8 @@ function openSecretEditor(name, anchor){
   // Remove any prior popover so only one is open at a time.
   document.querySelectorAll('.secret-pop').forEach(el => el.remove());
   const SECRET_INPUT_TYPE = name === 'CROWDSEC_LAPI_URL' ? 'text' : 'password';
+  const SECRET_INPUT_TYPE_OVERRIDE = { "POSTGRES_DSN": "text" }[name];
+  const _sit = SECRET_INPUT_TYPE_OVERRIDE || SECRET_INPUT_TYPE;
   const SECRET_PLACEHOLDER = {
     "TURNSTILE_SITEKEY":   "0x4AAAAAA…",
     "TURNSTILE_SECRET":    "0x4AAAAAA…",
@@ -2506,6 +2707,7 @@ function openSecretEditor(name, anchor){
     "CROWDSEC_LAPI_URL":   "http://crowdsec:8080",
     "CROWDSEC_LAPI_KEY":   "CrowdSec bouncer key",
     "MAXMIND_LICENSE_KEY": "MaxMind license key",
+    "POSTGRES_DSN":        "postgresql://user:password@host:5432/dbname",
   }[name] || "new value";
 
   const pop = document.createElement('div');
@@ -2756,7 +2958,7 @@ function openIntegrationDetails(it){
     btn.disabled = true; res.style.color = 'var(--dim)'; res.textContent = 'checking…';
     try {
       const r = await fetch(url('/antibot-appsec-gateway/secured/integration-check')
-        + '&name=' + encodeURIComponent(it.name), {credentials:'include'});
+        + '?name=' + encodeURIComponent(it.name), {credentials:'include'});
       const d = await r.json();
       res.style.color = d.ok ? 'var(--green)' : (d.ok === false ? 'var(--red)' : 'var(--yellow)');
       res.textContent = (d.ok ? '✓ reachable' : (d.ok === false ? '✗ unreachable' : '? unknown'))
