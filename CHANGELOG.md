@@ -6,6 +6,32 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.3] — 2026-05-04
+
+### Added
+- **Path-sweep detector** (`PATH_SWEEP_ENABLED=1`, default on) — new module `detection/path_sweep.py`. Fires when an identity visits ≥ `PATH_SWEEP_THRESHOLD` (default 40) distinct non-static paths within a `PATH_SWEEP_WINDOW_SECS` (default 300 s) sliding window. Unlike `behavioral.py` (skipped for cookied sessions), this detector runs for **all** identities including valid-cookied ones — specifically to catch the warm-up bypass technique (AI agent acquires valid cookie with benign traffic, then sweeps paths in fresh sessions). Static assets excluded via extension list; admin namespace excluded via `ADMIN_NAMESPACE` prefix check. Recorded inline within the existing `state_lock` hold to avoid re-entrant deadlock. Risk signal: `path-sweep` contributes to ban logic via `update_risk_and_maybe_ban`.
+- **New config knobs** (all hot-reloadable): `PATH_SWEEP_ENABLED`, `PATH_SWEEP_WINDOW_SECS`, `PATH_SWEEP_THRESHOLD`.
+- **`IpState.path_sweep_times`** — `deque(maxlen=500)` sliding window of `(monotonic_ts, path)` pairs added to `state.py`.
+- **`path-sweep` in signal cost table** — `kind: state`, `typical: 0.05 ms`, `p99: 0.2 ms` (O(n) deque prune + set comprehension, no I/O).
+- **`path-sweep` in toggle table** — maps `PATH_SWEEP_ENABLED`; visible in Settings dashboard.
+- **Geo "No geo" card** — `dashboards/geo.html` now shows a "No geo" summary card counting events with no MaxMind coordinates (private/localhost IPs — Docker, LAN). Surfaced via new `skipped_no_geo` field in `geo_data_endpoint` response.
+
+### Fixed
+- **Admin-path bypass scope too broad** — Global RPS limit and Method allowlist were exempt for ALL requests to admin-namespace paths regardless of source IP. Fixed: exemption now only applies when the request comes from an admin IP (`_admin_ip_allowed(request)` check added). Non-admin IPs hitting admin paths are now subject to rate limiting and method filtering.
+- **`geo_data_endpoint` stale `LIMIT 200000`** — `ORDER BY ts ASC LIMIT 200000` kept the oldest 200k events, discarding newer ones when volume exceeded the cap. Removed; query now returns all events in the window.
+- **`detection/path_sweep.py` added to `copy-to-github.sh` manifest** — previously the new module would have been omitted from GitHub pushes.
+
+### Tests
+- **9 new unit tests** in `tests/test_path_sweep.py`: static-asset filtering, admin namespace exclusion (exact + subpath), threshold fire/no-fire, repeated-path deduplication, window expiry pruning, safe initial state.
+- **Totals**: 214 unit + 22 functional + 23 integration + 76 regression + 9 path_sweep = **344 tests**; all pass individually.
+
+### Validation
+- Bandit: 0 High · 0 Critical · 12 Low (all B110, pre-existing FP).
+- Semgrep: 0 findings on `detection/path_sweep.py`.
+- Trivy: unchanged (no new dependencies).
+
+---
+
 ## [1.7.2] — 2026-05-04
 
 ### Added
