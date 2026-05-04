@@ -1,0 +1,10 @@
+exceptions:
+  - id: docker-no-latest-tag
+    files:
+      - Dockerfile
+    reason: >
+      Chainguard python images (cgr.dev/chainguard/python) only publish :latest
+      and :latest-dev as public tags — no version-specific tags (3.x, 3.x-dev)
+      are available. Both FROM lines are pinned to immutable @sha256 digests for
+      full reproducibility; the :latest tag is effectively an alias required by
+      the registry and does not represent a floating reference.

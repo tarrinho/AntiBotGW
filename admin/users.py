@@ -6,12 +6,12 @@ from config import *   # noqa: F401,F403
 from config import _DASHBOARDS_DIR  # noqa: F401 — underscore not exported by *
 from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip  # noqa: F401
-from admin.auth import _internal_authed, _request_username  # noqa: F401
+from admin.auth import _internal_authed, _request_username, _request_role, _role_denied  # noqa: F401
 from aiohttp import web
 
 # ── 1.6.7: dashboard user accounts ──────────────────────────────────
 _USERNAME_RE  = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
-_USER_ROLES   = ("admin",)            # extension point: viewer/editor
+_USER_ROLES   = ("admin", "maintainer", "viewer")
 _USER_STATUS  = ("active", "disabled")
 _SESSION_COOKIE = "agw_session"
 _SESSION_TTL  = 12 * 3600              # 12h sliding session
@@ -632,6 +632,8 @@ async def users_list_endpoint(request: web.Request):
     password material). Each row gains `online` and `last_seen_ts` from
     the in-memory active-session map (bumped on every authenticated
     request)."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     rows = _user_load_all()
     n = _t.time()
     for r in rows:
@@ -648,6 +650,8 @@ async def users_list_endpoint(request: web.Request):
 
 async def users_create_endpoint(request: web.Request):
     """POST <NS>/secured/admin/users — body: {username, password, role}."""
+    if denied := _role_denied(request, "admin"):
+        return denied
     try:
         body = await asyncio.wait_for(request.content.read(8 * 1024),
                                        timeout=BODY_TIMEOUT)
@@ -697,6 +701,10 @@ async def users_get_endpoint(request: web.Request):
     if not ok:
         return web.json_response({"error": msg}, status=400,
                                   headers={"Cache-Control": "no-store"})
+    caller_role = _request_role(request)
+    if caller_role not in ("admin", "maintainer") and _request_username(request) != username:
+        return web.json_response({"error": "forbidden"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
     u = _user_load(username)
     if not u:
         return web.json_response({"error": "not found"}, status=404,
@@ -708,12 +716,24 @@ async def users_get_endpoint(request: web.Request):
 
 async def users_update_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/users/{username} — body may include
-    `password`, `status`, `role`."""
+    `password`, `status`, `role`. Viewers may only change their own password."""
     username = request.match_info.get("username", "").strip().lower()
     ok, msg = _user_validate_username(username)
     if not ok:
         return web.json_response({"error": msg}, status=400,
                                   headers={"Cache-Control": "no-store"})
+    caller = _request_username(request)
+    caller_role = _request_role(request)
+    is_self = (caller == username)
+    # Viewers: only own-password change allowed.
+    if caller_role == "viewer":
+        if not is_self:
+            return web.json_response({"error": "forbidden"}, status=403,
+                                      headers={"Cache-Control": "no-store"})
+    # Non-self updates require admin or maintainer.
+    elif not is_self:
+        if denied := _role_denied(request, "admin", "maintainer"):
+            return denied
     cur = _user_load(username)
     if cur is None:
         return web.json_response({"error": "not found"}, status=404,
@@ -732,21 +752,36 @@ async def users_update_endpoint(request: web.Request):
         if len(pw) < 8:
             return web.json_response({"error": "password must be at least 8 chars"},
                                       status=400, headers={"Cache-Control": "no-store"})
+        if is_self:
+            cur_pw = data.get("current_password") or ""
+            if not cur_pw:
+                return web.json_response({"error": "current_password required"},
+                                          status=400, headers={"Cache-Control": "no-store"})
+            if not _password_verify(cur_pw, cur.get("password_hash", "")):
+                return web.json_response({"error": "current password is incorrect"},
+                                          status=403, headers={"Cache-Control": "no-store"})
         fields["password_hash"] = _password_hash(pw)
         audit_fields["password_changed"] = True
     if "role" in data:
+        if caller_role == "viewer":
+            return web.json_response({"error": "forbidden: viewers cannot change roles"},
+                                      status=403, headers={"Cache-Control": "no-store"})
         if data["role"] not in _USER_ROLES:
             return web.json_response({"error": "invalid role"}, status=400,
                                       headers={"Cache-Control": "no-store"})
         fields["role"] = data["role"]; audit_fields["role"] = data["role"]
     if "status" in data:
+        if caller_role == "viewer":
+            return web.json_response({"error": "forbidden: viewers cannot change status"},
+                                      status=403, headers={"Cache-Control": "no-store"})
         if data["status"] not in _USER_STATUS:
             return web.json_response({"error": "invalid status"}, status=400,
                                       headers={"Cache-Control": "no-store"})
         # Refuse to disable the LAST active admin — would lock everyone out.
         if data["status"] != "active":
-            actives = [u for u in _user_load_all() if u["status"] == "active"]
-            if len(actives) <= 1 and any(u["username"] == username for u in actives):
+            active_admins = [u for u in _user_load_all()
+                             if u["status"] == "active" and u.get("role") == "admin"]
+            if len(active_admins) <= 1 and any(u["username"] == username for u in active_admins):
                 return web.json_response(
                     {"error": "cannot disable the last active admin"},
                     status=400, headers={"Cache-Control": "no-store"})
@@ -776,6 +811,10 @@ async def user_sessions_list_endpoint(request: web.Request):
     ok, msg = _user_validate_username(username)
     if not ok:
         return web.json_response({"error": msg}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    caller_role = _request_role(request)
+    if caller_role not in ("admin", "maintainer") and _request_username(request) != username:
+        return web.json_response({"error": "forbidden"}, status=403,
                                   headers={"Cache-Control": "no-store"})
     if _user_load(username) is None:
         return web.json_response({"error": "not found"}, status=404,
@@ -821,6 +860,10 @@ async def user_session_revoke_endpoint(request: web.Request):
     if not ok:
         return web.json_response({"error": msg}, status=400,
                                   headers={"Cache-Control": "no-store"})
+    caller_role = _request_role(request)
+    if caller_role not in ("admin", "maintainer") and _request_username(request) != username:
+        return web.json_response({"error": "forbidden"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
     if not _SID_RE.match(sid):
         return web.json_response({"error": "invalid sid"}, status=400,
                                   headers={"Cache-Control": "no-store"})
@@ -842,6 +885,8 @@ async def user_session_revoke_endpoint(request: web.Request):
 
 async def users_delete_endpoint(request: web.Request):
     """DELETE <NS>/secured/admin/users/{username}"""
+    if denied := _role_denied(request, "admin"):
+        return denied
     username = request.match_info.get("username", "").strip().lower()
     ok, msg = _user_validate_username(username)
     if not ok:
@@ -852,8 +897,9 @@ async def users_delete_endpoint(request: web.Request):
         return web.json_response({"error": "not found"}, status=404,
                                   headers={"Cache-Control": "no-store"})
     # Refuse to delete the last active admin.
-    actives = [u for u in _user_load_all() if u["status"] == "active"]
-    if len(actives) <= 1 and any(u["username"] == username for u in actives):
+    active_admins = [u for u in _user_load_all()
+                     if u["status"] == "active" and u.get("role") == "admin"]
+    if len(active_admins) <= 1 and any(u["username"] == username for u in active_admins):
         return web.json_response(
             {"error": "cannot delete the last active admin"},
             status=400, headers={"Cache-Control": "no-store"})

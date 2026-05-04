@@ -62,7 +62,7 @@ from config import (  # noqa: F401 — more underscore config constants
 )
 from dashboards.agents import _stealth_score, AGENT_BLOCK_REASONS  # noqa: F401
 # Underscore-prefixed functions not exported by import * — explicit imports required
-from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed  # noqa: F401
+from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied  # noqa: F401
 from integrations.ja4 import _request_ja4, _tls_fingerprint_blocked  # noqa: F401
 from integrations.redis import _shared_ban_set  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
@@ -1330,6 +1330,8 @@ async def signal_orders_endpoint(request: web.Request):
             {"orders": orders, "gw_id": gw_id},
             headers={"Cache-Control": "no-store"})
     if request.method == "POST":
+        if denied := _role_denied(request, "admin", "maintainer"):
+            return denied
         try:
             body = await request.json()
         except Exception:
@@ -1369,6 +1371,8 @@ async def admin_ips_endpoint(request: web.Request):
             {"entries": list(ADMIN_ALLOWED_ENTRIES),
              "env_seed": ADMIN_ENV_SEED},
             headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     if request.method == "POST":
         try:
             body = await request.json()
@@ -1416,6 +1420,8 @@ async def ban_endpoint(request: web.Request):
       &secs=<int>      — ban duration (default HOSTILE_BAN_SECS, max 31 d)
       &reason=<text>   — recorded in audit log + risk-score reasons
     """
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     target_id = request.query.get("id")
     target_ip = request.query.get("ip")
     try:
@@ -1510,6 +1516,8 @@ async def secrets_endpoint(request: web.Request):
              }},
             headers={"Cache-Control": "no-store"})
 
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     if request.method == "DELETE":
         public_name = request.query.get("name", "")
         if public_name not in _SECRET_KEYS:
@@ -1619,6 +1627,8 @@ async def rotate_keys_endpoint(request: web.Request):
                                   in flight invalidated).
       ?scope=all                — rotate both.
     """
+    if denied := _role_denied(request, "admin"):
+        return denied
     global SESSION_KEY, POW_HMAC_KEY
     scope = request.query.get("scope", "session").lower()
     rotated = []
@@ -1882,6 +1892,8 @@ async def config_endpoint(request: web.Request):
     if request.method != "POST":
         return web.json_response({"error": "method not allowed"}, status=405,
                                   headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     try:
         raw = await asyncio.wait_for(request.content.read(64 * 1024),
                                       timeout=BODY_TIMEOUT)
@@ -2995,6 +3007,8 @@ async def db_switch_endpoint(request: web.Request):
       • SQLite events table is NOT migrated to Postgres or vice versa
       • bans, config_kv, admin_ips persist (they live in SQLite always)
     """
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     target = (request.query.get("target", "") or "").strip().lower()
     if target not in ("sqlite", "postgres"):
         return web.json_response(
@@ -3693,6 +3707,8 @@ async def unban_endpoint(request: web.Request):
       ?all=1 via GET is rejected — use POST {"all":true} for destructive op.
     """
     if request.method == "POST":
+        if denied := _role_denied(request, "admin", "maintainer"):
+            return denied
         try:
             data = await request.json()
         except Exception:
@@ -4086,6 +4102,8 @@ async def maxmind_fetch_endpoint(request: web.Request):
     needed); (2) if MAXMIND_LICENSE_KEY is set, also runs a fresh fetch
     from MaxMind. Used by the GeoMap "Refresh DB" button so operators
     never have to drop into a shell."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
     try:
         # Step 1 — seed from image always works offline.

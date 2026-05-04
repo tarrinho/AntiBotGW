@@ -77,6 +77,28 @@ def _request_username(request) -> str:
     return u or "unknown"
 
 
+def _request_role(request) -> str:
+    """Return the role of the session user, or 'admin' for key-only auth."""
+    from admin.users import _user_load  # lazy: avoid circular import at module load
+    u = request.get("_session_user") if hasattr(request, "get") else None
+    if not u:
+        return "admin"
+    user = _user_load(u)
+    return (user or {}).get("role") or "admin"
+
+
+def _role_denied(request, *allowed_roles: str):
+    """Return a 403 response if the caller's role is not in allowed_roles,
+    else return None so callers can use `if denied := _role_denied(...)`."""
+    from aiohttp import web as _web
+    role = _request_role(request)
+    if role in allowed_roles:
+        return None
+    return _web.json_response(
+        {"error": "forbidden", "role": role, "required": list(allowed_roles)},
+        status=403, headers={"Cache-Control": "no-store"})
+
+
 def _admin_ip_allowed(request) -> bool:
     """Allowed iff source IP matches one of the configured networks. Returns
     True when no allowlist is configured (open by default — admin key still

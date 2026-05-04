@@ -5,14 +5,16 @@ from config import *   # noqa: F401,F403
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog  # noqa: F401
-from admin.auth import _internal_authed, ADMIN_ALLOWED_ENTRIES  # noqa: F401
+from admin.auth import _internal_authed, ADMIN_ALLOWED_ENTRIES, _role_denied  # noqa: F401
 from aiohttp import web
 
 SETTINGS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "settings.html").read_text(encoding="utf-8")
 
 
 async def settings_dashboard_endpoint(request: web.Request):
-    """GET /__settings — render the Settings dashboard (admin-IP gated)."""
+    """GET /__settings — render the Settings dashboard (admin-only)."""
+    if denied := _role_denied(request, "admin"):
+        return denied
     body = SETTINGS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
@@ -21,6 +23,14 @@ async def settings_dashboard_endpoint(request: web.Request):
             "X-Frame-Options": "DENY",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
         })
 
 
@@ -91,9 +101,9 @@ def _settings_make_zip(xml_bytes: bytes) -> bytes:
 
 async def settings_export_endpoint(request: web.Request):
     """GET /__settings-export?include_secrets=0|1 — return a ZIP archive
-    containing `appsecgw-config.xml`. Admin-IP + admin-key gated like
-    every other /__* route (the global `protect` middleware enforces
-    auth before this handler runs)."""
+    containing `appsecgw-config.xml`. Admin-only."""
+    if denied := _role_denied(request, "admin"):
+        return denied
     include_secrets = (request.query.get("include_secrets") or "0").lower() in ("1", "true", "yes")
     try:
         xml_bytes = _settings_build_xml(include_secrets=include_secrets)
@@ -135,7 +145,9 @@ async def settings_import_endpoint(request: web.Request):
     Validation runs through the same parser/validator pair used by
     POST /__config so an import can never sidestep bounds-checking. A
     single malformed knob does NOT abort the whole import — it lands
-    in `errors[]` and the rest are still applied."""
+    in `errors[]` and the rest are still applied. Admin-only."""
+    if denied := _role_denied(request, "admin"):
+        return denied
     import io as _io
     import zipfile as _zf
     import xml.etree.ElementTree as _ET

@@ -5,7 +5,7 @@ import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
-from admin.auth import _internal_authed, _request_username  # noqa: F401
+from admin.auth import _internal_authed, _request_username, _role_denied  # noqa: F401
 from integrations.redis import _redis  # noqa: F401 — lazy singleton, may be None
 from aiohttp import web
 
@@ -286,6 +286,8 @@ async def gw_registry_get_endpoint(request: web.Request):
 
 async def gw_registry_create_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry"""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     try:
         body = await asyncio.wait_for(request.content.read(64 * 1024),
                                        timeout=BODY_TIMEOUT)
@@ -371,6 +373,8 @@ async def gw_registry_create_endpoint(request: web.Request):
 
 async def gw_registry_update_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}"""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     ok, msg = _gw_validate_id(gw_id)
     if not ok:
@@ -429,6 +433,8 @@ async def gw_registry_update_endpoint(request: web.Request):
 
 async def gw_registry_can_distribute_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}/can-distribute"""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -500,6 +506,8 @@ async def gw_registry_auto_apply_endpoint(request: web.Request):
 
 async def gw_registry_rotate_key_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/{gw_id}/rotate-key"""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -537,6 +545,8 @@ async def gw_registry_rotate_key_endpoint(request: web.Request):
 
 async def gw_registry_delete_endpoint(request: web.Request):
     """DELETE <NS>/secured/admin/gw-registry/{gw_id}"""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -874,6 +884,8 @@ async def mesh_sync_state_endpoint(request: web.Request):
 
 async def mesh_sync_toggle_endpoint(request: web.Request):
     """POST <NS>/secured/admin/mesh-sync/{key}/toggle — body {enabled}."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     key = request.match_info.get("key", "").strip()
     if key not in _MESH_SYNC_ELIGIBLE_KEYS:
         return web.json_response({"error": "key not eligible for mesh sync"},
@@ -897,6 +909,8 @@ async def mesh_sync_toggle_endpoint(request: web.Request):
 async def mesh_sync_confirm_endpoint(request: web.Request):
     """POST <NS>/secured/admin/mesh-sync/pending/{id}/confirm — apply
     a pending offer's value to the live integration."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     try:
         pid = int(request.match_info.get("id", "0"))
     except ValueError:
@@ -944,6 +958,8 @@ async def mesh_sync_confirm_endpoint(request: web.Request):
 
 async def mesh_sync_reject_endpoint(request: web.Request):
     """POST <NS>/secured/admin/mesh-sync/pending/{id}/reject"""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     try:
         pid = int(request.match_info.get("id", "0"))
     except ValueError:
