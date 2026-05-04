@@ -181,8 +181,9 @@ def test_v8_block_does_not_reveal_gateway(proxy_module):
                 r = await client.get("/api/v1/data",
                                      headers=_browser_headers({
                                          "Accept": "application/json"}))
-                # Stealth response = 200 OK from silent-decoy, not 401.
-                assert r.status == 200
+                # Stealth response = silent-decoy, not 401. API paths get 404
+                # (route-aware decoy); HTML paths get 200. Both hide the gateway.
+                assert r.status in (200, 404)
                 body = (await r.read()).lower()
                 assert b"challenge required" not in body
                 assert b"chal cookie" not in body
@@ -329,8 +330,8 @@ def test_host_mismatch_silent_decoys_even_without_cookie(proxy_module):
                 hdrs = _browser_headers({"Host": "evil.example.com",
                                          "Accept": "application/json"})
                 r = await client.get("/api/v1/x", headers=hdrs)
-                # Silent decoy = 200 OK. Body must not be the JSON 401 hint.
-                assert r.status == 200
+                # Silent decoy — not 401/403. API paths get 404 (route-aware decoy).
+                assert r.status in (200, 404)
                 body = (await r.read()).lower()
                 assert b"challenge required" not in body
     _run(go())

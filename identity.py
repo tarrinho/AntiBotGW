@@ -186,5 +186,15 @@ async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
             await _proxy.update_risk_and_maybe_ban(fp_h, "session-churn", ip)
         except (ImportError, AttributeError):
             pass
+        # Accumulate JA4-level ban signal: a bot rotating sessions while
+        # keeping the same TLS fingerprint (JA4) should be auto-denied even
+        # if each individual session never crosses RISK_BAN_THRESHOLD.
+        if ja4:
+            try:
+                from integrations.ja4 import _observe_ja4_ban
+                import asyncio as _asyncio
+                _asyncio.create_task(_observe_ja4_ban(ja4))
+            except Exception:
+                pass
         return True
     return False

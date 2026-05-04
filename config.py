@@ -781,8 +781,8 @@ SECURITY_HEADERS: dict = {
 }
 
 BODY_TIMEOUT           = float(os.environ.get("BODY_TIMEOUT",           "30"))
-SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S",   "60"))
-SESSION_CHURN_MAX      = int(os.environ.get("SESSION_CHURN_MAX",        "6"))
+SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S",   "120"))
+SESSION_CHURN_MAX      = int(os.environ.get("SESSION_CHURN_MAX",        "3"))
 
 # ── Anubis-mode PoW boost (1.5.4+) ──────────────────────────────────────────
 ANUBIS_ENABLED          = os.environ.get("ANUBIS_ENABLED", "0") in ("1", "true", "yes")
