@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.7.1"
+GW_VERSION = "AppSecGW_1.7.2"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -554,6 +554,8 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/automation-report",
     "/assets/botd.bundle.js",
     "/tarpit/",
+    "/fp-report",
+    "/sw.js",
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout")
 
@@ -637,6 +639,13 @@ RISK_WEIGHTS = {
     "webdriver-detected":    30,
     "coordinated-probe":     25,
     "direct-api-probe":      15,
+    # 1.7.2 — new signals
+    "cookie-ghost":          20,
+    "lifecycle-miss":        12,
+    "referer-ghost":         10,
+    "impossible-travel":     35,
+    "soft-renderer":         25,
+    "webgl-missing":         15,
 }
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
@@ -653,6 +662,28 @@ COORDINATED_ATTACK_THRESHOLD = int(os.environ.get("COORDINATED_ATTACK_THRESHOLD"
 # 1.7.1 — User journey: flag identities that probe API directly without HTML load
 JOURNEY_CHECK_ENABLED        = os.environ.get("JOURNEY_CHECK_ENABLED",      "1") in ("1", "true", "yes")
 _BOTD_REPORT_TTL = 300  # report valid for 5 minutes after the page loads
+
+# ── 1.7.2 — cookie lifecycle + ghost detection ───────────────────────────────
+COOKIE_GHOST_ENABLED        = os.environ.get("COOKIE_GHOST_ENABLED",        "1") in ("1", "true", "yes")
+COOKIE_LIFECYCLE_ENABLED    = os.environ.get("COOKIE_LIFECYCLE_ENABLED",    "1") in ("1", "true", "yes")
+COOKIE_GHOST_MIN_REQUESTS   = int(os.environ.get("COOKIE_GHOST_MIN_REQUESTS",   "3"))
+COOKIE_GHOST_MISS_THRESHOLD = int(os.environ.get("COOKIE_GHOST_MISS_THRESHOLD", "3"))
+
+# ── 1.7.2 — referrer chain integrity ────────────────────────────────────────
+REFERER_CHAIN_ENABLED = os.environ.get("REFERER_CHAIN_ENABLED", "1") in ("1", "true", "yes")
+
+# ── 1.7.2 — impossible travel ────────────────────────────────────────────────
+IMPOSSIBLE_TRAVEL_ENABLED     = os.environ.get("IMPOSSIBLE_TRAVEL_ENABLED",     "1") in ("1", "true", "yes")
+IMPOSSIBLE_TRAVEL_WINDOW_SECS = int(os.environ.get("IMPOSSIBLE_TRAVEL_WINDOW_SECS", "1800"))
+
+# ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
+FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")
+
+# ── 1.7.2 — service worker challenge ────────────────────────────────────────
+SW_CHALLENGE_ENABLED = os.environ.get("SW_CHALLENGE_ENABLED", "0") in ("1", "true", "yes")
+
+# ── 1.7.2 — PoW embedded in JS challenge when risk > threshold ───────────────
+POW_CHAL_THRESHOLD = float(os.environ.get("POW_CHAL_THRESHOLD", "30.0"))
 
 TARPIT_ENABLED = os.environ.get("TARPIT_ENABLED", "0") in ("1", "true", "yes")
 TARPIT_DELAY_MS = int(os.environ.get("TARPIT_DELAY_MS", "1500"))

@@ -53,6 +53,16 @@ class IpState:
     last_allowed_paths: deque = field(default_factory=lambda: deque(maxlen=10))
     # 1.7.1 — journey sequence for direct-API-probe detection
     path_sequence: deque = field(default_factory=lambda: deque(maxlen=5))
+    # 1.7.2 — cookie lifecycle tracking
+    gateway_cookies_set: int = 0
+    cookie_ghost_misses: int = 0
+    # 1.7.2 — HTML paths served to this identity (referer-ghost check)
+    served_html_paths: set = field(default_factory=set)
+    # 1.7.2 — impossible travel
+    last_country: str = ""
+    last_country_ts: float = 0.0
+    # 1.7.2 — service worker enrichment
+    sw_seen: bool = False
 
 
 # ── Primary identity state ─────────────────────────────────────────────────
@@ -108,6 +118,9 @@ _signal_order_cache: dict[str, int] = {}
 
 # ── PoW seen-pairs: {(token, solution): expires_at_epoch} ─────────────────
 _pow_seen: Dict[tuple, float] = {}
+
+# ── 1.7.2 — canvas fingerprint store: identity → {canvas, renderer, vendor, ts}
+_fp_canvas_store: dict = {}
 
 # ── AI-agent canary tokens: token -> expiry_epoch ─────────────────────────
 _canary_tokens: dict = {}

@@ -90,7 +90,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.1 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.2 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -124,7 +124,10 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         <option value="fp-suspect">FP suspect</option>
         <option value="normal">normal</option>
       </select>
+      <button id="prev" class="ctrl" title="Scroll back one window">← prev</button>
+      <button id="next" class="ctrl" disabled title="Scroll forward one window">next →</button>
       <button id="now"  class="ctrl ctrl-now">now</button>
+      <span id="window-label" class="dim" style="font-size:10px;min-width:130px"></span>
       <button id="refresh" class="ctrl">refresh</button>
     </div>
   </div>
@@ -144,8 +147,9 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
       <div class="scrubber" id="scrubber">
         <button class="play" id="play">▶ Play</button>
         <input type="range" id="scrub" min="0" max="0" value="0" step="1">
-        <span class="ts" id="scrub-ts">— · live</span>
+        <span class="ts" id="scrub-ts">— · live (aggregate)</span>
         <button class="ctrl" id="scrub-live">jump to live</button>
+        <span class="dim" style="font-size:10px;font-style:italic" title="'Missed' (medium-risk) events are derived from live in-memory state and are not available in per-bucket scrubber mode">missed N/A in scrubber</span>
       </div>
     </div>
 
@@ -157,7 +161,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
           <th class="num">missed</th><th class="num">blocked</th>
           <th class="num" title="blocked / (blocked + missed) — what fraction of suspicious traffic from this country we actually stopped">eff%</th>
           <th class="num" title="missed / (blocked + missed) — what fraction of suspicious traffic from this country slipped past the gate">bypass%</th>
-          <th></th>
+          <th>actions</th>
         </tr></thead>
         <tbody id="country-tbody"><tr><td colspan="7" class="dim">loading…</td></tr></tbody>
       </table>
@@ -223,15 +227,17 @@ let lastData = null;          // last full /antibot-appsec-gateway/secured/geo-d
 let scrubBucketIdx = -1;      // -1 = aggregate (default); 0..N = bucket
 let scrubBuckets = [];        // [{ts, points:{key:{c,m,b}}}]
 let playing = false;
+let endEpoch = null;  // null = live; number = right edge of historical window
 
 function radiusFor(count){
   return Math.max(4, Math.min(40, 4 + Math.log10(Math.max(1, count)) * 3));
 }
 
-function buildCircle(lat, lng, count, color, label, onClick){
+function buildCircle(lat, lng, count, color, label, onClick, extraOpts){
   const c = L.circleMarker([lat, lng], {
     radius: radiusFor(count),
     color, fillColor:color, fillOpacity:0.45, weight:1.4,
+    ...(extraOpts||{}),
   }).bindTooltip(label, { className:'leaflet-tooltip', sticky:true });
   if (onClick) c.on('click', onClick);
   return c;
@@ -309,9 +315,14 @@ function renderMap(){
       (p.dc_hits  ? `<br><span style="color:#bc8cff">dc/hosting</span>: ${p.dc_hits}`  : '') +
       `<br><span class="dim">click to drill down</span>`;
     const onClick = () => openDrill(p.lat, p.lng);
-    if (p.clean   > 0) buildCircle(p.lat, p.lng, p.clean,   '#3fb950', tip, onClick).addTo(layerGroup);
-    if (p.missed  > 0) buildCircle(p.lat + 0.0001, p.lng + 0.0001, p.missed,  '#ff7b3a', tip, onClick).addTo(layerGroup);
-    if (p.blocked > 0) buildCircle(p.lat + 0.0002, p.lng + 0.0002, p.blocked, '#f85149', tip, onClick).addTo(layerGroup);
+    const isDenied = lastData && lastData.geo_state &&
+      (lastData.geo_state.country_denylist||[]).includes(p.country);
+    const deniedOpts = isDenied ? { weight: 3, dashArray: '4,3', fillOpacity: 0.65 } : {};
+    const deniedPrefix = isDenied ? `<span style="color:#f85149;font-weight:700">⛔ DENIED · </span>` : '';
+    const fullTip = deniedPrefix + tip;
+    if (p.clean   > 0) buildCircle(p.lat, p.lng, p.clean,   '#3fb950', fullTip, onClick, deniedOpts).addTo(layerGroup);
+    if (p.missed  > 0) buildCircle(p.lat + 0.0001, p.lng + 0.0001, p.missed,  '#ff7b3a', fullTip, onClick, deniedOpts).addTo(layerGroup);
+    if (p.blocked > 0) buildCircle(p.lat + 0.0002, p.lng + 0.0002, p.blocked, '#f85149', fullTip, onClick, deniedOpts).addTo(layerGroup);
     if (showTor && p.tor_hits) buildOverlayMarker(p.lat, p.lng, p.tor_hits, 'tor').addTo(layerGroup);
     if (showDC  && p.dc_hits)  buildOverlayMarker(p.lat, p.lng, p.dc_hits,  'dc').addTo(layerGroup);
   });
@@ -352,17 +363,16 @@ function fmtTs(epoch){
 // ── Country leaderboard render ───────────────────────────────────────
 function renderCountries(){
   const tbody = document.getElementById('country-tbody');
-  if (!lastData) { tbody.innerHTML = '<tr><td colspan="6" class="dim">no data</td></tr>'; return; }
+  if (!lastData) { tbody.innerHTML = '<tr><td colspan="7" class="dim">no data</td></tr>'; return; }
   const cs = lastData.countries || [];
   const denylist  = new Set((lastData.geo_state||{}).country_denylist  || []);
   const allowlist = new Set((lastData.geo_state||{}).country_allowlist || []);
   if (!cs.length){
-    tbody.innerHTML = '<tr><td colspan="6" class="dim">no events with country data</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="7" class="dim">no events with country data</td></tr>';
   } else {
-    tbody.innerHTML = cs.slice(0, 12).map(c => {
-      const inDeny = denylist.has(c.country);
-      // 1.6.4 — block-effectiveness % column. blocked/(blocked+missed).
-      // Color: green ≥80%, yellow 50-80%, red <50%, dim if N/A.
+    tbody.innerHTML = cs.slice(0, 30).map(c => {
+      const inDeny  = denylist.has(c.country);
+      const inAllow = allowlist.has(c.country);
       const eff = c.effectiveness_pct;
       let effCell;
       if (eff === null || eff === undefined) {
@@ -371,8 +381,6 @@ function renderCountries(){
         const col = eff >= 80 ? '#3fb950' : eff >= 50 ? '#d29922' : '#f85149';
         effCell = `<td class="num" style="color:${col};font-weight:600">${eff.toFixed(0)}%</td>`;
       }
-      // 1.6.5 — bypass-rate proxy column. missed/(blocked+missed).
-      // Color: red >30%, yellow 10-30%, green <10%, dim if N/A.
       const byp = c.bypass_pct;
       let bypCell;
       if (byp === null || byp === undefined) {
@@ -388,9 +396,15 @@ function renderCountries(){
         <td class="num" style="color:#f85149">${c.blocked}</td>
         ${effCell}
         ${bypCell}
-        <td><button class="deny-btn ${inDeny?'active':''}"
-                    data-iso="${escapeHtml(c.country)}"
-                    title="${inDeny?'Remove from':'Add to'} COUNTRY_DENYLIST">${inDeny?'denied':'deny'}</button></td>
+        <td style="white-space:nowrap">
+          <button class="deny-btn ${inDeny?'active':''}"
+                  data-iso="${escapeHtml(c.country)}"
+                  title="${inDeny?'Remove from COUNTRY_DENYLIST':'Add to COUNTRY_DENYLIST'}">${inDeny?'denied':'deny'}</button>
+          <button class="deny-btn ${inAllow?'active':''}"
+                  data-iso="${escapeHtml(c.country)}" data-list="allow"
+                  style="margin-left:4px;color:${inAllow?'#fff':'var(--green)'};border-color:var(--green);${inAllow?'background:var(--green)':''}"
+                  title="${inAllow?'Remove from COUNTRY_ALLOWLIST':'Add to COUNTRY_ALLOWLIST (bypass denylist)'}">${inAllow?'allowed':'allow'}</button>
+        </td>
       </tr>`;
     }).join('');
   }
@@ -400,7 +414,7 @@ function renderCountries(){
     'allowlist: ' + (Array.from(allowlist).join(', ') || '(empty)');
 
   // Wire deny buttons.
-  tbody.querySelectorAll('.deny-btn').forEach(btn => {
+  tbody.querySelectorAll('.deny-btn:not([data-list])').forEach(btn => {
     btn.onclick = async () => {
       const iso = btn.dataset.iso;
       const cur = new Set((lastData.geo_state||{}).country_denylist || []);
@@ -410,10 +424,35 @@ function renderCountries(){
       try {
         const r = await fetch('/antibot-appsec-gateway/secured/config',
                               {method:'POST', headers:{'Content-Type':'application/json'},
-                               body: JSON.stringify({COUNTRY_DENYLIST: next, COUNTRY_BLOCK_ENABLED:true})});
+                               body: JSON.stringify({COUNTRY_DENYLIST: next})});
         const j = await r.json();
         if (j.applied && j.applied.COUNTRY_DENYLIST !== undefined){
           lastData.geo_state.country_denylist = next;
+          renderCountries();
+          renderMap();
+        } else {
+          alert('Rejected — ' + JSON.stringify(j.rejected||{}));
+        }
+      } catch(e) { alert('Network error: ' + e.message); }
+      btn.disabled = false;
+    };
+  });
+
+  // Wire allow buttons.
+  tbody.querySelectorAll('.deny-btn[data-list="allow"]').forEach(btn => {
+    btn.onclick = async () => {
+      const iso = btn.dataset.iso;
+      const cur = new Set((lastData.geo_state||{}).country_allowlist || []);
+      if (cur.has(iso)) cur.delete(iso); else cur.add(iso);
+      const next = Array.from(cur).sort();
+      btn.disabled = true;
+      try {
+        const r = await fetch('/antibot-appsec-gateway/secured/config',
+                              {method:'POST', headers:{'Content-Type':'application/json'},
+                               body: JSON.stringify({COUNTRY_ALLOWLIST: next})});
+        const j = await r.json();
+        if (j.applied && j.applied.COUNTRY_ALLOWLIST !== undefined){
+          lastData.geo_state.country_allowlist = next;
           renderCountries();
         } else {
           alert('Rejected — ' + JSON.stringify(j.rejected||{}));
@@ -424,6 +463,9 @@ function renderCountries(){
   });
 }
 
+const _DRILL_ADMIN_TIP = 'Admin IP — this source is in the operator\'s trusted IP allowlist. Requests from this address bypass risk scoring and ban enforcement.';
+const _drillAdminLock = f => f ? `<span title="${_DRILL_ADMIN_TIP}" style="cursor:help;margin-right:3px">🔒</span>` : '';
+
 // ── Drill modal: top IPs / reasons / paths at a clicked cell ─────────
 async function openDrill(lat, lng){
   const modal = document.getElementById('drill-modal');
@@ -433,7 +475,21 @@ async function openDrill(lat, lng){
   body.textContent = 'loading…';
   modal.classList.add('show');
   const range = document.getElementById('range').value;
-  const params = new URLSearchParams({lat, lng, range});
+  // When scrubbing to a specific bucket, pass that bucket's end timestamp so
+  // the drill endpoint only shows events from that time slice, not the full window.
+  let params;
+  if (scrubBucketIdx >= 0 && scrubBuckets[scrubBucketIdx]) {
+    const sm = (lastData && lastData.summary) || {};
+    const start = sm.start_epoch || 0;
+    const end   = sm.end_epoch   || Math.floor(Date.now()/1000);
+    const step  = Math.max(1, (end - start) / Math.max(1, scrubBuckets.length));
+    const bucketEnd = Math.round(start + (scrubBucketIdx + 1) * step);
+    const bucketRangeMin = Math.max(5, Math.ceil(step / 60));
+    params = new URLSearchParams({lat, lng, range: bucketRangeMin, end: bucketEnd});
+  } else {
+    params = new URLSearchParams({lat, lng, range});
+    if (endEpoch !== null) params.set('end', endEpoch.toString());
+  }
   try {
     const r = await fetch('/antibot-appsec-gateway/secured/geo-drill?' + params, {credentials:'include'});
     const d = await r.json();
@@ -442,7 +498,7 @@ async function openDrill(lat, lng){
       const tags = (x.tor ? '<span class="tag tor">TOR</span> ' : '') +
                    (x.dc  ? '<span class="tag dc">DC</span> '  : '');
       return `<tr>
-        <td>${escapeHtml(x.ip)}</td>
+        <td>${_drillAdminLock(x.is_admin_ip)}${escapeHtml(x.ip)}</td>
         <td>${escapeHtml(x.city||'')} (${escapeHtml(x.country||'')})</td>
         <td>${escapeHtml(x.asn_org||'-')}</td>
         <td>${tags}</td>
@@ -542,8 +598,29 @@ geoRestorePrefs();
 document.getElementById('ovly-tor').onchange = () => { geoSavePrefs(); renderMap(); };
 document.getElementById('ovly-dc').onchange  = () => { geoSavePrefs(); renderMap(); };
 
+function refreshGeoControls(){
+  const next = document.getElementById('next');
+  const now  = document.getElementById('now');
+  const lbl  = document.getElementById('window-label');
+  if (!next || !now) return;
+  next.disabled = (endEpoch === null);
+  now.disabled  = (endEpoch === null);
+  if (endEpoch === null) {
+    lbl.textContent = '(live)';
+    lbl.style.color = 'var(--green)';
+  } else {
+    const win = parseInt(document.getElementById('range').value || '60', 10);
+    const start = new Date((endEpoch - win*60) * 1000);
+    const end   = new Date(endEpoch * 1000);
+    const fmt = d => d.toLocaleString(undefined, {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+    lbl.textContent = `${fmt(start)} → ${fmt(end)}`;
+    lbl.style.color = 'var(--yellow)';
+  }
+}
+
 async function tick(){
   const params = new URLSearchParams({range: document.getElementById('range').value});
+  if (endEpoch !== null) params.set('end', endEpoch.toString());
   try {
     const r = await fetch('/antibot-appsec-gateway/secured/geo-data?' + params, {credentials:'include'});
     const d = await r.json();
@@ -642,8 +719,24 @@ function renderAsns(){
 
 document.getElementById('range').onchange = () => { geoSavePrefs(); scrubBucketIdx = -1; tick(); };
 document.getElementById('refresh').onclick = tick;
-document.getElementById('now').onclick     = () => { scrubBucketIdx = -1; tick(); };
-document.getElementById('pin-filter').onchange = () => { geoSavePrefs(); renderMap(); };  // 1.6.5
+document.getElementById('now').onclick = () => {
+  endEpoch = null; scrubBucketIdx = -1; refreshGeoControls(); tick();
+};
+document.getElementById('prev').onclick = () => {
+  const win = parseInt(document.getElementById('range').value || '60', 10) * 60;
+  const cur = endEpoch || Math.floor(Date.now()/1000);
+  endEpoch = cur - win;
+  scrubBucketIdx = -1; refreshGeoControls(); tick();
+};
+document.getElementById('next').onclick = () => {
+  if (!endEpoch) return;
+  const win = parseInt(document.getElementById('range').value || '60', 10) * 60;
+  endEpoch = endEpoch + win;
+  if (endEpoch > Math.floor(Date.now()/1000)) endEpoch = null;
+  scrubBucketIdx = -1; refreshGeoControls(); tick();
+};
+document.getElementById('pin-filter').onchange = () => { geoSavePrefs(); renderMap(); };
+refreshGeoControls();
 tick();
 function _typing(){
   const ae = document.activeElement; if (!ae) return false;
@@ -724,7 +817,6 @@ document.addEventListener('keydown', e => {
 (function(){
   const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
     ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -779,7 +871,7 @@ document.addEventListener('keydown', e => {
   // 1.6.5 — log-level combo box: read current value, push on change, persist.
   async function loadLogLevel(){
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
       const d = await r.json();
       const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
       lvlSelect.value = cur;
@@ -788,7 +880,7 @@ document.addEventListener('keydown', e => {
   lvlSelect.onchange = async () => {
     const lvl = lvlSelect.value;
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
         {method:'POST', headers:{'Content-Type':'application/json'},
          body: JSON.stringify({LOG_LEVEL: lvl})});
       const d = await r.json();
@@ -799,7 +891,6 @@ document.addEventListener('keydown', e => {
     } catch(e){ alert('Network error: ' + e.message); }
   };
   loadLogLevel();
-  setInterval(loadLogLevel, 30000);
 })();
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->

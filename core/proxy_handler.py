@@ -82,6 +82,15 @@ from detection.canary import (  # noqa: F401
     _botd_token_for, _scan_request_for_canary,
 )
 from detection.automation import _inject_automation_probe  # noqa: F401
+from detection.cookie_lifecycle import (  # noqa: F401
+    cookie_ghost_check, record_gateway_cookie_set,
+    record_html_served, _inject_lifecycle_cookie_script, LIFECYCLE_COOKIE,
+)
+from detection.referer_chain import referer_ghost_check  # noqa: F401
+from detection.impossible_travel import impossible_travel_check  # noqa: F401
+from detection.fp_enrichment import _inject_fp_probe, fp_report_endpoint  # noqa: F401
+from challenge.js_challenge import sw_js_endpoint  # noqa: F401
+from state import _fp_canvas_store  # noqa: F401
 from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
 from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
@@ -792,6 +801,17 @@ async def proxy(request: web.Request):
                     if AUTOMATION_PROBE_ENABLED:
                         resp_body = _inject_automation_probe(
                             resp_body, request.get("_track_key", ""))
+                    # 1.7.2 — cookie lifecycle JS marker (writes agw_lc cookie)
+                    if COOKIE_LIFECYCLE_ENABLED:
+                        resp_body = _inject_lifecycle_cookie_script(resp_body)
+                    # 1.7.2 — canvas + WebGL fingerprint probe
+                    if FP_ENRICHMENT_ENABLED:
+                        resp_body = _inject_fp_probe(
+                            resp_body, request.get("_track_key", ""))
+                    # 1.7.2 — record HTML path for referer-ghost tracking
+                    _tk_html = request.get("_track_key", "")
+                    if _tk_html:
+                        record_html_served(_tk_html, request.path)
 
                 # 1.6.10 — JSON API canary: inject a "_ref" token into JSON
                 # object responses. LLM agents that cache and replay API
@@ -863,6 +883,25 @@ async def thresholds_endpoint(request: web.Request):
          "Max chal cookies per fingerprint per window"),
         ("JA4_AUTODENY_THRESHOLD", 1,    100,     "lower-is-stricter",
          "Distinct bans on a JA4 before auto-deny"),
+        ("ANUBIS_DIFFICULTY_BOOST", 0,   6,       "higher-is-stricter",
+         "Extra PoW leading zeros (Anubis mode)"),
+        ("SECOND_ORDER_THRESHOLD", 0,    1000,    "higher-is-stricter",
+         "Risk score above which 2nd-order detectors activate (0 = always)"),
+        ("ESCALATION_THRESHOLD",   0,    1000,    "higher-is-stricter",
+         "Risk score above which 3rd-order expensive detectors run (0 = always)"),
+        ("TARPIT_DELAY_MS",        0,    30000,   "lower-is-stricter",
+         "Delay (ms) added per soft-band response (tarpit)"),
+        ("DLP_MAX_BYTES",          1024, 16777216,"lower-is-stricter",
+         "Max response bytes scanned by DLP (cost cap)"),
+        # ── 1.7.2 ──
+        ("COOKIE_GHOST_MIN_REQUESTS",   1,   100,    "higher-is-stricter",
+         "Minimum requests before cookie-ghost can fire"),
+        ("COOKIE_GHOST_MISS_THRESHOLD", 1,   50,     "lower-is-stricter",
+         "Cookie-miss count that triggers cookie-ghost"),
+        ("IMPOSSIBLE_TRAVEL_WINDOW_SECS", 60, 604800, "higher-is-stricter",
+         "Window (s) in which same identity must not span two countries"),
+        ("POW_CHAL_THRESHOLD",          0,   100000, "lower-is-stricter",
+         "Risk score at or above which JS challenge embeds a PoW puzzle (0 = never)"),
     ]
     g = globals()
     out = []
@@ -915,6 +954,7 @@ async def external_endpoint(request: web.Request):
         "cost_typical_ms":  150.0,    # CF challenge widget round-trip
         "cost_p99_ms":      400.0,
         "cost_cached_ms":   0.0,      # cookie reuse — no per-request call
+        "activation_order": 3,
         "telemetry": {
             "active": JS_CHALLENGE and TURNSTILE_ENABLED,
         },
@@ -1018,6 +1058,7 @@ async def external_endpoint(request: web.Request):
         "cost_typical_ms":  0.05,    # SHA-256 verify on cookie path
         "cost_p99_ms":      0.5,
         "cost_cached_ms":   0.0,
+        "activation_order": 3,
         "telemetry": {
             "base_difficulty":   POW_DIFFICULTY,
             "boost":             ANUBIS_DIFFICULTY_BOOST if ANUBIS_ENABLED else 0,
@@ -1103,6 +1144,76 @@ async def external_endpoint(request: web.Request):
         "telemetry": pg_telemetry,
     })
 
+    # ── 1.7.2 ────────────────────────────────────────────────────────────────
+    # 8. Canvas/WebGL fingerprint enrichment — self-hosted JS probe
+    integrations.append({
+        "name":         "Canvas/WebGL Fingerprint",
+        "purpose":      "Injects ~1 KB inline JS that draws a canvas scene and queries WebGL renderer info. Detects headless browsers (SwiftShader/Mesa/LLVMPipe renderer) and Chrome with WebGL blocked.",
+        "vendor_url":   "",
+        "docs_url":     "",
+        "trigger":      "Injected into every HTML response. Browser POSTs result to /antibot-appsec-gateway/fp-report (HMAC-bound to session, 300 s TTL).",
+        "weight":       "soft-renderer = +25 risk (med) · webgl-missing = +15 risk (soft)",
+        "data_egress":  "None — report endpoint is self-hosted at /antibot-appsec-gateway/fp-report.",
+        "status":       "configured" if FP_ENRICHMENT_ENABLED else "disabled",
+        "enabled":      FP_ENRICHMENT_ENABLED,
+        "credentials_present": True,
+        "envs_needed":  ["FP_ENRICHMENT_ENABLED=1 (default on)"],
+        "free_tier":    "in-process — no external service",
+        "cost_typical_ms":  0.1,
+        "cost_p99_ms":      0.3,
+        "cost_cached_ms":   0.0,
+        "activation_order": 1,
+        "telemetry": {"active": FP_ENRICHMENT_ENABLED},
+    })
+
+    # 9. Service Worker challenge — self-hosted SW header probe
+    integrations.append({
+        "name":         "Service Worker Challenge",
+        "purpose":      "Registers a SW at /antibot-appsec-gateway/sw.js that adds X-SW-Active: 1 to intercepted gateway requests. Absence after registration is expected = strong headless-browser signal.",
+        "vendor_url":   "",
+        "docs_url":     "",
+        "trigger":      "SW is registered by the JS challenge page when SW_CHALLENGE_ENABLED=1. X-SW-Active header expected on all subsequent /antibot-appsec-gateway/* requests.",
+        "weight":       "No direct risk score — absence is a signal context used by other detectors.",
+        "data_egress":  "None — purely in-browser service worker, no network call.",
+        "status":       "configured" if SW_CHALLENGE_ENABLED else "disabled",
+        "enabled":      SW_CHALLENGE_ENABLED,
+        "credentials_present": True,
+        "envs_needed":  ["SW_CHALLENGE_ENABLED=1 (default off)"],
+        "free_tier":    "in-process — no external service",
+        "cost_typical_ms":  0.0,
+        "cost_p99_ms":      0.0,
+        "cost_cached_ms":   0.0,
+        "activation_order": 2,
+        "telemetry": {"active": SW_CHALLENGE_ENABLED},
+    })
+
+    # 10. MaxMind GeoLite2 City — impossible-travel detection
+    from reputation.maxmind import _city_reader as _city_reader_ref
+    _city_db_ok = _city_reader_ref is not None
+    integrations.append({
+        "name":         "MaxMind GeoLite2 City",
+        "purpose":      "City-level geolocation DB used for impossible-travel detection: same session appearing from two different countries within IMPOSSIBLE_TRAVEL_WINDOW_SECS fires +35 risk (hard-ban default).",
+        "vendor_url":   "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data",
+        "docs_url":     "https://dev.maxmind.com/geoip/geolite2-free-geolocation-data",
+        "trigger":      "Every request for session-keyed identities when IMPOSSIBLE_TRAVEL_ENABLED=1 and City DB is loaded.",
+        "weight":       "impossible-travel = +35 risk (hard, triggers ban)",
+        "data_egress":  "None — in-memory DB lookup at /data/GeoLite2-City.mmdb.",
+        "status":       ("configured" if (_city_db_ok and IMPOSSIBLE_TRAVEL_ENABLED)
+                         else ("missing-db" if (not _city_db_ok and IMPOSSIBLE_TRAVEL_ENABLED)
+                               else "disabled")),
+        "enabled":      _city_db_ok and IMPOSSIBLE_TRAVEL_ENABLED,
+        "credentials_present": _city_db_ok,
+        "envs_needed":  ["IMPOSSIBLE_TRAVEL_ENABLED=1", "MAXMIND_LICENSE_KEY (for auto-download)"],
+        "free_tier":    "free DB download — monthly refresh",
+        "cost_typical_ms":  0.1,
+        "cost_p99_ms":      0.5,
+        "cost_cached_ms":   0.1,
+        "telemetry": {
+            "active": _city_db_ok and IMPOSSIBLE_TRAVEL_ENABLED,
+            "db_path": "/data/GeoLite2-City.mmdb",
+        },
+    })
+
     return web.json_response({"integrations": integrations},
                               headers={"Cache-Control": "no-store"})
 
@@ -1177,6 +1288,19 @@ async def integration_check_endpoint(request: web.Request):
                 return {"ok": True, "detail": f"connected in {(_chk_time.monotonic()-t0)*1000:.0f} ms"}
             except Exception as e:
                 return {"ok": False, "detail": str(e)}
+        if name in ("Canvas/WebGL Fingerprint", "Canvas/WebGL"):
+            return {"ok": FP_ENRICHMENT_ENABLED,
+                    "detail": "probe enabled" if FP_ENRICHMENT_ENABLED else "FP_ENRICHMENT_ENABLED=0"}
+        if name in ("Service Worker Challenge", "Service Worker"):
+            return {"ok": SW_CHALLENGE_ENABLED,
+                    "detail": "SW challenge enabled" if SW_CHALLENGE_ENABLED else "SW_CHALLENGE_ENABLED=0 (default off)"}
+        if name in ("MaxMind GeoLite2 City", "MaxMind City"):
+            _city_ok = _city_reader_is_loaded()
+            if not _city_ok:
+                return {"ok": False, "detail": "City DB not loaded — set MAXMIND_LICENSE_KEY for auto-download"}
+            if not IMPOSSIBLE_TRAVEL_ENABLED:
+                return {"ok": False, "detail": "DB loaded but IMPOSSIBLE_TRAVEL_ENABLED=0"}
+            return {"ok": True, "detail": f"City DB loaded · impossible-travel active"}
         return {"ok": None, "detail": f"no health-check defined for '{name}'"}
 
     t_start = _chk_time.monotonic()
@@ -1700,6 +1824,18 @@ _HOT_RELOAD_KNOBS = {
     "PRUNE_IDLE_SECS":        (int,   lambda v: 60 <= v <= 31 * 86400),
     "UPSTREAM_MAX_BODY":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),  # up to 1 GiB
     "UPSTREAM_MAX_RESP":      (int,   lambda v: 1024 <= v <= 1024 * 1024 * 1024),
+    # ── 1.7.2 ──
+    "COOKIE_GHOST_ENABLED":         (_to_bool, None),
+    "COOKIE_LIFECYCLE_ENABLED":     (_to_bool, None),
+    "COOKIE_GHOST_MIN_REQUESTS":    (int,   lambda v: 1 <= v <= 1000),
+    "COOKIE_GHOST_MISS_THRESHOLD":  (int,   lambda v: 1 <= v <= 100),
+    "REFERER_CHAIN_ENABLED":        (_to_bool, None),
+    "IMPOSSIBLE_TRAVEL_ENABLED":    (_to_bool,
+                                     lambda v: (not v) or _city_reader_is_loaded()),
+    "IMPOSSIBLE_TRAVEL_WINDOW_SECS":(int,   lambda v: 60 <= v <= 86400 * 7),
+    "FP_ENRICHMENT_ENABLED":        (_to_bool, None),
+    "SW_CHALLENGE_ENABLED":         (_to_bool, None),
+    "POW_CHAL_THRESHOLD":           (float, lambda v: 0.0 <= v <= 100000.0),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2005,7 +2141,14 @@ async def protect(request: web.Request, handler):
     # block paths take precedence and remain undetectable.
     if _js_challenge_required(request):
         if _js_challenge_applicable(request):
-            return _serve_js_challenge(request)
+            _pow_chal_str = ""
+            if POW_CHAL_THRESHOLD > 0:
+                _early_id, *_ = get_identity(request)
+                _s_pow = ip_state.get(_early_id)
+                if _s_pow and _s_pow.risk_score >= POW_CHAL_THRESHOLD:
+                    _pow_chal_str = make_pow_challenge("*", "*",
+                                                       risk_score=int(_s_pow.risk_score))
+            return _serve_js_challenge(request, pow_challenge=_pow_chal_str)
         # 1.4.4: heuristic auto-mint mode (no Turnstile). HTML GETs are
         # allowed through; the response gets the cookie set after the
         # request completes the rest of the layered checks. Non-HTML or
@@ -2103,6 +2246,8 @@ async def protect(request: web.Request, handler):
             _s_early.unique_paths.pop()
         _early_unique_n = len(_s_early.unique_paths)
         _s_early.path_sequence.append(request.path)  # 1.7.1: journey tracking
+        if request.headers.get("X-SW-Active") == "1":  # 1.7.2: SW seen
+            _s_early.sw_seen = True
         if request.method == "GET":
             if request.path.endswith((".css", ".js", ".png", ".jpg", ".jpeg",
                                       ".gif", ".svg", ".webp", ".woff", ".woff2",
@@ -2576,6 +2721,25 @@ async def protect(request: web.Request, handler):
             return await deny(403, "behavior",
                               {"error": "suspicious behavior", "reason": reason})
 
+    # 5b. 1.7.2 — cookie-ghost / lifecycle-miss
+    if not is_static_asset_get and (COOKIE_GHOST_ENABLED or COOKIE_LIFECYCLE_ENABLED):
+        _cg_hit, _cg_why = await cookie_ghost_check(track_key, request)
+        if _cg_hit:
+            _cg_reason = "lifecycle-miss" if "lifecycle" in _cg_why else "cookie-ghost"
+            return await deny(403, _cg_reason, {"error": "cookie anomaly"})
+
+    # 5c. 1.7.2 — referer-ghost
+    if REFERER_CHAIN_ENABLED and not is_static_asset_get:
+        _rg_hit, _rg_why = await referer_ghost_check(track_key, request)
+        if _rg_hit:
+            return await deny(403, "referer-ghost", {"error": "referrer anomaly"})
+
+    # 5d. 1.7.2 — impossible travel (session-keyed only; requires MaxMind city DB)
+    if IMPOSSIBLE_TRAVEL_ENABLED and MAXMIND_CITY_ENABLED:
+        _it_hit, _it_why = await impossible_travel_check(track_key, ip)
+        if _it_hit:
+            return await deny(403, "impossible-travel", {"error": "location anomaly"})
+
     # 6. PoW
     if needs_pow(request):
         token = request.headers.get("X-PoW-Token", "")
@@ -2621,6 +2785,7 @@ async def protect(request: web.Request, handler):
             samesite=SESSION_SAMESITE,
             secure=SESSION_SECURE,
             path="/", max_age=JS_CHALLENGE_TTL)
+        record_gateway_cookie_set(track_key)
         # 1.5.0: log this mint into the per-fingerprint churn detector. If
         # the same UA+IP-tier+JA4 has minted > SESSION_CHURN_MAX cookies in
         # the last SESSION_CHURN_WINDOW_S seconds, the fingerprint enters
@@ -3523,13 +3688,26 @@ DASHBOARD_HTML         = (_DASHBOARDS_DIR / "main.html").read_text(encoding="utf
 async def unban_endpoint(request: web.Request):
     """Admin: clear ban + risk score for an identity (or all). Useful when a
     false-positive pushed someone over threshold.
-      ?id=<identity>   — unban a single identity (track_key)
-      ?ip=<ip>         — unban every identity whose last_ip matches
-      ?all=1           — clear ALL bans + reset risk_score on every identity
+      POST body JSON: {"id":"<identity>"} | {"ip":"<ip>"} | {"all":true}
+      GET query (legacy, read-only ops only): ?id=... | ?ip=...
+      ?all=1 via GET is rejected — use POST {"all":true} for destructive op.
     """
-    target_id = request.query.get("id")
-    target_ip = request.query.get("ip")
-    do_all = request.query.get("all") in ("1", "true", "yes")
+    if request.method == "POST":
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        target_id = data.get("id")
+        target_ip = data.get("ip")
+        do_all = bool(data.get("all"))
+    else:
+        target_id = request.query.get("id")
+        target_ip = request.query.get("ip")
+        # Reject all=1 via GET (CSRF-safe: destructive ops require POST)
+        if request.query.get("all") in ("1", "true", "yes"):
+            return web.json_response({"error": "Use POST {\"all\":true} for unban-all"},
+                                     status=405, headers={"Cache-Control": "no-store"})
+        do_all = False
     cleared = 0
     async with state_lock:
         n = now()
@@ -3650,6 +3828,13 @@ async def scoring_endpoint(request: web.Request):
         "dlp-pii-ssn":           ("intel", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
         # ── 1.6.9: AI Labyrinth ──
         "tarpit-walk":           ("hard",  "Client followed a hidden rel=nofollow link injected into proxied HTML — only automated crawlers traverse invisible links. Near-zero FP; instant ban + response deliberately slow-dripped to exhaust crawler resources."),
+        # ── 1.7.2 ──
+        "cookie-ghost":          ("med",   "Gateway set cookies but client never returned them across 3+ requests — pure-HTTP bot not running a real browser cookie jar."),
+        "lifecycle-miss":        ("soft",  "HTML page was served (lifecycle JS injected), but agw_lc cookie absent on subsequent non-HTML requests — JS not executing or bot stripping cookies."),
+        "referer-ghost":         ("soft",  "Referer claims our domain but the referenced path was never served to this identity — fabricated Referer (common in automated requests)."),
+        "impossible-travel":     ("hard",  "Same session-keyed identity appeared from different countries within the impossible-travel window — session hijack or account-sharing across VPN hops."),
+        "soft-renderer":         ("med",   "WebGL renderer/vendor string contains a known software-renderer pattern (swiftshader, mesa, llvmpipe, vmware) — virtual or headless environment."),
+        "webgl-missing":         ("soft",  "Chrome UA but no WebGL renderer returned — headless Chrome with WebGL blocked or disabled (common in Puppeteer/Playwright default configs)."),
     }
     # Each entry annotated with the runtime-toggle knob (if any) that
     # controls whether the detector runs. UI uses this to render a switch
@@ -3726,6 +3911,13 @@ async def scoring_endpoint(request: web.Request):
         "ai-no-assets":       "AI_NO_ASSETS_ENABLED",
         "session-flood":      "SESSION_FLOOD_ENABLED",
         "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
+        # ── 1.7.2 ──
+        "cookie-ghost":       "COOKIE_GHOST_ENABLED",
+        "lifecycle-miss":     "COOKIE_LIFECYCLE_ENABLED",
+        "referer-ghost":      "REFERER_CHAIN_ENABLED",
+        "impossible-travel":  "IMPOSSIBLE_TRAVEL_ENABLED",
+        "soft-renderer":      "FP_ENRICHMENT_ENABLED",
+        "webgl-missing":      "FP_ENRICHMENT_ENABLED",
     }
     # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
     #
@@ -3870,6 +4062,10 @@ async def scoring_endpoint(request: web.Request):
         ("JS_CHAL_REQUIRE_JA4",     "Hard-require JA4 from a trusted peer at /__challenge"),
         ("JS_CHAL_STRICT_STATIC",   "Refuse static-asset bypass on API-shaped paths"),
         ("ANUBIS_ENABLED",          "Anubis-mode (1.5.4): strict PoW gate on every first request, raises difficulty by ANUBIS_DIFFICULTY_BOOST"),
+        ("DLP_ENABLED",             "Outbound DLP — scan upstream response bodies for PII / secrets. Bounded by DLP_MAX_BYTES. Affects DLP group signals (dlp-cc, dlp-aws, …)."),
+        ("DLP_REDACT",              "Replace DLP matches with [REDACTED-<group>] before forwarding response to client."),
+        ("TARPIT_ENABLED",          "Add TARPIT_DELAY_MS slowdown to every soft-band response (tarpit-walk flow). Maximises attacker CPU/bandwidth cost without blocking."),
+        ("SW_CHALLENGE_ENABLED",    "Register a Service Worker at /antibot-appsec-gateway/sw.js that stamps X-SW-Active: 1 on intercepted requests. Absence after expected registration = headless-browser signal."),
     ]
     return web.json_response({
         "weights":   weights,
@@ -4041,7 +4237,8 @@ async def geo_data_endpoint(request: web.Request):
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT ts, ip, reason FROM events WHERE ts >= ? AND ts <= ? LIMIT 200000",
+            "SELECT ts, ip, reason FROM events "
+            "WHERE ts >= ? AND ts <= ? ORDER BY ts ASC LIMIT 200000",
             (start_epoch, end_epoch),
         ).fetchall()
         conn.close()
@@ -4248,8 +4445,8 @@ async def geo_data_endpoint(request: web.Request):
     }
     _GEO_CACHE[cache_key] = (_t.time() + 60, payload)
     if len(_GEO_CACHE) > 64:
-        # cheap LRU: drop the oldest 16
-        for k in sorted(_GEO_CACHE.keys())[:16]:
+        # evict entries with the earliest expiry (oldest inserted)
+        for k in sorted(_GEO_CACHE.keys(), key=lambda k: _GEO_CACHE[k][0])[:16]:
             _GEO_CACHE.pop(k, None)
     return web.json_response(payload, headers={"Cache-Control": "no-store"})
 
@@ -4333,6 +4530,7 @@ async def geo_drill_endpoint(request: web.Request):
                 "asn_org": asn_org,
                 "tor": (ip in _tor_exits),
                 "dc":  is_hosting,
+                "is_admin_ip": _is_admin_ip(ip),
                 "hits": 0, "blocked": 0,
                 "last_seen": 0.0, "last_reason": "",
             }

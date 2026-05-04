@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.7.1 — entry point only.
+Anti-bot reverse proxy v1.7.2 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -57,6 +57,16 @@ from helpers import (  # noqa: F401
 from identity import _sign_session, _verify_session
 from detection.canary import _inject_honey_links, _inject_botd, _botd_token_for
 from detection.automation import automation_report_endpoint  # noqa: F401
+from detection.fp_enrichment import (  # noqa: F401
+    fp_report_endpoint, _fp_token_for, _is_soft_renderer, _inject_fp_probe,
+)
+from challenge.js_challenge import sw_js_endpoint  # noqa: F401
+from detection.cookie_lifecycle import (  # noqa: F401
+    cookie_ghost_check, record_gateway_cookie_set, record_html_served,
+    _inject_lifecycle_cookie_script, LIFECYCLE_COOKIE,
+)
+from detection.referer_chain import referer_ghost_check  # noqa: F401
+from detection.impossible_travel import impossible_travel_check  # noqa: F401
 from detection.paths import _bot_trap_triggered  # noqa: F401
 from admin.auth import _internal_authed, _admin_ip_allowed
 from admin.users import (  # noqa: F401
@@ -359,6 +369,9 @@ def make_app() -> web.Application:
         ("solver",             "GET",  solver_endpoint,               False),
         ("botd-report",        "POST", botd_report_endpoint,          False),
         ("automation-report",  "POST", automation_report_endpoint,    False),
+        # 1.7.2 — canvas/WebGL fingerprint report + Service Worker
+        ("fp-report",          "POST", fp_report_endpoint,            False),
+        ("sw.js",              "GET",  sw_js_endpoint,                False),
         # 1.6.9 — AI Labyrinth tarpit (public; HMAC-gated internally)
         ("tarpit/{token}",     "GET",  tarpit_endpoint,               False),
         # ── secured (admin-IP + admin-key gated) ────────────────

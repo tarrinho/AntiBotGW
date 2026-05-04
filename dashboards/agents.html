@@ -122,7 +122,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.7.1 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.2 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents" class="active">Agents</a>
@@ -136,9 +136,9 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <div class="grid">
 
   <div class="row">
-    <div class="card"><h2>Identities w/ allowed traffic</h2>
+    <div class="card"><h2>Tracked identities</h2>
          <div class="metric low" id="m-total">0</div>
-         <div class="metric-sub">total ever passed gate</div></div>
+         <div class="metric-sub">with any signal (allowed or blocked)</div></div>
     <div class="card"><h2>Suspicious now</h2>
          <div class="metric high" id="m-susp">0</div>
          <div class="metric-sub" id="m-susp-pct">—</div></div>
@@ -199,50 +199,25 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
 
   <div class="card">
-    <h2>Suspicious identities / IPs (passed all blocks but exhibit stealth signals)</h2>
+    <h2>Suspicious identities / IPs <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">hover score bar for signal breakdown · click identity or risk for details</span></h2>
     <table id="sus-tbl">
       <thead><tr>
-        <th class="sortable" data-sort="score" data-col-tip="Score|0–100 composite stealth-bot likelihood. Combines 6 signals: header completeness, asset ratio, path enumeration, timing regularity, risk score, and 404 rate. Higher = more bot-like.">Score<span class="col-tip-i">ℹ</span></th>
-        <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="score" data-col-tip="Score|0–100 composite stealth-bot likelihood. Bar segments: ▐purple=headers ▐teal=assets ▐green=enum ▐yellow=timing ▐red=risk ▐orange=404s. Higher = more bot-like.">Score<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Type|Agent category derived from User-Agent pattern matching. LLM agent · Scanner · Crawler · Scraper · Automation · Monitoring · No-UA · Stealth (browser UA but high signals).">Type<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. First-seen time shown below.">Identity<span class="col-tip-i">ℹ</span></th>
         <th data-col-tip="UA|Last observed User-Agent string sent by this identity.">UA<span class="col-tip-i">ℹ</span></th>
         <th data-col-tip="IP|Source IP address last seen for this identity.">IP<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="allowed" data-col-tip="Allowed|Requests that passed all controls and were proxied to the upstream application.">Allowed<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="blocked" data-col-tip="Blocked|Requests caught by a detector and silently served a decoy response instead of the real upstream.">Blocked<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="header" data-col-tip="Headers avg|Average browser-header completeness score (0–7). Real browsers send ~6–7 standard headers (Accept, Accept-Language, Accept-Encoding, etc.). Bots often omit several.">Headers avg<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="html" data-col-tip="HTML/Static|HTML page loads vs static asset (CSS/JS/image) loads. Real browsers fetch assets after every page. A high HTML count with zero static loads is a strong bot signal.">HTML/Static<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="paths" data-col-tip="Paths/req|Unique paths divided by allowed requests. A high ratio means the identity is hitting many different endpoints — typical of scanners and crawlers.">Paths/req<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="timing" data-col-tip="Timing σ/μ|Coefficient of variation (std-dev / mean) of inter-request intervals. Real users are irregular (CV > 0.5). Bots are machine-paced and score low (< 0.20).">Timing σ/μ<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="fours" data-col-tip="404s|Number of HTTP 404 responses received from the upstream. A high count indicates probing for hidden endpoints, admin panels, or known CVE paths.">404s<span class="col-tip-i">ℹ</span></th>
-        <th class="sortable" data-sort="risk" data-col-tip="Risk|Raw accumulated detector score (decays over time). Triggers a ban when it exceeds RISK_BAN_THRESHOLD. This is one of the six inputs into Score — not the same thing.">Risk<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Top signal|Highest-count block reason for this identity, or dominant stealth component if never blocked. Explains why this identity is flagged.">Top signal<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="allowed" data-col-tip="Allowed|Requests proxied to the upstream application.">Allow<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="blocked" data-col-tip="Blocked|Requests caught by a detector and silently decoyed.">Block<span class="col-tip-i">ℹ</span></th>
         <th data-col-tip="Last path|Most recently observed request path for this identity.">Last path<span class="col-tip-i">ℹ</span></th>
-        <th data-col-tip="Status|Current ban/allow state for this identity. Click the button in the row to manually ban or unban.">Status<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Status|Current ban/allow state. Click to change.">Status<span class="col-tip-i">ℹ</span></th>
         <th></th>
       </tr></thead>
       <tbody></tbody>
     </table>
   </div>
 
-</div>
-
-<!-- 1.6.5 — rule inventory + per-method latency -->
-<div class="row" style="grid-template-columns:1fr 1fr;margin-top:14px;gap:14px">
-  <div class="card">
-    <h2>Rule inventory <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">rule-based gateway · AppSecGW_1.7.1</span></h2>
-    <div id="rule-inv" style="font-size:11.5px;font-family:ui-monospace,Menlo,monospace;line-height:1.7">loading…</div>
-  </div>
-  <div class="card">
-    <h2>Per-method latency <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:4px">live samples · sorted by hits</span></h2>
-    <table id="agent-latency-tbl" style="width:100%;border-collapse:collapse;font-size:11.5px">
-      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
-        <th style="padding:4px 6px">reason</th>
-        <th style="padding:4px 6px">method</th>
-        <th style="padding:4px 6px;text-align:right">hits</th>
-        <th style="padding:4px 6px;text-align:right">p50 ms</th>
-        <th style="padding:4px 6px;text-align:right">p99 ms</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </div>
 </div>
 
 <div class="foot">refreshes every 3 s · <code id="ts"></code></div>
@@ -271,13 +246,79 @@ const _SUS_KEY = {
   score:   s => s.stealth_score || 0,
   allowed: s => s.allowed || 0,
   blocked: s => s.blocked || 0,
-  header:  s => (s.metrics && s.metrics.avg_header_score) || 0,
-  html:    s => (s.metrics && s.metrics.html_loads) || 0,
-  paths:   s => (s.metrics && parseFloat(s.metrics.path_diversity)) || 0,
-  timing:  s => (s.metrics && s.metrics.behavioral_cov != null) ? parseFloat(s.metrics.behavioral_cov) || 0 : -1,
-  fours:   s => (s.metrics && s.metrics.upstream_404_count) || 0,
-  risk:    s => (s.metrics && s.metrics.risk_score) || 0,
 };
+
+// ── Agent type classifier ─────────────────────────────────────────────────
+const _AGENT_PATTERNS = [
+  // LLM agents / AI crawlers
+  { re: /GPTBot|ChatGPT|OAI-SearchBot|openai/i,            type:'llm-agent',   label:'LLM · OpenAI',    color:'#bc8cff' },
+  { re: /ClaudeBot|Claude-Web|anthropic/i,                  type:'llm-agent',   label:'LLM · Anthropic',  color:'#bc8cff' },
+  { re: /GoogleBot.*Gemini|Gemini/i,                        type:'llm-agent',   label:'LLM · Gemini',     color:'#bc8cff' },
+  { re: /PerplexityBot|Perplexity/i,                        type:'llm-agent',   label:'LLM · Perplexity', color:'#bc8cff' },
+  { re: /YouBot|you\.com/i,                                 type:'llm-agent',   label:'LLM · You',        color:'#bc8cff' },
+  { re: /cohere|ai21|mistral|llama|meta-externalagent/i,    type:'llm-agent',   label:'LLM agent',        color:'#bc8cff' },
+  { re: /langchain|llm|auto.?gpt|agentgpt|openagent/i,     type:'llm-agent',   label:'LLM framework',    color:'#bc8cff' },
+  // Vulnerability scanners
+  { re: /nuclei/i,                                          type:'scanner',     label:'Scanner · Nuclei', color:'#f85149' },
+  { re: /sqlmap/i,                                          type:'scanner',     label:'Scanner · sqlmap', color:'#f85149' },
+  { re: /nikto/i,                                           type:'scanner',     label:'Scanner · Nikto',  color:'#f85149' },
+  { re: /nmap|masscan/i,                                    type:'scanner',     label:'Scanner · Nmap',   color:'#f85149' },
+  { re: /acunetix|netsparker|appscan|webinspect|burp/i,     type:'scanner',     label:'Scanner · AppSec', color:'#f85149' },
+  { re: /dirbuster|gobuster|ffuf|wfuzz|dirb\b/i,            type:'scanner',     label:'Scanner · Fuzzer', color:'#f85149' },
+  { re: /zgrab|shodan|censys|fofa|zoomeye/i,                type:'scanner',     label:'Scanner · Recon',  color:'#f85149' },
+  // Browser automation
+  { re: /selenium|webdriver|headless/i,                     type:'automation',  label:'Automation',       color:'#d29922' },
+  { re: /puppeteer|playwright|cypress|phantomjs/i,          type:'automation',  label:'Automation',       color:'#d29922' },
+  // Known web crawlers
+  { re: /Googlebot/i,                                       type:'crawler',     label:'Crawler · Google', color:'#58a6ff' },
+  { re: /Bingbot|msnbot/i,                                  type:'crawler',     label:'Crawler · Bing',   color:'#58a6ff' },
+  { re: /YandexBot/i,                                       type:'crawler',     label:'Crawler · Yandex', color:'#58a6ff' },
+  { re: /Baiduspider/i,                                     type:'crawler',     label:'Crawler · Baidu',  color:'#58a6ff' },
+  { re: /DuckDuckBot|DuckDuckGo/i,                          type:'crawler',     label:'Crawler · DDG',    color:'#58a6ff' },
+  { re: /Slurp/i,                                           type:'crawler',     label:'Crawler · Yahoo',  color:'#58a6ff' },
+  { re: /AhrefsBot|SemrushBot|MJ12bot|DotBot/i,             type:'crawler',     label:'Crawler · SEO',    color:'#58a6ff' },
+  // Monitoring / uptime — before generic bot catch to avoid mis-classification
+  { re: /UptimeRobot|Pingdom|StatusCake|Site24x7|NewRelic/i,type:'monitoring',  label:'Monitoring',       color:'#3fb950' },
+  { re: /monitor|healthcheck|uptime|pingbot/i,              type:'monitoring',  label:'Monitoring',       color:'#3fb950' },
+  { re: /[Cc]rawler|[Ss]pider|[Bb]ot\b/,                   type:'crawler',     label:'Crawler',          color:'#58a6ff' },
+  // Scrapers / generic HTTP clients
+  { re: /python-requests|aiohttp|httpx|requests\//i,        type:'scraper',     label:'Scraper · Python', color:'#ff7b3a' },
+  { re: /Scrapy|BeautifulSoup/i,                            type:'scraper',     label:'Scraper · Python', color:'#ff7b3a' },
+  { re: /Go-http-client|Go\/\d/i,                           type:'scraper',     label:'Scraper · Go',     color:'#ff7b3a' },
+  { re: /okhttp|java\/|Apache-HttpClient/i,                 type:'scraper',     label:'Scraper · Java',   color:'#ff7b3a' },
+  { re: /axios|node-fetch|node\.js|got\//i,                 type:'scraper',     label:'Scraper · Node',   color:'#ff7b3a' },
+  { re: /curl\//i,                                          type:'scraper',     label:'Scraper · curl',   color:'#ff7b3a' },
+  { re: /wget\//i,                                          type:'scraper',     label:'Scraper · wget',   color:'#ff7b3a' },
+];
+function classifyAgent(ua, s) {
+  if (!ua || ua.length < 4) return { type:'no-ua', label:'No UA', color:'#8b949e' };
+  for (const p of _AGENT_PATTERNS) {
+    if (p.re.test(ua)) return { type: p.type, label: p.label, color: p.color };
+  }
+  // Heuristic: looks like a real browser UA but scored high → stealth agent
+  const looksLikeBrowser = /Mozilla\/5\.0.*(Chrome|Firefox|Safari|Edg)\//i.test(ua);
+  if (looksLikeBrowser && s.stealth_score >= 40)
+    return { type:'stealth', label:'Stealth', color:'#f85149' };
+  if (looksLikeBrowser)
+    return { type:'browser', label:'Browser', color:'#3fb950' };
+  return { type:'unknown', label:'Unknown', color:'#8b949e' };
+}
+
+// ── Top-signal helper ─────────────────────────────────────────────────────
+const _COMP_NAMES = { headers:'headers', assets:'assets', enum:'enum', timing:'timing', risk:'risk', '404s':'404s' };
+function topSignal(s) {
+  // Prefer the highest-count explicit block reason.
+  const bb = s.blocks_breakdown || [];
+  if (bb.length) return { label: bb[0][0], count: bb[0][1], isBlock: true };
+  // Fall back to the stealth component with the highest score.
+  const c = s.components || {};
+  let best = null, bestVal = 0;
+  for (const [k, v] of Object.entries(c)) {
+    if (v > bestVal) { bestVal = v; best = k; }
+  }
+  if (best) return { label: _COMP_NAMES[best] || best, count: bestVal, isBlock: false };
+  return null;
+}
 function _sortSuspects(arr) {
   const fn = _SUS_KEY[_susSort.col];
   if (!fn) return arr;
@@ -305,12 +346,16 @@ document.querySelectorAll('#sus-tbl th[data-sort]').forEach(th => {
 });
 _updateSusSortHeaders();
 
-let MIN = 20;
+let MIN = parseInt(localStorage.getItem('agt_thresh') || '20', 10);
+// Sync slider initial value from persisted threshold.
+document.getElementById('thresh-slider').value = MIN;
+document.getElementById('thresh-input-readout').textContent = MIN;
 function setThreshold(v, refresh){
   MIN = Math.max(0, Math.min(100, parseInt(v) || 0));
   document.getElementById('m-thresh').textContent = MIN;
   document.getElementById('thresh-slider').value = MIN;
   document.getElementById('thresh-input-readout').textContent = MIN;
+  try { localStorage.setItem('agt_thresh', MIN); } catch(_){}
   if (refresh) tick();
 }
 document.getElementById('thresh-slider').addEventListener('input', e=>{
@@ -333,10 +378,10 @@ async function tick(){
     _liveEl.title='Agent data refreshed · updated ' + new Date().toLocaleTimeString();
 
     const sum = d.summary;
-    document.getElementById('m-total').textContent = sum.total_with_allowed;
+    document.getElementById('m-total').textContent = sum.total_tracked;
     document.getElementById('m-susp').textContent  = sum.suspicious;
-    const pct = sum.total_with_allowed
-      ? ((sum.suspicious/sum.total_with_allowed)*100).toFixed(1) + '% of allowed'
+    const pct = sum.total_tracked
+      ? ((sum.suspicious/sum.total_tracked)*100).toFixed(1) + '% of tracked'
       : '—';
     document.getElementById('m-susp-pct').textContent = pct;
     const crits = d.suspects.filter(s=>s.stealth_score>=80).length;
@@ -360,22 +405,49 @@ async function tick(){
     const tbody = document.querySelector('#sus-tbl tbody');
     const suspects = _sortSuspects(d.suspects);
     window._suspectsList = suspects;
+    const ADMIN_IP_TIP = 'Admin IP — this source is in the operator’s trusted IP allowlist. Requests from this address bypass risk scoring and ban enforcement.';
+    const adminLock = f => f ? `<span title="${ADMIN_IP_TIP}" style="cursor:help;margin-right:3px">🔒</span>` : '';
     if (!suspects.length){
-      tbody.innerHTML = `<tr><td colspan=15 class=dim style="text-align:center;padding:14px">no suspicious agents at threshold ${MIN}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan=11 class=dim style="text-align:center;padding:14px">no suspicious agents at threshold ${MIN}</td></tr>`;
       _updateSusSortHeaders();
     } else {
       tbody.innerHTML = suspects.map((s,i)=>{
         const m = s.metrics, c = s.components;
-        const compBar = `<div class="bar" title="headers:${c.headers} assets:${c.assets} enum:${c.enum} timing:${c.timing} risk:${c.risk} 404s:${c['404s']}">
+        const compTip = `▐purple=headers:${c.headers} ▐teal=assets:${c.assets} ▐green=enum:${c.enum} ▐yellow=timing:${c.timing} ▐red=risk:${c.risk} ▐orange=404s:${c['404s']}`;
+        const compBar = `<div class="bar" title="${compTip}">
           <div class="h" style="width:${c.headers}%"></div>
           <div class="a" style="width:${c.assets}%"></div>
           <div class="e" style="width:${c.enum}%"></div>
           <div class="t" style="width:${c.timing}%"></div>
           <div class="r" style="width:${c.risk}%"></div>
           <div class="f" style="width:${c['404s']}%"></div></div>`;
+        // Agent type
+        const agCls = classifyAgent(s.ua, s);
+        const agBadge = `<span style="background:${agCls.color}22;color:${agCls.color};padding:1px 5px;border-radius:3px;font-size:10px;font-weight:600;white-space:nowrap" title="${escapeHtml(s.ua||'')}">${escapeHtml(agCls.label)}</span>`;
+        // Top signal
+        const ts = topSignal(s);
+        const tsHtml = ts
+          ? (ts.isBlock
+              ? `<code style="color:var(--red);font-size:10.5px">${escapeHtml(ts.label)}</code><span class="dim" style="font-size:10px"> ×${ts.count}</span>`
+              : `<span class="dim" style="font-size:10.5px">${escapeHtml(ts.label)} <span style="color:var(--orange)">+${ts.count}</span></span>`)
+          : '<span class="dim">—</span>';
+        // First seen
+        const fmtAge = secs => {
+          if (secs == null) return '—';
+          if (secs < 60) return Math.round(secs)+'s ago';
+          if (secs < 3600) return Math.round(secs/60)+'m ago';
+          if (secs < 86400) return (secs/3600).toFixed(1)+'h ago';
+          return (secs/86400).toFixed(1)+'d ago';
+        };
+        // Expand: allowed paths + signal breakdown
         const recentRows = (s.recent_paths||[]).slice(-5).reverse().map(p=>
           `<div class="path-row">${new Date(p.ts*1000).toLocaleTimeString()} · ${p.status} · ${escapeHtml(p.path)} · hdr=${p.header_score}</div>`
-        ).join('') || '<span class=dim>—</span>';
+        ).join('') || '<span class=dim>no allowed paths</span>';
+        const blockRows = (s.blocks_breakdown||[]).slice(0,8).map(([r,c2])=>
+          `<div class="path-row"><code style="color:var(--red)">${escapeHtml(r)}</code> <span class="dim">×${c2}</span></div>`
+        ).join('') || '';
+        const metricsBlock = `<div class="path-row" style="color:var(--dim)">
+          hdrs ${m.avg_header_score}/7 · html/static ${m.html_loads}/${m.static_loads} · paths ${m.unique_paths}/${s.allowed} (div=${m.path_diversity}) · timing-cv ${m.behavioral_cov!==null?m.behavioral_cov:'n/a'} · 404s ${m.upstream_404_count} · risk ${m.risk_score}</div>`;
         const _bs = s.banned_secs || 0;
         const _bstate = _bs > 86400 ? 'really-banned' : _bs > 0 ? 'banned' : 'allow';
         const switchHtml = `
@@ -388,25 +460,23 @@ async function tick(){
         return `
           <tr>
             <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
-            <td><b class="cell-click" data-pop="id" data-i="${i}" title="click for full identity details">${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim">${m.samples} samples</div></td>
+            <td>${agBadge}</td>
+            <td><b class="cell-click" data-pop="id" data-i="${i}" title="click for full identity details">${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim" style="font-size:10px">${fmtAge(s.first_seen_secs_ago)}</div></td>
             <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
-            <td>${s.is_admin_ip?'<span title="Admin IP" style="margin-right:3px">🔒</span>':''}${escapeHtml(s.ip)}</td>
+            <td>${adminLock(s.is_admin_ip)}${escapeHtml(s.ip)}</td>
+            <td>${tsHtml}</td>
             <td style="color:var(--green)">${s.allowed}</td>
             <td style="color:${s.blocked?'var(--red)':'var(--dim)'}">${s.blocked}</td>
-            <td>${m.avg_header_score}/7</td>
-            <td>${m.html_loads}/${m.static_loads}</td>
-            <td>${m.unique_paths}/${s.allowed} (${m.path_diversity})</td>
-            <td>${m.behavioral_cov!==null?m.behavioral_cov:'—'}</td>
-            <td style="color:${m.upstream_404_count>5?'var(--red)':'var(--dim)'}">${m.upstream_404_count}</td>
-            <td>${hasRiskBreakdown
-                  ? `<span class="cell-click" data-pop="risk" data-i="${i}" title="click for reason breakdown">${m.risk_score}</span>`
-                  : `<span class="dim">${m.risk_score}</span>`}</td>
             <td class="dim">${escapeHtml((s.last_path||'').slice(0,30))}</td>
             <td>${switchHtml}</td>
-            <td><span class="expand" data-i="${i}">▸ paths</span></td>
+            <td><span class="expand" data-i="${i}">▸</span></td>
           </tr>
-          <tr id="d-${i}" class="detail-row" style="display:none"><td colspan=15>
-            <div class="detail show"><b>Recent allowed paths</b>${recentRows}</div></td></tr>`;
+          <tr id="d-${i}" class="detail-row" style="display:none"><td colspan=11>
+            <div class="detail show">
+              ${blockRows ? `<b>Block signals</b>${blockRows}` : ''}
+              <b>Recent allowed paths</b>${recentRows}
+              <b>Signal breakdown</b>${metricsBlock}
+            </div></td></tr>`;
       }).join('');
       _updateSusSortHeaders();
       // Wire 3-state ban controls.
@@ -573,86 +643,6 @@ function _typing(){
 setInterval(() => { if (!_typing()) tick(); }, 3000);
 
 // 1.6.5 — rule inventory + per-method latency
-(function(){
-  const url = (p) => p;
-  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const COL = {
-    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
-    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
-    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
-  };
-  function fmtAge(secs){
-    if (!secs) return 'never';
-    if (secs < 60) return `${secs|0}s ago`;
-    if (secs < 3600) return `${(secs/60)|0} min ago`;
-    if (secs < 86400) return `${(secs/3600)|0} h ago`;
-    return `${(secs/86400)|0} d ago`;
-  }
-  async function loadInventory(){
-    if (typeof _typing === 'function' && _typing()) return;
-    try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/lists-snapshot'), {credentials:'include'});
-      const d = await r.json();
-      const rows = [];
-      // AI-UA groups (granular bot detection)
-      const ai = Object.entries(d.ai_ua_groups || {});
-      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:6px">AI crawler groups (${ai.length})</div>`);
-      for (const [grp, info] of ai) {
-        rows.push(`<div>· <span style="color:#bc8cff">${escHtml(grp)}</span> · <code>${info.frags}</code> rules · <span style="color:${info.enabled?'#3fb950':'#8b949e'}">${info.enabled?'on':'off'}</span></div>`);
-      }
-      // Body groups
-      const bg = Object.entries(d.body_groups || {});
-      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px">Body-pattern groups (${bg.length})</div>`);
-      for (const [grp, info] of bg) {
-        rows.push(`<div>· <span style="color:#ff7b3a">${escHtml(grp)}</span> · <code>${info.patterns}</code> regex · <span style="color:${info.enabled?'#3fb950':'#8b949e'}">${info.enabled?'on':'off'}</span></div>`);
-      }
-      // DLP
-      const dlp = Object.entries(d.dlp_groups || {});
-      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px">DLP groups (${dlp.length})</div>`);
-      for (const [grp, info] of dlp) {
-        rows.push(`<div>· <span style="color:#bc8cff">${escHtml(grp)}</span> · <code>${info.patterns}</code> regex · <span style="color:${info.enabled?'#3fb950':'#8b949e'}">${info.enabled?'on':'off'}</span></div>`);
-      }
-      // Lists
-      rows.push(`<div style="color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;margin-top:8px">Lists & deny-feeds</div>`);
-      rows.push(`<div>UA blocklist (legacy CLI / scanners) · <code>${d.ua_blocklist_size}</code> entries</div>`);
-      rows.push(`<div>JA4 deny list · <code>${d.ja4_deny_size}</code> entries</div>`);
-      rows.push(`<div>Tor exits · <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:#3fb950">enforcing</span>':'<span style="color:#8b949e">off</span>'}</div>`);
-      rows.push(`<div>Hosting-ASN keywords · <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:#3fb950">on</span>':'<span style="color:#8b949e">off</span>'}</div>`);
-      rows.push(`<div>Honeypot paths · <code>${d.honeypot_paths_size}</code></div>`);
-      rows.push(`<div>Suspicious-path patterns · <code>${d.suspicious_path_patterns}</code></div>`);
-      rows.push(`<div>Country denylist · <code>${d.country_denylist_size}</code> · ${d.country_denylist.join(',')||'(empty)'}</div>`);
-      rows.push(`<div>Country allowlist · <code>${d.country_allowlist_size}</code> · ${d.country_allowlist.join(',')||'(empty)'}</div>`);
-      rows.push(`<div>Custom rules · <code>${d.custom_rules_size}</code></div>`);
-      rows.push(`<div>JWT validation paths · <code>${(d.jwt_paths||[]).length}</code></div>`);
-      rows.push(`<div>Endpoint policies · <code>${(d.endpoint_policies||[]).length}</code></div>`);
-      rows.push(`<div>Webhook event filter · <code>${(d.webhook_event_filter||[]).length || 'all'}</code></div>`);
-      rows.push(`<div>Admin IP allow · <code>${d.admin_ip_count}</code></div>`);
-      document.getElementById('rule-inv').innerHTML = rows.join('');
-    } catch(e){}
-  }
-  async function loadLatency(){
-    if (typeof _typing === 'function' && _typing()) return;
-    try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
-      const d = await r.json();
-      const tb = document.querySelector('#agent-latency-tbl tbody');
-      if (!tb) return;
-      const sigs = (d.signals || []).filter(s => s.hits > 0);
-      if (!sigs.length){ tb.innerHTML = '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>'; return; }
-      tb.innerHTML = sigs.slice(0, 20).map(s => `
-        <tr style="border-bottom:1px solid #1f2730">
-          <td style="padding:4px 6px;font-family:ui-monospace,monospace"><code>${escHtml(s.reason)}</code></td>
-          <td style="padding:4px 6px;color:${COL[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escHtml(s.method)}</td>
-          <td style="padding:4px 6px;text-align:right;font-weight:600">${s.hits}</td>
-          <td style="padding:4px 6px;text-align:right;color:var(--dim)">${s.p50_ms}</td>
-          <td style="padding:4px 6px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
-        </tr>`).join('');
-    } catch(e){}
-  }
-  loadInventory(); loadLatency();
-  setInterval(() => { loadInventory(); loadLatency(); }, 5000);
-})();
 // Only auto-refresh the chart when in live mode.
 setInterval(() => { if (tEndEpoch === null && !_typing()) tickChart(); }, 5000);
 
@@ -667,6 +657,8 @@ function _identCell(idents){
   return `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
 }
 const _adminNs = '/antibot-appsec-gateway/secured';
+const _ADMIN_IP_TIP = 'Admin IP — this source is in the operator’s trusted IP allowlist. Requests from this address bypass risk scoring and ban enforcement.';
+const _adminLock = f => f ? `<span title="${_ADMIN_IP_TIP}" style="cursor:help;margin-right:3px">🔒</span>` : '';
 async function _ipAction(btn, url){
   btn.disabled = true; btn.textContent = '…';
   try {
@@ -698,7 +690,7 @@ function _renderDetected(list){
       const top = Object.entries(e.reasons||{}).sort((a,b)=>b[1]-a[1])[0]||['—',0];
       return `<tr>
         <td>${_identCell(e.identities)}</td>
-        <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
+        <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
         <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
@@ -714,7 +706,7 @@ function _renderMissed(list){
     </tr></thead><tbody>` +
     list.map(e => `<tr>
       <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
-      <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
+      <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
       <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
       <td style="text-align:right">${e.risk_score}</td>
       <td style="color:var(--green)">${e.allowed}</td>
@@ -731,7 +723,7 @@ function _renderClean(list){
     </tr></thead><tbody>` +
     list.map(e => `<tr>
       <td>${_identCell(e.identities)}</td>
-      <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
+      <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
       <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
       <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
       <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
@@ -859,7 +851,7 @@ function openPopover(kind, s, x, y){
       <div class="kv">
         <span class="k">id</span>          <span class="v">${escapeHtml(s.id||'')}</span>
         <span class="k">status</span>      <span class="v">${banLine}</span>
-        <span class="k">ip</span>          <span class="v">${s.is_admin_ip?'🔒 ':'' }${escapeHtml(s.ip||'')}</span>
+        <span class="k">ip</span>          <span class="v">${_adminLock(s.is_admin_ip)}${escapeHtml(s.ip||'')}</span>
         <span class="k">user-agent</span>  <span class="v">${escapeHtml(s.ua||'')}</span>
         <span class="k">session</span>     <span class="v">${escapeHtml(s.session||'—')}</span>
         <span class="k">fingerprint</span> <span class="v">${escapeHtml(s.fingerprint||'—')}</span>

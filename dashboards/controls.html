@@ -243,6 +243,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="tier:info"].active{background:rgba(139,148,158,.15);border-color:rgba(139,148,158,.35);color:#8b949e}
 .sf-chip[data-filter="tier:intel"].active{background:rgba(188,140,255,.15);border-color:rgba(188,140,255,.4);color:#bc8cff}
 .sf-chip[data-filter="tier:modifier"].active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.4);color:#79c0ff}
+.sf-chip[data-filter="tag:fp"].active{background:rgba(188,140,255,.15);border-color:rgba(188,140,255,.4);color:#bc8cff}
 .sf-clear{font-size:10px;padding:2px 8px;border-radius:12px;cursor:pointer;
   background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#f85149;
   font-weight:700;margin-left:4px}
@@ -306,7 +307,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="order:3"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.35);color:#f85149}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.7.1 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.7.2 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -430,6 +431,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
         <button class="sf-chip" data-filter="tag:cfg-required">Config required</button>
         <button class="sf-chip" data-filter="tag:ip">IP / geo</button>
         <button class="sf-chip" data-filter="tag:ua">User Agent</button>
+        <button class="sf-chip" data-filter="tag:fp">Browser FP</button>
       </div>
       <div class="sf-row">
         <span class="sf-label">Order</span>
@@ -691,11 +693,30 @@ const META = {
   H2_FP_ENABLED:           {kind:'bool', desc:'HTTP/2 fingerprint fallback (1.6.10, default OFF) — fires (+3 soft) when a modern-browser UA makes HTTP/1.1 requests via a TLS proxy (X-Forwarded-Proto: https). Real browsers always negotiate HTTP/2 on HTTPS; bot libraries default to HTTP/1.1. Disabled by default because TLS-terminating proxies may already normalise versions.'},
   TARPIT_ENABLED:          {kind:'bool', desc:'Tarpit mitigation — when an identity is in the soft-challenge band (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD), silent-decoy responses are delayed by TARPIT_DELAY_MS. Burns attacker iteration time without committing to a ban.'},
   TARPIT_DELAY_MS:         {kind:'num', min:0, max:30000, step:100, desc:'Delay in ms before serving the silent decoy when tarpit fires. Default 1500. Per response — total time blow-up = delay × #soft-band hits.', card:'thresholds'},
+  SOFT_CHALLENGE_SCORE:    {kind:'num', min:0, max:100000, step:0.5, desc:'Risk score at or above which the JS challenge (cookie gate) is shown. Below this threshold, requests are allowed through. Default 4.', card:'thresholds'},
+  TURNSTILE_RISK_THRESHOLD:{kind:'num', min:0, max:100000, step:0.5, desc:'Risk score at or above which Turnstile CAPTCHA is presented (0 = auto = midpoint of orange band). Most users never see Turnstile; only suspected bots above this score do.', card:'thresholds'},
+  JS_CHALLENGE_TTL:        {kind:'num', min:60, max:604800, step:60, desc:'Seconds a solved JS challenge cookie remains valid before re-challenge. Default 3600 = 1 hour.', card:'thresholds'},
+  LABYRINTH_SLOW_MS:       {kind:'num', min:0, max:30000, step:100, desc:'Milliseconds to stream each labyrinth page chunk. Higher = more CPU/bandwidth burned per bot request. Default 600. Irrelevant when LABYRINTH_JITTER_ENABLED is on.', card:'thresholds'},
+  LABYRINTH_MAX_DEPTH:     {kind:'num', min:1, max:20, step:1, desc:'Maximum maze depth before looping back. Deeper = more total pages served per bot crawl session.', card:'thresholds'},
+  LABYRINTH_LINKS_PER_PAGE:{kind:'num', min:1, max:10, step:1, desc:'Signed links injected per labyrinth page. More links = faster branch explosion but larger pages.', card:'thresholds'},
+  POW_MIN_SOLVE_MS:        {kind:'num', min:0, max:5000, step:50, desc:'Minimum milliseconds the PoW solution must have taken (client-side). Solutions faster than this are rejected as pre-computed. Default 200.', card:'thresholds'},
   BOTD_ENABLED:            {kind:'bool', desc:'FingerprintJS BotD client-side detection (open-source). Injects /antibot-appsec-gateway/assets/botd.bundle.js into HTML responses; the in-browser library checks for headless / WebDriver / automation markers and POSTs an HMAC-bound report to /antibot-appsec-gateway/botd-report. Detected = +30 risk (med tier). Off by default — adds ~16 KB JS to every HTML response.'},
   // 1.6.5 — log-level moved out of the legacy "logging" card and into
   // the External integrations area so operators have a single place to
   // tune all server-side telemetry knobs.
-  LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error'], card:'external-log', desc:'Filter for stdout structured log emission.'},
+  LOG_LEVEL:               {kind:'select', options:['debug','info','warn','error','critical'], card:'external-log', desc:'Filter for stdout structured log emission.'},
+  LOG_FORMAT:              {kind:'select', options:['text','json'], card:'external-log', desc:'Log output format. text = human-readable (default); json = structured JSON lines for log aggregators (Loki, Splunk, etc.).'},
+  // ── 1.7.2 ──
+  COOKIE_GHOST_ENABLED:          {kind:'bool', desc:'Cookie-ghost detection (1.7.2) — fires when the gateway has set cookies for an identity but the client has never returned any of them across 3+ requests. Real browsers carry cookies automatically; pure-HTTP bots do not. Near-zero false-positive risk. Fires cookie-ghost (+20 risk).'},
+  COOKIE_LIFECYCLE_ENABLED:      {kind:'bool', desc:'Lifecycle-miss detection (1.7.2) — injects a tiny JS snippet into HTML responses that sets the agw_lc cookie. If subsequent non-HTML requests from the same identity lack the cookie, JS is not executing (headless/curl). Fires lifecycle-miss (+12 risk).'},
+  COOKIE_GHOST_MIN_REQUESTS:     {kind:'num', min:1, max:100, step:1, desc:'Minimum total requests before cookie-ghost can fire. Prevents false positives on first-contact clients.', card:'thresholds'},
+  COOKIE_GHOST_MISS_THRESHOLD:   {kind:'num', min:1, max:50,  step:1, desc:'Number of cookie-miss requests before cookie-ghost fires. Default 3.', card:'thresholds'},
+  REFERER_CHAIN_ENABLED:         {kind:'bool', desc:'Referer-ghost detection (1.7.2) — fires when a request\'s Referer header claims our domain but the referenced path was never served to this identity. Fabricated Referers are common in bot frameworks that copy headers from captured browser sessions. Fires referer-ghost (+10 risk).'},
+  IMPOSSIBLE_TRAVEL_ENABLED:     {kind:'bool', desc:'Impossible-travel detection (1.7.2) — fires when the same session-keyed identity appears from a different country within IMPOSSIBLE_TRAVEL_WINDOW_SECS. Catches session hijacking and VPN-hopping bots. Requires MaxMind GeoLite2 City DB. Fires impossible-travel (+35 risk → ban).'},
+  IMPOSSIBLE_TRAVEL_WINDOW_SECS: {kind:'num', min:60, max:604800, step:60, desc:'Window (seconds) in which the same identity must not appear from two different countries. Default 1800 = 30 min.', card:'thresholds'},
+  FP_ENRICHMENT_ENABLED:         {kind:'bool', desc:'Canvas/WebGL fingerprint enrichment (1.7.2) — injects ~1 KB of inline JS that draws a deterministic canvas scene and queries WebGL renderer info. Reports back via /antibot-appsec-gateway/fp-report (HMAC-bound to session). soft-renderer fires (+25) when the renderer string contains swiftshader/mesa/vmware/llvmpipe; webgl-missing fires (+15) when Chrome UA has no WebGL renderer (headless default).'},
+  SW_CHALLENGE_ENABLED:          {kind:'bool', desc:'Service Worker challenge (1.7.2, default OFF) — registers a SW at /antibot-appsec-gateway/sw.js that adds X-SW-Active: 1 to every intercepted gateway request. Absence of this header after the SW is expected to be registered is a strong headless-browser signal. Requires a browser that supports Service Workers. Disabled by default — enable when advanced headless evasion is confirmed.'},
+  POW_CHAL_THRESHOLD:            {kind:'num', min:0, max:100000, step:1, desc:'Risk score at or above which the JS challenge page embeds a PoW puzzle (solved in a WebWorker alongside Turnstile). 0 = never embed PoW. Default 30 = embed on any soft-band identity. Raises bot solve cost without adding round-trips.', card:'thresholds'},
 };
 
 let serverState = {};
@@ -746,26 +767,18 @@ function renderControl(name, meta, value){
     sw.className = 'switch' + (value ? ' on' : '');
     sw.onclick = async () => {
       const newVal = !sw.classList.contains('on');
-      sw.classList.toggle('on', newVal);
-      // Auto-apply booleans: push instantly to /antibot-appsec-gateway/secured/config, no Apply click
-      // needed. Reverts the toggle visually if the server rejects.
-      try {
-        const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
-          {method:'POST', headers:{'Content-Type':'application/json'},
-           body: JSON.stringify({[name]: newVal})});
-        const body = await r.json();
-        if (r.ok && body.applied && Object.keys(body.applied).length) {
-          serverState[name] = newVal;
-          showToast(name + ' = ' + newVal, 'ok');
-        } else {
-          sw.classList.toggle('on', !newVal);  // revert
-          const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
-          showToast('Rejected — ' + reasons, 'err');
-        }
-      } catch (e) {
-        sw.classList.toggle('on', !newVal);
-        showToast('Network error: ' + e.message, 'err');
+      // Warn: COUNTRY_BLOCK_ENABLED on with both lists empty
+      if (name === 'COUNTRY_BLOCK_ENABLED' && newVal) {
+        const deny  = serverState.COUNTRY_DENYLIST  || [];
+        const allow = serverState.COUNTRY_ALLOWLIST || [];
+        if (!deny.length && !allow.length)
+          showToast('⚠ COUNTRY_BLOCK_ENABLED on but both denylist and allowlist are empty — all countries pass through', 'err');
       }
+      // Warn: DLP_REDACT enabled without DLP_ENABLED
+      if (name === 'DLP_REDACT' && newVal && !serverState.DLP_ENABLED)
+        showToast('⚠ DLP_REDACT requires DLP_ENABLED — enable DLP first', 'err');
+      sw.classList.toggle('on', newVal);
+      await _applyBool(sw, name, newVal);
     };
     input.appendChild(sw);
   } else if (m.kind === 'num') {
@@ -827,11 +840,66 @@ function clearDirty(){
   $('hint').textContent = 'No pending changes.';
 }
 
-function showToast(msg, kind){
+function showToast(msg, kind, onUndo){
   const t = $('toast');
-  t.textContent = msg;
+  if (typeof t._undoTimer === 'number') clearTimeout(t._undoTimer);
   t.className = 'toast show ' + (kind || 'ok');
-  setTimeout(() => t.classList.remove('show'), 2400);
+  if (onUndo) {
+    t.innerHTML = escapeHtml(String(msg)) +
+      '<button id="toast-undo-btn" style="margin-left:10px;background:rgba(255,255,255,.18);' +
+      'border:1px solid rgba(255,255,255,.3);color:#fff;padding:2px 8px;border-radius:3px;' +
+      'cursor:pointer;font-size:11px;font-weight:600;vertical-align:middle">Undo</button>';
+    const btn = document.getElementById('toast-undo-btn');
+    if (btn) btn.onclick = (ev) => {
+      ev.stopPropagation();
+      clearTimeout(t._undoTimer);
+      t.classList.remove('show');
+      onUndo();
+    };
+    t._undoTimer = setTimeout(() => t.classList.remove('show'), 5000);
+  } else {
+    t.textContent = msg;
+    t._undoTimer = setTimeout(() => t.classList.remove('show'), 2400);
+  }
+}
+
+// Shared helper: optimistic-toggle already applied by caller; push to server + wire undo.
+async function _applyBool(sw, knob, newVal) {
+  try {
+    const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+      {method:'POST', headers:{'Content-Type':'application/json'},
+       body: JSON.stringify({[knob]: newVal})});
+    const body = await r.json();
+    if (r.ok && body.applied && Object.keys(body.applied).length) {
+      serverState[knob] = newVal;
+      showToast(knob + ' = ' + newVal, 'ok', async () => {
+        sw.classList.toggle('on', !newVal);
+        try {
+          const r2 = await fetch(url('/antibot-appsec-gateway/secured/config'),
+            {method:'POST', headers:{'Content-Type':'application/json'},
+             body: JSON.stringify({[knob]: !newVal})});
+          const b2 = await r2.json();
+          if (r2.ok && b2.applied && Object.keys(b2.applied).length) {
+            serverState[knob] = !newVal;
+            showToast(knob + ' reverted', 'ok');
+          } else {
+            sw.classList.toggle('on', newVal);
+            showToast('Undo rejected', 'err');
+          }
+        } catch(e2) {
+          sw.classList.toggle('on', newVal);
+          showToast('Undo error: ' + e2.message, 'err');
+        }
+      });
+    } else {
+      sw.classList.toggle('on', !newVal);
+      const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
+      showToast('Rejected — ' + reasons, 'err');
+    }
+  } catch (e) {
+    sw.classList.toggle('on', !newVal);
+    showToast('Network error: ' + e.message, 'err');
+  }
 }
 
 async function load(){
@@ -858,6 +926,10 @@ async function load(){
 }
 
 async function apply(){
+  // Warn: GLOBAL_RPS_LIMIT=0 removes all global rate-limit protection
+  if ('GLOBAL_RPS_LIMIT' in dirty && dirty.GLOBAL_RPS_LIMIT === 0) {
+    if (!confirm('Setting GLOBAL_RPS_LIMIT to 0 disables global rate-limit protection entirely.\nContinue?')) return;
+  }
   $('apply').disabled = true;
   try {
     // Lists: split CSV → array on submit
@@ -871,16 +943,19 @@ async function apply(){
     const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
       {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     const body = await r.json();
-    if (r.ok && body.applied && Object.keys(body.applied).length){
-      showToast(`Applied ${Object.keys(body.applied).length} change(s)`, 'ok');
+    const appliedN  = body.applied  ? Object.keys(body.applied).length  : 0;
+    const rejectedN = body.rejected ? Object.keys(body.rejected).length : 0;
+    if (r.ok && appliedN) {
+      showToast(`Applied ${appliedN} change(s)` + (rejectedN ? ` (${rejectedN} rejected)` : ''), 'ok');
       serverState = body.state || serverState;
       clearDirty();
-      // Re-render to reflect server-side coercion (e.g. CSV → list).
       load();
       loadAudit();
-    } else if (body.rejected && Object.keys(body.rejected).length){
+    } else if (rejectedN) {
       const reasons = Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ');
-      showToast('Rejected — ' + reasons, 'err');
+      showToast('All rejected — ' + reasons, 'err');
+    } else {
+      showToast('No changes accepted (server may have rejected all)', 'err');
     }
   } catch (e) { showToast('Network error: ' + e.message, 'err'); }
   $('apply').disabled = Object.keys(dirty).length === 0;
@@ -945,7 +1020,7 @@ async function loadBans(){
         $('unban-mode').value = 'id';
       });
     });
-  } catch(e){ /* ignore */ }
+  } catch(e){ showToast('Bans load failed: ' + e.message, 'err'); }
 }
 
 async function loadAudit(){
@@ -969,11 +1044,13 @@ async function loadAudit(){
 async function unban(scope, value){
   const msg = $('unban-msg');
   msg.textContent = 'working…'; msg.style.color = 'var(--dim)';
-  let qs;
-  if (scope === 'all') qs = '&all=1';
-  else qs = '&' + scope + '=' + encodeURIComponent(value);
+  const body = scope === 'all' ? {all: true} : {[scope]: value};
   try{
-    const r = await fetch(url('/antibot-appsec-gateway/secured/unban') + qs);
+    const r = await fetch(url('/antibot-appsec-gateway/secured/unban'), {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
     const b = await r.json().catch(()=>({}));
     if (r.ok && b.cleared !== undefined){
       msg.textContent = `cleared ${b.cleared} identit${b.cleared===1?'y':'ies'}`;
@@ -998,8 +1075,35 @@ document.addEventListener('DOMContentLoaded', () => {
     unban($('unban-mode').value, v);
   };
   $('unban-all').onclick = () => {
-    if (!confirm('Clear EVERY ban + reset risk scores?\nThis is audit-logged.')) return;
-    unban('all');
+    showSimpleModal(`
+      <div style="font-size:15px;font-weight:700;margin-bottom:8px;color:var(--red)">Clear ALL bans</div>
+      <p style="font-size:12.5px;color:var(--dim);margin:0 0 14px">
+        This resets ban status and risk scores for every tracked identity. Action is audit-logged.
+        Type <b style="color:var(--fg)">UNBAN ALL</b> to confirm.
+      </p>
+      <input id="_unban-confirm-inp" type="text" placeholder="UNBAN ALL"
+             style="width:100%;box-sizing:border-box;background:#0d1117;color:var(--fg);
+                    border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:13px">
+      <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
+        <button onclick="closeSimpleModal()"
+                style="padding:5px 14px;background:#21262d;color:var(--fg);border:1px solid var(--line);
+                       border-radius:4px;cursor:pointer">Cancel</button>
+        <button id="_unban-confirm-btn"
+                style="padding:5px 14px;background:var(--red);color:#fff;border:none;
+                       border-radius:4px;cursor:pointer;font-weight:600">Clear all bans</button>
+      </div>`);
+    const inp = document.getElementById('_unban-confirm-inp');
+    const btn = document.getElementById('_unban-confirm-btn');
+    inp.focus();
+    const go = () => {
+      if (inp.value.trim() !== 'UNBAN ALL') {
+        inp.style.borderColor = 'var(--red)'; inp.focus(); return;
+      }
+      closeSimpleModal();
+      unban('all');
+    };
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter') go(); });
+    btn.onclick = go;
   };
   // ── Admin IP allowlist UI ──────────────────────────────────────────
   async function loadAdminIps(){
@@ -1078,7 +1182,7 @@ document.addEventListener('DOMContentLoaded', () => {
           inp.addEventListener('blur', () => save(true));
         };
       });
-    } catch(e) { /* ignore */ }
+    } catch(e) { showToast('Admin IPs load failed: ' + e.message, 'err'); }
   }
   $('aip-add').onclick = async () => {
     const cidr = $('aip-cidr').value.trim();
@@ -1161,7 +1265,7 @@ document.addEventListener('DOMContentLoaded', () => {
           inp.addEventListener('blur', () => save(true));
         };
       });
-    } catch(e) { /* ignore */ }
+    } catch(e) { showToast('Thresholds load failed: ' + e.message, 'err'); }
   }
 
   // ── External integrations status + cost ─────────────────────────
@@ -1184,11 +1288,15 @@ document.addEventListener('DOMContentLoaded', () => {
       };
       // Map name → hot-reloadable knob (env var that controls active state)
       const KNOB = {
-        'Cloudflare Turnstile':   'TURNSTILE_ENABLED',
-        'AbuseIPDB':              'ABUSEIPDB_ENABLED',
-        'CrowdSec':               'CROWDSEC_ENABLED',
-        'MaxMind GeoLite2 ASN':   'MAXMIND_ENABLED',
-        'Anubis-mode (PoW)':      'ANUBIS_ENABLED',
+        'Cloudflare Turnstile':           'TURNSTILE_ENABLED',
+        'AbuseIPDB':                      'ABUSEIPDB_ENABLED',
+        'CrowdSec':                       'CROWDSEC_ENABLED',
+        'MaxMind GeoLite2 ASN':           'MAXMIND_ENABLED',
+        'Anubis-mode (PoW)':              'ANUBIS_ENABLED',
+        // ── 1.7.2 ──
+        'Canvas/WebGL Fingerprint':       'FP_ENRICHMENT_ENABLED',
+        'Service Worker Challenge':        'SW_CHALLENGE_ENABLED',
+        'MaxMind GeoLite2 City':          'IMPOSSIBLE_TRAVEL_ENABLED',
       };
       // 1.6.5 — DB backend cards use a special toggle (mutually exclusive,
       // requires a process restart). Render as colour-coded pill instead
@@ -1262,7 +1370,7 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `${item.name} is the ACTIVE backend. To swap, click the OTHER backend's switch (a confirmation dialog will list the impact).`
             : (credsOk
                 ? `Click to switch the active backend to ${item.name}. RESTART REQUIRED — confirmation dialog will list impact.`
-                : `Click to supply ${(item.envs_needed||[]).join(' / ')} and switch to ${item.name} in one step (RESTART REQUIRED).`);
+                : `Click to supply ${(item.envs_needed||[]).join(' AND ')} and switch to ${item.name} in one step (RESTART REQUIRED).`);
           return '';  // rendered as combined DB card above
         }
         const knob = KNOB[item.name];
@@ -1280,8 +1388,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const disabledAttr = credsPresent ? '' : 'data-disabled="1"';
         const cls = (checked ? ' on' : '') + (credsPresent ? '' : ' switch-disabled');
         const title = credsPresent
-          ? 'Toggle integration on/off (requires ' + (item.envs_needed||[]).join(', ') + ' to be configured)'
-          : 'Cannot enable — set ' + (item.envs_needed||[]).join(' / ') + ' in container env first';
+          ? 'Toggle integration on/off (requires ' + (item.envs_needed||[]).join(' AND ') + ' to be configured)'
+          : 'Cannot enable — set ' + (item.envs_needed||[]).join(' AND ') + ' in container env first';
         return `<div class="switch${cls}" data-knob="${knob}" ${disabledAttr} title="${escapeHtml(title)}"></div>`;
       };
       box.innerHTML = renderDbCard() + (d.integrations||[]).filter(i => !DB_TARGET[i.name]).map(item => {
@@ -1330,10 +1438,18 @@ document.addEventListener('DOMContentLoaded', () => {
           }
         }
         // 1.5.4 — embed full info as data-attr so the click-to-tooltip can pull it
+        // 1.7.2 — activation order badge (same .sig-order pill as Defenses & Scoring)
+        const ord = item.activation_order;
+        const ordTitles = {1:'1st order — Baseline: always safe, zero config, µs cost',
+                           2:'2nd order — Elevated Suspicion: enable when bot patterns appear',
+                           3:'3rd order — Confirmed Attack: aggressive / requires configuration'};
+        const orderBadge = (DB_TARGET[item.name] || !ord) ? '' :
+          `<span class="sig-order o${ord}" style="flex-shrink:0;align-self:flex-start;margin-top:2px" title="${ordTitles[ord]||''}">${ord}</span>`;
         const itemJson = encodeURIComponent(JSON.stringify(item));
         return `<div class="integration-card" data-item="${itemJson}" style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117;cursor:pointer;transition:border-color .12s" title="click for full details">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
             <div style="flex:1 1 280px;display:flex;align-items:flex-start;gap:12px">
+              ${orderBadge}
               ${renderToggle(item)}
               <div>
                 <div style="font-weight:700;font-size:14px;margin-bottom:4px">${escapeHtml(item.name)} ${
@@ -1470,8 +1586,8 @@ document.addEventListener('DOMContentLoaded', () => {
                   const p = j.probe || j.postgres || {};
                   const ver  = p.version  ? `<b>PostgreSQL ${escapeHtml(String(p.version))}</b>` : '';
                   const db   = p.db_name  ? ` · db <code>${escapeHtml(p.db_name)}</code>` : '';
-                  const ms   = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
-                  const rows = p.events_rows  != null ? ` · ${p.events_rows} events` : '';
+                  const ms   = p.round_trip_ms != null ? ` · ${escapeHtml(String(p.round_trip_ms))} ms` : '';
+                  const rows = p.events_rows  != null ? ` · ${escapeHtml(String(p.events_rows))} events` : '';
                   resultEl.innerHTML = `<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`;
                   okBtn.disabled = false;
                   okBtn.title = '';
@@ -1588,7 +1704,7 @@ document.addEventListener('DOMContentLoaded', () => {
           s.innerHTML = '<span class="dot"></span>Loading Ready';
         }
       }));
-    } catch(e) { /* ignore */ }
+    } catch(e) { showToast('External integrations load failed: ' + e.message, 'err'); }
   }
 
   // ── Defenses & scoring (merged toggles + weights view) ──────────
@@ -1678,9 +1794,12 @@ document.addEventListener('DOMContentLoaded', () => {
         'ua-platform-mismatch':['ua'], 'header-order-fp':      ['ua'],
         'accept-fp':           ['ua'], 'accept-wildcard-html': ['ua'],
         'h2-fp':               ['ua'], 'behavior':             ['ua'],
-        'ai-headers-empty':    ['ai','ua'], 'ai-headers-incomplete':['ai','ua'],
         'js-challenge':        ['cfg-required'], 'rate-limit-endpoint': ['cfg-required'],
         'custom-rule-block':   ['cfg-required'], 'auth-jwt-invalid':    ['cfg-required'],
+        // ── 1.7.2 ──
+        'cookie-ghost':        ['ua'],           'lifecycle-miss':     ['ua'],
+        'referer-ghost':       ['ua'],           'impossible-travel':  ['ip','cfg-required'],
+        'soft-renderer':       ['fp'],           'webgl-missing':      ['fp'],
       };
 
       // Activation order defaults: 1=baseline, 2=elevated suspicion, 3=confirmed attack
@@ -1706,6 +1825,10 @@ document.addEventListener('DOMContentLoaded', () => {
         'js-challenge':3,'rate-limit-endpoint':3,
         'custom-rule-block':3,'auth-jwt-invalid':3,
         'tarpit-walk':3,'labyrinth-jitter':3,'botd-detected':3,
+        // ── 1.7.2: Layer A — server-side signals ──────────────────────────
+        'cookie-ghost':1,'lifecycle-miss':1,'referer-ghost':1,
+        // ── 1.7.2: Layer B — JS/geo signals ──────────────────────────────
+        'soft-renderer':2,'webgl-missing':2,'impossible-travel':2,
       };
 
       const _ORDER_LS_KEY = 'agw_sig_order';
@@ -1717,6 +1840,11 @@ document.addEventListener('DOMContentLoaded', () => {
         // persist locally first for instant UI feedback
         const ov = getOrderOverrides();
         ov[sig] = n;
+        // Bound map size to prevent unbounded localStorage growth
+        const keys = Object.keys(ov);
+        if (keys.length > 200) {
+          keys.slice(0, keys.length - 200).forEach(k => delete ov[k]);
+        }
         localStorage.setItem(_ORDER_LS_KEY, JSON.stringify(ov));
         // persist to server (fire-and-forget; localStorage is the fallback)
         fetch(url('/antibot-appsec-gateway/secured/signal-orders'), {
@@ -2016,8 +2144,10 @@ document.addEventListener('DOMContentLoaded', () => {
           const x    = (ev.touches ? ev.touches[0].clientX : ev.clientX) - rect.left;
           const pct  = Math.max(0, Math.min(1, x / rect.width));
           const v    = Math.round(pct * MAX);
+          const rban = (typeof serverState.RISK_BAN_THRESHOLD === 'number')
+            ? Math.round(serverState.RISK_BAN_THRESHOLD) : MAX;
           if (dragging === 's2') S2 = Math.min(v, S3 - 1);
-          else                   S3 = Math.max(v, S2 + 1);
+          else                   S3 = Math.min(Math.max(v, S2 + 1), rban - 1);
           render();
         }
         async function dragEnd(){
@@ -2312,23 +2442,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const knob = sw.dataset.knobScoring;
                 const newVal = !sw.classList.contains('on');
                 sw.classList.toggle('on', newVal);
-                try {
-                  const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
-                    {method:'POST', headers:{'Content-Type':'application/json'},
-                     body: JSON.stringify({[knob]: newVal})});
-                  const body = await r.json();
-                  if (r.ok && body.applied && Object.keys(body.applied).length){
-                    serverState[knob] = newVal;
-                    showToast(knob + ' = ' + newVal, 'ok');
-                  } else {
-                    sw.classList.toggle('on', !newVal);
-                    const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
-                    showToast('Rejected — ' + reasons, 'err');
-                  }
-                } catch(e) {
-                  sw.classList.toggle('on', !newVal);
-                  showToast('Network error: ' + e.message, 'err');
-                }
+                await _applyBool(sw, knob, newVal);
               };
             });
             // Re-wire sig-name tooltips after re-render
@@ -2347,26 +2461,10 @@ document.addEventListener('DOMContentLoaded', () => {
           const knob = sw.dataset.knobScoring;
           const newVal = !sw.classList.contains('on');
           sw.classList.toggle('on', newVal);
-          try {
-            const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
-              {method:'POST', headers:{'Content-Type':'application/json'},
-               body: JSON.stringify({[knob]: newVal})});
-            const body = await r.json();
-            if (r.ok && body.applied && Object.keys(body.applied).length){
-              serverState[knob] = newVal;
-              showToast(knob + ' = ' + newVal, 'ok');
-            } else {
-              sw.classList.toggle('on', !newVal);
-              const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
-              showToast('Rejected — ' + reasons, 'err');
-            }
-          } catch(e) {
-            sw.classList.toggle('on', !newVal);
-            showToast('Network error: ' + e.message, 'err');
-          }
+          await _applyBool(sw, knob, newVal);
         };
       });
-    } catch(e) { /* ignore */ }
+    } catch(e) { showToast('Scoring load failed: ' + e.message, 'err'); }
   }
 
   // 1.6.10 — seed localStorage overrides from server-persisted signal-orders
@@ -2430,8 +2528,8 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const ch = d.chal || {};
         document.getElementById('chal-rate').innerHTML =
-          `<b>${ch.minted||0}</b> chal-cookie mints / <b>${ch.required||0}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${ch.mint_rate||0}%</b>`;
-      } catch(e){}
+          `<b>${escapeHtml(String(ch.minted||0))}</b> chal-cookie mints / <b>${escapeHtml(String(ch.required||0))}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${escapeHtml(String(ch.mint_rate||0))}%</b>`;
+      } catch(e){ showToast('Active rules load failed: ' + e.message, 'err'); }
     }
     async function loadLists(){
       try {
@@ -2446,8 +2544,8 @@ document.addEventListener('DOMContentLoaded', () => {
           `Suspicious-path patterns: <code>${d.suspicious_path_patterns}</code>`,
           `Tor exits: <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:var(--green)">enforcing</span>':'<span class="dim">off</span>'}`,
           `Hosting-ASN keywords: <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:var(--green)">on</span>':'<span class="dim">off</span>'}`,
-          `Country denylist: <code>${d.country_denylist_size}</code>${d.country_denylist.length?' · '+d.country_denylist.join(','):''}`,
-          `Country allowlist: <code>${d.country_allowlist_size}</code>${d.country_allowlist.length?' · '+d.country_allowlist.join(','):''}`,
+          `Country denylist: <code>${escapeHtml(String(d.country_denylist_size))}</code>${d.country_denylist.length?' · '+d.country_denylist.map(c=>escapeHtml(c)).join(', '):''}`,
+          `Country allowlist: <code>${escapeHtml(String(d.country_allowlist_size))}</code>${d.country_allowlist.length?' · '+d.country_allowlist.map(c=>escapeHtml(c)).join(', '):''}`,
           `Custom rules: <code>${d.custom_rules_size}</code> · JWT paths: <code>${(d.jwt_paths||[]).length}</code> · Endpoint policies: <code>${(d.endpoint_policies||[]).length}</code>`,
           `Webhook event filter: <code>${(d.webhook_event_filter||[]).length || 'all'}</code> · Admin IP allowlist: <code>${d.admin_ip_count}</code>`,
         ];
@@ -2465,7 +2563,7 @@ document.addEventListener('DOMContentLoaded', () => {
             </tr>`).join('')
             : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>';
         }
-      } catch(e){}
+      } catch(e){ showToast('Lists load failed: ' + e.message, 'err'); }
     }
     loadActiveRules(); loadLists();
     setInterval(() => { loadActiveRules(); loadLists(); }, 7000);
@@ -2638,7 +2736,7 @@ function openPgDetails(it){
       msg.style.color = 'var(--red)'; msg.textContent = 'Password is required for a new connection.'; return;
     }
     const passEnc = pass ? encodeURIComponent(pass) : '****';
-    const dsn = `postgresql://${encodeURIComponent(user)}:${passEnc}@${host}:${port}/${db}`;
+    const dsn = `postgresql://${encodeURIComponent(user)}:${passEnc}@${encodeURIComponent(host)}:${encodeURIComponent(port)}/${encodeURIComponent(db)}`;
     this.disabled = true; msg.style.color = 'var(--dim)'; msg.textContent = 'Saving…';
     try {
       const r = await fetch(url('/antibot-appsec-gateway/secured/secrets'),
@@ -2835,7 +2933,7 @@ function openSecretEditor(name, anchor){
       if (r.ok && b.applied && b.applied[name]){
         msg.style.color = 'var(--green)';
         msg.textContent = '✓ saved · integration re-evaluated';
-        showToast(name + ' saved (' + v.length + ' chars)', 'ok');
+        showToast(name + ' saved', 'ok');
         setTimeout(() => { pop.remove(); loadExternal(); }, 600);
       } else {
         msg.style.color = 'var(--red)';

@@ -10,7 +10,8 @@ Depends on:
                 _TURNSTILE_CONFIGURED, JS_CHAL_REQUIRE_JA4, JS_CHAL_BIND_JA4,
                 JS_CHAL_STRICT_STATIC, JS_CHAL_OPEN_PATHS,
                 SESSION_KEY, SESSION_SAMESITE, SESSION_SECURE,
-                SOFT_CHALLENGE_SCORE, RISK_BAN_THRESHOLD
+                SOFT_CHALLENGE_SCORE, RISK_BAN_THRESHOLD,
+                SW_CHALLENGE_ENABLED, POW_CHAL_THRESHOLD
   state.py   — ip_state
   helpers.py — slog, now, get_ip
 
@@ -249,6 +250,43 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
 <script>
 (async()=>{
   const n = "__NONCE__", t = "__TARGET__", TS_KEY = "__TURNSTILE_KEY__";
+  const POW_CHALLENGE = "__POW_CHALLENGE__";
+  const SW_ENABLED = __SW_ENABLED__;
+
+  // 1.7.2 — Service Worker registration (opt-in via SW_CHALLENGE_ENABLED)
+  if (SW_ENABLED && 'serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/antibot-appsec-gateway/sw.js', {scope: '/'})
+      .catch(function(){});
+  }
+
+  // 1.7.2 — PoW solver (WebWorker inline blob). Activated when POW_CHALLENGE != "".
+  function solvePoW(challenge) {
+    return new Promise((resolve) => {
+      const parts = challenge.split('|');
+      const diff = parseInt(parts[2], 10);
+      const prefix = '0'.repeat(diff);
+      const nonce = parts[0];
+      const blob = new Blob([`
+        const nonce="${nonce}", prefix="${prefix}";
+        let i=0;
+        while(true){
+          const candidate=i.toString(36);
+          const msg=nonce+candidate;
+          // Use SubtleCrypto for SHA-256
+          crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg)).then(buf=>{
+            const hex=Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+            if(hex.startsWith(prefix)){ postMessage(candidate); }
+          });
+          i++;
+          if(i%5000===0){ /* yield */ }
+        }
+      `], {type:'application/javascript'});
+      const url = URL.createObjectURL(blob);
+      const w = new Worker(url);
+      w.onmessage = e => { w.terminate(); URL.revokeObjectURL(url); resolve(e.data); };
+    });
+  }
+
   function waitForTurnstile(){
     return new Promise((resolve, reject)=>{
       const t0 = Date.now();
@@ -265,9 +303,23 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
       tick();
     });
   }
+
   try{
+    // Start PoW solving in parallel with Turnstile if a challenge is embedded
+    const powPromise = POW_CHALLENGE ? solvePoW(POW_CHALLENGE) : Promise.resolve(null);
+
     const tsToken = await waitForTurnstile();
-    const fd = new URLSearchParams({n, t, 'cf-turnstile-response': tsToken});
+    const params = {n, t, 'cf-turnstile-response': tsToken};
+
+    // If PoW challenge was embedded, wait for solution and include it
+    if (POW_CHALLENGE) {
+      document.querySelector('p').textContent = 'Solving security puzzle...';
+      const powSol = await powPromise;
+      params['pow_token']    = POW_CHALLENGE;
+      params['pow_solution'] = powSol;
+    }
+
+    const fd = new URLSearchParams(params);
     const r = await fetch('/antibot-appsec-gateway/challenge', {
       method: 'POST', body: fd, credentials: 'include',
       headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -297,9 +349,14 @@ from integrations.endpoint_policy import _looks_like_api, _API_PATH_HINTS  # noq
 
 # ── Serve challenge page ──────────────────────────────────────────────────
 
-def _serve_js_challenge(request: web.Request):
-    """Render the Turnstile-only challenge page. Only invoked when
-    JS_CHALLENGE is enabled AND Turnstile is configured."""
+def _serve_js_challenge(request: web.Request, pow_challenge: str = ""):
+    """Render the Turnstile challenge page. Only invoked when JS_CHALLENGE is
+    enabled AND Turnstile is configured.
+
+    1.7.2: when pow_challenge is provided (non-empty HMAC-signed PoW token),
+    it is embedded in the HTML so the client-side WebWorker solver starts
+    immediately in parallel with Turnstile. The solution is submitted together
+    with the Turnstile token in a single POST to /challenge."""
     nonce = _make_chal_nonce()
     target = request.path_qs or "/"
     target_safe = re.sub(r'[^A-Za-z0-9_\-./?&=%:#]', '', target)[:512] or "/"
@@ -307,13 +364,17 @@ def _serve_js_challenge(request: web.Request):
             or target_safe.startswith("//")
             or "\\" in target_safe):
         target_safe = "/"
-    nonce_json   = json.dumps(nonce)
-    target_json  = json.dumps(target_safe)
-    ts_key_json  = json.dumps(TURNSTILE_SITEKEY)
+    nonce_json      = json.dumps(nonce)
+    target_json     = json.dumps(target_safe)
+    ts_key_json     = json.dumps(TURNSTILE_SITEKEY)
+    pow_chal_json   = json.dumps(pow_challenge)
+    sw_enabled_json = "true" if SW_CHALLENGE_ENABLED else "false"
     html = (JS_CHAL_HTML
             .replace('"__NONCE__"',         nonce_json)
             .replace('"__TARGET__"',        target_json)
-            .replace('"__TURNSTILE_KEY__"', ts_key_json))
+            .replace('"__TURNSTILE_KEY__"', ts_key_json)
+            .replace('"__POW_CHALLENGE__"', pow_chal_json)
+            .replace('__SW_ENABLED__',      sw_enabled_json))
     # R7: plant a canary on the challenge page too — the LLM summariser
     # reads the gateway's HTML before it ever reaches upstream content.
     headers = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
@@ -381,7 +442,7 @@ async def js_challenge_endpoint(request: web.Request):
         verify_data = {
             "secret":   TURNSTILE_SECRET,
             "response": ts_token,
-            "remoteip": request.remote or "",
+            "remoteip": get_ip(request),
         }
         async with ClientSession(
                 timeout=ClientTimeout(total=5)) as session:
@@ -392,6 +453,18 @@ async def js_challenge_endpoint(request: web.Request):
         return web.Response(status=502, text="turnstile verify failed\n")
     if not ts_json.get("success"):
         return web.Response(status=403, text="turnstile rejected\n")
+
+    # 1.7.2 — PoW verification (risk-gated). When the challenge page embedded
+    # a PoW token (because the identity's risk crossed POW_CHAL_THRESHOLD),
+    # the client submits pow_token + pow_solution. Verify both are present and
+    # correct before minting the cookie.
+    pow_token    = (params.get("pow_token",    [""])[0] or "").strip()
+    pow_solution = (params.get("pow_solution", [""])[0] or "").strip()
+    if pow_token:
+        from challenge.pow import verify_pow as _verify_pow
+        ok, why = _verify_pow(pow_token, pow_solution, "*", "*")
+        if not ok:
+            return web.Response(status=403, text=f"pow rejected: {why}\n")
 
     # JA4 cookie-binding (opportunistic; opt-in hard requirement).
     ja4 = _request_ja4(request)
@@ -513,3 +586,42 @@ def _js_challenge_applicable(request) -> bool:
     if request.method != "GET":
         return False
     return "text/html" in request.headers.get("Accept", "")
+
+
+# ── 1.7.2 — Service Worker endpoint ──────────────────────────────────────────
+
+_SW_SCRIPT = """\
+// AppSecGW 1.7.2 — Service Worker (SW_CHALLENGE_ENABLED)
+// Intercepts requests to /antibot-appsec-gateway/* and adds X-SW-Active: 1
+// so the server can confirm the browser executed JS across sessions.
+self.addEventListener('install', function(e) { self.skipWaiting(); });
+self.addEventListener('activate', function(e) { e.waitUntil(self.clients.claim()); });
+self.addEventListener('fetch', function(e) {
+  var url = e.request.url;
+  if (url.indexOf('/antibot-appsec-gateway/') !== -1) {
+    try {
+      var h = new Headers(e.request.headers);
+      h.set('X-SW-Active', '1');
+      e.respondWith(fetch(new Request(e.request, {headers: h})));
+    } catch(err) {
+      // Fall through to default fetch on any error
+    }
+  }
+});
+"""
+
+
+async def sw_js_endpoint(request: web.Request):
+    """Serve the Service Worker script. No auth required — public endpoint.
+    Cache-Control: no-store so updated SW logic deploys immediately."""
+    if not SW_CHALLENGE_ENABLED:
+        return web.Response(status=404, text="not found\n")
+    return web.Response(
+        text=_SW_SCRIPT,
+        content_type="application/javascript",
+        headers={
+            "Cache-Control":       "no-store, no-cache, must-revalidate",
+            "Service-Worker-Allowed": "/",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

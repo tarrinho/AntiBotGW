@@ -6,6 +6,39 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.2] — 2026-05-04
+
+### Added
+- **Geo dashboard time-window navigation** — `← prev` / `next →` / `now` buttons allow stepping backward/forward through 24-hour windows. `endEpoch` state variable appended to all `geo-data` requests as `?end=<epoch>`. `refreshGeoControls()` disables `next →` at live mode and updates the window label.
+- **Geo drill scrubber-aware queries** — `openDrill()` now passes `?end=<bucketEnd>&range=<bucketMin>` when a scrubber bucket is active, scoping the drill-down to that time window instead of always querying live.
+- **Geo map denied-country visual** — circles for IPs whose country is in the denylist are rendered with a red border (`weight:3`, `dashArray:'4,3'`) and a `⛔ DENIED ·` prefix in the popup.
+- **Admin IP lock icon in geo drill panel** — `_drillAdminLock()` helper added to `geo.html`; IP rows now show 🔒 with full tooltip when `is_admin_ip` is true.
+- **`is_admin_ip` in geo drill response** — `geo_drill_endpoint` now includes `is_admin_ip` for each IP in the response map.
+- **Country table allow buttons** — `renderCountries()` now renders both deny and allow buttons; allow POST uses `"list":"allow"` without forcing `COUNTRY_BLOCK_ENABLED:true`.
+
+### Fixed
+- **`main.html` cost chart click** — `onClick` handler reverted to direct `openMainBucketDetail(tl[idx], ...)` call, eliminating the silent `find()` failure that caused the modal to open empty on bucket-boundary mismatches.
+- **Admin IP lock icon tooltip** — `_adminLock` / `_ADMIN_IP_TIP` moved to global scope in `main.html`; previously the helper was defined inside `openMainBucketDetail` only. All five 🔒 occurrences across both main and agents panels now show the full description on hover.
+- **`geo_data_endpoint` ordering** — events query now includes `ORDER BY ts ASC`; previously events could be returned in insertion order, causing garbled map animation when backfilling.
+- **`_GEO_CACHE` LRU eviction** — eviction previously sorted by key tuple value (`sorted(keys())`), not by expiry time. Fixed to `sorted(keys(), key=lambda k: _GEO_CACHE[k][0])` so oldest entries are evicted first.
+- **Geo scrubber label** — "— · live" changed to "— · live (aggregate)" to disambiguate from a time-scoped bucket.
+- **Country table colspan** — no-data rows used `colspan="6"` despite the table having 7 columns. Fixed to `colspan="7"`.
+- **Geo dashboard dead code** — removed unused `url()` arrow function and `setInterval(loadLogLevel, 30000)` (log-level polling not applicable in geo page).
+- **Missed signal note** — added inline note in scrubber div explaining that missed counts are unavailable in scrubber mode (sourced from live `ip_state`, not DB events).
+- **All dashboard version badges** — `AppSecGW_1.7.1` → `AppSecGW_1.7.2` in `main.html`, `controls.html`, `agents.html`, `logs.html`, `settings.html`, `service.html`, `geo.html`.
+
+### Tests
+- **189 unit tests + 22 functional + 22 integration + 40 control regression + v14/v142**: all pass (individually due to pre-existing OOM when run together). 0 new failures.
+
+### Validation
+- Bandit: 0 High · 0 Critical · 12 Low (all pre-existing, accepted FP: intentional gateway binding, fixed-HTTPS, numeric-controlled SQL).
+- Semgrep: 0 findings.
+- Trivy: 0 Critical / 0 High / 0 Medium CVEs.
+- §13b version sweep: all non-comment occurrences updated; remaining `1.7.1` hits are code-history annotations (`# 1.7.1 — feature name`) intentionally preserved.
+- See `validation/1.7.2.md` for full record.
+
+---
+
 ## [1.7.1] — 2026-05-03
 
 ### Added

@@ -203,6 +203,43 @@ Before declaring documentation complete, verify:
 - `CHANGELOG.md` `[Unreleased]` section is empty (or absent) after the
   release entry is stamped — nothing left undocumented.
 
+### 13b. Full version-string sweep
+Run this grep before declaring the release done. Every file that embeds
+the version number must agree with the release tag — stale strings are a
+support and audit liability.
+
+```bash
+VER=<version>   # e.g. 1.7.2
+PREV=$(echo $VER | awk -F. '{printf "%d.%d.%d", $1, $2, $3-1}')  # e.g. 1.7.1
+
+# Find any occurrence of the previous version (or any X.Y.Z that isn't $VER)
+# across all tracked source files — exits non-zero if stale strings found.
+grep -rn --include="*.py" --include="*.html" --include="*.yml" \
+     --include="*.yaml" --include="*.sh" --include="*.md" \
+     --include="Dockerfile*" \
+     "$PREV" . \
+  | grep -v "CHANGELOG\|README\|rules.md\|validation/" \
+  | grep -v "^Binary"
+```
+
+**Checklist — every location the version string must be current:**
+
+| File | What to check |
+|------|--------------|
+| `core/config.py` | `GW_VERSION = "AppSecGW_<version>"` |
+| `Dockerfile` | `LABEL version=` and any `ARG VERSION=` line |
+| `Dockerfile.armv7` | same as above |
+| `docker-compose.yml` | `image: appsec-antibot-gw:<version>` and `container_name:` |
+| `dashboards/main.html` | version badge / footer text (e.g. `v1.7.2`) |
+| `dashboards/controls.html` | version badge / header comment |
+| `README.md` | Quick Start `docker pull` tag, Version history table header row, Build from source example |
+| `CHANGELOG.md` | Latest `## [<version>]` section header stamped (not `[Unreleased]`) |
+| `MANUAL.md` | Any pinned image tags in example commands |
+| `copy-to-github.sh` | `VERSION=` line or equivalent constant |
+
+**Pass criterion:** Zero stale-version hits from the grep AND every row in
+the checklist manually confirmed. Any mismatch must be corrected before step 14.
+
 ---
 
 ## 14. Multi-arch build + Harbor push

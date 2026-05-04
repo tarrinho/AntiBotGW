@@ -5,3 +5,4 @@
 from challenge.pow import *
 from challenge.js_challenge import *
 from challenge.tarpit import *
+from challenge.js_challenge import sw_js_endpoint  # noqa: F401 — underscore-free, explicit
