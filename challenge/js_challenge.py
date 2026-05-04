@@ -377,7 +377,21 @@ def _serve_js_challenge(request: web.Request, pow_challenge: str = ""):
             .replace('__SW_ENABLED__',      sw_enabled_json))
     # R7: plant a canary on the challenge page too — the LLM summariser
     # reads the gateway's HTML before it ever reaches upstream content.
-    headers = {"Cache-Control": "no-store", "X-Robots-Tag": "noindex"}
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Robots-Tag": "noindex",
+        # Own CSP so upstream's restrictive policy never blocks Turnstile.
+        "Content-Security-Policy": (
+            "default-src 'none'; "
+            "script-src 'unsafe-inline' https://challenges.cloudflare.com; "
+            "style-src 'unsafe-inline'; "
+            "connect-src 'self'; "
+            "frame-src https://challenges.cloudflare.com; "
+            "worker-src blob: 'self'; "
+            "img-src data:; "
+            "frame-ancestors 'none'; base-uri 'none'"
+        ),
+    }
     # Late import: canary helpers live in proxy.py still
     from detection.canary import _new_canary, _inject_canary
     from core.proxy_handler import BODY_TIMEOUT, _chal_mint_count, _record_chal_mint
@@ -432,10 +446,15 @@ async def js_challenge_endpoint(request: web.Request):
 
     nonce = params.get("n", [""])[0]
     if not _verify_chal_nonce(nonce):
+        slog("chal_bad_nonce", level="warning", ip=get_ip(request),
+             keys=list(params.keys()))
         return web.Response(status=400, text="bad nonce\n")
 
     # Cloudflare Turnstile siteverify — the only real boundary.
     ts_token = (params.get("cf-turnstile-response", [""])[0] or "").strip()
+    slog("chal_token_recv", level="info", present=bool(ts_token),
+         token_len=len(ts_token), token_prefix=ts_token[:24],
+         keys=list(params.keys()), ip=get_ip(request))
     if not ts_token:
         return web.Response(status=403, text="missing turnstile\n")
     try:
@@ -449,8 +468,13 @@ async def js_challenge_endpoint(request: web.Request):
             async with session.post(TURNSTILE_VERIFY_URL,
                                      data=verify_data) as ts_resp:
                 ts_json = await ts_resp.json(content_type=None)
-    except Exception:
+    except Exception as exc:
+        slog("chal_siteverify_err", level="error", err=str(exc),
+             ip=get_ip(request))
         return web.Response(status=502, text="turnstile verify failed\n")
+    slog("chal_siteverify_resp", level="info" if ts_json.get("success") else "warning",
+         success=ts_json.get("success"), error_codes=ts_json.get("error-codes", []),
+         hostname=ts_json.get("hostname", ""), ip=get_ip(request))
     if not ts_json.get("success"):
         return web.Response(status=403, text="turnstile rejected\n")
 
@@ -480,7 +504,9 @@ async def js_challenge_endpoint(request: web.Request):
     sess_salt = hashlib.sha256(ts_token.encode()).hexdigest()[:16]
     cookie = _make_chal_cookie(ua, sess_salt, ip_tier, bind_ja4)
     # 1.6.5 — count successful chal-cookie mints (Turnstile path).
-    _chal_mint_count += 1
+    import core.proxy_handler as _ph
+    from identity import _record_chal_mint as _rcm
+    _ph._chal_mint_count += 1
     resp = web.Response(status=200, text="ok",
                         headers={"Cache-Control": "no-store"})
     resp.set_cookie(CHAL_COOKIE, cookie,
@@ -491,7 +517,7 @@ async def js_challenge_endpoint(request: web.Request):
     # 1.5.0: same churn check on the Turnstile path. Even though Turnstile
     # itself raises the cost, an attacker that can solve Turnstile (e.g.
     # via a paid CAPTCHA-farm) and then mints many cookies still trips this.
-    await _record_chal_mint(
+    await _rcm(
         ua, ip_tier, ja4, get_ip(request),
         rid=request.get("_rid", ""))
     return resp

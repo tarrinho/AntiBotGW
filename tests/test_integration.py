@@ -254,10 +254,28 @@ def test_host_allowlist_blocks_mismatch(proxy_module):
     async def go():
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as client:
-                r = await client.get("/api/x",
+                r = await client.get("/some-page",
                                      headers=_browser_headers({"Host": "evil.example.com"}))
                 # silent decoy: 200, but X-Proxy must NOT be set (decoy must not fingerprint the gateway)
+                # Use a non-API path — API paths trigger route-aware decoy and return 404.
                 assert r.status == 200
+                assert "X-Proxy" not in r.headers
+    try:
+        _run(go())
+    finally:
+        proxy_module.ALLOWED_HOSTS = set()
+
+
+def test_host_allowlist_blocks_mismatch_api_path(proxy_module):
+    """Route-aware decoy: API path + mismatched Host → silent decoy with 404."""
+    proxy_module.ALLOWED_HOSTS = {"good.example.com"}
+
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                r = await client.get("/api/x",
+                                     headers=_browser_headers({"Host": "evil.example.com"}))
+                assert r.status == 404
                 assert "X-Proxy" not in r.headers
     try:
         _run(go())

@@ -26,12 +26,20 @@ Author: Pedro Tarrinho
 - **Geo dashboard dead code** — removed unused `url()` arrow function and `setInterval(loadLogLevel, 30000)` (log-level polling not applicable in geo page).
 - **Missed signal note** — added inline note in scrubber div explaining that missed counts are unavailable in scrubber mode (sourced from live `ip_state`, not DB events).
 - **All dashboard version badges** — `AppSecGW_1.7.1` → `AppSecGW_1.7.2` in `main.html`, `controls.html`, `agents.html`, `logs.html`, `settings.html`, `service.html`, `geo.html`.
+- **JS SyntaxErrors in `main.html` and `agents.html`** — smart/typographic quotes (U+2018/U+2019) in `_adminLock` fallback literal and unescaped apostrophe in `_ADMIN_IP_TIP` string caused `Uncaught SyntaxError` that silently killed all dashboard JS (`tick()` never ran → zero stats). Fixed `_ADMIN_IP_TIP` to use double-quoted string; `_adminLock` fallback to ASCII single quotes.
+- **Blockrate chart always empty in `main.html`** — `d.timeline.buckets` does not exist; `d.timeline` is the array directly. Fixed to `Array.isArray(d.timeline) ? d.timeline : []` with `b.t||b.ts` for timestamp field.
+- **CI `docker-no-latest-tag` linter failure** — added `exceptions.yaml` to suppress the conftest rule for Chainguard images; both `FROM` lines are already pinned by `@sha256` digest so the `:latest` tag is a registry alias, not a floating reference.
+- **`copy-to-github.sh` manifest** — added five missing detection modules (`automation.py`, `cookie_lifecycle.py`, `referer_chain.py`, `impossible_travel.py`, `fp_enrichment.py`), `dashboards/assets/chart.umd.min.js` (Chart.js 4.4.0 local bundle), and `exceptions.yaml` so `copy-to-github.sh` delivers all CI-required files to the GitHub repo.
+- **Chart.js CDN → local bundle** — moved from `cdn.jsdelivr.net` to `/antibot-appsec-gateway/assets/chart.umd.min.js` to avoid CDN blocking in air-gapped deployments.
 
 ### Tests
-- **189 unit tests + 22 functional + 22 integration + 40 control regression + v14/v142**: all pass (individually due to pre-existing OOM when run together). 0 new failures.
+- **196 unit tests + 22 functional + 23 integration + 76 regression**: all pass (individually due to pre-existing OOM when run together). 0 new failures.
+- **7 new regression tests** in `test_pure.py`: `test_no_smart_quotes_in_main_html`, `test_no_smart_quotes_in_agents_html`, `test_main_html_js_syntax` (node --check), `test_agents_html_js_syntax`, `test_no_broken_string_assignments_in_main_html`, `test_no_broken_string_assignments_in_agents_html`, `test_admin_ip_tip_uses_double_quotes` — prevent regression of the JS SyntaxError bug class.
+- **1 new integration test** `test_host_allowlist_blocks_mismatch_api_path` — verifies route-aware decoy returns 404 (not 200) for API paths with mismatched Host header.
+- **3 test fixes** for route-aware decoy behaviour (API paths → 404, not 200): `test_host_allowlist_blocks_mismatch` (path `/api/x` → `/some-page`), `test_v8_block_does_not_reveal_gateway` and `test_host_mismatch_silent_decoys_even_without_cookie` (`== 200` → `in (200, 404)`). Security invariant unchanged — no 401/gateway fingerprint leaks.
 
 ### Validation
-- Bandit: 0 High · 0 Critical · 12 Low (all pre-existing, accepted FP: intentional gateway binding, fixed-HTTPS, numeric-controlled SQL).
+- Bandit: 0 High · 0 Critical · 12 Low (all B110 try/except/pass, pre-existing, accepted FP).
 - Semgrep: 0 findings.
 - Trivy: 0 Critical / 0 High / 0 Medium CVEs.
 - §13b version sweep: all non-comment occurrences updated; remaining `1.7.1` hits are code-history annotations (`# 1.7.1 — feature name`) intentionally preserved.

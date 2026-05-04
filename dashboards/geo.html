@@ -279,12 +279,23 @@ function renderMap(){
   if (scrubBucketIdx < 0) {
     pts = (lastData.points || []).map(p => ({...p}));
   } else {
-    const bucket = scrubBuckets[scrubBucketIdx] || {};
-    pts = Object.entries(bucket.points || {}).map(([k, v]) => {
-      const [lat, lng] = k.split(',').map(Number);
+    // Cumulative: merge buckets 0..scrubBucketIdx so circles build up over
+    // time rather than flickering with per-bucket sparse counts.
+    const merged = {};
+    for (let i = 0; i <= scrubBucketIdx; i++) {
+      for (const [k, v] of Object.entries((scrubBuckets[i] || {}).points || {})) {
+        if (!merged[k]) merged[k] = {c:0, m:0, b:0};
+        merged[k].c += v.c || 0;
+        merged[k].m += v.m || 0;
+        merged[k].b += v.b || 0;
+      }
+    }
+    pts = Object.entries(merged).map(([k, v]) => {
+      const [rlat, rlng] = k.split(',').map(Number);
+      // Tolerance 0.26° covers the max 0.25° error from the backend's 0.5°-grid rounding.
       const meta = (lastData.points||[]).find(
-        q => Math.abs(q.lat-lat)<0.01 && Math.abs(q.lng-lng)<0.01) || {};
-      return {lat, lng, country: meta.country||'', city: meta.city||'',
+        q => Math.abs(q.lat-rlat) <= 0.26 && Math.abs(q.lng-rlng) <= 0.26) || {};
+      return {lat:rlat, lng:rlng, country: meta.country||'', city: meta.city||'',
               clean:v.c||0, missed:v.m||0, blocked:v.b||0,
               tor_hits:0, dc_hits:0, methods: meta.methods || {},
               pin_type: meta.pin_type || 'normal',
@@ -346,12 +357,15 @@ function rebuildBuckets(){
   }
   for (const [ts, lat, lng, kind] of lastData.events) {
     const idx = Math.min(N-1, Math.max(0, Math.floor((ts - start) / step)));
-    const key = `${lat.toFixed(2)},${lng.toFixed(2)}`;
+    // Mirror the backend's 0.5° rounding so keys align with points[] lat/lng.
+    const rlat = Math.round(lat * 2) / 2;
+    const rlng = Math.round(lng * 2) / 2;
+    const key = `${rlat},${rlng}`;
     const b = scrubBuckets[idx];
     if (!b.points[key]) b.points[key] = {c:0, m:0, b:0};
-    if (kind === 'clean')   b.points[key].c++;
-    else if (kind === 'missed') b.points[key].m++;
-    else                        b.points[key].b++;
+    if (kind === 'clean')        b.points[key].c++;
+    else if (kind === 'missed')  b.points[key].m++;
+    else                         b.points[key].b++;
   }
   document.getElementById('scrub').max = N - 1;
 }
@@ -555,7 +569,12 @@ document.getElementById('play').onclick = () => {
   playing = !playing;
   document.getElementById('play').textContent = playing ? '⏸ Pause' : '▶ Play';
   if (playing) {
-    if (scrubBucketIdx < 0) scrubBucketIdx = 0;
+    if (scrubBucketIdx < 0) {
+      scrubBucketIdx = 0;
+      scrub.value = 0;
+      if (scrubBuckets[0]) scrubTs.textContent = fmtTs(scrubBuckets[0].ts);
+      renderMap();  // Show frame 0 immediately; don't wait 800 ms for first tick.
+    }
     playTimer = setInterval(() => {
       scrubBucketIdx = (scrubBucketIdx + 1) % Math.max(1, scrubBuckets.length);
       scrub.value = scrubBucketIdx;

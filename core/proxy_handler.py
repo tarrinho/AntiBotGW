@@ -331,6 +331,39 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
                     _decoy_cache["status"] = 200
                     _decoy_cache["fetched_at"] = n
     decoy_status = int(_decoy_cache.get("status") or 200)
+
+    # ── Route-aware decoy body selection ────────────────────────────────────
+    # Returning the identical cached homepage for every blocked path (API
+    # endpoints, admin paths, SQLi probes, etc.) produces a uniform
+    # body-hash fingerprint that automated scanners trivially detect as a
+    # catch-all gate.  Instead, serve a path-appropriate synthetic response
+    # so blocked requests look indistinguishable from a real upstream that
+    # simply doesn't have that path:
+    #   • API / JSON paths → synthetic JSON 404 (not the HTML homepage)
+    #   • Admin / dot paths → synthetic JSON 404
+    #   • Everything else   → homepage (existing behaviour)
+    # Synthetic bodies are used (not _upstream_404_cache) because the cache
+    # content is controlled by the upstream and may carry its own fingerprint.
+    _decoy_body  = _decoy_cache["body"]
+    _decoy_ctype = _decoy_cache["ctype"]
+    _path = path or "/"
+    _looks_like_api = (
+        _path.startswith("/api/") or
+        _path.startswith("/v1/") or _path.startswith("/v2/") or
+        "/api/" in _path or
+        _path.endswith(".json") or _path.endswith(".xml")
+    )
+    _looks_like_admin = (
+        _path.startswith("/admin") or _path.startswith("/management") or
+        _path.startswith("/.") or _path.startswith("/actuator") or
+        _path.startswith("/debug") or _path.startswith("/console") or
+        _path.startswith("/internal")
+    )
+    if _looks_like_api or _looks_like_admin:
+        _decoy_body  = b'{"error":"not found","status":404}'
+        _decoy_ctype = "application/json"
+        decoy_status = 404
+
     await record(ip, ua, path, decoy_status, reason, track_key=track_key, sid=sid,
                  fp=fp, ja4=ja4, request_id=request_id)
     # 1.6.5 — TARPIT mitigation: identities in the soft-challenge band
@@ -357,14 +390,14 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
         global _chal_required_count
         _chal_required_count += 1
     headers = {
-        "Content-Type": _decoy_cache["ctype"],
+        "Content-Type": _decoy_ctype,
         "Cache-Control": "no-store",
     }
     if request_id:
         headers[_REQUEST_ID_HEADER] = request_id
     return web.Response(
         status=decoy_status,
-        body=_decoy_cache["body"],
+        body=_decoy_body,
         headers=headers,
     )
 
@@ -1853,15 +1886,19 @@ _HOT_RELOAD_KNOBS = {
 # restart).  Set `CONFIG_KV_STRICT_ENV=1` for GitOps-style determinism
 # where env values are authoritative and dashboard mutations are rejected
 # at runtime.
-_ENV_PROVIDED_KNOBS = (
-    {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
-    if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes")
-    else set()
-)
-# DB_BACKEND is always env-pinned when explicitly set: a stale config_kv row
-# from a previous run must not silently override the operator's .env choice.
-# The Controls dashboard switch flow writes the new value AND restarts, so
-# after a UI-driven switch both the DB row and the env agree.
+# Any knob explicitly set to a non-empty value in the environment is pinned:
+# the DB config_kv row from a previous run cannot silently override operator
+# intent expressed in .env / container env.  CONFIG_KV_STRICT_ENV=1 extends
+# this to knobs that are present in the environment even with an empty value
+# (full GitOps-style lock-out of dashboard mutations).
+_ENV_PROVIDED_KNOBS = {
+    k for k in _HOT_RELOAD_KNOBS
+    if os.environ.get(k, "").strip()
+}
+if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
+    _ENV_PROVIDED_KNOBS |= {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
+# DB_BACKEND is always env-pinned when explicitly set (even empty string would
+# be caught above; this guard keeps the intent explicit in the code).
 if "DB_BACKEND" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
 
