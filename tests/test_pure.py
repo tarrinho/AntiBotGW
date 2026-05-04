@@ -373,6 +373,138 @@ def test_main_html_k_q_declaration_precedes_all_uses():
     )
 
 
+# Regression: typographic characters (smart quotes U+2018/2019/201C/201D and
+# unescaped apostrophes in single-quoted JS strings) caused SyntaxErrors that
+# silently killed all dashboard JS. Two instances found and fixed:
+#  - main.html line 884: smart quotes in _adminLock fallback ''
+#  - main.html/agents.html line 885: _ADMIN_IP_TIP = 'operator's ...' (apostrophe)
+_SMART_QUOTE_CODEPOINTS = {0x2018, 0x2019, 0x201C, 0x201D}
+
+
+def _dashboard_src(name):
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "dashboards" / name).read_text(encoding="utf-8")
+
+
+def _extract_js_blocks(src):
+    import re
+    return re.findall(r'<script>(.*?)</script>', src, re.DOTALL)
+
+
+def test_no_smart_quotes_in_main_html():
+    src = _dashboard_src("main.html")
+    hits = [(i + 1, ch) for i, ch in enumerate(src) if ord(ch) in _SMART_QUOTE_CODEPOINTS]
+    assert not hits, (
+        "Smart quotes found in main.html — will cause SyntaxError in browser: "
+        + ", ".join(f"line≈{src[:pos-1].count(chr(10))+1} U+{ord(ch):04X}" for pos, ch in hits)
+    )
+
+
+def test_no_smart_quotes_in_agents_html():
+    src = _dashboard_src("agents.html")
+    hits = [(i + 1, ch) for i, ch in enumerate(src) if ord(ch) in _SMART_QUOTE_CODEPOINTS]
+    assert not hits, (
+        "Smart quotes found in agents.html — will cause SyntaxError in browser: "
+        + ", ".join(f"line≈{src[:pos-1].count(chr(10))+1} U+{ord(ch):04X}" for pos, ch in hits)
+    )
+
+
+def test_main_html_js_syntax():
+    """node --check validates JS syntax; catches unescaped apostrophes, smart
+    quotes, and other token errors that break all dashboard JS silently."""
+    import subprocess, tempfile, os
+    src = _dashboard_src("main.html")
+    blocks = _extract_js_blocks(src)
+    assert blocks, "no <script> blocks found in main.html"
+    js = "\n".join(blocks)
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(js); tmp = f.name
+    try:
+        r = subprocess.run(["node", "--check", tmp], capture_output=True, text=True)
+        assert r.returncode == 0, f"JS syntax error in main.html:\n{r.stderr}"
+    finally:
+        os.unlink(tmp)
+
+
+def test_agents_html_js_syntax():
+    """Same as above for agents.html."""
+    import subprocess, tempfile, os
+    src = _dashboard_src("agents.html")
+    blocks = _extract_js_blocks(src)
+    assert blocks, "no <script> blocks found in agents.html"
+    js = "\n".join(blocks)
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(js); tmp = f.name
+    try:
+        r = subprocess.run(["node", "--check", tmp], capture_output=True, text=True)
+        assert r.returncode == 0, f"JS syntax error in agents.html:\n{r.stderr}"
+    finally:
+        os.unlink(tmp)
+
+
+def _find_broken_string_assignments(src):
+    """Scan <script> blocks for the specific bug pattern:
+      const/let/var NAME = 'value containing apostrophe's ...
+    i.e. a variable assignment using single quotes where the value contains a
+    contraction or possessive that terminates the string early.
+    Returns list of (line_num, matched_text) for confirmed hits."""
+    import re
+    hits = []
+    # Match: assignment to a single-quoted string that ends right before a letter
+    # (the closing quote is followed immediately by an alpha = broken string).
+    # Anchored to assignment context to avoid matching short tokens like '&'.
+    broken_re = re.compile(
+        r"""(?:const|let|var)\s+\w+\s*=\s*'([^'\n]{8,})'([a-zA-Z])""",
+    )
+    for block_m in re.finditer(r'<script>(.*?)</script>', src, re.DOTALL):
+        block = block_m.group(1)
+        base_line = src[:block_m.start()].count('\n') + 1
+        for m in broken_re.finditer(block):
+            line = base_line + block[:m.start()].count('\n')
+            hits.append((line, m.group()[:80]))
+    return hits
+
+
+def test_no_broken_string_assignments_in_main_html():
+    """Regression for dashboard:885 — const _ADMIN_IP_TIP = 'operator's...'
+    The assignment used single quotes but the value contained an apostrophe,
+    terminating the string and causing SyntaxError: Unexpected identifier 's'.
+    node --check is the authoritative check; this test catches the specific
+    assignment-with-apostrophe pattern without a full JS tokeniser."""
+    src = _dashboard_src("main.html")
+    hits = _find_broken_string_assignments(src)
+    assert not hits, (
+        "Single-quoted string assignments with unescaped apostrophes in main.html "
+        "(use double quotes for strings containing apostrophes):\n"
+        + "\n".join(f"  line {ln}: {snip}" for ln, snip in hits)
+    )
+
+
+def test_no_broken_string_assignments_in_agents_html():
+    """Same regression check for agents.html."""
+    src = _dashboard_src("agents.html")
+    hits = _find_broken_string_assignments(src)
+    assert not hits, (
+        "Single-quoted string assignments with unescaped apostrophes in agents.html:\n"
+        + "\n".join(f"  line {ln}: {snip}" for ln, snip in hits)
+    )
+
+
+def test_admin_ip_tip_uses_double_quotes():
+    """Specific regression: _ADMIN_IP_TIP / ADMIN_IP_TIP must be declared with
+    double quotes so the apostrophe in \"operator's\" doesn't split the string."""
+    import re
+    for name in ("main.html", "agents.html"):
+        src = _dashboard_src(name)
+        # Find every ADMIN_IP_TIP assignment
+        for m in re.finditer(r'(?:const\s+)?_?ADMIN_IP_TIP\s*=\s*([\'"`])', src):
+            quote = m.group(1)
+            assert quote == '"', (
+                f"{name}: _ADMIN_IP_TIP assigned with {quote!r} — must use double quotes "
+                f"because the value contains an apostrophe (operator's)"
+            )
+
+
 def test_167_session_token_format_includes_sid(proxy_module):
     """1.6.7 — token is `username|sid|expiry|HMAC`; the old 3-part
     `username|expiry|HMAC` format must no longer parse."""
