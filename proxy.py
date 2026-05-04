@@ -55,7 +55,16 @@ from helpers import (  # noqa: F401
     _is_admin_path, _admin_path_is_public,
 )
 from identity import _sign_session, _verify_session
-from detection.canary import _inject_honey_links, _inject_botd, _botd_token_for
+from detection.canary import (  # noqa: F401
+    _inject_honey_links, _inject_botd, _botd_token_for,
+    inject_canary_probe, canary_probe_endpoint, check_canary_probe,
+)
+from detection.honey_cred import inject_honey_creds, lookup_honey_key  # noqa: F401
+from detection.redirect_maze import (  # noqa: F401
+    should_maze, make_maze_entry, redirect_maze_endpoint,
+)
+import detection.llm_heuristic as _llm_heuristic  # noqa: F401
+from core.proxy_handler import honey_probe_endpoint  # noqa: F401
 from detection.automation import automation_report_endpoint  # noqa: F401
 from detection.fp_enrichment import (  # noqa: F401
     fp_report_endpoint, _fp_token_for, _is_soft_renderer, _inject_fp_probe,
@@ -374,6 +383,10 @@ def make_app() -> web.Application:
         ("sw.js",              "GET",  sw_js_endpoint,                False),
         # 1.6.9 — AI Labyrinth tarpit (public; HMAC-gated internally)
         ("tarpit/{token}",     "GET",  tarpit_endpoint,               False),
+        # 1.7.3 — AI-agent detection probes (public, no auth)
+        ("probe",                       "GET", honey_probe_endpoint,      False),
+        ("maze",                        "GET", redirect_maze_endpoint,    False),
+        ("canary-probe/{token}",        "GET", canary_probe_endpoint,     False),
         # ── secured (admin-IP + admin-key gated) ────────────────
         ("status",            "GET",    status_endpoint,                       True),
         ("dashboard",         "GET",    dashboard_endpoint,                    True),

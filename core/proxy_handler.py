@@ -80,7 +80,13 @@ from identity import _sign_session, _verify_session, _record_chal_mint, _fp_hash
 from detection.canary import (  # noqa: F401
     _new_canary, _inject_canary, _inject_honey_links, _inject_botd,
     _botd_token_for, _scan_request_for_canary,
+    inject_canary_probe, canary_probe_endpoint, check_canary_probe,
 )
+from detection.honey_cred import inject_honey_creds, lookup_honey_key  # noqa: F401
+from detection.redirect_maze import (  # noqa: F401
+    should_maze, make_maze_entry, redirect_maze_endpoint,
+)
+import detection.llm_heuristic as _llm_heuristic  # noqa: F401
 from detection.automation import _inject_automation_probe  # noqa: F401
 from detection.cookie_lifecycle import (  # noqa: F401
     cookie_ghost_check, record_gateway_cookie_set,
@@ -889,6 +895,17 @@ async def proxy(request: web.Request):
                     _tk_html = request.get("_track_key", "")
                     if _tk_html:
                         record_html_served(_tk_html, request.path)
+                    # 1.7.3 P1 — semantic honeypot credential injection
+                    resp_body = inject_honey_creds(resp_body, _tk_html)
+                    # 1.7.3 P4 — browser execution probe (preload link)
+                    resp_body = inject_canary_probe(resp_body, _tk_html)
+                    # 1.7.3 P3 — LLM no-subresource heuristic: check after HTML
+                    _llm_delta = check_canary_probe(_tk_html, ip) if _tk_html else 0.0
+                    if _llm_delta:
+                        await update_risk_and_maybe_ban(_tk_html, "canary-probe-miss", ip)
+                    _llm_sig = _llm_heuristic.check(_tk_html, ip) if _tk_html else 0.0
+                    if _llm_sig:
+                        await update_risk_and_maybe_ban(_tk_html, "llm-no-subresources", ip)
 
                 # 1.6.10 — JSON API canary: inject a "_ref" token into JSON
                 # object responses. LLM agents that cache and replay API
@@ -2526,6 +2543,15 @@ async def protect(request: web.Request, handler):
     # 'ip' is recorded as the last-seen IP for dashboard display only.
     track_key = identity
 
+    # 1.7.3 P3 — LLM no-subresource heuristic: record every request
+    if track_key:
+        _llm_heuristic.observe(
+            track_key,
+            request.method,
+            request.path,
+            request.headers.get("Accept", ""),
+        )
+
     async def deny(status, reason, body, extra_headers=None):
         """
         STEALTH MODE: every block returns the upstream homepage as 200 OK,
@@ -2999,6 +3025,28 @@ async def pow_endpoint(request: web.Request):
         "bound_to": {"method": method, "path": path},
         "anubis_mode": ANUBIS_ENABLED,
     }, headers={"Cache-Control": "no-store"})
+
+async def honey_probe_endpoint(request: web.Request):
+    """1.7.3 P1 — AI agent honey credential probe.
+    GET /antibot-appsec-gateway/probe?k=<key>
+    If the key matches a previously injected honey credential, bump the
+    risk of the identity it was issued to. Always return 200 so the agent
+    thinks the endpoint is live. The real user's browser never hits this —
+    browsers don't read HTML comments."""
+    ip = get_ip(request)
+    key = request.rel_url.query.get("k", "")
+    if key:
+        honey_identity = lookup_honey_key(key)
+        if honey_identity:
+            await update_risk_and_maybe_ban(honey_identity, "honey-cred", ip)
+    # Bland 200 response — never 403/404, would tell the agent its probe failed
+    return web.Response(
+        status=200,
+        text='{"status":"ok"}',
+        content_type="application/json",
+        headers={"Cache-Control": "no-store"},
+    )
+
 
 # 1.6.10 — robots.txt endpoint: serve a gateway-controlled robots.txt that
 # disallows all known AI crawlers. When ROBOTS_MONITOR_ENABLED=1, any request
