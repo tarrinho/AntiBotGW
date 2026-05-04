@@ -493,6 +493,10 @@ async def js_challenge_endpoint(request: web.Request):
     # JA4 cookie-binding (opportunistic; opt-in hard requirement).
     ja4 = _request_ja4(request)
     if JS_CHAL_REQUIRE_JA4 and not ja4:
+        slog("chal_ja4_required_missing", level="warn", ip=get_ip(request),
+             hint="JS_CHAL_REQUIRE_JA4 is on but JA4 is absent — "
+                  "TLS likely terminated upstream (e.g. Cloudflare CDN). "
+                  "Disable JS_CHAL_REQUIRE_JA4 or configure JA4_TRUSTED_PEERS.")
         return web.Response(status=403, text="ja4 required\n")
 
     ua = request.headers.get("User-Agent", "")

@@ -194,6 +194,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   <div class="card"><h2>Blocked</h2><div class="metric red" id="m-blocked">—</div><div class="metric-sub">bots silent-decoyed</div></div>
   <div class="card"><h2>Tor exits</h2><div class="metric yellow" id="m-tor">—</div><div class="metric-sub">events from Tor IPs</div></div>
   <div class="card"><h2>DC / VPN</h2><div class="metric purple" id="m-dc">—</div><div class="metric-sub">events from hosting ASNs</div></div>
+  <div class="card" title="Events from private/localhost IPs (Docker, LAN) — no MaxMind coordinates, not shown on map"><h2>No geo</h2><div class="metric dim" id="m-nogeo">—</div><div class="metric-sub">private/unresolvable IPs</div></div>
 </div>
 
 <div class="modal" id="drill-modal">
@@ -684,6 +685,7 @@ async function tick(){
     document.getElementById('m-blocked').textContent = (sm.total_blocked || 0).toLocaleString();
     document.getElementById('m-tor').textContent     = (sm.total_tor     || 0).toLocaleString();
     document.getElementById('m-dc').textContent      = (sm.total_dc      || 0).toLocaleString();
+    document.getElementById('m-nogeo').textContent   = (sm.skipped_no_geo || 0).toLocaleString();
 
     renderMap();
     renderCountries();
