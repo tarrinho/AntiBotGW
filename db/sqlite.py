@@ -669,12 +669,14 @@ def _refresh_integration_state(proxy_globals: dict) -> None:
     module. When called from proxy.py the caller passes globals()."""
     import sys as _sys_rs
     g = proxy_globals
+    _prev_configured = g.get("_TURNSTILE_CONFIGURED", False)
     g["_TURNSTILE_CONFIGURED"] = bool(g.get("TURNSTILE_SITEKEY") and g.get("TURNSTILE_SECRET"))
     _ts_env = os.environ.get("TURNSTILE_ENABLED", "").strip().lower()
-    g["TURNSTILE_ENABLED"] = (
-        g["_TURNSTILE_CONFIGURED"]
-        and _ts_env not in ("0", "false", "no")
-    )
+    # Auto-enable only when credentials first become available (prev=False →
+    # now=True). If already configured, respect the operator's explicit
+    # on/off choice set via /config or the Controls dashboard.
+    if not _prev_configured and g["_TURNSTILE_CONFIGURED"] and _ts_env not in ("0", "false", "no"):
+        g["TURNSTILE_ENABLED"] = True
     g["ABUSEIPDB_ENABLED"] = bool(g.get("ABUSEIPDB_KEY"))
     g["CROWDSEC_ENABLED"]  = bool(g.get("CROWDSEC_LAPI_URL") and g.get("CROWDSEC_API_KEY"))
     # Propagate secrets AND derived flags to all loaded modules so that:
@@ -819,6 +821,14 @@ def db_load_config(proxy_globals: dict) -> None:
             print(f"[config-kv] {key} failed to parse ({e}) — env default kept",
                   flush=True)
             skipped += 1
+    # Mutual exclusion: JS_CHAL_REQUIRE_JA4 + TURNSTILE_ENABLED cannot both be
+    # active. TURNSTILE_ENABLED wins — Turnstile topology implies Cloudflare CDN
+    # terminates TLS, making JA4 unavailable and causing every challenge to fail.
+    if g.get("JS_CHAL_REQUIRE_JA4") and g.get("TURNSTILE_ENABLED"):
+        g["JS_CHAL_REQUIRE_JA4"] = False
+        print("[config-kv] JS_CHAL_REQUIRE_JA4 forced off — "
+              "incompatible with TURNSTILE_ENABLED (JA4 absent behind Cloudflare CDN)",
+              flush=True)
     if applied or skipped or env_pinned:
         print(f"[config-kv] loaded {applied} knob(s) from DB "
               f"(skipped {skipped}, env-pinned {env_pinned})", flush=True)

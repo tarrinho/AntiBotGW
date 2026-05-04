@@ -641,6 +641,172 @@ Each hit logs: `reason='tarpit-walk'`, `track_key`, `ip`, `ua`, `path` (the maze
 
 ---
 
+---
+
+## 10. New Controls — 1.7.1
+
+### 10.1 Browser Automation Probe
+
+Injects a small JavaScript snippet into proxied HTML pages that checks for headless browser
+indicators (webdriver flag, absent plugins, screen depth, missing Chrome object).
+Fires `webdriver-detected` (+30 risk) when ≥ 2 indicators are set.
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `AUTOMATION_PROBE_ENABLED` | `1` (on) | Enable/disable the automation probe. |
+
+```bash
+# Disable automation probe:
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"AUTOMATION_PROBE_ENABLED": false}'
+```
+
+### 10.2 Coordinated ASN Clustering
+
+Detects when 5+ distinct identities from the same ASN hit the same path prefix within 60 seconds.
+Fires `coordinated-probe` (+25 risk) on every member of the cluster.
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `COORDINATED_ATTACK_ENABLED` | `1` (on) | Enable/disable coordinated-probe detection. |
+| `COORDINATED_ATTACK_THRESHOLD` | `5` | Minimum distinct IPs from same ASN to trigger. |
+
+### 10.3 Direct API Probe (Journey Check)
+
+Fires `direct-api-probe` (+15 risk) when an identity makes ≥ 5 requests to API-style
+paths (`/api/`, `/v1/`, `/graphql`, etc.) without ever loading an HTML page or static asset.
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `JOURNEY_CHECK_ENABLED` | `1` (on) | Enable/disable direct-API-probe detection. |
+
+---
+
+## 11. New Controls — 1.7.2
+
+### 11.1 Cookie Lifecycle & Ghost Detection
+
+**Lifecycle probe**: injects a tiny JS snippet that writes a marker cookie (`agw_lc`) when it
+runs. If subsequent non-HTML requests from the same identity arrive without this cookie,
+JS is not executing — the client is sending raw HTTP requests, not using a real browser.
+Fires `lifecycle-miss` (+12 risk).
+
+**Ghost detection**: detects a challenge cookie that exists (the challenge was solved) but the
+lifecycle marker was never written — indicating the token was obtained externally and injected
+into an automated client. Fires `cookie-ghost` (+20 risk).
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `COOKIE_LIFECYCLE_ENABLED` | `1` (on) | Enable/disable lifecycle probe injection. |
+| `COOKIE_GHOST_ENABLED` | `1` (on) | Enable/disable ghost-cookie detection. |
+| `COOKIE_GHOST_MIN_REQUESTS` | `3` | Minimum requests before ghost check runs. |
+| `COOKIE_GHOST_MISS_THRESHOLD` | `3` | Consecutive lifecycle-miss count before ghost fires. |
+
+```bash
+# Tighten ghost detection (fire after 2 misses instead of 3):
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"COOKIE_GHOST_MISS_THRESHOLD": 2}'
+```
+
+### 11.2 Referer Chain Integrity
+
+The gateway tracks which HTML pages it actually served to each identity. A `Referer` header
+pointing to a page that was never served to that identity is treated as a spoofed header.
+Fires `referer-ghost` (+10 risk).
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `REFERER_CHAIN_ENABLED` | `1` (on) | Enable/disable referer-ghost detection. |
+
+```bash
+# Disable (e.g. if upstream uses aggressive link prefetching that confuses the chain):
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"REFERER_CHAIN_ENABLED": false}'
+```
+
+### 11.3 Impossible Travel
+
+If the same session (same challenge cookie) is seen from two different countries within a
+configurable window, the session has either been shared between bots or the cookie was stolen.
+Fires `impossible-travel` (+35 risk), typically enough to trigger a ban.
+Requires the MaxMind City database (bundled in the image or auto-downloaded with a license key).
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `IMPOSSIBLE_TRAVEL_ENABLED` | `1` (on) | Enable/disable impossible-travel detection. |
+| `IMPOSSIBLE_TRAVEL_WINDOW_SECS` | `1800` (30 min) | Time window in seconds (60 s – 7 days). |
+
+```bash
+# Tighten window to 10 minutes:
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"IMPOSSIBLE_TRAVEL_WINDOW_SECS": 600}'
+
+# Inspect impossible-travel events:
+docker logs <container> 2>&1 | grep "impossible-travel"
+```
+
+### 11.4 Browser Fingerprint Enrichment (Canvas + WebGL)
+
+Injects a JavaScript probe into proxied HTML pages that collects canvas rendering output and
+WebGL capabilities. Headless browsers render differently from real ones; many lack hardware
+graphics entirely. Fires `soft-renderer` (+25 risk) or `webgl-missing` (+15 risk).
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `FP_ENRICHMENT_ENABLED` | `1` (on) | Enable/disable canvas/WebGL fingerprint injection. |
+
+### 11.5 Service Worker Challenge
+
+When enabled, the gateway's challenge page registers a Service Worker in the browser.
+All subsequent requests to the gateway's internal namespace must carry `X-SW-Active: 1`
+(added by the SW). Browsers or automation tools that refuse to run Service Workers are flagged.
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `SW_CHALLENGE_ENABLED` | `0` (off) | Enable Service Worker challenge. Off by default — enable after confirming your upstream's CSP allows Service Workers. |
+
+```bash
+# Enable Service Worker challenge:
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"SW_CHALLENGE_ENABLED": true}'
+```
+
+### 11.6 PoW Challenge Threshold
+
+Embeds a SHA-256 Proof-of-Work puzzle into the Turnstile challenge page for identities whose
+risk score has crossed the threshold. The browser solves it in a WebWorker in parallel with
+Turnstile. Makes mass automated challenge-solving economically expensive.
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `POW_CHAL_THRESHOLD` | `0` (off) | Risk score at or above which PoW is added to the challenge. `0` = never. |
+
+```bash
+# Require PoW for identities with risk score ≥ 30:
+curl -X POST https://<gw>/antibot-appsec-gateway/secured/config \
+  -H "Cookie: agw_session=<session>" \
+  -d '{"POW_CHAL_THRESHOLD": 30}'
+```
+
+### 11.7 Upstream CSP Augmentation
+
+The gateway automatically adds `https://challenges.cloudflare.com` to the `script-src` and
+`frame-src` directives of any `Content-Security-Policy` header served by the upstream application.
+This is applied transparently to all proxied HTML responses and requires no configuration.
+
+It prevents situations where the upstream site uses Cloudflare Turnstile on its own pages but
+has a CSP that does not include the Cloudflare challenge domain, causing the widget to be
+blocked by the browser.
+
+No knob — always active when the upstream sends a CSP header.
+
+---
+
 — *End of report* —
 
-Image: `appsec-antibot-gw:1.6.8` · Author: Pedro Tarrinho · 2026-05-02
+Image: `appsec-antibot-gw:1.7.2` · Author: Pedro Tarrinho · 2026-05-04

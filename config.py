@@ -676,6 +676,13 @@ REFERER_CHAIN_ENABLED = os.environ.get("REFERER_CHAIN_ENABLED", "1") in ("1", "t
 IMPOSSIBLE_TRAVEL_ENABLED     = os.environ.get("IMPOSSIBLE_TRAVEL_ENABLED",     "1") in ("1", "true", "yes")
 IMPOSSIBLE_TRAVEL_WINDOW_SECS = int(os.environ.get("IMPOSSIBLE_TRAVEL_WINDOW_SECS", "1800"))
 
+# ── 1.7.3 — path-sweep detector ─────────────────────────────────────────────
+# Fires when a post-challenge identity visits too many distinct non-static
+# paths in a rolling window — characteristic of automated content discovery.
+PATH_SWEEP_ENABLED      = os.environ.get("PATH_SWEEP_ENABLED",      "1") in ("1", "true", "yes")
+PATH_SWEEP_WINDOW_SECS  = int(os.environ.get("PATH_SWEEP_WINDOW_SECS",  "300"))  # 5-min window
+PATH_SWEEP_THRESHOLD    = int(os.environ.get("PATH_SWEEP_THRESHOLD",    "40"))   # distinct paths
+
 # ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
 FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")
 
@@ -769,10 +776,7 @@ SECURITY_HEADERS: dict = {
                                  os.environ.get("SEC_X_PERMITTED_XDP", "none"),
     "Permissions-Policy":        os.environ.get("SEC_PERMISSIONS_POLICY",
         "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
-        "magnetometer=(), microphone=(), payment=(), usb=(), "
-        "browsing-topics=(), run-ad-auction=(), join-ad-interest-group=(), "
-        "private-state-token-redemption=(), private-state-token-issuance=(), "
-        "private-aggregation=(), attribution-reporting=()"),
+        "magnetometer=(), microphone=(), payment=(), usb=()"),
     "Strict-Transport-Security": os.environ.get("SEC_HSTS",
         "max-age=31536000; includeSubDomains"),
     "Content-Security-Policy":   os.environ.get("SEC_CSP", ""),
@@ -821,8 +825,13 @@ TURNSTILE_VERIFY_URL = (
 
 # ── JS challenge JA4 binding + static-asset bypass ────────────────────────────
 # v1.4.1 V9.2: JA4 TLS-fingerprint binding for the chal cookie.
-JS_CHAL_REQUIRE_JA4 = os.environ.get(
-    "JS_CHAL_REQUIRE_JA4", "0") in ("1", "true", "yes")
+# Mutually exclusive with TURNSTILE_ENABLED: when Turnstile is on, TLS is
+# always terminated upstream (Cloudflare CDN), so JA4 is never available.
+# Forcing both on silently fails every challenge with 403 "ja4 required".
+JS_CHAL_REQUIRE_JA4 = (
+    os.environ.get("JS_CHAL_REQUIRE_JA4", "0") in ("1", "true", "yes")
+    and not TURNSTILE_ENABLED
+)
 JS_CHAL_BIND_JA4 = os.environ.get(
     "JS_CHAL_BIND_JA4", "1") not in ("", "0", "false", "False", "no")
 

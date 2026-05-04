@@ -63,6 +63,8 @@ class IpState:
     last_country_ts: float = 0.0
     # 1.7.2 — service worker enrichment
     sw_seen: bool = False
+    # 1.7.3 — path-sweep: sliding window of (monotonic_ts, path) for non-static paths
+    path_sweep_times: deque = field(default_factory=lambda: deque(maxlen=500))
 
 
 # ── Primary identity state ─────────────────────────────────────────────────

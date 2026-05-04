@@ -88,6 +88,7 @@ from detection.cookie_lifecycle import (  # noqa: F401
 )
 from detection.referer_chain import referer_ghost_check  # noqa: F401
 from detection.impossible_travel import impossible_travel_check  # noqa: F401
+from detection.path_sweep import path_sweep_record, path_sweep_check  # noqa: F401
 from detection.fp_enrichment import _inject_fp_probe, fp_report_endpoint  # noqa: F401
 from challenge.js_challenge import sw_js_endpoint  # noqa: F401
 from state import _fp_canvas_store  # noqa: F401
@@ -208,6 +209,37 @@ HOP_BY_HOP_RESPONSE = {
 
 UPSTREAM_MAX_BODY = int(os.environ.get("UPSTREAM_MAX_BODY", str(2 * 1024 * 1024)))  # 2 MiB
 UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(8 * 1024 * 1024)))  # 8 MiB
+
+_CF_TURNSTILE_ORIGIN = "https://challenges.cloudflare.com"
+
+def _csp_inject_cf_turnstile(csp: str) -> str:
+    """Add Cloudflare Turnstile origin to script-src and frame-src in an
+    upstream Content-Security-Policy header so upstream Turnstile widgets
+    (and the gateway's own challenge iframe) are not blocked by a
+    restrictive upstream policy."""
+    if _CF_TURNSTILE_ORIGIN in csp:
+        return csp
+    out = []
+    injected_script = False
+    injected_frame = False
+    default_idx = None
+    parts = csp.split(";")
+    for i, part in enumerate(parts):
+        s = part.strip().lower()
+        if s.startswith("script-src ") or s == "script-src":
+            part = part.rstrip() + " " + _CF_TURNSTILE_ORIGIN
+            injected_script = True
+        elif s.startswith("frame-src ") or s == "frame-src":
+            part = part.rstrip() + " " + _CF_TURNSTILE_ORIGIN
+            injected_frame = True
+        elif s.startswith("default-src ") or s == "default-src":
+            default_idx = i
+        out.append(part)
+    # When script-src / frame-src are absent, default-src governs them.
+    # Augment default-src so those missing directives inherit the origin.
+    if (not injected_script or not injected_frame) and default_idx is not None:
+        out[default_idx] = out[default_idx].rstrip() + " " + _CF_TURNSTILE_ORIGIN
+    return ";".join(out)
 
 # ── v1.4: Slowloris guard (default ON with sensible timeouts) ────────────
 HEADERS_TIMEOUT = float(os.environ.get("HEADERS_TIMEOUT", "10"))   # secs to receive full headers
@@ -803,6 +835,18 @@ async def proxy(request: web.Request):
                     for hk, hv in SECURITY_HEADERS.items():
                         if hv and hk.lower() not in {k.lower() for k in response_headers}:
                             response_headers[hk] = hv
+
+                # Augment upstream CSP to allow Cloudflare Turnstile.  Upstream
+                # sites that embed Turnstile widgets may have a script-src that
+                # omits challenges.cloudflare.com; the gateway adds it so the
+                # widget loads through the proxy without a CSP violation.
+                if ctype.startswith("text/html"):
+                    _csp_key = next(
+                        (k for k in response_headers
+                         if k.lower() == "content-security-policy"), None)
+                    if _csp_key:
+                        response_headers[_csp_key] = _csp_inject_cf_turnstile(
+                            response_headers[_csp_key])
 
                 # H7/N1: inject honey-links only when Content-Type begins with
                 # text/html (rejects `application/text/html-foo` substrings).
@@ -1563,7 +1607,7 @@ async def secrets_endpoint(request: web.Request):
             except asyncio.QueueFull: pass
         # Revert global to env (or empty)
         g[global_name] = os.environ.get(env_name, "").strip()
-        _refresh_integration_state()
+        _refresh_integration_state(globals())
         # Special: license-key clear -> don't re-fetch on next request
         if public_name == "MAXMIND_LICENSE_KEY":
             pass   # mmdbs persist on disk; nothing to undo
@@ -1619,7 +1663,7 @@ async def secrets_endpoint(request: web.Request):
                 pass
 
     if applied:
-        _refresh_integration_state()
+        _refresh_integration_state(globals())
         # If MaxMind license was newly set, kick off a fetch (returns fast;
         # the actual download runs async in the executor).
         if "MAXMIND_LICENSE_KEY" in applied:
@@ -1891,12 +1935,17 @@ _HOT_RELOAD_KNOBS = {
 # intent expressed in .env / container env.  CONFIG_KV_STRICT_ENV=1 extends
 # this to knobs that are present in the environment even with an empty value
 # (full GitOps-style lock-out of dashboard mutations).
+# TURNSTILE_ENABLED and JS_CHALLENGE are intentionally excluded: the env sets
+# the startup default but the dashboard must be able to toggle them at runtime
+# (e.g. disabling Turnstile for a maintenance window without a container restart).
+_ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE"}
 _ENV_PROVIDED_KNOBS = {
     k for k in _HOT_RELOAD_KNOBS
-    if os.environ.get(k, "").strip()
+    if k not in _ENV_PIN_EXCLUDE and os.environ.get(k, "").strip()
 }
 if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
-    _ENV_PROVIDED_KNOBS |= {k for k in _HOT_RELOAD_KNOBS if k in os.environ}
+    _ENV_PROVIDED_KNOBS |= {k for k in _HOT_RELOAD_KNOBS
+                             if k not in _ENV_PIN_EXCLUDE and k in os.environ}
 # DB_BACKEND is always env-pinned when explicitly set (even empty string would
 # be caught above; this guard keeps the intent explicit in the code).
 if "DB_BACKEND" in os.environ:
@@ -1940,7 +1989,7 @@ async def config_endpoint(request: web.Request):
     except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
         return web.json_response({"error": f"bad request: {e}"}, status=400,
                                   headers={"Cache-Control": "no-store"})
-    applied, rejected = {}, {}
+    applied, rejected, warnings = {}, {}, []
     g = globals()
     for k, raw_v in updates.items():
         spec = _HOT_RELOAD_KNOBS.get(k)
@@ -1983,12 +2032,44 @@ async def config_endpoint(request: web.Request):
                     pass
         except (ValueError, TypeError) as e:
             rejected[k] = str(e)[:120]
+
+    # Mutual exclusion: JS_CHAL_REQUIRE_JA4 and TURNSTILE_ENABLED cannot both
+    # be active. Enforce after all updates are applied so that setting both
+    # in one POST is also caught.
+    def _mutex_propagate(key, val):
+        g[key] = val
+        import sys as _sys_mx
+        for _m in list(_sys_mx.modules.values()):
+            if _m is not None and hasattr(_m, key):
+                try:
+                    setattr(_m, key, val)
+                except (AttributeError, TypeError):
+                    pass
+        applied[key] = val
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("set_config", (key, json.dumps(val), _t.time())))
+            except asyncio.QueueFull:
+                pass
+
+    if applied.get("JS_CHAL_REQUIRE_JA4") is True and g.get("TURNSTILE_ENABLED"):
+        _mutex_propagate("JS_CHAL_REQUIRE_JA4", False)
+        warnings.append("JS_CHAL_REQUIRE_JA4 auto-disabled: "
+                        "incompatible with TURNSTILE_ENABLED — "
+                        "JA4 is unavailable when TLS is terminated by Cloudflare CDN")
+        slog("config_mutex", level="warn", reason="ja4-required-blocked-by-turnstile")
+    elif applied.get("TURNSTILE_ENABLED") is True and g.get("JS_CHAL_REQUIRE_JA4"):
+        _mutex_propagate("JS_CHAL_REQUIRE_JA4", False)
+        warnings.append("JS_CHAL_REQUIRE_JA4 auto-disabled: "
+                        "incompatible with TURNSTILE_ENABLED")
+        slog("config_mutex", level="warn", reason="turnstile-cleared-ja4-required")
+
     if applied:
         slog("config_changed", level="warn",
              rid=request.get("_rid", ""), applied=list(applied.keys()),
              rejected=list(rejected.keys()))
     return web.json_response(
-        {"applied": applied, "rejected": rejected,
+        {"applied": applied, "rejected": rejected, "warnings": warnings,
          "state": _read_hot_reload_state()},
         headers={"Cache-Control": "no-store"})
 
@@ -2070,7 +2151,7 @@ async def protect(request: web.Request, handler):
     # request. Internal admin paths are exempt so health-checks and admin
     # tools keep working under load. Operator drives this via the main
     # dashboard slider (or POST <NS>/secured/config GLOBAL_RPS_LIMIT=N).
-    if GLOBAL_RPS_LIMIT > 0 and not _is_admin_path(request.path):
+    if GLOBAL_RPS_LIMIT > 0 and (not _is_admin_path(request.path) or not _admin_ip_allowed(request)):
         n_ts = _t.time()
         cutoff = n_ts - 1.0
         # Lazy-trim
@@ -2087,7 +2168,7 @@ async def protect(request: web.Request, handler):
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
     # admin routes accept any method (HEAD probes, OPTIONS preflight).
-    if not _is_admin_path(request.path) and request.method not in ALLOWED_METHODS:
+    if (not _is_admin_path(request.path) or not _admin_ip_allowed(request)) and request.method not in ALLOWED_METHODS:
         return web.Response(status=405, text="method not allowed\n",
                             headers={"Allow": ", ".join(sorted(ALLOWED_METHODS))})
 
@@ -2295,6 +2376,14 @@ async def protect(request: web.Request, handler):
             _s_early.unique_paths.pop()
         _early_unique_n = len(_s_early.unique_paths)
         _s_early.path_sequence.append(request.path)  # 1.7.1: journey tracking
+        # 1.7.3 — path-sweep window record (non-static, non-admin paths only;
+        # inline inside the held lock — path_sweep_check() reads this later).
+        if PATH_SWEEP_ENABLED and not _is_admin_path(request.path) and \
+                not request.path.endswith((".css", ".js", ".mjs", ".png", ".jpg",
+                    ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico", ".woff",
+                    ".woff2", ".ttf", ".otf", ".eot", ".map", ".mp4", ".webm",
+                    ".mp3", ".ogg", ".pdf", ".zip")):
+            _s_early.path_sweep_times.append((now(), request.path))
         if request.headers.get("X-SW-Active") == "1":  # 1.7.2: SW seen
             _s_early.sw_seen = True
         if request.method == "GET":
@@ -2788,6 +2877,16 @@ async def protect(request: web.Request, handler):
         _it_hit, _it_why = await impossible_travel_check(track_key, ip)
         if _it_hit:
             return await deny(403, "impossible-travel", {"error": "location anomaly"})
+
+    # 5e. 1.7.3 — path-sweep: post-challenge content-discovery detector.
+    # Runs for ALL identities including session-cookied ones (warm-up bypass
+    # acquires a valid cookie THEN sweeps paths). Skips static assets and
+    # admin namespace (recorded at the early-telemetry stage above).
+    if PATH_SWEEP_ENABLED and not is_static_asset_get:
+        _ps_hit, _ps_why = await path_sweep_check(track_key)
+        if _ps_hit:
+            await update_risk_and_maybe_ban(track_key, "path-sweep", ip)
+            request_signals.append("path-sweep")
 
     # 6. PoW
     if needs_pow(request):
@@ -3888,6 +3987,8 @@ async def scoring_endpoint(request: web.Request):
         "impossible-travel":     ("hard",  "Same session-keyed identity appeared from different countries within the impossible-travel window — session hijack or account-sharing across VPN hops."),
         "soft-renderer":         ("med",   "WebGL renderer/vendor string contains a known software-renderer pattern (swiftshader, mesa, llvmpipe, vmware) — virtual or headless environment."),
         "webgl-missing":         ("soft",  "Chrome UA but no WebGL renderer returned — headless Chrome with WebGL blocked or disabled (common in Puppeteer/Playwright default configs)."),
+        # ── 1.7.3 ──
+        "path-sweep":            ("hard",  "Identity visited too many distinct non-static paths in a short window (PATH_SWEEP_THRESHOLD in PATH_SWEEP_WINDOW_SECS s) — automated content discovery / directory enumeration after warm-up bypass."),
     }
     # Each entry annotated with the runtime-toggle knob (if any) that
     # controls whether the detector runs. UI uses this to render a switch
@@ -3971,6 +4072,8 @@ async def scoring_endpoint(request: web.Request):
         "impossible-travel":  "IMPOSSIBLE_TRAVEL_ENABLED",
         "soft-renderer":      "FP_ENRICHMENT_ENABLED",
         "webgl-missing":      "FP_ENRICHMENT_ENABLED",
+        # ── 1.7.3 ──
+        "path-sweep":         "PATH_SWEEP_ENABLED",
     }
     # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
     #
@@ -4065,6 +4168,8 @@ async def scoring_endpoint(request: web.Request):
         "traffic-threshold":    {"kind": "state",        "cached": 0,    "typical": 0.001, "p99": 0.005},
         # botd-detected: receive POST report from browser-side FingerprintJS; gateway cost = JSON parse + ban
         "botd-detected":        {"kind": "state",        "cached": 0,    "typical": 0.1,   "p99": 0.5},
+        # path-sweep: prune deque + set comprehension over maxlen=500 window (no I/O)
+        "path-sweep":           {"kind": "state",        "cached": 0,    "typical": 0.05,  "p99": 0.2},
         # ── Response-side (DLP) — added to response latency, not request latency ──
         "dlp-cc":               {"kind": "response",     "cached": 0,    "typical": 0.5,   "p99": 3.0},
         "dlp-aws":              {"kind": "response",     "cached": 0,    "typical": 0.3,   "p99": 1.5},
@@ -4293,7 +4398,7 @@ async def geo_data_endpoint(request: web.Request):
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT ts, ip, reason FROM events "
-            "WHERE ts >= ? AND ts <= ? ORDER BY ts ASC LIMIT 200000",
+            "WHERE ts >= ? AND ts <= ? ORDER BY ts ASC",
             (start_epoch, end_epoch),
         ).fetchall()
         conn.close()
@@ -4308,6 +4413,7 @@ async def geo_data_endpoint(request: web.Request):
     ip_geo = {}
     ip_flags = {}   # ip → {"tor": bool, "dc": bool, "asn_org": str}
     asn_totals = {}  # asn_org → {clean, blocked}
+    skipped_no_geo = 0  # events dropped because IP has no geoip record (private/unresolvable)
     for r in rows:
         ip = r["ip"]
         if not ip:
@@ -4324,6 +4430,7 @@ async def geo_data_endpoint(request: web.Request):
             ip_flags[ip] = {"tor": tor_hit, "dc": dc_hit, "asn_org": asn_org}
         loc = ip_geo[ip]
         if loc is None:
+            skipped_no_geo += 1
             continue
         lat, lng, country, city = loc
         # Round to 0.5° to merge nearby cities into a single bubble
@@ -4492,10 +4599,11 @@ async def geo_data_endpoint(request: web.Request):
             "total_clean":   sum(p["clean"]   for p in out_points),
             "total_tor":     sum(p["tor_hits"] for p in out_points),
             "total_dc":      sum(p["dc_hits"] for p in out_points),
-            "method_totals": method_totals,              # 1.6.4
-            "range_min":     range_min,
-            "end_epoch":     end_epoch,
-            "start_epoch":   start_epoch,
+            "method_totals":   method_totals,              # 1.6.4
+            "skipped_no_geo":  skipped_no_geo,             # events with no geoip (private/unresolvable IPs)
+            "range_min":       range_min,
+            "end_epoch":       end_epoch,
+            "start_epoch":     start_epoch,
         },
     }
     _GEO_CACHE[cache_key] = (_t.time() + 60, payload)
