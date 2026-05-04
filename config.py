@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.7.2"
+GW_VERSION = "AppSecGW_1.7.3"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -646,6 +646,11 @@ RISK_WEIGHTS = {
     "impossible-travel":     35,
     "soft-renderer":         25,
     "webgl-missing":         15,
+    # 1.7.3 — AI-agent specific signals
+    "honey-cred":            90,   # P1: fake credential used
+    "redirect-maze-bot":     55,   # P2: maze completed too fast
+    "llm-no-subresources":   40,   # P3: HTML fetched without CSS/JS/images
+    "canary-probe-miss":     35,   # P4: preload probe never fetched
 }
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
@@ -682,6 +687,39 @@ IMPOSSIBLE_TRAVEL_WINDOW_SECS = int(os.environ.get("IMPOSSIBLE_TRAVEL_WINDOW_SEC
 PATH_SWEEP_ENABLED      = os.environ.get("PATH_SWEEP_ENABLED",      "1") in ("1", "true", "yes")
 PATH_SWEEP_WINDOW_SECS  = int(os.environ.get("PATH_SWEEP_WINDOW_SECS",  "300"))  # 5-min window
 PATH_SWEEP_THRESHOLD    = int(os.environ.get("PATH_SWEEP_THRESHOLD",    "40"))   # distinct paths
+
+# ── 1.7.3 — P1: semantic honeypot credential injection ───────────────────────
+# Inject fake API keys in HTML comments. AI agents extract and use them;
+# browsers never read HTML source. When the probe endpoint is hit → instant
+# high-confidence bot flag.
+HONEY_CRED_ENABLED = os.environ.get("HONEY_CRED_ENABLED", "1") in ("1", "true", "yes")
+HONEY_CRED_SCORE   = float(os.environ.get("HONEY_CRED_SCORE", "90"))
+
+# ── 1.7.3 — P2: risk-gated redirect maze ─────────────────────────────────────
+# For identities above threshold, serve a chain of signed redirects.
+# Agents follow all steps in milliseconds; humans show normal latency.
+REDIRECT_MAZE_ENABLED   = os.environ.get("REDIRECT_MAZE_ENABLED",   "0") in ("1", "true", "yes")
+REDIRECT_MAZE_THRESHOLD = float(os.environ.get("REDIRECT_MAZE_THRESHOLD", "20"))  # risk score
+REDIRECT_MAZE_DEPTH     = int(os.environ.get("REDIRECT_MAZE_DEPTH",     "4"))     # redirect steps
+REDIRECT_MAZE_MIN_MS    = float(os.environ.get("REDIRECT_MAZE_MIN_MS",  "800"))   # ms a human needs
+REDIRECT_MAZE_SCORE     = float(os.environ.get("REDIRECT_MAZE_SCORE",   "55"))
+
+# ── 1.7.3 — P3: LLM no-subresource heuristic ────────────────────────────────
+# Real browsers load CSS/JS/images for every HTML page. AI agents fetch only
+# HTML. Track ratio: if N HTML pages fetched with zero sub-resources → LLM.
+LLM_HEURISTIC_ENABLED       = os.environ.get("LLM_HEURISTIC_ENABLED",       "1") in ("1", "true", "yes")
+LLM_HTML_MIN_COUNT          = int(os.environ.get("LLM_HTML_MIN_COUNT",          "5"))   # min HTML fetches to trigger
+LLM_SUBRES_RATIO_THRESHOLD  = float(os.environ.get("LLM_SUBRES_RATIO_THRESHOLD", "0.0")) # max sub-res ratio (0=none)
+LLM_HEURISTIC_WINDOW_SECS   = int(os.environ.get("LLM_HEURISTIC_WINDOW_SECS",   "120"))
+LLM_HEURISTIC_SCORE         = float(os.environ.get("LLM_HEURISTIC_SCORE",        "40"))
+
+# ── 1.7.3 — P4: browser execution probe (split canary) ───────────────────────
+# Inject <link rel="preload"> into HTML. Browsers auto-fetch it; curl/agents
+# don't. Probes not fetched within TTL after N HTML requests → LLM signal.
+CANARY_PROBE_ENABLED    = os.environ.get("CANARY_PROBE_ENABLED",    "1") in ("1", "true", "yes")
+CANARY_PROBE_TTL_SECS   = int(os.environ.get("CANARY_PROBE_TTL_SECS",   "30"))   # window to fetch
+CANARY_PROBE_MIN_HTML   = int(os.environ.get("CANARY_PROBE_MIN_HTML",   "3"))    # HTML pages before check
+CANARY_PROBE_SCORE      = float(os.environ.get("CANARY_PROBE_SCORE",      "35"))
 
 # ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
 FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")
