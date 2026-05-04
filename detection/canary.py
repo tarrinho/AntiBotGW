@@ -23,6 +23,7 @@ import hmac
 import json
 import secrets
 import time as _t
+from collections import defaultdict
 
 from aiohttp import web
 
@@ -40,11 +41,16 @@ from config import (
     POW_HMAC_KEY,
     SESSION_KEY,
     HONEY_LINK_HTML,
+    ADMIN_NS,
+    CANARY_PROBE_ENABLED,
+    CANARY_PROBE_TTL_SECS,
+    CANARY_PROBE_MIN_HTML,
+    CANARY_PROBE_SCORE,
 )
 # BODY_TIMEOUT lives in proxy.py (not yet promoted to config); late-imported
 # inside botd_report_endpoint() to avoid a circular import at module load time.
 from state import _canary_tokens
-from helpers import get_ip
+from helpers import get_ip, slog
 from identity import get_identity
 
 
@@ -251,6 +257,127 @@ def _inject_honey_links(body: bytes) -> bytes:
     return body[:abs_idx] + inject + body[abs_idx:]
 
 
+# ── P4: Browser execution probe (1.7.3) ───────────────────────────────────────
+# Real browsers automatically fetch <link rel="preload" as="fetch"> hints;
+# AI agents (WebFetch, LangChain, etc.) only retrieve the HTML document itself.
+#
+# Per-identity state:
+#   _probe_token_store  — token → (identity, expires_ts)
+#   _probe_html_counts  — identity → (html_count, first_seen_ts)
+#   _probe_confirmed    — identity → ts when probe was fetched
+
+_probe_token_store: dict = {}  # token → (identity, expires_ts)
+_PROBE_STORE_MAX = 8192
+# identity → [first_seen_ts, html_count]
+_probe_html_counts: dict = defaultdict(lambda: [0.0, 0])
+# identity → last confirmed timestamp
+_probe_confirmed: dict = {}
+
+
+def _make_canary_probe_token(identity: str) -> str:
+    bucket = int(_t.time()) // CANARY_PROBE_TTL_SECS
+    raw = hmac.new(
+        SESSION_KEY,
+        f"cp|{identity}|{bucket}".encode(),
+        hashlib.sha256,
+    ).hexdigest()[:24]
+    return raw
+
+
+def _store_probe_token(token: str, identity: str) -> None:
+    now = _t.time()
+    if len(_probe_token_store) >= _PROBE_STORE_MAX:
+        expired = [k for k, (_, exp) in _probe_token_store.items() if exp < now]
+        for k in expired:
+            _probe_token_store.pop(k, None)
+        if len(_probe_token_store) >= _PROBE_STORE_MAX:
+            for k in list(_probe_token_store.keys())[:_PROBE_STORE_MAX // 8]:
+                _probe_token_store.pop(k, None)
+    _probe_token_store[token] = (identity, now + CANARY_PROBE_TTL_SECS * 2)
+
+
+def inject_canary_probe(body: bytes, identity: str) -> bytes:
+    """Inject a hidden preload link probe into HTML. Browsers fetch it
+    automatically; AI agents don't. Also increments the per-identity HTML
+    counter. No-op when CANARY_PROBE_ENABLED=0 or body is empty."""
+    if not CANARY_PROBE_ENABLED or not body or not identity:
+        return body
+
+    token = _make_canary_probe_token(identity)
+    _store_probe_token(token, identity)
+
+    # Track HTML page count per identity
+    now = _t.time()
+    rec = _probe_html_counts[identity]
+    if rec[1] == 0:
+        rec[0] = now  # first_seen_ts
+    rec[1] += 1
+
+    probe_url = f"{ADMIN_NS}/canary-probe/{token}"
+    link_tag = (
+        f'<link rel="preload" href="{probe_url}" as="fetch" '
+        f'crossorigin="anonymous" data-agw="1">'
+    ).encode()
+
+    lower = body.lower()
+    idx = lower.find(b"</head>")
+    if idx >= 0:
+        return body[:idx] + link_tag + body[idx:]
+    # Fallback: prepend (still parsed before render, before </body>)
+    idx = lower.find(b"</body>")
+    if idx >= 0:
+        return body[:idx] + link_tag + body[idx:]
+    return body + link_tag
+
+
+async def canary_probe_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/canary-probe/{token}
+    Called automatically by browsers via preload hint. Records browser
+    confirmation for the identity. Returns 204 No Content."""
+    token = request.match_info.get("token", "")
+    entry = _probe_token_store.get(token)
+    if entry:
+        identity, exp = entry
+        if _t.time() <= exp:
+            _probe_confirmed[identity] = _t.time()
+    # Always return 204 — never reveal whether token was valid
+    return web.Response(status=204, headers={
+        "Cache-Control": "no-store, no-cache",
+        "Access-Control-Allow-Origin": "*",
+    })
+
+
+def check_canary_probe(identity: str, ip: str) -> float:
+    """Return risk delta if identity has received ≥ CANARY_PROBE_MIN_HTML
+    HTML pages but the browser probe was never fetched within
+    CANARY_PROBE_TTL_SECS of first serving. Returns 0.0 when no signal."""
+    if not CANARY_PROBE_ENABLED or not identity:
+        return 0.0
+
+    # Already confirmed as browser — no signal
+    if identity in _probe_confirmed:
+        return 0.0
+
+    rec = _probe_html_counts.get(identity)
+    if not rec:
+        return 0.0
+
+    first_seen_ts, html_count = rec[0], rec[1]
+    if html_count < CANARY_PROBE_MIN_HTML:
+        return 0.0
+
+    now = _t.time()
+    # Only fire after the TTL window has elapsed — give the browser time to fetch
+    if now - first_seen_ts < CANARY_PROBE_TTL_SECS:
+        return 0.0
+
+    # Fired — reset counter so it doesn't re-fire every request
+    _probe_html_counts[identity] = [now, 0]
+    slog("canary_probe_miss", level="warn", ip=ip, identity=identity[:8],
+         html_count=html_count, ttl_secs=CANARY_PROBE_TTL_SECS)
+    return CANARY_PROBE_SCORE
+
+
 __all__ = [
     # canary
     "_new_canary",
@@ -263,4 +390,8 @@ __all__ = [
     # tarpit / honey
     "_tarpit_inject_html",
     "_inject_honey_links",
+    # P4: browser execution probe (1.7.3)
+    "inject_canary_probe",
+    "canary_probe_endpoint",
+    "check_canary_probe",
 ]
