@@ -396,7 +396,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.1"
+_EXPECTED_VERSION = "AppSecGW_1.7.2"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -412,7 +412,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.1\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.2\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
@@ -436,4 +436,74 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.1:\n" + "\n".join(hits)
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.2:\n" + "\n".join(hits)
+
+
+# ── 1.7.2 pure-function tests ─────────────────────────────────────────────────
+
+def test_inject_lifecycle_cookie_script_before_body():
+    from detection.cookie_lifecycle import _inject_lifecycle_cookie_script
+    html = b"<html><body>hello</body></html>"
+    out = _inject_lifecycle_cookie_script(html)
+    assert b"agw_lc=1" in out
+    assert out.index(b"agw_lc=1") < out.index(b"</body>")
+
+
+def test_inject_lifecycle_cookie_script_appends_when_no_tag():
+    from detection.cookie_lifecycle import _inject_lifecycle_cookie_script
+    html = b"<html><p>no body tag</p></html>"
+    out = _inject_lifecycle_cookie_script(html)
+    assert b"agw_lc=1" in out
+
+
+def test_inject_lifecycle_cookie_script_empty_body_passthrough():
+    from detection.cookie_lifecycle import _inject_lifecycle_cookie_script
+    assert _inject_lifecycle_cookie_script(b"") == b""
+
+
+def test_is_soft_renderer_known_patterns():
+    from detection.fp_enrichment import _is_soft_renderer
+    assert _is_soft_renderer("Google SwiftShader")
+    assert _is_soft_renderer("Mesa Intel(R) Iris(R) Xe Graphics")
+    assert _is_soft_renderer("LLVMPIPE 0.0")
+    assert _is_soft_renderer("VMware SVGA 3D")
+    assert not _is_soft_renderer("NVIDIA GeForce RTX 3080")
+    assert not _is_soft_renderer("Apple M2")
+
+
+def test_fp_probe_injected_before_body():
+    import detection.fp_enrichment as _fpe
+    orig = _fpe.FP_ENRICHMENT_ENABLED
+    _fpe.FP_ENRICHMENT_ENABLED = True
+    html = b"<html><body>page</body></html>"
+    out = _fpe._inject_fp_probe(html, "track:abc123")
+    _fpe.FP_ENRICHMENT_ENABLED = orig
+    assert b"fp-report" in out
+    assert out.index(b"fp-report") < out.index(b"</body>")
+
+
+def test_fp_probe_skipped_when_disabled():
+    import detection.fp_enrichment as _fpe
+    orig = _fpe.FP_ENRICHMENT_ENABLED
+    _fpe.FP_ENRICHMENT_ENABLED = False
+    html = b"<html><body>page</body></html>"
+    out = _fpe._inject_fp_probe(html, "track:abc123")
+    _fpe.FP_ENRICHMENT_ENABLED = orig
+    assert out == html
+
+
+def test_fp_token_is_hmac_bound_to_track_key():
+    from detection.fp_enrichment import _fp_token_for
+    t1 = _fp_token_for("session:aaa", 1000)
+    t2 = _fp_token_for("session:bbb", 1000)
+    t3 = _fp_token_for("session:aaa", 1000)
+    assert t1 != t2
+    assert t1 == t3
+
+
+def test_referer_ghost_skips_static_suffixes():
+    """referer_ghost_check must not fire for static asset extensions."""
+    from detection.referer_chain import _STATIC_SUFFIXES
+    static_exts = [".css", ".js", ".png", ".jpg", ".woff2", ".ico"]
+    for ext in static_exts:
+        assert ext in _STATIC_SUFFIXES, f"{ext!r} missing from _STATIC_SUFFIXES"

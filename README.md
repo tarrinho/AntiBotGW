@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.6.10` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.7.2` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -201,7 +201,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.6.10 \
+docker run -d --name appsec-antibot-gw1.7.2 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.6.10 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.6.10 \
+  appsec-antibot-gw:1.7.2 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.6.10` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.2` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -317,7 +317,7 @@ Monitor startup:
 
 ```bash
 docker compose logs -f appsec-antibot-gw
-# Expect: "[js-challenge] active" and "AppSecGW_1.6.10 listening …" within 5 s
+# Expect: "[js-challenge] active" and "AppSecGW_1.7.2 listening …" within 5 s
 ```
 
 Check that all services are healthy:
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.6.10
+  appsec-antibot-gw:1.7.2
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.6.10 .
-trivy image appsec-antibot-gw:1.6.10        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.7.2 .
+trivy image appsec-antibot-gw:1.7.2        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1081,6 +1081,8 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.7.2** | **Geo dashboard overhaul + cost chart fix + admin IP tooltips.** Time-window navigation (← prev / next → / now) in geo dashboard; `endEpoch` appended to all geo-data requests. Drill scrubber-aware: passes `?end=&range=` when scrubbing. Denied-country visual on map circles (red border + ⛔ prefix). `is_admin_ip` returned by geo-drill endpoint; 🔒 icon with tooltip in drill panel. Country table allow buttons (no silent `COUNTRY_BLOCK_ENABLED:true` side-effect). `geo_data_endpoint` ORDER BY ts ASC. `_GEO_CACHE` LRU eviction fixed (was sorting by key value, not expiry). Cost chart `onClick` direct call — eliminates silent failure on bucket-boundary timestamp mismatch. `_adminLock` / `_ADMIN_IP_TIP` promoted to global scope in `main.html`; all five 🔒 occurrences across all panels now show full tooltip on hover. All dashboard version badges updated 1.7.1 → 1.7.2. **Tests**: 189 unit + 22 functional + 22 integration + 40 control regression + v14/v142 — all pass. **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
+| **1.7.1** | **Browser automation probe + coordinated ASN clustering + user journey detection.** Self-hosted JS probe (`AUTOMATION_PROBE_ENABLED=1`) fires `webdriver-detected` (+30). Coordinated-ASN clustering (`COORDINATED_ATTACK_ENABLED=1`) fires `coordinated-probe` (+25) on cluster members. User journey / direct-API-probe (`JOURNEY_CHECK_ENABLED=1`) fires `direct-api-probe` (+15). Fixes: agents.html bucket popover max-height clipping; fetch error handling in openBucketDetail; main.html catch-block error display. **Tests**: 22 functional + 22 integration + regression — all pass. **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
 | **1.7.0** | **Modular refactor (Phase 5–8)** — 13,696-line `proxy.py` monolith split into 30+ modules (`config`, `state`, `helpers`, `identity`, `rate_limit`, `scoring`, `admin/*`, `challenge/*`, `core/*`, `dashboards/*`, `db/*`, `detection/*`, `integrations/*`, `reputation/*`). Public API and all behaviour unchanged. Fixes: Dockerfile missing COPY blocks, `_postgres_available` NameError, NaN/Inf injection in `end=` param, `_global_rps_window` / `_pow_seen` / `_canary_tokens` NameErrors, namespace-aware tarpit + get_ip wrappers, `_HOSTILE_REASONS` NameError, `db_load_config` test-isolation regression, `DB_PATH` resolution, credential propagation to validators. **Tests**: 309/309 (179 unit + 22 functional + 10 integration + 98 regression). **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
 | **1.6.9** | **AI Labyrinth + Controls kind badges + TimescaleDB stats.** **(1) TimescaleDB / Postgres health metrics** — `_pg_timescale_stats()` samples hypertable sizes, chunk counts, compression ratio, continuous-aggregate freshness, and Postgres cache-hit ratio every interval; surfaces on the Service dashboard under "PostgreSQL / TimescaleDB" with click-to-zoom chart modal. **(2) Controls dashboard — kind badges** — every detector entry in the scoring table now carries a `kind` badge (7 categories: `in-process` · `state` · `regex` · `mmdb` · `network` · `response` · `adversary`) with coloured micro-badges and a kind-legend strip above the table. Adversary entries (`slow-client`, `tarpit-walk`) display in blue with tooltip "0 ms for legit traffic". Cost values corrected for `suspicious-body` (0.8 ms typical) and `suspicious-path` (0.1 ms). Sort-by-cost column header click. **(3) AI Labyrinth (in-progress as 1.6.9)** — hidden `rel="nofollow"` block injected before `</body>` on every proxied HTML response; bot following a link enters a slow-drip fake-documentation maze; fires `tarpit-walk` (weight 100, instant ban). 4 hot-reloadable knobs: `LABYRINTH_ENABLED`, `LABYRINTH_SLOW_MS`, `LABYRINTH_MAX_DEPTH`, `LABYRINTH_LINKS_PER_PAGE`. **Validation fixes (found during build validation)**: tarpit endpoint added to `_ADMIN_PUBLIC_SUBPATHS` (was unreachable by non-admin IPs); `tarpit_endpoint` identity derivation fixed (`get_identity()` instead of non-existent helper stubs). **Tests**: 163 unit + 19 functional + 10 integration + 94 regression — **286/286 passing**. New tests (1.6.8): `test_168_labyrinth_knobs_in_hot_reload`, `test_168_labyrinth_tarpit_walk_in_risk_weights`, `test_168_labyrinth_tarpit_walk_high_weight`, `test_168_tarpit_token_roundtrip`, `test_168_tarpit_verify_rejects_tampered`, `test_168_tarpit_inject_html_adds_hidden_div`, `test_168_tarpit_inject_html_no_body_tag_passthrough`, `test_168_tarpit_page_html_has_fake_content`, `test_168_tarpit_public_subpath_registered`, `test_168_admin_path_is_public_tarpit` (unit); `test_labyrinth_links_injected_in_html_response`, `test_tarpit_endpoint_accessible_without_admin_auth`, `test_tarpit_endpoint_rejects_invalid_token`, `test_tarpit_endpoint_disabled_returns_404` (functional). **Bandit**: 0 H / 0 C, 13 Mediums (all classified). **Trivy**: 0 CVEs. |
 | **1.6.7** | **Gateway Registry + multi-user auth + per-session ledger + mesh-sync.** **(1) Gateway Registry** in Settings (no new dashboard) — three tabs (list / distribution matrix / audit log) + 11 endpoints under `/antibot-appsec-gateway/secured/admin/gw-registry/...`; gw_id auto-derives from the domain (operator may override); production-environment edit warning; typed-confirm delete; "copy-once" private-key reveal modal. **(2) Multi-user auth + login flow** — bearer-key auth (`?key=` / `X-Admin-Key`) was **removed**; the only entry to `/secured/...` is signing in via `/antibot-appsec-gateway/login` and carrying the `agw_session` cookie. INTERNAL_KEY is now used **exclusively** as the bootstrap admin password. First-time-setup hint disappears from the login page once any user has logged in; the same hint is also printed to the container's startup log on a fresh `/data` volume. 5/min/IP login rate-limit; scrypt-hashed passwords (N=2¹⁴, random salt); STRICT_ORIGIN CSRF guard on `POST /login`. **(3) Per-session ledger** — every login mints a fresh sid embedded in the cookie HMAC payload (`username\|sid\|expiry\|HMAC`); the `user_sessions` table records source IP + User-Agent + created/last-seen/expires/status; click any username in the Users table → modal lists sessions with per-row Revoke; revoke marks `status=revoked` and the next request silent-decoys (cache-only verify post-boot). Logout revokes the current sid server-side. **(4) Mesh-sync of integration secrets** — small toggle next to each integration's value field in Controls (off by default); when on + REDIS_URL set, the gateway publishes the value to `appsecgw:mesh:offers:<gw_id>` every 30s with TTL 60s; peers scrape and land novel offers in `gw_sync_pending` with status=`pending` only when the local value is empty; nothing reaches the live integration without operator confirmation in Settings → Mesh sync. Allowlist excludes ADMIN_KEY/SESSION_KEY/INTERNAL_KEY. **(5) UX polish** — green ● LIVE pill normalised across every dashboard; portal footer (Antibot AppSec Gateway · © 2026 redacted, S.A. · Confidential) on every page; Sign-out link inline next to Settings in every topnav with a confirm prompt; Online column in Users table (60s in-memory TTL). **Tests**: 153 unit + 15 functional + 10 integration + 94 regression — **272/272 passing, 0 pre-existing failures**. New tests for 1.6.7: `test_167_gw_id_validator`, `test_167_gw_keypair_roundtrip`, `test_167_gw_row_to_dict_strips_private_key`, `test_167_registry_endpoints_registered`, `test_167_local_gw_id_resolves`, `test_167_gw_id_from_domain`, `test_167_mesh_sync_eligible_keys_allowlist`, `test_167_mesh_sync_endpoints_registered`, `test_167_session_revoke_invalidates_cookie`, `test_167_session_token_format_includes_sid`, `test_internal_authed_rejects_bearer_key_post_1_6_7`, `test_internal_authed_accepts_valid_session_cookie`, `test_internal_authed_rejects_tampered_cookie`. **Bandit**: 0 H / 0 C, 13 Mediums all classified (B104 / B608 / B310). **Trivy**: 0 CVEs. **Black-box pentest**: 8 attacks attempted (forged cookie, legacy 3-part token, cookie tampering, replay-after-revoke, login brute-force, CSRF-on-login, retired bearer-key × 2, mesh-sync without auth) — 8/8 blocked. |

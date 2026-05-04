@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.7.1 · Dashboard</title>
+<title>AppSecGW_1.7.2 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -136,7 +136,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   text-transform:uppercase;letter-spacing:.5px}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.1 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.2 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- column-header tooltip -->
 <div id="col-tip-pop"></div>
@@ -206,7 +206,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <!-- 1.5.4 — middleware wall-time cost (avg ms / request) -->
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Avg added latency per request <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">cost of all enabled controls · ms wall-time inside the proxy</span></h2>
+      <h2 style="margin:0">Avg added latency per request <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">cost of all enabled controls · ms wall-time inside the proxy · click a point to inspect that bucket</span></h2>
       <div class="dim" style="font-size:11.5px">
         <span>avg: <b id="cost-avg" style="color:var(--green)">—</b> ms</span>
         &nbsp;·&nbsp; <span>p-max: <b id="cost-max" style="color:var(--orange,#ff7b3a)">—</b> ms</span>
@@ -409,6 +409,16 @@ function ensureCostChart() {
       responsive: true, maintainAspectRatio: false,
       animation: { duration: 250 },
       interaction: { mode: 'index', intersect: false },
+      onClick: (ev, items) => {
+        if (!items || !items.length) return;
+        const idx = items[0].index;
+        const tl = window._lastCostTimeline || [];
+        if (!tl[idx]) return;
+        openMainBucketDetail(tl[idx], window._lastCostBucketSecs || 60, null);
+      },
+      onHover: (ev, items) => {
+        ev.native && (ev.native.target.style.cursor = items.length ? 'pointer' : 'default');
+      },
       plugins: { legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
                  tooltip: { backgroundColor:'#161b22', borderColor:'#30363d',
                             borderWidth:1, titleColor:'#c9d1d9', bodyColor:'#c9d1d9' } },
@@ -759,7 +769,7 @@ async function tick() {
       return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint}">
         <span class="dim">${escapeHtml(time)}</span>
         <span>${tagHtml}</span>
-        <span>${e.is_admin_ip?'<span title="Admin IP">🔒</span> ':''}${escapeHtml(e.ip)}</span>
+        <span>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</span>
         <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
         <span class="dim" title="request id (X-Request-ID)" style="font-family:ui-monospace;font-size:10.5px">${escapeHtml(e.rid || '')}</span>
       </div>`;
@@ -848,6 +858,8 @@ async function tick() {
         if (cd.timeline && cd.timeline.length){
           const cc = ensureCostChart();
           const bSec = cd.timeline_bucket_secs || 60;
+          window._lastCostTimeline   = cd.timeline;
+          window._lastCostBucketSecs = bSec;
           const lbls = cd.timeline.map(b => fmtTime(b.t, bSec));
           const stp = Math.max(1, Math.floor(lbls.length / 12));
           cc.data.labels = lbls.map((l,i)=>(i%stp===0||i===lbls.length-1)?l:'');
@@ -871,6 +883,8 @@ async function tick() {
   }
 }
 function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+const _ADMIN_IP_TIP = 'Admin IP — this source is in the operator’s trusted IP allowlist. Requests from this address bypass risk scoring and ban enforcement.';
+const _adminLock = f => f ? `<span title="${_ADMIN_IP_TIP}" style="cursor:help;margin-right:3px">🔒</span>` : '';
 // 1.5.4 — progressive unit formatter: s → min (>3600s) → h (>240min=14400s) → d (>48h=172800s)
 // Negative or invalid values render as "—" (was a 1.5.3 bug where stale DB-loaded
 // timestamps mixed epoch + monotonic).
@@ -1295,7 +1309,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         const totalRisk = idents.reduce((sum, i) => sum + (i.risk||0), 0);
         return `<tr>
           <td>${identCell}</td>
-          <td>${e.is_admin_ip?'<span title="Admin IP">🔒</span> ':''}${escapeHtml(e.ip)}</td>
+          <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
           <td style="text-align:right;font-weight:600">${e.count}×</td>
           <td style="text-align:right;color:${totalRisk>=50?'var(--red)':totalRisk>=25?'var(--orange,#ff7b3a)':'var(--dim)'};font-weight:600">${totalRisk.toFixed(1)}</td>
           <td><code style="color:${rsnColor}">${escapeHtml(topRsn)}</code></td>
@@ -1366,7 +1380,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Last path</th><th>Actions</th>
       </tr></thead><tbody>` +
       list.map(e => `<tr>
-        <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
+        <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
         <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
@@ -1379,7 +1393,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
       list.map(e => {
         const top = Object.entries(e.reasons||{}).sort((a,b)=>b[1]-a[1])[0]||['—',0];
         return `<tr>
-          <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
+          <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
           <td style="color:var(--red);font-weight:600;text-align:right">${e.count}×</td>
           <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
           <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
@@ -1393,7 +1407,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
       </tr></thead><tbody>` +
       list.map(e => `<tr>
         <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
-        <td>${e.is_admin_ip?'🔒 ':''}${escapeHtml(e.ip)}</td>
+        <td>${_adminLock(e.is_admin_ip)}${escapeHtml(e.ip)}</td>
         <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
         <td style="text-align:right">${e.risk_score}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>

@@ -392,3 +392,129 @@ def test_agents_bucket_kind_filter(proxy_module):
                 assert data.get("only") == "detected", \
                     f"expected 'only':'detected', got {data.get('only')!r}"
     _run(go())
+
+
+# ── 1.7.2: fp-report endpoint ──────────────────────────────────────────────────
+
+def test_fp_report_bad_token_returns_403(proxy_module):
+    """POST /antibot-appsec-gateway/fp-report with a wrong token → 403."""
+    import time, json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                proxy_module.FP_ENRICHMENT_ENABLED = True
+                payload = json.dumps({
+                    "token": "deadbeefdeadbeefdeadbeefdeadbeef",
+                    "ts": int(time.time()),
+                    "canvas": "abc",
+                    "renderer": "",
+                    "vendor": "",
+                }).encode()
+                r = await client.post(
+                    "/antibot-appsec-gateway/fp-report",
+                    data=payload,
+                    headers={"Content-Type": "application/json"})
+                assert r.status == 403
+    _run(go())
+
+
+def test_fp_report_disabled_returns_400(proxy_module):
+    """POST /antibot-appsec-gateway/fp-report when disabled → 400."""
+    import time, json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                proxy_module.FP_ENRICHMENT_ENABLED = False
+                payload = json.dumps({"token": "x", "ts": int(time.time())}).encode()
+                r = await client.post(
+                    "/antibot-appsec-gateway/fp-report",
+                    data=payload,
+                    headers={"Content-Type": "application/json"})
+                assert r.status == 400
+                proxy_module.FP_ENRICHMENT_ENABLED = True
+    _run(go())
+
+
+def test_fp_report_stale_ts_returns_400(proxy_module):
+    """POST /antibot-appsec-gateway/fp-report with a very old ts → 400."""
+    import json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                proxy_module.FP_ENRICHMENT_ENABLED = True
+                payload = json.dumps({
+                    "token": "x", "ts": 1, "canvas": "", "renderer": "", "vendor": "",
+                }).encode()
+                r = await client.post(
+                    "/antibot-appsec-gateway/fp-report",
+                    data=payload,
+                    headers={"Content-Type": "application/json"})
+                assert r.status == 400
+    _run(go())
+
+
+# ── 1.7.2: sw.js endpoint ────────────────────────────────────────────────────
+
+def test_sw_js_disabled_returns_404(proxy_module):
+    """GET /antibot-appsec-gateway/sw.js when SW_CHALLENGE_ENABLED=0 → 404."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                proxy_module.SW_CHALLENGE_ENABLED = False
+                r = await client.get("/antibot-appsec-gateway/sw.js")
+                assert r.status == 404
+    _run(go())
+
+
+def test_sw_js_enabled_returns_javascript(proxy_module):
+    """GET /antibot-appsec-gateway/sw.js when enabled → 200 with JS content."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as client:
+                proxy_module.SW_CHALLENGE_ENABLED = True
+                r = await client.get("/antibot-appsec-gateway/sw.js")
+                assert r.status == 200
+                assert "javascript" in r.headers.get("Content-Type", "")
+                text = await r.text()
+                assert "fetch" in text
+                proxy_module.SW_CHALLENGE_ENABLED = False
+    _run(go())
+
+
+# ── 1.7.2: lifecycle cookie injection ────────────────────────────────────────
+
+def test_lifecycle_cookie_injected_in_html_response(proxy_module):
+    """HTML upstream response must have agw_lc cookie-setting script injected."""
+    async def _html_handler(req):
+        return web.Response(
+            text="<html><body>hello</body></html>",
+            content_type="text/html")
+
+    async def go():
+        html_app = web.Application()
+        html_app.router.add_get("/", _html_handler)
+        html_srv = TestServer(html_app)
+        await html_srv.start_server()
+        html_url = f"http://127.0.0.1:{html_srv.port}"
+        try:
+            async with _spin_proxy(proxy_module, html_url) as client:
+                proxy_module.JS_CHALLENGE = False
+                proxy_module.COOKIE_LIFECYCLE_ENABLED = True
+                r = await client.get(
+                    "/",
+                    headers={
+                        "Accept": "text/html,application/xhtml+xml,*/*",
+                        "User-Agent": (
+                            "Mozilla/5.0 (X11; Linux x86_64) "
+                            "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            "Chrome/124.0.0.0 Safari/537.36"
+                        ),
+                        "Sec-Fetch-Site": "none",
+                        "Sec-Fetch-Mode": "navigate",
+                        "Sec-Fetch-Dest": "document",
+                    })
+                text = await r.text()
+                assert "agw_lc=1" in text, f"lifecycle script not injected; body={text[:300]!r}"
+        finally:
+            await html_srv.close()
+    _run(go())

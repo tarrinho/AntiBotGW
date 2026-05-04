@@ -78,6 +78,8 @@ AGENT_BLOCK_REASONS = (
     "admin-ip-blocked",
     "suspicious-body", "bot-trap", "js-challenge",
     "tls-fingerprint", "origin-mismatch", "missing-required-header",
+    # LLM / AI-agent specific (1.7.2)
+    "canary-echo", "internal-probe", "automation-probe",
 )
 
 
@@ -278,7 +280,7 @@ async def agents_data_endpoint(request: web.Request):
 
     return web.json_response({
         "summary": {
-            "total_with_allowed": total_allowed_identities,
+            "total_tracked": total_allowed_identities,
             "suspicious": len(suspects),
             "clean": clean,
             "min_score": min_score,

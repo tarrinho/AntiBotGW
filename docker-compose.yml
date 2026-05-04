@@ -103,8 +103,8 @@ services:
       retries:  5
 
   appsec-antibot-gw:
-    image: appsec-antibot-gw:1.7.1
-    container_name: appsec-antibot-gw1.7.1
+    image: appsec-antibot-gw:1.7.2
+    container_name: appsec-antibot-gw1.7.2
     restart: unless-stopped
     depends_on:
       appsec-timescaledb:
