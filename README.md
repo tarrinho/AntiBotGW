@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.7.2` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.7.3` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -201,7 +201,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.7.2 \
+docker run -d --name appsec-antibot-gw1.7.3 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.7.2 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.7.2 \
+  appsec-antibot-gw:1.7.3 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.2` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.3` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -317,7 +317,7 @@ Monitor startup:
 
 ```bash
 docker compose logs -f appsec-antibot-gw
-# Expect: "[js-challenge] active" and "AppSecGW_1.7.2 listening …" within 5 s
+# Expect: "[js-challenge] active" and "AppSecGW_1.7.3 listening …" within 5 s
 ```
 
 Check that all services are healthy:
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.7.2
+  appsec-antibot-gw:1.7.3
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.7.2 .
-trivy image appsec-antibot-gw:1.7.2        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.7.3 .
+trivy image appsec-antibot-gw:1.7.3        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1081,7 +1081,7 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
-| **1.7.3** | **Path-sweep detector + admin bypass scope fix.** New `detection/path_sweep.py` fires `path-sweep` when an identity visits ≥ `PATH_SWEEP_THRESHOLD` (default 40) distinct non-static paths within `PATH_SWEEP_WINDOW_SECS` (default 300 s). Runs for **all** identities including valid-cookied sessions — catches warm-up bypass (acquire cookie with benign traffic, then sweep paths). Static assets and admin namespace excluded. Global RPS and Method allowlist exemptions now scoped to admin IPs only (was incorrectly exempt for any request to admin-namespace paths). Geo "No geo" card shows count of events with no MaxMind coordinates. `geo_data_endpoint` LIMIT 200000 removed (was discarding newest events). **Tests**: 214 unit + 22 functional + 23 integration + 76 regression + 9 path_sweep = 344 total. **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
+| **1.7.3** | **4 AI-agent detection signals + path-sweep + admin bypass fix.** **(P1) Semantic honeypot credential injection** — `detection/honey_cred.py` injects fake `internal_api_key` comment in every HTML response; `/probe?k=<key>` endpoint fires `honey-cred` (+90) when AI agent hits it. **(P2) Risk-gated redirect maze** — `detection/redirect_maze.py`; HMAC-signed step tokens, `/maze` endpoint; completes all steps in < 800 ms → `redirect-maze-bot` (+55). **(P3) LLM no-subresource heuristic** — `detection/llm_heuristic.py`; ≥ 5 HTML GETs with 0 sub-resources in 120 s window → `llm-no-subresources` (+40). **(P4) Browser execution probe** — `<link rel="preload" as="fetch">` in every `<head>`; `/canary-probe/{token}` endpoint confirms browser execution; no fetch after ≥ 3 pages → `canary-probe-miss` (+35). **(Path-sweep)** `detection/path_sweep.py` fires `path-sweep` on ≥ 40 distinct non-static paths within 300 s — runs even for valid-cookied sessions. Global RPS / method-allowlist exemptions scoped to admin IPs only. Geo "No geo" card. JA4/Turnstile mutual exclusion (3-layer: startup + DB-load + hot-reload). **Security review**: 5 findings fixed (1 MEDIUM unbounded state, 4 LOW input validation). **Tests**: 205 unit + 22 functional + 37 v1.7.3 + 9 path_sweep + 4 mutex regression = 344 total. **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
 | **1.7.2** | **Geo dashboard overhaul + cost chart fix + admin IP tooltips + JS SyntaxError fixes.** Time-window navigation (← prev / next → / now) in geo dashboard; `endEpoch` appended to all geo-data requests. Drill scrubber-aware: passes `?end=&range=` when scrubbing. Denied-country visual on map circles (red border + ⛔ prefix). `is_admin_ip` returned by geo-drill endpoint; 🔒 icon with tooltip in drill panel. Country table allow buttons (no silent `COUNTRY_BLOCK_ENABLED:true` side-effect). `geo_data_endpoint` ORDER BY ts ASC. `_GEO_CACHE` LRU eviction fixed (was sorting by key value, not expiry). Cost chart `onClick` direct call — eliminates silent failure on bucket-boundary timestamp mismatch. `_adminLock` / `_ADMIN_IP_TIP` promoted to global scope in `main.html`; all five 🔒 occurrences across all panels now show full tooltip on hover. All dashboard version badges updated 1.7.1 → 1.7.2. JS SyntaxErrors fixed in `main.html`/`agents.html` (smart quotes U+2018/U+2019 + apostrophe in `_ADMIN_IP_TIP` caused all dashboard JS to fail silently). Chart.js moved CDN → local bundle (`chart.umd.min.js`). CI `docker-no-latest-tag` suppressed via `exceptions.yaml` (Chainguard has no public version-specific tags; images pinned by `@sha256`). **Tests**: 201 unit + 22 functional + 23 integration + 76 regression — all pass (+7 JS-syntax regression tests, +5 CSP-augmentation unit tests, +1 route-aware decoy regression test, 3 stale-assertion fixes). **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
 | **1.7.1** | **Browser automation probe + coordinated ASN clustering + user journey detection.** Self-hosted JS probe (`AUTOMATION_PROBE_ENABLED=1`) fires `webdriver-detected` (+30). Coordinated-ASN clustering (`COORDINATED_ATTACK_ENABLED=1`) fires `coordinated-probe` (+25) on cluster members. User journey / direct-API-probe (`JOURNEY_CHECK_ENABLED=1`) fires `direct-api-probe` (+15). Fixes: agents.html bucket popover max-height clipping; fetch error handling in openBucketDetail; main.html catch-block error display. **Tests**: 22 functional + 22 integration + regression — all pass. **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
 | **1.7.0** | **Modular refactor (Phase 5–8)** — 13,696-line `proxy.py` monolith split into 30+ modules (`config`, `state`, `helpers`, `identity`, `rate_limit`, `scoring`, `admin/*`, `challenge/*`, `core/*`, `dashboards/*`, `db/*`, `detection/*`, `integrations/*`, `reputation/*`). Public API and all behaviour unchanged. Fixes: Dockerfile missing COPY blocks, `_postgres_available` NameError, NaN/Inf injection in `end=` param, `_global_rps_window` / `_pow_seen` / `_canary_tokens` NameErrors, namespace-aware tarpit + get_ip wrappers, `_HOSTILE_REASONS` NameError, `db_load_config` test-isolation regression, `DB_PATH` resolution, credential propagation to validators. **Tests**: 309/309 (179 unit + 22 functional + 10 integration + 98 regression). **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |

@@ -270,8 +270,10 @@ _probe_token_store: dict = {}  # token → (identity, expires_ts)
 _PROBE_STORE_MAX = 8192
 # identity → [first_seen_ts, html_count]
 _probe_html_counts: dict = defaultdict(lambda: [0.0, 0])
+_PROBE_COUNTS_MAX = 32768
 # identity → last confirmed timestamp
 _probe_confirmed: dict = {}
+_PROBE_CONFIRMED_MAX = 32768
 
 
 def _make_canary_probe_token(identity: str) -> str:
@@ -335,15 +337,21 @@ async def canary_probe_endpoint(request: web.Request):
     Called automatically by browsers via preload hint. Records browser
     confirmation for the identity. Returns 204 No Content."""
     token = request.match_info.get("token", "")
-    entry = _probe_token_store.get(token)
-    if entry:
-        identity, exp = entry
-        if _t.time() <= exp:
-            _probe_confirmed[identity] = _t.time()
+    # Reject tokens that are obviously malformed to avoid hash-cost DoS
+    if token and len(token) <= 48:
+        entry = _probe_token_store.get(token)
+        if entry:
+            identity, exp = entry
+            if _t.time() <= exp:
+                now_ts = _t.time()
+                _probe_confirmed[identity] = now_ts
+                # Evict oldest quarter when confirmed dict grows too large
+                if len(_probe_confirmed) > _PROBE_CONFIRMED_MAX:
+                    for k in list(_probe_confirmed.keys())[:_PROBE_CONFIRMED_MAX // 4]:
+                        _probe_confirmed.pop(k, None)
     # Always return 204 — never reveal whether token was valid
     return web.Response(status=204, headers={
         "Cache-Control": "no-store, no-cache",
-        "Access-Control-Allow-Origin": "*",
     })
 
 

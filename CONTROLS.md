@@ -1,6 +1,6 @@
 # AppSecGW Controls
 
-**Version**: 1.7.2 · **Author**: Pedro Tarrinho
+**Version**: 1.7.3 · **Author**: Pedro Tarrinho
 
 ---
 
