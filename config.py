@@ -556,6 +556,10 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/tarpit/",
     "/fp-report",
     "/sw.js",
+    # 1.7.3 — AI-agent detection probes (public, no auth required)
+    "/probe",
+    "/maze",
+    "/canary-probe/",
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout")
 
