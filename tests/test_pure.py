@@ -558,7 +558,7 @@ def test_no_stale_version_strings_in_source():
             continue
         if path.name in skip_files:
             continue
-        if path.suffix not in {".py", ".yml", ".yaml", ".sh", ".md"}:
+        if path.suffix not in {".py", ".yml", ".yaml", ".sh", ".md", ".html"}:
             continue
         try:
             text = path.read_text(errors="replace")
@@ -571,6 +571,33 @@ def test_no_stale_version_strings_in_source():
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
     assert not hits, "Stale version strings found — update to AppSecGW_1.7.3:\n" + "\n".join(hits)
+
+
+def test_dashboard_html_version_strings():
+    """Every dashboard HTML file must display the current GW_VERSION string.
+    Catches the case where config.py is bumped but HTML titles/headings are not."""
+    import pathlib
+    from config import GW_VERSION
+    root = pathlib.Path(__file__).resolve().parent.parent
+    dashboards = [
+        "dashboards/main.html",
+        "dashboards/agents.html",
+        "dashboards/controls.html",
+        "dashboards/geo.html",
+        "dashboards/logs.html",
+        "dashboards/service.html",
+        "dashboards/settings.html",
+    ]
+    missing = []
+    for rel in dashboards:
+        path = root / rel
+        text = path.read_text(errors="replace")
+        if GW_VERSION not in text:
+            missing.append(f"{rel}: does not contain {GW_VERSION!r}")
+    assert not missing, (
+        "Dashboard HTML files missing current version string — update to match config.GW_VERSION:\n"
+        + "\n".join(missing)
+    )
 
 
 # ── 1.7.2 pure-function tests ─────────────────────────────────────────────────
