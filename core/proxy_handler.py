@@ -2837,7 +2837,7 @@ async def protect(request: web.Request, handler):
     if AI_NO_ASSETS_ENABLED and _should_run_signal("ai-no-assets", _esc_score) and no_static:
         return await deny(403, "ai-no-assets",
                           {"error": "browser UA but never fetched any asset — likely AI agent",
-                           "html_loads": s.html_loads, "static_loads": s.static_loads})
+                           "html_loads": _s_early.html_loads, "static_loads": _s_early.static_loads})
 
     # 4a. H4: Socket-IP rate limit — keyed strictly by kernel-observed peer IP,
     #     defeats "rotate UA every request to get a fresh identity bucket"
