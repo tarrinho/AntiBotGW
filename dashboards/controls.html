@@ -627,7 +627,8 @@ const META = {
   RATE_LIMIT_REFILL:       {kind:'num', min:0.1,  max:1000,  step:0.1, desc:'Per-identity tokens added per second.', card:'thresholds'},
   IP_BURST:                {kind:'num', min:1,    max:10000, step:1,   desc:'Per-socket-IP token-bucket capacity.', card:'thresholds'},
   IP_REFILL:               {kind:'num', min:0.1,  max:1000,  step:0.1, desc:'Per-socket-IP tokens added per second.', card:'thresholds'},
-  HOSTILE_BAN_SECS:        {kind:'num', min:60,   max:2678400, step:60, desc:'Ban duration for AI-flagged reasons (default 86400 = 24 h).', card:'thresholds'},
+  HOSTILE_BAN_SECS:        {kind:'num', min:60,   max:2678400,   step:60,    desc:'Ban time — standard ban duration for hostile signals (default 86400 = 24 h).', card:'thresholds'},
+  REALLY_BAN_SECS:         {kind:'num', min:3600, max:31536000,  step:3600,  desc:'Really Ban — extended ban for definitive bot proof: canary-echo, honeypot, honeypot-silent (default 2592000 = 30 days).', card:'thresholds'},
   CANARY_TTL_S:            {kind:'num', min:30,   max:86400, step:30,  desc:'Canary token validity window.', card:'thresholds'},
   GLOBAL_RPS_LIMIT:        {kind:'num', min:0,    max:100000,step:10,  desc:'Operator throttle: silent-decoy any request beyond N req/s globally. 0 = disabled.', card:'thresholds'},
   SESSION_CHURN_WINDOW_S:  {kind:'num', min:5,    max:3600,  step:1,   desc:'Window for fresh-session-rate detector.', card:'thresholds'},
@@ -724,7 +725,8 @@ let serverState = {};
 let dirty = {};
 
 function $(id){ return document.getElementById(id); }
-function escapeHtml(s){return String(s||'').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+const _timers=[];
 
 function renderControl(name, meta, value){
   const m = meta[name];
@@ -2202,7 +2204,7 @@ document.addEventListener('DOMContentLoaded', () => {
           } catch(e) {}
         }
         syncFromConfig();
-        setInterval(() => { if (!dragging) syncFromConfig(); }, 8000);
+        _timers.push(setInterval(() => { if (!dragging) syncFromConfig(); }, 8000));
       })();
 
       // Signal-name click → rich floating tooltip panel
@@ -2567,7 +2569,7 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch(e){ showToast('Lists load failed: ' + e.message, 'err'); }
     }
     loadActiveRules(); loadLists();
-    setInterval(() => { loadActiveRules(); loadLists(); }, 7000);
+    _timers.push(setInterval(() => { loadActiveRules(); loadLists(); }, 7000));
   })();
 
   // 1.5.5 — never repaint while the user is typing in any input.
@@ -2577,12 +2579,12 @@ document.addEventListener('DOMContentLoaded', () => {
     const tag = ae.tagName;
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable;
   }
-  setInterval(() => { if (!_typing()) load();           }, 15000);
-  setInterval(() => { if (!_typing()) loadAudit();      }, 10000);
-  setInterval(() => { if (!_typing()) loadBans();       }, 4000);
-  setInterval(() => { if (!_typing()) loadAdminIps();   }, 8000);
-  setInterval(() => { if (!_typing()) loadExternal();   }, 6000);
-  setInterval(() => { if (!_typing()) loadThresholds(); }, 10000);
+  _timers.push(setInterval(() => { if (!_typing()) load();           }, 15000));
+  _timers.push(setInterval(() => { if (!_typing()) loadAudit();      }, 10000));
+  _timers.push(setInterval(() => { if (!_typing()) loadBans();       }, 4000));
+  _timers.push(setInterval(() => { if (!_typing()) loadAdminIps();   }, 8000));
+  _timers.push(setInterval(() => { if (!_typing()) loadExternal();   }, 6000));
+  _timers.push(setInterval(() => { if (!_typing()) loadThresholds(); }, 10000));
 });
 
 // 1.5.4 — integration-card details modal + banned-identity tooltip
@@ -3102,6 +3104,7 @@ function openBanDetails(b){
   document.getElementById('ext-modal-close').onclick = __closeModal;
   __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
 }
+window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
@@ -3165,8 +3168,6 @@ function openBanDetails(b){
 </div>
 <script>
 (function(){
-  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
@@ -3217,7 +3218,7 @@ function openBanDetails(b){
     if (e.key==='Escape') modal.classList.remove('show');
   });
   tick();
-  setInterval(tick, 15000);
+  _timers.push(setInterval(tick, 15000));
 
   // 1.6.5 — log-level combo box: read current value, push on change, persist.
   async function loadLogLevel(){
@@ -3242,7 +3243,7 @@ function openBanDetails(b){
     } catch(e){ alert('Network error: ' + e.message); }
   };
   loadLogLevel();
-  setInterval(loadLogLevel, 30000);
+  _timers.push(setInterval(loadLogLevel, 30000));
 })();
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
@@ -3260,7 +3261,6 @@ function openBanDetails(b){
 </div>
 <script>
 (function(){
-  function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   window._userRole='admin';window._acctUsername='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;

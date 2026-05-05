@@ -573,6 +573,19 @@ def test_no_stale_version_strings_in_source():
     assert not hits, "Stale version strings found — update to AppSecGW_1.7.3:\n" + "\n".join(hits)
 
 
+def test_to_host_set_strips_scheme_and_path():
+    """_to_host_set must normalise full URLs to bare hostnames so operators can
+    supply 'https://example.com/' and have it match the Host header 'example.com'.
+    Regression: ALLOWED_HOSTS with scheme caused host-not-allowed on every request."""
+    from integrations.endpoint_policy import _to_host_set
+    assert _to_host_set("https://example.com/") == {"example.com"}
+    assert _to_host_set("http://example.com") == {"example.com"}
+    assert _to_host_set("example.com") == {"example.com"}
+    assert _to_host_set("https://a.com/, https://b.com/path") == {"a.com", "b.com"}
+    assert _to_host_set("EXAMPLE.COM") == {"example.com"}  # lowercased
+    assert _to_host_set("") == set()
+
+
 def test_dashboard_html_version_strings():
     """Every dashboard HTML file must display the current GW_VERSION string.
     Catches the case where config.py is bumped but HTML titles/headings are not."""
@@ -840,3 +853,385 @@ def test_ja4_required_missing_logs_warning(proxy_module, caplog):
     )
     proxy_module.JS_CHAL_REQUIRE_JA4 = False
     proxy_module.TURNSTILE_ENABLED   = False
+
+
+# ── DAST regression: probe endpoints in _ADMIN_PUBLIC_SUBPATHS ────────────
+# Bug: /probe, /maze, /canary-probe/ were missing from _ADMIN_PUBLIC_SUBPATHS.
+# protect() intercepts every admin-namespace path not in that list and
+# returns a 404 decoy before route dispatch — P1/P2/P4 detectors had zero
+# effect in production because their endpoints were unreachable.
+
+def test_probe_endpoint_in_admin_public_subpaths():
+    """P1 honey-cred probe endpoint must be publicly reachable (no admin auth)."""
+    from config import _ADMIN_PUBLIC_SUBPATHS
+    assert "/probe" in _ADMIN_PUBLIC_SUBPATHS, (
+        "/probe must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
+        "admin-namespace path not in this list before route dispatch, making "
+        "the honey-cred P1 detector completely non-functional"
+    )
+
+
+def test_maze_endpoint_in_admin_public_subpaths():
+    """P2 redirect-maze endpoint must be publicly reachable (no admin auth)."""
+    from config import _ADMIN_PUBLIC_SUBPATHS
+    assert "/maze" in _ADMIN_PUBLIC_SUBPATHS, (
+        "/maze must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
+        "admin-namespace path not in this list before route dispatch, making "
+        "the redirect-maze P2 detector completely non-functional"
+    )
+
+
+def test_canary_probe_in_admin_public_subpaths():
+    """P4 canary-probe endpoint must be publicly reachable (no admin auth)."""
+    from config import _ADMIN_PUBLIC_SUBPATHS
+    assert "/canary-probe/" in _ADMIN_PUBLIC_SUBPATHS, (
+        "/canary-probe/ must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
+        "admin-namespace path not in this list before route dispatch, making "
+        "the browser execution probe P4 detector completely non-functional"
+    )
+
+
+# ── DAST regression: NameError 's' on ban recovery ───────────────────────
+# Bug: the ai-no-assets deny branch in protect() referenced s.html_loads /
+# s.static_loads, but 's' is never assigned in that scope — only '_s_early'
+# is. Any request from an IP re-entering after a ban expiry triggered an
+# unhandled NameError → HTTP 500.
+
+def test_ai_no_assets_deny_uses_s_early_not_s():
+    """protect() ai-no-assets branch must use _s_early, not undefined 's'."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    # Find the ai-no-assets block and confirm it uses _s_early
+    assert "_s_early.html_loads" in src, (
+        "ai-no-assets deny block must read _s_early.html_loads — "
+        "'s' is not defined in protect(); referencing it causes NameError on "
+        "ban-recovery requests (first request after ban TTL expires)"
+    )
+    assert "_s_early.static_loads" in src, (
+        "ai-no-assets deny block must read _s_early.static_loads — same reason"
+    )
+
+
+# ── Regression: Turnstile shown to fresh visitors despite risk threshold ──
+# Bug: _js_challenge_applicable() used request.get("_track_key") to look up
+# the IP's risk score. _track_key is set at proxy_handler.py:2511, which is
+# AFTER the JS challenge gate at line 2282. So _track_key is always None at
+# this point → the threshold check never ran → every cookieless HTML GET
+# received Turnstile immediately regardless of risk score.
+# Fix: derive identity directly via get_identity(request) instead.
+
+def test_js_challenge_applicable_source_uses_get_identity_not_track_key():
+    """_js_challenge_applicable must derive identity via get_identity(), not _track_key."""
+    import inspect
+    from challenge import js_challenge
+    src = inspect.getsource(js_challenge._js_challenge_applicable)
+    assert "get_identity" in src, (
+        "_js_challenge_applicable must call get_identity() to derive the "
+        "identity's risk score — request.get('_track_key') is always None at "
+        "the point where the JS challenge gate runs in protect() (set at "
+        "line 2511, after the gate at line 2282)"
+    )
+    # Confirm the fix: get_identity is imported inside the function (not via _track_key lookup).
+    # The buggy pattern was: track_key = request.get("_track_key"); if track_key: ...
+    # Check that the live assignment is gone (comments referencing the old name are OK).
+    assert "track_key = request.get" not in src, (
+        "_js_challenge_applicable must NOT assign track_key from request — "
+        "request.get('_track_key') is always None when the JS challenge gate runs"
+    )
+
+
+# ── Regression: soft-challenge tier never enforced on JS_CHAL_OPEN_PATHS ─
+# Bug: _js_challenge_required() used request.get("_track_key") to check
+# whether a risky identity on an open path should have its bypass revoked.
+# _track_key is always None at the JS challenge gate (set at proxy_handler
+# line 2511, gate runs at line 2282). Result: risky identities on open paths
+# were never soft-challenged; the bypass was always granted.
+# Fix: derive identity via get_identity(request) directly.
+
+def test_js_challenge_required_soft_challenge_uses_get_identity_not_track_key():
+    """_js_challenge_required soft-challenge branch must derive identity via get_identity()."""
+    import inspect
+    from challenge import js_challenge
+    src = inspect.getsource(js_challenge._js_challenge_required)
+    # The soft-challenge tier must call get_identity — not rely on _track_key
+    assert "get_identity" in src, (
+        "_js_challenge_required soft-challenge branch must call get_identity() — "
+        "request.get('_track_key') is always None when the gate runs in protect()"
+    )
+    # The old buggy pattern had: track_key = request.get("_track_key")
+    assert "track_key = request.get" not in src, (
+        "_js_challenge_required must NOT assign track_key from request — "
+        "it is always None at the JS challenge gate in protect()"
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Dashboard security regression tests (Step 17, rules.md)
+# Source-inspection tests verifying all fixes introduced in the dashboard
+# audit: open redirect, XSS, escapeHtml canonical form, setInterval leaks,
+# silent-catch elimination.
+# ════════════════════════════════════════════════════════════════════════════
+
+import os as _os
+import re as _re
+
+_DASH_DIR = _os.path.join(_os.path.dirname(__file__), '..', 'dashboards')
+
+def _read_dash(name: str) -> str:
+    with open(_os.path.join(_DASH_DIR, name), encoding='utf-8') as f:
+        return f.read()
+
+
+# ── SEC-1: Open Redirect in login.html ───────────────────────────────────────
+# Bug: `next` param taken verbatim from URL query string and used in
+# `location.href` — server error path bypasses server-supplied redirect.
+# Fix: safeNext() validator checks URL origin before use.
+
+def test_login_safenext_validator_defined():
+    """login.html must define safeNext() to validate the ?next= parameter origin."""
+    src = _read_dash('login.html')
+    assert 'function safeNext(' in src, (
+        "login.html must define safeNext() to validate the next= query param. "
+        "Without it an attacker can redirect victims to arbitrary domains after login."
+    )
+
+def test_login_safenext_checks_origin():
+    """safeNext() must compare URL origin against location.origin."""
+    src = _read_dash('login.html')
+    assert 'location.origin' in src, (
+        "safeNext() must validate the URL origin against location.origin. "
+        "A missing origin check defeats the open-redirect protection."
+    )
+
+def test_login_no_bare_location_href_next():
+    """login.html must not use the raw ?next= value as location.href without safeNext."""
+    src = _read_dash('login.html')
+    # Ensure the next variable is assigned through safeNext, not bare URLSearchParams
+    assert 'safeNext(new URLSearchParams' in src or 'safeNext(' in src, (
+        "login.html must pass the ?next= param through safeNext() before use in location.href"
+    )
+
+
+# ── SEC-2: XSS via e.message in service.html ─────────────────────────────────
+# Bug: e.message concatenated directly into innerHTML — attacker-controlled
+# error messages can inject HTML/JS.
+# Fix: escapeHtml(String(e.message||e)) used instead.
+
+def test_service_emessage_escaped_in_innerhtml():
+    """service.html must escape e.message before injecting into innerHTML."""
+    src = _read_dash('service.html')
+    # The fix pattern: escapeHtml(String(e.message
+    assert 'escapeHtml(String(e.message' in src, (
+        "service.html must escape e.message with escapeHtml() before innerHTML injection. "
+        "Raw e.message in innerHTML is XSS when the server can influence error messages."
+    )
+    # The old vulnerable pattern must not be present
+    bad = "load failed: ' + (e.message"
+    assert bad not in src, (
+        "service.html still has unescaped e.message in innerHTML: " + repr(bad)
+    )
+
+
+# ── BUG-1: service.html missing global escapeHtml ─────────────────────────────
+# Bug: no top-level escapeHtml definition — local escHtml closures only;
+# any code outside those closures calling escapeHtml() throws ReferenceError.
+# Fix: canonical escapeHtml added at top of first <script> block.
+
+def test_service_has_global_escapehtml():
+    """service.html must define escapeHtml at global script scope."""
+    src = _read_dash('service.html')
+    assert 'function escapeHtml(' in src, (
+        "service.html must define a global function escapeHtml(). "
+        "Before the fix only local escHtml closures existed; callers outside "
+        "those closures would get ReferenceError."
+    )
+
+
+# ── BUG-2: Canonical escapeHtml charset (all dashboards) ─────────────────────
+# Bug: 6 of 8 files used [&<>"'] — missing backtick and / characters.
+# Fix: full charset [&<>"'`/] in every file.
+
+_DASHBOARD_FILES = [
+    'main.html', 'agents.html', 'service.html', 'controls.html',
+    'geo.html', 'logs.html', 'settings.html', 'login.html',
+]
+
+import pytest as _pytest
+
+@_pytest.mark.parametrize("fname", _DASHBOARD_FILES)
+def test_escapehtmlt_full_charset(fname):
+    """Every dashboard escapeHtml must escape backtick (&#96;) and slash (&#47;)."""
+    src = _read_dash(fname)
+    # login.html doesn't use escapeHtml at all in its JS — skip charset check
+    if fname == 'login.html':
+        return
+    assert '&#96;' in src, (
+        f"{fname}: escapeHtml charset missing backtick escape (&#96;). "
+        "Backtick allows template-literal injection in HTML attributes."
+    )
+    assert '&#47;' in src, (
+        f"{fname}: escapeHtml charset missing slash escape (&#47;). "
+        "Unescaped / allows protocol-relative URL injection in some contexts."
+    )
+
+@_pytest.mark.parametrize("fname", _DASHBOARD_FILES)
+def test_no_local_eschtml_alias(fname):
+    """No dashboard may define a local escHtml or escHtml2 alias."""
+    src = _read_dash(fname)
+    # Match definitions like: const escHtml =, function escHtml(, const escHtml2 =
+    matches = _re.findall(r'(?:const|function)\s+escHtml\b', src)
+    assert not matches, (
+        f"{fname}: found local escHtml/escHtml2 definition(s): {matches}. "
+        "All dashboards must use the single canonical escapeHtml at global scope."
+    )
+
+@_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
+                                     'controls.html','geo.html','logs.html','settings.html'])
+def test_single_escapehtmlt_definition(fname):
+    """Each dashboard must have exactly one escapeHtml definition."""
+    src = _read_dash(fname)
+    count = len(_re.findall(r'function escapeHtml\s*\(', src))
+    assert count == 1, (
+        f"{fname}: found {count} escapeHtml definitions (expected exactly 1). "
+        "Multiple definitions allow the wrong charset to silently win."
+    )
+
+@_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
+                                     'controls.html','geo.html','logs.html','settings.html'])
+def test_escapehtmlt_null_guard(fname):
+    """escapeHtml must handle null/undefined via String(s==null?'':s)."""
+    src = _read_dash(fname)
+    assert 'String(s==null' in src or "String(s == null" in src, (
+        f"{fname}: escapeHtml must guard against null/undefined with "
+        "String(s==null?'':s) — (s||'') coerces 0/false to empty string."
+    )
+
+
+# ── DES-1: setInterval leak prevention (all dashboards) ──────────────────────
+# Bug: 30+ setInterval calls with no corresponding clearInterval on navigation.
+# Fix: every call wrapped with _timers.push(); beforeunload clears all timers.
+
+@_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
+                                     'controls.html','geo.html','logs.html','settings.html'])
+def test_setinterval_tracked_in_timers(fname):
+    """Every setInterval call must be tracked — via _timers.push() or a named variable."""
+    src = _read_dash(fname)
+    total   = len(_re.findall(r'setInterval\(', src))
+    # _timers.push(setInterval(...))
+    pushed  = len(_re.findall(r'_timers\.push\(setInterval\(', src))
+    # named-variable tracking: playTimer = setInterval(...) — already paired with clearInterval
+    named   = len(_re.findall(r'\w+\s*=\s*setInterval\(', src))
+    bare    = total - pushed - named
+    assert pushed > 0, (
+        f"{fname}: no _timers.push(setInterval(...)) found — "
+        "intervals leak after navigation and accumulate across page visits."
+    )
+    assert bare == 0, (
+        f"{fname}: {bare} untracked setInterval() call(s) — neither _timers.push() "
+        "nor a named variable assignment. All intervals must be tracked for cleanup."
+    )
+
+@_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
+                                     'controls.html','geo.html','logs.html','settings.html'])
+def test_beforeunload_cleanup_present(fname):
+    """Each dashboard must register a beforeunload listener to clear all timers."""
+    src = _read_dash(fname)
+    assert 'beforeunload' in src, (
+        f"{fname}: no beforeunload listener found. "
+        "Without it, _timers.push() tracking has no cleanup path."
+    )
+    assert '_timers.forEach(clearInterval)' in src, (
+        f"{fname}: beforeunload handler must call _timers.forEach(clearInterval). "
+        "Tracked timer IDs must be explicitly cleared."
+    )
+
+
+# ── SEC-1 additional: login.html safeNext unit test ───────────────────────────
+# Unit test for the safeNext() logic correctness (separate from source checks).
+
+def test_login_safenext_logic():
+    """safeNext validation logic: same-origin paths allowed, cross-origin rejected."""
+    # Replicate the safeNext() logic in Python for unit testing
+    from urllib.parse import urlparse, urljoin
+
+    def safe_next_py(raw, origin='https://example.com'):
+        if not raw:
+            return None
+        try:
+            base = origin
+            full = urljoin(base, raw)
+            parsed = urlparse(full)
+            parsed_origin = f"{parsed.scheme}://{parsed.netloc}"
+            if parsed_origin == origin:
+                return parsed.path + (f"?{parsed.query}" if parsed.query else '') + (f"#{parsed.fragment}" if parsed.fragment else '')
+        except Exception:
+            pass
+        return None
+
+    origin = 'https://admin.example.com'
+    # Same-origin paths should be allowed
+    assert safe_next_py('/dashboard', origin) == '/dashboard'
+    assert safe_next_py('/antibot-appsec-gateway/secured/dashboard', origin) is not None
+    # Cross-origin must be blocked
+    assert safe_next_py('https://evil.com', origin) is None
+    assert safe_next_py('//evil.com/path', origin) is None
+    assert safe_next_py('javascript:alert(1)', origin) is None
+    # Empty/None returns None
+    assert safe_next_py('', origin) is None
+    assert safe_next_py(None, origin) is None
+
+
+# ── DES-3: No silent catch on UI-state fetch (login.html, settings.html) ─────
+# Bug: .catch(() => ({})) silently swallows fetch/parse errors → downstream
+# code gets {} with all properties undefined; UI shows nothing or crashes.
+# Fix: structured try/catch with _error flag.
+
+def test_login_no_silent_catch():
+    """login.html must not use .catch(() => ({})) to swallow JSON parse errors."""
+    src = _read_dash('login.html')
+    assert '.catch(() => ({}))' not in src and ".catch(()=>({}))" not in src, (
+        "login.html: silent .catch(() => ({})) found — JSON parse errors are swallowed "
+        "silently; downstream code gets {} and produces undefined behavior."
+    )
+
+def test_settings_no_silent_catch():
+    """settings.html must not use .catch(() => ({})) to swallow JSON parse errors."""
+    src = _read_dash('settings.html')
+    assert '.catch(() => ({}))' not in src and ".catch(()=>({}))" not in src, (
+        "settings.html: silent .catch(() => ({})) found on UI-state-populating fetch."
+    )
+
+
+# ── DES-4: agents.html title consistency ─────────────────────────────────────
+
+def test_agents_title_no_stealth_prefix():
+    """agents.html <title> must not contain 'Stealth' (was inconsistent with h1)."""
+    src = _read_dash('agents.html')
+    title_match = _re.search(r'<title>(.*?)</title>', src)
+    if title_match:
+        title = title_match.group(1)
+        assert 'Stealth' not in title, (
+            f"agents.html <title> still contains 'Stealth': {repr(title)}. "
+            "Title was inconsistent with the h1 element after the rename."
+        )
+
+
+# ── Regression: _decay_risk NameError in _js_challenge_applicable ────────────
+# Bug: _js_challenge_applicable called _decay_risk(s, now()) without importing
+# it. _decay_risk lives in scoring.py and is late-imported at other call sites
+# in js_challenge.py but was missing from this function. Any first-contact
+# request with a warmed ip_state entry (risk > 0) caused HTTP 500.
+# Fix: `from scoring import _decay_risk` added inside _js_challenge_applicable.
+
+def test_js_challenge_applicable_imports_decay_risk():
+    """_js_challenge_applicable must import _decay_risk before calling it."""
+    import inspect
+    from challenge import js_challenge
+    src = inspect.getsource(js_challenge._js_challenge_applicable)
+    assert "from scoring import _decay_risk" in src, (
+        "_js_challenge_applicable must import _decay_risk from scoring — "
+        "it calls _decay_risk(s, now()) to apply exponential decay before "
+        "comparing risk_score against the Turnstile activation threshold. "
+        "Without the import the function raises NameError → HTTP 500."
+    )

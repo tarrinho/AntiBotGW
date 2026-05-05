@@ -180,8 +180,8 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 <div class="foot">refreshes every 2 s · <code id="ts"></code></div>
 
 <script>
-const escapeHtml = s => String(s||'').replace(/[&<>"']/g, c =>
-  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+const _timers=[];
 const url = (p) => p;
 
 let kind = 'requests';
@@ -416,9 +416,10 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
 
 loadServerState();
 tick(true);
-setInterval(tick, 2000);
+_timers.push(setInterval(tick, 2000));
 // refresh server LOG_LEVEL paint every 10s in case it was changed elsewhere
-setInterval(loadServerState, 10000);
+_timers.push(setInterval(loadServerState, 10000));
+window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
@@ -482,8 +483,6 @@ setInterval(loadServerState, 10000);
 </div>
 <script>
 (function(){
-  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
@@ -534,7 +533,7 @@ setInterval(loadServerState, 10000);
     if (e.key==='Escape') modal.classList.remove('show');
   });
   tick();
-  setInterval(tick, 15000);
+  _timers.push(setInterval(tick, 15000));
 
   // 1.6.5 — log-level combo box: read current value, push on change, persist.
   async function loadLogLevel(){
@@ -559,7 +558,7 @@ setInterval(loadServerState, 10000);
     } catch(e){ alert('Network error: ' + e.message); }
   };
   loadLogLevel();
-  setInterval(loadLogLevel, 30000);
+  _timers.push(setInterval(loadLogLevel, 30000));
 })();
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
@@ -577,7 +576,6 @@ setInterval(loadServerState, 10000);
 </div>
 <script>
 (function(){
-  function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   window._userRole='admin';window._acctUsername='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;

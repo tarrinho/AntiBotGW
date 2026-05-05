@@ -12,6 +12,11 @@ import time as _t
 
 from config import *   # noqa: F401,F403
 from config import _HOSTILE_REASONS  # noqa: F401 — underscore not in import *
+from config import REALLY_BAN_SECS   # noqa: F401 — hot-reload propagated via proxy __setattr__
+
+# Signals that are definitive proof of an automated agent — earn REALLY_BAN_SECS.
+# Subset of _HOSTILE_REASONS; other hostile reasons earn HOSTILE_BAN_SECS.
+_REALLY_BAN_REASONS = {"canary-echo", "honeypot-silent", "honeypot"}
 from state import *    # noqa: F401,F403
 from state import _signal_order_cache  # explicit: underscore not exported by import *
 from helpers import slog, now
@@ -228,7 +233,8 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
             else RISK_BAN_THRESHOLD
         )
         if s.risk_score >= threshold and s.banned_until <= n:
-            ban_secs = (HOSTILE_BAN_SECS if reason in _HOSTILE_REASONS
+            ban_secs = (REALLY_BAN_SECS  if reason in _REALLY_BAN_REASONS
+                        else HOSTILE_BAN_SECS if reason in _HOSTILE_REASONS
                         else RISK_BAN_DURATION_SECS)
             s.banned_until = n + ban_secs
             triggered = True

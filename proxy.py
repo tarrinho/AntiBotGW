@@ -411,6 +411,8 @@ def make_app() -> web.Application:
         ("lists-snapshot",    "GET",    lists_snapshot_endpoint,               True),
         ("db-test",           "GET",    db_test_endpoint,                      True),
         ("db-switch",         "POST",   db_switch_endpoint,                    True),
+        ("disk-stats",        "GET",    disk_stats_endpoint,                   True),
+        ("db-vacuum",         "POST",   db_vacuum_endpoint,                    True),
         ("maxmind-fetch",     "POST",   maxmind_fetch_endpoint,                True),
         ("external",          "GET",    external_endpoint,                     True),
         ("integration-check", "GET",    integration_check_endpoint,            True),

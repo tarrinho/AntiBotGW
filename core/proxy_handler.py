@@ -193,9 +193,7 @@ ALLOWED_METHODS = {
 # list get silent-decoyed at Layer 0 — defends against host-header attacks
 # at OUR gate (in addition to the existing X-Forwarded-Host overwrite).
 _allowed_hosts_raw = os.environ.get("ALLOWED_HOSTS", "").strip()
-ALLOWED_HOSTS = {
-    h.strip().lower() for h in _allowed_hosts_raw.split(",") if h.strip()
-} if _allowed_hosts_raw else set()
+ALLOWED_HOSTS = _to_host_set(_allowed_hosts_raw) if _allowed_hosts_raw else set()
 
 # Hop-by-hop headers (RFC 7230 §6.1) + ones the proxy must own.
 HOP_BY_HOP_REQUEST = {
@@ -967,8 +965,10 @@ async def thresholds_endpoint(request: web.Request):
          "Per-socket-IP token-bucket capacity"),
         ("IP_REFILL",              0.1,  100,     "lower-is-stricter",
          "Per-socket-IP tokens added per second"),
-        ("HOSTILE_BAN_SECS",       60,   2678400, "higher-is-stricter",
-         "Ban duration (24 h default = 86400)"),
+        ("HOSTILE_BAN_SECS",       60,   2678400,   "higher-is-stricter",
+         "Ban time — standard ban duration (24 h default = 86400)"),
+        ("REALLY_BAN_SECS",        3600, 31536000,  "higher-is-stricter",
+         "Really Ban — extended ban for canary-echo/honeypot (30 d default = 2592000)"),
         ("CANARY_TTL_S",           30,   86400,   "higher-is-stricter",
          "Canary token validity window"),
         ("GLOBAL_RPS_LIMIT",       0,    10000,   "lower-is-stricter",
@@ -1829,6 +1829,7 @@ _HOT_RELOAD_KNOBS = {
     "IP_BURST":               (int,   lambda v: 1 <= v <= 100000),
     "IP_REFILL":              (float, lambda v: 0.0 < v <= 10000.0),
     "HOSTILE_BAN_SECS":       (int,   lambda v: 60 <= v <= 31 * 86400),
+    "REALLY_BAN_SECS":        (int,   lambda v: 60 <= v <= 365 * 86400),
     "CANARY_TTL_S":           (int,   lambda v: 30 <= v <= 86400),
     "GLOBAL_RPS_LIMIT":       (int,   lambda v: 0 <= v <= 1000000),
     "SESSION_CHURN_WINDOW_S": (int,   lambda v: 5 <= v <= 86400),
@@ -3386,6 +3387,55 @@ async def db_test_endpoint(request: web.Request):
                       "available": _postgres_available},
         "ts": _t.time(),
     }, headers={"Cache-Control": "no-store"})
+
+
+async def disk_stats_endpoint(request: web.Request):
+    """1.7.3 — disk and DB storage stats for the Settings dashboard storage card.
+    Returns host disk usage (statvfs on /data) plus SQLite file sizes so
+    operators can spot a filling disk before it causes DB write errors."""
+    from dashboards.service_metrics import _disk_usage
+    disk = _disk_usage(os.path.dirname(DB_PATH) or "/")
+    db_bytes  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
+    wal_bytes = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
+    shm_bytes = os.path.getsize(DB_PATH + "-shm") if os.path.exists(DB_PATH + "-shm") else 0
+    return web.json_response({
+        "disk":      disk,
+        "db_bytes":  db_bytes,
+        "wal_bytes": wal_bytes,
+        "shm_bytes": shm_bytes,
+        "db_path":   DB_PATH,
+        "ts":        _t.time(),
+    }, headers={"Cache-Control": "no-store"})
+
+
+async def db_vacuum_endpoint(request: web.Request):
+    """1.7.3 — trigger a SQLite VACUUM + WAL checkpoint from the Settings page.
+    Shrinks the DB file by reclaiming deleted-row pages and truncates the WAL
+    so the on-disk footprint drops immediately.  Safe to run at any time;
+    VACUUM obtains an exclusive lock briefly but releases it before returning."""
+    if DB_BACKEND != "sqlite":
+        return web.json_response(
+            {"ok": False, "reason": "active backend is not SQLite"},
+            status=400, headers={"Cache-Control": "no-store"})
+    try:
+        before_db  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
+        before_wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        conn.execute("VACUUM")
+        conn.close()
+        after_db  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
+        after_wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
+        return web.json_response({
+            "ok": True,
+            "before": {"db_bytes": before_db, "wal_bytes": before_wal},
+            "after":  {"db_bytes": after_db,  "wal_bytes": after_wal},
+            "saved_bytes": (before_db + before_wal) - (after_db + after_wal),
+        }, headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response(
+            {"ok": False, "reason": f"{type(e).__name__}: {e}"},
+            status=500, headers={"Cache-Control": "no-store"})
 
 
 async def lists_snapshot_endpoint(request: web.Request):

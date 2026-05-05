@@ -571,9 +571,15 @@ def _js_challenge_required(request) -> bool:
         # identity's risk score has climbed into the soft-challenge band
         # (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD). Forces a fresh
         # cookie mint on a path that would otherwise be exempt.
-        track_key = request.get("_track_key")
-        if track_key and SOFT_CHALLENGE_SCORE > 0:
-            s = ip_state.get(track_key)
+        # _track_key is set at proxy_handler.py:2511, after the JS challenge
+        # gate at 2282 — derive identity directly here instead.
+        if SOFT_CHALLENGE_SCORE > 0:
+            try:
+                from identity import get_identity
+                _sc_id, *_ = get_identity(request)
+                s = ip_state.get(_sc_id)
+            except Exception:
+                s = None
             if s and SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD:
                 # fall through to the cookie verify
                 pass
@@ -605,14 +611,23 @@ def _js_challenge_applicable(request) -> bool:
     if not TURNSTILE_ENABLED:
         return False
     # 1.5.4 — gate Turnstile on the identity's risk score.
-    track_key = request.get("_track_key")
-    if track_key:
-        s = ip_state.get(track_key)
-        if s:
-            _decay_risk(s, now())
-            thr = _turnstile_active_threshold()
-            if s.risk_score < thr:
-                return False
+    # _track_key is set at proxy_handler.py:2511, which is AFTER the JS
+    # challenge gate at line 2282 — so request.get("_track_key") is always
+    # None here. Derive identity directly to get the current risk score.
+    try:
+        from identity import get_identity
+        _tj_id, *_ = get_identity(request)
+        s = ip_state.get(_tj_id)
+    except Exception:
+        s = None
+    thr = _turnstile_active_threshold()
+    if s is None:
+        # Fresh visitor with no accumulated state → risk = 0, below threshold.
+        return False
+    from scoring import _decay_risk
+    _decay_risk(s, now())
+    if s.risk_score < thr:
+        return False
     if request.method != "GET":
         return False
     return "text/html" in request.headers.get("Accept", "")

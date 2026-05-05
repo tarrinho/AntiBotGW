@@ -881,7 +881,8 @@ async function tick() {
     _errEl.title='Error fetching metrics: ' + (err && err.message ? err.message : String(err));
   }
 }
-function escapeHtml(s){return (s||'').replace(/[&<>"'`/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+const _timers=[];
 function _cidrContains(cidr, ip){
   try {
     const [net, bits] = cidr.includes('/') ? cidr.split('/') : [cidr, '32'];
@@ -933,15 +934,13 @@ function _userIsTyping(){
 window._userIsTyping = _userIsTyping;
 // Auto-refresh — but ONLY when in live mode. When user has scrolled back,
 // the data is static and refreshing would just repaint the same window.
-setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
+_timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000));
 
 // 1.6.5 — bot/AI detection breakdown + top methods + block-rate trend.
 // Pulls from /antibot-appsec-gateway/secured/detector-stats (fast in-memory) + the timeline data already
 // drawn above. Re-paints every 5 s.
 (function(){
   const url = (p) => p;
-  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const COL = {
     ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
     cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
@@ -1028,7 +1027,7 @@ setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000);
   }
   window._paintBlockRate = paintBlockRate;
   loadDetectorStats();
-  setInterval(() => { loadDetectorStats(); }, 5000);
+  _timers.push(setInterval(() => { loadDetectorStats(); }, 5000));
 })();
 
 const k_q = '';  // secured endpoints use cookie auth — no key query param needed
@@ -1088,7 +1087,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
   disEl.onclick     = () => postLimit(0);
   inputEl.addEventListener('keydown', e => { if (e.key==='Enter') applyEl.click(); });
   refreshRps();
-  setInterval(() => { if (!window._userIsTyping || !window._userIsTyping()) refreshRps(); }, 2000);
+  _timers.push(setInterval(() => { if (!window._userIsTyping || !window._userIsTyping()) refreshRps(); }, 2000));
 
   // Unban buttons inside the clients table.
   document.addEventListener('click', async (e) => {
@@ -1725,7 +1724,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     } catch(e){}
   }
   syncFromConfig();
-  setInterval(() => { if (!dragging && (!window._userIsTyping || !window._userIsTyping())) syncFromConfig(); }, 6000);
+  _timers.push(setInterval(() => { if (!dragging && (!window._userIsTyping || !window._userIsTyping())) syncFromConfig(); }, 6000));
 })();
 
 // ── column-header tooltips (hover to show, click still sorts) ────────────
@@ -1745,7 +1744,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     th.addEventListener('mouseleave', hideTip);
   });
 })();
-
+window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
@@ -1809,8 +1808,6 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
 </div>
 <script>
 (function(){
-  const escHtml = s => String(s||'').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
@@ -1861,7 +1858,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     if (e.key==='Escape') modal.classList.remove('show');
   });
   tick();
-  setInterval(tick, 15000);
+  _timers.push(setInterval(tick, 15000));
 
   // 1.6.5 — log-level combo box: read current value, push on change, persist.
   async function loadLogLevel(){
@@ -1886,7 +1883,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     } catch(e){ alert('Network error: ' + e.message); }
   };
   loadLogLevel();
-  setInterval(loadLogLevel, 30000);
+  _timers.push(setInterval(loadLogLevel, 30000));
 })();
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
@@ -1904,7 +1901,6 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
 </div>
 <script>
 (function(){
-  function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   window._userRole='admin';window._acctUsername='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;
