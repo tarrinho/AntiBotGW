@@ -31,6 +31,8 @@ Author: Pedro Tarrinho
 - **`JS_CHAL_REQUIRE_JA4` / `TURNSTILE_ENABLED` mutual exclusion** — 3-layer mutex: startup (config.py), DB-load (db/sqlite.py), hot-reload (proxy_handler.py config_endpoint). Prevents silent 403s on every Turnstile solve when `JS_CHAL_REQUIRE_JA4=true` is persisted in `config_kv` table while Turnstile is active (JA4 always absent behind Cloudflare CDN).
 - **Silent 403 on JA4-required path emitted no log** — added `slog("chal_ja4_required_missing", level="warn", ...)` before the 403 return in `js_challenge.py`.
 - **5 security findings from code review** — 1 MEDIUM (unbounded `_maze_timing` dict — added `_MAZE_TIMING_MAX=2048` + `_MAZE_STEPS_MAX=32` caps), 4 LOW (unbounded `_fired`/`_probe_confirmed` — eviction added; missing key/token length caps on public endpoints — 64/48 char limits added; dead duplicate HMAC call in `_verify_maze_token` — removed).
+- **[DAST — HIGH] `NameError: name 's' is not defined` on ban recovery** — `protect()` ai-no-assets deny branch referenced `s.html_loads` / `s.static_loads` but `s` is never assigned in that code path; the correct IpState alias is `_s_early`. Any request from an IP re-entering after a ban expiry triggered an unhandled `NameError` → HTTP 500 to the client. Fixed: `proxy_handler.py` line 2840 changed to `_s_early.html_loads` / `_s_early.static_loads`. Found during DAST Step 15b ban-recovery cycle.
+- **[DAST — CRITICAL] `/probe`, `/maze`, `/canary-probe/` endpoints unreachable** — All three public AI-detection endpoints were registered as aiohttp routes but absent from `_ADMIN_PUBLIC_SUBPATHS` in `config.py`. The `protect()` middleware intercepts every admin-namespace path and returns a 404 decoy (logging `reason: internal-probe`) for any path not in that list, before route dispatch. Result: P1 honey-cred, P2 redirect-maze, and P4 canary-probe detectors had zero effect in production — the probe endpoint always returned upstream HTML. Fixed: added `/probe`, `/maze`, `/canary-probe/` to `_ADMIN_PUBLIC_SUBPATHS`. Found during DAST Step 15e probe-endpoint verification.
 
 ### Tests
 - **37 new unit tests** in `tests/test_v173.py`: P1 honey_cred (10), P2 redirect_maze (7), P3 llm_heuristic (9), P4 canary_probe (11).
@@ -42,8 +44,9 @@ Author: Pedro Tarrinho
 - Bandit: 0 High · 0 Critical · B110 Medium (confirmed FP — intentional try/except in `_evaluate_maze_timing`).
 - Semgrep: 0 findings on all 4 new detection modules.
 - Trivy: 0 Critical / 0 High / 0 Medium CVEs (all 3 arches).
-- Harbor: amd64 `sha256:fa265209…` · arm64 `sha256:70904630…` · armv7 `sha256:98a07abb…` · manifest `sha256:2203ce72…`.
-- Security review: 5 findings fixed before release.
+- Harbor: amd64 `sha256:aaaedfc3…` · arm64 `sha256:1f2af5f4…` · armv7 `sha256:418e619d…` · manifest `sha256:c5278f6f…` (post-DAST-fix rebuild).
+- Security review: 7 findings fixed total (5 from code review + 2 CRITICAL/HIGH from DAST).
+- DAST: 15/15 steps PASS — all 5 AI-detection sub-probes verified functional post-fix.
 - See `validation/1.7.3.md` for full record.
 
 ---
