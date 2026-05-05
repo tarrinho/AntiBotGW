@@ -230,8 +230,13 @@ grep -rn --include="*.py" --include="*.html" --include="*.yml" \
 | `Dockerfile` | `LABEL version=` and any `ARG VERSION=` line |
 | `Dockerfile.armv7` | same as above |
 | `docker-compose.yml` | `image: appsec-antibot-gw:<version>` and `container_name:` |
-| `dashboards/main.html` | version badge / footer text (e.g. `v1.7.2`) |
-| `dashboards/controls.html` | version badge / header comment |
+| `dashboards/main.html` | `<title>` and `<h1>` version string |
+| `dashboards/agents.html` | `<h1>` version string |
+| `dashboards/controls.html` | `<h1>` version string |
+| `dashboards/geo.html` | `<h1>` version string |
+| `dashboards/logs.html` | `<h1>` version string |
+| `dashboards/service.html` | `<h1>` version string |
+| `dashboards/settings.html` | `<h1>` version string |
 | `README.md` | Quick Start `docker pull` tag, Version history table header row, Build from source example |
 | `CHANGELOG.md` | Latest `## [<version>]` section header stamped (not `[Unreleased]`) |
 | `MANUAL.md` | Any pinned image tags in example commands |

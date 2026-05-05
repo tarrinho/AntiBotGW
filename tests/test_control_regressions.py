@@ -1022,3 +1022,35 @@ def test_mozilla_ua_alone_does_not_grant_access(proxy_module):
                 assert _UPSTREAM_MARK not in body, (
                     "Mozilla UA alone must not pass the gate")
     _run(go())
+
+
+# ── version-string consistency regressions ──────────────────────────────────
+
+def test_dashboard_html_version_matches_config():
+    """Regression: dashboard HTML files must display the same version as
+    config.GW_VERSION.  Catches version bumps that update config.py but
+    leave HTML titles/headings stale (caught in 1.7.3 release cycle)."""
+    import pathlib
+    from config import GW_VERSION
+    root = pathlib.Path(__file__).resolve().parent.parent
+    dashboards = [
+        "dashboards/main.html",
+        "dashboards/agents.html",
+        "dashboards/controls.html",
+        "dashboards/geo.html",
+        "dashboards/logs.html",
+        "dashboards/service.html",
+        "dashboards/settings.html",
+    ]
+    missing = []
+    for rel in dashboards:
+        path = root / rel
+        if not path.exists():
+            missing.append(f"{rel}: file not found")
+            continue
+        if GW_VERSION not in path.read_text(errors="replace"):
+            missing.append(f"{rel}: missing {GW_VERSION!r}")
+    assert not missing, (
+        "Dashboard HTML version mismatch — update to match config.GW_VERSION:\n"
+        + "\n".join(missing)
+    )
