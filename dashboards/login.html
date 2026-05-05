@@ -73,7 +73,12 @@ body{flex-direction:column}
 "use strict";
 const errEl = document.getElementById("err");
 const btn   = document.getElementById("submit");
-const next  = new URLSearchParams(location.search).get("next") || "/antibot-appsec-gateway/secured/dashboard";
+function safeNext(raw) {
+  if (!raw) return null;
+  try { const u = new URL(raw, location.origin); return u.origin === location.origin ? u.pathname + u.search + u.hash : null; }
+  catch { return null; }
+}
+const next = safeNext(new URLSearchParams(location.search).get("next")) || "/antibot-appsec-gateway/secured/dashboard";
 
 document.getElementById("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
@@ -93,7 +98,8 @@ document.getElementById("login-form").addEventListener("submit", async (ev) => {
       },
       body, credentials: "same-origin",
     });
-    const j = await r.json().catch(() => ({}));
+    let j; try { j = await r.json(); } catch { j = { _error: true }; }
+    if (j._error && r.ok) { errEl.textContent = "Response parse error"; errEl.classList.add("show"); btn.disabled = false; return; }
     if (!r.ok) {
       errEl.textContent = j.error || ("Sign-in failed (HTTP " + r.status + ")");
       errEl.classList.add("show");

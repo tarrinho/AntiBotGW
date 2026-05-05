@@ -251,17 +251,37 @@ def test_open_paths_opt_out_forwards_to_upstream(proxy_module):
 # ── HTML GET still gets the interactive challenge page ──────────────────
 
 def test_html_navigation_serves_challenge_page(proxy_module):
+    """Turnstile challenge page is served when identity's risk score is above
+    the activation threshold. Fresh visitors (no risk) fall through to
+    auto-mint — Turnstile is reserved for suspected bots."""
     async def go():
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up,
                                     JS_CHALLENGE=True,
-                                                                        TURNSTILE_ENABLED=True) as client:
+                                    TURNSTILE_ENABLED=True,
+                                    # Low threshold so first-contact risk (0) still
+                                    # triggers — we seed ip_state directly below.
+                                    SOFT_CHALLENGE_SCORE=1,
+                                    RISK_BAN_THRESHOLD=4) as client:
+                # First: make any request so ip_state gets an entry for this
+                # identity. We can then find the key by last_ip and boost it.
+                await client.get("/", headers=_browser_headers())
+                # Find the track_key for the loopback identity.
+                from state import ip_state
+                key = next(
+                    (k for k, s in ip_state.items() if s.last_ip == "127.0.0.1"),
+                    None,
+                )
+                assert key is not None, "ip_state entry not found for 127.0.0.1"
+                # Boost risk above the new threshold (midpoint of 1 and 4 = 2.5).
+                ip_state[key].risk_score = 5.0
+                # Now the HTML GET should show the Turnstile challenge page.
                 r = await client.get("/", headers=_browser_headers())
                 body = (await r.read()).decode("utf-8", "replace")
                 # Challenge page contains the verifying spinner copy.
                 assert "Verifying browser" in body
                 # And does NOT contain real upstream content.
-                assert "real" not in body or _UPSTREAM_MARK.decode() not in body
+                assert _UPSTREAM_MARK.decode() not in body
     _run(go())
 
 
@@ -396,8 +416,9 @@ def test_v9_chal_cookie_bound_to_ip_tier(proxy_module):
 
 
 def test_v9_turnstile_required_when_enabled(proxy_module):
-    """When TURNSTILE_ENABLED, /antibot-appsec-gateway/challenge MUST reject submissions that
-    omit `cf-turnstile-response`."""
+    """When TURNSTILE_ENABLED, the challenge page is shown for risky identities
+    and /antibot-appsec-gateway/challenge MUST reject submissions that omit
+    `cf-turnstile-response`."""
     import re
     async def go():
         async with _spin_upstream() as up:
@@ -405,7 +426,18 @@ def test_v9_turnstile_required_when_enabled(proxy_module):
                                     JS_CHALLENGE=True,
                                     TURNSTILE_ENABLED=True,
                                     TURNSTILE_SITEKEY="0xTEST",
-                                    TURNSTILE_SECRET="0xTESTSECRET") as client:
+                                    TURNSTILE_SECRET="0xTESTSECRET",
+                                    SOFT_CHALLENGE_SCORE=1,
+                                    RISK_BAN_THRESHOLD=4) as client:
+                # Warm up ip_state with a first request then seed risk above threshold.
+                await client.get("/", headers=_browser_headers())
+                from state import ip_state
+                key = next(
+                    (k for k, s in ip_state.items() if s.last_ip == "127.0.0.1"),
+                    None,
+                )
+                assert key is not None, "ip_state entry not found for 127.0.0.1"
+                ip_state[key].risk_score = 5.0
                 r = await client.get("/", headers=_browser_headers())
                 html = await r.text()
                 # Page must include the Turnstile script tag.

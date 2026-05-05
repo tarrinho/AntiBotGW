@@ -1,7 +1,7 @@
 # Rules of Engagement — AppSecGW build pipeline
 
 These rules are non-optional. After every Docker build of
-`appsec-antibot-gw:<version>`, run the full 15-step validation chain
+`appsec-antibot-gw:<version>`, run the full 17-step validation chain
 below **before announcing the build as done**. Every finding must be
 fixed (or explicitly classified as pre-existing in the report) before
 the version is considered released.
@@ -479,6 +479,182 @@ curl -sk "http://127.0.0.1:18443/antibot-appsec-gateway/bans" \
   `reason=canary-hit` in structured log and bans API.
 - Canary tokens must be unique per session (two fetches produce different tokens).
 - Canary tokens must NOT appear in any admin-visible key fields, metrics output, or error pages.
+
+---
+
+## 16. Post-Release Bug Watch
+
+**Purpose**: capture every bug found after Step 15 (DAST) — whether from user reports,
+production monitoring, or a subsequent code-review pass — with a regression test and a
+documented fix before the next release is stamped.
+
+### Protocol (mandatory for every bug that reaches this step)
+
+1. **Reproduce** — confirm the bug with a minimal reproducer (curl, pytest, or log excerpt).
+2. **Write the failing test first** — add a regression test to the appropriate suite
+   (`test_pure.py` for static source checks, `test_critical.py` for pure unit logic,
+   `test_async.py` for aiohttp integration). The test must **fail** before the fix.
+3. **Fix** — apply the minimum-scope change. Do not bundle unrelated cleanup.
+4. **Confirm green** — the new test must pass; no existing test may regress.
+5. **Document below** — fill in the bug table entry with: severity, symptom, root cause,
+   fix location, test name. Update `CHANGELOG.md` Fixed section and `validation/<ver>.md`.
+
+### 16a. Bug registry (cumulative — append, never delete)
+
+| # | Version | Severity | Symptom | Root Cause | Fix Location | Regression Test |
+|---|---------|----------|---------|-----------|-------------|-----------------|
+| 1 | 1.7.3 | HIGH | `NameError: name 's' is not defined` → HTTP 500 after ban expiry | `protect()` ai-no-assets deny branch referenced `s.html_loads` / `s.static_loads`; `s` is never assigned in that path — only `_s_early` is | `core/proxy_handler.py` (ai-no-assets block) | `test_ai_no_assets_deny_uses_s_early_not_s` |
+| 2 | 1.7.3 | CRITICAL | P1/P2/P4 probe endpoints return upstream 404 decoy; detectors have zero effect in production | `/probe`, `/maze`, `/canary-probe/` absent from `_ADMIN_PUBLIC_SUBPATHS`; `protect()` intercepts every admin-namespace path not in that list before route dispatch | `config.py` (`_ADMIN_PUBLIC_SUBPATHS`) | `test_probe_endpoint_in_admin_public_subpaths`, `test_maze_endpoint_in_admin_public_subpaths`, `test_canary_probe_in_admin_public_subpaths` |
+| 3 | 1.7.3 | HIGH | Turnstile shown to every first-time visitor regardless of risk score | `_js_challenge_applicable()` reads `request.get("_track_key")` which is always `None` at the JS challenge gate (set at `proxy_handler.py:2511`, gate runs at line 2282); threshold check never executes | `challenge/js_challenge.py` (`_js_challenge_applicable`) | `test_js_challenge_applicable_source_uses_get_identity_not_track_key` |
+| 4 | 1.7.3 | MEDIUM | Soft-challenge tier never enforced on `JS_CHAL_OPEN_PATHS` — risky identities (SOFT_CHALLENGE_SCORE ≤ risk < BAN) bypass the cookie gate on open paths | Same `_track_key` ordering bug in `_js_challenge_required()` — `track_key` is always `None`; `if track_key:` branch skipped; open-path bypass always granted | `challenge/js_challenge.py` (`_js_challenge_required`) | `test_js_challenge_required_soft_challenge_uses_get_identity_not_track_key` |
+
+### 16b. Root-cause pattern: request lifecycle ordering
+
+Bugs 3 and 4 share the same root cause: `request["_track_key"]` (and `_sid`, `_fp`, `_is_new`)
+are set at `proxy_handler.py:2511`, inside `protect()`, **after** the JS challenge gate at
+line 2282. Any code that runs at or before the gate and reads `request.get("_track_key")` will
+always receive `None`.
+
+**Canonical fix pattern** — replace `request.get("_track_key")` at the gate with a direct
+identity derivation:
+
+```python
+# WRONG — _track_key not set yet at the JS challenge gate
+track_key = request.get("_track_key")
+if track_key:
+    s = ip_state.get(track_key)
+    ...
+
+# CORRECT — derive identity directly
+try:
+    from identity import get_identity
+    _id, *_ = get_identity(request)
+    s = ip_state.get(_id)
+except Exception:
+    s = None
+```
+
+**Checklist when adding code that runs before `proxy_handler.py:2511`:**
+
+- [ ] Does it read `request.get("_track_key")`? → replace with `get_identity(request)`
+- [ ] Does it read `request.get("_sid")` or `request.get("_fp")`? → derive via `get_identity()`
+- [ ] Does it mutate `ip_state` using the track_key? → re-derive first
+- [ ] Does the new code have a unit test that exercises the `_track_key = None` path?
+
+### 16c. Pass criteria
+
+- All regression tests listed in §16a must be green.
+- Full suite (`test_critical.py tests/test_pure.py tests/test_async.py`) must show 0 new failures.
+- Every bug with severity ≥ MEDIUM must have an entry in `CHANGELOG.md` Fixed section.
+- `validation/<version>.md` must document each finding: symptom, root cause, fix, test name.
+
+---
+
+## 17. Dashboard Security Standards
+
+Every admin dashboard HTML file in `dashboards/` must comply with the standards below.
+Run the checks as part of any release that touches those files.
+
+### 17a. `escapeHtml` — canonical definition (mandatory in every file)
+
+Each dashboard must define **exactly one** `escapeHtml` at the top of its first `<script>` block.
+All other local aliases (`escHtml`, `escHtml2`, nested closures) are forbidden.
+
+**Canonical form:**
+```javascript
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+```
+
+Requirements:
+- Character set must include `&`, `<`, `>`, `"`, `'`, `` ` ``, `/` — no exceptions.
+- Null/undefined guard: `String(s==null?'':s)` (not `(s||'')`).
+- Function name: `escapeHtml` (not `escHtml`, `escHtml2`, `esc`, etc.).
+- Must be at the file's global scope — **not** inside an IIFE or closure.
+
+### 17b. `setInterval` leak prevention
+
+Every `setInterval(...)` call must push its return value into a file-level `_timers` array.
+A `beforeunload` listener must clear all timers on page exit.
+
+**Canonical pattern (add once per file, right after `escapeHtml`):**
+```javascript
+const _timers=[];
+// wrap every setInterval:
+_timers.push(setInterval(fn, ms));
+// add at end of LAST script block in the file:
+window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
+```
+
+No `setInterval` call may appear without `_timers.push(...)`.
+
+### 17c. Redirect validation (login.html)
+
+The `next` query-parameter must be validated against `location.origin` before use as a redirect target.
+
+**Canonical validator:**
+```javascript
+function safeNext(raw) {
+  if (!raw) return null;
+  try { const u = new URL(raw, location.origin); return u.origin === location.origin ? u.pathname + u.search + u.hash : null; }
+  catch { return null; }
+}
+```
+
+`location.href` must never be set to an unvalidated user-supplied string.
+
+### 17d. No unescaped data in `innerHTML`
+
+Every `innerHTML` assignment that incorporates server-supplied or user-supplied data must wrap each field with `escapeHtml()`. Template literals are no exception:
+```javascript
+// WRONG
+div.innerHTML = `<div>${data.message}</div>`;
+// CORRECT
+div.innerHTML = `<div>${escapeHtml(data.message)}</div>`;
+```
+
+`e.message` and any error string must be escaped before placement into `innerHTML`:
+```javascript
+// WRONG
+el.innerHTML = '<span>load failed: ' + e.message + '</span>';
+// CORRECT
+el.innerHTML = '<span>load failed: ' + escapeHtml(String(e.message||e)) + '</span>';
+```
+
+### 17e. Structured error handling for `fetch`
+
+Silent `.catch(()=>({}))` is forbidden on any fetch that populates UI state.
+Use structured error objects instead:
+```javascript
+// WRONG
+const j = await r.json().catch(() => ({}));
+// CORRECT
+let j; try { j = await r.json(); } catch { j = { _error: true }; }
+if (j._error) { /* show error */ return; }
+```
+
+### 17f. Pass criteria
+
+For each dashboard file in `dashboards/`:
+- [ ] Exactly one `escapeHtml` definition at top-scope with full 7-char charset.
+- [ ] Zero `escHtml`, `escHtml2`, or local `escapeHtml` aliases inside closures.
+- [ ] Every `setInterval` wrapped with `_timers.push(...)`.
+- [ ] `window.addEventListener('beforeunload', ...)` present in the file.
+- [ ] `next` param validated in `login.html`.
+- [ ] No `innerHTML` assignment with bare `e.message` or other unescaped strings.
+- [ ] No silent `.catch(()=>({}))` on UI-state-populating fetches.
+
+Regression tests in `test_pure.py` must verify §17a, §17c, §17d per file.
+
+### 17g. Dashboard security bug registry
+
+| # | File | Severity | Symptom | Fix | Regression Test |
+|---|------|----------|---------|-----|----------------|
+| D1 | `login.html` | HIGH | Open redirect via `?next=` parameter — server error → user-supplied URL used verbatim | `safeNext()` validator + origin check | `test_login_open_redirect_next_param_validated` |
+| D2 | `service.html` | MEDIUM | XSS via `e.message` in `innerHTML` — server-controlled error message rendered as HTML | `escapeHtml(String(e.message\|\|e))` | `test_service_emessage_escaped_in_innerhtml` |
+| D3 | `service.html` | MEDIUM | Missing global `escapeHtml` — calls outside local closures throw `ReferenceError` | Added canonical `escapeHtml` at top of first script block | `test_service_has_global_escapehtmlt` |
+| D4 | All files | MEDIUM | Incomplete escape charset — `[&<>"']` missing backtick + `/` | Updated all definitions to `[&<>"'\`/]` | `test_*_escapehtmlt_full_charset` (per file) |
+| D5 | All files | LOW | `setInterval` leaks — 30+ intervals never cleared on navigation | `_timers` array + `beforeunload` cleanup | `test_*_setinterval_tracked` (per file) |
+| D6 | `login.html`, `settings.html` | LOW | Silent `.catch(()=>({}))` hides network/parse errors | Structured `try/catch` with `_error` flag | `test_login_no_silent_catch`, `test_settings_no_silent_catch` |
 
 ---
 

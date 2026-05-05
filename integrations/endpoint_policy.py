@@ -68,10 +68,23 @@ def _to_method_set(v) -> set:
 
 
 def _to_host_set(v) -> set:
-    """Comma-separated → set of lower-cased hostnames."""
+    """Comma-separated → set of lower-cased bare hostnames.
+    Strips scheme (https://) and path/trailing-slash so operators can
+    supply either 'example.com' or 'https://example.com/' — both work."""
+    from urllib.parse import urlparse as _urlparse
+
+    def _normalise(h: str) -> str:
+        h = h.strip()
+        if not h:
+            return ""
+        # If it looks like a URL (has a scheme), parse it; otherwise treat
+        # as a bare hostname and parse with a dummy scheme so urlparse works.
+        parsed = _urlparse(h if "://" in h else "x://" + h)
+        return (parsed.hostname or "").lower()
+
     if isinstance(v, (list, set)):
-        return {str(h).strip().lower() for h in v if str(h).strip()}
-    return {h.strip().lower() for h in str(v).split(",") if h.strip()}
+        return {_normalise(str(h)) for h in v if _normalise(str(h))}
+    return {_normalise(h) for h in str(v).split(",") if _normalise(h)}
 
 
 def _to_country_set(v) -> set:

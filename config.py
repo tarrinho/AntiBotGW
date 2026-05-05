@@ -59,6 +59,10 @@ HONEYPOT_BAN_SECS = int(os.environ.get("HONEYPOT_BAN_SECS", "3600"))  # 1 h defa
 # AI-agent-specific signals (canary-echo, honeypot-silent, honeypot)
 # upgrade to hostile-pool duration.
 HOSTILE_BAN_SECS  = int(os.environ.get("HOSTILE_BAN_SECS", "86400"))   # 24 h
+# 1.7.3 — "Really Ban": definitive-proof signals (canary-echo, honeypot-silent,
+# honeypot) earn a 30-day ban instead of the standard 24 h. Configurable via
+# REALLY_BAN_SECS env var or the Controls dashboard Thresholds card.
+REALLY_BAN_SECS   = int(os.environ.get("REALLY_BAN_SECS", "2592000"))  # 30 d
 # 1.5.1 — operator-controlled global throughput limit. When > 0, ANY request
 # arriving while the rolling 1-second count exceeds this value is silent-
 # decoyed with reason `traffic-threshold`. Hot-reloadable via /__config or

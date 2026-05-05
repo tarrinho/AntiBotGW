@@ -406,6 +406,21 @@ button.danger{background:var(--red)}
 
 <div class="row">
 
+  <!-- ── Storage ─────────────────────────────────────────────── -->
+  <div class="card" id="card-storage">
+    <h2>Storage</h2>
+    <p class="desc">
+      Disk usage for the <code>/data</code> volume. When disk fills, SQLite write errors
+      occur and endpoints return HTTP 500. Use <b>Vacuum DB</b> to shrink the database
+      file and truncate the WAL — safe to run at any time.
+    </p>
+    <div id="storage-body" style="font-size:13px;color:var(--dim)">Loading…</div>
+    <div class="row-controls" style="margin-top:12px">
+      <button id="btn-vacuum">Vacuum DB</button>
+      <span class="foot" id="vacuum-status"></span>
+    </div>
+  </div>
+
   <!-- ── Export ───────────────────────────────────────────────── -->
   <div class="card">
     <h2>Export configuration</h2>
@@ -596,7 +611,7 @@ $("btn-import").addEventListener("click", async () => {
       body: pending,
       credentials: "same-origin",
     });
-    const j = await r.json().catch(() => ({}));
+    let j; try { j = await r.json(); } catch { j = {}; }
     if (!r.ok) {
       result.className = "result show err";
       result.textContent = "Import failed (HTTP " + r.status + "):\n" +
@@ -625,9 +640,8 @@ $("btn-import").addEventListener("click", async () => {
 
 // ── 1.6.7 — Gateway Registry ─────────────────────────────────────────
 const GW_BASE = "/antibot-appsec-gateway/secured/admin/gw-registry";
-const escHtml = (s) => String(s == null ? "" : s)
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+const _timers=[];
 const fmtAge = (epoch) => {
   if (!epoch) return "—";
   const dt = (Date.now()/1000) - Number(epoch);
@@ -649,7 +663,7 @@ function renderSyncCell(sync) {
     'no-redis':{ color: 'var(--dim)',    label: '— no redis', title: 'REDIS_URL not configured on this gateway' },
   };
   const m = map[sync.state] || map.offline;
-  return `<span title="${escHtml(m.title)}" style="color:${m.color};font-weight:600;font-family:ui-monospace,Menlo,monospace;font-size:11px">${m.label}</span>`;
+  return `<span title="${escapeHtml(m.title)}" style="color:${m.color};font-weight:600;font-family:ui-monospace,Menlo,monospace;font-size:11px">${m.label}</span>`;
 }
 const apiUrl = (p) => p;
 async function api(method, path, body) {
@@ -754,16 +768,16 @@ function renderList() {
     return;
   }
   tb.innerHTML = rows.map(r => `
-    <tr class="${r.is_local ? 'gw-row-local' : ''}" data-gw="${escHtml(r.gw_id)}">
-      <td><input type="checkbox" class="gw-row-cb" data-gw="${escHtml(r.gw_id)}"
+    <tr class="${r.is_local ? 'gw-row-local' : ''}" data-gw="${escapeHtml(r.gw_id)}">
+      <td><input type="checkbox" class="gw-row-cb" data-gw="${escapeHtml(r.gw_id)}"
                  ${GW_STATE.selected.has(r.gw_id) ? 'checked' : ''}></td>
-      <td>${escHtml(r.gw_id)}</td>
-      <td>${r.domain ? `<a href="https://${escHtml(r.domain)}" target="_blank" rel="noopener" style="color:var(--blue)">${escHtml(r.domain)}</a>` : '<span class="dim">—</span>'}</td>
-      <td>${escHtml(r.region || '—')}</td>
-      <td>${escHtml(r.environment || '—')}</td>
+      <td>${escapeHtml(r.gw_id)}</td>
+      <td>${r.domain ? `<a href="https://${escapeHtml(r.domain)}" target="_blank" rel="noopener" style="color:var(--blue)">${escapeHtml(r.domain)}</a>` : '<span class="dim">—</span>'}</td>
+      <td>${escapeHtml(r.region || '—')}</td>
+      <td>${escapeHtml(r.environment || '—')}</td>
       <td>
         <label class="gw-toggle" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer">
-          <input type="checkbox" class="gw-cd" data-gw="${escHtml(r.gw_id)}"
+          <input type="checkbox" class="gw-cd" data-gw="${escapeHtml(r.gw_id)}"
                  ${r.can_distribute ? 'checked' : ''}
                  style="accent-color:var(--green);transform:scale(1.1)">
           <span style="font-size:10px;color:var(--dim)">${r.can_distribute ? 'on' : 'off'}</span>
@@ -773,19 +787,19 @@ function renderList() {
         ${r.is_local ? '<span class="dim" style="font-size:11px">— (local)</span>' : `
         <label class="gw-toggle" style="display:inline-flex;align-items:center;gap:6px;cursor:pointer"
                title="Trusted peer — mesh-sync offers apply directly, no operator confirmation">
-          <input type="checkbox" class="gw-aa" data-gw="${escHtml(r.gw_id)}"
+          <input type="checkbox" class="gw-aa" data-gw="${escapeHtml(r.gw_id)}"
                  ${r.auto_apply ? 'checked' : ''}
                  style="accent-color:var(--yellow);transform:scale(1.1)">
           <span style="font-size:10px;color:var(--dim)">${r.auto_apply ? 'trusted' : 'manual'}</span>
         </label>`}
       </td>
-      <td><span class="pill-status pill-${r.status}">${escHtml(r.status)}</span></td>
+      <td><span class="pill-status pill-${r.status}">${escapeHtml(r.status)}</span></td>
       <td>${renderSyncCell(r.sync)}</td>
       <td>${fmtAge(r.last_seen_ts)}</td>
       <td>
-        <button class="act-btn" data-act="edit"     data-gw="${escHtml(r.gw_id)}">Edit</button>
-        <button class="act-btn" data-act="rotate"   data-gw="${escHtml(r.gw_id)}">Rotate key</button>
-        <button class="act-btn danger" data-act="delete" data-gw="${escHtml(r.gw_id)}"
+        <button class="act-btn" data-act="edit"     data-gw="${escapeHtml(r.gw_id)}">Edit</button>
+        <button class="act-btn" data-act="rotate"   data-gw="${escapeHtml(r.gw_id)}">Rotate key</button>
+        <button class="act-btn danger" data-act="delete" data-gw="${escapeHtml(r.gw_id)}"
                 ${r.is_local ? 'disabled title="cannot delete the local gateway"' : ''}>Delete</button>
       </td>
     </tr>`).join("");
@@ -900,17 +914,17 @@ $("gw-add").addEventListener("click", () => openAddModal());
 
 function regionOpts(sel) {
   return GW_STATE.regions.map(r =>
-    `<option value="${escHtml(r)}" ${r===sel?'selected':''}>${escHtml(r)}</option>`
+    `<option value="${escapeHtml(r)}" ${r===sel?'selected':''}>${escapeHtml(r)}</option>`
   ).join("");
 }
 function envOpts(sel) {
   return GW_STATE.environments.map(e =>
-    `<option value="${escHtml(e)}" ${e===sel?'selected':''}>${escHtml(e)}</option>`
+    `<option value="${escapeHtml(e)}" ${e===sel?'selected':''}>${escapeHtml(e)}</option>`
   ).join("");
 }
 function statusOpts(sel) {
   return GW_STATE.statuses.map(s =>
-    `<option value="${escHtml(s)}" ${s===sel?'selected':''}>${escHtml(s)}</option>`
+    `<option value="${escapeHtml(s)}" ${s===sel?'selected':''}>${escapeHtml(s)}</option>`
   ).join("");
 }
 
@@ -921,7 +935,7 @@ function openAddModal() {
       <label>Domain</label>
       <input id="add-domain" type="text"
              placeholder="gw-prod.example.com"
-             value="${escHtml(window.location.host || '')}">
+             value="${escapeHtml(window.location.host || '')}">
       <label>GW ID</label>
       <input id="add-id" type="text" placeholder="auto-derived from domain"
              pattern="[a-z0-9][a-z0-9-]{1,62}"
@@ -1027,7 +1041,7 @@ function showPrivateKeyOnce(gwId, priv, pub, context) {
   showSimpleModal(`
     <h3 style="margin:0 0 8px 0;color:var(--yellow)">⚠ Copy the private key now</h3>
     <p class="desc" style="margin-bottom:10px">
-      ${escHtml(context)} produced a fresh keypair for <strong>${escHtml(gwId)}</strong>.
+      ${escapeHtml(context)} produced a fresh keypair for <strong>${escapeHtml(gwId)}</strong>.
       The private key is shown <strong>only once</strong> — store it in your
       operator vault immediately. Anyone holding it can sign mesh blocks
       as this gateway.
@@ -1037,9 +1051,9 @@ function showPrivateKeyOnce(gwId, priv, pub, context) {
     server retains it (this is the local row), but it cannot be re-fetched
     via the dashboard.</div>
     <label class="dim" style="font-size:10.5px">PUBLIC KEY (verification handle)</label>
-    <div class="gw-key-block" id="key-pub">${escHtml(pub)}</div>
+    <div class="gw-key-block" id="key-pub">${escapeHtml(pub)}</div>
     <label class="dim" style="font-size:10.5px;margin-top:10px;display:block">PRIVATE KEY</label>
-    <div class="gw-key-block" id="key-priv" style="color:var(--red)">${escHtml(priv)}</div>
+    <div class="gw-key-block" id="key-priv" style="color:var(--red)">${escapeHtml(priv)}</div>
     <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
       <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(priv)}).then(()=>toast('Private key copied — store it now','ok'))">Copy private</button>
       <button class="secondary" onclick="navigator.clipboard.writeText(${JSON.stringify(pub)}).then(()=>toast('Public key copied','ok'))">Copy public</button>
@@ -1055,11 +1069,11 @@ async function openEditModal(gwId) {
   const isProd = row.environment === "production";
   showSimpleModal(`
     ${isProd ? '<div class="gw-warn"><strong>Production gateway.</strong> Changes propagate to mesh peers.</div>' : ''}
-    <h3 style="margin:0 0 12px 0;color:#fff">Gateway · ${escHtml(row.gw_id)} ${row.is_local ? '<span style="color:var(--yellow);font-size:11px">★ LOCAL</span>' : ''}</h3>
+    <h3 style="margin:0 0 12px 0;color:#fff">Gateway · ${escapeHtml(row.gw_id)} ${row.is_local ? '<span style="color:var(--yellow);font-size:11px">★ LOCAL</span>' : ''}</h3>
     <div class="gw-form-grid">
-      <label>GW ID</label><div class="dim" style="font-family:ui-monospace">${escHtml(row.gw_id)}</div>
+      <label>GW ID</label><div class="dim" style="font-family:ui-monospace">${escapeHtml(row.gw_id)}</div>
       <label>Domain</label>
-      <input id="edit-domain" type="text" value="${escHtml(row.domain || '')}"
+      <input id="edit-domain" type="text" value="${escapeHtml(row.domain || '')}"
              placeholder="gw-prod.example.com (optional)">
       <label>Region</label><select id="edit-region">${regionOpts(row.region)}</select>
       <label>Environment</label><select id="edit-env">${envOpts(row.environment)}</select>
@@ -1071,9 +1085,9 @@ async function openEditModal(gwId) {
       </label>
       <label>Public key</label>
       <div>
-        <div class="gw-key-block" style="color:var(--blue)">${escHtml(row.public_key)}</div>
+        <div class="gw-key-block" style="color:var(--blue)">${escapeHtml(row.public_key)}</div>
         <div class="dim" style="font-size:10.5px;margin-top:4px">
-          Fingerprint: <span class="gw-fp">${escHtml(row.fingerprint || "")}</span>
+          Fingerprint: <span class="gw-fp">${escapeHtml(row.fingerprint || "")}</span>
           · created ${row.key_created_ts ? new Date(row.key_created_ts*1000).toISOString().replace('T',' ').slice(0,16) : '—'}
           ${row.key_rotated_ts ? '· rotated ' + new Date(row.key_rotated_ts*1000).toISOString().replace('T',' ').slice(0,16) : ''}
         </div>
@@ -1099,7 +1113,7 @@ async function openEditModal(gwId) {
       if (!ok) return;
       // Opt in to the reveal flag — server logs an audit event.
       api("GET", `${GW_BASE}/${encodeURIComponent(gwId)}?reveal=1`).then(full => {
-        document.getElementById("edit-priv-mask").innerHTML = escHtml(full.private_key || "(unset)");
+        document.getElementById("edit-priv-mask").innerHTML = escapeHtml(full.private_key || "(unset)");
         document.getElementById("edit-priv-mask").style.color = "var(--red)";
       }).catch(e => toast("Reveal failed: " + e.message, "err"));
     });
@@ -1145,7 +1159,7 @@ async function rotateKey(gwId) {
 // ── Delete gateway (typed-confirm) ───────────────────────────────
 async function deleteGw(gwId) {
   showSimpleModal(`
-    <h3 style="margin:0 0 10px 0;color:var(--red)">Delete gateway "${escHtml(gwId)}"?</h3>
+    <h3 style="margin:0 0 10px 0;color:var(--red)">Delete gateway "${escapeHtml(gwId)}"?</h3>
     <p class="desc" style="margin-bottom:10px">
       This removes the registry row, all distribution rules referring to
       it, and writes a <code>gw_deleted</code> audit entry. The mesh
@@ -1154,7 +1168,7 @@ async function deleteGw(gwId) {
     </p>
     <div class="gw-form-grid">
       <label>Type gw_id</label>
-      <input id="del-confirm" type="text" placeholder="${escHtml(gwId)}">
+      <input id="del-confirm" type="text" placeholder="${escapeHtml(gwId)}">
       <span class="err" id="del-err"></span>
     </div>
     <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
@@ -1202,11 +1216,11 @@ function renderMatrix() {
     return;
   }
   let head = "<thead><tr><th>source ↓ / target →</th>";
-  for (const g of gws) head += `<th>${escHtml(g.gw_id)}</th>`;
+  for (const g of gws) head += `<th>${escapeHtml(g.gw_id)}</th>`;
   head += "</tr></thead>";
   let body = "<tbody>";
   for (const src of gws) {
-    body += `<tr ${src.gw_id===GW_STATE.local_gw_id?'class="gw-row-local"':''}><th>${escHtml(src.gw_id)}</th>`;
+    body += `<tr ${src.gw_id===GW_STATE.local_gw_id?'class="gw-row-local"':''}><th>${escapeHtml(src.gw_id)}</th>`;
     for (const tgt of gws) {
       if (src.gw_id === tgt.gw_id) {
         body += `<td class="cell disabled">—</td>`;
@@ -1215,7 +1229,7 @@ function renderMatrix() {
         const back = matrixHas(tgt.gw_id, src.gw_id);
         const asym = on && !back;
         body += `<td class="cell ${on?'on':''} ${asym?'asym':''}"
-                    data-s="${escHtml(src.gw_id)}" data-t="${escHtml(tgt.gw_id)}"
+                    data-s="${escapeHtml(src.gw_id)}" data-t="${escapeHtml(tgt.gw_id)}"
                     title="${asym ? 'Asymmetric: target does NOT sync back' : ''}">${on?'✓':'·'}</td>`;
       }
     }
@@ -1272,10 +1286,10 @@ async function loadAudit() {
       tb.innerHTML = j.entries.map(e => `
         <tr>
           <td>${new Date((e.ts||0)*1000).toISOString().replace('T',' ').slice(0,19)}Z</td>
-          <td><code>${escHtml(e.action)}</code></td>
-          <td>${escHtml(e.gw_id || '*')}</td>
-          <td>${escHtml(e.actor || '—')}</td>
-          <td><code style="white-space:pre-wrap;word-break:break-all;font-size:10.5px">${escHtml(e.details || '')}</code></td>
+          <td><code>${escapeHtml(e.action)}</code></td>
+          <td>${escapeHtml(e.gw_id || '*')}</td>
+          <td>${escapeHtml(e.actor || '—')}</td>
+          <td><code style="white-space:pre-wrap;word-break:break-all;font-size:10.5px">${escapeHtml(e.details || '')}</code></td>
         </tr>`).join("");
     }
     const last = Math.min(GW_STATE.audit.offset + GW_STATE.audit.limit, GW_STATE.audit.total);
@@ -1317,7 +1331,7 @@ $("audit-export").addEventListener("click", async () => {
 });
 
 // Auto-refresh the gateway list every 30s while the list tab is visible.
-setInterval(() => {
+_timers.push(setInterval(() => {
   if (document.getElementById("pane-list").style.display !== "none") {
     const last = Date.now();
     loadList().then(() => {
@@ -1325,7 +1339,7 @@ setInterval(() => {
       $("gw-last-refresh").textContent = `updated ${dt}s ago`;
     });
   }
-}, 30000);
+}));
 
 // ── 1.6.7 — Users management ────────────────────────────────────────
 const USERS_BASE = "/antibot-appsec-gateway/secured/admin/users";
@@ -1351,19 +1365,19 @@ async function loadUsers() {
         : '<span class="dim">○ offline</span>';
       return `
       <tr ${isCurrent ? 'style="background:rgba(217,154,32,.05)"' : ''}>
-        <td><a href="#" data-uact="sessions" data-user="${escHtml(u.username)}"
+        <td><a href="#" data-uact="sessions" data-user="${escapeHtml(u.username)}"
                style="color:var(--blue);text-decoration:none;border-bottom:1px dotted var(--blue);cursor:pointer"
-               title="View active sessions">${escHtml(u.username)}</a>
+               title="View active sessions">${escapeHtml(u.username)}</a>
             ${isCurrent ? '<span style="color:var(--yellow);font-size:10px">(you)</span>' : ''}</td>
         <td>${onlineDot}</td>
-        <td><span class="pill-status pill-active" style="background:rgba(88,166,255,.15);color:var(--blue)">${escHtml(u.role)}</span></td>
-        <td><span class="pill-status pill-${u.status === 'active' ? 'active' : 'decommissioned'}">${escHtml(u.status)}</span></td>
+        <td><span class="pill-status pill-active" style="background:rgba(88,166,255,.15);color:var(--blue)">${escapeHtml(u.role)}</span></td>
+        <td><span class="pill-status pill-${u.status === 'active' ? 'active' : 'decommissioned'}">${escapeHtml(u.status)}</span></td>
         <td>${u.last_login_ts ? new Date(u.last_login_ts*1000).toISOString().replace('T',' ').slice(0,19) + 'Z' : '<span class="dim">—</span>'}</td>
         <td>${u.created_ts ? new Date(u.created_ts*1000).toISOString().slice(0,10) : '—'}</td>
         <td>
-          <button class="act-btn" data-uact="password"  data-user="${escHtml(u.username)}">Change password</button>
-          <button class="act-btn" data-uact="status"    data-user="${escHtml(u.username)}">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
-          <button class="act-btn danger" data-uact="delete" data-user="${escHtml(u.username)}"
+          <button class="act-btn" data-uact="password"  data-user="${escapeHtml(u.username)}">Change password</button>
+          <button class="act-btn" data-uact="status"    data-user="${escapeHtml(u.username)}">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+          <button class="act-btn danger" data-uact="delete" data-user="${escapeHtml(u.username)}"
                   ${isCurrent ? 'disabled title="cannot delete your own account"' : ''}>Delete</button>
         </td>
       </tr>`;
@@ -1389,7 +1403,7 @@ $("users-tbody").addEventListener("click", (ev) => {
 async function openSessionsModal(username) {
   showSimpleModal(`
     <h3 style="margin:0 0 8px 0;color:#fff">
-      Sessions — ${escHtml(username)}
+      Sessions — ${escapeHtml(username)}
       <span style="float:right;cursor:pointer;color:var(--dim);font-size:18px"
             onclick="closeSimpleModal()">×</span>
     </h3>
@@ -1434,13 +1448,13 @@ async function openSessionsModal(username) {
               <tr ${isMe ? 'style="background:rgba(217,154,32,.06)"' : ''}>
                 <td><span style="color:${statusColor};font-weight:700">${statusLabel}</span>
                     ${isMe ? '<span style="color:var(--yellow);font-size:10px">(you)</span>' : ''}</td>
-                <td><code>${escHtml(s.ip || '—')}</code></td>
-                <td style="max-width:280px;word-break:break-all"><span class="dim" style="font-size:10.5px">${escHtml(s.user_agent || '—')}</span></td>
+                <td><code>${escapeHtml(s.ip || '—')}</code></td>
+                <td style="max-width:280px;word-break:break-all"><span class="dim" style="font-size:10.5px">${escapeHtml(s.user_agent || '—')}</span></td>
                 <td>${created}</td>
                 <td>${lastSeen}</td>
                 <td>${
                   s.status === "active"
-                    ? `<button class="act-btn danger" data-revoke-sid="${escHtml(s.sid)}" data-revoke-user="${escHtml(username)}">Revoke${isMe ? ' (sign me out)' : ''}</button>`
+                    ? `<button class="act-btn danger" data-revoke-sid="${escapeHtml(s.sid)}" data-revoke-user="${escapeHtml(username)}">Revoke${isMe ? ' (sign me out)' : ''}</button>`
                     : '<span class="dim">—</span>'
                 }</td>
               </tr>`;
@@ -1522,7 +1536,7 @@ function openAddUserModal() {
 
 function changeUserPassword(username) {
   showSimpleModal(`
-    <h3 style="margin:0 0 12px 0;color:#fff">Change password — ${escHtml(username)}</h3>
+    <h3 style="margin:0 0 12px 0;color:#fff">Change password — ${escapeHtml(username)}</h3>
     <div class="gw-form-grid">
       <label>New password</label>
       <input id="u-pw-new" type="password" autocomplete="new-password">
@@ -1565,13 +1579,13 @@ async function toggleUserStatus(username, currentLabel) {
 
 async function deleteUser(username) {
   showSimpleModal(`
-    <h3 style="margin:0 0 10px 0;color:var(--red)">Delete user "${escHtml(username)}"?</h3>
+    <h3 style="margin:0 0 10px 0;color:var(--red)">Delete user "${escapeHtml(username)}"?</h3>
     <p class="desc" style="margin-bottom:10px">
       This permanently removes the account. Type the username to confirm.
     </p>
     <div class="gw-form-grid">
       <label>Type username</label>
-      <input id="u-del-confirm" type="text" placeholder="${escHtml(username)}">
+      <input id="u-del-confirm" type="text" placeholder="${escapeHtml(username)}">
       <span class="err" id="u-del-err"></span>
     </div>
     <div class="row-controls" style="margin-top:14px;justify-content:flex-end">
@@ -1623,10 +1637,10 @@ async function loadMesh() {
     tb.innerHTML = rows.map(r => `
       <tr>
         <td>${new Date((r.received_ts||0)*1000).toISOString().replace('T',' ').slice(0,19)}Z</td>
-        <td>${escHtml(r.source_gw_id)}</td>
-        <td><code style="color:var(--blue)">${escHtml(r.key_name)}</code></td>
-        <td><span class="dim">${escHtml(r.value_preview)} (${r.value_length} chars)</span></td>
-        <td><span class="pill-status pill-inactive">${escHtml(r.status)}</span></td>
+        <td>${escapeHtml(r.source_gw_id)}</td>
+        <td><code style="color:var(--blue)">${escapeHtml(r.key_name)}</code></td>
+        <td><span class="dim">${escapeHtml(r.value_preview)} (${r.value_length} chars)</span></td>
+        <td><span class="pill-status pill-inactive">${escapeHtml(r.status)}</span></td>
         <td>
           <button class="act-btn" data-mact="confirm" data-id="${r.id}">Apply</button>
           <button class="act-btn danger" data-mact="reject" data-id="${r.id}">Reject</button>
@@ -1654,19 +1668,95 @@ $("mesh-tbody").addEventListener("click", async (ev) => {
 });
 
 // Auto-refresh the pending list every 30s (matches the publish cadence).
-setInterval(() => {
+_timers.push(setInterval(() => {
   if (document.getElementById("card-mesh")) loadMesh();
-}, 30000);
+}, 30000));
 
 // Auto-refresh the users list every 30s (online indicator decays in 60s).
-setInterval(() => {
+_timers.push(setInterval(() => {
   if (document.getElementById("card-users")) loadUsers();
-}, 30000);
+}, 30000));
+
+// ── Storage card ────────────────────────────────────────────────────────────
+function fmtBytes(b) {
+  if (b == null) return '—';
+  if (b >= 1073741824) return (b/1073741824).toFixed(2)+' GB';
+  if (b >= 1048576)    return (b/1048576).toFixed(1)+' MB';
+  return (b/1024).toFixed(0)+' KB';
+}
+
+async function loadStorage() {
+  const el = document.getElementById('storage-body');
+  if (!el) return;
+  try {
+    const r = await fetch(BASE + '/disk-stats', {credentials:'include'});
+    if (!r.ok) { el.innerHTML = '<span style="color:var(--red)">Failed to load storage info (HTTP '+r.status+')</span>'; return; }
+    const d = await r.json();
+    const disk = d.disk || {};
+    const pct  = disk.pct != null ? disk.pct.toFixed(1) : '?';
+    const free  = fmtBytes(disk.avail);
+    const total = fmtBytes(disk.total);
+    const warn  = disk.pct >= 90;
+    const color = warn ? 'var(--red)' : (disk.pct >= 75 ? '#e3b341' : '#3fb950');
+    el.innerHTML = `
+      <div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+          <span style="color:var(--fg)">Disk usage</span>
+          <span style="color:${color};font-weight:600">${pct}% used &mdash; ${free} free of ${total}</span>
+        </div>
+        <div style="background:#0d1117;border-radius:4px;height:8px;overflow:hidden">
+          <div style="width:${Math.min(pct,100)}%;height:100%;background:${color};transition:width .3s"></div>
+        </div>
+        ${warn ? '<div style="color:var(--red);margin-top:6px;font-size:12px">⚠ Disk above 90% — SQLite write errors likely. Vacuum DB or free space.</div>' : ''}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:12px">
+        <div style="background:#0d1117;border-radius:4px;padding:8px">
+          <div style="color:var(--dim);margin-bottom:2px">DB file</div>
+          <div style="color:var(--fg);font-weight:600">${fmtBytes(d.db_bytes)}</div>
+        </div>
+        <div style="background:#0d1117;border-radius:4px;padding:8px">
+          <div style="color:var(--dim);margin-bottom:2px">WAL file</div>
+          <div style="color:var(--fg);font-weight:600">${fmtBytes(d.wal_bytes)}</div>
+        </div>
+        <div style="background:#0d1117;border-radius:4px;padding:8px">
+          <div style="color:var(--dim);margin-bottom:2px">SHM file</div>
+          <div style="color:var(--fg);font-weight:600">${fmtBytes(d.shm_bytes)}</div>
+        </div>
+      </div>
+      <div style="color:var(--dim);font-size:11px;margin-top:8px">Path: ${d.db_path || '—'}</div>`;
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--red)">Error: '+e.message+'</span>';
+  }
+}
+
+document.getElementById('btn-vacuum').addEventListener('click', async () => {
+  const st = document.getElementById('vacuum-status');
+  const btn = document.getElementById('btn-vacuum');
+  btn.disabled = true; st.textContent = 'Running VACUUM…'; st.style.color='var(--dim)';
+  try {
+    const r = await fetch(BASE + '/db-vacuum', {method:'POST', credentials:'include'});
+    const d = await r.json();
+    if (d.ok) {
+      const saved = fmtBytes(d.saved_bytes);
+      st.textContent = `Done — reclaimed ${saved}`;
+      st.style.color = '#3fb950';
+    } else {
+      st.textContent = 'Failed: ' + (d.reason || 'unknown');
+      st.style.color = 'var(--red)';
+    }
+    await loadStorage();
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+    st.style.color = 'var(--red)';
+  } finally { btn.disabled = false; }
+});
 
 // Initial load.
 loadList();
 loadUsers();
 loadMesh();
+loadStorage();
+window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
 </script>
 
@@ -1730,8 +1820,6 @@ loadMesh();
 </div>
 <script>
 (function(){
-  const escHtml2 = s => String(s||'').replace(/[&<>"']/g, c =>
-    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const url2 = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
@@ -1768,10 +1856,10 @@ loadMesh();
     modalScore.style.color = colorFor(lastData.score).fg;
     const rows = (lastData.reasons||[]).map(r => `
       <div class="gw-row">
-        <span class="key">${escHtml2(r.key)}</span>
-        <span class="badge ${escHtml2(r.status)}">${escHtml2(r.status)}</span>
-        <span class="det">${escHtml2(r.detail||'')}</span>
-        <span class="val">${escHtml2(r.value||'')}</span>
+        <span class="key">${escapeHtml(r.key)}</span>
+        <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
+        <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="val">${escapeHtml(r.value||'')}</span>
       </div>`).join('');
     modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
       Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
@@ -1782,7 +1870,7 @@ loadMesh();
     if (e.key==='Escape') modal.classList.remove('show');
   });
   tick();
-  setInterval(tick, 15000);
+  _timers.push(setInterval(tick, 15000));
 
   async function loadLogLevel(){
     try {
@@ -1806,7 +1894,7 @@ loadMesh();
     } catch(e){ alert('Network error: ' + e.message); }
   };
   loadLogLevel();
-  setInterval(loadLogLevel, 30000);
+  _timers.push(setInterval(loadLogLevel, 30000));
 })();
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
@@ -1824,7 +1912,6 @@ loadMesh();
 </div>
 <script>
 (function(){
-  function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
   window._userRole='admin';window._acctUsername='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;
@@ -1840,7 +1927,7 @@ loadMesh();
     b.innerHTML='<div style="color:var(--dim)">Loading…</div>';
     fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
       var u=d.user||{};
-      b.innerHTML='<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escHtml(u.role||'')+'</span></div>'+
+      b.innerHTML='<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
@@ -1870,7 +1957,7 @@ loadMesh();
         var curSid=d.current_sid||'';
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML='<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
-          return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
+          return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
             '<td style="padding:4px 0;text-align:right"><button onclick="_acctRevokeSession('+JSON.stringify(s.sid)+')" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>';
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
