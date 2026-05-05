@@ -6,29 +6,45 @@ Author: Pedro Tarrinho
 
 ---
 
-## [1.7.3] — 2026-05-04
+## [1.7.3] — 2026-05-05
 
 ### Added
-- **Path-sweep detector** (`PATH_SWEEP_ENABLED=1`, default on) — new module `detection/path_sweep.py`. Fires when an identity visits ≥ `PATH_SWEEP_THRESHOLD` (default 40) distinct non-static paths within a `PATH_SWEEP_WINDOW_SECS` (default 300 s) sliding window. Unlike `behavioral.py` (skipped for cookied sessions), this detector runs for **all** identities including valid-cookied ones — specifically to catch the warm-up bypass technique (AI agent acquires valid cookie with benign traffic, then sweeps paths in fresh sessions). Static assets excluded via extension list; admin namespace excluded via `ADMIN_NAMESPACE` prefix check. Recorded inline within the existing `state_lock` hold to avoid re-entrant deadlock. Risk signal: `path-sweep` contributes to ban logic via `update_risk_and_maybe_ban`.
-- **New config knobs** (all hot-reloadable): `PATH_SWEEP_ENABLED`, `PATH_SWEEP_WINDOW_SECS`, `PATH_SWEEP_THRESHOLD`.
-- **`IpState.path_sweep_times`** — `deque(maxlen=500)` sliding window of `(monotonic_ts, path)` pairs added to `state.py`.
-- **`path-sweep` in signal cost table** — `kind: state`, `typical: 0.05 ms`, `p99: 0.2 ms` (O(n) deque prune + set comprehension, no I/O).
-- **`path-sweep` in toggle table** — maps `PATH_SWEEP_ENABLED`; visible in Settings dashboard.
-- **Geo "No geo" card** — `dashboards/geo.html` now shows a "No geo" summary card counting events with no MaxMind coordinates (private/localhost IPs — Docker, LAN). Surfaced via new `skipped_no_geo` field in `geo_data_endpoint` response.
+- **Path-sweep detector** (`PATH_SWEEP_ENABLED=1`, default on) — new module `detection/path_sweep.py`. Fires when an identity visits ≥ `PATH_SWEEP_THRESHOLD` (default 40) distinct non-static paths within a `PATH_SWEEP_WINDOW_SECS` (default 300 s) sliding window. Unlike `behavioral.py` (skipped for cookied sessions), this detector runs for **all** identities including valid-cookied ones — specifically to catch the warm-up bypass technique (AI agent acquires valid cookie with benign traffic, then sweeps paths in fresh sessions). Static assets excluded via extension list; admin namespace excluded via `ADMIN_NAMESPACE` prefix check. Risk signal: `path-sweep`.
+- **New config knobs** (path-sweep): `PATH_SWEEP_ENABLED`, `PATH_SWEEP_WINDOW_SECS`, `PATH_SWEEP_THRESHOLD`.
+- **`IpState.path_sweep_times`** — `deque(maxlen=500)` sliding window of `(monotonic_ts, path)` pairs in `state.py`.
+- **Geo "No geo" card** — `dashboards/geo.html` shows "No geo" summary card (private/localhost IPs with no MaxMind coordinates) via new `skipped_no_geo` field in `geo_data_endpoint`.
+- **P1 — Semantic honeypot credential injection** (`HONEY_CRED_ENABLED=1`, default on) — new module `detection/honey_cred.py`. Injects a realistic-looking HTML comment before `</body>` on every proxied HTML response: `<!-- internal_api_key = <key>  debug_endpoint = /antibot-appsec-gateway/probe?k=<key>  env = staging -->`. Key is HMAC-SHA256(SESSION_KEY, identity + hourly bucket)[:32], stored in-process with 2-hour TTL. New public endpoint `GET /antibot-appsec-gateway/probe?k=<key>`: if key matches a known honey credential, fires `honey-cred` signal (+90 risk) on the issuing identity and returns bland `{"status":"ok"}` (never reveals whether key was valid). Browsers never read HTML comments; AI agents extract them from source. Risk score 90 = near-instant ban on first probe.
+- **New config knobs** (honey-cred): `HONEY_CRED_ENABLED` (default `1`), `HONEY_CRED_SCORE` (default `90`).
+- **P2 — Risk-gated redirect maze** (`REDIRECT_MAZE_ENABLED=0`, default off) — new module `detection/redirect_maze.py`. For identities above `REDIRECT_MAZE_THRESHOLD` risk, serves a chain of HMAC-signed redirect steps before allowing through. Token format: `{step}.{ts_ms}.{hmac16}`, 30 s TTL per step. New public endpoint `GET /antibot-appsec-gateway/maze?t=TOKEN&d=DEST`: validates token, issues next redirect (or final dest after `REDIRECT_MAZE_DEPTH` steps). If all steps completed in < `REDIRECT_MAZE_MIN_MS` (default 800 ms) → fires `redirect-maze-bot` (+55 risk). Real browsers show human latency; automated agents complete all steps in milliseconds.
+- **New config knobs** (redirect maze): `REDIRECT_MAZE_ENABLED` (default `0`), `REDIRECT_MAZE_THRESHOLD` (default `20`), `REDIRECT_MAZE_DEPTH` (default `4`), `REDIRECT_MAZE_MIN_MS` (default `800`), `REDIRECT_MAZE_SCORE` (default `55`).
+- **P3 — LLM no-subresource heuristic** (`LLM_HEURISTIC_ENABLED=1`, default on) — new module `detection/llm_heuristic.py`. Real browsers load CSS, JS, images, and fonts alongside every HTML page. AI agents using `WebFetch` or similar tools fetch only the HTML document — no sub-resources ever follow. Tracks HTML vs sub-resource request ratio per identity in a rolling `deque(maxlen=256)` window. When an identity has fetched ≥ `LLM_HTML_MIN_COUNT` (default 5) HTML pages with sub-resource ratio ≤ `LLM_SUBRES_RATIO_THRESHOLD` (default 0.0 = zero sub-resources) within `LLM_HEURISTIC_WINDOW_SECS` (default 120 s) → fires `llm-no-subresources` (+40 risk). Cooldown prevents double-firing within the window.
+- **New config knobs** (LLM heuristic): `LLM_HEURISTIC_ENABLED` (default `1`), `LLM_HTML_MIN_COUNT` (default `5`), `LLM_SUBRES_RATIO_THRESHOLD` (default `0.0`), `LLM_HEURISTIC_WINDOW_SECS` (default `120`), `LLM_HEURISTIC_SCORE` (default `40`).
+- **P4 — Browser execution probe** (`CANARY_PROBE_ENABLED=1`, default on) — extended `detection/canary.py`. Injects `<link rel="preload" href="/antibot-appsec-gateway/canary-probe/{token}" as="fetch" crossorigin>` into every HTML `<head>`. Browsers automatically fetch preload hints in the background within milliseconds; AI agents only retrieve the HTML document. New public endpoint `GET /antibot-appsec-gateway/canary-probe/{token}`: marks identity as "browser-confirmed". `check_canary_probe()`: after ≥ `CANARY_PROBE_MIN_HTML` (default 3) HTML pages, if probe was never fetched within `CANARY_PROBE_TTL_SECS` (default 30 s) → fires `canary-probe-miss` (+35 risk). Confirmed identities are immune from this signal.
+- **New config knobs** (canary probe): `CANARY_PROBE_ENABLED` (default `1`), `CANARY_PROBE_TTL_SECS` (default `30`), `CANARY_PROBE_MIN_HTML` (default `3`), `CANARY_PROBE_SCORE` (default `35`).
+- **New risk signals** in scoring table: `honey-cred` (+90), `redirect-maze-bot` (+55), `llm-no-subresources` (+40), `canary-probe-miss` (+35).
+- **`path-sweep` + `honey-cred` in signal cost table** — `kind: state/in-process`, `typical: < 0.1 ms` (no I/O).
 
 ### Fixed
-- **Admin-path bypass scope too broad** — Global RPS limit and Method allowlist were exempt for ALL requests to admin-namespace paths regardless of source IP. Fixed: exemption now only applies when the request comes from an admin IP (`_admin_ip_allowed(request)` check added). Non-admin IPs hitting admin paths are now subject to rate limiting and method filtering.
-- **`geo_data_endpoint` stale `LIMIT 200000`** — `ORDER BY ts ASC LIMIT 200000` kept the oldest 200k events, discarding newer ones when volume exceeded the cap. Removed; query now returns all events in the window.
-- **`detection/path_sweep.py` added to `copy-to-github.sh` manifest** — previously the new module would have been omitted from GitHub pushes.
+- **Admin-path bypass scope too broad** — Global RPS limit and Method allowlist were exempt for ALL requests to admin-namespace paths regardless of source IP. Fixed: exemption now only applies when the request comes from an admin IP. Non-admin IPs hitting admin paths are now subject to rate limiting and method filtering.
+- **`geo_data_endpoint` stale `LIMIT 200000`** — removed `ORDER BY ts ASC LIMIT 200000`; query now returns all events in the window.
+- **`NameError: ip not defined` in proxy() HTML injection block** — caught during validation testing. `ip` is not in scope inside the forwarding function; fixed to use `get_ip(request)` via local `_gw_ip`.
+- **`JS_CHAL_REQUIRE_JA4` / `TURNSTILE_ENABLED` mutual exclusion** — 3-layer mutex: startup (config.py), DB-load (db/sqlite.py), hot-reload (proxy_handler.py config_endpoint). Prevents silent 403s on every Turnstile solve when `JS_CHAL_REQUIRE_JA4=true` is persisted in `config_kv` table while Turnstile is active (JA4 always absent behind Cloudflare CDN).
+- **Silent 403 on JA4-required path emitted no log** — added `slog("chal_ja4_required_missing", level="warn", ...)` before the 403 return in `js_challenge.py`.
+- **5 security findings from code review** — 1 MEDIUM (unbounded `_maze_timing` dict — added `_MAZE_TIMING_MAX=2048` + `_MAZE_STEPS_MAX=32` caps), 4 LOW (unbounded `_fired`/`_probe_confirmed` — eviction added; missing key/token length caps on public endpoints — 64/48 char limits added; dead duplicate HMAC call in `_verify_maze_token` — removed).
 
 ### Tests
-- **9 new unit tests** in `tests/test_path_sweep.py`: static-asset filtering, admin namespace exclusion (exact + subpath), threshold fire/no-fire, repeated-path deduplication, window expiry pruning, safe initial state.
-- **Totals**: 214 unit + 22 functional + 23 integration + 76 regression + 9 path_sweep = **344 tests**; all pass individually.
+- **37 new unit tests** in `tests/test_v173.py`: P1 honey_cred (10), P2 redirect_maze (7), P3 llm_heuristic (9), P4 canary_probe (11).
+- **9 new unit tests** in `tests/test_path_sweep.py` (path-sweep detector).
+- **4 new regression tests** in `tests/test_pure.py`: JA4/Turnstile mutex (startup, DB-load, hot-reload), JA4-required slog warning.
+- **Totals**: 205 unit + 22 functional + 1 integration + 116 regression = **344 tests**; all pass individually.
 
 ### Validation
-- Bandit: 0 High · 0 Critical · 12 Low (all B110, pre-existing FP).
-- Semgrep: 0 findings on `detection/path_sweep.py`.
-- Trivy: unchanged (no new dependencies).
+- Bandit: 0 High · 0 Critical · B110 Medium (confirmed FP — intentional try/except in `_evaluate_maze_timing`).
+- Semgrep: 0 findings on all 4 new detection modules.
+- Trivy: 0 Critical / 0 High / 0 Medium CVEs (all 3 arches).
+- Harbor: amd64 `sha256:fa265209…` · arm64 `sha256:70904630…` · armv7 `sha256:98a07abb…` · manifest `sha256:2203ce72…`.
+- Security review: 5 findings fixed before release.
+- See `validation/1.7.3.md` for full record.
 
 ---
 

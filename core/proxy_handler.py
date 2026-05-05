@@ -899,13 +899,15 @@ async def proxy(request: web.Request):
                     resp_body = inject_honey_creds(resp_body, _tk_html)
                     # 1.7.3 P4 — browser execution probe (preload link)
                     resp_body = inject_canary_probe(resp_body, _tk_html)
-                    # 1.7.3 P3 — LLM no-subresource heuristic: check after HTML
-                    _llm_delta = check_canary_probe(_tk_html, ip) if _tk_html else 0.0
-                    if _llm_delta:
-                        await update_risk_and_maybe_ban(_tk_html, "canary-probe-miss", ip)
-                    _llm_sig = _llm_heuristic.check(_tk_html, ip) if _tk_html else 0.0
-                    if _llm_sig:
-                        await update_risk_and_maybe_ban(_tk_html, "llm-no-subresources", ip)
+                    # 1.7.3 P3/P4 — check after HTML response; use gw_ip (ip not in scope here)
+                    if _tk_html:
+                        _gw_ip = get_ip(request)
+                        _probe_delta = check_canary_probe(_tk_html, _gw_ip)
+                        if _probe_delta:
+                            await update_risk_and_maybe_ban(_tk_html, "canary-probe-miss", _gw_ip)
+                        _llm_sig = _llm_heuristic.check(_tk_html, _gw_ip)
+                        if _llm_sig:
+                            await update_risk_and_maybe_ban(_tk_html, "llm-no-subresources", _gw_ip)
 
                 # 1.6.10 — JSON API canary: inject a "_ref" token into JSON
                 # object responses. LLM agents that cache and replay API
@@ -3035,7 +3037,8 @@ async def honey_probe_endpoint(request: web.Request):
     browsers don't read HTML comments."""
     ip = get_ip(request)
     key = request.rel_url.query.get("k", "")
-    if key:
+    # Cap key length before dict lookup to prevent hash-cost DoS on public endpoint
+    if key and len(key) <= 64:
         honey_identity = lookup_honey_key(key)
         if honey_identity:
             await update_risk_and_maybe_ban(honey_identity, "honey-cred", ip)
