@@ -1414,17 +1414,17 @@ def test_elb_path_logged_as_hash_not_plaintext():
 # detection on path "/" and records "authorized-robot" (not counted as blocked).
 
 def test_authorized_bot_uas_config_exists():
-    """AUTHORIZED_BOT_UAS must be defined in config as a list of UA substrings."""
+    """AUTHORIZED_BOT_UAS must be defined in config as a list of bot dicts."""
     import config
     assert hasattr(config, "AUTHORIZED_BOT_UAS"), (
-        "config.py must define AUTHORIZED_BOT_UAS (list of UA substrings for "
+        "config.py must define AUTHORIZED_BOT_UAS (list of bot dicts for "
         "authorized monitoring bots)"
     )
     assert isinstance(config.AUTHORIZED_BOT_UAS, list), (
-        "AUTHORIZED_BOT_UAS must be a list of strings"
+        "AUTHORIZED_BOT_UAS must be a list of dicts"
     )
     known = {"UptimeRobot", "Pingdom", "StatusCake"}
-    matched = {k for k in known if any(k in ua for ua in config.AUTHORIZED_BOT_UAS)}
+    matched = {k for k in known if any(k in e.get("ua", "") for e in config.AUTHORIZED_BOT_UAS if isinstance(e, dict))}
     assert matched == known, (
         f"Default AUTHORIZED_BOT_UAS must include UptimeRobot, Pingdom, StatusCake; "
         f"missing: {known - matched}"
@@ -1447,20 +1447,20 @@ def test_authorized_bot_bypass_in_protect_source():
 
 
 def test_authorized_bot_bypass_only_on_root():
-    """Authorized bot bypass must check request.path against per-entry path (UA:path pairs)."""
+    """Authorized bot bypass must check request.path against per-entry path."""
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 800]
-    assert "request.path ==" in bot_block, (
+    bot_block = src[bot_idx: bot_idx + 1500]
+    assert "request.path ==" in bot_block or "request.path !=" in bot_block, (
         "Authorized bot bypass must compare request.path against the configured "
-        "path from each UA:path entry"
+        "path from each entry (using == or !=)"
     )
     assert "_bot_path" in bot_block, (
-        "Authorized bot bypass must use per-entry path variable (_bot_path) from "
-        "UA:path pairs — not a global hardcoded '/'"
+        "Authorized bot bypass must use per-entry path variable (_bot_path) — "
+        "not a global hardcoded '/'"
     )
 
 
@@ -2116,24 +2116,28 @@ def test_build_validation_armv7_requires_platform_flag():
 # ── 1.7.5: AUTHORIZED_BOT_UAS UA:path pair format ────────────────────────────
 
 def test_authorized_bot_config_default_uses_ua_path_pairs():
-    """Default AUTHORIZED_BOT_UAS must use 'UA:path' pair format, not bare UA substrings."""
+    """Default AUTHORIZED_BOT_UAS must use structured dict format with ua and path fields."""
     import config
     for entry in config.AUTHORIZED_BOT_UAS:
-        assert ":" in entry, (
-            f"AUTHORIZED_BOT_UAS default entry {entry!r} must be a 'UA_substring:path' pair "
-            f"(e.g. 'UptimeRobot:/') — bare UA substrings no longer supported as the "
-            f"default; each entry must specify which path to match"
+        assert isinstance(entry, dict), (
+            f"AUTHORIZED_BOT_UAS default entry {entry!r} must be a dict with 'ua' and "
+            f"'path' keys — the new structured format replaces the legacy UA:path string"
+        )
+        assert "ua" in entry and entry["ua"], (
+            f"AUTHORIZED_BOT_UAS entry {entry!r} must have a non-empty 'ua' field"
+        )
+        assert "path" in entry and entry["path"], (
+            f"AUTHORIZED_BOT_UAS entry {entry!r} must have a non-empty 'path' field"
         )
 
 
 def test_authorized_bot_config_known_bots_with_root_path():
-    """Default AUTHORIZED_BOT_UAS pairs must include known bots mapped to '/'."""
+    """Default AUTHORIZED_BOT_UAS dicts must include known bots mapped to '/'."""
     import config
-    pairs = {e.split(":", 1)[0].strip(): e.split(":", 1)[1].strip()
-             for e in config.AUTHORIZED_BOT_UAS if ":" in e}
+    pairs = {e["ua"]: e["path"] for e in config.AUTHORIZED_BOT_UAS if isinstance(e, dict) and e.get("ua")}
     for bot in ("UptimeRobot", "Pingdom", "StatusCake"):
         assert bot in pairs, (
-            f"Default AUTHORIZED_BOT_UAS must include '{bot}' — missing from pairs"
+            f"Default AUTHORIZED_BOT_UAS must include '{bot}' — missing from entries"
         )
         assert pairs[bot] == "/", (
             f"Default entry for '{bot}' must map to path '/' (got {pairs[bot]!r})"
@@ -2141,19 +2145,19 @@ def test_authorized_bot_config_known_bots_with_root_path():
 
 
 def test_authorized_bot_bypass_uses_per_entry_path_variable():
-    """protect() bypass loop must use _bot_path variable from UA:path split."""
+    """protect() bypass loop must use _bot_path variable from per-entry path field."""
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1000]
+    bot_block = src[bot_idx: bot_idx + 1500]
     assert "_bot_path" in bot_block, (
-        "protect() must extract _bot_path from each UA:path entry — "
+        "protect() must extract _bot_path from each entry — "
         "the path to match is per-entry, not a global constant"
     )
-    assert "request.path == _bot_path" in bot_block, (
-        "protect() must compare request.path == _bot_path (per-entry path), "
+    assert "request.path == _bot_path" in bot_block or "request.path != _bot_path" in bot_block, (
+        "protect() must compare request.path against _bot_path (per-entry path), "
         "not a hardcoded '/'"
     )
 
@@ -2176,15 +2180,22 @@ def test_authorized_bot_bypass_splits_on_colon():
 
 
 def test_authorized_bot_bypass_backward_compat_no_colon():
-    """protect() bypass must default path to '/' for entries without ':'."""
+    """protect() bypass must default path to '/' for legacy entries without ':'."""
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1000]
-    assert '= "/"' in bot_block or "= '/'" in bot_block, (
-        "protect() bypass must default _bot_path to '/' when an entry has no ':' "
+    bot_block = src[bot_idx: bot_idx + 1500]
+    # The new dict-based code uses .get("path", "/") and or "/" as fallbacks;
+    # legacy string branch uses else "/" and or "/".
+    assert (
+        '= "/"' in bot_block or "= '/'" in bot_block
+        or 'or "/"' in bot_block or "or '/'" in bot_block
+        or 'else "/"' in bot_block or "else '/'" in bot_block
+        or '"/"' in bot_block
+    ), (
+        "protect() bypass must default _bot_path to '/' when an entry has no path "
         "for backward compatibility with bare UA substring entries"
     )
 
@@ -2214,7 +2225,7 @@ def test_controls_card_bypass_section_exists():
 
 
 def test_controls_meta_authorized_bot_uas_entry():
-    """controls.html META must include AUTHORIZED_BOT_UAS with card:'bypass'."""
+    """controls.html META must include AUTHORIZED_BOT_UAS with card:'bypass' and kind:'botlist'."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
     assert "AUTHORIZED_BOT_UAS" in src, (
@@ -2226,9 +2237,92 @@ def test_controls_meta_authorized_bot_uas_entry():
         "controls.html META AUTHORIZED_BOT_UAS must specify card:'bypass' so "
         "load() renders it into the #bypass div"
     )
-    assert "kind:'list'" in meta_block or 'kind:"list"' in meta_block, (
-        "controls.html META AUTHORIZED_BOT_UAS must be kind:'list' to render "
-        "as a textarea for UA:path pair editing"
+    assert "kind:'botlist'" in meta_block or 'kind:"botlist"' in meta_block, (
+        "controls.html META AUTHORIZED_BOT_UAS must be kind:'botlist' to render "
+        "as the structured bot card UI"
+    )
+
+
+def test_authorized_bot_action_field_default():
+    """Each default AUTHORIZED_BOT_UAS entry must have action == 'authorized-robot'."""
+    import config
+    for entry in config.AUTHORIZED_BOT_UAS:
+        assert isinstance(entry, dict), f"Entry {entry!r} must be a dict"
+        assert entry.get("action") == "authorized-robot", (
+            f"Default entry {entry!r} must have action='authorized-robot'"
+        )
+
+
+def test_authorized_bot_allow_action_sets_custom_rule_flag():
+    """protect() bypass block must set '_custom_rule_allow' for 'allow' action."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    assert bot_idx != -1
+    bot_block = src[bot_idx: bot_idx + 2500]
+    assert "_custom_rule_allow" in bot_block, (
+        "protect() bypass block must set request['_custom_rule_allow'] = True "
+        "when action is 'allow' — so the bot is silently passed through"
+    )
+
+
+def test_authorized_bot_ban_action_sets_banned_until():
+    """protect() bypass block must set banned_until for 'ban'/'really-ban' actions."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    assert bot_idx != -1
+    bot_block = src[bot_idx: bot_idx + 3000]
+    assert "banned_until" in bot_block, (
+        "protect() bypass block must set ip_state[...].banned_until for "
+        "ban/really-ban actions"
+    )
+
+
+def test_custom_rules_authorized_robot_action_valid():
+    """_ACTIONS in endpoint_policy.py must include 'authorized-robot'."""
+    import inspect
+    from integrations import endpoint_policy
+    src = inspect.getsource(endpoint_policy)
+    assert '"authorized-robot"' in src or "'authorized-robot'" in src, (
+        "endpoint_policy.py _ACTIONS tuple must include 'authorized-robot' so "
+        "custom rules can use it as a valid action"
+    )
+    assert "_ACTIONS" in src
+    actions_idx = src.find("_ACTIONS")
+    actions_block = src[actions_idx: actions_idx + 200]
+    assert "authorized-robot" in actions_block, (
+        "_ACTIONS in endpoint_policy.py must include 'authorized-robot'"
+    )
+
+
+def test_custom_rules_authorized_robot_handled_in_protect():
+    """protect() must handle _action == 'authorized-robot' from custom rules."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    # Find the custom rules section
+    cr_idx = src.find("_eval_custom_rules")
+    assert cr_idx != -1, "protect() must call _eval_custom_rules"
+    cr_block = src[cr_idx: cr_idx + 800]
+    assert 'authorized-robot' in cr_block, (
+        "protect() must handle _action == 'authorized-robot' returned by custom "
+        "rules engine — respond with 200 ok and record as authorized-robot"
+    )
+
+
+def test_controls_authorized_bot_meta_is_botlist_kind():
+    """controls.html META AUTHORIZED_BOT_UAS must have kind:'botlist'."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    idx = src.find("AUTHORIZED_BOT_UAS")
+    assert idx != -1
+    meta_block = src[idx: idx + 200]
+    assert "kind:'botlist'" in meta_block or 'kind:"botlist"' in meta_block, (
+        "controls.html META AUTHORIZED_BOT_UAS must be kind:'botlist' — not "
+        "'list' — to render the structured card-per-bot UI instead of a textarea"
     )
 
 

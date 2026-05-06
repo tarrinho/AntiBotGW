@@ -228,14 +228,13 @@ async def on_startup(app):
     # 1.6.10 — load per-gateway signal activation-order overrides from DB.
     _load_signal_order_cache()
     db_queue = asyncio.Queue(maxsize=10000)
-    # All submodules did `from state import *` which cached db_queue=None at
-    # import time.  Push the live Queue into every loaded module that still
-    # holds the None sentinel so their `if db_queue is not None:` guards work.
+    # Push the live Queue into every loaded module that has a db_queue
+    # attribute (submodules did `from state import *` which cached
+    # db_queue=None at import time; in tests on_startup is called multiple
+    # times so we propagate unconditionally, not just when value is None).
     import sys as _sys
     for _m in list(_sys.modules.values()):
-        if (_m is not None
-                and hasattr(_m, 'db_queue')
-                and getattr(_m, 'db_queue') is None):
+        if _m is not None and hasattr(_m, 'db_queue'):
             try:
                 setattr(_m, 'db_queue', db_queue)
             except (AttributeError, TypeError):

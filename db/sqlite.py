@@ -629,6 +629,8 @@ async def db_writer_loop():
                 except Exception as e:
                     print(f"[db] write failed: {e} args={args!r}")
             conn.commit()
+            for _ in batch:
+                _state.db_queue.task_done()
 
             # Truncate the WAL on a timer so it doesn't accumulate between
             # auto-checkpoints. PASSIVE first (no locking); only TRUNCATE if
