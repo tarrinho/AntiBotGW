@@ -145,6 +145,29 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .kind-legend{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center}
 .kind-legend .lbl{font-size:10px;color:var(--dim);margin-right:4px}
 
+/* Master bypass bar */
+#bypass-bar{display:flex;align-items:center;gap:10px;padding:10px 16px;margin-bottom:14px;
+  border-radius:8px;border:1px solid var(--line);background:var(--card);transition:border-color .2s,background .2s}
+#bypass-bar.bypass-on{border-color:var(--red);background:rgba(248,81,73,.07)}
+.bypass-sw{width:48px;height:26px;background:#30363d;border-radius:13px;cursor:pointer;
+  position:relative;transition:background .15s;flex-shrink:0}
+.bypass-sw::after{content:'';position:absolute;top:3px;left:3px;width:20px;height:20px;
+  border-radius:50%;background:#fff;transition:left .15s}
+.bypass-sw.on{background:var(--red)}
+.bypass-sw.on::after{left:25px}
+#bypass-label{font-size:13px;font-weight:700;color:var(--fg)}
+#bypass-desc{font-size:11.5px;color:var(--dim)}
+#bypass-warn{font-size:12px;font-weight:700;color:var(--red);margin-left:auto;display:none}
+#bypass-bar.bypass-on #bypass-warn{display:block}
+#bypass-bar.bypass-on #bypass-label{color:var(--red)}
+
+/* Card collapse toggles */
+.card>h2{cursor:pointer;user-select:none;display:flex;align-items:center}
+.cc-chevron{margin-left:auto;font-size:9px;color:var(--dim);display:inline-block;
+  transition:transform .15s;flex-shrink:0;padding-left:8px}
+.card.cc-collapsed>h2 .cc-chevron{transform:rotate(-90deg)}
+.card.cc-collapsed>*:not(h2){display:none !important}
+
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
@@ -320,6 +343,12 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <main>
+  <div id="bypass-bar">
+    <div class="bypass-sw" id="bypass-sw" title="Toggle pass-through bypass mode"></div>
+    <span id="bypass-label">Bot Detection</span>
+    <span id="bypass-desc">— click to disable all controls (pass-through mode)</span>
+    <span id="bypass-warn">⚠ BYPASS ACTIVE — no bot protection running</span>
+  </div>
   <div class="banner">
     Edit a value to flag it dirty (orange dot). Click <b>Apply changes</b> to
     push the diff to <code>POST /antibot-appsec-gateway/secured/config</code>. Every applied change is
@@ -459,7 +488,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     </table>
   </section>
 
-  <section class="card">
+  <section class="card" id="card-unban">
     <h2>Unban an identity / IP</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="unban-target" type="text" placeholder="track-key or IP"
@@ -509,7 +538,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <span class="hint" id="hint">No pending changes.</span>
   </div>
 
-  <section class="card" style="margin-top:20px">
+  <section class="card" id="card-admin-ip" style="margin-top:20px">
     <h2>Admin IP allowlist</h2>
     <div class="hint" style="margin-bottom:8px">
       Source IPs allowed to reach <code>/__*</code> endpoints. The admin
@@ -572,7 +601,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     </table>
   </section>
 
-  <section class="card" style="margin-top:20px">
+  <section class="card" id="card-audit-log" style="margin-top:20px">
     <h2>Recent <code>config_changed</code> events</h2>
     <div class="audit" id="audit">loading…</div>
   </section>
@@ -3105,6 +3134,137 @@ function openBanDetails(b){
   __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
 }
 window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
+
+// ── Master bypass switch ─────────────────────────────────────────────────────
+(function(){
+  const _BYPASS_ACTIVE_KEY  = 'agw_bypass_active';
+  const _BYPASS_SNAP_KEY    = 'agw_bypass_snapshot';
+  const sw = document.getElementById('bypass-sw');
+  const bar = document.getElementById('bypass-bar');
+
+  function _boolKnobs(){
+    // All META bool knobs that exist in serverState
+    return Object.entries(META)
+      .filter(([,m]) => m.kind === 'bool')
+      .map(([n]) => n)
+      .filter(n => n in serverState);
+  }
+
+  function _setBypassUI(active){
+    sw.classList.toggle('on', active);
+    bar.classList.toggle('bypass-on', active);
+    document.getElementById('bypass-desc').textContent = active
+      ? '— all detection controls disabled'
+      : '— click to disable all controls (pass-through mode)';
+  }
+
+  async function _activateBypass(){
+    const knobs = _boolKnobs();
+    if (!knobs.length){ showToast('No bool controls in state — load config first', 'err'); return; }
+
+    // Save current bool state snapshot
+    const snap = {};
+    knobs.forEach(n => { snap[n] = serverState[n]; });
+    localStorage.setItem(_BYPASS_SNAP_KEY, JSON.stringify(snap));
+
+    // Build payload: all false
+    const payload = {};
+    knobs.forEach(n => { payload[n] = false; });
+
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         credentials:'include', body: JSON.stringify(payload)});
+      if (!r.ok){ showToast('Bypass failed: server ' + r.status, 'err'); return; }
+      const d = await r.json();
+      const n = d.applied ? Object.keys(d.applied).length : 0;
+      localStorage.setItem(_BYPASS_ACTIVE_KEY, '1');
+      serverState = d.state || serverState;
+      _setBypassUI(true);
+      showToast('Bypass ON — ' + n + ' control(s) disabled', 'err');
+      if (typeof loadScoring === 'function') loadScoring();
+      if (typeof loadExternal === 'function') loadExternal();
+    } catch(e){
+      showToast('Bypass error: ' + e.message, 'err');
+    }
+  }
+
+  async function _deactivateBypass(){
+    let snap = {};
+    try { snap = JSON.parse(localStorage.getItem(_BYPASS_SNAP_KEY) || '{}'); } catch(_){}
+
+    if (!Object.keys(snap).length){
+      // No snapshot — just clear the flag and reload
+      localStorage.removeItem(_BYPASS_ACTIVE_KEY);
+      _setBypassUI(false);
+      showToast('Bypass OFF (no snapshot — manual restore may be needed)', 'ok');
+      return;
+    }
+
+    try {
+      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+        {method:'POST', headers:{'Content-Type':'application/json'},
+         credentials:'include', body: JSON.stringify(snap)});
+      if (!r.ok){ showToast('Restore failed: server ' + r.status, 'err'); return; }
+      const d = await r.json();
+      const n = d.applied ? Object.keys(d.applied).length : 0;
+      localStorage.removeItem(_BYPASS_ACTIVE_KEY);
+      localStorage.removeItem(_BYPASS_SNAP_KEY);
+      serverState = d.state || serverState;
+      _setBypassUI(false);
+      showToast('Bypass OFF — ' + n + ' control(s) restored', 'ok');
+      if (typeof loadScoring === 'function') loadScoring();
+      if (typeof loadExternal === 'function') loadExternal();
+    } catch(e){
+      showToast('Restore error: ' + e.message, 'err');
+    }
+  }
+
+  sw.onclick = async () => {
+    const active = sw.classList.contains('on');
+    if (!active) {
+      if (!confirm('Disable ALL bot detection controls?\n\nAll bool toggles will be set to OFF. Current state will be saved and can be restored by toggling bypass back OFF.')) return;
+      await _activateBypass();
+    } else {
+      await _deactivateBypass();
+    }
+  };
+
+  // Restore bypass visual state on page load (actual knob state comes from server)
+  if (localStorage.getItem(_BYPASS_ACTIVE_KEY) === '1') {
+    _setBypassUI(true);
+  }
+})();
+
+// ── Card collapse toggles ────────────────────────────────────────────────────
+(function(){
+  const _CC_PREFIX = 'agw_cc_';
+  document.querySelectorAll('.card').forEach(card => {
+    const h2 = card.querySelector(':scope > h2');
+    if (!h2) return;
+    const id = card.id || ('card-' + h2.textContent.trim().slice(0,20).replace(/[^a-z0-9]/gi,'_').toLowerCase());
+
+    // Add chevron
+    const chev = document.createElement('span');
+    chev.className = 'cc-chevron';
+    chev.textContent = '▼';
+    h2.appendChild(chev);
+
+    // Restore collapse state
+    if (localStorage.getItem(_CC_PREFIX + id) === '1') {
+      card.classList.add('cc-collapsed');
+    }
+
+    h2.addEventListener('click', (ev) => {
+      // Don't collapse when clicking interactive children inside h2
+      if (ev.target.closest('select,input,button,a,.switch')) return;
+      card.classList.toggle('cc-collapsed');
+      const collapsed = card.classList.contains('cc-collapsed');
+      if (collapsed) localStorage.setItem(_CC_PREFIX + id, '1');
+      else           localStorage.removeItem(_CC_PREFIX + id);
+    });
+  });
+})();
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
