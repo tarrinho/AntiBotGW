@@ -789,11 +789,26 @@ function _renderClean(list){
       <td>${_actionBtns(e.ip)}</td>
     </tr>`).join('') + '</tbody></table>';
 }
+function _renderAuthBots(list){
+  if (!list.length) return '<div class="empty">no entries</div>';
+  return `<table style="width:100%"><thead><tr>
+      <th style="text-align:left">Identity</th><th style="text-align:left">IP</th><th>Hits</th>
+      <th style="text-align:left">UA</th><th style="text-align:left">Last path</th><th>Actions</th>
+    </tr></thead><tbody>` +
+    list.map(e => `<tr>
+      <td>${_identCell(e.identities)}</td>
+      <td>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</td>
+      <td style="color:#bc8cff;font-weight:600;text-align:right">${e.count}</td>
+      <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
+      <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+      <td>${_actionBtns(e.ip)}</td>
+    </tr>`).join('') + '</tbody></table>';
+}
 
 async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
   const t      = bucketEntry.t;
-  // datasetIndex: 0=detected, 1=missed, 2=clean.  Highlight that section.
-  const focusKind = ['detected','missed','clean'][datasetIndex] || null;
+  // datasetIndex: 0=detected, 1=missed, 2=clean, 3=authorized_robot.  Highlight that section.
+  const focusKind = ['detected','missed','clean','authorized_robot'][datasetIndex] || null;
   const params = new URLSearchParams({ t, bucket_secs: bucketSecs, min_score: MIN });
   let d = {};
   try {
@@ -810,11 +825,12 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
     return;
   }
   const fmt = epoch => new Date(epoch*1000).toLocaleString();
-  // Render order: focused first, then the other two.
+  // Render order: focused first, then the others.
   const sections = [
-    {kind:'detected', label:'BLOCKED (detected)',  color:'var(--red)',                 list:d.detected||[], render:_renderDetected},
-    {kind:'missed',   label:'MISSED (medium risk)', color:'var(--orange,#ff7b3a)',     list:d.missed  ||[], render:_renderMissed},
-    {kind:'clean',    label:'CLEAN (allowed)',      color:'var(--green)',              list:d.clean   ||[], render:_renderClean},
+    {kind:'detected',         label:'BLOCKED (detected)',  color:'var(--red)',          list:d.detected        ||[], render:_renderDetected},
+    {kind:'missed',           label:'MISSED (medium risk)', color:'var(--orange,#ff7b3a)', list:d.missed       ||[], render:_renderMissed},
+    {kind:'clean',            label:'CLEAN (allowed)',     color:'var(--green)',         list:d.clean           ||[], render:_renderClean},
+    {kind:'authorized_robot', label:'AUTHORIZED BOTS',    color:'#bc8cff',              list:d.authorized_robot||[], render:_renderAuthBots},
   ];
   if (focusKind){
     sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
@@ -831,7 +847,7 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
   }).join('');
   POP.style.maxWidth = '900px'; POP.style.maxHeight = '85vh'; POP.style.overflowY = 'auto';
   document.getElementById('pop-title').innerHTML =
-    `Bucket · ${fmt(t)} +${bucketSecs}s · ${(d.detected||[]).length}+${(d.missed||[]).length}+${(d.clean||[]).length} entries
+    `Bucket · ${fmt(t)} +${bucketSecs}s · ${(d.detected||[]).length}+${(d.missed||[]).length}+${(d.clean||[]).length}+${(d.authorized_robot||[]).length} entries
      <span class="x" id="pop-close">×</span>`;
   document.getElementById('pop-close').onclick = closePopover;
   const popBody = document.getElementById('pop-body');
