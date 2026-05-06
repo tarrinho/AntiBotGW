@@ -1086,6 +1086,21 @@ def test_no_local_eschtml_alias(fname):
         "All dashboards must use the single canonical escapeHtml at global scope."
     )
 
+@_pytest.mark.parametrize("fname", _DASHBOARD_FILES)
+def test_no_eschtml_calls(fname):
+    """No dashboard may call the undefined escHtml() — only escapeHtml() is defined.
+
+    Regression for logs.html bug where 5 call-sites used escHtml() (undefined),
+    causing ReferenceError at runtime in the health-score pill modal and account modal.
+    """
+    src = _read_dash(fname)
+    # Match calls like escHtml(, escHtml2( — but not definitions (already covered above)
+    calls = _re.findall(r'\bescHtml\s*\(', src)
+    assert not calls, (
+        f"{fname}: found {len(calls)} call(s) to undefined escHtml(): {calls}. "
+        "Use the canonical escapeHtml() function defined at global script scope."
+    )
+
 @_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
                                      'controls.html','geo.html','logs.html','settings.html'])
 def test_single_escapehtmlt_definition(fname):
@@ -1377,3 +1392,27 @@ def test_elb_path_logged_as_hash_not_plaintext():
         "logging the plaintext path leaks the secret value to log aggregators"
     )
 
+
+
+def test_log_level_n_propagated_on_hot_reload():
+    """LOG_LEVEL hot-reload must also update _LOG_LEVEL_N in all modules.
+
+    Regression: config_endpoint propagated LOG_LEVEL string to all modules via
+    the generic setattr loop, but _LOG_LEVEL_N (the numeric sentinel used by
+    slog() for level filtering) is not in _HOT_RELOAD_KNOBS and was not updated.
+    Result: slog() kept filtering at the original startup level regardless of
+    the dashboard log-level change.
+    Fix: config_endpoint explicitly propagates _LOG_LEVEL_N after LOG_LEVEL changes.
+    """
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.config_endpoint)
+    assert "_LOG_LEVEL_N" in src, (
+        "config_endpoint must explicitly propagate _LOG_LEVEL_N when LOG_LEVEL "
+        "is hot-reloaded — the generic knob loop only updates the string value, "
+        "but slog() uses the derived numeric sentinel for level filtering."
+    )
+    assert "_LOG_LEVELS.get(value" in src or "_LOG_LEVELS.get(" in src, (
+        "config_endpoint must recompute _LOG_LEVEL_N from _LOG_LEVELS dict "
+        "after a LOG_LEVEL hot-reload, not hard-code a default value."
+    )
