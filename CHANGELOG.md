@@ -11,8 +11,11 @@ Author: Pedro Tarrinho
 ### Added
 - **Authorized bots shown in purple on all traffic graphs** (`dashboards/main.html`, `dashboards/agents.html`, `dashboards/geo.html`, `core/proxy_handler.py`, `dashboards/agents.py`) — monitoring bots that are explicitly authorized (reason `authorized-robot`) were previously invisible on the time-series charts and geo map, or incorrectly counted as "blocked". They are now tracked as a distinct fifth dataset (purple, `#bc8cff`, dashed line) on the main dashboard traffic chart and the agents chart, and rendered as purple circles on the geo map with a separate legend entry. Backend changes: `metrics_endpoint` timeline now extracts `authorized_robot` from each bucket's `by_reason` (in-memory `defaultdict` or DB JSON column); `agents_timeline_endpoint` gains a dedicated SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies `authorized-robot` events as `kind='authorized_robot'` instead of `'blocked'` so they no longer inflate blocked counts on the map. Scrubber playback also tracks the new kind via `ar` counter in bucket points.
 
+### Fixed
+- **armv7 image built with wrong architecture** — `docker build -f Dockerfile.armv7` on an arm64 host without `--platform linux/arm/v7` silently produces an arm64 image tagged as `-armv7`. The container fails with exit code 159 on the target armv7 device ("platform linux/arm64 does not match detected host platform linux/arm/v8"). Fix: always pass `--platform linux/arm/v7` for armv7 builds.
+
 ### Tests
-- Added regression tests for 1.7.5 features: `test_main_authorized_bots_purple_dataset`, `test_agents_authorized_bots_purple_dataset`, `test_geo_authorized_bot_legend`, `test_geo_authorized_bot_circle_renders`, `test_geo_authorized_bot_scrubber_ar_counter`, `test_metrics_timeline_has_authorized_robot_field`, `test_agents_timeline_has_authorized_robot_query`, `test_geo_authorized_robot_kind_in_geo_data_endpoint`.
+- Added regression tests for 1.7.5 features: `test_main_authorized_bots_purple_dataset`, `test_agents_authorized_bots_purple_dataset`, `test_geo_authorized_bot_legend`, `test_geo_authorized_bot_circle_renders`, `test_geo_authorized_bot_scrubber_ar_counter`, `test_metrics_timeline_has_authorized_robot_field`, `test_agents_timeline_has_authorized_robot_query`, `test_geo_authorized_robot_kind_in_geo_data_endpoint`, `test_build_validation_armv7_requires_platform_flag`.
 
 ---
 

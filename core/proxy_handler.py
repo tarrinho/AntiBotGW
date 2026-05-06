@@ -4660,8 +4660,8 @@ async def geo_data_endpoint(request: web.Request):
         # 1.6.4 — global ASN totals (top providers per range)
         org = (flags.get("asn_org") or "").strip()
         if org:
-            asn_totals.setdefault(org, {"clean": 0, "blocked": 0})
-            asn_totals[org][kind] += 1
+            asn_totals.setdefault(org, {"clean": 0, "blocked": 0, "authorized_robot": 0})
+            asn_totals[org][kind] = asn_totals[org].get(kind, 0) + 1
         # Sample for time-scrubber playback (cap at 5000 events)
         if len(events_sample) < 5000:
             events_sample.append([float(r["ts"]), lat, lng, kind])
@@ -5309,6 +5309,29 @@ async def agents_bucket_detail_endpoint(request: web.Request):
     except Exception as e:
         return web.json_response({"error": f"db: {e}"}, status=500)
 
+    # authorized-robot events (passthrough bots, not blocked, not clean)
+    auth_robot_set = {}
+    try:
+        conn2 = sqlite3.connect(DB_PATH)
+        conn2.row_factory = sqlite3.Row
+        for r in conn2.execute(
+            "SELECT ip, ua, path FROM events "
+            "WHERE ts >= ? AND ts < ? AND reason='authorized-robot' LIMIT 20000",
+            (t, end),
+        ):
+            ip = r["ip"] or "?"
+            entry = auth_robot_set.setdefault(ip, {
+                "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "is_admin_ip": _is_admin_ip(ip),
+                "last_path": r["path"] or "",
+                "identities": ip_to_idents.get(ip, []),
+            })
+            entry["count"] += 1
+            entry["last_path"] = r["path"] or entry["last_path"]
+        conn2.close()
+    except Exception:
+        pass
+
     # `missed` IPs = currently have stealth_score >= MIN and were last_seen
     # inside this bucket window. Best-effort using live state.
     missed_list = []
@@ -5337,11 +5360,12 @@ async def agents_bucket_detail_endpoint(request: web.Request):
                 })
 
     payload = {
-        "bucket_t":     t,
-        "bucket_secs":  bucket,
-        "detected":     sorted(detected_set.values(), key=lambda r: r["count"], reverse=True)[:500],
-        "missed":       sorted(missed_list,           key=lambda r: r["stealth_score"], reverse=True)[:500],
-        "clean":        sorted(clean_set.values(),    key=lambda r: r["count"], reverse=True)[:500],
+        "bucket_t":         t,
+        "bucket_secs":      bucket,
+        "detected":         sorted(detected_set.values(),    key=lambda r: r["count"], reverse=True)[:500],
+        "missed":           sorted(missed_list,              key=lambda r: r["stealth_score"], reverse=True)[:500],
+        "clean":            sorted(clean_set.values(),       key=lambda r: r["count"], reverse=True)[:500],
+        "authorized_robot": sorted(auth_robot_set.values(),  key=lambda r: r["count"], reverse=True)[:500],
     }
     if kind in ("detected","missed","clean"):
         payload["only"] = kind

@@ -2090,6 +2090,29 @@ def test_geo_authorized_robot_kind_in_geo_data_endpoint():
     )
 
 
+def test_build_validation_armv7_requires_platform_flag():
+    """BUILD_VALIDATION: armv7 image must be built with --platform linux/arm/v7.
+    Without this flag, a build on an arm64 host produces an arm64 image tagged
+    as armv7 — the container will fail with exit code 159 on the armv7 device.
+    This is a documentation/procedure test — it checks that rules.md or
+    BUILD_VALIDATION.md documents the --platform flag for armv7 builds."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    # Check rules.md or any validation/build doc mentions --platform for armv7
+    candidates = ["rules.md", "BUILD_VALIDATION.md"]
+    found = False
+    for name in candidates:
+        p = root / name
+        if p.exists() and "--platform linux/arm/v7" in p.read_text():
+            found = True
+            break
+    assert found, (
+        "rules.md or BUILD_VALIDATION.md must document '--platform linux/arm/v7' "
+        "for armv7 builds — omitting this flag on an arm64 host produces an arm64 "
+        "image tagged as armv7, which fails with exit code 159 on the target device."
+    )
+
+
 # ── 1.7.5: AUTHORIZED_BOT_UAS UA:path pair format ────────────────────────────
 
 def test_authorized_bot_config_default_uses_ua_path_pairs():
@@ -2209,6 +2232,106 @@ def test_controls_meta_authorized_bot_uas_entry():
     )
 
 
+def test_main_bucket_modal_focuskind_has_authorized_robot():
+    """openMainBucketDetail focusKind array must include 'authorized_robot' at index 4."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    fn_start = src.find("window.openMainBucketDetail")
+    assert fn_start != -1, "main.html must define openMainBucketDetail"
+    fn_section = src[fn_start: fn_start + 400]
+    assert "'authorized_robot'" in fn_section or '"authorized_robot"' in fn_section, (
+        "openMainBucketDetail focusKind array must include 'authorized_robot' (dataset index 4)"
+    )
+
+
+def test_main_bucket_modal_has_authorized_bots_section():
+    """openMainBucketDetail sections array must include authorized_robot kind with purple label."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    fn_start = src.find("window.openMainBucketDetail")
+    assert fn_start != -1, "main.html must define openMainBucketDetail"
+    fn_section = src[fn_start: fn_start + 6500]
+    assert "authorized_robot" in fn_section, (
+        "openMainBucketDetail sections must include authorized_robot kind"
+    )
+    assert "AUTHORIZED BOTS" in fn_section, (
+        "openMainBucketDetail sections must include 'AUTHORIZED BOTS' label"
+    )
+    assert "#bc8cff" in fn_section, (
+        "openMainBucketDetail authorized bots section must use purple color #bc8cff"
+    )
+
+
+def test_main_bucket_modal_renders_authorized_robot_from_response():
+    """openMainBucketDetail must read d.authorized_robot from the API response."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    fn_start = src.find("window.openMainBucketDetail")
+    assert fn_start != -1
+    fn_section = src[fn_start: fn_start + 6500]
+    assert "d.authorized_robot" in fn_section, (
+        "openMainBucketDetail must read d.authorized_robot from the agents-bucket response"
+    )
+
+
+def test_agents_bucket_modal_focuskind_has_authorized_robot():
+    """openBucketDetail focusKind array must include 'authorized_robot' at index 3."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    fn_start = src.find("async function openBucketDetail")
+    assert fn_start != -1, "agents.html must define openBucketDetail"
+    fn_section = src[fn_start: fn_start + 400]
+    assert "'authorized_robot'" in fn_section or '"authorized_robot"' in fn_section, (
+        "openBucketDetail focusKind array must include 'authorized_robot' (dataset index 3)"
+    )
+
+
+def test_agents_bucket_modal_has_authorized_bots_section():
+    """openBucketDetail sections array must include authorized_robot kind with purple label."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    fn_start = src.find("async function openBucketDetail")
+    assert fn_start != -1, "agents.html must define openBucketDetail"
+    fn_section = src[fn_start: fn_start + 2500]
+    assert "authorized_robot" in fn_section, (
+        "openBucketDetail sections must include authorized_robot kind"
+    )
+    assert "AUTHORIZED BOTS" in fn_section, (
+        "openBucketDetail sections must include 'AUTHORIZED BOTS' label"
+    )
+    assert "#bc8cff" in fn_section, (
+        "openBucketDetail authorized bots section must use purple color #bc8cff"
+    )
+
+
+def test_agents_bucket_modal_renders_authorized_robot_from_response():
+    """openBucketDetail must read d.authorized_robot from the API response."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    fn_start = src.find("async function openBucketDetail")
+    assert fn_start != -1
+    fn_section = src[fn_start: fn_start + 2500]
+    assert "d.authorized_robot" in fn_section, (
+        "openBucketDetail must read d.authorized_robot from the agents-bucket response"
+    )
+
+
+def test_agents_bucket_endpoint_returns_authorized_robot_field():
+    """agents_bucket_detail_endpoint must query reason='authorized-robot' and include
+    authorized_robot in the response payload."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    fn_start = src.find("async def agents_bucket_detail_endpoint")
+    assert fn_start != -1, "proxy_handler.py must define agents_bucket_detail_endpoint"
+    fn_section = src[fn_start: fn_start + 7000]
+    assert "reason='authorized-robot'" in fn_section, (
+        "agents_bucket_detail_endpoint must query reason='authorized-robot' events"
+    )
+    assert '"authorized_robot"' in fn_section or "'authorized_robot'" in fn_section, (
+        "agents_bucket_detail_endpoint payload must include authorized_robot key"
+    )
+
+
 def test_controls_load_clears_bypass_div():
     """controls.html load() must clear the #bypass div before rendering."""
     from pathlib import Path
@@ -2219,4 +2342,73 @@ def test_controls_load_clears_bypass_div():
     assert "'bypass'" in load_block or '"bypass"' in load_block, (
         "controls.html load() clearing list must include 'bypass' so stale "
         "AUTHORIZED_BOT_UAS entries are removed before re-rendering"
+    )
+
+
+# ── 1.7.5 regression: geo_data_endpoint 500 on authorized-robot + ASN ────────
+# Bug: asn_totals initialized with {"clean":0,"blocked":0} only. When
+# kind=="authorized_robot" and the bot IP had a resolvable ASN org (public
+# monitoring-bot IPs like UptimeRobot), asn_totals[org]["authorized_robot"]
+# raised KeyError → unhandled → HTTP 500. Triggered reliably on range=10080
+# (7 days) because long windows accumulate enough authorized-robot events.
+
+def test_geo_data_asn_totals_includes_authorized_robot_key():
+    """geo_data_endpoint must init asn_totals with authorized_robot to avoid KeyError.
+
+    Regression: asn_totals was initialized with {"clean":0,"blocked":0} only.
+    When kind=="authorized_robot" (UptimeRobot/Pingdom with resolvable ASN),
+    asn_totals[org]["authorized_robot"] raised KeyError → HTTP 500.
+    Triggered on range=10080 (7 days) where authorized-robot events accumulate.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    asn_init_idx = src.find('asn_totals.setdefault(org,')
+    assert asn_init_idx != -1, "geo_data_endpoint must call asn_totals.setdefault"
+    asn_init_block = src[asn_init_idx: asn_init_idx + 120]
+    assert "authorized_robot" in asn_init_block, (
+        "asn_totals default dict must include 'authorized_robot': 0 — "
+        "omitting it causes KeyError when monitoring bots (UptimeRobot, Pingdom) "
+        "have resolvable ASN orgs, crashing geo-data at large time ranges"
+    )
+
+
+def test_geo_data_asn_totals_increment_is_safe_for_unknown_kinds():
+    """geo_data_endpoint asn_totals increment must not raise KeyError on new kind values.
+
+    Regression: bare dict-key increment (asn_totals[org][kind] += 1) raises
+    KeyError for any kind not pre-declared. Fix uses .get(kind, 0) + 1.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    asn_init_idx = src.find('asn_totals.setdefault(org,')
+    assert asn_init_idx != -1
+    increment_block = src[asn_init_idx: asn_init_idx + 200]
+    assert ".get(kind," in increment_block or ".get(kind ," in increment_block, (
+        "asn_totals increment must use .get(kind, 0) + 1 instead of direct "
+        "[kind] += 1 — direct access raises KeyError for any kind not in the "
+        "default dict (e.g. future new classification values)"
+    )
+
+
+def test_geo_data_authorized_robot_classification_precedes_asn_update():
+    """geo_data_endpoint: authorized-robot kind classification must come before asn_totals update.
+
+    Verifies the kind variable is set from reason before being used to
+    increment asn_totals, ensuring authorized-robot events land in the correct bucket.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    geo_fn = src.find("async def geo_data_endpoint")
+    assert geo_fn != -1
+    geo_section = src[geo_fn: geo_fn + 6000]
+    ar_kind_idx = geo_section.find('reason == "authorized-robot"')
+    asn_update_idx = geo_section.find("asn_totals.setdefault")
+    assert ar_kind_idx != -1, (
+        "geo_data_endpoint must classify reason==\"authorized-robot\" to kind "
+        "'authorized_robot' before the asn_totals update"
+    )
+    assert asn_update_idx != -1, "geo_data_endpoint must update asn_totals"
+    assert ar_kind_idx < asn_update_idx, (
+        "kind classification (authorized-robot check) must come BEFORE the "
+        "asn_totals increment — otherwise the wrong kind is counted"
     )
