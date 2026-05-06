@@ -53,6 +53,21 @@ async def _spin_upstream():
     await runner.cleanup()
 
 
+def _propagate_to_all_modules(key, value):
+    """Propagate a config value to every loaded module that declares it.
+    Mirrors the mechanism used by proxy_handler.config_endpoint so that
+    overrides set on proxy_module are visible to js_challenge.py,
+    challenge/*, core/*, etc. — which all have their own copies from
+    `from config import *` at import time."""
+    import sys
+    for m in list(sys.modules.values()):
+        if m is not None and hasattr(m, key):
+            try:
+                setattr(m, key, value)
+            except (AttributeError, TypeError):
+                pass
+
+
 @asynccontextmanager
 async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
     """Set proxy env, build the app, return a TestClient. Restores attrs
@@ -82,16 +97,43 @@ async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
     await client.start_server()
     # Re-apply overrides AFTER on_startup so db_load_secrets() can't
     # undo them. The middleware reads these on every request.
+    # Propagate each override to ALL loaded modules so that submodules
+    # (js_challenge.py, core/proxy_handler.py, etc.) which have their
+    # own copy from `from config import *` see the test values too.
     for k, v in mod_overrides.items():
         setattr(proxy_module, k, v)
+        _propagate_to_all_modules(k, v)
     if _turnstile_on:
         proxy_module._TURNSTILE_CONFIGURED = True
+        _propagate_to_all_modules("_TURNSTILE_CONFIGURED", True)
     try:
         yield client
     finally:
         await client.close()
+        # Cancel and await ALL background tasks spawned by on_startup.
+        # on_cleanup only cancels the 3 saved-reference tasks; the periodic
+        # refresh loops (404, MaxMind, Tor) have no saved refs and must be
+        # cleaned up here so they don't keep the event loop alive after
+        # loop.close() — which would leave dangling state for the next test.
+        _cur = asyncio.current_task()
+        _pending = [t for t in asyncio.all_tasks() if t is not _cur]
+        if _pending:
+            for _t in _pending:
+                _t.cancel()
+            await asyncio.gather(*_pending, return_exceptions=True)
+        # Reset db_queue to None in all modules so next on_startup always
+        # re-propagates the fresh Queue (on_startup now does unconditional
+        # propagation, but this is retained as defense-in-depth).
+        import sys as _sys_r
+        for _m in list(_sys_r.modules.values()):
+            if _m is not None and hasattr(_m, 'db_queue'):
+                try:
+                    setattr(_m, 'db_queue', None)
+                except (AttributeError, TypeError):
+                    pass
         for k, v in saved.items():
             setattr(proxy_module, k, v)
+            _propagate_to_all_modules(k, v)
 
 
 def _browser_headers(extra=None):
@@ -114,7 +156,17 @@ def _browser_headers(extra=None):
 
 
 def _run(coro):
-    return asyncio.new_event_loop().run_until_complete(coro)
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        loop.close()
+        asyncio.set_event_loop(None)
 
 
 def _admin_cookie(proxy_module):

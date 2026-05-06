@@ -149,7 +149,7 @@ def _to_custom_rules(v):
       ip_cidr:<cidr/list>, country:<iso/list>
     Actions: allow | block | challenge | tag
     Returns a sanitised list (gateway-safe, empty on parse fail)."""
-    _ACTIONS = ("allow", "block", "challenge", "tag")
+    _ACTIONS = ("allow", "block", "challenge", "tag", "authorized-robot")
     if v is None or v == "" or v == []:
         return []
     if isinstance(v, str):

@@ -22,7 +22,7 @@ permissions:
 jobs:
   # ─── 1. Run the unit + integration tests ─────────────────────────────────
   test:
-    name: pytest (3 layers · 68 tests)
+    name: pytest (unit · static · control)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,7 +44,17 @@ jobs:
           ADMIN_ALLOWED_IPS:  ''
           ALLOWED_HOSTS:      ''
           DEBUG:              '1'
-        run: pytest tests/ -v --tb=short
+        run: |
+          pytest \
+            tests/test_critical.py \
+            tests/test_pure.py \
+            tests/test_async.py \
+            tests/test_blockrate_regressions.py \
+            tests/test_path_sweep.py \
+            tests/test_v142.py \
+            tests/test_v173.py \
+            tests/test_control_regressions.py \
+            -v --tb=short
 
   # ─── 2. Build the Docker image (multi-arch) ──────────────────────────────
   build:

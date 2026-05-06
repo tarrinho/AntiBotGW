@@ -92,19 +92,64 @@ ELB_HEALTH_CHECK_PATH = (_elb_raw.rstrip("/") or "/")   # preserve "/" as-is
 ELB_HEALTH_CHECK_UA   = os.environ.get("ELB_HEALTH_CHECK_UA",   "ELB-HealthChecker").strip()
 
 # ── Authorized monitoring bot pass-through ────────────────────────────────────
-# Uptime monitors (UptimeRobot, Pingdom, StatusCake, etc.) probe a path with
-# non-browser UAs and minimal headers — ua-non-browser (25 pts) +
-# ai-headers-incomplete (20 pts) bans them after 2 requests.
-# Each entry is a "UA_substring:path" pair. The request UA must contain the
-# substring AND the request path must match exactly. Entries without ":" default
-# to path "/". Matched requests are returned 200 ok and recorded as
-# "authorized-robot" (shown in blue in dashboards, not counted as blocked).
-# Set AUTHORIZED_BOT_UAS="" to disable. Hot-reloadable via Controls dashboard.
+# Each entry: {"name":str, "ua":str, "path":str, "ips":[str], "action":str, "enabled":bool}
+# ua substring must appear in User-Agent; path must match exactly; ips (when
+# non-empty) restrict which source IPs qualify. action: authorized-robot (default,
+# returns 200 blue), allow (pass-through silently), ban / really-ban.
+# Stored as JSON. Legacy "UA:path" CSV auto-migrated. Hot-reloadable.
+
+def _parse_authorized_bot_uas(raw) -> list:
+    """Parse AUTHORIZED_BOT_UAS — JSON array of dicts or legacy UA:path CSV."""
+    if isinstance(raw, list):
+        result = []
+        for e in raw:
+            if not isinstance(e, dict):
+                continue
+            result.append({
+                "name":    str(e.get("name", e.get("ua", ""))).strip(),
+                "ua":      str(e.get("ua", "")).strip(),
+                "path":    str(e.get("path", "/")).strip() or "/",
+                "ips":     [str(ip).strip() for ip in e.get("ips", []) if str(ip).strip()],
+                "action":  str(e.get("action", "authorized-robot")).strip().lower(),
+                "enabled": bool(e.get("enabled", True)),
+            })
+        return result
+    s = str(raw).strip()
+    if not s:
+        return []
+    if s.startswith('['):
+        try:
+            return _parse_authorized_bot_uas(json.loads(s))
+        except Exception:
+            pass
+    # Legacy CSV: "UA:path" or bare "UA"
+    result = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        colon = part.find(":")
+        if colon > 0:
+            ua, path = part[:colon].strip(), part[colon + 1:].strip() or "/"
+        else:
+            ua, path = part, "/"
+        if ua:
+            result.append({"name": ua, "ua": ua, "path": path, "ips": [],
+                           "action": "authorized-robot", "enabled": True})
+    return result
+
 _bot_uas_raw = os.environ.get(
     "AUTHORIZED_BOT_UAS",
-    "UptimeRobot:/,Pingdom:/,StatusCake:/,Site24x7:/,freshping:/,hetrix:/,"
-    "Better Uptime:/,uptimia:/,updown.io:/,HetrixTools:/,statuscake:/").strip()
-AUTHORIZED_BOT_UAS: list = [s.strip() for s in _bot_uas_raw.split(",") if s.strip()]
+    '[{"name":"UptimeRobot","ua":"UptimeRobot","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"Pingdom","ua":"Pingdom","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"StatusCake","ua":"StatusCake","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"Site24x7","ua":"Site24x7","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"freshping","ua":"freshping","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"HetrixTools","ua":"HetrixTools","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"Better Uptime","ua":"Better Uptime","path":"/","ips":[],"action":"authorized-robot","enabled":true},'
+    '{"name":"updown.io","ua":"updown.io","path":"/","ips":[],"action":"authorized-robot","enabled":true}]'
+).strip()
+AUTHORIZED_BOT_UAS: list = _parse_authorized_bot_uas(_bot_uas_raw)
 
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}

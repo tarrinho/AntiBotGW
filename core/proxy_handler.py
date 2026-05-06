@@ -54,6 +54,7 @@ from core.metrics import record, _timeline_bump, _bucket_now  # noqa: F401
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading underscore not in *
 from config import _LOG_LEVELS, _LOG_LEVEL_N  # noqa: F401 — leading underscore not in *
 from config import _REQUEST_ID_HEADER, _REQUEST_ID_RE  # noqa: F401 — leading underscore not in *
+from config import _parse_authorized_bot_uas  # noqa: F401
 from config import (  # noqa: F401 — more underscore config constants
     _CANARY_PREFIX, _CANARY_USED_MAX, _CANARY_RE,
     _ADMIN_PUBLIC_SUBPATHS, _ADMIN_LOGIN_SUBPATHS,
@@ -1781,6 +1782,10 @@ async def rotate_keys_endpoint(request: web.Request):
 # state that is intentionally bound at startup.
 # NOTE: _to_bool / _to_path_list / _to_ja4_set etc. come from integrations.*
 
+def _to_bot_uas_list(v):
+    """Convert AUTHORIZED_BOT_UAS — accepts list-of-dicts (JSON POST) or string."""
+    return _parse_authorized_bot_uas(v)
+
 # name -> (parser, optional validator returning bool)
 _HOT_RELOAD_KNOBS = {
     # Toggles (booleans)
@@ -1836,7 +1841,7 @@ _HOT_RELOAD_KNOBS = {
     "SESSION_CHURN_MAX":      (int,   lambda v: 1 <= v <= 10000),
     "JA4_AUTODENY_THRESHOLD": (int,   lambda v: 1 <= v <= 1000),
     # Lists (comma-separated str -> list/set)
-    "AUTHORIZED_BOT_UAS":     (_to_path_list, None),
+    "AUTHORIZED_BOT_UAS":     (_to_bot_uas_list, None),
     "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
     # 1.6.0 — country-level geo block (requires GeoLite2-City)
@@ -2205,32 +2210,66 @@ async def protect(request: web.Request, handler):
                          _REQUEST_ID_HEADER: rid})
 
     # 1.7.4 — Authorized monitoring bot pass-through.
-    # UptimeRobot, Pingdom, StatusCake et al. probe a configured path to check
-    # availability. Each entry in AUTHORIZED_BOT_UAS is a "UA_substring:path"
-    # pair; both must match. Entries without ":" default to path "/".
-    # Matched requests are returned 200 ok and recorded as "authorized-robot"
-    # (shown in blue in dashboards, not counted as blocked).
+    # Each entry in AUTHORIZED_BOT_UAS is a dict: {name, ua, path, ips, action, enabled}.
+    # UA substring + path must match; ips (when non-empty) restricts source IPs.
+    # action: authorized-robot → 200 ok + blue recording; allow → silent pass-through;
+    # ban / really-ban → immediate ban + decoy response.
     if AUTHORIZED_BOT_UAS:
         _mon_ua = request.headers.get("User-Agent", "")
-        for _bot_entry in AUTHORIZED_BOT_UAS:
-            _colon = _bot_entry.find(":")
-            if _colon > 0:
-                _ua_sub   = _bot_entry[:_colon].strip()
-                _bot_path = _bot_entry[_colon + 1:].strip() or "/"
+        _req_ip = get_ip(request) or request.remote or ""
+        for _bot in AUTHORIZED_BOT_UAS:
+            if isinstance(_bot, dict):
+                if not _bot.get("enabled", True):
+                    continue
+                _ua_sub   = str(_bot.get("ua", "")).strip()
+                _bot_path = str(_bot.get("path", "/")).strip() or "/"
+                _bot_ips  = _bot.get("ips") or []
+                _bot_act  = str(_bot.get("action", "authorized-robot")).strip().lower()
             else:
-                _ua_sub   = _bot_entry.strip()
-                _bot_path = "/"
-            if _ua_sub and _ua_sub in _mon_ua and request.path == _bot_path:
-                _mon_ip = get_ip(request) or request.remote or ""
-                await record(_mon_ip, _mon_ua, request.path, 200, "authorized-robot",
+                # Legacy string "UA:path"
+                _s = str(_bot)
+                _c = _s.find(":")
+                _ua_sub   = (_s[:_c] if _c > 0 else _s).strip()
+                _bot_path = (_s[_c + 1:] if _c > 0 else "/").strip() or "/"
+                _bot_ips  = []
+                _bot_act  = "authorized-robot"
+            if not _ua_sub or _ua_sub not in _mon_ua:
+                continue
+            if request.path != _bot_path:
+                continue
+            if _bot_ips and _req_ip not in _bot_ips:
+                continue
+            # Match — apply action
+            if _bot_act == "authorized-robot":
+                await record(_req_ip, _mon_ua, request.path, 200, "authorized-robot",
                              request_id=rid)
                 slog("authorized-robot", level="info",
-                     ip=_mon_ip, ua=_mon_ua, request_id=rid)
+                     ip=_req_ip, ua=_mon_ua, request_id=rid)
                 return web.Response(
                     status=200, text="ok",
                     headers={"Content-Type": "text/plain; charset=utf-8",
                              "Cache-Control": "no-store",
                              _REQUEST_ID_HEADER: rid})
+            elif _bot_act == "allow":
+                request["_custom_rule_allow"] = True
+                break   # exit bot loop; continue to normal proxy
+            elif _bot_act in ("ban", "really-ban"):
+                _ban_secs = REALLY_BAN_SECS if _bot_act == "really-ban" else HONEYPOT_BAN_SECS
+                _ban_reason = f"bot-rule-{'really-ban' if _bot_act == 'really-ban' else 'ban'}"
+                async with state_lock:
+                    _bs = ip_state[_req_ip]
+                    _bs.banned_until = _t.time() + _ban_secs
+                    _bs.last_ip = _req_ip
+                await _shared_ban_set(_req_ip, _t.time() + _ban_secs, _ban_reason)
+                if db_queue is not None:
+                    try:
+                        db_queue.put_nowait(("ban", (
+                            _req_ip, _t.time() + _ban_secs, _ban_reason, _t.time())))
+                    except asyncio.QueueFull:
+                        pass
+                return await _silent_decoy_response(
+                    _req_ip, _mon_ua, request.path, _ban_reason,
+                    ja4=_request_ja4(request), request_id=rid)
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
@@ -2283,8 +2322,17 @@ async def protect(request: web.Request, handler):
         _action, _tag = _eval_custom_rules(request, _ip)
         if _action == "allow":
             request["_custom_rule_allow"] = True   # surfaced in record()
-            # Skip the rest of the security chain — forward to upstream.
             return await handler(request)
+        if _action == "authorized-robot":
+            _ar_ua = request.headers.get("User-Agent", "")
+            await record(_ip, _ar_ua, request.path, 200, "authorized-robot",
+                         request_id=rid)
+            slog("authorized-robot", level="info", ip=_ip, ua=_ar_ua, request_id=rid)
+            return web.Response(
+                status=200, text="ok",
+                headers={"Content-Type": "text/plain; charset=utf-8",
+                         "Cache-Control": "no-store",
+                         _REQUEST_ID_HEADER: rid})
         if _action == "block":
             _ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(_ip, _ua, request.path,
