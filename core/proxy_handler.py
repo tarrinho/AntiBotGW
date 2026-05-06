@@ -1836,6 +1836,7 @@ _HOT_RELOAD_KNOBS = {
     "SESSION_CHURN_MAX":      (int,   lambda v: 1 <= v <= 10000),
     "JA4_AUTODENY_THRESHOLD": (int,   lambda v: 1 <= v <= 1000),
     # Lists (comma-separated str -> list/set)
+    "AUTHORIZED_BOT_UAS":     (_to_path_list, None),
     "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
     # 1.6.0 — country-level geo block (requires GeoLite2-City)
@@ -2204,24 +2205,32 @@ async def protect(request: web.Request, handler):
                          _REQUEST_ID_HEADER: rid})
 
     # 1.7.4 — Authorized monitoring bot pass-through.
-    # UptimeRobot, Pingdom, StatusCake et al. probe "/" to check availability.
-    # They send non-browser UAs with minimal headers, accumulating 45 pts per
-    # request and being banned after two hits.  Requests matching any UA
-    # substring in AUTHORIZED_BOT_UAS on path "/" are returned 200 ok and
-    # recorded as "authorized-robot" (shown in blue in dashboards, not blocked).
-    if AUTHORIZED_BOT_UAS and request.path == "/":
+    # UptimeRobot, Pingdom, StatusCake et al. probe a configured path to check
+    # availability. Each entry in AUTHORIZED_BOT_UAS is a "UA_substring:path"
+    # pair; both must match. Entries without ":" default to path "/".
+    # Matched requests are returned 200 ok and recorded as "authorized-robot"
+    # (shown in blue in dashboards, not counted as blocked).
+    if AUTHORIZED_BOT_UAS:
         _mon_ua = request.headers.get("User-Agent", "")
-        if any(_sub in _mon_ua for _sub in AUTHORIZED_BOT_UAS):
-            _mon_ip = get_ip(request) or request.remote or ""
-            await record(_mon_ip, _mon_ua, request.path, 200, "authorized-robot",
-                         request_id=rid)
-            slog("authorized-robot", level="info",
-                 ip=_mon_ip, ua=_mon_ua, request_id=rid)
-            return web.Response(
-                status=200, text="ok",
-                headers={"Content-Type": "text/plain; charset=utf-8",
-                         "Cache-Control": "no-store",
-                         _REQUEST_ID_HEADER: rid})
+        for _bot_entry in AUTHORIZED_BOT_UAS:
+            _colon = _bot_entry.find(":")
+            if _colon > 0:
+                _ua_sub   = _bot_entry[:_colon].strip()
+                _bot_path = _bot_entry[_colon + 1:].strip() or "/"
+            else:
+                _ua_sub   = _bot_entry.strip()
+                _bot_path = "/"
+            if _ua_sub and _ua_sub in _mon_ua and request.path == _bot_path:
+                _mon_ip = get_ip(request) or request.remote or ""
+                await record(_mon_ip, _mon_ua, request.path, 200, "authorized-robot",
+                             request_id=rid)
+                slog("authorized-robot", level="info",
+                     ip=_mon_ip, ua=_mon_ua, request_id=rid)
+                return web.Response(
+                    status=200, text="ok",
+                    headers={"Content-Type": "text/plain; charset=utf-8",
+                             "Cache-Control": "no-store",
+                             _REQUEST_ID_HEADER: rid})
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
@@ -3835,7 +3844,7 @@ async def metrics_endpoint(request: web.Request):
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
                 for row in conn.execute(
-                    "SELECT bucket_minute, total, allowed, blocked, missed FROM timeline "
+                    "SELECT bucket_minute, total, allowed, blocked, missed, by_reason FROM timeline "
                     "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
                     (start_b, end_b + 60)
                 ):
@@ -3845,7 +3854,7 @@ async def metrics_endpoint(request: web.Request):
                 pass
 
         for slot in range(start_b, end_b + 1, bucket_secs):
-            agg = {"total": 0, "allowed": 0, "blocked": 0, "missed": 0}
+            agg = {"total": 0, "allowed": 0, "blocked": 0, "missed": 0, "authorized_robot": 0}
             # Sum every 1-min bucket falling inside [slot, slot + bucket_secs)
             for m in range(slot, slot + bucket_secs, 60):
                 d = timeline.get(m)
@@ -3859,6 +3868,15 @@ async def metrics_endpoint(request: web.Request):
                     try:
                         agg["missed"] += (d["missed"] if d["missed"] is not None else 0)
                     except (IndexError, KeyError):
+                        pass
+                    # authorized_robot: from by_reason (in-memory = defaultdict, DB = JSON str)
+                    try:
+                        br = d["by_reason"]
+                        if isinstance(br, str):
+                            agg["authorized_robot"] += json.loads(br or "{}").get("authorized-robot", 0)
+                        elif hasattr(br, "get"):
+                            agg["authorized_robot"] += br.get("authorized-robot", 0)
+                    except (KeyError, IndexError, TypeError):
                         pass
             timeline_out.append({"t": slot, **agg})
 
@@ -4608,10 +4626,16 @@ async def geo_data_endpoint(request: web.Request):
             # at this cell. Operators see WHICH layer is doing the work.
             points[key] = {"country": country, "city": city,
                            "clean": 0, "missed": 0, "blocked": 0,
+                           "authorized_robot": 0,
                            "tor_hits": 0, "dc_hits": 0,
                            "methods": {}}
         reason = (r["reason"] or "")
-        kind = "blocked" if (reason and reason != "OK") else "clean"
+        if reason == "authorized-robot":
+            kind = "authorized_robot"
+        elif reason and reason != "OK":
+            kind = "blocked"
+        else:
+            kind = "clean"
         points[key][kind] += 1
         # 1.6.4 — bucket the block reason by method
         if kind == "blocked":
@@ -4621,7 +4645,7 @@ async def geo_data_endpoint(request: web.Request):
         if country:
             if country not in countries:
                 countries[country] = {"clean": 0, "missed": 0, "blocked": 0,
-                                       "methods": {}}
+                                       "authorized_robot": 0, "methods": {}}
             countries[country][kind] += 1
             if kind == "blocked":
                 method = _reason_method(reason)
@@ -4662,6 +4686,7 @@ async def geo_data_endpoint(request: web.Request):
             if key not in points:
                 points[key] = {"country": country, "city": city,
                                "clean": 0, "missed": 0, "blocked": 0,
+                               "authorized_robot": 0,
                                "tor_hits": 0, "dc_hits": 0, "methods": {}}
             points[key]["missed"] += s.allowed_count
 
@@ -4693,10 +4718,11 @@ async def geo_data_endpoint(request: web.Request):
         {"lat": lat, "lng": lng,
          "country": p["country"], "city": p["city"],
          "clean": p["clean"], "missed": p["missed"], "blocked": p["blocked"],
+         "authorized_robot": p.get("authorized_robot", 0),
          "tor_hits": p["tor_hits"], "dc_hits": p["dc_hits"],
          "methods":  p.get("methods") or {},                # 1.6.4
          "pin_type": _classify(p),                          # 1.6.4
-         "total": p["clean"] + p["missed"] + p["blocked"]}
+         "total": p["clean"] + p["missed"] + p["blocked"] + p.get("authorized_robot", 0)}
         for (lat, lng), p in points.items()
     ]
     out_points.sort(key=lambda d: d["total"], reverse=True)

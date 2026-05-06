@@ -333,7 +333,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="order:3"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.35);color:#f85149}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.7.4 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.7.5 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -370,6 +370,14 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <div id="external-log" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"></div>
   </section>
 
+  <section class="card" id="card-bypass" style="margin-top:20px">
+    <h2>🤖 Authorized monitoring bots <span style="font-size:11px;color:var(--dim);font-weight:400">(pass-through on specific paths — shown blue, not counted as blocked)</span></h2>
+    <div class="hint" style="margin-bottom:10px">
+      Each entry is a <code>UA_substring:path</code> pair. The bot's User-Agent must contain the substring AND the request path must match exactly.
+      Example: <code>UptimeRobot:/, Pingdom:/health</code>. Entries without <code>:</code> default to path <code>/</code>.
+    </div>
+    <div id="bypass"></div>
+  </section>
 
   <section class="card" id="card-scoring">
     <h2>🛡️ Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
@@ -707,6 +715,7 @@ const META = {
   DLP_GROUP_API_KEY_ENABLED:     {kind:'bool', desc:'DLP group: API-key shapes (Slack xoxb-, GitHub ghp_/gho_, OpenAI sk-, labelled high-entropy secrets).'},
   DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
   DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
+  AUTHORIZED_BOT_UAS:      {kind:'list', card:'bypass', desc:'Monitoring-bot pass-through pairs: <code>UA_substring:path</code> (e.g. <code>UptimeRobot:/, Pingdom:/health</code>). Bot UA must contain the substring AND path must match exactly. Entries without <code>:</code> default to <code>/</code>. Matched requests return 200 ok and are recorded as authorized-robot (blue in dashboards, not counted as blocked). Empty = disabled.'},
   WEBHOOK_EVENT_FILTER:    {kind:'list', card:'ext-misc', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
   DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
@@ -944,7 +953,7 @@ async function load(){
   serverState = body.state || {};
   // Group + render. Booleans (toggles) are now rendered inside the merged
   // "Defenses & scoring" table (see loadScoring), so skip them here.
-  ['thresholds','ext-misc','external-log'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  ['thresholds','ext-misc','external-log','bypass'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
   const map = {num:'thresholds'};
   for (const [name, meta] of Object.entries(META)){
     if (!(name in serverState)) continue;

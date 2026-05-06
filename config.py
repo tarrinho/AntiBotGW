@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.7.4"
+GW_VERSION = "AppSecGW_1.7.5"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -92,16 +92,18 @@ ELB_HEALTH_CHECK_PATH = (_elb_raw.rstrip("/") or "/")   # preserve "/" as-is
 ELB_HEALTH_CHECK_UA   = os.environ.get("ELB_HEALTH_CHECK_UA",   "ELB-HealthChecker").strip()
 
 # ── Authorized monitoring bot pass-through ────────────────────────────────────
-# Uptime monitors (UptimeRobot, Pingdom, StatusCake, etc.) probe "/" with
+# Uptime monitors (UptimeRobot, Pingdom, StatusCake, etc.) probe a path with
 # non-browser UAs and minimal headers — ua-non-browser (25 pts) +
 # ai-headers-incomplete (20 pts) bans them after 2 requests.
-# Requests matching any substring in AUTHORIZED_BOT_UAS on path "/"
-# are returned 200 ok and recorded as "authorized-robot" (shown in blue in the
-# dashboard, not counted as blocked). Set AUTHORIZED_BOT_UAS="" to disable.
+# Each entry is a "UA_substring:path" pair. The request UA must contain the
+# substring AND the request path must match exactly. Entries without ":" default
+# to path "/". Matched requests are returned 200 ok and recorded as
+# "authorized-robot" (shown in blue in dashboards, not counted as blocked).
+# Set AUTHORIZED_BOT_UAS="" to disable. Hot-reloadable via Controls dashboard.
 _bot_uas_raw = os.environ.get(
     "AUTHORIZED_BOT_UAS",
-    "UptimeRobot,Pingdom,StatusCake,Site24x7,freshping,hetrix,"
-    "Better Uptime,uptimia,updown.io,HetrixTools,statuscake").strip()
+    "UptimeRobot:/,Pingdom:/,StatusCake:/,Site24x7:/,freshping:/,hetrix:/,"
+    "Better Uptime:/,uptimia:/,updown.io:/,HetrixTools:/,statuscake:/").strip()
 AUTHORIZED_BOT_UAS: list = [s.strip() for s in _bot_uas_raw.split(",") if s.strip()]
 
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",

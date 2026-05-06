@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.7.4 · Dashboard</title>
+<title>AppSecGW_1.7.5 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -139,7 +139,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   text-transform:uppercase;letter-spacing:.5px}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.4 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.5 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- column-header tooltip -->
 <div id="col-tip-pop"></div>
@@ -423,7 +423,20 @@ function ensureCostChart() {
       },
       plugins: { legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
                  tooltip: { backgroundColor:'#161b22', borderColor:'#30363d',
-                            borderWidth:1, titleColor:'#c9d1d9', bodyColor:'#c9d1d9' } },
+                            borderWidth:1, titleColor:'#c9d1d9', bodyColor:'#c9d1d9',
+                            callbacks: { title: items => {
+                              const idx = items[0].dataIndex;
+                              const tl = window._lastCostTimeline;
+                              const bs = window._lastCostBucketSecs || 60;
+                              if (!tl || !tl[idx]) return items[0].label || '';
+                              const d = new Date(tl[idx].t * 1000);
+                              if (bs >= 86400)
+                                return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+                              const end = new Date((tl[idx].t + bs) * 1000);
+                              const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+                              const fmtT = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+                              return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
+                            }}} },
       scales: {
         x: { ticks: { color:'#8b949e', font:{size:10}, maxRotation:0, autoSkipPadding:18 }, grid: { color:'#21262d' } },
         y: { beginAtZero: true,
@@ -461,6 +474,10 @@ function ensureChart() {
         { label: 'missed (medium risk)', data: [], borderColor: '#ff7b3a',
           backgroundColor: 'rgba(255,123,58,0.18)', tension: 0.25, fill: false,
           borderWidth: 2, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
+        // 1.7.5 — purple: authorized monitoring bots (bypass detection, allowed through)
+        { label: 'authorized bots', data: [], borderColor: '#bc8cff',
+          backgroundColor: 'rgba(188,140,255,0.15)', tension: 0.25, fill: false,
+          borderWidth: 2, borderDash: [2,3], pointRadius: 0, pointHoverRadius: 4 },
       ],
     },
     options: {
@@ -487,7 +504,7 @@ function ensureChart() {
           titleColor: '#c9d1d9', bodyColor: '#c9d1d9',
           callbacks: {
             title: items => {
-              const idx = items[0].index;
+              const idx = items[0].dataIndex;
               const tl  = window._lastMainTimeline;
               const bs  = window._lastMainBucketSecs || 60;
               if (!tl || !tl[idx]) return items[0].label;
@@ -817,6 +834,7 @@ async function tick() {
       const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
       const blocks = d.timeline.map(b => b.blocked);
       const missed = d.timeline.map(b => b.missed || 0);
+      const authBots = d.timeline.map(b => b.authorized_robot || 0);
       // Dynamic decimation: aim at ~10 labels regardless of how many points
       const step = Math.max(1, Math.floor(labels.length / 10));
       const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
@@ -825,6 +843,7 @@ async function tick() {
       c.data.datasets[1].data = allowed;
       c.data.datasets[2].data = blocks;
       c.data.datasets[3].data = missed;
+      c.data.datasets[4].data = authBots;
       c.update('none');
       if (typeof window._paintBlockRate === 'function') window._paintBlockRate();
     }

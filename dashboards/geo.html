@@ -90,7 +90,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.4 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.5 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -141,6 +141,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
           <div><span class="dot" style="background:#3fb950"></span> clean (allowed)</div>
           <div><span class="dot" style="background:#ff7b3a"></span> missed (medium risk)</div>
           <div><span class="dot" style="background:#f85149"></span> blocked (bots)</div>
+          <div><span class="dot" style="background:#bc8cff"></span> authorized bots</div>
           <div><span class="triangle"></span> Tor exit (overlay)</div>
           <div><span class="square"></span> DC / hosting ASN (overlay)</div>
         </div>
@@ -285,10 +286,11 @@ function renderMap(){
     const merged = {};
     for (let i = 0; i <= scrubBucketIdx; i++) {
       for (const [k, v] of Object.entries((scrubBuckets[i] || {}).points || {})) {
-        if (!merged[k]) merged[k] = {c:0, m:0, b:0};
+        if (!merged[k]) merged[k] = {c:0, m:0, b:0, ar:0};
         merged[k].c += v.c || 0;
         merged[k].m += v.m || 0;
         merged[k].b += v.b || 0;
+        merged[k].ar += v.ar || 0;
       }
     }
     pts = Object.entries(merged).map(([k, v]) => {
@@ -297,10 +299,10 @@ function renderMap(){
       const meta = (lastData.points||[]).find(
         q => Math.abs(q.lat-rlat) <= 0.26 && Math.abs(q.lng-rlng) <= 0.26) || {};
       return {lat:rlat, lng:rlng, country: meta.country||'', city: meta.city||'',
-              clean:v.c||0, missed:v.m||0, blocked:v.b||0,
+              clean:v.c||0, missed:v.m||0, blocked:v.b||0, authorized_robot:v.ar||0,
               tor_hits:0, dc_hits:0, methods: meta.methods || {},
               pin_type: meta.pin_type || 'normal',
-              total:(v.c||0)+(v.m||0)+(v.b||0)};
+              total:(v.c||0)+(v.m||0)+(v.b||0)+(v.ar||0)};
     });
   }
 
@@ -319,10 +321,12 @@ function renderMap(){
     const pinTypeLine = p.pin_type && p.pin_type !== 'normal'
       ? `<br><span style="color:${PIN_COLORS[p.pin_type]||'#fff'};font-weight:700">type</span>: ${escapeHtml(p.pin_type)}`
       : '';
+    const authBots = p.authorized_robot || 0;
     const tip = `<b>${escapeHtml(p.city || '?')}</b> ${p.country ? '(' + escapeHtml(p.country) + ')' : ''}<br>` +
       `<span style="color:#3fb950">clean</span>: ${p.clean}<br>` +
       `<span style="color:#ff7b3a">missed</span>: ${p.missed}<br>` +
       `<span style="color:#f85149">blocked</span>: ${p.blocked}` +
+      (authBots ? `<br><span style="color:#bc8cff">authorized bots</span>: ${authBots}` : '') +
       methodLine + pinTypeLine +
       (p.tor_hits ? `<br><span style="color:#d29922">tor exits</span>: ${p.tor_hits}` : '') +
       (p.dc_hits  ? `<br><span style="color:#bc8cff">dc/hosting</span>: ${p.dc_hits}`  : '') +
@@ -336,6 +340,7 @@ function renderMap(){
     if (p.clean   > 0) buildCircle(p.lat, p.lng, p.clean,   '#3fb950', fullTip, onClick, deniedOpts).addTo(layerGroup);
     if (p.missed  > 0) buildCircle(p.lat + 0.0001, p.lng + 0.0001, p.missed,  '#ff7b3a', fullTip, onClick, deniedOpts).addTo(layerGroup);
     if (p.blocked > 0) buildCircle(p.lat + 0.0002, p.lng + 0.0002, p.blocked, '#f85149', fullTip, onClick, deniedOpts).addTo(layerGroup);
+    if (authBots  > 0) buildCircle(p.lat + 0.0003, p.lng + 0.0003, authBots,  '#bc8cff', fullTip, onClick, deniedOpts).addTo(layerGroup);
     if (showTor && p.tor_hits) buildOverlayMarker(p.lat, p.lng, p.tor_hits, 'tor').addTo(layerGroup);
     if (showDC  && p.dc_hits)  buildOverlayMarker(p.lat, p.lng, p.dc_hits,  'dc').addTo(layerGroup);
   });
@@ -363,10 +368,11 @@ function rebuildBuckets(){
     const rlng = Math.round(lng * 2) / 2;
     const key = `${rlat},${rlng}`;
     const b = scrubBuckets[idx];
-    if (!b.points[key]) b.points[key] = {c:0, m:0, b:0};
-    if (kind === 'clean')        b.points[key].c++;
-    else if (kind === 'missed')  b.points[key].m++;
-    else                         b.points[key].b++;
+    if (!b.points[key]) b.points[key] = {c:0, m:0, b:0, ar:0};
+    if (kind === 'clean')              b.points[key].c++;
+    else if (kind === 'missed')        b.points[key].m++;
+    else if (kind === 'authorized_robot') b.points[key].ar++;
+    else                               b.points[key].b++;
   }
   document.getElementById('scrub').max = N - 1;
 }
