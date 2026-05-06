@@ -1408,6 +1408,81 @@ def test_elb_path_logged_as_hash_not_plaintext():
 
 
 
+# Authorized monitoring bot pass-through (1.7.4)
+# UptimeRobot, Pingdom, StatusCake et al. probe "/" and trigger ua-non-browser +
+# ai-headers-incomplete → banned after 2 hits.  AUTHORIZED_BOT_UAS bypasses
+# detection on path "/" and records "authorized-robot" (not counted as blocked).
+
+def test_authorized_bot_uas_config_exists():
+    """AUTHORIZED_BOT_UAS must be defined in config as a list of UA substrings."""
+    import config
+    assert hasattr(config, "AUTHORIZED_BOT_UAS"), (
+        "config.py must define AUTHORIZED_BOT_UAS (list of UA substrings for "
+        "authorized monitoring bots)"
+    )
+    assert isinstance(config.AUTHORIZED_BOT_UAS, list), (
+        "AUTHORIZED_BOT_UAS must be a list of strings"
+    )
+    known = {"UptimeRobot", "Pingdom", "StatusCake"}
+    matched = {k for k in known if any(k in ua for ua in config.AUTHORIZED_BOT_UAS)}
+    assert matched == known, (
+        f"Default AUTHORIZED_BOT_UAS must include UptimeRobot, Pingdom, StatusCake; "
+        f"missing: {known - matched}"
+    )
+
+
+def test_authorized_bot_bypass_in_protect_source():
+    """protect() must contain AUTHORIZED_BOT_UAS bypass on path '/'."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    assert "AUTHORIZED_BOT_UAS" in src, (
+        "protect() must check AUTHORIZED_BOT_UAS to bypass detection for "
+        "authorized monitoring bots hitting '/'"
+    )
+    assert "authorized-robot" in src, (
+        "protect() must record reason='authorized-robot' for authorized bots — "
+        "this is how they appear in the dashboard (blue, not blocked)"
+    )
+
+
+def test_authorized_bot_bypass_only_on_root():
+    """Authorized bot bypass must check path == '/' — not all paths."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    assert bot_idx != -1
+    bot_block = src[bot_idx: bot_idx + 600]
+    assert 'request.path == "/"' in bot_block or "request.path == '/'" in bot_block, (
+        "Authorized bot bypass must only fire on path '/' — monitoring bots "
+        "that hit other paths should go through normal detection"
+    )
+
+
+def test_passthrough_reasons_not_counted_as_blocked():
+    """authorized-robot in _PASSTHROUGH_REASONS → not counted as blocked."""
+    from core.metrics import _PASSTHROUGH_REASONS
+    assert "authorized-robot" in _PASSTHROUGH_REASONS, (
+        "_PASSTHROUGH_REASONS must include 'authorized-robot' so these requests "
+        "are not counted in the blocked metric"
+    )
+
+
+def test_authorized_robot_tag_in_main_dashboard():
+    """main.html must have .tag.authorized-robot CSS class (blue)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "authorized-robot" in src, (
+        "main.html must define .tag.authorized-robot CSS and render 'authorized-robot' "
+        "events in blue, not as blocked"
+    )
+    assert "evt-authorized" in src, (
+        "main.html must define .evt.evt-authorized CSS class (blue border-left) for "
+        "authorized bot events in the live events stream"
+    )
+
+
 def test_log_level_n_propagated_on_hot_reload():
     """LOG_LEVEL hot-reload must also update _LOG_LEVEL_N in all modules.
 
@@ -1429,4 +1504,450 @@ def test_log_level_n_propagated_on_hot_reload():
     assert "_LOG_LEVELS.get(value" in src or "_LOG_LEVELS.get(" in src, (
         "config_endpoint must recompute _LOG_LEVEL_N from _LOG_LEVELS dict "
         "after a LOG_LEVEL hot-reload, not hard-code a default value."
+    )
+
+
+def test_ip_intel_endpoint_imports_reputation_symbols():
+    """admin/users.py ip_intel_endpoint must import all four reputation symbols.
+
+    Regression: ip_intel_endpoint called _city_lookup, _asn_lookup,
+    _abuseipdb_lookup, _crowdsec_check, and _tor_exits without importing them —
+    proxy_handler.py had those names in its global scope via its own imports,
+    but admin/users.py is a separate module with its own namespace. Any call
+    to ip_intel_endpoint raised NameError: name '_city_lookup' is not defined.
+    """
+    src = open("admin/users.py").read()
+    for sym in ("_city_lookup", "_asn_lookup", "_abuseipdb_lookup",
+                "_crowdsec_check", "_tor_exits"):
+        assert sym in src.split("ip_intel_endpoint")[0] or \
+               f"import {sym}" in src or \
+               f"from reputation" in src, (
+            f"admin/users.py must import {sym!r} before ip_intel_endpoint uses it"
+        )
+    # Stricter: verify the import lines are at module level, not inside the function
+    import_block = src[:src.index("async def ip_intel_endpoint")]
+    for sym in ("_city_lookup", "_asn_lookup", "_abuseipdb_lookup",
+                "_crowdsec_check", "_tor_exits"):
+        assert sym in import_block, (
+            f"{sym!r} must be imported at module level in admin/users.py, "
+            f"not inside ip_intel_endpoint — NameError at runtime otherwise"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.7.4 — regression / unit tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── logs.html: r.ok guard before r.json() in LOG_LEVEL POST handlers ─────
+
+def test_logs_html_log_level_button_has_rok_guard():
+    """logs.html level-button click handler must guard r.ok before r.json().
+
+    Regression: calling r.json() unconditionally on a non-JSON 404/401
+    response caused 'unexpected non-whitespace character' SyntaxError in the
+    browser when the session expired.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "logs.html").read_text()
+    # Find the block that POSTs LOG_LEVEL and verify r.ok appears before r.json()
+    # Both LOG_LEVEL handlers must contain r.ok checks
+    rok_count = src.count("if (!r.ok)")
+    assert rok_count >= 2, (
+        f"logs.html must have at least 2 'if (!r.ok)' guards (one per LOG_LEVEL "
+        f"POST handler — button click + dropdown onchange); found {rok_count}"
+    )
+
+
+def test_logs_html_log_level_handlers_no_unconditional_json():
+    """logs.html must not call r.json() before checking r.ok in LOG_LEVEL handlers.
+
+    Regression: unconditional r.json() caused JSON parse error on non-JSON responses.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "logs.html").read_text()
+    # Find LOG_LEVEL POST blocks and ensure r.ok check precedes r.json() in each
+    log_level_blocks = src.split("LOG_LEVEL")
+    for blk in log_level_blocks[1:]:  # skip before first LOG_LEVEL occurrence
+        # Only check blocks that contain a POST fetch (the two handlers)
+        if "method:'POST'" not in blk and 'method:"POST"' not in blk:
+            continue
+        # Within ~300 chars of the fetch, r.ok must appear before r.json()
+        fetch_area = blk[:400]
+        if "r.json()" in fetch_area:
+            ok_pos   = fetch_area.find("r.ok")
+            json_pos = fetch_area.find("r.json()")
+            assert ok_pos != -1 and ok_pos < json_pos, (
+                "logs.html: r.ok must be checked before r.json() in LOG_LEVEL "
+                "POST handler — unconditional r.json() causes SyntaxError on "
+                "non-JSON responses (session expiry / 401 decoy page)"
+            )
+
+
+def test_logs_html_authorized_robot_shown_in_blue():
+    """logs.html must render authorized-robot reason in blue, not red.
+
+    Regression: authorized monitoring-bot events (UptimeRobot, Pingdom, etc.)
+    were shown as blocked (red) because the reason was not in the colour map.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "logs.html").read_text()
+    assert "authorized-robot" in src, (
+        "logs.html must handle 'authorized-robot' reason in its render logic"
+    )
+    # The reason must map to blue, not red
+    idx = src.find("authorized-robot")
+    neighbourhood = src[max(0, idx - 20):idx + 60]
+    assert "blue" in neighbourhood, (
+        "logs.html must colour 'authorized-robot' entries with var(--blue), "
+        "not with the default red used for blocked events"
+    )
+
+
+# ── controls.html: master bypass switch ──────────────────────────────────
+
+def test_controls_bypass_bar_html_elements_present():
+    """controls.html must contain bypass bar elements: #bypass-bar, #bypass-sw, #bypass-warn."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    for elem_id in ("bypass-bar", "bypass-sw", "bypass-warn"):
+        assert f'id="{elem_id}"' in src, (
+            f"controls.html must define element id={elem_id!r} for the master "
+            f"bypass switch UI"
+        )
+
+
+def test_controls_bypass_css_classes_defined():
+    """controls.html must define CSS for .bypass-sw, .bypass-sw.on, #bypass-bar.bypass-on."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    for selector in (".bypass-sw", ".bypass-sw.on", "#bypass-bar.bypass-on"):
+        assert selector in src, (
+            f"controls.html must define CSS selector {selector!r} for the "
+            f"master bypass switch"
+        )
+
+
+def test_controls_bypass_iife_snapshots_and_restores():
+    """controls.html bypass IIFE must save snapshot to localStorage and restore on deactivate."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "_BYPASS_ACTIVE_KEY" in src, (
+        "controls.html bypass IIFE must define _BYPASS_ACTIVE_KEY localStorage key"
+    )
+    assert "_BYPASS_SNAP_KEY" in src or "SNAP" in src, (
+        "controls.html bypass IIFE must snapshot current state to localStorage "
+        "before disabling all controls"
+    )
+    assert "localStorage.setItem" in src, (
+        "controls.html bypass IIFE must persist bypass state via localStorage.setItem"
+    )
+    assert "localStorage.removeItem" in src, (
+        "controls.html bypass IIFE must clean up localStorage on bypass deactivation"
+    )
+
+
+def test_controls_bypass_posts_false_for_all_bool_knobs():
+    """controls.html bypass activation must POST false for every bool knob."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    # The bypass IIFE must set all bool knobs to false
+    assert "payload[n] = false" in src or "payload[k] = false" in src or \
+           "= false" in src, (
+        "controls.html bypass IIFE must set all bool knobs to false in the "
+        "POST payload — not just a subset"
+    )
+
+
+def test_controls_bypass_uses_credentials_include():
+    """controls.html bypass fetch calls must include credentials:'include'."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    bypass_block = src[src.find("_BYPASS_ACTIVE_KEY"):]
+    assert "credentials:'include'" in bypass_block or \
+           'credentials:"include"' in bypass_block, (
+        "controls.html bypass IIFE fetch calls must include credentials:'include' "
+        "so the session cookie is sent with admin config POST requests"
+    )
+
+
+def test_controls_bypass_requires_user_confirmation():
+    """controls.html bypass activation must show a confirm() dialog before disabling all controls."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    bypass_block = src[src.find("_BYPASS_ACTIVE_KEY"):]
+    assert "confirm(" in bypass_block, (
+        "controls.html bypass switch must require explicit user confirmation "
+        "via confirm() before disabling all bot detection controls"
+    )
+
+
+# ── controls.html: per-card collapse toggles ─────────────────────────────
+
+def test_controls_collapse_css_defined():
+    """controls.html must define .cc-chevron and .cc-collapsed CSS for card collapse."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    for selector in (".cc-chevron", ".cc-collapsed"):
+        assert selector in src, (
+            f"controls.html must define CSS selector {selector!r} for "
+            f"per-card collapse toggle feature"
+        )
+
+
+def test_controls_collapse_iife_persists_to_localstorage():
+    """controls.html collapse IIFE must persist collapse state to localStorage."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "_CC_PREFIX" in src, (
+        "controls.html collapse IIFE must define _CC_PREFIX localStorage key prefix "
+        "for per-card collapse state persistence"
+    )
+    # Collapse state must be written and read from localStorage
+    cc_block = src[src.find("_CC_PREFIX"):]
+    assert "localStorage.setItem" in cc_block, (
+        "controls.html collapse IIFE must save collapse state via localStorage.setItem"
+    )
+    assert "localStorage.getItem" in cc_block, (
+        "controls.html collapse IIFE must restore collapse state via localStorage.getItem"
+    )
+
+
+def test_controls_collapse_card_h2_click_handler():
+    """controls.html collapse IIFE must attach click handler to card h2 elements."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    cc_block = src[src.find("_CC_PREFIX"):]
+    assert "querySelectorAll('.card')" in cc_block or \
+           "querySelectorAll(\".card\")" in cc_block, (
+        "controls.html collapse IIFE must iterate .card elements to attach "
+        "click handlers to their h2 headings"
+    )
+    assert "addEventListener('click'" in cc_block or \
+           'addEventListener("click"' in cc_block, (
+        "controls.html collapse IIFE must attach 'click' event listener for toggle"
+    )
+
+
+# ── main.html / agents.html: 7-day bucket fix + 30-day window ────────────
+
+def test_main_pick_bucket_7day_returns_3600():
+    """main.html pickBucketForRange(10080) must return 3600 (hourly buckets for 7d).
+
+    Regression: was returning 900 (15-min buckets), producing 672 data points
+    all labelled 'HH:MM' by fmtTime's sub-3600 branch — no date component shown.
+    With 3600-s buckets fmtTime returns 'May 3 14:00' format.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    # Extract a generous window around pickBucketForRange (function is ≤ 10 lines)
+    start  = src.index("function pickBucketForRange")
+    fn_src = src[start:start + 350]
+    # Must NOT map 10080 to 900
+    assert "10080) return 900" not in fn_src and \
+           "<= 10080) return 900" not in fn_src, (
+        "main.html pickBucketForRange must not map 7-day range (10080 min) to "
+        "900-s buckets — that produces HH:MM-only labels with no date"
+    )
+    # Must map 10080 to 3600
+    assert "10080) return 3600" in fn_src or \
+           "<= 10080) return 3600" in fn_src, (
+        "main.html pickBucketForRange must map 7-day range (10080 min) to "
+        "3600-s (hourly) buckets so fmtTime produces 'May 3 14:00' labels"
+    )
+
+
+def test_main_pick_bucket_30day_returns_86400():
+    """main.html pickBucketForRange for >7d range must return 86400 (daily buckets)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    start = src.index("function pickBucketForRange")
+    # The fallthrough return for large ranges must be 86400
+    fn_area = src[start:start + 300]
+    assert "return 86400" in fn_area, (
+        "main.html pickBucketForRange must return 86400 for ranges > 7d "
+        "(30-day view needs daily buckets for 'May 3' date labels)"
+    )
+
+
+def test_main_30day_option_in_range_select():
+    """main.html range <select> must include a 30-day option (value='43200')."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert 'value="43200"' in src or "value='43200'" in src, (
+        "main.html range select must include <option value='43200'>30 days</option>"
+    )
+
+
+def test_agents_pick_bucket_7day_returns_3600():
+    """agents.html tPickBucketForRange(10080) must return 3600."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "tPickBucketForRange" in src, (
+        "agents.html must define tPickBucketForRange — agents dashboard had no "
+        "auto-bucket logic, causing 7-day view to use 60-s buckets with HH:MM labels"
+    )
+    start = src.index("function tPickBucketForRange")
+    fn_area = src[start:start + 300]
+    assert "return 3600" in fn_area, (
+        "agents.html tPickBucketForRange must return 3600 for 7-day range "
+        "(10080 min) so fmtTimeBucket produces date+time labels"
+    )
+    assert "10080) return 900" not in fn_area and \
+           "<= 10080) return 900" not in fn_area, (
+        "agents.html tPickBucketForRange must not map 7d to 900-s buckets"
+    )
+
+
+def test_agents_pick_bucket_30day_returns_86400():
+    """agents.html tPickBucketForRange for >7d must return 86400."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    start = src.index("function tPickBucketForRange")
+    fn_area = src[start:start + 300]
+    assert "return 86400" in fn_area, (
+        "agents.html tPickBucketForRange must return 86400 for 30-day range"
+    )
+
+
+def test_agents_30day_option_in_range_select():
+    """agents.html range select must include <option value='43200'>30 days</option>."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert 'value="43200"' in src or "value='43200'" in src, (
+        "agents.html range select must include a 30-day option (value='43200')"
+    )
+
+
+def test_agents_auto_select_bucket_wired_to_range_change():
+    """agents.html range change listener must call tAutoSelectBucket()."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "tAutoSelectBucket" in src, (
+        "agents.html must define tAutoSelectBucket to update the bucket select "
+        "when the range changes"
+    )
+    # Verify it is called from the range change listener
+    range_listener_area = src[src.rfind("t-range") - 10:
+                               src.rfind("t-range") + 200]
+    assert "tAutoSelectBucket" in range_listener_area, (
+        "agents.html t-range change listener must call tAutoSelectBucket() so the "
+        "bucket selector stays in sync with the chosen time window"
+    )
+
+
+# ── main.html / agents.html: tooltip date+time ───────────────────────────
+
+def test_main_tooltip_callback_uses_timeline_epoch():
+    """main.html chart tooltip title must use _lastMainTimeline epoch, not just axis label.
+
+    Without this, short-window views show bare 'HH:MM' in the tooltip with no date.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "_lastMainTimeline" in src, (
+        "main.html tooltip title callback must reference _lastMainTimeline to "
+        "derive a full date+time string from the bucket epoch"
+    )
+    assert "_lastMainBucketSecs" in src, (
+        "main.html tooltip title callback must reference _lastMainBucketSecs to "
+        "format the bucket end time correctly"
+    )
+    # The callback must produce a human-readable date (not just relay the axis label)
+    tooltip_block = src[src.find("callbacks:"):src.find("callbacks:") + 600]
+    assert "toLocaleDateString" in tooltip_block or "toLocaleString" in tooltip_block, (
+        "main.html tooltip title callback must format the epoch as a readable "
+        "date string (toLocaleDateString / toLocaleString)"
+    )
+
+
+def test_agents_tooltip_config_defined():
+    """agents.html chart must have a tooltip plugin config with title callback."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    # agents.html had no tooltip config at all before 1.7.4
+    assert "tooltip:{" in src.replace(" ", "") or \
+           "tooltip: {" in src, (
+        "agents.html chart options must define a tooltip plugin config "
+        "(was absent before 1.7.4)"
+    )
+    assert "_lastAgentTimeline" in src, (
+        "agents.html tooltip title callback must reference _lastAgentTimeline "
+        "to produce a full date+time string"
+    )
+    assert "_lastAgentBucketSecs" in src, (
+        "agents.html tooltip title callback must reference _lastAgentBucketSecs"
+    )
+
+
+def test_agents_tooltip_callback_formats_date():
+    """agents.html tooltip title callback must format the epoch as a readable date."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    tooltip_start = src.find("_lastAgentTimeline")
+    tooltip_area  = src[max(0, tooltip_start - 100):tooltip_start + 400]
+    assert "toLocaleDateString" in tooltip_area or "toLocaleString" in tooltip_area, (
+        "agents.html tooltip must call toLocaleDateString/toLocaleString to "
+        "format the bucket start as a human-readable date"
+    )
+
+
+# ── Dockerfile: pip version pinning + builder USER drop ──────────────────
+
+def test_dockerfile_pip_deps_use_exact_pins():
+    """Dockerfile must pin all pip deps to exact ==x.y.z versions (DL3013 / Aikido supply-chain)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    # Find the pip install RUN instruction
+    pip_block = src[src.find("pip install"):src.find("pip install") + 400]
+    # No range specifiers allowed
+    for bad in (">=", "<=", ">", "<", "~="):
+        # allow < inside version strings only — simplest check: no bare range after package name
+        assert f"'{bad}" not in pip_block and f'"{bad}' not in pip_block, (
+            f"Dockerfile pip install must use exact ==x.y.z pins, not range "
+            f"specifier {bad!r} — Aikido DL3013 / supply-chain finding"
+        )
+    # Must have exact pins
+    assert "==" in pip_block, (
+        "Dockerfile pip install must use exact ==x.y.z version pins"
+    )
+
+
+def test_dockerfile_armv7_pip_deps_use_exact_pins():
+    """Dockerfile.armv7 must pin all pip deps to exact ==x.y.z versions."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "Dockerfile.armv7").read_text()
+    pip_block = src[src.find("pip install"):src.find("pip install") + 400]
+    for bad in (">=", "<=", "~="):
+        assert f"'{bad}" not in pip_block and f'"{bad}' not in pip_block, (
+            f"Dockerfile.armv7 pip install must use exact pins, not {bad!r}"
+        )
+    assert "==" in pip_block, (
+        "Dockerfile.armv7 pip install must use exact ==x.y.z version pins"
+    )
+
+
+def test_dockerfile_builder_stage_drops_root():
+    """Dockerfile builder stage must end with USER nonroot (Aikido DL3002)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    # Find builder stage (everything before second FROM)
+    from_indices = [i for i in range(len(src)) if src[i:i+4] == "FROM"]
+    assert len(from_indices) >= 2, "Dockerfile must have at least 2 FROM lines (multi-stage)"
+    builder_stage = src[:from_indices[1]]
+    assert "USER nonroot" in builder_stage or "USER nobody" in builder_stage, (
+        "Dockerfile builder stage must end with 'USER nonroot' to satisfy "
+        "DL3002 — last USER in builder was root (Aikido HIGH finding)"
+    )
+
+
+def test_dockerfile_armv7_builder_stage_drops_root():
+    """Dockerfile.armv7 builder stage must end with USER nobody (Aikido DL3002)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "Dockerfile.armv7").read_text()
+    from_indices = [i for i in range(len(src)) if src[i:i+4] == "FROM"]
+    assert len(from_indices) >= 2, "Dockerfile.armv7 must have at least 2 FROM lines"
+    builder_stage = src[:from_indices[1]]
+    assert "USER nobody" in builder_stage or "USER nonroot" in builder_stage, (
+        "Dockerfile.armv7 builder stage must end with 'USER nobody' to satisfy "
+        "DL3002 — Alpine builder had implicit root as last USER"
     )

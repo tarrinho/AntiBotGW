@@ -2203,6 +2203,26 @@ async def protect(request: web.Request, handler):
                          "Cache-Control": "no-store",
                          _REQUEST_ID_HEADER: rid})
 
+    # 1.7.4 — Authorized monitoring bot pass-through.
+    # UptimeRobot, Pingdom, StatusCake et al. probe "/" to check availability.
+    # They send non-browser UAs with minimal headers, accumulating 45 pts per
+    # request and being banned after two hits.  Requests matching any UA
+    # substring in AUTHORIZED_BOT_UAS on path "/" are returned 200 ok and
+    # recorded as "authorized-robot" (shown in blue in dashboards, not blocked).
+    if AUTHORIZED_BOT_UAS and request.path == "/":
+        _mon_ua = request.headers.get("User-Agent", "")
+        if any(_sub in _mon_ua for _sub in AUTHORIZED_BOT_UAS):
+            _mon_ip = get_ip(request) or request.remote or ""
+            await record(_mon_ip, _mon_ua, request.path, 200, "authorized-robot",
+                         request_id=rid)
+            slog("authorized-robot", level="info",
+                 ip=_mon_ip, ua=_mon_ua, request_id=rid)
+            return web.Response(
+                status=200, text="ok",
+                headers={"Content-Type": "text/plain; charset=utf-8",
+                         "Cache-Control": "no-store",
+                         _REQUEST_ID_HEADER: rid})
+
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
     # request. Internal admin paths are exempt so health-checks and admin

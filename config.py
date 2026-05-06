@@ -91,6 +91,19 @@ _elb_raw = os.environ.get("ELB_HEALTH_CHECK_PATH", "/").strip()
 ELB_HEALTH_CHECK_PATH = (_elb_raw.rstrip("/") or "/")   # preserve "/" as-is
 ELB_HEALTH_CHECK_UA   = os.environ.get("ELB_HEALTH_CHECK_UA",   "ELB-HealthChecker").strip()
 
+# ── Authorized monitoring bot pass-through ────────────────────────────────────
+# Uptime monitors (UptimeRobot, Pingdom, StatusCake, etc.) probe "/" with
+# non-browser UAs and minimal headers — ua-non-browser (25 pts) +
+# ai-headers-incomplete (20 pts) bans them after 2 requests.
+# Requests matching any substring in AUTHORIZED_BOT_UAS on path "/"
+# are returned 200 ok and recorded as "authorized-robot" (shown in blue in the
+# dashboard, not counted as blocked). Set AUTHORIZED_BOT_UAS="" to disable.
+_bot_uas_raw = os.environ.get(
+    "AUTHORIZED_BOT_UAS",
+    "UptimeRobot,Pingdom,StatusCake,Site24x7,freshping,hetrix,"
+    "Better Uptime,uptimia,updown.io,HetrixTools,statuscake").strip()
+AUTHORIZED_BOT_UAS: list = [s.strip() for s in _bot_uas_raw.split(",") if s.strip()]
+
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)

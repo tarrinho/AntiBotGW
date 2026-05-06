@@ -201,6 +201,7 @@ function renderRequestRow(r){
   const status = r.status || 0;
   const reasonColor = !r.reason ? 'var(--dim)'
                     : r.reason==='OK' ? 'var(--green)'
+                    : r.reason==='authorized-robot' ? 'var(--blue)'
                     : 'var(--red)';
   const statusColor = status >= 500 ? 'var(--red)'
                     : status >= 400 ? 'var(--orange)'

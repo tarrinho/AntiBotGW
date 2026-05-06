@@ -546,7 +546,28 @@ function ensureAgentChart(){
     ]},
     options: { responsive:true, maintainAspectRatio:false,
       animation:{duration:200}, interaction:{mode:'index',intersect:false},
-      plugins:{ legend:{ labels:{ color:'#c9d1d9', font:{size:11} } } },
+      plugins:{
+        legend:{ labels:{ color:'#c9d1d9', font:{size:11} } },
+        tooltip:{
+          backgroundColor:'#161b22', borderColor:'#30363d', borderWidth:1,
+          titleColor:'#c9d1d9', bodyColor:'#c9d1d9',
+          callbacks:{
+            title: items => {
+              const idx = items[0].index;
+              const tl  = window._lastAgentTimeline;
+              const bs  = window._lastAgentBucketSecs || 60;
+              if (!tl || !tl[idx]) return items[0].label;
+              const d   = new Date(tl[idx].t * 1000);
+              if (bs >= 86400)
+                return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+              const end   = new Date((tl[idx].t + bs) * 1000);
+              const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+              const fmtT  = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+              return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
+            }
+          }
+        }
+      },
       // 1.5.4 — click-to-drill: open modal with IPs in the clicked bucket
       onClick: (ev, items) => {
         if (!items || !items.length) return;
@@ -564,10 +585,11 @@ function ensureAgentChart(){
   });
   return agentChart;
 }
-function fmtTimeBucket(epochSec, bucketSec){
+function fmtTimeBucket(epochSec, bucketSec, rangeMin){
   const d = new Date(epochSec*1000);
-  if (bucketSec >= 86400) return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
-  if (bucketSec >= 3600)  return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
+  const rm = rangeMin || 0;
+  if (bucketSec >= 86400 || rm >= 10080) return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+  if (bucketSec >= 3600  || rm > 180)   return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
   return d.getHours().toString().padStart(2,'0')+':'+d.getMinutes().toString().padStart(2,'0');
 }
 async function tickChart(){
@@ -582,8 +604,9 @@ async function tickChart(){
     const d = await r.json();
     const c = ensureAgentChart();
     const bs = d.bucket_secs || 60;
-    const labels = d.timeline.map(b=>fmtTimeBucket(b.t, bs));
-    const step = Math.max(1, Math.floor(labels.length/12));
+    const rm = tGetRangeMin();
+    const labels = d.timeline.map(b=>fmtTimeBucket(b.t, bs, rm));
+    const step = Math.max(1, Math.floor(labels.length/10));
     c.data.labels = labels.map((l,i)=>(i%step===0||i===labels.length-1)?l:'');
     c.data.datasets[0].data = d.timeline.map(b=>b.detected);
     c.data.datasets[1].data = d.timeline.map(b=>b.missed);
