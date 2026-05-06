@@ -174,6 +174,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
           <option value="720">12 h</option>
           <option value="1440">24 h</option>
           <option value="10080">7 days</option>
+          <option value="43200">30 days</option>
         </select>
         <span class="dim">bucket:</span>
         <select id="t-bucket" class="ctrl">
@@ -599,6 +600,17 @@ async function tickChart(){
 // Time-window navigation state for the timeline chart
 let tEndEpoch = null;   // null = live; epoch seconds = scrolled-back right edge
 function tGetRangeMin(){ return parseInt(document.getElementById('t-range').value||'60',10); }
+function tPickBucketForRange(rangeMin){
+  if (rangeMin <= 360)   return 60;
+  if (rangeMin <= 1440)  return 300;
+  if (rangeMin <= 10080) return 3600;
+  return 86400;
+}
+function tAutoSelectBucket(){
+  const bs = tPickBucketForRange(tGetRangeMin()).toString();
+  const sel = document.getElementById('t-bucket');
+  if ([...sel.options].some(o => o.value === bs)) sel.value = bs;
+}
 function tRefreshControls(){
   document.getElementById('t-next').disabled = (tEndEpoch === null);
   document.getElementById('t-now').disabled  = (tEndEpoch === null);
@@ -627,7 +639,7 @@ document.getElementById('t-next').onclick = () => {
   tRefreshControls(); tickChart();
 };
 document.getElementById('t-now').onclick = () => { tEndEpoch = null; tRefreshControls(); tickChart(); };
-document.getElementById('t-range').addEventListener('change', () => { tRefreshControls(); tickChart(); });
+document.getElementById('t-range').addEventListener('change', () => { tAutoSelectBucket(); tRefreshControls(); tickChart(); });
 document.getElementById('t-bucket').addEventListener('change', tickChart);
 tRefreshControls();
 

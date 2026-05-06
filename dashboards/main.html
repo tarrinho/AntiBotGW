@@ -188,6 +188,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
           <option value="1440">24 h</option>
           <option value="4320">3 days</option>
           <option value="10080">7 days</option>
+          <option value="43200">30 days</option>
         </select>
         <span class="dim" style="margin-left:6px">bucket:</span>
         <select id="bucket" class="ctrl">
@@ -547,8 +548,8 @@ function getBucketSec() { return parseInt(document.getElementById('bucket').valu
 function pickBucketForRange(rangeMin) {
   if (rangeMin <= 360)   return 60;
   if (rangeMin <= 1440)  return 300;
-  if (rangeMin <= 10080) return 900;
-  return 3600;
+  if (rangeMin <= 10080) return 3600;
+  return 86400;
 }
 
 function fmtTime(epochSec, bucketSec) {

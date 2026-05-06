@@ -1277,24 +1277,27 @@ def test_honey_probe_skips_ban_with_valid_chal_cookie():
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# AWS ELB health check pass-through (1.7.3)
+# AWS ELB health check pass-through (1.7.4)
 # ELB-HealthChecker/2.0 sends minimal headers — no Accept, Accept-Language,
 # Sec-Fetch-* — which triggers ua-non-browser (25 pts) + ai-headers-incomplete
 # (20 pts) per request, banning the LB node after two hits and causing the
-# target to be marked unhealthy.  The bypass requires BOTH the configured path
-# AND the configured UA prefix to match.
+# target to be marked unhealthy.  Default path is "/" (AWS ALB/NLB default).
+# Bypass requires BOTH path AND UA prefix to match.
 # ════════════════════════════════════════════════════════════════════════════
 
 def test_elb_health_check_config_vars_exist():
     """ELB_HEALTH_CHECK_PATH and ELB_HEALTH_CHECK_UA must be defined in config."""
     import config
     assert hasattr(config, "ELB_HEALTH_CHECK_PATH"), (
-        "config.py must define ELB_HEALTH_CHECK_PATH (default empty = disabled)"
+        "config.py must define ELB_HEALTH_CHECK_PATH (default '/' = root)"
     )
     assert hasattr(config, "ELB_HEALTH_CHECK_UA"), (
         "config.py must define ELB_HEALTH_CHECK_UA (default 'ELB-HealthChecker')"
     )
-    assert config.ELB_HEALTH_CHECK_PATH == "" or isinstance(config.ELB_HEALTH_CHECK_PATH, str)
+    assert config.ELB_HEALTH_CHECK_PATH == "/", (
+        "Default ELB_HEALTH_CHECK_PATH must be '/' — AWS ALB/NLB sends health "
+        "checks to root by default; empty default caused bypass to never activate"
+    )
     assert config.ELB_HEALTH_CHECK_UA == "ELB-HealthChecker", (
         "Default ELB_HEALTH_CHECK_UA must be 'ELB-HealthChecker' to match "
         "AWS ALB/NLB health checker User-Agent prefix 'ELB-HealthChecker/2.0'"
@@ -1340,10 +1343,7 @@ def test_elb_bypass_path_check_is_exact():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
-    assert elb_idx != -1
-    elb_block = src[elb_idx: elb_idx + 200]
-    assert "request.path == ELB_HEALTH_CHECK_PATH" in elb_block, (
+    assert "request.path == ELB_HEALTH_CHECK_PATH" in src, (
         "ELB path check must use exact equality (==) not startswith — "
         "a prefix match would expose adjacent paths to the bypass"
     )
@@ -1354,7 +1354,9 @@ def test_elb_health_check_response_is_200_ok():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
+    # Search from the actual if-condition line, not the comment
+    elb_idx = src.find("if ELB_HEALTH_CHECK_PATH and request.path")
+    assert elb_idx != -1
     block = src[elb_idx: elb_idx + 600]
     assert "status=200" in block, (
         "ELB health check bypass must return HTTP 200 — "
@@ -1365,18 +1367,30 @@ def test_elb_health_check_response_is_200_ok():
     )
 
 
-def test_elb_bypass_disabled_when_path_empty():
-    """When ELB_HEALTH_CHECK_PATH is empty the guard must not activate."""
+def test_elb_bypass_default_path_is_root():
+    """Default ELB_HEALTH_CHECK_PATH must be '/' so AWS ALB/NLB health checks
+    to the root work out of the box without operator configuration."""
+    import config
+    assert config.ELB_HEALTH_CHECK_PATH == "/", (
+        "ELB_HEALTH_CHECK_PATH default must be '/' — AWS ALB/NLB health checkers "
+        "probe GET / by default; the previous empty default meant the bypass never "
+        "activated and LB nodes were banned after two requests"
+    )
+
+
+def test_elb_bypass_disable_via_empty_ua():
+    """Setting ELB_HEALTH_CHECK_UA='' must disable the bypass entirely."""
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
-    block = src[elb_idx: elb_idx + 100]
-    # Guard must be conditional on the path being non-empty
-    assert ("if ELB_HEALTH_CHECK_PATH" in block or
-            "ELB_HEALTH_CHECK_PATH and" in block), (
-        "ELB bypass must be gated on ELB_HEALTH_CHECK_PATH being non-empty — "
-        "when the operator has not configured a path the bypass must be inactive"
+    # Locate the inner UA guard inside the ELB block
+    elb_idx = src.find("if ELB_HEALTH_CHECK_PATH and request.path")
+    assert elb_idx != -1
+    block = src[elb_idx: elb_idx + 400]
+    assert ("if ELB_HEALTH_CHECK_UA" in block or
+            "ELB_HEALTH_CHECK_UA and" in block), (
+        "ELB bypass must be gated on ELB_HEALTH_CHECK_UA being non-empty — "
+        "operators can disable the bypass by setting ELB_HEALTH_CHECK_UA=''"
     )
 
 
