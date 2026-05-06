@@ -2178,18 +2178,17 @@ async def protect(request: web.Request, handler):
     # silent-decoy without revealing the gateway, and the challenge gate
     # must not preempt them with an explicit response.
 
-    # 1.7.3 — AWS ELB / ALB health check pass-through.
+    # 1.7.4 — AWS ELB / ALB health check pass-through.
     # ELB-HealthChecker/2.0 sends only Host + Connection + Accept-Encoding —
     # no Accept, Accept-Language, Sec-Fetch-* — which triggers ua-non-browser
     # (25 pts) and ai-headers-incomplete (20 pts) on every request. After two
     # hits the LB node accumulates 90+ pts and is banned, causing the target
     # to be marked unhealthy and traffic to be drained.
     #
-    # Guard: BOTH the configured path AND the UA prefix must match so that
-    # external clients spoofing the UA on arbitrary paths still hit the full
-    # detection pipeline. ELB nodes are inside the VPC (private address space)
-    # so they arrive on a trusted-proxy chain; the path is operator-controlled
-    # and should be a non-obvious value matching the AWS target-group setting.
+    # Default path is "/" (AWS ALB/NLB default health-check target).  Override
+    # with ELB_HEALTH_CHECK_PATH for custom target-group paths.  Disable by
+    # setting ELB_HEALTH_CHECK_UA="" — UA match is required in all cases so
+    # arbitrary external clients hitting "/" are NOT exempt.
     if ELB_HEALTH_CHECK_PATH and request.path == ELB_HEALTH_CHECK_PATH:
         _elb_ua = request.headers.get("User-Agent", "")
         if ELB_HEALTH_CHECK_UA and ELB_HEALTH_CHECK_UA in _elb_ua:

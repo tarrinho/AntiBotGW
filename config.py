@@ -76,10 +76,10 @@ GLOBAL_RPS_LIMIT = int(os.environ.get("GLOBAL_RPS_LIMIT", "0"))
 # ai-headers-incomplete (20 pts) on every request, banning the LB node after
 # two hits and causing the target to be marked unhealthy.
 #
-# Setting ELB_HEALTH_CHECK_PATH bypasses all detection for requests that match
-# BOTH the path AND the UA prefix. Use a non-obvious path (the operator sets
-# the same value in the AWS target group health-check settings) so an attacker
-# spoofing the UA cannot abuse this exemption from an external source.
+# Bypass fires when BOTH path AND UA prefix match.  Default path is "/" because
+# AWS ALB/NLB health checks hit the root by default.  Operators may override
+# with ELB_HEALTH_CHECK_PATH to match a custom target-group health-check path.
+# Set ELB_HEALTH_CHECK_UA="" to disable the bypass entirely.
 #
 # Security properties:
 #   • Path + UA must both match — neither alone is sufficient.
@@ -87,7 +87,8 @@ GLOBAL_RPS_LIMIT = int(os.environ.get("GLOBAL_RPS_LIMIT", "0"))
 #     via the trusted-proxy chain; external IP spoofing is blocked upstream.
 #   • The path is never leaked in responses or logs (only the path hash is
 #     logged to prevent the value from appearing in log-aggregation tools).
-ELB_HEALTH_CHECK_PATH = os.environ.get("ELB_HEALTH_CHECK_PATH", "").strip().rstrip("/")
+_elb_raw = os.environ.get("ELB_HEALTH_CHECK_PATH", "/").strip()
+ELB_HEALTH_CHECK_PATH = (_elb_raw.rstrip("/") or "/")   # preserve "/" as-is
 ELB_HEALTH_CHECK_UA   = os.environ.get("ELB_HEALTH_CHECK_UA",   "ELB-HealthChecker").strip()
 
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
