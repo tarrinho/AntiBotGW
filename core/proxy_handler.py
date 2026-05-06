@@ -2102,10 +2102,10 @@ async def config_endpoint(request: web.Request):
                         "incompatible with TURNSTILE_ENABLED")
         slog("config_mutex", level="warn", reason="turnstile-cleared-ja4-required")
 
-    if applied:
+    if applied or rejected:
         slog("config_changed", level="warn",
              rid=request.get("_rid", ""), applied=list(applied.keys()),
-             rejected=list(rejected.keys()))
+             rejected=rejected)
     return web.json_response(
         {"applied": applied, "rejected": rejected, "warnings": warnings,
          "state": _read_hot_reload_state()},

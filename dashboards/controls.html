@@ -179,9 +179,6 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .bot-entry-hdr{display:flex;align-items:center;gap:8px;margin-bottom:9px}
 .bot-name-lbl{font-family:ui-monospace,Menlo,monospace;font-size:12.5px;font-weight:600;
   flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--fg)}
-.bot-action-sel{width:148px;margin-left:auto;flex-shrink:0;font-size:11.5px;
-  background:#0d1117;border:1px solid var(--line);color:var(--fg);
-  padding:4px 6px;border-radius:4px;font-family:ui-monospace,Menlo,monospace}
 .bot-entry-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .bot-entry-grid>div{display:flex;flex-direction:column;gap:3px}
 .bot-field-lbl{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px}
@@ -190,7 +187,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
   padding:5px 8px;border-radius:4px;font-family:ui-monospace,Menlo,monospace;
   font-size:11.5px;width:100%;box-sizing:border-box}
 .bot-entry-grid textarea{min-height:52px;resize:vertical}
-.bot-entry-grid input:focus,.bot-entry-grid textarea:focus,.bot-action-sel:focus{
+.bot-entry-grid input:focus,.bot-entry-grid textarea:focus{
   outline:none;border-color:var(--blue)}
 .bot-del-btn{background:none;border:1px solid rgba(248,81,73,.3);color:var(--red);
   padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;flex-shrink:0}
@@ -744,7 +741,7 @@ const META = {
   DLP_GROUP_API_KEY_ENABLED:     {kind:'bool', desc:'DLP group: API-key shapes (Slack xoxb-, GitHub ghp_/gho_, OpenAI sk-, labelled high-entropy secrets).'},
   DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
   DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
-  AUTHORIZED_BOT_UAS:      {kind:'botlist', card:'bypass', desc:'Structured monitoring-bot pass-through rules. Each entry: UA substring + path (+ optional source IPs) → action (authorized-robot / allow / ban / really-ban).'},
+  AUTHORIZED_BOT_UAS:      {kind:'botlist', card:'bypass', desc:'Structured monitoring-bot pass-through rules. Each entry: UA substring + path (+ optional source IPs). Matched requests are recorded blue and passed through.'},
   WEBHOOK_EVENT_FILTER:    {kind:'list', card:'ext-misc', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
   DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
@@ -830,7 +827,7 @@ function _buildBotListUI(knobName, raw) {
         ua:      row.querySelector('.bot-ua-inp').value.trim(),
         path:    row.querySelector('.bot-path-inp').value.trim()||'/',
         ips:     row.querySelector('.bot-ips-inp').value.split('\n').map(s=>s.trim()).filter(Boolean),
-        action:  row.querySelector('.bot-action-sel').value,
+        action:  'authorized-robot',
         enabled: row.querySelector('.bot-toggle').classList.contains('on'),
       });
     });
@@ -861,23 +858,13 @@ function _buildBotListUI(knobName, raw) {
     nameLbl.className = 'bot-name-lbl';
     nameLbl.textContent = bot.name || bot.ua || '(unnamed)';
 
-    const actSel = document.createElement('select');
-    actSel.className = 'bot-action-sel';
-    [['authorized-robot','🟦 Authorized bot'],['allow','✅ Allow'],
-     ['ban','🚫 Ban'],['really-ban','⛔ Really ban']].forEach(([val,lbl]) => {
-      const o = new Option(lbl, val);
-      if (bot.action === val) o.selected = true;
-      actSel.add(o);
-    });
-    actSel.onchange = onChange;
-
     const delBtn = document.createElement('button');
     delBtn.className = 'bot-del-btn';
     delBtn.textContent = '✕';
     delBtn.title = 'Remove this entry';
     delBtn.onclick = () => { row.remove(); onChange(); };
 
-    hdr.append(tog, nameLbl, actSel, delBtn);
+    hdr.append(tog, nameLbl, delBtn);
 
     // Fields grid
     const grid = document.createElement('div');

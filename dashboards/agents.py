@@ -255,10 +255,18 @@ async def agents_data_endpoint(request: web.Request):
                 ((r, c) for r, c in s.blocks_by_reason.items() if c > 0),
                 key=lambda kv: kv[1], reverse=True,
             )
+            _s_ua = s.last_user_agent or ""
+            _s_is_auth_bot = any(
+                isinstance(_b, dict) and _b.get("enabled", True)
+                and _b.get("action", "authorized-robot") == "authorized-robot"
+                and _b.get("ua", "") and _b["ua"] in _s_ua
+                for _b in AUTHORIZED_BOT_UAS
+            )
             suspects.append({
                 "id": key,
                 "ip": s.last_ip or key,
                 "is_admin_ip": _is_admin_ip(s.last_ip or key),
+                "is_authorized_bot": _s_is_auth_bot,
                 "session": s.last_session,
                 "fingerprint": s.last_fingerprint,
                 "ja4": s.last_ja4,

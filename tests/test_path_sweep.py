@@ -177,12 +177,16 @@ def test_expired_entries_pruned(proxy_module, monkeypatch):
     threshold = config.PATH_SWEEP_THRESHOLD
     key = "test-expiry"
 
-    # Manually insert old entries (timestamp = 0, long past window)
+    # Manually insert old entries (guaranteed outside window regardless of
+    # how long the system has been running — monotonic() - window * 2 is
+    # always < cutoff = monotonic() - window).
+    import time as _time
+    old_ts = _time.monotonic() - config.PATH_SWEEP_WINDOW_SECS * 2
     from state import state_lock
     async def plant_old():
         async with state_lock:
             for i in range(threshold):
-                ip_state[key].path_sweep_times.append((0.0, f"/old-{i}"))
+                ip_state[key].path_sweep_times.append((old_ts, f"/old-{i}"))
 
     _run(plant_old())
 

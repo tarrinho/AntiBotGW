@@ -2506,3 +2506,202 @@ def test_geo_data_authorized_robot_classification_precedes_asn_update():
         "kind classification (authorized-robot check) must come BEFORE the "
         "asn_totals increment — otherwise the wrong kind is counted"
     )
+
+
+# ---------------------------------------------------------------------------
+# 1.7.5 — is_authorized_bot in metrics clients list
+# ---------------------------------------------------------------------------
+
+def test_metrics_clients_includes_is_authorized_bot_field():
+    """metrics endpoint clients list must include is_authorized_bot field.
+
+    Needed so dashboards (agents.html, main.html) can show the auth-bot state
+    in the ban-ctrl button group and popover status line.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    ca_idx = src.find("clients.append({")
+    assert ca_idx != -1, "proxy_handler.py must have clients.append({ in metrics endpoint"
+    ca_block = src[ca_idx: ca_idx + 1000]
+    assert '"is_authorized_bot"' in ca_block or "'is_authorized_bot'" in ca_block, (
+        "clients.append() dict must include 'is_authorized_bot' field — "
+        "dashboards use this to render the auth-bot status button and popover"
+    )
+
+
+def test_metrics_clients_is_authorized_bot_checks_authorized_robot_action():
+    """is_authorized_bot computation must only match entries with action=authorized-robot.
+
+    Entries with action=ban or action=allow must not trigger is_authorized_bot=True.
+    Ensures bot-rule-ban/bot-rule-allow entries don't accidentally mark clients
+    as authorized bots in the dashboard.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    ca_idx = src.find("clients.append({")
+    assert ca_idx != -1
+    # Search backwards from clients.append for the is_auth_bot computation
+    pre_block = src[max(0, ca_idx - 500): ca_idx + 50]
+    assert "authorized-robot" in pre_block, (
+        "is_authorized_bot computation must filter action == 'authorized-robot' — "
+        "otherwise ban/allow bot entries would incorrectly set the flag"
+    )
+
+
+def test_agents_html_ban_ctrl_has_authorized_bot_button():
+    """agents.html suspicious identities table must have an Auth Bot button in ban-ctrl."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "authorized-bot" in src and "auth-bot" in src, (
+        "agents.html ban-ctrl must include authorized-bot button with data-action='auth-bot' (1.7.5)"
+    )
+    assert "Auth Bot" in src, (
+        "agents.html ban-ctrl must label the authorized-bot button 'Auth Bot'"
+    )
+
+
+def test_main_html_ban_ctrl_has_authorized_bot_button():
+    """main.html clients table must have an Auth Bot button in ban-ctrl."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "authorized-bot" in src and "auth-bot" in src, (
+        "main.html ban-ctrl must include authorized-bot button with data-action='auth-bot' (1.7.5)"
+    )
+    assert "Auth Bot" in src, (
+        "main.html ban-ctrl must label the authorized-bot button 'Auth Bot'"
+    )
+
+
+def test_agents_html_authorized_bot_css_active_state():
+    """agents.html must have CSS active state for authorized-bot ban button."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert ".ban-btn.authorized-bot.active" in src, (
+        "agents.html must define .ban-btn.authorized-bot.active CSS rule — "
+        "without it the active button has no visual highlight"
+    )
+
+
+def test_main_html_authorized_bot_css_active_state():
+    """main.html must have CSS active state for authorized-bot ban button."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert ".ban-btn.authorized-bot.active" in src, (
+        "main.html must define .ban-btn.authorized-bot.active CSS rule — "
+        "without it the active button has no visual highlight"
+    )
+
+
+def test_agents_html_bstate_checks_is_authorized_bot():
+    """agents.html _bstate computation must check s.is_authorized_bot first."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    bstate_idx = src.find("_bstate =")
+    assert bstate_idx != -1, "agents.html must have a _bstate variable"
+    bstate_line = src[bstate_idx: bstate_idx + 200]
+    assert "is_authorized_bot" in bstate_line, (
+        "agents.html _bstate must check s.is_authorized_bot — "
+        "otherwise authorized bots show as 'allow' instead of 'authorized-bot'"
+    )
+
+
+def test_main_html_mst_checks_is_authorized_bot():
+    """main.html _mst computation must check c.is_authorized_bot first."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    mst_idx = src.find("_mst =")
+    assert mst_idx != -1, "main.html must have a _mst variable"
+    mst_line = src[mst_idx: mst_idx + 200]
+    assert "is_authorized_bot" in mst_line, (
+        "main.html _mst must check c.is_authorized_bot — "
+        "otherwise authorized bots show as 'allow' instead of 'authorized-bot'"
+    )
+
+
+def test_agents_html_popover_banline_has_authorized_bot_case():
+    """agents.html openPopover banLine must show blue 'Authorized Bot' status."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    pop_idx = src.find("function openPopover")
+    assert pop_idx != -1
+    pop_section = src[pop_idx: pop_idx + 1500]
+    assert "is_authorized_bot" in pop_section, (
+        "agents.html openPopover banLine must check s.is_authorized_bot — "
+        "without it the popover status line never shows 'Authorized Bot'"
+    )
+    assert "Authorized Bot" in pop_section, (
+        "agents.html openPopover banLine must include 'Authorized Bot' text label"
+    )
+
+
+def test_main_html_popover_banline_has_authorized_bot_case():
+    """main.html openClientPopover banLine must show blue 'Authorized Bot' status."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    pop_idx = src.find("window.openClientPopover")
+    assert pop_idx != -1, "main.html must define window.openClientPopover"
+    pop_section = src[pop_idx: pop_idx + 1500]
+    assert "is_authorized_bot" in pop_section, (
+        "main.html openClientPopover banLine must check c.is_authorized_bot — "
+        "without it the popover status line never shows 'Authorized Bot'"
+    )
+    assert "Authorized Bot" in pop_section, (
+        "main.html openClientPopover banLine must include 'Authorized Bot' text label"
+    )
+
+
+def test_agents_html_auth_bot_handler_calls_config_endpoint():
+    """agents.html Auth Bot click handler must POST to the config endpoint."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "auth-bot" in src, "agents.html must wire data-action='auth-bot'"
+    assert "AUTHORIZED_BOT_UAS" in src, (
+        "agents.html auth-bot handler must POST AUTHORIZED_BOT_UAS to config endpoint"
+    )
+
+
+def test_main_html_auth_bot_handler_calls_config_endpoint():
+    """main.html Auth Bot click handler must POST to the config endpoint."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "auth-bot" in src, "main.html must wire data-action='auth-bot'"
+    assert "AUTHORIZED_BOT_UAS" in src, (
+        "main.html auth-bot handler must POST AUTHORIZED_BOT_UAS to config endpoint"
+    )
+
+
+def test_main_html_banned_tag_shows_auth_bot_for_authorized_bots():
+    """main.html banned column must render 'auth-bot' tag for is_authorized_bot clients."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    banned_idx = src.find("const banned =")
+    assert banned_idx != -1, "main.html must have const banned = ... for status tag"
+    banned_block = src[banned_idx: banned_idx + 300]
+    assert "is_authorized_bot" in banned_block, (
+        "main.html banned tag must check c.is_authorized_bot — "
+        "otherwise the status column shows '—' for authorized bots instead of 'auth-bot'"
+    )
+    assert "auth-bot" in banned_block or "authorized-robot" in banned_block, (
+        "main.html banned tag must render an 'auth-bot' or 'authorized-robot' label "
+        "for clients whose UA matches the authorized bot list"
+    )
+
+
+def test_agents_html_ban_ctrl_stores_ua_in_data_attribute():
+    """agents.html ban-ctrl div must store the client UA in data-ua for auth-bot handler."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert 'data-ua=' in src, (
+        "agents.html ban-ctrl must set data-ua attribute — "
+        "the auth-bot click handler reads it to know which UA to add to the bot list"
+    )
+
+
+def test_main_html_ban_ctrl_stores_ua_in_data_attribute():
+    """main.html ban-ctrl div must store the client UA in data-ua for auth-bot handler."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert 'data-ua=' in src, (
+        "main.html ban-ctrl must set data-ua attribute — "
+        "the auth-bot click handler reads it to know which UA to add to the bot list"
+    )

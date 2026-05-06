@@ -123,7 +123,7 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .modal td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace;font-size:11.5px}
 .modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
 .act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
-.act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}
+.act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
 
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
@@ -739,15 +739,42 @@ async function tick() {
       </tr>`;
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
     _updateCliSortHeaders();
-    // Wire 3-state ban controls.
+    // Wire 4-state ban controls (allow / banned / really-banned / authorized-bot).
     tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
       ctrl.querySelectorAll('.ban-btn').forEach(btn => {
         btn.addEventListener('click', async (ev) => {
           ev.stopPropagation();
           if (btn.classList.contains('active')) return;
           const id = ctrl.dataset.id;
-          const secs = parseInt(btn.dataset.secs, 10);
           ctrl.style.opacity = '0.5';
+          if (btn.dataset.action === 'auth-bot') {
+            const ua = ctrl.dataset.ua || '';
+            try {
+              const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+              const gs = await gr.json().catch(()=>({}));
+              const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+              const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
+              const newBots = existing
+                ? bots.map(b => (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:true, action:'authorized-robot'} : b)
+                : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
+              const pr = await fetch('/antibot-appsec-gateway/secured/config', {
+                method:'POST', credentials:'include',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+              });
+              const pb = await pr.json().catch(()=>({}));
+              if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+                ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
+                btn.classList.add('active');
+                setTimeout(tick, 500);
+              } else {
+                alert('Action failed (' + pr.status + ') — ' + (pb.error || JSON.stringify(pb.rejected||{})));
+              }
+            } catch(e) { alert('Network error: ' + e.message); }
+            ctrl.style.opacity = '1';
+            return;
+          }
+          const secs = parseInt(btn.dataset.secs, 10);
           const endpoint = secs === 0
             ? '/antibot-appsec-gateway/secured/unban?id=' + encodeURIComponent(id)
             : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
@@ -1198,7 +1225,9 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     if (kind === 'id-main'){
       title = 'Identity details';
       const _pbs = c.banned_secs || 0;
-      const banLine = _pbs > 86400
+      const banLine = c.is_authorized_bot
+        ? `<span style="color:var(--blue);font-weight:600">Authorized Bot · UA matched bot list</span>`
+        : _pbs > 86400
         ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(_pbs/86400).toFixed(1)}d remaining</span>`
         : _pbs > 0
         ? `<span style="color:#d29922;font-weight:600">Banned · ~${(_pbs/3600).toFixed(1)}h remaining</span>`
@@ -1431,7 +1460,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
       } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; }
     }
-    function actionBtns(ip, id){
+    function actionBtns(ip, id, ua){
       const enc = encodeURIComponent(ip);
       const encId = id ? encodeURIComponent(id) : null;
       const banUrl  = encId
@@ -1441,10 +1470,11 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         ? `${adminNs}/ban?id=${encId}&secs=2678400&reason=hard-ban`
         : `${adminNs}/ban?ip=${enc}&secs=2678400&reason=hard-ban`;
       const allowUrl = `${adminNs}/unban?ip=${enc}`;
-      return `<span class="act-btns" data-ban="${banUrl}" data-hban="${hbanUrl}" data-allow="${allowUrl}">`+
+      return `<span class="act-btns" data-ban="${banUrl}" data-hban="${hbanUrl}" data-allow="${allowUrl}" data-authbot="${escapeHtml(ua||'')}">`+
         `<button class="act ban"  title="Ban 1 h">Ban</button>`+
         `<button class="act hban" title="Hard ban 31 d">Hard ban</button>`+
         `<button class="act allow" title="Unban / allow">Allow</button>`+
+        `<button class="act authbot" title="Add to authorized bots">Auth Bot</button>`+
         `</span>`;
     }
     const renderClean = list => !list.length ? '<div class="empty">no entries</div>' :
@@ -1456,7 +1486,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-        <td>${actionBtns(e.ip)}</td>
+        <td>${actionBtns(e.ip, null, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
     const renderBlocked = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
@@ -1470,7 +1500,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
           <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
           <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
           <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-          <td>${actionBtns(e.ip)}</td>
+          <td>${actionBtns(e.ip, null, e.ua)}</td>
         </tr>`;
       }).join('') + '</tbody></table>';
     const renderMissed = list => !list.length ? '<div class="empty">no entries</div>' :
@@ -1483,7 +1513,7 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
         <td style="text-align:right">${e.risk_score}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-        <td>${actionBtns(e.ip, e.id)}</td>
+        <td>${actionBtns(e.ip, e.id, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
     const renderAuthBots = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
@@ -1528,6 +1558,32 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
       span.querySelector('.ban' ).onclick = e => { e.preventDefault(); ipAction(e.target, span.dataset.ban);   };
       span.querySelector('.hban').onclick = e => { e.preventDefault(); ipAction(e.target, span.dataset.hban);  };
       span.querySelector('.allow').onclick= e => { e.preventDefault(); ipAction(e.target, span.dataset.allow); };
+      const abBtn = span.querySelector('.authbot');
+      if (abBtn) abBtn.onclick = async e => {
+        e.preventDefault();
+        const ua = span.dataset.authbot || '';
+        abBtn.disabled = true; abBtn.textContent = '…';
+        try {
+          const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+          const gs = await gr.json().catch(()=>({}));
+          const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+          const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
+          const newBots = existing
+            ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
+            : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
+          const pr = await fetch('/antibot-appsec-gateway/secured/config', {
+            method:'POST', credentials:'include',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+          });
+          const pb = await pr.json().catch(()=>({}));
+          if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+            abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
+          } else {
+            abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
+          }
+        } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
+      };
     });
     back.classList.add('show'); modal.classList.add('show');
   };

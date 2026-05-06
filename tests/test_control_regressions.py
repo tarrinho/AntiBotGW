@@ -106,6 +106,12 @@ async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
     if _turnstile_on:
         proxy_module._TURNSTILE_CONFIGURED = True
         _propagate_to_all_modules("_TURNSTILE_CONFIGURED", True)
+    # Clear per-IP runtime state so this test is not affected by previous
+    # tests leaving dirty risk scores, bans, or depleted token buckets.
+    from state import ip_state, ip_buckets, ip_new_sessions
+    ip_state.clear()
+    ip_buckets.clear()
+    ip_new_sessions.clear()
     try:
         yield client
     finally:
@@ -131,6 +137,10 @@ async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
                     setattr(_m, 'db_queue', None)
                 except (AttributeError, TypeError):
                     pass
+        # Clear runtime state again so the next test starts clean.
+        ip_state.clear()
+        ip_buckets.clear()
+        ip_new_sessions.clear()
         for k, v in saved.items():
             setattr(proxy_module, k, v)
             _propagate_to_all_modules(k, v)
