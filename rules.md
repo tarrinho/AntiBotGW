@@ -658,6 +658,46 @@ Regression tests in `test_pure.py` must verify §17a, §17c, §17d per file.
 
 ---
 
+### 17h. AWS ELB / ALB health check pass-through
+
+AWS Elastic Load Balancer health checkers use `User-Agent: ELB-HealthChecker/2.0`
+and send only `Host`, `Connection: close`, and `Accept-Encoding` — no `Accept`,
+`Accept-Language`, `Sec-Fetch-*`. Without the bypass:
+
+| Signal | Score per hit |
+|--------|---------------|
+| `ua-non-browser` | 25 |
+| `ai-headers-incomplete` | 20 |
+
+Two requests → 90 pts → ban. The ELB marks the target **unhealthy** and drains traffic.
+
+**Configuration (set in `.env` + AWS target group):**
+```
+ELB_HEALTH_CHECK_PATH=/your-secret-health-path   # must match AWS target group setting
+ELB_HEALTH_CHECK_UA=ELB-HealthChecker            # matches ELB-HealthChecker/2.0 and future versions
+```
+
+**Security model:**
+- Path **and** UA must both match — neither alone triggers the bypass.
+- Use a non-obvious path value (the operator controls both the gateway env and the AWS console setting).
+- ELB nodes always originate from within the VPC private address space (consistent with `TRUSTED_PROXIES`).
+- The plaintext path is never logged — only a SHA-256 prefix is recorded in the structured log.
+
+**Pass criteria:**
+```
+pytest tests/test_pure.py -k "elb"
+```
+Must produce `7 passed`. Verify the bypass is active in the live container:
+```bash
+curl -sk http://localhost:8443/$ELB_HEALTH_CHECK_PATH \
+  -H "User-Agent: ELB-HealthChecker/2.0" \
+  -H "Connection: close" \
+  -H "Accept-Encoding: gzip, compressed"
+# Expected: 200 OK, body "ok"
+```
+
+---
+
 ## Findings policy
 **Fix before declaring the build done.** Pre-existing failures (e.g.
 the JS-challenge HTML tests broken since 1.5.4 risk-gating Turnstile)

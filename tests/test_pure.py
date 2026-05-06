@@ -530,7 +530,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.3"
+_EXPECTED_VERSION = "AppSecGW_1.7.4"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -546,7 +546,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.3\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.4\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
@@ -570,7 +570,7 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.3:\n" + "\n".join(hits)
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.4:\n" + "\n".join(hits)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -1235,3 +1235,145 @@ def test_js_challenge_applicable_imports_decay_risk():
         "comparing risk_score against the Turnstile activation threshold. "
         "Without the import the function raises NameError → HTTP 500."
     )
+
+
+# ── Regression: honey probe false-positive guard ──────────────────────────────
+# Bug: honey_probe_endpoint applied +90 risk (honey-cred) to any identity that
+# hit the probe URL, including legitimate human developers who viewed the HTML
+# comment in browser DevTools and curiosity-clicked the link. Real browsers
+# have a valid chal cookie (auto-minted or Turnstile-issued); AI scraping
+# agents have no cookie.
+# Fix: skip the ban when the probe request carries a valid chal cookie.
+
+def test_honey_probe_skips_ban_with_valid_chal_cookie():
+    """honey_probe_endpoint must not apply risk when requester has a valid
+    chal cookie — that confirms a real browser, not an AI agent."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.honey_probe_endpoint)
+    assert "_verify_chal_cookie" in src, (
+        "honey_probe_endpoint must check _verify_chal_cookie before applying "
+        "honey-cred risk — a human developer who clicks the probe URL from "
+        "DevTools has a valid chal cookie and must not be banned."
+    )
+    assert "has_chal" in src or "chal_cookie" in src or "not has_chal" in src, (
+        "honey_probe_endpoint must gate the ban on the chal-cookie check result."
+    )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# AWS ELB health check pass-through (1.7.3)
+# ELB-HealthChecker/2.0 sends minimal headers — no Accept, Accept-Language,
+# Sec-Fetch-* — which triggers ua-non-browser (25 pts) + ai-headers-incomplete
+# (20 pts) per request, banning the LB node after two hits and causing the
+# target to be marked unhealthy.  The bypass requires BOTH the configured path
+# AND the configured UA prefix to match.
+# ════════════════════════════════════════════════════════════════════════════
+
+def test_elb_health_check_config_vars_exist():
+    """ELB_HEALTH_CHECK_PATH and ELB_HEALTH_CHECK_UA must be defined in config."""
+    import config
+    assert hasattr(config, "ELB_HEALTH_CHECK_PATH"), (
+        "config.py must define ELB_HEALTH_CHECK_PATH (default empty = disabled)"
+    )
+    assert hasattr(config, "ELB_HEALTH_CHECK_UA"), (
+        "config.py must define ELB_HEALTH_CHECK_UA (default 'ELB-HealthChecker')"
+    )
+    assert config.ELB_HEALTH_CHECK_PATH == "" or isinstance(config.ELB_HEALTH_CHECK_PATH, str)
+    assert config.ELB_HEALTH_CHECK_UA == "ELB-HealthChecker", (
+        "Default ELB_HEALTH_CHECK_UA must be 'ELB-HealthChecker' to match "
+        "AWS ALB/NLB health checker User-Agent prefix 'ELB-HealthChecker/2.0'"
+    )
+
+
+def test_elb_health_check_bypass_in_protect_source():
+    """protect() middleware must contain the ELB health check bypass guard."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    assert "ELB_HEALTH_CHECK_PATH" in src, (
+        "protect() must check ELB_HEALTH_CHECK_PATH to bypass bot detection "
+        "for AWS ELB health checker requests"
+    )
+    assert "ELB_HEALTH_CHECK_UA" in src, (
+        "protect() must check ELB_HEALTH_CHECK_UA — path alone is not enough; "
+        "UA must also match to prevent abuse from non-LB clients"
+    )
+
+
+def test_elb_bypass_requires_both_path_and_ua():
+    """The bypass must require BOTH path AND UA prefix to match."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    # Both must appear in a compound condition — locate the ELB block
+    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
+    assert elb_idx != -1
+    elb_block = src[elb_idx: elb_idx + 400]
+    assert "ELB_HEALTH_CHECK_UA" in elb_block, (
+        "ELB UA check must be inside the ELB_HEALTH_CHECK_PATH block — "
+        "a UA-only check would let any external client bypass detection"
+    )
+    assert "ELB_HEALTH_CHECK_UA in" in elb_block or "ELB_HEALTH_CHECK_UA and" in elb_block, (
+        "ELB_HEALTH_CHECK_UA must be used as a substring match ('in') against "
+        "the User-Agent header so future ELB-HealthChecker/3.0 versions also match"
+    )
+
+
+def test_elb_bypass_path_check_is_exact():
+    """Path check must be exact equality, not startswith, to prevent prefix abuse."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
+    assert elb_idx != -1
+    elb_block = src[elb_idx: elb_idx + 200]
+    assert "request.path == ELB_HEALTH_CHECK_PATH" in elb_block, (
+        "ELB path check must use exact equality (==) not startswith — "
+        "a prefix match would expose adjacent paths to the bypass"
+    )
+
+
+def test_elb_health_check_response_is_200_ok():
+    """ELB bypass must return HTTP 200 with 'ok' body."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
+    block = src[elb_idx: elb_idx + 600]
+    assert "status=200" in block, (
+        "ELB health check bypass must return HTTP 200 — "
+        "ELB marks targets unhealthy on any non-2xx response"
+    )
+    assert '"ok"' in block or "'ok'" in block, (
+        "ELB bypass response body must be 'ok' (plain text health status)"
+    )
+
+
+def test_elb_bypass_disabled_when_path_empty():
+    """When ELB_HEALTH_CHECK_PATH is empty the guard must not activate."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
+    block = src[elb_idx: elb_idx + 100]
+    # Guard must be conditional on the path being non-empty
+    assert ("if ELB_HEALTH_CHECK_PATH" in block or
+            "ELB_HEALTH_CHECK_PATH and" in block), (
+        "ELB bypass must be gated on ELB_HEALTH_CHECK_PATH being non-empty — "
+        "when the operator has not configured a path the bypass must be inactive"
+    )
+
+
+def test_elb_path_logged_as_hash_not_plaintext():
+    """ELB bypass must log a hash of the path, not the plaintext value."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    elb_idx = src.find("ELB_HEALTH_CHECK_PATH")
+    block = src[elb_idx: elb_idx + 600]
+    assert "sha256" in block or "path_tag" in block or "hash" in block.lower(), (
+        "ELB bypass must log a hash (sha256) of the health check path — "
+        "logging the plaintext path leaks the secret value to log aggregators"
+    )
+

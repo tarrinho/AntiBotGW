@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.7.3"
+GW_VERSION = "AppSecGW_1.7.4"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -69,6 +69,27 @@ REALLY_BAN_SECS   = int(os.environ.get("REALLY_BAN_SECS", "2592000"))  # 30 d
 # the main dashboard's threshold slider. Default 0 = disabled (no global cap;
 # per-identity / per-socket-IP buckets still apply).
 GLOBAL_RPS_LIMIT = int(os.environ.get("GLOBAL_RPS_LIMIT", "0"))
+
+# ── AWS ELB / ALB health check pass-through ──────────────────────────────────
+# ELB-HealthChecker/2.0 sends GET <path> with minimal headers (no Accept,
+# Accept-Language, Sec-Fetch-*) — this triggers ua-non-browser (25 pts) and
+# ai-headers-incomplete (20 pts) on every request, banning the LB node after
+# two hits and causing the target to be marked unhealthy.
+#
+# Setting ELB_HEALTH_CHECK_PATH bypasses all detection for requests that match
+# BOTH the path AND the UA prefix. Use a non-obvious path (the operator sets
+# the same value in the AWS target group health-check settings) so an attacker
+# spoofing the UA cannot abuse this exemption from an external source.
+#
+# Security properties:
+#   • Path + UA must both match — neither alone is sufficient.
+#   • ELB health check IPs live inside the VPC (private range) so they arrive
+#     via the trusted-proxy chain; external IP spoofing is blocked upstream.
+#   • The path is never leaked in responses or logs (only the path hash is
+#     logged to prevent the value from appearing in log-aggregation tools).
+ELB_HEALTH_CHECK_PATH = os.environ.get("ELB_HEALTH_CHECK_PATH", "").strip().rstrip("/")
+ELB_HEALTH_CHECK_UA   = os.environ.get("ELB_HEALTH_CHECK_UA",   "ELB-HealthChecker").strip()
+
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)

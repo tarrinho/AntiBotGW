@@ -66,7 +66,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.7.3 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.4 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -433,6 +433,14 @@ const fmtTime = ts => {
 let endEpoch = null;   // null = live, otherwise number = scrolled-back right edge
 function getRangeMin(){ return parseInt(document.getElementById('range').value||'60',10); }
 function getBucketSec(){return parseInt(document.getElementById('bucket').value||'5',10); }
+function pickBucketForRange(rangeMin) {
+  if (rangeMin <= 15)    return 5;
+  if (rangeMin <= 60)    return 30;
+  if (rangeMin <= 360)   return 60;
+  if (rangeMin <= 1440)  return 300;
+  if (rangeMin <= 10080) return 900;
+  return 3600;
+}
 function refreshControls(){
   document.getElementById('next').disabled = (endEpoch === null);
   document.getElementById('now').disabled  = (endEpoch === null);
@@ -461,7 +469,7 @@ document.getElementById('next').onclick = () => {
   refreshControls(); tick();
 };
 document.getElementById('now').onclick = () => { endEpoch = null; refreshControls(); tick(); };
-document.getElementById('range').onchange  = () => { refreshControls(); tick(); };
+document.getElementById('range').onchange  = () => { document.getElementById('bucket').value = pickBucketForRange(getRangeMin()); refreshControls(); tick(); };
 document.getElementById('bucket').onchange = () => { tick(); };
 refreshControls();
 
@@ -949,16 +957,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const summaryEl = document.getElementById('sm-summary');
   const loadingEl = document.getElementById('sm-loading');
   let currentStat = null;
-
-  function pickBucketForRange(rangeMin) {
-    // Default sensible bucket by window size to keep < ~300 points per chart.
-    if (rangeMin <= 15)   return 5;
-    if (rangeMin <= 60)   return 30;
-    if (rangeMin <= 360)  return 60;
-    if (rangeMin <= 1440) return 300;
-    if (rangeMin <= 10080) return 900;
-    return 3600;
-  }
 
   async function loadAndRender() {
     if (!currentStat) return;

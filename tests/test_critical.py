@@ -1006,7 +1006,7 @@ def test_165_every_knob_persists_round_trip():
         "RISK_BAN_THRESHOLD": 75, "SOFT_CHALLENGE_SCORE": 6.0,
         "RATE_LIMIT_BURST": 88, "RATE_LIMIT_REFILL": 7.0,
         "IP_BURST": 222, "IP_REFILL": 22.0,
-        "HOSTILE_BAN_SECS": 7200, "CANARY_TTL_S": 600,
+        "HOSTILE_BAN_SECS": 7200, "REALLY_BAN_SECS": 5184000, "CANARY_TTL_S": 600,
         "GLOBAL_RPS_LIMIT": 500, "SESSION_CHURN_WINDOW_S": 120,
         "SESSION_CHURN_MAX": 50, "JA4_AUTODENY_THRESHOLD": 5,
         "JS_CHAL_OPEN_PATHS": ["/api/v1/", "/health"],

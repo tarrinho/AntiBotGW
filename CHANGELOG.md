@@ -6,6 +6,19 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.4] — 2026-05-06
+
+### Fixed
+- **Dashboard time-window bucket auto-adapt** (`dashboards/service.html`, `dashboards/main.html`) — selecting a time window > 3 h left the bucket selector at its default (5 s for Service, 1 min for Dashboard) causing the API to return thousands of mostly-zero data points for the selected window. Chart.js rendered a near-invisible flat line at y = 0 giving the impression that graphs were blank. Root cause: the main chart `range.onchange` handler called `tick()` directly without updating the bucket selector, while the stat-card click-to-zoom modal already contained a correct `pickBucketForRange()` helper. Fix: hoisted `pickBucketForRange` to global scope in both files; wired it into the `range.onchange` handler so the bucket is always set to a sensible granularity before the data fetch. Removed the duplicate local definition from the stat-card IIFE in `service.html`. Resulting point counts stay ≤ ~720 across all window sizes (5 min → 5 s; 1 h → 30 s; 6 h → 1 min; 24 h → 5 min; 7 d → 15 min; > 7 d → 1 h).
+
+### Tests
+- **Version strings bumped** — `tests/test_pure.py` `_EXPECTED_VERSION`, `test_gw_version_constant`, and `test_no_stale_version_strings_in_source` updated to `AppSecGW_1.7.4`.
+
+### Validation
+- 322 unit + regression tests pass; pre-existing failures in `test_v14.py` (JS challenge namespace-patch isolation) unchanged.
+
+---
+
 ## [1.7.3] — 2026-05-05
 
 ### Added
@@ -61,7 +74,7 @@ Author: Pedro Tarrinho
 - Bandit: 0 High · 0 Critical · B110 Medium (confirmed FP — intentional try/except in `_evaluate_maze_timing`).
 - Semgrep: 0 findings on all 4 new detection modules.
 - Trivy: 0 Critical / 0 High / 0 Medium CVEs (all 3 arches).
-- Harbor: amd64 `sha256:702a0bf4…` · arm64 `sha256:9e82703c…` · armv7 `sha256:8fb1ff1b…` · manifest `sha256:c5278f6f…` (post-release-additions + test-fix rebuild).
+- Harbor: amd64 `sha256:eeb71292…` · arm64 `sha256:64fa6b48…` · armv7 `sha256:0b9ebd1c…` · manifest `sha256:5772e553…` (final: honey_cred comment reverted to original convincing-developer-mistake format).
 - Security review: 11 findings fixed total (5 code review + 2 CRITICAL/HIGH DAST + 2 HIGH + 1 MEDIUM post-release).
 - DAST: 15/15 steps PASS. Post-release bug watch (Step 16): 16/16 steps PASS, 4 additional bugs fixed, 6 regression tests added.
 - See `validation/1.7.3.md` for full record.
