@@ -28,6 +28,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .ban-btn.allow.active{background:rgba(63,185,80,.2);color:#3fb950}
 .ban-btn.banned.active{background:rgba(210,153,34,.2);color:#d29922}
 .ban-btn.really-banned.active{background:rgba(248,81,73,.2);color:#f85149}
+.ban-btn.authorized-bot.active{background:rgba(88,166,255,.2);color:var(--blue)}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
@@ -697,7 +698,8 @@ async function tick() {
     window._clientsList = _sortClients(d.clients || []);
     tbody.innerHTML = window._clientsList.slice(0, 25).map((c, i) => {
       const _bsec = c.banned_secs || 0;
-      const banned = _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
+      const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
+                   : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
                    : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
                    : '<span class="dim">—</span>';
       const id = (c.id || c.ip || '');
@@ -709,12 +711,13 @@ async function tick() {
                        : score >= 20 ? 'var(--blue)'
                        : 'var(--dim)';
       const _mbs = c.banned_secs || 0;
-      const _mst = _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
+      const _mst = c.is_authorized_bot ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
       const switchHtml = `
-        <div class="ban-ctrl" data-id="${escapeHtml(id)}">
+        <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
           <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
           <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
           <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
+          <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
         </div>`;
       return `<tr>
         <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
@@ -838,6 +841,7 @@ async function tick() {
       // Dynamic decimation: aim at ~10 labels regardless of how many points
       const step = Math.max(1, Math.floor(labels.length / 10));
       const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
+      window._lastMainLabels = labelsView;   // shared with paintBlockRate
       c.data.labels = labelsView;
       c.data.datasets[0].data = totals;
       c.data.datasets[1].data = allowed;
@@ -1035,10 +1039,14 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
   function paintBlockRate(){
     const buckets = window._lastMainTimeline;
     if (!Array.isArray(buckets) || !buckets.length) return;
-    const bucketSec = window._lastMainBucketSecs || 60;
-    const step = Math.max(1, Math.floor(buckets.length / 10));
-    const labels = buckets.map((b, i) =>
-      (i % step === 0 || i === buckets.length - 1) ? fmtTime(b.t, bucketSec, getRangeMin()) : '');
+    // Reuse the exact same labels the main chart already computed so the
+    // x-axis tick marks are identical (same positions, same strings).
+    const labels = window._lastMainLabels || (() => {
+      const bucketSec = window._lastMainBucketSecs || 60;
+      const step = Math.max(1, Math.floor(buckets.length / 10));
+      return buckets.map((b, i) =>
+        (i % step === 0 || i === buckets.length - 1) ? fmtTime(b.t, bucketSec, getRangeMin()) : '');
+    })();
     const data = buckets.map(b => {
       const tot = (b.allowed||0) + (b.blocked||0) + (b.missed||0);
       return tot > 0 ? Math.round(((b.blocked||0) / tot) * 1000)/10 : 0;
@@ -1063,10 +1071,10 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           responsive: true, maintainAspectRatio: false,
           plugins: { legend: { display: false } },
           scales: {
-            x: { ticks: { color: '#8b949e', font: { size: 9 }, maxTicksLimit: 6 },
-                 grid: { color: '#1f2730' } },
+            x: { ticks: { color: '#8b949e', font: { size: 9 }, maxRotation: 0, autoSkipPadding: 18 },
+                 grid: { color: '#21262d' } },
             y: { min: 0, max: 100, ticks: { color: '#8b949e', font: { size: 9 },
-                 callback: v => v + '%' }, grid: { color: '#1f2730' } },
+                 callback: v => v + '%' }, grid: { color: '#21262d' } },
           },
         },
       });

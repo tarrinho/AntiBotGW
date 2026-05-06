@@ -3829,6 +3829,13 @@ async def metrics_endpoint(request: web.Request):
                     _ssc = min(100, int(s.risk_score))
                 elif s.blocked_count > 0:
                     _ssc = min(100, 30 + min(50, s.blocked_count * 2))
+            _cli_ua = s.last_user_agent or ""
+            _is_auth_bot = any(
+                isinstance(_b, dict) and _b.get("enabled", True)
+                and _b.get("action", "authorized-robot") == "authorized-robot"
+                and _b.get("ua", "") and _b["ua"] in _cli_ua
+                for _b in AUTHORIZED_BOT_UAS
+            )
             clients.append({
                 "id": key,
                 "ip": key,
@@ -3848,6 +3855,7 @@ async def metrics_endpoint(request: web.Request):
                 "risk_score": round(s.risk_score, 1),
                 "stealth_score": _ssc,
                 "is_admin_ip": _is_admin_ip(s.last_ip or key),
+                "is_authorized_bot": _is_auth_bot,
             })
         recent_events = list(events)[-50:]
         recent_events.reverse()  # newest first
