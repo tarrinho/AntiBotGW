@@ -449,7 +449,9 @@ async function tick(){
         const metricsBlock = `<div class="path-row" style="color:var(--dim)">
           hdrs ${m.avg_header_score}/7 · html/static ${m.html_loads}/${m.static_loads} · paths ${m.unique_paths}/${s.allowed} (div=${m.path_diversity}) · timing-cv ${m.behavioral_cov!==null?m.behavioral_cov:'n/a'} · 404s ${m.upstream_404_count} · risk ${m.risk_score}</div>`;
         const _bs = s.banned_secs || 0;
-        const _bstate = s.is_authorized_bot ? 'authorized-bot' : _bs > 86400 ? 'really-banned' : _bs > 0 ? 'banned' : 'allow';
+        const _abPatch = window._authBotPatch;
+        const _isAuthBot = (_abPatch && s.id in _abPatch) ? _abPatch[s.id] : !!s.is_authorized_bot;
+        const _bstate = _isAuthBot ? 'authorized-bot' : _bs > 86400 ? 'really-banned' : _bs > 0 ? 'banned' : 'allow';
         const switchHtml = (window._userRole === 'viewer') ? '' : `
           <div class="ban-ctrl" data-id="${escapeHtml(s.id)}" data-ua="${escapeHtml(s.ua||'')}">
             <button class="ban-btn allow${_bstate==='allow'?' active':''}" data-secs="0">Allow</button>
@@ -481,30 +483,39 @@ async function tick(){
       }).join('');
       _updateSusSortHeaders();
       // Wire 4-state ban controls (allow / banned / really-banned / authorized-bot).
+      window._authBotPatch = window._authBotPatch || {};
+      const _cfgUrl = '/antibot-appsec-gateway/secured/config';
+      const _patchAuthBot = (id, val) => {
+        window._authBotPatch[id] = val;
+        setTimeout(() => { delete window._authBotPatch[id]; }, 15000);
+      };
       tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
         ctrl.querySelectorAll('.ban-btn').forEach(btn => {
           btn.addEventListener('click', async (ev) => {
             ev.stopPropagation();
             if (btn.classList.contains('active')) return;
             const id = ctrl.dataset.id;
+            const ua = ctrl.dataset.ua || '';
             ctrl.style.opacity = '0.5';
+
+            // ── Auth Bot: add/enable UA in AUTHORIZED_BOT_UAS ──────────────
             if (btn.dataset.action === 'auth-bot') {
-              const ua = ctrl.dataset.ua || '';
               try {
-                const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+                const gr = await fetch(_cfgUrl, {credentials:'include'});
                 const gs = await gr.json().catch(()=>({}));
                 const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
                 const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
                 const newBots = existing
                   ? bots.map(b => (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:true, action:'authorized-robot'} : b)
                   : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
-                const pr = await fetch('/antibot-appsec-gateway/secured/config', {
+                const pr = await fetch(_cfgUrl, {
                   method:'POST', credentials:'include',
                   headers:{'Content-Type':'application/json'},
                   body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
                 });
                 const pb = await pr.json().catch(()=>({}));
                 if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+                  _patchAuthBot(id, true);
                   ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
                   btn.classList.add('active');
                   setTimeout(tick, 500);
@@ -515,7 +526,27 @@ async function tick(){
               ctrl.style.opacity = '1';
               return;
             }
+
+            // ── Any non-auth-bot action: if currently auth-bot, disable the bot entry ──
             const secs = parseInt(btn.dataset.secs, 10);
+            const currentlyAuthBot = !!ctrl.querySelector('.ban-btn.authorized-bot.active');
+            if (currentlyAuthBot && ua) {
+              try {
+                const gr = await fetch(_cfgUrl, {credentials:'include'});
+                const gs = await gr.json().catch(()=>({}));
+                const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+                const newBots = bots.map(b =>
+                  (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:false} : b
+                );
+                await fetch(_cfgUrl, {
+                  method:'POST', credentials:'include',
+                  headers:{'Content-Type':'application/json'},
+                  body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+                });
+              } catch(_) {}
+              _patchAuthBot(id, false);
+            }
+
             const endpoint = secs === 0
               ? '/antibot-appsec-gateway/secured/unban?id=' + encodeURIComponent(id)
               : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
@@ -855,64 +886,111 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
     return;
   }
   const fmt = epoch => new Date(epoch*1000).toLocaleString();
-  // Render order: focused first, then the others.
-  const sections = [
-    {kind:'detected',         label:'BLOCKED (detected)',  color:'var(--red)',          list:d.detected        ||[], render:_renderDetected},
-    {kind:'missed',           label:'MISSED (medium risk)', color:'var(--orange,#ff7b3a)', list:d.missed       ||[], render:_renderMissed},
-    {kind:'clean',            label:'CLEAN (allowed)',     color:'var(--green)',         list:d.clean           ||[], render:_renderClean},
-    {kind:'authorized_robot', label:'AUTHORIZED BOTS',    color:'#bc8cff',              list:d.authorized_robot||[], render:_renderAuthBots},
-  ];
-  if (focusKind){
-    sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
+  // kind → d key (clean = allowed, detected = blocked)
+  const _KIND_TO_KEY = {detected:'detected', missed:'missed', clean:'clean', authorized_robot:'authorized_robot'};
+
+  function _extractIpA(span) {
+    const m = (span.dataset.allow||'').match(/[?&]ip=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
   }
-  const body = sections.map(s => {
-    const isFocus = s.kind === focusKind;
-    const border  = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
-    return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
-      <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
-        ${escapeHtml(s.label)} <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
-      </h3>
-      ${s.render(s.list)}
-    </div>`;
-  }).join('');
+
+  function _moveEntryA(ip, targetKind) {
+    const targetKey = _KIND_TO_KEY[targetKind];
+    if (!targetKey) return;
+    d[targetKey] = d[targetKey] || [];
+    for (const key of Object.values(_KIND_TO_KEY)) {
+      if (key === targetKey) continue;
+      const list = d[key] || [];
+      const idx = list.findIndex(e => e.ip === ip);
+      if (idx !== -1) { const [entry] = list.splice(idx, 1); d[targetKey].push(entry); return; }
+    }
+  }
+
+  async function _ipActionR(btn, url){
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      const r = await fetch(url, {method:'POST', credentials:'include'});
+      btn.textContent = r.ok ? '✓' : '✗';
+      btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+      return r.ok;
+    } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; return false; }
+  }
+
+  function _renderAndWireA() {
+    const sections = [
+      {kind:'detected',         label:'BLOCKED (detected)',   color:'var(--red)',            list:d.detected        ||[], render:_renderDetected},
+      {kind:'missed',           label:'MISSED (medium risk)', color:'var(--orange,#ff7b3a)', list:d.missed          ||[], render:_renderMissed},
+      {kind:'clean',            label:'CLEAN (allowed)',      color:'var(--green)',           list:d.clean           ||[], render:_renderClean},
+      {kind:'authorized_robot', label:'AUTHORIZED BOTS',     color:'#bc8cff',               list:d.authorized_robot||[], render:_renderAuthBots},
+    ];
+    if (focusKind){
+      sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
+    }
+    const body = sections.map(s => {
+      const isFocus = s.kind === focusKind;
+      const border  = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
+      return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
+        <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+          ${escapeHtml(s.label)} <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
+        </h3>
+        ${s.render(s.list)}
+      </div>`;
+    }).join('');
+    document.getElementById('pop-title').innerHTML =
+      `Bucket · ${fmt(t)} +${bucketSecs}s · ${(d.detected||[]).length}+${(d.missed||[]).length}+${(d.clean||[]).length}+${(d.authorized_robot||[]).length} entries
+       <span class="x" id="pop-close">×</span>`;
+    document.getElementById('pop-close').onclick = closePopover;
+    const popBody = document.getElementById('pop-body');
+    popBody.innerHTML = body;
+    popBody.querySelectorAll('.act-btns').forEach(span => {
+      const ip = _extractIpA(span);
+      span.querySelector('.ban').onclick = async e => {
+        e.preventDefault();
+        const ok = await _ipActionR(e.target, span.dataset.ban);
+        if (ok && ip) setTimeout(() => { _moveEntryA(ip, 'detected'); _renderAndWireA(); }, 400);
+      };
+      span.querySelector('.hban').onclick = async e => {
+        e.preventDefault();
+        const ok = await _ipActionR(e.target, span.dataset.hban);
+        if (ok && ip) setTimeout(() => { _moveEntryA(ip, 'detected'); _renderAndWireA(); }, 400);
+      };
+      span.querySelector('.allow').onclick = async e => {
+        e.preventDefault();
+        const ok = await _ipActionR(e.target, span.dataset.allow);
+        if (ok && ip) setTimeout(() => { _moveEntryA(ip, 'clean'); _renderAndWireA(); }, 400);
+      };
+      const abBtn = span.querySelector('.authbot');
+      if (abBtn) abBtn.onclick = async e => {
+        e.preventDefault();
+        const ua = span.dataset.authbot || '';
+        abBtn.disabled = true; abBtn.textContent = '…';
+        try {
+          const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+          const gs = await gr.json().catch(()=>({}));
+          const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+          const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
+          const newBots = existing
+            ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
+            : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
+          const pr = await fetch('/antibot-appsec-gateway/secured/config', {
+            method:'POST', credentials:'include',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+          });
+          const pb = await pr.json().catch(()=>({}));
+          if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+            abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
+            if (ip) setTimeout(() => { _moveEntryA(ip, 'authorized_robot'); _renderAndWireA(); }, 400);
+          } else {
+            abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
+          }
+        } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
+      };
+    });
+  }
+
   POP.style.maxWidth = '900px'; POP.style.maxHeight = '85vh'; POP.style.overflowY = 'auto';
-  document.getElementById('pop-title').innerHTML =
-    `Bucket · ${fmt(t)} +${bucketSecs}s · ${(d.detected||[]).length}+${(d.missed||[]).length}+${(d.clean||[]).length}+${(d.authorized_robot||[]).length} entries
-     <span class="x" id="pop-close">×</span>`;
-  document.getElementById('pop-close').onclick = closePopover;
-  const popBody = document.getElementById('pop-body');
-  popBody.innerHTML = body;
-  popBody.querySelectorAll('.act-btns').forEach(span => {
-    span.querySelector('.ban' ).onclick = e => { e.preventDefault(); _ipAction(e.target, span.dataset.ban);   };
-    span.querySelector('.hban').onclick = e => { e.preventDefault(); _ipAction(e.target, span.dataset.hban);  };
-    span.querySelector('.allow').onclick= e => { e.preventDefault(); _ipAction(e.target, span.dataset.allow); };
-    const abBtn = span.querySelector('.authbot');
-    if (abBtn) abBtn.onclick = async e => {
-      e.preventDefault();
-      const ua = span.dataset.authbot || '';
-      abBtn.disabled = true; abBtn.textContent = '…';
-      try {
-        const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
-        const gs = await gr.json().catch(()=>({}));
-        const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
-        const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
-        const newBots = existing
-          ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
-          : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
-        const pr = await fetch('/antibot-appsec-gateway/secured/config', {
-          method:'POST', credentials:'include',
-          headers:{'Content-Type':'application/json'},
-          body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
-        });
-        const pb = await pr.json().catch(()=>({}));
-        if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
-          abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
-        } else {
-          abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
-        }
-      } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
-    };
-  });
+  _renderAndWireA();
   POP.style.left = '50%'; POP.style.top = '50%';
   POP.style.transform = 'translate(-50%, -50%)';
   POP.classList.add('show'); POP_BACK.classList.add('show'); POP.style.display='block';
