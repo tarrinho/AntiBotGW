@@ -2039,6 +2039,18 @@ async def config_endpoint(request: web.Request):
                         setattr(_hr_m, k, value)
                     except (AttributeError, TypeError):
                         pass
+            # LOG_LEVEL change must also update the derived numeric sentinel
+            # _LOG_LEVEL_N that slog() uses for level filtering — it is not
+            # in _HOT_RELOAD_KNOBS and not updated by the generic loop above.
+            if k == "LOG_LEVEL":
+                _new_level_n = _LOG_LEVELS.get(value, 20)
+                g["_LOG_LEVEL_N"] = _new_level_n
+                for _hr_m in list(_sys_hr.modules.values()):
+                    if _hr_m is not None and hasattr(_hr_m, "_LOG_LEVEL_N"):
+                        try:
+                            setattr(_hr_m, "_LOG_LEVEL_N", _new_level_n)
+                        except (AttributeError, TypeError):
+                            pass
             applied[k] = sorted(value) if isinstance(value, set) else value
             # 1.5.5 — persist to DB so the change survives container restart.
             # JSON-encode so ints / floats / bools / strings / lists round-trip.
@@ -2165,6 +2177,32 @@ async def protect(request: web.Request, handler):
     # TLS / origin / required-headers). Reason: on those checks we already
     # silent-decoy without revealing the gateway, and the challenge gate
     # must not preempt them with an explicit response.
+
+    # 1.7.3 — AWS ELB / ALB health check pass-through.
+    # ELB-HealthChecker/2.0 sends only Host + Connection + Accept-Encoding —
+    # no Accept, Accept-Language, Sec-Fetch-* — which triggers ua-non-browser
+    # (25 pts) and ai-headers-incomplete (20 pts) on every request. After two
+    # hits the LB node accumulates 90+ pts and is banned, causing the target
+    # to be marked unhealthy and traffic to be drained.
+    #
+    # Guard: BOTH the configured path AND the UA prefix must match so that
+    # external clients spoofing the UA on arbitrary paths still hit the full
+    # detection pipeline. ELB nodes are inside the VPC (private address space)
+    # so they arrive on a trusted-proxy chain; the path is operator-controlled
+    # and should be a non-obvious value matching the AWS target-group setting.
+    if ELB_HEALTH_CHECK_PATH and request.path == ELB_HEALTH_CHECK_PATH:
+        _elb_ua = request.headers.get("User-Agent", "")
+        if ELB_HEALTH_CHECK_UA and ELB_HEALTH_CHECK_UA in _elb_ua:
+            import hashlib as _hl
+            _path_tag = _hl.sha256(request.path.encode()).hexdigest()[:8]
+            slog("elb-health-check", level="info",
+                 ip=request.remote or "", path_tag=_path_tag,
+                 ua=_elb_ua, request_id=rid)
+            return web.Response(
+                status=200, text="ok",
+                headers={"Content-Type": "text/plain; charset=utf-8",
+                         "Cache-Control": "no-store",
+                         _REQUEST_ID_HEADER: rid})
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
@@ -3034,15 +3072,25 @@ async def honey_probe_endpoint(request: web.Request):
     GET /antibot-appsec-gateway/probe?k=<key>
     If the key matches a previously injected honey credential, bump the
     risk of the identity it was issued to. Always return 200 so the agent
-    thinks the endpoint is live. The real user's browser never hits this —
-    browsers don't read HTML comments."""
+    thinks the endpoint is live.
+
+    False-positive guard: real browsers have a valid chal cookie (auto-minted
+    on first HTML GET or issued after Turnstile). AI agents scraping HTML via
+    WebFetch/urllib have no cookie. Skip the ban when the requester carries a
+    valid chal cookie — they are almost certainly a human who noticed the
+    comment in DevTools and curiosity-clicked the URL."""
     ip = get_ip(request)
     key = request.rel_url.query.get("k", "")
-    # Cap key length before dict lookup to prevent hash-cost DoS on public endpoint
     if key and len(key) <= 64:
         honey_identity = lookup_honey_key(key)
         if honey_identity:
-            await update_risk_and_maybe_ban(honey_identity, "honey-cred", ip)
+            # Skip ban if requester has a valid JS-challenge cookie — real browser.
+            ua       = request.headers.get("User-Agent", "")
+            cookie   = request.cookies.get(CHAL_COOKIE, "")
+            has_chal = bool(cookie and _verify_chal_cookie(
+                cookie, ua, _ip_tier(ip), _request_ja4(request)))
+            if not has_chal:
+                await update_risk_and_maybe_ban(honey_identity, "honey-cred", ip)
     # Bland 200 response — never 403/404, would tell the agent its probe failed
     return web.Response(
         status=200,
