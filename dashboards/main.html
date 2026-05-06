@@ -41,6 +41,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 table{width:100%;border-collapse:collapse;font-size:12px}
 table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
+#clients-tbl thead th{position:sticky;top:0;z-index:1}
 th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
 th.sortable:hover{color:var(--fg,#e6edf3)}
 th.sortable::after{content:' ↕';opacity:.55;font-size:10px;text-transform:none}
@@ -331,6 +332,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 
   <div class="card">
     <h2>Clients (top by request count)</h2>
+    <div style="max-height:420px;overflow-y:auto">
     <table id="clients-tbl">
       <thead><tr>
         <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
@@ -348,6 +350,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
       </tr></thead>
       <tbody></tbody>
     </table>
+    </div>
   </div>
 
   <div class="row" style="grid-template-columns:1fr 1fr">
@@ -696,7 +699,7 @@ async function tick() {
     // Clients
     const tbody = document.querySelector('#clients-tbl tbody');
     window._clientsList = _sortClients(d.clients || []);
-    tbody.innerHTML = window._clientsList.slice(0, 25).map((c, i) => {
+    tbody.innerHTML = window._clientsList.slice(0, 100).map((c, i) => {
       const _bsec = c.banned_secs || 0;
       const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
                    : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
@@ -711,7 +714,9 @@ async function tick() {
                        : score >= 20 ? 'var(--blue)'
                        : 'var(--dim)';
       const _mbs = c.banned_secs || 0;
-      const _mst = c.is_authorized_bot ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
+      const _abPatchM = window._authBotPatch;
+      const _isAuthBotM = (_abPatchM && id in _abPatchM) ? _abPatchM[id] : !!c.is_authorized_bot;
+      const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
       const switchHtml = `
         <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
           <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
@@ -740,30 +745,39 @@ async function tick() {
     }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
     _updateCliSortHeaders();
     // Wire 4-state ban controls (allow / banned / really-banned / authorized-bot).
+    window._authBotPatch = window._authBotPatch || {};
+    const _cfgUrl = '/antibot-appsec-gateway/secured/config';
+    const _patchAuthBot = (id, val) => {
+      window._authBotPatch[id] = val;
+      setTimeout(() => { delete window._authBotPatch[id]; }, 15000);
+    };
     tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
       ctrl.querySelectorAll('.ban-btn').forEach(btn => {
         btn.addEventListener('click', async (ev) => {
           ev.stopPropagation();
           if (btn.classList.contains('active')) return;
           const id = ctrl.dataset.id;
+          const ua = ctrl.dataset.ua || '';
           ctrl.style.opacity = '0.5';
+
+          // ── Auth Bot: add/enable UA in AUTHORIZED_BOT_UAS ──────────────
           if (btn.dataset.action === 'auth-bot') {
-            const ua = ctrl.dataset.ua || '';
             try {
-              const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+              const gr = await fetch(_cfgUrl, {credentials:'include'});
               const gs = await gr.json().catch(()=>({}));
               const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
               const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
               const newBots = existing
                 ? bots.map(b => (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:true, action:'authorized-robot'} : b)
                 : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
-              const pr = await fetch('/antibot-appsec-gateway/secured/config', {
+              const pr = await fetch(_cfgUrl, {
                 method:'POST', credentials:'include',
                 headers:{'Content-Type':'application/json'},
                 body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
               });
               const pb = await pr.json().catch(()=>({}));
               if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+                _patchAuthBot(id, true);
                 ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
                 btn.classList.add('active');
                 setTimeout(tick, 500);
@@ -774,7 +788,27 @@ async function tick() {
             ctrl.style.opacity = '1';
             return;
           }
+
+          // ── Any non-auth-bot action: if currently auth-bot, disable the bot entry ──
           const secs = parseInt(btn.dataset.secs, 10);
+          const currentlyAuthBot = !!ctrl.querySelector('.ban-btn.authorized-bot.active');
+          if (currentlyAuthBot && ua) {
+            try {
+              const gr = await fetch(_cfgUrl, {credentials:'include'});
+              const gs = await gr.json().catch(()=>({}));
+              const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+              const newBots = bots.map(b =>
+                (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:false} : b
+              );
+              await fetch(_cfgUrl, {
+                method:'POST', credentials:'include',
+                headers:{'Content-Type':'application/json'},
+                body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+              });
+            } catch(_) {}
+            _patchAuthBot(id, false);
+          }
+
           const endpoint = secs === 0
             ? '/antibot-appsec-gateway/secured/unban?id=' + encodeURIComponent(id)
             : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
@@ -1452,13 +1486,34 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
     } catch(e) { d = {detected:[], missed:[], clean:[]}; _fetchErr = String(e); }
     const fmt = epoch => new Date(epoch*1000).toLocaleString();
     const adminNs = '/antibot-appsec-gateway/secured';
+    // kind → d key mapping (allowed uses d.clean, blocked uses d.detected)
+    const KIND_TO_KEY = {allowed:'clean', blocked:'detected', missed:'missed', authorized_robot:'authorized_robot'};
+
+    function _extractIp(span) {
+      const m = (span.dataset.allow||'').match(/[?&]ip=([^&]+)/);
+      return m ? decodeURIComponent(m[1]) : null;
+    }
+
+    function _moveEntry(ip, targetKind) {
+      const targetKey = KIND_TO_KEY[targetKind];
+      if (!targetKey) return;
+      d[targetKey] = d[targetKey] || [];
+      for (const key of Object.values(KIND_TO_KEY)) {
+        if (key === targetKey) continue;
+        const list = d[key] || [];
+        const idx = list.findIndex(e => e.ip === ip);
+        if (idx !== -1) { const [entry] = list.splice(idx, 1); d[targetKey].push(entry); return; }
+      }
+    }
+
     async function ipAction(btn, url){
       btn.disabled = true; btn.textContent = '…';
       try {
         const r = await fetch(url, {method:'POST', credentials:'include'});
         btn.textContent = r.ok ? '✓' : '✗';
         btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
-      } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; }
+        return r.ok;
+      } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; return false; }
     }
     function actionBtns(ip, id, ua){
       const enc = encodeURIComponent(ip);
@@ -1526,65 +1581,82 @@ const k_q = '';  // secured endpoints use cookie auth — no key query param nee
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
         <td>${actionBtns(e.ip)}</td>
       </tr>`).join('') + '</tbody></table>';
-    // Combine clean + detected + authorized_robot for "total" (everything seen in the bucket).
-    const totalCount = (d.clean||[]).length + (d.detected||[]).length + (d.missed||[]).length + (d.authorized_robot||[]).length;
-    const sections = [
-      {kind:'allowed',          label:'ALLOWED (clean)',         color:'#3fb950', list:d.clean           ||[], render:renderClean},
-      {kind:'blocked',          label:'BLOCKED (detected)',      color:'#f85149', list:d.detected        ||[], render:renderBlocked},
-      {kind:'missed',           label:'MISSED (medium risk)',    color:'#ff7b3a', list:d.missed          ||[], render:renderMissed},
-      {kind:'authorized_robot', label:'AUTHORIZED BOTS',        color:'#bc8cff', list:d.authorized_robot||[], render:renderAuthBots},
-    ];
-    if (focusKind && focusKind !== 'total'){
-      sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
+
+    function _renderAndWire() {
+      const totalCount = (d.clean||[]).length + (d.detected||[]).length + (d.missed||[]).length + (d.authorized_robot||[]).length;
+      const sections = [
+        {kind:'allowed',          label:'ALLOWED (clean)',         color:'#3fb950', list:d.clean           ||[], render:renderClean},
+        {kind:'blocked',          label:'BLOCKED (detected)',      color:'#f85149', list:d.detected        ||[], render:renderBlocked},
+        {kind:'missed',           label:'MISSED (medium risk)',    color:'#ff7b3a', list:d.missed          ||[], render:renderMissed},
+        {kind:'authorized_robot', label:'AUTHORIZED BOTS',        color:'#bc8cff', list:d.authorized_robot||[], render:renderAuthBots},
+      ];
+      if (focusKind && focusKind !== 'total'){
+        sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
+      }
+      const body = sections.map(s => {
+        const isFocus = s.kind === focusKind;
+        const border = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
+        return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
+          <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
+            ${escapeHtml(s.label)}
+            <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
+          </h3>
+          ${s.render(s.list)}
+        </div>`;
+      }).join('');
+      document.getElementById('modal-title').innerHTML =
+        `Bucket · ${fmt(t)} +${bucketSecs}s · ${totalCount} entries (${focusKind||'all'} clicked)
+         <span class="x" id="modal-close">×</span>`;
+      document.getElementById('modal-close').onclick = close;
+      const modalBody = document.getElementById('modal-body');
+      modalBody.innerHTML = (_fetchErr ? `<div class="empty" style="color:var(--red);margin-bottom:10px">Fetch error: ${escapeHtml(_fetchErr)}</div>` : '') + body;
+      modalBody.querySelectorAll('.act-btns').forEach(span => {
+        const ip = _extractIp(span);
+        span.querySelector('.ban').onclick = async e => {
+          e.preventDefault();
+          const ok = await ipAction(e.target, span.dataset.ban);
+          if (ok && ip) setTimeout(() => { _moveEntry(ip, 'blocked'); _renderAndWire(); }, 400);
+        };
+        span.querySelector('.hban').onclick = async e => {
+          e.preventDefault();
+          const ok = await ipAction(e.target, span.dataset.hban);
+          if (ok && ip) setTimeout(() => { _moveEntry(ip, 'blocked'); _renderAndWire(); }, 400);
+        };
+        span.querySelector('.allow').onclick = async e => {
+          e.preventDefault();
+          const ok = await ipAction(e.target, span.dataset.allow);
+          if (ok && ip) setTimeout(() => { _moveEntry(ip, 'allowed'); _renderAndWire(); }, 400);
+        };
+        const abBtn = span.querySelector('.authbot');
+        if (abBtn) abBtn.onclick = async e => {
+          e.preventDefault();
+          const ua = span.dataset.authbot || '';
+          abBtn.disabled = true; abBtn.textContent = '…';
+          try {
+            const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+            const gs = await gr.json().catch(()=>({}));
+            const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+            const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
+            const newBots = existing
+              ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
+              : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
+            const pr = await fetch('/antibot-appsec-gateway/secured/config', {
+              method:'POST', credentials:'include',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+            });
+            const pb = await pr.json().catch(()=>({}));
+            if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+              abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
+              if (ip) setTimeout(() => { _moveEntry(ip, 'authorized_robot'); _renderAndWire(); }, 400);
+            } else {
+              abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
+            }
+          } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
+        };
+      });
     }
-    const body = sections.map(s => {
-      const isFocus = s.kind === focusKind;
-      const border = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
-      return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
-        <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
-          ${escapeHtml(s.label)}
-          <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
-        </h3>
-        ${s.render(s.list)}
-      </div>`;
-    }).join('');
-    document.getElementById('modal-title').innerHTML =
-      `Bucket · ${fmt(t)} +${bucketSecs}s · ${totalCount} entries (${focusKind||'all'} clicked)
-       <span class="x" id="modal-close">×</span>`;
-    document.getElementById('modal-close').onclick = close;
-    const modalBody = document.getElementById('modal-body');
-    modalBody.innerHTML = (_fetchErr ? `<div class="empty" style="color:var(--red);margin-bottom:10px">Fetch error: ${escapeHtml(_fetchErr)}</div>` : '') + body;
-    modalBody.querySelectorAll('.act-btns').forEach(span => {
-      span.querySelector('.ban' ).onclick = e => { e.preventDefault(); ipAction(e.target, span.dataset.ban);   };
-      span.querySelector('.hban').onclick = e => { e.preventDefault(); ipAction(e.target, span.dataset.hban);  };
-      span.querySelector('.allow').onclick= e => { e.preventDefault(); ipAction(e.target, span.dataset.allow); };
-      const abBtn = span.querySelector('.authbot');
-      if (abBtn) abBtn.onclick = async e => {
-        e.preventDefault();
-        const ua = span.dataset.authbot || '';
-        abBtn.disabled = true; abBtn.textContent = '…';
-        try {
-          const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
-          const gs = await gr.json().catch(()=>({}));
-          const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
-          const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
-          const newBots = existing
-            ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
-            : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
-          const pr = await fetch('/antibot-appsec-gateway/secured/config', {
-            method:'POST', credentials:'include',
-            headers:{'Content-Type':'application/json'},
-            body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
-          });
-          const pb = await pr.json().catch(()=>({}));
-          if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
-            abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
-          } else {
-            abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
-          }
-        } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
-      };
-    });
+    _renderAndWire();
     back.classList.add('show'); modal.classList.add('show');
   };
 

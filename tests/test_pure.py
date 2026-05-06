@@ -2344,7 +2344,7 @@ def test_main_bucket_modal_has_authorized_bots_section():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     fn_start = src.find("window.openMainBucketDetail")
     assert fn_start != -1, "main.html must define openMainBucketDetail"
-    fn_section = src[fn_start: fn_start + 6500]
+    fn_section = src[fn_start: fn_start + 12000]
     assert "authorized_robot" in fn_section, (
         "openMainBucketDetail sections must include authorized_robot kind"
     )
@@ -2362,7 +2362,7 @@ def test_main_bucket_modal_renders_authorized_robot_from_response():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     fn_start = src.find("window.openMainBucketDetail")
     assert fn_start != -1
-    fn_section = src[fn_start: fn_start + 6500]
+    fn_section = src[fn_start: fn_start + 12000]
     assert "d.authorized_robot" in fn_section, (
         "openMainBucketDetail must read d.authorized_robot from the agents-bucket response"
     )
@@ -2593,28 +2593,41 @@ def test_main_html_authorized_bot_css_active_state():
 
 
 def test_agents_html_bstate_checks_is_authorized_bot():
-    """agents.html _bstate computation must check s.is_authorized_bot first."""
+    """agents.html _bstate computation must derive from is_authorized_bot.
+
+    The implementation may use an intermediate variable (e.g. _isAuthBot built
+    from window._authBotPatch + s.is_authorized_bot) — what matters is that
+    is_authorized_bot is referenced near the _bstate assignment and that
+    'authorized-bot' is the resulting state value.
+    """
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
     bstate_idx = src.find("_bstate =")
     assert bstate_idx != -1, "agents.html must have a _bstate variable"
-    bstate_line = src[bstate_idx: bstate_idx + 200]
-    assert "is_authorized_bot" in bstate_line, (
-        "agents.html _bstate must check s.is_authorized_bot — "
+    # Check within a wider window — intermediate variable may be on the prior line
+    bstate_block = src[max(0, bstate_idx - 300): bstate_idx + 300]
+    assert "is_authorized_bot" in bstate_block, (
+        "agents.html _bstate block must reference is_authorized_bot — "
         "otherwise authorized bots show as 'allow' instead of 'authorized-bot'"
+    )
+    assert "'authorized-bot'" in bstate_block or '"authorized-bot"' in bstate_block, (
+        "agents.html _bstate block must have 'authorized-bot' as a possible value"
     )
 
 
 def test_main_html_mst_checks_is_authorized_bot():
-    """main.html _mst computation must check c.is_authorized_bot first."""
+    """main.html _mst computation must derive from is_authorized_bot."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     mst_idx = src.find("_mst =")
     assert mst_idx != -1, "main.html must have a _mst variable"
-    mst_line = src[mst_idx: mst_idx + 200]
-    assert "is_authorized_bot" in mst_line, (
-        "main.html _mst must check c.is_authorized_bot — "
+    mst_block = src[max(0, mst_idx - 300): mst_idx + 300]
+    assert "is_authorized_bot" in mst_block, (
+        "main.html _mst block must reference is_authorized_bot — "
         "otherwise authorized bots show as 'allow' instead of 'authorized-bot'"
+    )
+    assert "'authorized-bot'" in mst_block or '"authorized-bot"' in mst_block, (
+        "main.html _mst block must have 'authorized-bot' as a possible value"
     )
 
 
