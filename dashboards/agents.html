@@ -36,6 +36,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .ban-btn.allow.active{background:rgba(63,185,80,.2);color:#3fb950}
 .ban-btn.banned.active{background:rgba(210,153,34,.2);color:#d29922}
 .ban-btn.really-banned.active{background:rgba(248,81,73,.2);color:#f85149}
+.ban-btn.authorized-bot.active{background:rgba(88,166,255,.2);color:var(--blue)}
 .bar{height:10px;background:#0a0e13;border-radius:4px;overflow:hidden;display:flex}
 .bar>div{height:100%}
 .bar .h{background:#a78bfa}
@@ -448,12 +449,13 @@ async function tick(){
         const metricsBlock = `<div class="path-row" style="color:var(--dim)">
           hdrs ${m.avg_header_score}/7 · html/static ${m.html_loads}/${m.static_loads} · paths ${m.unique_paths}/${s.allowed} (div=${m.path_diversity}) · timing-cv ${m.behavioral_cov!==null?m.behavioral_cov:'n/a'} · 404s ${m.upstream_404_count} · risk ${m.risk_score}</div>`;
         const _bs = s.banned_secs || 0;
-        const _bstate = _bs > 86400 ? 'really-banned' : _bs > 0 ? 'banned' : 'allow';
+        const _bstate = s.is_authorized_bot ? 'authorized-bot' : _bs > 86400 ? 'really-banned' : _bs > 0 ? 'banned' : 'allow';
         const switchHtml = (window._userRole === 'viewer') ? '' : `
-          <div class="ban-ctrl" data-id="${escapeHtml(s.id)}">
+          <div class="ban-ctrl" data-id="${escapeHtml(s.id)}" data-ua="${escapeHtml(s.ua||'')}">
             <button class="ban-btn allow${_bstate==='allow'?' active':''}" data-secs="0">Allow</button>
             <button class="ban-btn banned${_bstate==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
             <button class="ban-btn really-banned${_bstate==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
+            <button class="ban-btn authorized-bot${_bstate==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
           </div>`;
         const hasRiskBreakdown = (s.risk_breakdown||[]).length > 0;
         return `

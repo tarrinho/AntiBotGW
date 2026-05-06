@@ -403,8 +403,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <h2>🤖 Authorized monitoring bots <span style="font-size:11px;color:var(--dim);font-weight:400">(pass-through rules — shown blue, not counted as blocked)</span></h2>
     <div class="hint" style="margin-bottom:12px">
       Each entry matches on <b>UA substring</b> + <b>path</b> (and optionally source IP).
-      Action: <b>Authorized bot</b> → 200 ok, recorded blue; <b>Allow</b> → silent pass-through;
-      <b>Ban / Really ban</b> → immediate ban + decoy. Disabled entries are skipped.
+      Matched requests are recorded blue and passed through. Disabled entries are skipped.
     </div>
     <div id="bypass"></div>
   </section>
