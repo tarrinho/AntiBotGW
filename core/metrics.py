@@ -43,6 +43,10 @@ def _cost_bump(elapsed_ms: float):
         bucket["max_ms"] = elapsed_ms
 
 
+# Reasons that bypass detection but are still recorded — not counted as blocked.
+_PASSTHROUGH_REASONS: frozenset = frozenset({"authorized-robot"})
+
+
 def _timeline_bump(reason: str, missed: bool = False):
     """Update the current minute bucket.  Caller must hold state_lock.
     `missed` = allowed AND identity score >= SOFT_CHALLENGE_SCORE (medium band)."""
@@ -60,8 +64,11 @@ def _timeline_bump(reason: str, missed: bool = False):
     if "missed" not in bucket:
         bucket["missed"] = 0
     bucket["total"] += 1
-    if reason:
+    if reason and reason not in _PASSTHROUGH_REASONS:
         bucket["blocked"] += 1
+        bucket["by_reason"][reason] += 1
+    elif reason:  # passthrough — allowed, still tracked in by_reason
+        bucket["allowed"] += 1
         bucket["by_reason"][reason] += 1
     else:
         bucket["allowed"] += 1
@@ -108,11 +115,15 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         if fp:  s.last_fingerprint = fp
         if ja4: s.last_ja4 = ja4[:64]
         s.request_count += 1
-        if reason:
+        if reason and reason not in _PASSTHROUGH_REASONS:
             metrics["blocked"] += 1
             metrics["by_reason"][reason] += 1
             s.blocked_count += 1
             s.blocks_by_reason[reason] += 1
+        elif reason:  # passthrough — allowed, still tracked in by_reason
+            metrics["by_reason"][reason] += 1
+            metrics["allowed"] += 1
+            s.allowed_count += 1
         else:
             metrics["allowed"] += 1
             s.allowed_count += 1

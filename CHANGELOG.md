@@ -20,7 +20,14 @@ Author: Pedro Tarrinho
 - **`_LOG_LEVEL_N` not propagated on LOG_LEVEL hot-reload** (`core/proxy_handler.py` `config_endpoint`) — the LOG_LEVEL hot-reload path updated the `LOG_LEVEL` string in all module namespaces via the generic `_HOT_RELOAD_KNOBS` loop, but did not update the derived numeric sentinel `_LOG_LEVEL_N` used by `slog()` for level filtering. Since `helpers.py` imports `_LOG_LEVEL_N` at module load time (`from config import _LOG_LEVEL_N`), Python creates a local copy of the value; changing `config._LOG_LEVEL_N` does not update `helpers._LOG_LEVEL_N`. Result: changing the log level from the dashboard had no effect on actual log output. Fix: after the generic propagation loop, `config_endpoint` now explicitly recomputes `_LOG_LEVEL_N = _LOG_LEVELS.get(value, 20)` and propagates it to all loaded modules via `setattr`.
 
 ### Fixed (continued)
+- **`NameError: name '_city_lookup' is not defined` in `ip_intel_endpoint`** (`admin/users.py`) — `ip_intel_endpoint` called `_city_lookup`, `_asn_lookup`, `_abuseipdb_lookup`, `_crowdsec_check`, and `_tor_exits` without importing them. `proxy_handler.py` has all five in its global namespace via its own import block; `admin/users.py` is a separate module with its own namespace and had none of them. Any call to the IP intel popover (identity-details in agents.html / main.html) raised `NameError` and returned HTTP 500. Fix: added `from reputation.maxmind import _city_lookup, _asn_lookup`, `from reputation.abuseipdb import _abuseipdb_lookup`, `from reputation.crowdsec import _crowdsec_check`, `from reputation.tor import _tor_exits` at module level in `admin/users.py`.
+- **Dockerfile pip deps pinned to exact versions** (`Dockerfile`, `Dockerfile.armv7`) — previously used range specifiers (`>=x,<y`), flagged as DL3013 / supply-chain unpinned by Aikido. Resolved currently installed versions (`aiohttp==3.13.5`, `maxminddb==2.8.2`, `psycopg[binary]==3.3.4`, `redis==5.3.1`, `pyjwt==2.12.1`) and pinned all direct deps to exact `==` constraints. Builds remain reproducible.
+- **Dockerfile builder stage drops root before final stage** (`Dockerfile`, `Dockerfile.armv7`) — Aikido DL3002: builder stage set `USER root` (line 6) and never reverted. Final runtime stage already runs as `USER 65532:65532`, but the linter checks per-stage. Fixed by adding `USER nonroot` at end of the Chainguard builder stage and `USER nobody` at end of the Alpine builder stage.
 - **7-day graph no date labels in main/agents dashboards** (`dashboards/main.html`, `dashboards/agents.html`) — `pickBucketForRange` mapped the 7-day window to 900 s (15-min) buckets, producing 672 data points all labeled `"HH:MM"` by `fmtTime`'s sub-3600 s branch (no date component). Changed to map 7 d → 3600 s buckets (168 points, labeled `"May 3 14:00"`) and ≥ 30 d → 86400 s buckets (30 points, labeled `"May 3"`). Added `<option value="43200">30 days</option>` to the range selector in both dashboards. Added `tPickBucketForRange` + `tAutoSelectBucket` to `agents.html` (which had no equivalent auto-bucket logic) and wired it into the `t-range` change handler.
+
+### Added (monitoring bot pass-through)
+- **Authorized monitoring bot pass-through** (`config.py`, `core/proxy_handler.py`, `core/metrics.py`) — UptimeRobot, Pingdom, StatusCake, Site24x7 and similar availability monitors probe `"/"` with non-browser UAs and minimal headers, accumulating `ua-non-browser` (+25) + `ai-headers-incomplete` (+20) = 45 pts per request and being banned after two hits. New bypass: when the request path is `"/"` and the `User-Agent` contains any substring from `AUTHORIZED_BOT_UAS`, the request short-circuits detection, returns `200 ok`, and is recorded as `"authorized-robot"` — **not counted as blocked** (`_PASSTHROUGH_REASONS` set in `core/metrics.py`). Recorded in `by_reason` so operators see the traffic in the dashboard reasons breakdown. Default UA list: `UptimeRobot`, `Pingdom`, `StatusCake`, `Site24x7`, `freshping`, `hetrix`, `Better Uptime`, `uptimia`, `updown.io`, `HetrixTools`, `statuscake`. Set `AUTHORIZED_BOT_UAS=""` to disable. New env var: `AUTHORIZED_BOT_UAS`.
+- **"authorized-robot" dashboard display** (`dashboards/main.html`, `dashboards/logs.html`) — authorized monitoring bot events appear with a blue `authorized-robot` tag (`.tag.authorized-robot`) and blue left-border row (`.evt.evt-authorized`) in the live events stream, not as blocked (red) rows. In `logs.html` the reason is shown in `var(--blue)` instead of red.
 
 ### Added (controls dashboard UX)
 - **Master bypass switch** (`dashboards/controls.html`) — prominent toggle bar at the top of the Controls page. When turned ON (after confirmation): snapshots all current `bool` control states to `localStorage`, POSTs all bool knobs as `false` in a single request, and shows a red "BYPASS ACTIVE" warning. When turned OFF: reads the snapshot from `localStorage` and POSTs the restore payload in one request. Intended for temporary maintenance / debugging windows where bot protection must be fully suspended. Snapshot + active flag persist across page reloads so the warning survives navigation; both are cleared on restore.
@@ -28,11 +35,39 @@ Author: Pedro Tarrinho
 
 ### Tests
 - **Version strings bumped** — `tests/test_pure.py` `_EXPECTED_VERSION`, `test_gw_version_constant`, and `test_no_stale_version_strings_in_source` updated to `AppSecGW_1.7.4`.
-- **`test_no_eschtml_calls`** — new parametrized test covering all 7 dashboard HTML files; asserts no call to the undefined `escHtml()` exists (regression for the 5-dashboard `escHtml` bug above).
-- **`test_log_level_n_propagated_on_hot_reload`** — new static-analysis test asserting `config_endpoint` contains `_LOG_LEVEL_N` propagation and `_LOG_LEVELS.get(` recompute logic (regression for the hot-reload numeric sentinel bug above).
+- **`test_no_eschtml_calls`** — parametrized ×7 dashboards; asserts no call to undefined `escHtml()` (regression for 5-dashboard `escHtml` bug).
+- **`test_log_level_n_propagated_on_hot_reload`** — asserts `config_endpoint` contains `_LOG_LEVEL_N` propagation and `_LOG_LEVELS.get(` recompute (regression for hot-reload numeric sentinel bug).
+- **`test_ip_intel_endpoint_imports_reputation_symbols`** — asserts all 5 reputation symbols (`_city_lookup`, `_asn_lookup`, `_abuseipdb_lookup`, `_crowdsec_check`, `_tor_exits`) imported at module level in `admin/users.py` (regression for `NameError` in ip-intel endpoint).
+- **`test_logs_html_log_level_button_has_rok_guard`** — asserts ≥2 `if (!r.ok)` guards in `logs.html` (regression for unconditional `r.json()` on non-JSON responses).
+- **`test_logs_html_log_level_handlers_no_unconditional_json`** — verifies `r.ok` check precedes `r.json()` in each LOG_LEVEL POST handler in `logs.html`.
+- **`test_logs_html_authorized_robot_shown_in_blue`** — asserts `logs.html` renders `authorized-robot` reason in `var(--blue)`.
+- **`test_controls_bypass_bar_html_elements_present`** — asserts `#bypass-bar`, `#bypass-sw`, `#bypass-warn` elements present in `controls.html`.
+- **`test_controls_bypass_css_classes_defined`** — asserts `.bypass-sw`, `.bypass-sw.on`, `#bypass-bar.bypass-on` CSS defined.
+- **`test_controls_bypass_iife_snapshots_and_restores`** — asserts `_BYPASS_ACTIVE_KEY`, `_BYPASS_SNAP_KEY`, `localStorage.setItem/removeItem` in bypass IIFE.
+- **`test_controls_bypass_posts_false_for_all_bool_knobs`** — asserts payload sets knobs to `false`.
+- **`test_controls_bypass_uses_credentials_include`** — asserts bypass fetch calls include `credentials:'include'`.
+- **`test_controls_bypass_requires_user_confirmation`** — asserts `confirm()` shown before disabling all controls.
+- **`test_controls_collapse_css_defined`** — asserts `.cc-chevron` and `.cc-collapsed` CSS present.
+- **`test_controls_collapse_iife_persists_to_localstorage`** — asserts `_CC_PREFIX`, `localStorage.setItem/getItem` in collapse IIFE.
+- **`test_controls_collapse_card_h2_click_handler`** — asserts `querySelectorAll('.card')` + click listener in collapse IIFE.
+- **`test_main_pick_bucket_7day_returns_3600`** — asserts `pickBucketForRange(10080)` maps to 3600, not 900 (regression for HH:MM-only 7-day labels).
+- **`test_main_pick_bucket_30day_returns_86400`** — asserts fallthrough returns 86400 for 30-day view.
+- **`test_main_30day_option_in_range_select`** — asserts `<option value="43200">` present in `main.html`.
+- **`test_agents_pick_bucket_7day_returns_3600`** — asserts `tPickBucketForRange` exists in `agents.html` and returns 3600 for 7d.
+- **`test_agents_pick_bucket_30day_returns_86400`** — same for 30-day.
+- **`test_agents_30day_option_in_range_select`** — asserts `<option value="43200">` in `agents.html`.
+- **`test_agents_auto_select_bucket_wired_to_range_change`** — asserts `tAutoSelectBucket` called from `t-range` change listener.
+- **`test_main_tooltip_callback_uses_timeline_epoch`** — asserts `main.html` tooltip uses `_lastMainTimeline`/`_lastMainBucketSecs` with `toLocaleDateString`.
+- **`test_agents_tooltip_config_defined`** — asserts `agents.html` has tooltip plugin config with `_lastAgentTimeline`.
+- **`test_agents_tooltip_callback_formats_date`** — asserts `agents.html` tooltip calls `toLocaleDateString/toLocaleString`.
+- **`test_dockerfile_pip_deps_use_exact_pins`** — asserts no range specifiers (`>=`, `<=`, `~=`) in `Dockerfile` pip install (Aikido DL3013).
+- **`test_dockerfile_armv7_pip_deps_use_exact_pins`** — same for `Dockerfile.armv7`.
+- **`test_dockerfile_builder_stage_drops_root`** — asserts `USER nonroot` in `Dockerfile` builder stage (Aikido DL3002).
+- **`test_dockerfile_armv7_builder_stage_drops_root`** — asserts `USER nobody` in `Dockerfile.armv7` builder stage.
+- **Authorized bot tests** (×6) — `test_authorized_bot_uas_config_exists`, `test_authorized_bot_bypass_in_protect_source`, `test_authorized_bot_bypass_only_on_root`, `test_passthrough_reasons_not_counted_as_blocked`, `test_authorized_robot_tag_in_main_dashboard` — cover config existence, protect() source guard, root-only enforcement, metrics passthrough, and dashboard CSS.
 
 ### Validation
-- 158 (test_pure.py) + 116 (test_critical.py) + 10 (test_async.py) tests pass; pre-existing failures in `test_v14.py` (JS challenge namespace-patch isolation) unchanged.
+- 164 (test_pure.py) + 116 (test_critical.py) + 10 (test_async.py) tests pass; pre-existing failures in `test_v14.py` (JS challenge namespace-patch isolation) unchanged.
 
 ---
 

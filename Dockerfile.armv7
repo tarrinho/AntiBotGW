@@ -22,11 +22,13 @@ RUN apk add --no-cache \
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
  && python3 -m pip install --no-cache-dir --target /pydeps \
-        'aiohttp>=3.11.11,<4' \
-        'maxminddb>=2.6,<3' \
-        'redis>=5,<6' \
-        'psycopg[c]>=3.1,<4' \
-        'pyjwt>=2.8,<3'
+        'aiohttp==3.13.5' \
+        'maxminddb==2.8.2' \
+        'redis==5.3.1' \
+        'psycopg[c]==3.3.4' \
+        'pyjwt==2.12.1'
+
+USER nobody
 
 # ─── Stage 2: runtime — minimal Alpine + libpq shared lib ─────────────
 FROM python:3.13-alpine

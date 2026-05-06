@@ -8,6 +8,10 @@ from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip  # noqa: F401
 from admin.auth import _internal_authed, _request_username, _request_role, _role_denied  # noqa: F401
 from aiohttp import web
+from reputation.maxmind import _city_lookup, _asn_lookup  # noqa: F401
+from reputation.abuseipdb import _abuseipdb_lookup  # noqa: F401
+from reputation.crowdsec import _crowdsec_check  # noqa: F401
+from reputation.tor import _tor_exits  # noqa: F401
 
 # ── 1.6.7: dashboard user accounts ──────────────────────────────────
 _USERNAME_RE  = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")

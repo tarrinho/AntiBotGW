@@ -65,6 +65,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.ai-no-assets{background:#4a1a3d;color:#ff8acc}
 .tag.banned-silent{background:#2d1a4a;color:#a78bfa}
 .tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
+.tag.authorized-robot{background:#0d2340;color:var(--blue)}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:4px}
 .bar>div{height:100%;background:var(--blue)}
 .reasons{display:grid;grid-template-columns:1fr auto;gap:4px 8px;font-size:11.5px}
@@ -78,6 +79,8 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .evt:nth-child(even){background:#0a0e13}
 .evt.evt-ok{border-left-color:var(--green);background:rgba(63,185,80,0.06)}
 .evt.evt-ok:nth-child(even){background:rgba(63,185,80,0.10)}
+.evt.evt-authorized{border-left-color:var(--blue);background:rgba(88,166,255,0.06)}
+.evt.evt-authorized:nth-child(even){background:rgba(88,166,255,0.10)}
 .evt.evt-block{border-left-color:var(--red)}
 .evt.evt-warn{border-left-color:var(--yellow)}
 .foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
@@ -436,11 +439,6 @@ function getRangeMin() {
   return parseInt(document.getElementById('range').value || '60', 10);
 }
 
-function fmtTime(epochSec) {
-  const d = new Date(epochSec * 1000);
-  return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
-}
-
 function ensureChart() {
   if (chart) return chart;
   const ctx = document.getElementById('chart').getContext('2d');
@@ -487,7 +485,21 @@ function ensureChart() {
         tooltip: {
           backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
           titleColor: '#c9d1d9', bodyColor: '#c9d1d9',
-          callbacks: { title: items => items[0].label }
+          callbacks: {
+            title: items => {
+              const idx = items[0].index;
+              const tl  = window._lastMainTimeline;
+              const bs  = window._lastMainBucketSecs || 60;
+              if (!tl || !tl[idx]) return items[0].label;
+              const d   = new Date(tl[idx].t * 1000);
+              if (bs >= 86400)
+                return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+              const end   = new Date((tl[idx].t + bs) * 1000);
+              const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+              const fmtT  = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+              return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
+            }
+          }
         },
       },
       scales: {
@@ -552,13 +564,18 @@ function pickBucketForRange(rangeMin) {
   return 86400;
 }
 
-function fmtTime(epochSec, bucketSec) {
+function fmtTime(epochSec, bucketSec, rangeMin) {
   const d = new Date(epochSec * 1000);
-  if (bucketSec >= 86400) {
+  const rm = rangeMin || 0;
+  // 7 d+ or daily buckets → "May 6"
+  if (bucketSec >= 86400 || rm >= 10080) {
     return d.toLocaleDateString(undefined, {month:'short', day:'numeric'});
-  } else if (bucketSec >= 3600) {
+  }
+  // > 3 h or hourly buckets → "May 6 14:00" (date context needed across midnight)
+  if (bucketSec >= 3600 || rm > 180) {
     return d.toLocaleString(undefined, {month:'short', day:'numeric', hour:'2-digit', minute:'2-digit'});
   }
+  // ≤ 3 h window → "14:32"
   return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0');
 }
 
@@ -755,16 +772,19 @@ async function tick() {
     eEl.innerHTML = (d.events || []).map(e => {
       const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
       const isOk = (e.reason === 'OK' || e.reason === '');
-      const evtCls = isOk ? 'evt-ok' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
+      const isAuthorized = (e.reason === 'authorized-robot');
+      const evtCls = isOk ? 'evt-ok' : isAuthorized ? 'evt-authorized' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
       // 1.5.5 — make reason tag click-to-explain.  Tooltip on the row's
       // OK/blocked indicator clarifies the decision (silent decoys can
       // return 200 even when blocked, etc.)
       const tagHtml = isOk
         ? `<span class="tag ${safeClass(e.reason)}" title="Request reached upstream — no detector fired.">OK</span>`
-        : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
+        : isAuthorized
+          ? `<span class="tag authorized-robot" title="Authorized monitoring bot — bypassed detection, not counted as blocked.">authorized-robot</span>`
+          : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
       // Status hint based on HTTP code seen + whether reason fired
       let statusHint = '';
-      if (!isOk) {
+      if (!isOk && !isAuthorized) {
         if (e.status === 200) statusHint = ' · silent-decoy (HTTP 200, mirrors upstream — bot can\'t tell it was blocked)';
         else if (e.status === 404) statusHint = ' · upstream-404 mirror or honeypot decoy';
         else if (e.status === 403) statusHint = ' · hard reject';
@@ -791,13 +811,14 @@ async function tick() {
       // 1.5.5 — stash for click-to-drill-down handler (mirrors agents page)
       window._lastMainTimeline   = d.timeline;
       window._lastMainBucketSecs = bucketSec;
-      const labels = d.timeline.map(b => fmtTime(b.t, bucketSec));
+      const rangeMin = getRangeMin();
+      const labels = d.timeline.map(b => fmtTime(b.t, bucketSec, rangeMin));
       const totals = d.timeline.map(b => b.total);
       const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
       const blocks = d.timeline.map(b => b.blocked);
       const missed = d.timeline.map(b => b.missed || 0);
-      // Dynamic decimation: aim at ~12 labels regardless of how many points
-      const step = Math.max(1, Math.floor(labels.length / 12));
+      // Dynamic decimation: aim at ~10 labels regardless of how many points
+      const step = Math.max(1, Math.floor(labels.length / 10));
       const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
       c.data.labels = labelsView;
       c.data.datasets[0].data = totals;
@@ -866,8 +887,8 @@ async function tick() {
           const bSec = cd.timeline_bucket_secs || 60;
           window._lastCostTimeline   = cd.timeline;
           window._lastCostBucketSecs = bSec;
-          const lbls = cd.timeline.map(b => fmtTime(b.t, bSec));
-          const stp = Math.max(1, Math.floor(lbls.length / 12));
+          const lbls = cd.timeline.map(b => fmtTime(b.t, bSec, getRangeMin()));
+          const stp = Math.max(1, Math.floor(lbls.length / 10));
           cc.data.labels = lbls.map((l,i)=>(i%stp===0||i===lbls.length-1)?l:'');
           cc.data.datasets[0].data = cd.timeline.map(b=>b.avg_ms);
           cc.data.datasets[1].data = cd.timeline.map(b=>b.max_ms);
@@ -996,9 +1017,9 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
     const buckets = window._lastMainTimeline;
     if (!Array.isArray(buckets) || !buckets.length) return;
     const bucketSec = window._lastMainBucketSecs || 60;
-    const step = Math.max(1, Math.floor(buckets.length / 12));
+    const step = Math.max(1, Math.floor(buckets.length / 10));
     const labels = buckets.map((b, i) =>
-      (i % step === 0 || i === buckets.length - 1) ? fmtTime(b.t, bucketSec) : '');
+      (i % step === 0 || i === buckets.length - 1) ? fmtTime(b.t, bucketSec, getRangeMin()) : '');
     const data = buckets.map(b => {
       const tot = (b.allowed||0) + (b.blocked||0) + (b.missed||0);
       return tot > 0 ? Math.round(((b.blocked||0) / tot) * 1000)/10 : 0;

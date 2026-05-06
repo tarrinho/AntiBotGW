@@ -7,11 +7,11 @@ USER root
 WORKDIR /tmp
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
- && python3 -m pip install --no-cache-dir --upgrade --target /pydeps \
-       'aiohttp>=3.11.11,<4' \
-       'maxminddb>=2.6,<3' \
-       'psycopg[binary]>=3.1,<4' \
-       'redis>=5,<6'
+ && python3 -m pip install --no-cache-dir --target /pydeps \
+       'aiohttp==3.13.5' \
+       'maxminddb==2.8.2' \
+       'psycopg[binary]==3.3.4' \
+       'redis==5.3.1'
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.
@@ -41,6 +41,8 @@ COPY reputation   /rootfs/app/reputation
 # works out-of-the-box. Operators may override by dropping fresher mmdbs
 # into /data, or set MAXMIND_LICENSE_KEY to auto-refresh inside the container.
 COPY _seed/ /rootfs/usr/local/share/maxmind/
+
+USER nonroot
 
 # ─── Stage 2: Chainguard's distroless python runtime (Wolfi). No shell, no
 # apt, no systemd, no ncurses, no util-linux, no expat-side-tools. Built
