@@ -122,7 +122,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.7.4 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.5 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents" class="active">Agents</a>
@@ -543,6 +543,9 @@ function ensureAgentChart(){
       { label:'clean allowed', data:[], borderColor:'#3fb950',
         backgroundColor:'rgba(63,185,80,0.10)', tension:0.25, fill:true,
         borderWidth:2, pointRadius:0, pointHoverRadius:4 },
+      { label:'authorized bots', data:[], borderColor:'#bc8cff',
+        backgroundColor:'rgba(188,140,255,0.15)', tension:0.25, fill:false,
+        borderWidth:2, borderDash:[2,3], pointRadius:0, pointHoverRadius:4 },
     ]},
     options: { responsive:true, maintainAspectRatio:false,
       animation:{duration:200}, interaction:{mode:'index',intersect:false},
@@ -553,7 +556,7 @@ function ensureAgentChart(){
           titleColor:'#c9d1d9', bodyColor:'#c9d1d9',
           callbacks:{
             title: items => {
-              const idx = items[0].index;
+              const idx = items[0].dataIndex;
               const tl  = window._lastAgentTimeline;
               const bs  = window._lastAgentBucketSecs || 60;
               if (!tl || !tl[idx]) return items[0].label;
@@ -611,13 +614,14 @@ async function tickChart(){
     c.data.datasets[0].data = d.timeline.map(b=>b.detected);
     c.data.datasets[1].data = d.timeline.map(b=>b.missed);
     c.data.datasets[2].data = d.timeline.map(b=>b.clean_allowed);
+    c.data.datasets[3].data = d.timeline.map(b=>b.authorized_robot||0);
     // 1.5.4 — stash for click-to-drill-down handler
     window._lastAgentTimeline   = d.timeline;
     window._lastAgentBucketSecs = bs;
     c.update('none');
     const t = d.totals;
     document.getElementById('t-totals').textContent =
-      `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} · stealth IPs=${d.stealth_ips_count}`;
+      `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} auth-bots=${t.authorized_robot||0} · stealth IPs=${d.stealth_ips_count}`;
   }catch(e){}
 }
 // Time-window navigation state for the timeline chart

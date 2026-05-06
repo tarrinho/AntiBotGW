@@ -118,7 +118,7 @@ async def agents_timeline_endpoint(request: web.Request):
     bucket_count = min(250, max(2, (range_min * 60) // bucket_secs))
     start_b = end_b - (bucket_count - 1) * bucket_secs
 
-    detected, allowed_total, missed = {}, {}, {}
+    detected, allowed_total, missed, authorized_robot = {}, {}, {}, {}
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -141,6 +141,15 @@ async def agents_timeline_endpoint(request: web.Request):
         ):
             allowed_total[int(r["b"])] = r["n"]
 
+        for r in conn.execute(
+            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant
+            f"COUNT(*) AS n FROM events "
+            f"WHERE ts >= ? AND ts <= ? AND reason='authorized-robot' "
+            f"GROUP BY b",
+            (start_b, end_b + bucket_secs),
+        ):
+            authorized_robot[int(r["b"])] = r["n"]
+
         if stealth_ips:
             ip_q = ",".join("?" * len(stealth_ips))
             for r in conn.execute(
@@ -156,18 +165,19 @@ async def agents_timeline_endpoint(request: web.Request):
         print(f"[agents-timeline] db error: {e}")
 
     series = []
-    tot_d = tot_m = tot_c = 0
+    tot_d = tot_m = tot_c = tot_ar = 0
     for b in range(start_b, end_b + 1, bucket_secs):
         d = detected.get(b, 0)
         m = missed.get(b, 0)
         a = allowed_total.get(b, 0)
+        ar = authorized_robot.get(b, 0)
         c = max(0, a - m)
-        tot_d += d; tot_m += m; tot_c += c
-        series.append({"t": b, "detected": d, "missed": m, "clean_allowed": c})
+        tot_d += d; tot_m += m; tot_c += c; tot_ar += ar
+        series.append({"t": b, "detected": d, "missed": m, "clean_allowed": c, "authorized_robot": ar})
 
     return web.json_response({
         "timeline": series,
-        "totals": {"detected": tot_d, "missed": tot_m, "clean_allowed": tot_c},
+        "totals": {"detected": tot_d, "missed": tot_m, "clean_allowed": tot_c, "authorized_robot": tot_ar},
         "stealth_ips_count": len(stealth_ips),
         "range_min": range_min,
         "bucket_secs": bucket_secs,

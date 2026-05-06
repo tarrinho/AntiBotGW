@@ -6,6 +6,16 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.5] — 2026-05-06
+
+### Added
+- **Authorized bots shown in purple on all traffic graphs** (`dashboards/main.html`, `dashboards/agents.html`, `dashboards/geo.html`, `core/proxy_handler.py`, `dashboards/agents.py`) — monitoring bots that are explicitly authorized (reason `authorized-robot`) were previously invisible on the time-series charts and geo map, or incorrectly counted as "blocked". They are now tracked as a distinct fifth dataset (purple, `#bc8cff`, dashed line) on the main dashboard traffic chart and the agents chart, and rendered as purple circles on the geo map with a separate legend entry. Backend changes: `metrics_endpoint` timeline now extracts `authorized_robot` from each bucket's `by_reason` (in-memory `defaultdict` or DB JSON column); `agents_timeline_endpoint` gains a dedicated SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies `authorized-robot` events as `kind='authorized_robot'` instead of `'blocked'` so they no longer inflate blocked counts on the map. Scrubber playback also tracks the new kind via `ar` counter in bucket points.
+
+### Tests
+- Added regression tests for 1.7.5 features: `test_main_authorized_bots_purple_dataset`, `test_agents_authorized_bots_purple_dataset`, `test_geo_authorized_bot_legend`, `test_geo_authorized_bot_circle_renders`, `test_geo_authorized_bot_scrubber_ar_counter`, `test_metrics_timeline_has_authorized_robot_field`, `test_agents_timeline_has_authorized_robot_query`, `test_geo_authorized_robot_kind_in_geo_data_endpoint`.
+
+---
+
 ## [1.7.4] — 2026-05-06
 
 ### Added

@@ -530,7 +530,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.4"
+_EXPECTED_VERSION = "AppSecGW_1.7.5"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -546,7 +546,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.4\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.5\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
@@ -570,7 +570,7 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.4:\n" + "\n".join(hits)
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.5:\n" + "\n".join(hits)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -1447,16 +1447,20 @@ def test_authorized_bot_bypass_in_protect_source():
 
 
 def test_authorized_bot_bypass_only_on_root():
-    """Authorized bot bypass must check path == '/' — not all paths."""
+    """Authorized bot bypass must check request.path against per-entry path (UA:path pairs)."""
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 600]
-    assert 'request.path == "/"' in bot_block or "request.path == '/'" in bot_block, (
-        "Authorized bot bypass must only fire on path '/' — monitoring bots "
-        "that hit other paths should go through normal detection"
+    bot_block = src[bot_idx: bot_idx + 800]
+    assert "request.path ==" in bot_block, (
+        "Authorized bot bypass must compare request.path against the configured "
+        "path from each UA:path entry"
+    )
+    assert "_bot_path" in bot_block, (
+        "Authorized bot bypass must use per-entry path variable (_bot_path) from "
+        "UA:path pairs — not a global hardcoded '/'"
     )
 
 
@@ -1841,6 +1845,9 @@ def test_main_tooltip_callback_uses_timeline_epoch():
     """main.html chart tooltip title must use _lastMainTimeline epoch, not just axis label.
 
     Without this, short-window views show bare 'HH:MM' in the tooltip with no date.
+    Regression: used items[0].index (onClick API) instead of items[0].dataIndex
+    (TooltipItem API) — index was undefined, timeline lookup returned undefined,
+    callback fell back to items[0].label which is '' for step-filtered points.
     """
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
@@ -1852,8 +1859,18 @@ def test_main_tooltip_callback_uses_timeline_epoch():
         "main.html tooltip title callback must reference _lastMainBucketSecs to "
         "format the bucket end time correctly"
     )
+    # Must use .dataIndex (Chart.js TooltipItem API), not .index (onClick element API)
+    # ensureChart() is the main traffic chart function (ensureCostChart is separate)
+    chart_fn_start = src.find("function ensureChart(")
+    callbacks_start = src.find("callbacks:", chart_fn_start)
+    callbacks_area = src[callbacks_start:callbacks_start + 600]
+    assert "dataIndex" in callbacks_area, (
+        "main.html tooltip callback must use items[0].dataIndex (Chart.js v3 "
+        "TooltipItem property) — items[0].index is undefined in tooltip callbacks "
+        "causing the epoch lookup to fail and the title to show as empty string"
+    )
     # The callback must produce a human-readable date (not just relay the axis label)
-    tooltip_block = src[src.find("callbacks:"):src.find("callbacks:") + 600]
+    tooltip_block = src[src.find("callbacks:"):src.find("callbacks:") + 800]
     assert "toLocaleDateString" in tooltip_block or "toLocaleString" in tooltip_block, (
         "main.html tooltip title callback must format the epoch as a readable "
         "date string (toLocaleDateString / toLocaleString)"
@@ -1861,7 +1878,12 @@ def test_main_tooltip_callback_uses_timeline_epoch():
 
 
 def test_agents_tooltip_config_defined():
-    """agents.html chart must have a tooltip plugin config with title callback."""
+    """agents.html chart must have a tooltip plugin config with title callback.
+
+    Regression: used items[0].index instead of items[0].dataIndex — index is
+    undefined in Chart.js v3 TooltipItem objects causing silent fallback to
+    items[0].label which is '' for step-filtered axis labels.
+    """
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
     # agents.html had no tooltip config at all before 1.7.4
@@ -1876,6 +1898,14 @@ def test_agents_tooltip_config_defined():
     )
     assert "_lastAgentBucketSecs" in src, (
         "agents.html tooltip title callback must reference _lastAgentBucketSecs"
+    )
+    # Must use .dataIndex, not .index
+    tl_start = src.find("_lastAgentTimeline")
+    tl_area = src[max(0, tl_start - 200):tl_start + 50]
+    assert "dataIndex" in tl_area, (
+        "agents.html tooltip callback must use items[0].dataIndex (Chart.js v3 "
+        "TooltipItem API) — items[0].index is undefined in tooltip context, "
+        "causing epoch lookup to fail and tooltip title to appear empty"
     )
 
 
@@ -1950,4 +1980,243 @@ def test_dockerfile_armv7_builder_stage_drops_root():
     assert "USER nobody" in builder_stage or "USER nonroot" in builder_stage, (
         "Dockerfile.armv7 builder stage must end with 'USER nobody' to satisfy "
         "DL3002 — Alpine builder had implicit root as last USER"
+    )
+
+
+# ── 1.7.5: Authorized bots in purple ─────────────────────────────────────────
+
+def test_main_authorized_bots_purple_dataset():
+    """main.html traffic chart must have a purple 'authorized bots' dataset."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "authorized bots" in src, (
+        "main.html chart must have 'authorized bots' dataset label (1.7.5)"
+    )
+    assert "#bc8cff" in src, (
+        "main.html chart must use purple #bc8cff for authorized bots dataset"
+    )
+    assert "authorized_robot" in src, (
+        "main.html tick() must map b.authorized_robot to the authorized bots dataset"
+    )
+
+
+def test_agents_authorized_bots_purple_dataset():
+    """agents.html chart must have a purple 'authorized bots' dataset."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "authorized bots" in src, (
+        "agents.html chart must have 'authorized bots' dataset label (1.7.5)"
+    )
+    assert "#bc8cff" in src, (
+        "agents.html chart must use purple #bc8cff for authorized bots dataset"
+    )
+    assert "b.authorized_robot" in src, (
+        "agents.html tickChart() must map b.authorized_robot to dataset[3]"
+    )
+
+
+def test_geo_authorized_bot_legend():
+    """geo.html map legend must include authorized bots entry."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "geo.html").read_text()
+    assert "authorized bots" in src, (
+        "geo.html legend must include 'authorized bots' entry (1.7.5)"
+    )
+
+
+def test_geo_authorized_bot_circle_renders():
+    """geo.html renderMap() must draw a purple circle for authorized_robot count."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "geo.html").read_text()
+    assert "authorized_robot" in src, (
+        "geo.html renderMap() must use p.authorized_robot to draw purple circle"
+    )
+    assert "authBots" in src, (
+        "geo.html renderMap() must extract authBots from point and render if > 0"
+    )
+
+
+def test_geo_authorized_bot_scrubber_ar_counter():
+    """geo.html scrubber bucket merging must track ar counter for authorized_robot."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "geo.html").read_text()
+    assert "ar:0" in src, (
+        "geo.html scrubber bucket init must include ar:0 for authorized_robot"
+    )
+    rebuild_idx = src.find("rebuildBuckets")
+    assert rebuild_idx != -1, "geo.html must have rebuildBuckets function"
+    assert "authorized_robot" in src[rebuild_idx:rebuild_idx + 1200], (
+        "geo.html rebuildBuckets() must handle 'authorized_robot' kind → ar counter"
+    )
+
+
+def test_metrics_timeline_has_authorized_robot_field():
+    """metrics_endpoint timeline aggregation must include authorized_robot field."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    loop_start = src.find('"authorized_robot": 0')
+    assert loop_start != -1, (
+        "metrics_endpoint timeline agg dict must init 'authorized_robot': 0 (1.7.5)"
+    )
+    assert "authorized-robot" in src[loop_start:loop_start + 1200], (
+        "metrics_endpoint must extract by_reason['authorized-robot'] into authorized_robot"
+    )
+
+
+def test_agents_timeline_has_authorized_robot_query():
+    """agents_timeline_endpoint must have a dedicated SQL query for authorized-robot."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
+    assert "reason='authorized-robot'" in src, (
+        "agents.py agents_timeline_endpoint must query events for reason='authorized-robot'"
+    )
+    assert '"authorized_robot": ar' in src or "'authorized_robot': ar" in src, (
+        "agents.py must include authorized_robot in each series bucket"
+    )
+
+
+def test_geo_authorized_robot_kind_in_geo_data_endpoint():
+    """geo_data_endpoint must classify authorized-robot events as authorized_robot kind."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    geo_start = src.find("async def geo_data_endpoint")
+    assert geo_start != -1, "geo_data_endpoint must exist in proxy_handler.py"
+    geo_section = src[geo_start:geo_start + 5000]
+    assert 'reason == "authorized-robot"' in geo_section, (
+        "geo_data_endpoint must detect reason==\"authorized-robot\" for purple classification"
+    )
+    assert '"authorized_robot"' in geo_section or "'authorized_robot'" in geo_section, (
+        "geo_data_endpoint must use 'authorized_robot' kind for authorized-robot events"
+    )
+
+
+# ── 1.7.5: AUTHORIZED_BOT_UAS UA:path pair format ────────────────────────────
+
+def test_authorized_bot_config_default_uses_ua_path_pairs():
+    """Default AUTHORIZED_BOT_UAS must use 'UA:path' pair format, not bare UA substrings."""
+    import config
+    for entry in config.AUTHORIZED_BOT_UAS:
+        assert ":" in entry, (
+            f"AUTHORIZED_BOT_UAS default entry {entry!r} must be a 'UA_substring:path' pair "
+            f"(e.g. 'UptimeRobot:/') — bare UA substrings no longer supported as the "
+            f"default; each entry must specify which path to match"
+        )
+
+
+def test_authorized_bot_config_known_bots_with_root_path():
+    """Default AUTHORIZED_BOT_UAS pairs must include known bots mapped to '/'."""
+    import config
+    pairs = {e.split(":", 1)[0].strip(): e.split(":", 1)[1].strip()
+             for e in config.AUTHORIZED_BOT_UAS if ":" in e}
+    for bot in ("UptimeRobot", "Pingdom", "StatusCake"):
+        assert bot in pairs, (
+            f"Default AUTHORIZED_BOT_UAS must include '{bot}' — missing from pairs"
+        )
+        assert pairs[bot] == "/", (
+            f"Default entry for '{bot}' must map to path '/' (got {pairs[bot]!r})"
+        )
+
+
+def test_authorized_bot_bypass_uses_per_entry_path_variable():
+    """protect() bypass loop must use _bot_path variable from UA:path split."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    assert bot_idx != -1
+    bot_block = src[bot_idx: bot_idx + 1000]
+    assert "_bot_path" in bot_block, (
+        "protect() must extract _bot_path from each UA:path entry — "
+        "the path to match is per-entry, not a global constant"
+    )
+    assert "request.path == _bot_path" in bot_block, (
+        "protect() must compare request.path == _bot_path (per-entry path), "
+        "not a hardcoded '/'"
+    )
+
+
+def test_authorized_bot_bypass_splits_on_colon():
+    """protect() bypass must find the colon separator and split UA from path."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    assert bot_idx != -1
+    bot_block = src[bot_idx: bot_idx + 1000]
+    assert "_colon" in bot_block or '.find(":")' in bot_block or "split(" in bot_block, (
+        "protect() bypass must locate the ':' separator in each UA:path entry "
+        "to split UA substring from path"
+    )
+    assert "_ua_sub" in bot_block, (
+        "protect() bypass must extract _ua_sub from the UA:path entry"
+    )
+
+
+def test_authorized_bot_bypass_backward_compat_no_colon():
+    """protect() bypass must default path to '/' for entries without ':'."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    assert bot_idx != -1
+    bot_block = src[bot_idx: bot_idx + 1000]
+    assert '= "/"' in bot_block or "= '/'" in bot_block, (
+        "protect() bypass must default _bot_path to '/' when an entry has no ':' "
+        "for backward compatibility with bare UA substring entries"
+    )
+
+
+def test_authorized_bot_hot_reload_knob_registered():
+    """AUTHORIZED_BOT_UAS must be in _HOT_RELOAD_KNOBS for runtime config changes."""
+    from core.proxy_handler import _HOT_RELOAD_KNOBS
+    assert "AUTHORIZED_BOT_UAS" in _HOT_RELOAD_KNOBS, (
+        "AUTHORIZED_BOT_UAS must be registered in _HOT_RELOAD_KNOBS — operators "
+        "must be able to change monitoring-bot pairs at runtime without restarting "
+        "the container"
+    )
+
+
+def test_controls_card_bypass_section_exists():
+    """controls.html must have a #card-bypass section for the AUTHORIZED_BOT_UAS toggle."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert 'id="card-bypass"' in src, (
+        "controls.html must define <section id='card-bypass'> for the authorized "
+        "monitoring bots UA:path pair editor"
+    )
+    assert 'id="bypass"' in src, (
+        "controls.html must define <div id='bypass'> inside card-bypass — "
+        "load() renders AUTHORIZED_BOT_UAS textarea into this div"
+    )
+
+
+def test_controls_meta_authorized_bot_uas_entry():
+    """controls.html META must include AUTHORIZED_BOT_UAS with card:'bypass'."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "AUTHORIZED_BOT_UAS" in src, (
+        "controls.html META must include AUTHORIZED_BOT_UAS knob definition"
+    )
+    idx = src.find("AUTHORIZED_BOT_UAS")
+    meta_block = src[idx: idx + 200]
+    assert "card:'bypass'" in meta_block or 'card:"bypass"' in meta_block, (
+        "controls.html META AUTHORIZED_BOT_UAS must specify card:'bypass' so "
+        "load() renders it into the #bypass div"
+    )
+    assert "kind:'list'" in meta_block or 'kind:"list"' in meta_block, (
+        "controls.html META AUTHORIZED_BOT_UAS must be kind:'list' to render "
+        "as a textarea for UA:path pair editing"
+    )
+
+
+def test_controls_load_clears_bypass_div():
+    """controls.html load() must clear the #bypass div before rendering."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    load_idx = src.find("async function load()")
+    assert load_idx != -1, "controls.html must define async function load()"
+    load_block = src[load_idx: load_idx + 500]
+    assert "'bypass'" in load_block or '"bypass"' in load_block, (
+        "controls.html load() clearing list must include 'bypass' so stale "
+        "AUTHORIZED_BOT_UAS entries are removed before re-rendering"
     )
