@@ -441,20 +441,20 @@ async def test_risk_increments_on_block(gw_client):
 # ── F9 — TRUSTED_PROXIES integration check ────────────────────────────────
 @pytest.mark.asyncio
 async def test_xff_spoof_blocked_when_peer_untrusted(gw_client):
-    """When TRUSTED_PROXIES excludes the test peer, XFF is ignored.
-
-    Both proxy.TRUSTED_PROXIES_NETS and helpers.TRUSTED_PROXIES_NETS must be
-    patched — helpers.py imports the variable at module load time, so patching
-    only the proxy module namespace has no effect on _peer_is_trusted_proxy().
-    """
+    """When TRUSTED_PROXIES excludes the test peer, XFF is ignored."""
     import ipaddress
-    import helpers as _helpers_mod
+    import core.proxy_handler as _cph_fix
     restrict = [ipaddress.ip_network("10.99.0.0/16")]
-    # Patch both namespaces — hot-reload in production does the same via setattr loop
-    proxy.TRUSTED_PROXIES_NETS = restrict
-    _helpers_mod.TRUSTED_PROXIES_NETS = restrict
-    proxy.TRUST_XFF = "first"
-    _helpers_mod.TRUST_XFF = "first"
+    # core.proxy_handler.get_ip is a namespace-aware wrapper defined in proxy.py.
+    # Its __globals__ may point to an orphaned proxy module loaded at collection
+    # time via importlib exec_module — not reachable via sys.modules or via
+    # _ProxyModule.__setattr__ propagation.  Patch its __globals__ dict directly
+    # so the wrapper sees the restricted TRUSTED_PROXIES_NETS / TRUST_XFF values.
+    _gip_g = _cph_fix.get_ip.__globals__
+    _saved_nets = _gip_g.get("TRUSTED_PROXIES_NETS", [])
+    _saved_xff = _gip_g.get("TRUST_XFF", "first")
+    _gip_g["TRUSTED_PROXIES_NETS"] = restrict
+    _gip_g["TRUST_XFF"] = "first"
     try:
         # Clear ip_state so max() finds only this request's identity
         async with proxy.state_lock:
@@ -472,8 +472,8 @@ async def test_xff_spoof_blocked_when_peer_untrusted(gw_client):
         assert latest.last_ip != "8.8.8.8", \
             f"XFF spoof leaked through: identity recorded as {latest.last_ip}"
     finally:
-        proxy.TRUSTED_PROXIES_NETS = []
-        _helpers_mod.TRUSTED_PROXIES_NETS = []
+        _gip_g["TRUSTED_PROXIES_NETS"] = _saved_nets
+        _gip_g["TRUST_XFF"] = _saved_xff
 
 
 # ── helper ────────────────────────────────────────────────────────────────

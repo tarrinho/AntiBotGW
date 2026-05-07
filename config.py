@@ -151,6 +151,15 @@ _bot_uas_raw = os.environ.get(
 ).strip()
 AUTHORIZED_BOT_UAS: list = _parse_authorized_bot_uas(_bot_uas_raw)
 
+# ── Detection bypass paths ────────────────────────────────────────────────────
+# Path prefixes listed here bypass ALL bot detection and are proxied directly.
+# Intended for static asset directories (/static/, /assets/, /media/) where
+# bot detection adds latency and false positives without security benefit.
+# Prefix matching: any request.path that starts with an entry is exempt.
+# Hot-reloadable. Empty list = no bypass (default, all paths protected).
+_bypass_paths_raw = os.environ.get("BYPASS_PATHS", "").strip()
+BYPASS_PATHS: list = [p.strip() for p in _bypass_paths_raw.split(",") if p.strip()]
+
 _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)

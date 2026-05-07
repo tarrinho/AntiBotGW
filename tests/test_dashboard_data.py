@@ -171,8 +171,8 @@ def test_agents_data_returns_agents_list(proxy_module):
                                 cookies={proxy_module._SESSION_COOKIE: cookie})
                 assert r.status == 200
                 d = await r.json()
-                assert "agents" in d
-                assert isinstance(d["agents"], list)
+                assert "suspects" in d
+                assert isinstance(d["suspects"], list)
     _run(go())
 
 
@@ -247,8 +247,8 @@ def test_logs_data_returns_events(proxy_module):
                                 cookies={proxy_module._SESSION_COOKIE: cookie})
                 assert r.status == 200
                 d = await r.json()
-                assert "events" in d
-                assert isinstance(d["events"], list)
+                assert "rows" in d
+                assert isinstance(d["rows"], list)
     _run(go())
 
 
@@ -358,12 +358,12 @@ def test_path_hits_returns_paths(proxy_module):
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as c:
                 cookie = _make_admin_session(proxy_module)
-                r = await c.get(NS + "/path-hits",
+                r = await c.get(NS + "/path-hits?path=/",
                                 cookies={proxy_module._SESSION_COOKIE: cookie})
                 assert r.status == 200
                 d = await r.json()
-                assert "paths" in d
-                assert isinstance(d["paths"], list)
+                assert "ips" in d
+                assert isinstance(d["ips"], list)
     _run(go())
 
 

@@ -1148,3 +1148,159 @@ def test_dashboard_html_version_matches_config():
         "Dashboard HTML version mismatch — update to match config.GW_VERSION:\n"
         + "\n".join(missing)
     )
+
+
+# ── BYPASS_PATHS: detection-free path prefix regressions ────────────────────
+
+def test_bypass_paths_proxied_to_upstream(proxy_module):
+    """A path that matches a BYPASS_PATHS prefix must reach upstream directly,
+    bypassing the JS challenge gate."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                   JS_CHALLENGE=True,
+                                   TURNSTILE_ENABLED=True,
+                                   BYPASS_PATHS=["/static/"]) as client:
+                r = await client.get("/static/app.js", headers={
+                    "User-Agent": "curl/7.88.0",
+                    "Accept": "*/*",
+                })
+                body = await r.read()
+                assert _UPSTREAM_MARK in body, (
+                    "Request to a BYPASS_PATHS prefix must reach upstream directly — "
+                    "bot detection must not gate static assets"
+                )
+    _run(go())
+
+
+def test_bypass_paths_prefix_matches_subpath(proxy_module):
+    """Prefix matching: /assets/ configured → /assets/img/logo.png proxied."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                   JS_CHALLENGE=True,
+                                   TURNSTILE_ENABLED=True,
+                                   BYPASS_PATHS=["/assets/"]) as client:
+                r = await client.get("/assets/img/logo.png", headers={
+                    "User-Agent": "curl/7.88.0",
+                })
+                body = await r.read()
+                assert _UPSTREAM_MARK in body, (
+                    "Prefix /assets/ must match /assets/img/logo.png — "
+                    "any sub-path under a bypass prefix must be proxied"
+                )
+    _run(go())
+
+
+def test_bypass_paths_non_bypass_path_still_inspected(proxy_module):
+    """A path not in BYPASS_PATHS must still be inspected.
+    Bot UA with no chal cookie on /api/ must be blocked even when /static/ is bypassed."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                   JS_CHALLENGE=True,
+                                   TURNSTILE_ENABLED=True,
+                                   BYPASS_PATHS=["/static/"]) as client:
+                r = await client.get("/api/v1/users", headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json",
+                })
+                body = await r.read()
+                assert _UPSTREAM_MARK not in body, (
+                    "/api/v1/users is not in BYPASS_PATHS — "
+                    "bot detection must still run on this path"
+                )
+    _run(go())
+
+
+def test_bypass_paths_empty_list_inspects_all(proxy_module):
+    """Empty BYPASS_PATHS (default) must not skip detection on any path.
+    Regression guard: ensure the bypass check short-circuits only when non-empty."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                   JS_CHALLENGE=True,
+                                   TURNSTILE_ENABLED=True,
+                                   BYPASS_PATHS=[]) as client:
+                r = await client.get("/static/app.js", headers={
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "application/json",
+                })
+                body = await r.read()
+                assert _UPSTREAM_MARK not in body, (
+                    "Empty BYPASS_PATHS must not exempt any path — "
+                    "all paths go through detection when list is empty"
+                )
+    _run(go())
+
+
+def test_bypass_paths_no_ip_state_recorded(proxy_module):
+    """Bypass path requests must not create ip_state entries — detection and
+    risk scoring are skipped. An audit event is written to db_queue (event log)
+    but record() is never called, so ip_state stays empty."""
+    from state import ip_state
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                   BYPASS_PATHS=["/static/"]) as client:
+                ip_state.clear()
+                await client.get("/static/app.css", headers={
+                    "User-Agent": "curl/7.88.0",
+                })
+                key = next(
+                    (k for k, s in ip_state.items() if s.last_ip == "127.0.0.1"),
+                    None,
+                )
+                assert key is None, (
+                    "Bypass path must not create an ip_state entry — "
+                    "record() must not be called for bypassed requests"
+                )
+    _run(go())
+
+
+def test_bypass_paths_hot_reload_via_config_endpoint(proxy_module):
+    """BYPASS_PATHS applied via the config endpoint takes effect immediately.
+    A path that was blocked before the POST must be proxied after."""
+    import json as _json
+    pre = list(proxy_module.BYPASS_PATHS)
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                   JS_CHALLENGE=True,
+                                   TURNSTILE_ENABLED=True,
+                                   BYPASS_PATHS=[]) as client:
+                # Before: /uploads/ blocked (no bypass configured)
+                r1 = await client.get("/uploads/doc.pdf", headers={
+                    "User-Agent": "curl/7.88.0",
+                })
+                body1 = await r1.read()
+                assert _UPSTREAM_MARK not in body1, (
+                    "Pre-reload: /uploads/ must be inspected with empty BYPASS_PATHS"
+                )
+
+                # Hot-reload: add /uploads/ to bypass list
+                r_cfg = await client.post(
+                    "/antibot-appsec-gateway/secured/config",
+                    data=_json.dumps({"BYPASS_PATHS": ["/uploads/"]}),
+                    headers={"Content-Type": "application/json"},
+                    cookies=_admin_cookie(proxy_module),
+                )
+                assert r_cfg.status == 200
+                cfg_body = _json.loads(await r_cfg.text())
+                assert "BYPASS_PATHS" in cfg_body.get("applied", {}), (
+                    "BYPASS_PATHS must be accepted by the config endpoint"
+                )
+
+                # After: /uploads/ must now be proxied directly
+                r2 = await client.get("/uploads/doc.pdf", headers={
+                    "User-Agent": "curl/7.88.0",
+                })
+                body2 = await r2.read()
+                assert _UPSTREAM_MARK in body2, (
+                    "Post-reload: /uploads/ must be proxied after BYPASS_PATHS hot-reload"
+                )
+    try:
+        _run(go())
+    finally:
+        proxy_module.BYPASS_PATHS = pre
+        _propagate_to_all_modules("BYPASS_PATHS", pre)

@@ -197,6 +197,16 @@ button:disabled{opacity:.4;cursor:not-allowed}
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif}
 .bot-add-btn:hover{border-color:var(--blue);color:var(--blue)}
 
+/* Path list editor (BYPASS_PATHS) */
+.pathlist-container{display:flex;flex-direction:column;gap:6px;margin-bottom:4px}
+.pathlist-empty{font-size:12px;color:var(--dim);font-style:italic;padding:8px 0}
+.path-entry{display:flex;align-items:center;gap:8px;background:#0d1117;border:1px solid var(--line);
+  border-radius:6px;padding:7px 10px}
+.path-entry input{flex:1;background:#161b22;border:1px solid var(--line);color:var(--fg);
+  padding:5px 8px;border-radius:4px;font-family:ui-monospace,Menlo,monospace;font-size:12px;
+  box-sizing:border-box}
+.path-entry input:focus{outline:none;border-color:var(--blue)}
+
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
@@ -403,6 +413,19 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       Matched requests are recorded blue and passed through. Disabled entries are skipped.
     </div>
     <div id="bypass"></div>
+
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--line)">
+      <h3 style="font-size:13px;font-weight:700;color:var(--fg);margin:0 0 6px">
+        🚫 Detection-free path prefixes
+        <span style="font-size:11px;color:var(--dim);font-weight:400">— these paths skip all bot detection</span>
+      </h3>
+      <div class="hint" style="margin-bottom:10px">
+        Requests to these path prefixes bypass <b>all</b> detectors, scoring, and rate limiting — proxied directly with no overhead.
+        Use for static asset directories (<code>/static/</code>, <code>/assets/</code>, <code>/media/</code>) where bot filters add latency without security benefit.
+        Prefix match: <code>/static/</code> covers <code>/static/app.js</code>, <code>/static/img/logo.png</code>, etc.
+      </div>
+      <div id="bypass-paths"></div>
+    </div>
   </section>
 
   <section class="card" id="card-scoring">
@@ -742,6 +765,7 @@ const META = {
   DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
   DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
   AUTHORIZED_BOT_UAS:      {kind:'botlist', card:'bypass', desc:'Structured monitoring-bot pass-through rules. Each entry: UA substring + path (+ optional source IPs). Matched requests are recorded blue and passed through.'},
+  BYPASS_PATHS:            {kind:'pathlist', card:'bypass-paths', desc:'Path prefixes that bypass ALL bot detection and are proxied directly. Use for static asset directories (/static/, /assets/, /media/) where bot signals are meaningless. Prefix match: any request path starting with an entry is exempt from all detectors, scoring, and rate limiting.'},
   WEBHOOK_EVENT_FILTER:    {kind:'list', card:'ext-misc', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
   DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
@@ -923,6 +947,72 @@ function _buildBotListUI(knobName, raw) {
   return ct;
 }
 
+function _buildPathListUI(knobName, raw) {
+  const paths = Array.isArray(raw)
+    ? raw.map(s => String(s).trim()).filter(Boolean)
+    : String(raw||'').split(',').map(s=>s.trim()).filter(Boolean);
+
+  const ct = document.createElement('div');
+  ct.className = 'pathlist-container';
+
+  function readPaths() {
+    return [...ct.querySelectorAll('.path-entry input')]
+      .map(i => i.value.trim()).filter(Boolean);
+  }
+
+  function onChange() { mark(knobName, readPaths()); }
+
+  function updateEmpty() {
+    let emp = ct.querySelector('.pathlist-empty');
+    const hasEntries = ct.querySelectorAll('.path-entry').length > 0;
+    if (!hasEntries && !emp) {
+      emp = document.createElement('div');
+      emp.className = 'pathlist-empty';
+      emp.textContent = 'No bypass paths configured — all requests are inspected.';
+      ct.insertBefore(emp, ct.querySelector('.bot-add-btn'));
+    } else if (hasEntries && emp) {
+      emp.remove();
+    }
+  }
+
+  function mkRow(val) {
+    const row = document.createElement('div');
+    row.className = 'path-entry';
+
+    const inp = document.createElement('input');
+    inp.type = 'text';
+    inp.placeholder = '/static/';
+    inp.value = val || '';
+    inp.oninput = onChange;
+
+    const del = document.createElement('button');
+    del.className = 'bot-del-btn';
+    del.textContent = '✕';
+    del.title = 'Remove this path';
+    del.onclick = () => { row.remove(); updateEmpty(); onChange(); };
+
+    row.append(inp, del);
+    return row;
+  }
+
+  paths.forEach(p => ct.appendChild(mkRow(p)));
+
+  const addBtn = document.createElement('button');
+  addBtn.className = 'bot-add-btn';
+  addBtn.textContent = '+ Add path prefix';
+  addBtn.onclick = () => {
+    const row = mkRow('');
+    ct.insertBefore(row, addBtn);
+    updateEmpty();
+    row.querySelector('input').focus();
+    onChange();
+  };
+  ct.appendChild(addBtn);
+
+  updateEmpty();
+  return ct;
+}
+
 function renderControl(name, meta, value){
   const m = meta[name];
   if (!m) return null;
@@ -933,6 +1023,12 @@ function renderControl(name, meta, value){
     wrap.classList.add('botlist-wrap');
     wrap.style.display = 'block';
     wrap.appendChild(_buildBotListUI(name, value));
+    return wrap;
+  }
+  if (m.kind === 'pathlist') {
+    wrap.classList.add('botlist-wrap');
+    wrap.style.display = 'block';
+    wrap.appendChild(_buildPathListUI(name, value));
     return wrap;
   }
   const label = document.createElement('div');
@@ -1113,11 +1209,19 @@ async function load(){
   serverState = body.state || {};
   // Group + render. Booleans (toggles) are now rendered inside the merged
   // "Defenses & scoring" table (see loadScoring), so skip them here.
-  ['thresholds','ext-misc','external-log','bypass'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  ['thresholds','ext-misc','external-log','bypass','bypass-paths'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  // Always render BYPASS_PATHS pathlist into its dedicated slot so the add
+  // button is available even when the server hasn't persisted any paths yet.
+  const _bpSlot = $('bypass-paths');
+  if (_bpSlot) {
+    const _bpEl = renderControl('BYPASS_PATHS', META, serverState['BYPASS_PATHS'] || []);
+    if (_bpEl) _bpSlot.appendChild(_bpEl);
+  }
   const map = {num:'thresholds'};
   for (const [name, meta] of Object.entries(META)){
     if (!(name in serverState)) continue;
     if (meta.kind === 'bool') continue;        // moved to scoring table
+    if (name === 'BYPASS_PATHS') continue;     // already rendered above
     const card = meta.card || map[meta.kind];
     if (!card || !$(card)) continue;
     const el = renderControl(name, META, serverState[name]);
@@ -1143,6 +1247,8 @@ async function apply(){
       if (meta && meta.kind === 'list')
         payload[k] = String(v).split(',').map(s=>s.trim()).filter(Boolean);
       else if (meta && meta.kind === 'botlist')
+        payload[k] = Array.isArray(v) ? v : [];
+      else if (meta && meta.kind === 'pathlist')
         payload[k] = Array.isArray(v) ? v : [];
       else payload[k] = v;
     }

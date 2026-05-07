@@ -745,6 +745,7 @@ def test_config_startup_mutex_ja4_off_when_turnstile_on():
         "JS_CHAL_REQUIRE_JA4":  "1",
     }
     orig = os.environ.copy()
+    _saved_config = sys.modules.get("config")
     try:
         os.environ.update(fake_env)
         if "config" in sys.modules:
@@ -759,6 +760,8 @@ def test_config_startup_mutex_ja4_off_when_turnstile_on():
         os.environ.update(orig)
         if "config" in sys.modules:
             del sys.modules["config"]
+        if _saved_config is not None:
+            sys.modules["config"] = _saved_config
 
 
 def test_db_load_config_mutex_clears_ja4_when_turnstile_active():
@@ -3269,4 +3272,166 @@ def test_agents_data_auth_bot_has_safe_comps_fallback():
            ("_s_is_auth_bot" in fn_section and "not comps" in fn_section), (
         "agents_data_endpoint must guard comps/mets with _s_is_auth_bot fallback "
         "so score-0 auth bots don't send null to the frontend component bar"
+    )
+
+
+def test_bypass_paths_in_hot_reload_knobs():
+    """BYPASS_PATHS must be registered as a hot-reload knob."""
+    import importlib, sys
+    saved = {k: v for k, v in sys.modules.items()
+             if k.startswith("core.") or k == "core"}
+    for mod in saved:
+        sys.modules.pop(mod, None)
+    try:
+        proxy = importlib.import_module("core.proxy_handler")
+        assert "BYPASS_PATHS" in proxy._HOT_RELOAD_KNOBS, (
+            "BYPASS_PATHS must be in _HOT_RELOAD_KNOBS for hot-reload support"
+        )
+    finally:
+        for mod in list(sys.modules):
+            if mod.startswith("core.") or mod == "core":
+                sys.modules.pop(mod, None)
+        sys.modules.update(saved)
+
+
+def test_bypass_paths_prefix_check_in_protect():
+    """protect() must contain a BYPASS_PATHS prefix check before bot detection."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    assert "BYPASS_PATHS" in src, "proxy_handler.py must reference BYPASS_PATHS"
+    bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
+    assert bp_idx != -1, (
+        "protect() must contain: if BYPASS_PATHS and any(request.path.startswith(p) for p in BYPASS_PATHS)"
+    )
+
+
+def test_controls_html_bypass_paths_in_meta():
+    """controls.html META registry must include BYPASS_PATHS knob."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "BYPASS_PATHS" in src, "controls.html must reference BYPASS_PATHS"
+    assert "bypass-paths" in src, "controls.html must have bypass-paths card slot"
+    assert "Detection-free path prefixes" in src, (
+        "controls.html must have Detection-free path prefixes sub-section header"
+    )
+
+
+def test_controls_html_bypass_paths_card_cleared_on_load():
+    """controls.html load() must clear the bypass-paths card div."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "'bypass-paths'" in src, (
+        "controls.html forEach clear list must include 'bypass-paths'"
+    )
+
+
+def test_controls_html_bypass_paths_uses_pathlist_kind():
+    """BYPASS_PATHS META entry must use kind:'pathlist' (not kind:'list')."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "kind:'pathlist'" in src, (
+        "controls.html must define kind:'pathlist' for the path list editor"
+    )
+    bp_idx = src.find("BYPASS_PATHS")
+    assert bp_idx != -1
+    bp_meta = src[bp_idx: bp_idx + 120]
+    assert "pathlist" in bp_meta, "BYPASS_PATHS META entry must use kind:'pathlist'"
+
+
+def test_controls_html_build_path_list_ui_exists():
+    """controls.html must define _buildPathListUI function."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "_buildPathListUI" in src, (
+        "controls.html must define _buildPathListUI for the bypass path editor"
+    )
+    assert "Add path prefix" in src, (
+        "controls.html path list editor must have 'Add path prefix' button"
+    )
+    assert "bot-del-btn" in src[src.find("_buildPathListUI"):src.find("_buildPathListUI") + 2000], (
+        "_buildPathListUI must include delete buttons"
+    )
+
+
+def test_config_bypass_paths_default_empty():
+    """BYPASS_PATHS must default to an empty list when env var is not set."""
+    import sys, os
+    env_backup = os.environ.pop("BYPASS_PATHS", None)
+    saved = {k: v for k, v in sys.modules.items()
+             if k == "config" or k.startswith("config.")}
+    try:
+        for mod in list(saved):
+            sys.modules.pop(mod, None)
+        import config as cfg
+        assert cfg.BYPASS_PATHS == [], (
+            "BYPASS_PATHS default must be [] when BYPASS_PATHS env var is absent"
+        )
+    finally:
+        if env_backup is not None:
+            os.environ["BYPASS_PATHS"] = env_backup
+        for mod in list(sys.modules):
+            if mod == "config" or mod.startswith("config."):
+                sys.modules.pop(mod, None)
+        sys.modules.update(saved)
+
+
+def test_config_bypass_paths_env_parse():
+    """BYPASS_PATHS env var is split on comma into a list of stripped strings."""
+    import sys, os
+    os.environ["BYPASS_PATHS"] = "/static/, /assets/, /media/"
+    saved = {k: v for k, v in sys.modules.items()
+             if k == "config" or k.startswith("config.")}
+    try:
+        for mod in list(saved):
+            sys.modules.pop(mod, None)
+        import config as cfg
+        assert cfg.BYPASS_PATHS == ["/static/", "/assets/", "/media/"], (
+            "BYPASS_PATHS must parse CSV env var into stripped list of paths"
+        )
+    finally:
+        del os.environ["BYPASS_PATHS"]
+        for mod in list(sys.modules):
+            if mod == "config" or mod.startswith("config."):
+                sys.modules.pop(mod, None)
+        sys.modules.update(saved)
+
+
+def test_bypass_paths_guard_after_authorized_bots_before_rps():
+    """BYPASS_PATHS check must be positioned AFTER AUTHORIZED_BOT_UAS block
+    and BEFORE the GLOBAL_RPS_LIMIT check in protect()."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    bot_idx  = src.find("AUTHORIZED_BOT_UAS:")
+    bp_idx   = src.find("BYPASS_PATHS and any(request.path.startswith")
+    rps_idx  = src.find("GLOBAL_RPS_LIMIT > 0 and")
+    assert bot_idx != -1, "AUTHORIZED_BOT_UAS block not found in proxy_handler.py"
+    assert bp_idx  != -1, "BYPASS_PATHS guard not found in proxy_handler.py"
+    assert rps_idx != -1, "GLOBAL_RPS_LIMIT check not found in proxy_handler.py"
+    assert bot_idx < bp_idx < rps_idx, (
+        "Guard order must be: AUTHORIZED_BOT_UAS … BYPASS_PATHS … GLOBAL_RPS_LIMIT. "
+        f"Found positions: bot={bot_idx}, bypass={bp_idx}, rps={rps_idx}"
+    )
+
+
+def test_bypass_paths_early_return_no_record_call():
+    """Bypass block must proxy via handler(), write an audit event to db_queue,
+    and must NOT call record() — ip_state stays empty, but the DB event log
+    captures every bypassed access for operator audit trail."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
+    assert bp_idx != -1
+    # Extract the bypass block (larger window — now includes db_queue write)
+    block = src[bp_idx: bp_idx + 600]
+    assert "await handler(request)" in block, (
+        "Bypass block must call await handler(request)"
+    )
+    assert "db_queue.put_nowait" in block, (
+        "Bypass block must write an audit event to db_queue"
+    )
+    assert "bypass-path" in block, (
+        "Bypass block audit event must use reason 'bypass-path'"
+    )
+    assert "record(" not in block, (
+        "Bypass block must NOT call record() — ip_state must stay empty for bypassed paths"
     )
