@@ -2386,7 +2386,7 @@ def test_agents_bucket_modal_has_authorized_bots_section():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
     fn_start = src.find("async function openBucketDetail")
     assert fn_start != -1, "agents.html must define openBucketDetail"
-    fn_section = src[fn_start: fn_start + 2500]
+    fn_section = src[fn_start: fn_start + 4000]
     assert "authorized_robot" in fn_section, (
         "openBucketDetail sections must include authorized_robot kind"
     )
@@ -2404,7 +2404,7 @@ def test_agents_bucket_modal_renders_authorized_robot_from_response():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
     fn_start = src.find("async function openBucketDetail")
     assert fn_start != -1
-    fn_section = src[fn_start: fn_start + 2500]
+    fn_section = src[fn_start: fn_start + 4000]
     assert "d.authorized_robot" in fn_section, (
         "openBucketDetail must read d.authorized_robot from the agents-bucket response"
     )
@@ -2717,4 +2717,240 @@ def test_main_html_ban_ctrl_stores_ua_in_data_attribute():
     assert 'data-ua=' in src, (
         "main.html ban-ctrl must set data-ua attribute — "
         "the auth-bot click handler reads it to know which UA to add to the bot list"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.7.5 — new quality tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── config_changed slog: rejected must be a dict (not a list) ─────────────
+
+def test_config_changed_slog_passes_rejected_dict_not_keylist():
+    """config_endpoint slog('config_changed') must pass rejected as the full dict.
+
+    Regression fixed in 1.7.5: was `rejected=list(rejected.keys())` which
+    logged only key names — the operator saw e.g. `rejected=['FOO_KNOB']`
+    with no indication of WHY the change was rejected.  Fixed to
+    `rejected=rejected` so the dict values (reason strings) appear in the log.
+    """
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.config_endpoint)
+    # Must NOT use list(rejected.keys()) as the slog argument
+    assert "rejected=list(rejected.keys())" not in src, (
+        "config_endpoint slog must pass rejected dict directly — "
+        "rejected=list(rejected.keys()) strips reason strings from the log"
+    )
+    # Must pass the dict itself
+    slog_block = src[src.find("slog(\"config_changed\""):][:200]
+    assert "rejected=rejected" in slog_block, (
+        "config_endpoint slog('config_changed') must pass rejected=rejected "
+        "(the full dict with reason values), not just the key names"
+    )
+
+
+def test_config_changed_slog_fires_on_pure_rejection():
+    """config_endpoint must call slog when all changes are rejected (applied is empty).
+
+    Regression fixed in 1.7.5: was `if applied:` guard, so a POST that was
+    entirely rejected (e.g. env-pinned knob) logged nothing.  Fixed to
+    `if applied or rejected:` so rejections are always surfaced.
+    """
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.config_endpoint)
+    # The guard must include the rejected branch
+    assert "if applied or rejected:" in src, (
+        "config_endpoint must log config_changed when rejected is non-empty "
+        "even if applied is empty — 'if applied:' silently drops pure rejections"
+    )
+
+
+# ── agents.py: agents_data_endpoint includes is_authorized_bot ───────────
+
+def test_agents_data_endpoint_includes_is_authorized_bot_field():
+    """agents_data_endpoint suspects.append must include is_authorized_bot key.
+
+    Regression fixed in 1.7.5: the field was only added to proxy_handler.py's
+    metrics endpoint, not to dashboards/agents.py's separate agents_data_endpoint.
+    agents.html fetches from /agents-data (not /metrics), so the field was always
+    undefined — causing the Auth Bot button state to revert on every tick.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
+    fn_start = src.find("async def agents_data_endpoint")
+    assert fn_start != -1, "agents.py must define agents_data_endpoint"
+    fn_section = src[fn_start: fn_start + 4000]
+    assert "is_authorized_bot" in fn_section, (
+        "agents_data_endpoint suspects.append must include 'is_authorized_bot' key — "
+        "agents.html fetches from /agents-data (not /metrics) so without this field "
+        "the Auth Bot button state reverts on every auto-tick"
+    )
+    # Must use the same authorized-robot action check as metrics endpoint
+    assert "authorized-robot" in fn_section, (
+        "agents_data_endpoint is_authorized_bot check must filter on "
+        "action=='authorized-robot' — entries with other actions must not be matched"
+    )
+
+
+def test_agents_data_endpoint_is_authorized_bot_checks_enabled_flag():
+    """agents_data_endpoint is_authorized_bot must respect the enabled flag.
+
+    A disabled bot entry (enabled=False) must not count as an authorized bot —
+    otherwise re-clicking 'Allow' from auth-bot state still shows the client
+    as authorized on the next tick.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
+    fn_start = src.find("async def agents_data_endpoint")
+    fn_section = src[fn_start: fn_start + 4000]
+    # The is_authorized_bot any() must check enabled
+    assert 'enabled' in fn_section and '_s_is_auth_bot' in fn_section, (
+        "agents_data_endpoint is_authorized_bot must check _b.get('enabled', True) — "
+        "disabled entries must not be counted as authorized bots"
+    )
+
+
+# ── _authBotPatch: client-side override expiry ────────────────────────────
+
+def test_agents_html_auth_bot_patch_expires_after_15s():
+    """agents.html _patchAuthBot must expire the override after 15000 ms.
+
+    The patch map prevents auto-tick from reverting the button before the server
+    reflects the new state.  Expiry after 15 s is intentional — tick interval
+    is also 15 s, so the patch covers exactly one missed-update window.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    patch_idx = src.find("_patchAuthBot")
+    assert patch_idx != -1, "agents.html must define _patchAuthBot"
+    # setTimeout with 15000 must appear near the patch function definition
+    patch_block = src[patch_idx: patch_idx + 200]
+    assert "15000" in patch_block, (
+        "agents.html _patchAuthBot must use setTimeout(..., 15000) to expire the "
+        "client-side override — expiry must match the tick interval"
+    )
+
+
+def test_main_html_auth_bot_patch_expires_after_15s():
+    """main.html _patchAuthBot must expire the override after 15000 ms."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    patch_idx = src.find("_patchAuthBot")
+    assert patch_idx != -1, "main.html must define _patchAuthBot"
+    patch_block = src[patch_idx: patch_idx + 200]
+    assert "15000" in patch_block, (
+        "main.html _patchAuthBot must use setTimeout(..., 15000) — "
+        "expiry must match tick interval so the override covers exactly one missed window"
+    )
+
+
+# ── auth-bot dedup: substring match in find() and map() ──────────────────
+
+def test_agents_html_auth_bot_dedup_uses_substring_match():
+    """agents.html auth-bot handler must use substring match in bots.find().
+
+    Dedup uses `b.ua === ua || (b.ua && ua.includes(b.ua))` so that an existing
+    short-form entry (e.g. 'UptimeRobot') is found when ua is the full UA string
+    ('UptimeRobot/2.0 ...').  Exact-match only would always create duplicates.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    # Find the auth-bot handler block
+    auth_bot_idx = src.find("if (btn.dataset.action === 'auth-bot')")
+    assert auth_bot_idx != -1, "agents.html must have auth-bot action handler"
+    handler_block = src[auth_bot_idx: auth_bot_idx + 800]
+    assert "ua.includes(b.ua)" in handler_block, (
+        "agents.html auth-bot bots.find() must include substring check "
+        "ua.includes(b.ua) — exact-match only creates duplicate entries for "
+        "existing short-form UA patterns like 'UptimeRobot'"
+    )
+
+
+def test_main_html_auth_bot_dedup_uses_substring_match():
+    """main.html auth-bot handler must use substring match in bots.find()."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    auth_bot_idx = src.find("if (btn.dataset.action === 'auth-bot')")
+    assert auth_bot_idx != -1, "main.html must have auth-bot action handler"
+    handler_block = src[auth_bot_idx: auth_bot_idx + 800]
+    assert "ua.includes(b.ua)" in handler_block, (
+        "main.html auth-bot bots.find() must include substring check "
+        "ua.includes(b.ua) — exact-match only creates duplicate entries"
+    )
+
+
+# ── leaving auth-bot state: bot entry must be disabled ───────────────────
+
+def test_agents_html_leaving_auth_bot_state_disables_bot_entry():
+    """agents.html non-auth-bot click from auth-bot state must disable the bot entry.
+
+    When transitioning away from auth-bot (Allow / Banned / Really Banned),
+    the matching AUTHORIZED_BOT_UAS entry must be set to enabled:false before
+    the ban/unban call.  Without this, the next tick still shows the client
+    as auth-bot because is_authorized_bot remains true server-side.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    # Find the "currently auth-bot" guard block
+    guard_idx = src.find("currentlyAuthBot")
+    assert guard_idx != -1, "agents.html must have currentlyAuthBot guard"
+    guard_block = src[guard_idx: guard_idx + 600]
+    assert "enabled:false" in guard_block, (
+        "agents.html non-auth-bot handler must set enabled:false on the matching "
+        "bot entry when leaving auth-bot state — otherwise next tick still shows "
+        "is_authorized_bot=true and reverts the button"
+    )
+    assert "AUTHORIZED_BOT_UAS" in guard_block, (
+        "agents.html non-auth-bot handler must POST updated AUTHORIZED_BOT_UAS "
+        "with enabled:false before the ban/unban call"
+    )
+
+
+def test_main_html_leaving_auth_bot_state_disables_bot_entry():
+    """main.html non-auth-bot click from auth-bot state must disable the bot entry."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    guard_idx = src.find("currentlyAuthBot")
+    assert guard_idx != -1, "main.html must have currentlyAuthBot guard"
+    guard_block = src[guard_idx: guard_idx + 600]
+    assert "enabled:false" in guard_block, (
+        "main.html non-auth-bot handler must set enabled:false on the matching "
+        "bot entry when leaving auth-bot state"
+    )
+    assert "AUTHORIZED_BOT_UAS" in guard_block, (
+        "main.html non-auth-bot handler must POST updated AUTHORIZED_BOT_UAS "
+        "with enabled:false"
+    )
+
+
+def test_agents_html_leaving_auth_bot_uses_substring_match_in_map():
+    """agents.html bot-disable map must also use substring match, not exact-match.
+
+    The same dedup condition `b.ua === ua || (b.ua && ua.includes(b.ua))` must be
+    used in both the find() (dedup check) and the map() (disable update).  Using
+    exact-match in the map means the existing short-form entry ('UptimeRobot') is
+    never disabled even though find() found it.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    guard_idx = src.find("currentlyAuthBot")
+    assert guard_idx != -1
+    guard_block = src[guard_idx: guard_idx + 600]
+    assert "ua.includes(b.ua)" in guard_block, (
+        "agents.html bot-disable map() must use ua.includes(b.ua) substring check — "
+        "exact match misses existing short-form entries like 'UptimeRobot'"
+    )
+
+
+def test_main_html_leaving_auth_bot_uses_substring_match_in_map():
+    """main.html bot-disable map must also use substring match."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    guard_idx = src.find("currentlyAuthBot")
+    assert guard_idx != -1
+    guard_block = src[guard_idx: guard_idx + 600]
+    assert "ua.includes(b.ua)" in guard_block, (
+        "main.html bot-disable map() must use ua.includes(b.ua) substring check"
     )

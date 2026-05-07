@@ -295,31 +295,41 @@ def test_db_load_config_rejects_abuseipdb_enabled_without_key(tmp_path):
 
     # Load proxy with no ABUSEIPDB_KEY
     env_backup = {k: os.environ.pop(k, None) for k in ("ABUSEIPDB_KEY",)}
+    _orig_db_path = os.environ.get("DB_PATH")
+    _orig_upstream = os.environ.get("UPSTREAM")
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
+    try:
+        proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
+        spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb", proxy_path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
 
-    proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
-    spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb", proxy_path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+        g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
+        g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
+        g["ABUSEIPDB_KEY"] = ""          # ensure absent
 
-    g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
-    g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
-    g["ABUSEIPDB_KEY"] = ""          # ensure absent
+        from db.sqlite import db_load_config
+        db_load_config(g)
 
-    from db.sqlite import db_load_config
-    db_load_config(g)
-
-    # Validator must have rejected it — stays False
-    assert not g.get("ABUSEIPDB_ENABLED"), (
-        "ABUSEIPDB_ENABLED should stay False when ABUSEIPDB_KEY is absent; "
-        "startup log line '[config-kv] ABUSEIPDB_ENABLED failed validator' is expected."
-    )
-
-    # Restore env
-    for k, v in env_backup.items():
-        if v is not None:
-            os.environ[k] = v
+        # Validator must have rejected it — stays False
+        assert not g.get("ABUSEIPDB_ENABLED"), (
+            "ABUSEIPDB_ENABLED should stay False when ABUSEIPDB_KEY is absent; "
+            "startup log line '[config-kv] ABUSEIPDB_ENABLED failed validator' is expected."
+        )
+    finally:
+        # Restore env
+        for k, v in env_backup.items():
+            if v is not None:
+                os.environ[k] = v
+        if _orig_db_path is not None:
+            os.environ["DB_PATH"] = _orig_db_path
+        else:
+            os.environ.pop("DB_PATH", None)
+        if _orig_upstream is not None:
+            os.environ["UPSTREAM"] = _orig_upstream
+        else:
+            os.environ.pop("UPSTREAM", None)
 
 
 def test_db_load_config_rejects_turnstile_enabled_without_creds(tmp_path):
@@ -334,30 +344,40 @@ def test_db_load_config_rejects_turnstile_enabled_without_creds(tmp_path):
     conn.close()
 
     env_backup = {k: os.environ.pop(k, None) for k in ("TURNSTILE_SITEKEY", "TURNSTILE_SECRET")}
+    _orig_db_path = os.environ.get("DB_PATH")
+    _orig_upstream = os.environ.get("UPSTREAM")
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
+    try:
+        proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
+        spec = importlib.util.spec_from_file_location("_test_proxy_turnstile", proxy_path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
 
-    proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
-    spec = importlib.util.spec_from_file_location("_test_proxy_turnstile", proxy_path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+        g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
+        g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
+        g["TURNSTILE_SITEKEY"] = ""
+        g["TURNSTILE_SECRET"] = ""
 
-    g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
-    g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
-    g["TURNSTILE_SITEKEY"] = ""
-    g["TURNSTILE_SECRET"] = ""
+        from db.sqlite import db_load_config
+        db_load_config(g)
 
-    from db.sqlite import db_load_config
-    db_load_config(g)
-
-    assert not g.get("TURNSTILE_ENABLED"), (
-        "TURNSTILE_ENABLED should stay False when TURNSTILE_SITEKEY/SECRET absent; "
-        "startup log line '[config-kv] TURNSTILE_ENABLED failed validator' is expected."
-    )
-
-    for k, v in env_backup.items():
-        if v is not None:
-            os.environ[k] = v
+        assert not g.get("TURNSTILE_ENABLED"), (
+            "TURNSTILE_ENABLED should stay False when TURNSTILE_SITEKEY/SECRET absent; "
+            "startup log line '[config-kv] TURNSTILE_ENABLED failed validator' is expected."
+        )
+    finally:
+        for k, v in env_backup.items():
+            if v is not None:
+                os.environ[k] = v
+        if _orig_db_path is not None:
+            os.environ["DB_PATH"] = _orig_db_path
+        else:
+            os.environ.pop("DB_PATH", None)
+        if _orig_upstream is not None:
+            os.environ["UPSTREAM"] = _orig_upstream
+        else:
+            os.environ.pop("UPSTREAM", None)
 
 
 def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
@@ -371,27 +391,37 @@ def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
     conn.commit()
     conn.close()
 
+    _orig_db_path = os.environ.get("DB_PATH")
+    _orig_upstream = os.environ.get("UPSTREAM")
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
     os.environ["ABUSEIPDB_KEY"] = "fake-test-key-12345"
+    try:
+        proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
+        spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb2", proxy_path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
 
-    proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
-    spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb2", proxy_path)
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
+        g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
+        g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
+        g["ABUSEIPDB_KEY"] = "fake-test-key-12345"
 
-    g = {"_HOT_RELOAD_KNOBS": m._HOT_RELOAD_KNOBS, "_ENV_PROVIDED_KNOBS": set()}
-    g.update({k: getattr(m, k) for k in m._HOT_RELOAD_KNOBS if hasattr(m, k)})
-    g["ABUSEIPDB_KEY"] = "fake-test-key-12345"
+        from db.sqlite import db_load_config
+        db_load_config(g)
 
-    from db.sqlite import db_load_config
-    db_load_config(g)
-
-    assert g.get("ABUSEIPDB_ENABLED") is True, (
-        "ABUSEIPDB_ENABLED should be applied when ABUSEIPDB_KEY is present."
-    )
-
-    os.environ.pop("ABUSEIPDB_KEY", None)
+        assert g.get("ABUSEIPDB_ENABLED") is True, (
+            "ABUSEIPDB_ENABLED should be applied when ABUSEIPDB_KEY is present."
+        )
+    finally:
+        os.environ.pop("ABUSEIPDB_KEY", None)
+        if _orig_db_path is not None:
+            os.environ["DB_PATH"] = _orig_db_path
+        else:
+            os.environ.pop("DB_PATH", None)
+        if _orig_upstream is not None:
+            os.environ["UPSTREAM"] = _orig_upstream
+        else:
+            os.environ.pop("UPSTREAM", None)
 
 
 # ── F8 — risk-decay across the wire ───────────────────────────────────────
@@ -411,12 +441,24 @@ async def test_risk_increments_on_block(gw_client):
 # ── F9 — TRUSTED_PROXIES integration check ────────────────────────────────
 @pytest.mark.asyncio
 async def test_xff_spoof_blocked_when_peer_untrusted(gw_client):
-    """When TRUSTED_PROXIES excludes the test peer, XFF is ignored."""
+    """When TRUSTED_PROXIES excludes the test peer, XFF is ignored.
+
+    Both proxy.TRUSTED_PROXIES_NETS and helpers.TRUSTED_PROXIES_NETS must be
+    patched — helpers.py imports the variable at module load time, so patching
+    only the proxy module namespace has no effect on _peer_is_trusted_proxy().
+    """
     import ipaddress
-    # Test client connects from 127.0.0.1.  Restrict trust to a different CIDR.
-    proxy.TRUSTED_PROXIES_NETS = [ipaddress.ip_network("10.99.0.0/16")]
+    import helpers as _helpers_mod
+    restrict = [ipaddress.ip_network("10.99.0.0/16")]
+    # Patch both namespaces — hot-reload in production does the same via setattr loop
+    proxy.TRUSTED_PROXIES_NETS = restrict
+    _helpers_mod.TRUSTED_PROXIES_NETS = restrict
     proxy.TRUST_XFF = "first"
+    _helpers_mod.TRUST_XFF = "first"
     try:
+        # Clear ip_state so max() finds only this request's identity
+        async with proxy.state_lock:
+            proxy.ip_state.clear()
         await gw_client.get(
             "/echo", headers={
                 "User-Agent": "Mozilla/5.0 Chrome/120",
@@ -430,7 +472,8 @@ async def test_xff_spoof_blocked_when_peer_untrusted(gw_client):
         assert latest.last_ip != "8.8.8.8", \
             f"XFF spoof leaked through: identity recorded as {latest.last_ip}"
     finally:
-        proxy.TRUSTED_PROXIES_NETS = []   # reset
+        proxy.TRUSTED_PROXIES_NETS = []
+        _helpers_mod.TRUSTED_PROXIES_NETS = []
 
 
 # ── helper ────────────────────────────────────────────────────────────────

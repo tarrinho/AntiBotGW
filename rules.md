@@ -6,7 +6,7 @@ below **before announcing the build as done**. Every finding must be
 fixed (or explicitly classified as pre-existing in the report) before
 the version is considered released.
 
-Author: Pedro Tarrinho · Last updated for: 1.6.7
+Author: Pedro Tarrinho · Last updated for: 1.7.5
 
 ---
 
@@ -40,7 +40,7 @@ should be flagged for investigation but do not block.
 
 ## 5. Regression tests
 ```
-pytest tests/test_control_regressions.py tests/test_v14.py tests/test_v142.py -q
+pytest tests/test_control_regressions.py tests/test_v14.py tests/test_v142.py tests/test_v173.py -q
 ```
 **Pass criterion:** Same set of pre-existing failures as last release
 (no new regressions). Diff the failure list against the previous build.
@@ -83,9 +83,9 @@ as confirmed false-positive in the report (B310 fixed-https / B104
 intentional gateway binding / B608 numeric-controlled SQL are accepted).
 
 ```
-semgrep scan --config=auto proxy.py dashboards/
+semgrep scan --config p/python proxy.py core/ dashboards/*.py
 ```
-Run in OSS mode — no token or login required. Do NOT use `semgrep mcp` or set `SEMGREP_APP_TOKEN`.
+Run in OSS mode — no token or login required. Do NOT use `--config=auto` (requires SEMGREP_APP_TOKEN), `semgrep mcp`, or set `SEMGREP_APP_TOKEN`. Use `--config p/python` which runs the curated Python ruleset without authentication.
 
 **Pass criterion (Semgrep):** 0 ERROR / 0 WARNING findings not previously
 classified. Any new finding must be triaged: confirmed false-positive → document
@@ -507,6 +507,13 @@ documented fix before the next release is stamped.
 | 2 | 1.7.3 | CRITICAL | P1/P2/P4 probe endpoints return upstream 404 decoy; detectors have zero effect in production | `/probe`, `/maze`, `/canary-probe/` absent from `_ADMIN_PUBLIC_SUBPATHS`; `protect()` intercepts every admin-namespace path not in that list before route dispatch | `config.py` (`_ADMIN_PUBLIC_SUBPATHS`) | `test_probe_endpoint_in_admin_public_subpaths`, `test_maze_endpoint_in_admin_public_subpaths`, `test_canary_probe_in_admin_public_subpaths` |
 | 3 | 1.7.3 | HIGH | Turnstile shown to every first-time visitor regardless of risk score | `_js_challenge_applicable()` reads `request.get("_track_key")` which is always `None` at the JS challenge gate (set at `proxy_handler.py:2511`, gate runs at line 2282); threshold check never executes | `challenge/js_challenge.py` (`_js_challenge_applicable`) | `test_js_challenge_applicable_source_uses_get_identity_not_track_key` |
 | 4 | 1.7.3 | MEDIUM | Soft-challenge tier never enforced on `JS_CHAL_OPEN_PATHS` — risky identities (SOFT_CHALLENGE_SCORE ≤ risk < BAN) bypass the cookie gate on open paths | Same `_track_key` ordering bug in `_js_challenge_required()` — `track_key` is always `None`; `if track_key:` branch skipped; open-path bypass always granted | `challenge/js_challenge.py` (`_js_challenge_required`) | `test_js_challenge_required_soft_challenge_uses_get_identity_not_track_key` |
+| 5 | 1.7.4 | HIGH | All dashboard modals throw `ReferenceError: escHtml is not defined` | Local alias `escHtml` used in pill modal / account modal / popover render functions; global `escapeHtml` is the canonical name — `escHtml` was only defined as a local closure copy in some files and removed in §17 hardening, breaking callers outside the closure | All 5 affected dashboard HTML files | `test_no_local_eschtml_alias`, `test_no_eschtml_calls`, `test_single_escapehtmlt_definition`, `test_escapehtmlt_full_charset` (per file) |
+| 6 | 1.7.4 | HIGH | `LOG_LEVEL` hot-reload has no effect — slog() keeps filtering at original startup level | `config_endpoint` propagated `LOG_LEVEL` string to all modules via generic `setattr` loop, but `_LOG_LEVEL_N` (the numeric sentinel used by `slog()` for level filtering) is not in `_HOT_RELOAD_KNOBS` and was not updated | `core/proxy_handler.py` (`config_endpoint`) | `test_log_level_n_propagated_on_hot_reload` |
+| 7 | 1.7.4 | MEDIUM | `ip_intel_endpoint` raises `NameError` for all five reputation lookups at runtime | `admin/users.py` called `_city_lookup`, `_asn_lookup`, `_abuseipdb_lookup`, `_crowdsec_check`, `_tor_exits` without importing them — names exist in `proxy_handler.py` global scope but not in `admin/users.py` separate module namespace | `admin/users.py` (module-level imports) | `test_ip_intel_endpoint_imports_reputation_symbols` |
+| 8 | 1.7.4 | MEDIUM | `logs.html` LOG_LEVEL POST handlers crash with JSON parse error on session expiry / 401 | `r.json()` called unconditionally before checking `r.ok` — a non-JSON 401/404 decoy response causes `SyntaxError: unexpected non-whitespace character` in the browser | `dashboards/logs.html` (both LOG_LEVEL handlers) | `test_logs_html_log_level_button_has_rok_guard`, `test_logs_html_log_level_handlers_no_unconditional_json` |
+| 9 | 1.7.5 | HIGH | `Auth Bot` button reverts to Allow on every auto-tick | `agents_data_endpoint` in `dashboards/agents.py` did not include `is_authorized_bot` field — agents.html fetches from `/agents-data` (not `/metrics`), so `s.is_authorized_bot` was always `undefined`; `_authBotPatch` expiry race exacerbated the symptom | `dashboards/agents.py` (`agents_data_endpoint` `suspects.append()`) | `test_agents_data_endpoint_includes_is_authorized_bot_field` |
+| 10 | 1.7.5 | HIGH | Moving from Auth Bot to Allow/Banned/Really Banned does not stick — next tick reverts | Auth-bot UA dedup `find()` used exact-match only (`b.ua === ua`), not substring; existing short-form entry (e.g. `UptimeRobot`) never found → `enabled:false` never applied → next tick still sees `is_authorized_bot=true` | `dashboards/agents.html`, `dashboards/main.html` (ban handler) | `test_agents_html_leaving_auth_bot_state_disables_bot_entry`, `test_agents_html_leaving_auth_bot_uses_substring_match_in_map`, `test_main_html_leaving_auth_bot_state_disables_bot_entry`, `test_main_html_leaving_auth_bot_uses_substring_match_in_map` |
+| 11 | 1.7.5 | MEDIUM | `config_changed` log shows only key names for rejected changes, not the reason | `slog("config_changed")` passed `rejected=list(rejected.keys())` — operator log showed `rejected=['FOO_KNOB']` with no indication why; fully-rejected POSTs (applied empty) logged nothing (`if applied:` guard) | `core/proxy_handler.py` (`config_endpoint`) | `test_config_changed_slog_passes_rejected_dict_not_keylist`, `test_config_changed_slog_fires_on_pure_rejection` |
 
 ### 16b. Root-cause pattern: request lifecycle ordering
 
