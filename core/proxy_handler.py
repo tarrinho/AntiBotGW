@@ -2458,7 +2458,12 @@ async def protect(request: web.Request, handler):
                 return await handler(request)
             # else: fall through to silent decoy
         elif _admin_ip_allowed(request) and _internal_authed(request):
-            return await handler(request)
+            _adm_resp = await handler(request)
+            _adm_ip = get_ip(request)
+            _adm_ua = request.headers.get("User-Agent", "")
+            await record(_adm_ip, _adm_ua, request.path,
+                          _adm_resp.status, "operator-passthrough", request_id=rid)
+            return _adm_resp
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
         reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)

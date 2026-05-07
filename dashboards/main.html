@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.7.6 · Dashboard</title>
+<title>AppSecGW_1.7.7 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -146,24 +146,27 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   background:transparent;cursor:pointer;font-size:12px;font-weight:600;
   transition:background .15s,color .15s,border-color .15s;line-height:1.6}
 .cat-pill[data-cat="allowed"]{border-color:#3fb950;color:#3fb950}
-.cat-pill[data-cat="blocked"]{border-color:#f85149;color:#f85149}
+.cat-pill[data-cat="ban"]{border-color:#f85149;color:#f85149}
+.cat-pill[data-cat="reallyban"]{border-color:#b91c1c;color:#ff4444}
 .cat-pill[data-cat="missed"]{border-color:#ff7b3a;color:#ff7b3a}
 .cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
 .cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
-.cat-pill.active[data-cat="blocked"]{background:#f85149;color:#fff}
+.cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
+.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
 .cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
 .cat-pill.active[data-cat="gwmgmt"]{background:#58a6ff;color:#000}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.6 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.7 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.7.6 — category filter bar -->
 <div id="cat-filter">
   <span id="cat-filter-label">Show:</span>
   <button class="cat-pill active" data-cat="allowed">● Allowed</button>
-  <button class="cat-pill active" data-cat="blocked">● Blocked</button>
+  <button class="cat-pill active" data-cat="ban">● Ban</button>
+  <button class="cat-pill active" data-cat="reallyban">● Really Ban</button>
   <button class="cat-pill active" data-cat="missed">● Missed</button>
   <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
   <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
@@ -357,7 +360,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
 
   <div class="card">
-    <h2>Clients (top by request count)</h2>
+    <h2>Clients <span id="clients-count" class="dim" style="font-size:12px;font-weight:400"></span></h2>
     <div style="max-height:420px;overflow-y:auto">
     <table id="clients-tbl">
       <thead><tr>
@@ -426,7 +429,7 @@ let chart = null;
 let costChart = null;
 
 // 1.7.6 — category filter state
-window._activeFilters = new Set(['allowed','blocked','missed','authbots','gwmgmt']);
+window._activeFilters = new Set(['allowed','ban','reallyban','missed','authbots','gwmgmt']);
 const _cfgUrl = '/antibot-appsec-gateway/secured/config';
 window._authBotPatch = window._authBotPatch || {};
 function _patchAuthBot(id, val) {
@@ -434,11 +437,17 @@ function _patchAuthBot(id, val) {
   setTimeout(() => { delete window._authBotPatch[id]; }, 15000);
 }
 
+const _HARD_BAN_REASONS = new Set(['canary-echo','honeypot-silent','honeypot']);
+
 function _clientCats(c) {
   if (c.is_authorized_bot) return ['authbots'];
   if ((c.last_path||'').startsWith('/antibot-appsec-gateway/')) return ['gwmgmt'];
   const cats = [];
-  if ((c.banned_secs||0) > 0) cats.push('blocked');
+  if ((c.banned_secs||0) > 0) {
+    const br = c.blocks_by_reason || {};
+    const isHard = Object.keys(br).some(r => _HARD_BAN_REASONS.has(r));
+    cats.push(isHard ? 'reallyban' : 'ban');
+  }
   if ((c.stealth_score||0) >= 20) cats.push('missed');
   if (!cats.length) cats.push('allowed');
   return cats;
@@ -447,6 +456,9 @@ function _clientCats(c) {
 function _renderClientsTable(list) {
   const tbody = document.querySelector('#clients-tbl tbody');
   window._clientsView = list;
+  const cntEl = document.getElementById('clients-count');
+  if (cntEl) cntEl.textContent = `(${list.length})`;
+
   tbody.innerHTML = list.slice(0, 100).map((c, i) => {
     const _bsec = c.banned_secs || 0;
     const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
@@ -575,7 +587,7 @@ function _renderClientsTable(list) {
 function _applyFilters() {
   if (chart) {
     chart.data.datasets[1].hidden = !window._activeFilters.has('allowed');
-    chart.data.datasets[2].hidden = !window._activeFilters.has('blocked');
+    chart.data.datasets[2].hidden = !window._activeFilters.has('ban') && !window._activeFilters.has('reallyban');
     chart.data.datasets[3].hidden = !window._activeFilters.has('missed');
     chart.data.datasets[4].hidden = !window._activeFilters.has('authbots');
     chart.update();

@@ -6,6 +6,22 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.7] — 2026-05-07
+
+### Fixed
+- **GW Mgmt filter showed zero entries despite active operator dashboard browsing** (`core/proxy_handler.py`) — `protect()` returned `await handler(request)` immediately for authenticated admin-path requests (`_admin_ip_allowed and _internal_authed`) without calling `record()`. Operator dashboard accesses never entered `ip_state` and were invisible to `_clientCats` / `_agentCats`. Fix: await the handler first, then call `record()` with `reason='operator-passthrough'` before returning, ensuring every `/antibot-appsec-gateway/…` dashboard page load and API poll by a logged-in operator is written to ip_state with `last_path` set to the GW path and classified as `gwmgmt`.
+
+### Tests
+- `test_protect_authenticated_admin_path_calls_record` — `protect()` must call `record()` in the authenticated admin path branch
+- `test_protect_authenticated_admin_path_uses_operator_passthrough_reason` — reason must be `'operator-passthrough'`
+
+### Validation
+- **Unit tests**: 393 passed, 0 failed (`test_critical.py` 116 + `test_pure.py` 267 + `test_async.py` 10)
+- **Bandit**: 0 High / 0 Critical
+- **Semgrep**: 0 findings
+
+---
+
 ## [1.7.6] — 2026-05-07
 
 ### Added

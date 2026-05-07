@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.7.6 — entry point only.
+Anti-bot reverse proxy v1.7.7 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
