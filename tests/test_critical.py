@@ -1078,6 +1078,7 @@ def test_165_every_knob_persists_round_trip():
             {"name": "Pingdom", "ua": "Pingdom", "path": "/",
              "ips": [], "action": "authorized-robot", "enabled": True},
         ],
+        "BYPASS_PATHS": ["/static/", "/assets/"],
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

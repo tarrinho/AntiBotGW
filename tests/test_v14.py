@@ -185,6 +185,14 @@ def test_js_challenge_applicable_off_by_default(proxy_module):
 
 
 def test_js_challenge_applies_on_html_get_no_cookie(proxy_module):
+    """Since 1.5.4, challenge applies when identity risk ≥ threshold.
+    Seed a high-risk state so _js_challenge_applicable returns True."""
+    from identity import get_identity
+    import state as _st
+    req = _FakeReq()
+    identity_key, *_ = get_identity(req)
+    _saved_score = _st.ip_state[identity_key].risk_score
+    _st.ip_state[identity_key].risk_score = 100.0
     proxy_module.JS_CHALLENGE = True
     proxy_module.TURNSTILE_ENABLED = True
     try:
@@ -192,6 +200,7 @@ def test_js_challenge_applies_on_html_get_no_cookie(proxy_module):
     finally:
         proxy_module.JS_CHALLENGE = False
         proxy_module.TURNSTILE_ENABLED = False
+        _st.ip_state[identity_key].risk_score = _saved_score
 
 
 def test_js_challenge_skips_static_assets(proxy_module):

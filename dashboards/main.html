@@ -161,7 +161,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <body>
 <h1>AppSecGW_1.7.7 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
-<!-- 1.7.6 — category filter bar -->
+<!-- 1.7.7 — category filter bar + path search -->
 <div id="cat-filter">
   <span id="cat-filter-label">Show:</span>
   <button class="cat-pill active" data-cat="allowed">● Allowed</button>
@@ -170,6 +170,18 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <button class="cat-pill active" data-cat="missed">● Missed</button>
   <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
   <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
+  <span style="margin-left:10px;font-size:11px;color:var(--dim)">Path:</span>
+  <input id="path-search" type="text" placeholder="filter by path…"
+    style="font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#0d1117;
+           border:1px solid var(--line);color:var(--fg);padding:3px 8px;border-radius:5px;
+           width:220px;outline:none"
+    oninput="_applyFilters()"
+    onfocus="this.style.borderColor='var(--blue)'"
+    onblur="this.style.borderColor='var(--line)'">
+  <button id="path-search-clear" title="Clear path filter"
+    style="display:none;background:none;border:none;color:var(--dim);cursor:pointer;
+           font-size:14px;padding:0 4px;line-height:1"
+    onclick="document.getElementById('path-search').value='';_applyFilters();this.style.display='none'">✕</button>
 </div>
 
 <!-- column-header tooltip -->
@@ -382,6 +394,27 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </div>
   </div>
 
+  <!-- path event log — shown when path search is active; covers bypass-path + all logged events -->
+  <div id="path-events-card" class="card" style="display:none;margin-bottom:0">
+    <h2>Path event log <span id="path-events-count" class="dim" style="font-size:12px;font-weight:400"></span>
+      <span style="font-size:11px;color:var(--dim);font-weight:400;margin-left:6px">— all logged accesses matching path filter (includes bypass-path events)</span>
+    </h2>
+    <div style="max-height:320px;overflow-y:auto">
+      <table id="path-events-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;background:#161b22">
+          <th style="padding:5px 8px">Time</th>
+          <th style="padding:5px 8px">IP</th>
+          <th style="padding:5px 8px">Path</th>
+          <th style="padding:5px 8px">Status</th>
+          <th style="padding:5px 8px">Reason</th>
+          <th style="padding:5px 8px">UA</th>
+        </tr></thead>
+        <tbody id="path-events-body"></tbody>
+      </table>
+      <div id="path-events-empty" style="display:none;padding:16px;color:var(--dim);font-size:12px;text-align:center">No events found for this path.</div>
+    </div>
+  </div>
+
   <div class="row" style="grid-template-columns:1fr 1fr">
     <div class="card">
       <h2>Top paths</h2>
@@ -584,6 +617,51 @@ function _renderClientsTable(list) {
   });
 }
 
+let _pathEventsTimer = null;
+
+async function _fetchPathEvents(pathQ) {
+  const card  = document.getElementById('path-events-card');
+  const body  = document.getElementById('path-events-body');
+  const empty = document.getElementById('path-events-empty');
+  const count = document.getElementById('path-events-count');
+  if (!pathQ) { card.style.display = 'none'; return; }
+  card.style.display = 'block';
+  body.innerHTML = '<tr><td colspan="6" style="padding:12px;color:var(--dim);text-align:center">loading…</td></tr>';
+  empty.style.display = 'none';
+  try {
+    const params = new URLSearchParams({ kind: 'requests', q: pathQ, limit: '200', level: 'debug' });
+    const r = await fetch('/antibot-appsec-gateway/secured/logs-data?' + params, { cache: 'no-store', credentials: 'include' });
+    const d = await r.json();
+    const rows = (d.rows || []).filter(e => (e.path || '').toLowerCase().includes(pathQ));
+    count.textContent = `(${rows.length} events)`;
+    if (!rows.length) {
+      body.innerHTML = '';
+      empty.style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+    const reasonColor = (reason) => {
+      if (!reason || reason === 'OK') return 'var(--green)';
+      if (reason === 'bypass-path') return 'var(--blue)';
+      return 'var(--red)';
+    };
+    body.innerHTML = rows.map(e => {
+      const ts = e.ts ? new Date(e.ts * 1000).toLocaleString() : '—';
+      const reason = e.reason || 'OK';
+      return `<tr style="border-top:1px solid var(--line)">
+        <td style="padding:4px 8px;font-size:11px;color:var(--dim);white-space:nowrap">${escapeHtml(ts)}</td>
+        <td style="padding:4px 8px;font-family:ui-monospace,monospace;font-size:11px">${escapeHtml(e.ip||'')}</td>
+        <td style="padding:4px 8px;font-family:ui-monospace,monospace;font-size:11px;color:var(--purple)">${escapeHtml(e.path||'')}</td>
+        <td style="padding:4px 8px;text-align:center;font-size:11px">${e.status||'—'}</td>
+        <td style="padding:4px 8px;font-size:11px;color:${reasonColor(reason)}">${escapeHtml(reason)}</td>
+        <td style="padding:4px 8px;font-size:10px;color:var(--dim);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.ua||'')}">${escapeHtml((e.ua||'').slice(0,60))}</td>
+      </tr>`;
+    }).join('');
+  } catch(err) {
+    body.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--red)">Error: ${escapeHtml(String(err))}</td></tr>`;
+  }
+}
+
 function _applyFilters() {
   if (chart) {
     chart.data.datasets[1].hidden = !window._activeFilters.has('allowed');
@@ -592,13 +670,22 @@ function _applyFilters() {
     chart.data.datasets[4].hidden = !window._activeFilters.has('authbots');
     chart.update();
   }
+  const pathQ = (document.getElementById('path-search')?.value || '').trim().toLowerCase();
+  const clearBtn = document.getElementById('path-search-clear');
+  if (clearBtn) clearBtn.style.display = pathQ ? 'inline' : 'none';
   const all = window._clientsList || [];
   const filtered = all.filter(cl => {
     const cats = _clientCats(cl);
-    for (const cat of cats) if (window._activeFilters.has(cat)) return true;
-    return false;
+    let catMatch = false;
+    for (const cat of cats) if (window._activeFilters.has(cat)) { catMatch = true; break; }
+    if (!catMatch) return false;
+    if (pathQ && !(cl.last_path || '').toLowerCase().includes(pathQ)) return false;
+    return true;
   });
   _renderClientsTable(filtered);
+  // Debounce path-event log fetch (300 ms) so we don't hammer on every keystroke
+  clearTimeout(_pathEventsTimer);
+  _pathEventsTimer = setTimeout(() => _fetchPathEvents(pathQ), 300);
 }
 
 document.querySelectorAll('.cat-pill').forEach(btn => {
@@ -990,7 +1077,7 @@ async function tick() {
       c.data.datasets[3].data = missed;
       c.data.datasets[4].data = authBots;
       c.data.datasets[1].hidden = !window._activeFilters.has('allowed');
-      c.data.datasets[2].hidden = !window._activeFilters.has('blocked');
+      c.data.datasets[2].hidden = !window._activeFilters.has('ban') && !window._activeFilters.has('reallyban');
       c.data.datasets[3].hidden = !window._activeFilters.has('missed');
       c.data.datasets[4].hidden = !window._activeFilters.has('authbots');
       c.update('none');

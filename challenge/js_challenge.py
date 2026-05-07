@@ -622,12 +622,15 @@ def _js_challenge_applicable(request) -> bool:
         s = None
     thr = _turnstile_active_threshold()
     if s is None:
-        # Fresh visitor with no accumulated state → risk = 0, below threshold.
-        return False
-    from scoring import _decay_risk
-    _decay_risk(s, now())
-    if s.risk_score < thr:
-        return False
+        if thr > 0:
+            # Fresh visitor with no accumulated state → risk = 0, below threshold.
+            return False
+        # thr ≤ 0 means "challenge everyone" — include fresh visitors.
+    else:
+        from scoring import _decay_risk
+        _decay_risk(s, now())
+        if s.risk_score < thr:
+            return False
     if request.method != "GET":
         return False
     return "text/html" in request.headers.get("Accept", "")

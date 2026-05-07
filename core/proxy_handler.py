@@ -1842,6 +1842,7 @@ _HOT_RELOAD_KNOBS = {
     "JA4_AUTODENY_THRESHOLD": (int,   lambda v: 1 <= v <= 1000),
     # Lists (comma-separated str -> list/set)
     "AUTHORIZED_BOT_UAS":     (_to_bot_uas_list, None),
+    "BYPASS_PATHS":           (_to_path_list, None),
     "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
     # 1.6.0 — country-level geo block (requires GeoLite2-City)
@@ -2270,6 +2271,25 @@ async def protect(request: web.Request, handler):
                 return await _silent_decoy_response(
                     _req_ip, _mon_ua, request.path, _ban_reason,
                     ja4=_request_ja4(request), request_id=rid)
+
+    # Operator-defined detection bypass paths — prefix match, skips detection
+    # but still writes an audit event so every access is traceable in logs.
+    if BYPASS_PATHS and any(request.path.startswith(p) for p in BYPASS_PATHS):
+        resp = await handler(request)
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("event", (
+                    _t.time(),
+                    get_ip(request),
+                    request.headers.get("User-Agent", "")[:200],
+                    request.path[:200],
+                    "",
+                    resp.status,
+                    "bypass-path",
+                )))
+            except asyncio.QueueFull:
+                pass
+        return resp
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this

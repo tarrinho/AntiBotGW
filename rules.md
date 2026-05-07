@@ -318,6 +318,13 @@ docker manifest push ${HARBOR}:${VER}
 ```
 **Pass criterion:** Manifest digest printed. Harbor shows the multi-arch tag in the UI.
 
+### 14e. Orphaned image cleanup
+After all three pushes succeed, remove dangling (untagged) images left by the build:
+```bash
+docker image prune -f
+```
+**Pass criterion:** Command exits 0. `docker images` shows no `<none>` entries for `appsec-antibot-gw`.
+
 ---
 
 ## 15. Dynamic Security Testing

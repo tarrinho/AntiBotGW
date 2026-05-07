@@ -79,6 +79,21 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 
 .label{font-size:11px;color:var(--dim);margin-right:6px}
 
+/* Category filter pills — same pattern as main/agents dashboards */
+.cat-pill{padding:3px 13px;border-radius:14px;border:1.5px solid transparent;
+  background:none;font-size:11.5px;cursor:pointer;font-family:inherit;font-weight:600;
+  transition:background .15s,color .15s}
+.cat-pill[data-cat="allowed"]{border-color:#3fb950;color:#3fb950}
+.cat-pill[data-cat="ban"]{border-color:#f85149;color:#f85149}
+.cat-pill[data-cat="reallyban"]{border-color:#b91c1c;color:#ff4444}
+.cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
+.cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
+.cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
+.cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
+.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
+.cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
+.cat-pill.active[data-cat="gwmgmt"]{background:#58a6ff;color:#000}
+
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
@@ -165,6 +180,15 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
     <span class="dim" style="font-size:11px;margin-left:8px">
       currently: <code id="cur-lvl">—</code> · changes survive container restart (config_kv)
     </span>
+  </div>
+
+  <div class="toolbar" id="cat-filter-bar" style="border-top:1px solid var(--line);padding-top:10px;display:none">
+    <span class="label">Category:</span>
+    <button class="cat-pill active" data-cat="allowed">● Allowed</button>
+    <button class="cat-pill active" data-cat="ban">● Ban</button>
+    <button class="cat-pill active" data-cat="reallyban">● Really Ban</button>
+    <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
+    <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
   </div>
 
   <div class="log-pane" id="pane">loading…</div>
@@ -263,19 +287,14 @@ async function tick(force){
   try {
     const r = await fetch('/antibot-appsec-gateway/secured/logs-data?' + params, {credentials:'include'});
     const d = await r.json();
-    document.getElementById('m-count').textContent = (d.count||0);
     document.getElementById('m-level').textContent = d.level || '—';
     if (d.kind === 'gw') {
       document.getElementById('m-ring').textContent = d.ring_size || 0;
     } else {
       document.getElementById('m-ring').textContent = '—';
     }
-    const pane = document.getElementById('pane');
-    if (!(d.rows||[]).length){
-      pane.innerHTML = '<div style="padding:20px;color:var(--dim);text-align:center">no log rows match the current filters</div>';
-    } else {
-      pane.innerHTML = (d.rows||[]).map(d.kind === 'requests' ? renderRequestRow : renderGwRow).join('');
-    }
+    _allLogRows = d.rows || [];
+    _applyLogFilters();
     document.getElementById('ts').textContent = new Date().toISOString();
     const _liveEl = document.getElementById('live');
     _liveEl.style.background = 'var(--blue)';
@@ -289,6 +308,47 @@ async function tick(force){
   }
 }
 
+// ── Category filter ──────────────────────────────────────────────────
+const _HARD_BAN_REASONS = new Set(['canary-echo','honeypot-silent','honeypot']);
+window._logFilters = new Set(['allowed','ban','reallyban','authbots','gwmgmt']);
+let _allLogRows = [];
+
+function _logCat(r){
+  if (r.reason === 'authorized-robot') return 'authbots';
+  if ((r.path||'').startsWith('/antibot-appsec-gateway/')) return 'gwmgmt';
+  if (_HARD_BAN_REASONS.has(r.reason)) return 'reallyban';
+  if (r.reason && r.reason !== 'OK') return 'ban';
+  return 'allowed';
+}
+
+function _applyLogFilters(){
+  const pane = document.getElementById('pane');
+  const rows = kind === 'gw'
+    ? _allLogRows
+    : _allLogRows.filter(r => window._logFilters.has(_logCat(r)));
+  document.getElementById('m-count').textContent = rows.length;
+  if (!rows.length){
+    pane.innerHTML = '<div style="padding:20px;color:var(--dim);text-align:center">no log rows match the current filters</div>';
+  } else {
+    pane.innerHTML = rows.map(kind === 'requests' ? renderRequestRow : renderGwRow).join('');
+  }
+}
+
+function _updateCatBar(){
+  const bar = document.getElementById('cat-filter-bar');
+  if (bar) bar.style.display = kind === 'requests' ? 'flex' : 'none';
+}
+
+document.querySelectorAll('.cat-pill').forEach(p => {
+  p.onclick = () => {
+    const cat = p.dataset.cat;
+    if (window._logFilters.has(cat)) window._logFilters.delete(cat);
+    else window._logFilters.add(cat);
+    p.classList.toggle('active', window._logFilters.has(cat));
+    _applyLogFilters();
+  };
+});
+
 // ── Tabs ─────────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(t => {
   t.onclick = () => {
@@ -298,6 +358,7 @@ document.querySelectorAll('.tab').forEach(t => {
     document.getElementById('m-tab').textContent = kind;
     document.getElementById('m-tab-sub').textContent =
       kind === 'requests' ? 'connection log (SQLite events)' : 'gw operational events (in-mem ring)';
+    _updateCatBar();
     if (typeof savePrefs === 'function') savePrefs();   // 1.6.5
     tick(true);
   };
@@ -419,6 +480,7 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
   };
 });
 
+_updateCatBar();
 loadServerState();
 tick(true);
 _timers.push(setInterval(tick, 2000));
