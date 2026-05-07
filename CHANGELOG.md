@@ -6,6 +6,40 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.6] — 2026-05-07
+
+### Added
+- **Category filter bar on main and agents dashboards** (`dashboards/main.html`, `dashboards/agents.html`) — five colour-coded toggle pills above the page content: ● Allowed (green), ● Blocked (red), ● Missed (orange), ● Auth Bots (purple), ● GW Mgmt (blue). All active by default. Toggling a pill simultaneously hides/shows the corresponding Chart.js dataset on the timeline chart AND filters rows in the clients / suspects table. Filter state persists across `tick()` refreshes (stored in `window._activeFilters`). GW Mgmt captures any client or suspect whose `last_path` starts with `/antibot-appsec-gateway/` and has no corresponding timeline dataset — it is table-only.
+- **`_clientCats` / `_agentCats` category classifiers** (`dashboards/main.html`, `dashboards/agents.html`) — pure functions that map each client/suspect to one or more filter categories. Priority order: `is_authorized_bot` → `gwmgmt` (last_path prefix) → `blocked` (banned_secs > 0) → `missed` (stealth_score ≥ 20) → `allowed`. A client appearing in multiple categories is shown if any active filter matches.
+- **`_renderClientsTable(list)` extracted from `tick()`** (`dashboards/main.html`) — the entire clients table HTML generation + ban-control event wiring was an inline block inside `tick()`. Extracted into a standalone function so `_applyFilters()` can re-render the filtered subset without a network round-trip. Popover handler now references `window._clientsView` (the currently displayed subset) instead of the full `_clientsList`.
+
+### Fixed
+- **Auth bots invisible under Auth Bots filter when last_path is a GW URL** (`dashboards/main.html`, `dashboards/agents.html`) — `_clientCats` / `_agentCats` checked `last_path.startsWith('/antibot-appsec-gateway/')` first. Auth bots that poll the health endpoint or dashboard are classified as `gwmgmt` and disappear from the Auth Bots filter. Fix: check `is_authorized_bot` before the gwmgmt path check.
+- **Auth bots excluded from agents suspects table by min_score gate** (`dashboards/agents.py`) — `_s_is_auth_bot` was computed after `if score < min_score: continue`. Auth bots have stealth_score ≈ 0 by design (they pass all checks), so all of them were silently dropped before the auth-bot check ran. The agents page showed zero entries under Auth Bots filter. Fix: hoist `_s_is_auth_bot` before the gate; guard as `if score < min_score and not _s_is_auth_bot: continue`.
+- **Null comps/mets for score-0 auth bots** (`dashboards/agents.py`) — the existing score-0 fallbacks only trigger when `score > 0`. Auth bots passing through with score == 0 sent `null` to the frontend component bar, causing `c.headers` to throw. Fix: add `_s_is_auth_bot and not comps` / `_s_is_auth_bot and not mets` fallback dicts after the gate.
+
+### Tests
+- `test_main_html_cat_filter_pills_present` — main.html has all 4 original cat-pill data-cat values
+- `test_agents_html_cat_filter_pills_present` — agents.html has all 4 original cat-pill data-cat values
+- `test_main_html_apply_filters_hides_chart_datasets` — `_applyFilters` sets datasets[1-4].hidden from `_activeFilters`
+- `test_agents_html_cat_filter_hides_chart_datasets` — agents pill handler sets all 4 agentChart dataset hidden flags
+- `test_main_html_render_clients_table_is_standalone` — `_renderClientsTable` is a top-level function
+- `test_main_html_tick_calls_apply_filters` — `tick()` calls `_applyFilters()` for client table rendering
+- `test_main_html_gwmgmt_pill_and_cat_function` — main.html has gwmgmt pill + `_clientCats` checks `/antibot-appsec-gateway/` prefix
+- `test_agents_html_gwmgmt_pill_and_cat_function` — agents.html has gwmgmt pill + `_agentCats` checks prefix
+- `test_main_html_client_cats_auth_bot_before_gwmgmt` — `_clientCats` tests is_authorized_bot before gwmgmt check
+- `test_agents_html_agent_cats_auth_bot_before_gwmgmt` — `_agentCats` tests is_authorized_bot before gwmgmt check
+- `test_agents_data_auth_bot_check_before_min_score_gate` — `_s_is_auth_bot` computed before score gate
+- `test_agents_data_min_score_gate_skips_auth_bots` — gate guards `and not _s_is_auth_bot`
+- `test_agents_data_auth_bot_has_safe_comps_fallback` — auth bots with score == 0 get default comps/mets
+
+### Validation
+- **Bandit**: 0 High / 0 Critical (1 Low B104 intentional; 4 Low B608 `#nosec` parameterized)
+- **Semgrep**: 151 rules · 9 files · 0 findings
+- **Unit tests**: 391 passed, 0 failed (`test_critical.py` 116 + `test_pure.py` 265 + `test_async.py` 10)
+
+---
+
 ## [1.7.5] — 2026-05-06 · updated 2026-05-07
 
 ### Added (2026-05-07)

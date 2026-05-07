@@ -530,7 +530,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.5"
+_EXPECTED_VERSION = "AppSecGW_1.7.6"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -546,7 +546,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.5\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.6\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
@@ -570,7 +570,7 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.5:\n" + "\n".join(hits)
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.6:\n" + "\n".join(hits)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -2781,7 +2781,7 @@ def test_agents_data_endpoint_includes_is_authorized_bot_field():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
     fn_start = src.find("async def agents_data_endpoint")
     assert fn_start != -1, "agents.py must define agents_data_endpoint"
-    fn_section = src[fn_start: fn_start + 4000]
+    fn_section = src[fn_start: fn_start + 6000]
     assert "is_authorized_bot" in fn_section, (
         "agents_data_endpoint suspects.append must include 'is_authorized_bot' key — "
         "agents.html fetches from /agents-data (not /metrics) so without this field "
@@ -2953,4 +2953,201 @@ def test_main_html_leaving_auth_bot_uses_substring_match_in_map():
     guard_block = src[guard_idx: guard_idx + 600]
     assert "ua.includes(b.ua)" in guard_block, (
         "main.html bot-disable map() must use ua.includes(b.ua) substring check"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.7.6 — category filter (Allowed / Blocked / Missed / Auth Bots)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_main_html_cat_filter_pills_present():
+    """main.html must have 4 cat-pill buttons for allowed/blocked/missed/authbots."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    for cat in ('allowed', 'blocked', 'missed', 'authbots'):
+        assert f'data-cat="{cat}"' in src, (
+            f"main.html cat-filter must include pill with data-cat=\"{cat}\" (1.7.6)"
+        )
+
+
+def test_agents_html_cat_filter_pills_present():
+    """agents.html must have 4 cat-pill buttons for allowed/blocked/missed/authbots."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    for cat in ('allowed', 'blocked', 'missed', 'authbots'):
+        assert f'data-cat="{cat}"' in src, (
+            f"agents.html cat-filter must include pill with data-cat=\"{cat}\" (1.7.6)"
+        )
+
+
+def test_main_html_apply_filters_hides_chart_datasets():
+    """main.html _applyFilters must set chart.data.datasets[1-4].hidden from _activeFilters."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    af_idx = src.find("function _applyFilters()")
+    assert af_idx != -1, "main.html must define _applyFilters() (1.7.6)"
+    block = src[af_idx: af_idx + 500]
+    assert "datasets[1].hidden" in block, "_applyFilters must set datasets[1].hidden"
+    assert "datasets[2].hidden" in block, "_applyFilters must set datasets[2].hidden"
+    assert "datasets[3].hidden" in block, "_applyFilters must set datasets[3].hidden"
+    assert "datasets[4].hidden" in block, "_applyFilters must set datasets[4].hidden"
+    assert "_activeFilters" in block, "_applyFilters must reference _activeFilters"
+
+
+def test_agents_html_cat_filter_hides_chart_datasets():
+    """agents.html pill handler must toggle all 4 agentChart dataset hidden flags."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    pill_idx = src.find("window._activeFilters = new Set")
+    assert pill_idx != -1, "agents.html must initialise _activeFilters (1.7.6)"
+    # datasets[0]=detected→blocked, [1]=missed, [2]=clean→allowed, [3]=authbots
+    for i in range(4):
+        assert f"agentChart.data.datasets[{i}].hidden" in src, (
+            f"agents.html must set agentChart.data.datasets[{i}].hidden in pill handler (1.7.6)"
+        )
+
+
+def test_main_html_render_clients_table_is_standalone():
+    """main.html must define _renderClientsTable as a top-level function (not inside tick)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "function _renderClientsTable(" in src, (
+        "main.html must extract _renderClientsTable() so _applyFilters can call it (1.7.6)"
+    )
+
+
+def test_main_html_tick_calls_apply_filters():
+    """main.html tick() must call _applyFilters() instead of inlining client rendering."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    tick_idx = src.find("async function tick()")
+    assert tick_idx != -1
+    tick_body = src[tick_idx: tick_idx + 5000]
+    assert "_applyFilters()" in tick_body, (
+        "main.html tick() must call _applyFilters() for client table rendering (1.7.6)"
+    )
+
+
+def test_main_html_gwmgmt_pill_and_cat_function():
+    """main.html must have GW Mgmt pill and _clientCats must classify by /antibot-appsec-gateway/ prefix."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert 'data-cat="gwmgmt"' in src, "main.html must have gwmgmt cat-pill (1.7.6)"
+    assert "'gwmgmt'" in src and "antibot-appsec-gateway" in src, (
+        "main.html _clientCats must assign gwmgmt for /antibot-appsec-gateway/ paths (1.7.6)"
+    )
+    cats_idx = src.find("function _clientCats(")
+    assert cats_idx != -1
+    cats_block = src[cats_idx: cats_idx + 300]
+    assert "antibot-appsec-gateway" in cats_block, (
+        "_clientCats must check last_path for /antibot-appsec-gateway/ prefix (1.7.6)"
+    )
+
+
+def test_agents_html_gwmgmt_pill_and_cat_function():
+    """agents.html must have GW Mgmt pill and _agentCats must classify by /antibot-appsec-gateway/ prefix."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert 'data-cat="gwmgmt"' in src, "agents.html must have gwmgmt cat-pill (1.7.6)"
+    cats_idx = src.find("function _agentCats(")
+    assert cats_idx != -1
+    cats_block = src[cats_idx: cats_idx + 300]
+    assert "antibot-appsec-gateway" in cats_block, (
+        "_agentCats must check last_path for /antibot-appsec-gateway/ prefix (1.7.6)"
+    )
+
+
+# ── auth-bot priority over gwmgmt in cat functions ────────────────────────
+
+def test_main_html_client_cats_auth_bot_before_gwmgmt():
+    """_clientCats must check is_authorized_bot before the gwmgmt last_path check.
+
+    Auth bots whose last_path happens to be a GW management URL must still
+    appear as 'authbots', not get mis-classified as 'gwmgmt' and disappear
+    from the Auth Bots filter.
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    cats_idx = src.find("function _clientCats(")
+    assert cats_idx != -1
+    block = src[cats_idx: cats_idx + 300]
+    auth_pos  = block.find("is_authorized_bot")
+    gwmgmt_pos = block.find("antibot-appsec-gateway")
+    assert auth_pos != -1 and gwmgmt_pos != -1
+    assert auth_pos < gwmgmt_pos, (
+        "_clientCats must test is_authorized_bot before the gwmgmt path check — "
+        "otherwise auth bots accessing GW endpoints vanish from Auth Bots filter"
+    )
+
+
+def test_agents_html_agent_cats_auth_bot_before_gwmgmt():
+    """_agentCats must check is_authorized_bot before the gwmgmt last_path check."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    cats_idx = src.find("function _agentCats(")
+    assert cats_idx != -1
+    block = src[cats_idx: cats_idx + 300]
+    auth_pos   = block.find("is_authorized_bot")
+    gwmgmt_pos = block.find("antibot-appsec-gateway")
+    assert auth_pos != -1 and gwmgmt_pos != -1
+    assert auth_pos < gwmgmt_pos, (
+        "_agentCats must test is_authorized_bot before the gwmgmt path check"
+    )
+
+
+# ── agents.py: auth bots bypass min_score gate ────────────────────────────
+
+def test_agents_data_auth_bot_check_before_min_score_gate():
+    """agents_data_endpoint must evaluate _s_is_auth_bot BEFORE the score gate.
+
+    Auth bots have stealth_score ≈ 0 by design (they're allowed through).
+    If the min_score continue fires first, all auth bots are silently dropped
+    and the Auth Bots filter shows zero entries on the agents page.
+
+    Fix: hoist _s_is_auth_bot above the gate and guard as:
+        if score < min_score and not _s_is_auth_bot: continue
+    """
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
+    fn_start = src.find("async def agents_data_endpoint")
+    assert fn_start != -1
+    fn_section = src[fn_start: fn_start + 5000]
+
+    auth_bot_pos  = fn_section.find("_s_is_auth_bot")
+    min_score_pos = fn_section.find("score < min_score")
+    assert auth_bot_pos != -1, "_s_is_auth_bot must be defined in agents_data_endpoint"
+    assert min_score_pos != -1, "score < min_score gate must exist in agents_data_endpoint"
+    assert auth_bot_pos < min_score_pos, (
+        "_s_is_auth_bot must be computed before the 'score < min_score' gate — "
+        "otherwise auth bots (stealth_score ≈ 0) are excluded before the check runs"
+    )
+
+
+def test_agents_data_min_score_gate_skips_auth_bots():
+    """agents_data_endpoint min_score guard must exempt auth bots."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
+    fn_start = src.find("async def agents_data_endpoint")
+    assert fn_start != -1
+    fn_section = src[fn_start: fn_start + 5000]
+    gate_idx = fn_section.find("score < min_score")
+    assert gate_idx != -1
+    gate_line = fn_section[gate_idx: gate_idx + 80]
+    assert "_s_is_auth_bot" in gate_line, (
+        "The score < min_score guard must include 'and not _s_is_auth_bot' "
+        "so auth bots are never excluded by the threshold filter"
+    )
+
+
+def test_agents_data_auth_bot_has_safe_comps_fallback():
+    """agents_data_endpoint must provide default comps/mets for auth bots with score == 0."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.py").read_text()
+    fn_start = src.find("async def agents_data_endpoint")
+    assert fn_start != -1
+    fn_section = src[fn_start: fn_start + 5000]
+    assert "_s_is_auth_bot and not comps" in fn_section or \
+           ("_s_is_auth_bot" in fn_section and "not comps" in fn_section), (
+        "agents_data_endpoint must guard comps/mets with _s_is_auth_bot fallback "
+        "so score-0 auth bots don't send null to the frontend component bar"
     )

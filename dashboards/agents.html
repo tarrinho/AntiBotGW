@@ -122,8 +122,35 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px;transition:color .1s}
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
+/* 1.7.6 — category filter pills */
+#cat-filter{display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
+#cat-filter-label{font-size:11px;color:var(--dim);margin-right:2px}
+.cat-pill{padding:3px 13px;border-radius:14px;border:1.5px solid transparent;
+  background:transparent;cursor:pointer;font-size:12px;font-weight:600;
+  transition:background .15s,color .15s,border-color .15s;line-height:1.6}
+.cat-pill[data-cat="allowed"]{border-color:#3fb950;color:#3fb950}
+.cat-pill[data-cat="blocked"]{border-color:#f85149;color:#f85149}
+.cat-pill[data-cat="missed"]{border-color:#ff7b3a;color:#ff7b3a}
+.cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
+.cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
+.cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
+.cat-pill.active[data-cat="blocked"]{background:#f85149;color:#fff}
+.cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
+.cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
+.cat-pill.active[data-cat="gwmgmt"]{background:#58a6ff;color:#000}
 </style>
-<h1>AppSecGW_1.7.5 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.6 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+
+<!-- 1.7.6 — category filter bar -->
+<div id="cat-filter">
+  <span id="cat-filter-label">Show:</span>
+  <button class="cat-pill active" data-cat="allowed">● Allowed</button>
+  <button class="cat-pill active" data-cat="blocked">● Blocked</button>
+  <button class="cat-pill active" data-cat="missed">● Missed</button>
+  <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
+  <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
+</div>
+
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents" class="active">Agents</a>
@@ -368,6 +395,41 @@ document.getElementById('thresh-slider').addEventListener('change', e=>{
 document.getElementById('thresh-up').onclick   = ()=>setThreshold(MIN + 1, true);
 document.getElementById('thresh-down').onclick = ()=>setThreshold(MIN - 1, true);
 
+// 1.7.6 — category filter state
+window._activeFilters = new Set(['allowed','blocked','missed','authbots','gwmgmt']);
+
+function _agentCats(s) {
+  if (s.is_authorized_bot) return ['authbots'];
+  if ((s.last_path||'').startsWith('/antibot-appsec-gateway/')) return ['gwmgmt'];
+  const cats = [];
+  if ((s.banned_secs||0) > 0 || (s.blocked||0) > 0) cats.push('blocked');
+  if ((s.stealth_score||0) >= 20 && !(s.blocked||0)) cats.push('missed');
+  if (!cats.length) cats.push('allowed');
+  return cats;
+}
+
+document.querySelectorAll('.cat-pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const cat = btn.dataset.cat;
+    if (window._activeFilters.has(cat)) {
+      window._activeFilters.delete(cat);
+      btn.classList.remove('active');
+    } else {
+      window._activeFilters.add(cat);
+      btn.classList.add('active');
+    }
+    // Update chart datasets immediately
+    if (agentChart) {
+      agentChart.data.datasets[0].hidden = !window._activeFilters.has('blocked');
+      agentChart.data.datasets[1].hidden = !window._activeFilters.has('missed');
+      agentChart.data.datasets[2].hidden = !window._activeFilters.has('allowed');
+      agentChart.data.datasets[3].hidden = !window._activeFilters.has('authbots');
+      agentChart.update();
+    }
+    tick();
+  });
+});
+
 async function tick(){
   try{
     const params = new URLSearchParams({min_score: MIN, limit: 200});
@@ -404,7 +466,11 @@ async function tick(){
 
     // Suspect table
     const tbody = document.querySelector('#sus-tbl tbody');
-    const suspects = _sortSuspects(d.suspects);
+    const _allSuspects = _sortSuspects(d.suspects);
+    const suspects = _allSuspects.filter(s => {
+      const cats = _agentCats(s);
+      return cats.some(c => window._activeFilters.has(c));
+    });
     window._suspectsList = suspects;
     const adminLock = (ip, f) => f ? `<span title="${escapeHtml(_adminIpTip(ip))}" style="cursor:help;margin-right:3px">🔒</span>` : '';
     if (!suspects.length){
@@ -675,6 +741,11 @@ async function tickChart(){
     c.data.datasets[1].data = d.timeline.map(b=>b.missed);
     c.data.datasets[2].data = d.timeline.map(b=>b.clean_allowed);
     c.data.datasets[3].data = d.timeline.map(b=>b.authorized_robot||0);
+    // Apply category filter to chart datasets
+    c.data.datasets[0].hidden = !window._activeFilters.has('blocked');
+    c.data.datasets[1].hidden = !window._activeFilters.has('missed');
+    c.data.datasets[2].hidden = !window._activeFilters.has('allowed');
+    c.data.datasets[3].hidden = !window._activeFilters.has('authbots');
     // 1.5.4 — stash for click-to-drill-down handler
     window._lastAgentTimeline   = d.timeline;
     window._lastAgentBucketSecs = bs;

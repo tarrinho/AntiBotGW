@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.7.5 · Dashboard</title>
+<title>AppSecGW_1.7.6 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -139,9 +139,35 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   color:var(--fg);box-shadow:0 6px 24px rgba(0,0,0,.55);display:none;pointer-events:none}
 #col-tip-pop b{color:var(--blue);display:block;margin-bottom:3px;font-size:11px;
   text-transform:uppercase;letter-spacing:.5px}
+/* 1.7.6 — category filter pills */
+#cat-filter{display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
+#cat-filter-label{font-size:11px;color:var(--dim);margin-right:2px}
+.cat-pill{padding:3px 13px;border-radius:14px;border:1.5px solid transparent;
+  background:transparent;cursor:pointer;font-size:12px;font-weight:600;
+  transition:background .15s,color .15s,border-color .15s;line-height:1.6}
+.cat-pill[data-cat="allowed"]{border-color:#3fb950;color:#3fb950}
+.cat-pill[data-cat="blocked"]{border-color:#f85149;color:#f85149}
+.cat-pill[data-cat="missed"]{border-color:#ff7b3a;color:#ff7b3a}
+.cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
+.cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
+.cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
+.cat-pill.active[data-cat="blocked"]{background:#f85149;color:#fff}
+.cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
+.cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
+.cat-pill.active[data-cat="gwmgmt"]{background:#58a6ff;color:#000}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.5 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.6 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+
+<!-- 1.7.6 — category filter bar -->
+<div id="cat-filter">
+  <span id="cat-filter-label">Show:</span>
+  <button class="cat-pill active" data-cat="allowed">● Allowed</button>
+  <button class="cat-pill active" data-cat="blocked">● Blocked</button>
+  <button class="cat-pill active" data-cat="missed">● Missed</button>
+  <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
+  <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
+</div>
 
 <!-- column-header tooltip -->
 <div id="col-tip-pop"></div>
@@ -398,6 +424,184 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 let lastTotal = 0, lastTime = Date.now();
 let chart = null;
 let costChart = null;
+
+// 1.7.6 — category filter state
+window._activeFilters = new Set(['allowed','blocked','missed','authbots','gwmgmt']);
+const _cfgUrl = '/antibot-appsec-gateway/secured/config';
+window._authBotPatch = window._authBotPatch || {};
+function _patchAuthBot(id, val) {
+  window._authBotPatch[id] = val;
+  setTimeout(() => { delete window._authBotPatch[id]; }, 15000);
+}
+
+function _clientCats(c) {
+  if (c.is_authorized_bot) return ['authbots'];
+  if ((c.last_path||'').startsWith('/antibot-appsec-gateway/')) return ['gwmgmt'];
+  const cats = [];
+  if ((c.banned_secs||0) > 0) cats.push('blocked');
+  if ((c.stealth_score||0) >= 20) cats.push('missed');
+  if (!cats.length) cats.push('allowed');
+  return cats;
+}
+
+function _renderClientsTable(list) {
+  const tbody = document.querySelector('#clients-tbl tbody');
+  window._clientsView = list;
+  tbody.innerHTML = list.slice(0, 100).map((c, i) => {
+    const _bsec = c.banned_secs || 0;
+    const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
+                 : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
+                 : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
+                 : '<span class="dim">—</span>';
+    const id = (c.id || c.ip || '');
+    const lastIp = c.last_ip || '?';
+    const score = c.stealth_score || 0;
+    const scoreColor = score >= 80 ? 'var(--red)'
+                     : score >= 60 ? 'var(--orange,#ff7b3a)'
+                     : score >= 40 ? 'var(--yellow)'
+                     : score >= 20 ? 'var(--blue)'
+                     : 'var(--dim)';
+    const _mbs = c.banned_secs || 0;
+    const _abPatchM = window._authBotPatch;
+    const _isAuthBotM = (_abPatchM && id in _abPatchM) ? _abPatchM[id] : !!c.is_authorized_bot;
+    const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
+    const switchHtml = `
+      <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
+        <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
+        <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
+        <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
+        <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
+      </div>`;
+    return `<tr>
+      <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
+      <td class="dim">${escapeHtml(lastIp)}</td>
+      <td>${c.requests}</td>
+      <td style="color:var(--green)">${c.allowed}</td>
+      <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
+      <td style="color:${scoreColor};font-weight:600">${
+        score > 0
+          ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${score}</span>`
+          : score
+      }</td>
+      <td>${banned}</td>
+      <td>${c.tokens}</td>
+      <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
+      <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
+      <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
+      <td>${switchHtml}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+  _updateCliSortHeaders();
+  tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
+    ctrl.querySelectorAll('.ban-btn').forEach(btn => {
+      btn.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        if (btn.classList.contains('active')) return;
+        const id = ctrl.dataset.id;
+        const ua = ctrl.dataset.ua || '';
+        ctrl.style.opacity = '0.5';
+        if (btn.dataset.action === 'auth-bot') {
+          try {
+            const gr = await fetch(_cfgUrl, {credentials:'include'});
+            const gs = await gr.json().catch(()=>({}));
+            const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+            const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
+            const newBots = existing
+              ? bots.map(b => (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:true, action:'authorized-robot'} : b)
+              : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
+            const pr = await fetch(_cfgUrl, {
+              method:'POST', credentials:'include',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+            });
+            const pb = await pr.json().catch(()=>({}));
+            if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+              _patchAuthBot(id, true);
+              ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
+              btn.classList.add('active');
+              setTimeout(tick, 500);
+            } else {
+              alert('Action failed (' + pr.status + ') — ' + (pb.error || JSON.stringify(pb.rejected||{})));
+            }
+          } catch(e) { alert('Network error: ' + e.message); }
+          ctrl.style.opacity = '1';
+          return;
+        }
+        const secs = parseInt(btn.dataset.secs, 10);
+        const currentlyAuthBot = !!ctrl.querySelector('.ban-btn.authorized-bot.active');
+        if (currentlyAuthBot && ua) {
+          try {
+            const gr = await fetch(_cfgUrl, {credentials:'include'});
+            const gs = await gr.json().catch(()=>({}));
+            const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+            const newBots = bots.map(b =>
+              (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:false} : b
+            );
+            await fetch(_cfgUrl, {
+              method:'POST', credentials:'include',
+              headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+            });
+          } catch(_) {}
+          _patchAuthBot(id, false);
+        }
+        const endpoint = secs === 0
+          ? '/antibot-appsec-gateway/secured/unban?id=' + encodeURIComponent(id)
+          : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
+        try {
+          const r = await fetch(endpoint, {credentials:'include'});
+          const b = await r.json().catch(()=>({}));
+          if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
+            ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
+            btn.classList.add('active');
+            setTimeout(tick, 300);
+          } else {
+            alert('Action failed (' + r.status + ')');
+          }
+        } catch(e){ alert('Network error: ' + e.message); }
+        ctrl.style.opacity = '1';
+      });
+    });
+  });
+  tbody.querySelectorAll('.cell-click').forEach(el => {
+    el.onclick = ev => {
+      const c = window._clientsView[+el.dataset.i];
+      if (!c) return;
+      openClientPopover(el.dataset.pop, c);
+    };
+  });
+}
+
+function _applyFilters() {
+  if (chart) {
+    chart.data.datasets[1].hidden = !window._activeFilters.has('allowed');
+    chart.data.datasets[2].hidden = !window._activeFilters.has('blocked');
+    chart.data.datasets[3].hidden = !window._activeFilters.has('missed');
+    chart.data.datasets[4].hidden = !window._activeFilters.has('authbots');
+    chart.update();
+  }
+  const all = window._clientsList || [];
+  const filtered = all.filter(cl => {
+    const cats = _clientCats(cl);
+    for (const cat of cats) if (window._activeFilters.has(cat)) return true;
+    return false;
+  });
+  _renderClientsTable(filtered);
+}
+
+document.querySelectorAll('.cat-pill').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const cat = btn.dataset.cat;
+    if (window._activeFilters.has(cat)) {
+      window._activeFilters.delete(cat);
+      btn.classList.remove('active');
+    } else {
+      window._activeFilters.add(cat);
+      btn.classList.add('active');
+    }
+    _applyFilters();
+  });
+});
 function ensureCostChart() {
   if (costChart) return costChart;
   const ctx = document.getElementById('cost-chart').getContext('2d');
@@ -697,144 +901,8 @@ async function tick() {
       .map(([k,v]) => `<span class="lbl">HTTP ${k}</span><span class="val">${v}</span>`).join('');
 
     // Clients
-    const tbody = document.querySelector('#clients-tbl tbody');
     window._clientsList = _sortClients(d.clients || []);
-    tbody.innerHTML = window._clientsList.slice(0, 100).map((c, i) => {
-      const _bsec = c.banned_secs || 0;
-      const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
-                   : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
-                   : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
-                   : '<span class="dim">—</span>';
-      const id = (c.id || c.ip || '');
-      const lastIp = c.last_ip || '?';
-      const score = c.stealth_score || 0;
-      const scoreColor = score >= 80 ? 'var(--red)'
-                       : score >= 60 ? 'var(--orange,#ff7b3a)'
-                       : score >= 40 ? 'var(--yellow)'
-                       : score >= 20 ? 'var(--blue)'
-                       : 'var(--dim)';
-      const _mbs = c.banned_secs || 0;
-      const _abPatchM = window._authBotPatch;
-      const _isAuthBotM = (_abPatchM && id in _abPatchM) ? _abPatchM[id] : !!c.is_authorized_bot;
-      const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
-      const switchHtml = `
-        <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
-          <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
-          <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
-          <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
-          <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
-        </div>`;
-      return `<tr>
-        <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
-        <td class="dim">${escapeHtml(lastIp)}</td>
-        <td>${c.requests}</td>
-        <td style="color:var(--green)">${c.allowed}</td>
-        <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
-        <td style="color:${scoreColor};font-weight:600">${
-          score > 0
-            ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${score}</span>`
-            : score
-        }</td>
-        <td>${banned}</td>
-        <td>${c.tokens}</td>
-        <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
-        <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
-        <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
-        <td>${switchHtml}</td>
-      </tr>`;
-    }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
-    _updateCliSortHeaders();
-    // Wire 4-state ban controls (allow / banned / really-banned / authorized-bot).
-    window._authBotPatch = window._authBotPatch || {};
-    const _cfgUrl = '/antibot-appsec-gateway/secured/config';
-    const _patchAuthBot = (id, val) => {
-      window._authBotPatch[id] = val;
-      setTimeout(() => { delete window._authBotPatch[id]; }, 15000);
-    };
-    tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
-      ctrl.querySelectorAll('.ban-btn').forEach(btn => {
-        btn.addEventListener('click', async (ev) => {
-          ev.stopPropagation();
-          if (btn.classList.contains('active')) return;
-          const id = ctrl.dataset.id;
-          const ua = ctrl.dataset.ua || '';
-          ctrl.style.opacity = '0.5';
-
-          // ── Auth Bot: add/enable UA in AUTHORIZED_BOT_UAS ──────────────
-          if (btn.dataset.action === 'auth-bot') {
-            try {
-              const gr = await fetch(_cfgUrl, {credentials:'include'});
-              const gs = await gr.json().catch(()=>({}));
-              const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
-              const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
-              const newBots = existing
-                ? bots.map(b => (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:true, action:'authorized-robot'} : b)
-                : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
-              const pr = await fetch(_cfgUrl, {
-                method:'POST', credentials:'include',
-                headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
-              });
-              const pb = await pr.json().catch(()=>({}));
-              if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
-                _patchAuthBot(id, true);
-                ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
-                btn.classList.add('active');
-                setTimeout(tick, 500);
-              } else {
-                alert('Action failed (' + pr.status + ') — ' + (pb.error || JSON.stringify(pb.rejected||{})));
-              }
-            } catch(e) { alert('Network error: ' + e.message); }
-            ctrl.style.opacity = '1';
-            return;
-          }
-
-          // ── Any non-auth-bot action: if currently auth-bot, disable the bot entry ──
-          const secs = parseInt(btn.dataset.secs, 10);
-          const currentlyAuthBot = !!ctrl.querySelector('.ban-btn.authorized-bot.active');
-          if (currentlyAuthBot && ua) {
-            try {
-              const gr = await fetch(_cfgUrl, {credentials:'include'});
-              const gs = await gr.json().catch(()=>({}));
-              const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
-              const newBots = bots.map(b =>
-                (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:false} : b
-              );
-              await fetch(_cfgUrl, {
-                method:'POST', credentials:'include',
-                headers:{'Content-Type':'application/json'},
-                body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
-              });
-            } catch(_) {}
-            _patchAuthBot(id, false);
-          }
-
-          const endpoint = secs === 0
-            ? '/antibot-appsec-gateway/secured/unban?id=' + encodeURIComponent(id)
-            : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
-          try {
-            const r = await fetch(endpoint, {credentials:'include'});
-            const b = await r.json().catch(()=>({}));
-            if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
-              ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
-              btn.classList.add('active');
-              setTimeout(tick, 300);
-            } else {
-              alert('Action failed (' + r.status + ')');
-            }
-          } catch(e){ alert('Network error: ' + e.message); }
-          ctrl.style.opacity = '1';
-        });
-      });
-    });
-    // Wire identity / risk popovers (1.5.4 — same UX as the agents dashboard)
-    tbody.querySelectorAll('.cell-click').forEach(el => {
-      el.onclick = ev => {
-        const c = window._clientsList[+el.dataset.i];
-        if (!c) return;
-        openClientPopover(el.dataset.pop, c);
-      };
-    });
+    _applyFilters();
 
     // Top paths — 1.5.5: click any row to see who hit that path
     const pBody = document.querySelector('#paths-tbl tbody');
@@ -909,6 +977,10 @@ async function tick() {
       c.data.datasets[2].data = blocks;
       c.data.datasets[3].data = missed;
       c.data.datasets[4].data = authBots;
+      c.data.datasets[1].hidden = !window._activeFilters.has('allowed');
+      c.data.datasets[2].hidden = !window._activeFilters.has('blocked');
+      c.data.datasets[3].hidden = !window._activeFilters.has('missed');
+      c.data.datasets[4].hidden = !window._activeFilters.has('authbots');
       c.update('none');
       if (typeof window._paintBlockRate === 'function') window._paintBlockRate();
     }

@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.7.5` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.7.6` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -201,7 +201,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.7.5 \
+docker run -d --name appsec-antibot-gw1.7.6 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.7.5 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.7.5 \
+  appsec-antibot-gw:1.7.6 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.5` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.6` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.7.5
+  appsec-antibot-gw:1.7.6
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.7.5 .
-trivy image appsec-antibot-gw:1.7.5        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.7.6 .
+trivy image appsec-antibot-gw:1.7.6        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1081,6 +1081,7 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.7.6** | **Category filter bar on main and agents dashboards.** Five colour-coded toggle pills (● Allowed / ● Blocked / ● Missed / ● Auth Bots / ● GW Mgmt) filter both timeline chart datasets and the clients/suspects table simultaneously. `_clientCats` / `_agentCats` classifiers map each entry to a category; `_applyFilters()` applies the active set on every tick. GW Mgmt captures accesses to `/antibot-appsec-gateway/` paths (table-only, no chart dataset). Fixes: auth bot priority over gwmgmt path check in cat functions; auth bots dropped by `min_score` gate in `agents_data_endpoint` (stealth_score ≈ 0 caused all to be excluded — zero entries under Auth Bots filter on agents page); null comps/mets for score-0 auth bots crashing frontend component bar. **Tests**: 116 critical + 265 pure + 10 async = **391 passing** (+57 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |
 | **1.7.5** | **Authorized bots shown in purple on all dashboards.** Monitoring bots with `reason=authorized-robot` now appear as a distinct purple dataset on the main dashboard traffic chart (5th line, `#bc8cff`, dashed) and the agents chart (4th dataset); geo map renders purple circles for authorized-robot events with a dedicated legend entry and tooltip. Backend: `metrics_endpoint` timeline extracts `authorized_robot` from `by_reason`; `agents_timeline_endpoint` adds SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies authorized-robot as its own kind (no longer inflates `blocked`). **Tests**: 199 pure + 116 critical + 19 async = **334 passing** (+8 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |
 | **1.7.4** | **AWS ELB health-check pass-through + authorized monitoring bot pass-through + Aikido security fixes + dashboard UX improvements.** ELB bypass when UA prefix + path both match (`ELB_HEALTH_CHECK_PATH`, `ELB_HEALTH_CHECK_UA`). Authorized monitoring bot pass-through (`AUTHORIZED_BOT_UAS`, hot-reloadable) records `authorized-robot` reason shown in blue in logs. Controls dashboard: master bypass switch (`BYPASS_ENABLED`) + per-card collapse toggles. Agents/main charts: 7-day + 30-day range with auto-bucket; tooltip hover shows date/time range. Pip deps pinned to exact `==x.y.z` versions (Aikido DL3013); builder stages drop root (`USER nonroot` / `USER nobody`, Aikido DL3002). Fixed `ip_intel_endpoint` `NameError` for `_city_lookup` / `_asn_lookup` / `_abuseipdb_lookup` / `_crowdsec_check` / `_tor_exits`. **Tests**: 191 pure + 116 critical + 10 async = **317 passing** (+26 regression tests). **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. |
 | **1.7.3** | **4 AI-agent detection signals + path-sweep + admin bypass fix + DAST + post-release additions.** **(P1) Semantic honeypot credential injection** — `detection/honey_cred.py` injects fake `internal_api_key` comment in every HTML response; `/probe?k=<key>` endpoint fires `honey-cred` (+90) when AI agent hits it. **(P2) Risk-gated redirect maze** — `detection/redirect_maze.py`; HMAC-signed step tokens, `/maze` endpoint; completes all steps in < 800 ms → `redirect-maze-bot` (+55). **(P3) LLM no-subresource heuristic** — `detection/llm_heuristic.py`; ≥ 5 HTML GETs with 0 sub-resources in 120 s window → `llm-no-subresources` (+40). **(P4) Browser execution probe** — `<link rel="preload" as="fetch">` in every `<head>`; `/canary-probe/{token}` endpoint confirms browser execution; no fetch after ≥ 3 pages → `canary-probe-miss` (+35). **(Path-sweep)** `detection/path_sweep.py` fires `path-sweep` on ≥ 40 distinct non-static paths within 300 s — runs even for valid-cookied sessions. Global RPS / method-allowlist exemptions scoped to admin IPs only. Geo "No geo" card. JA4/Turnstile mutual exclusion (3-layer: startup + DB-load + hot-reload). **Post-release additions**: Three-tier ban durations — `REALLY_BAN_SECS` (30 d default) for definitive bot-proof signals (`canary-echo`, `honeypot-silent`, `honeypot`); `HOSTILE_BAN_SECS` (24 h) for hostile signals; ban-duration knobs in Controls dashboard. Storage card in Settings (disk usage + DB/WAL/SHM sizes + Vacuum button). Fixed `ALLOWED_HOSTS` URL parsing (`urlparse`-based normalisation). **Security review**: 13 findings fixed total. **Tests**: 215 pass; 0 failures. **DAST**: 15/15 PASS. **Bandit**: 0 H / 0 C. **Trivy**: 0 CVEs. Harbor: amd64 `sha256:eeb71292…` · arm64 `sha256:64fa6b48…` · armv7 `sha256:0b9ebd1c…` · manifest `sha256:5772e553…`. |
