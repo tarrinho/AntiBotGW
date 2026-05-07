@@ -243,9 +243,30 @@ async def agents_data_endpoint(request: web.Request):
                     "upstream_404_count": s.upstream_404_count,
                     "risk_score": round(s.risk_score, 1), "samples": 0,
                 }
-            if score < min_score:
+            # Determine authorized-bot status before the score gate so auth bots
+            # are never silently dropped — they have stealth_score ≈ 0 by design.
+            _s_ua = s.last_user_agent or ""
+            _s_is_auth_bot = any(
+                isinstance(_b, dict) and _b.get("enabled", True)
+                and _b.get("action", "authorized-robot") == "authorized-robot"
+                and _b.get("ua", "") and _b["ua"] in _s_ua
+                for _b in AUTHORIZED_BOT_UAS
+            )
+            if score < min_score and not _s_is_auth_bot:
                 clean += 1
                 continue
+            # Ensure auth bots with score == 0 have safe comps/mets dicts.
+            if _s_is_auth_bot and not comps:
+                comps = {"headers": 0, "assets": 0, "enum": 0,
+                         "timing": 0, "risk": 0, "404s": 0}
+            if _s_is_auth_bot and not mets:
+                mets = {
+                    "avg_header_score": 0, "html_loads": 0, "static_loads": 0,
+                    "unique_paths": len(s.unique_paths),
+                    "path_diversity": 0, "behavioral_cov": None,
+                    "upstream_404_count": s.upstream_404_count,
+                    "risk_score": 0, "samples": 0,
+                }
             # Per-reason risk breakdown (decayed in lockstep with risk_score)
             risk_breakdown = sorted(
                 ((r, round(v, 1)) for r, v in s.risk_by_reason.items() if v >= 0.5),
@@ -254,13 +275,6 @@ async def agents_data_endpoint(request: web.Request):
             blocks_breakdown = sorted(
                 ((r, c) for r, c in s.blocks_by_reason.items() if c > 0),
                 key=lambda kv: kv[1], reverse=True,
-            )
-            _s_ua = s.last_user_agent or ""
-            _s_is_auth_bot = any(
-                isinstance(_b, dict) and _b.get("enabled", True)
-                and _b.get("action", "authorized-robot") == "authorized-robot"
-                and _b.get("ua", "") and _b["ua"] in _s_ua
-                for _b in AUTHORIZED_BOT_UAS
             )
             suspects.append({
                 "id": key,
