@@ -530,7 +530,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.6"
+_EXPECTED_VERSION = "AppSecGW_1.7.7"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -546,7 +546,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.6\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.7\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
@@ -570,7 +570,7 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.6:\n" + "\n".join(hits)
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.7:\n" + "\n".join(hits)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -2961,23 +2961,29 @@ def test_main_html_leaving_auth_bot_uses_substring_match_in_map():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_main_html_cat_filter_pills_present():
-    """main.html must have 4 cat-pill buttons for allowed/blocked/missed/authbots."""
+    """main.html must have cat-pill buttons for all categories including ban and reallyban."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
-    for cat in ('allowed', 'blocked', 'missed', 'authbots'):
+    for cat in ('allowed', 'ban', 'reallyban', 'missed', 'authbots'):
         assert f'data-cat="{cat}"' in src, (
-            f"main.html cat-filter must include pill with data-cat=\"{cat}\" (1.7.6)"
+            f"main.html cat-filter must include pill with data-cat=\"{cat}\" (1.7.8)"
         )
+    assert 'data-cat="blocked"' not in src, (
+        "main.html must not have 'blocked' pill — replaced by 'ban' + 'reallyban' (1.7.8)"
+    )
 
 
 def test_agents_html_cat_filter_pills_present():
-    """agents.html must have 4 cat-pill buttons for allowed/blocked/missed/authbots."""
+    """agents.html must have cat-pill buttons for all categories including ban and reallyban."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
-    for cat in ('allowed', 'blocked', 'missed', 'authbots'):
+    for cat in ('allowed', 'ban', 'reallyban', 'missed', 'authbots'):
         assert f'data-cat="{cat}"' in src, (
-            f"agents.html cat-filter must include pill with data-cat=\"{cat}\" (1.7.6)"
+            f"agents.html cat-filter must include pill with data-cat=\"{cat}\" (1.7.8)"
         )
+    assert 'data-cat="blocked"' not in src, (
+        "agents.html must not have 'blocked' pill — replaced by 'ban' + 'reallyban' (1.7.8)"
+    )
 
 
 def test_main_html_apply_filters_hides_chart_datasets():
@@ -3136,6 +3142,119 @@ def test_agents_data_min_score_gate_skips_auth_bots():
     assert "_s_is_auth_bot" in gate_line, (
         "The score < min_score guard must include 'and not _s_is_auth_bot' "
         "so auth bots are never excluded by the threshold filter"
+    )
+
+
+# ── gwmgmt: authenticated admin path access is recorded ──────────────────
+
+def test_protect_authenticated_admin_path_calls_record():
+    """protect() must call record() for authenticated operator requests to admin paths.
+
+    Without this, dashboard accesses by a logged-in operator are never written
+    to ip_state / the DB, so the gwmgmt filter in main.html and agents.html
+    shows zero entries — the operator sees an empty filter even though they
+    are actively browsing /antibot-appsec-gateway/secured/*.
+    """
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    # Locate the authenticated admin path branch
+    admin_block_idx = src.find("_admin_ip_allowed(request) and _internal_authed(request)")
+    assert admin_block_idx != -1, "protect() must have the authed-admin-path branch"
+    # record() must be called inside that block (within 400 chars of the branch)
+    block = src[admin_block_idx: admin_block_idx + 400]
+    assert "await record(" in block, (
+        "protect() must call record() for authenticated admin path requests so that "
+        "operator dashboard accesses appear in ip_state with last_path = /antibot-appsec-gateway/... "
+        "and are classified as gwmgmt by _clientCats / _agentCats"
+    )
+
+
+def test_protect_authenticated_admin_path_uses_operator_passthrough_reason():
+    """protect() must record authenticated admin accesses with reason='operator-passthrough'.
+
+    Using a distinct reason (not '' or 'internal-probe') lets the operator
+    distinguish their own dashboard browsing from unauthorized probes in the
+    event log and Logs dashboard.
+    """
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    admin_block_idx = src.find("_admin_ip_allowed(request) and _internal_authed(request)")
+    assert admin_block_idx != -1
+    block = src[admin_block_idx: admin_block_idx + 400]
+    assert "operator-passthrough" in block, (
+        "protect() must pass reason='operator-passthrough' to record() for "
+        "authenticated admin path requests so events are labelled correctly in the DB"
+    )
+
+
+# ── 1.7.8 — ban / really-ban filter pills ────────────────────────────────
+
+def test_main_html_client_cats_hard_ban_reasons():
+    """_clientCats must classify clients with canary-echo/honeypot-silent/honeypot as reallyban,
+    and all other currently-banned clients as ban."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    cats_idx = src.find("function _clientCats(")
+    assert cats_idx != -1
+    block = src[cats_idx: cats_idx + 600]
+    assert "_HARD_BAN_REASONS" in block or "canary-echo" in block, (
+        "_clientCats must reference hard-ban reasons (canary-echo/honeypot-silent/honeypot) "
+        "to distinguish reallyban from ban (1.7.8)"
+    )
+    assert "'reallyban'" in block, "_clientCats must push 'reallyban' for hard-ban clients (1.7.8)"
+    assert "'ban'" in block, "_clientCats must push 'ban' for regular-ban clients (1.7.8)"
+
+
+def test_main_html_hard_ban_reasons_constant_defined():
+    """main.html must define _HARD_BAN_REASONS with the three definitive bot signals."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "_HARD_BAN_REASONS" in src, "main.html must define _HARD_BAN_REASONS (1.7.8)"
+    hr_idx = src.find("_HARD_BAN_REASONS")
+    block = src[hr_idx: hr_idx + 200]
+    assert "canary-echo" in block, "_HARD_BAN_REASONS must include 'canary-echo' (1.7.8)"
+    assert "honeypot-silent" in block, "_HARD_BAN_REASONS must include 'honeypot-silent' (1.7.8)"
+    assert "honeypot" in block, "_HARD_BAN_REASONS must include 'honeypot' (1.7.8)"
+
+
+def test_agents_html_agent_cats_hard_ban_reasons():
+    """_agentCats must classify suspects with hard-ban reasons as reallyban."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    cats_idx = src.find("function _agentCats(")
+    assert cats_idx != -1
+    block = src[cats_idx: cats_idx + 600]
+    assert "_HARD_BAN_REASONS" in block or "canary-echo" in block, (
+        "_agentCats must reference hard-ban reasons to classify reallyban (1.7.8)"
+    )
+    assert "'reallyban'" in block, "_agentCats must push 'reallyban' for hard-ban suspects (1.7.8)"
+    assert "'ban'" in block, "_agentCats must push 'ban' for regular-ban suspects (1.7.8)"
+
+
+def test_main_html_apply_filters_ban_maps_to_dataset2():
+    """_applyFilters must show dataset[2] (blocked) when EITHER ban OR reallyban is active."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    af_idx = src.find("function _applyFilters()")
+    assert af_idx != -1
+    block = src[af_idx: af_idx + 400]
+    assert "datasets[2].hidden" in block, "_applyFilters must toggle datasets[2] (1.7.8)"
+    assert "'ban'" in block and "'reallyban'" in block, (
+        "_applyFilters datasets[2].hidden must reference both 'ban' and 'reallyban' (1.7.8)"
+    )
+
+
+def test_agents_html_chart_datasets_ban_maps_to_dataset0():
+    """agents.html chart hidden logic must show dataset[0] (detected) when ban OR reallyban active."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "datasets[0].hidden" in src, "agents.html must toggle agentChart.datasets[0] (1.7.8)"
+    d0_idx = src.find("datasets[0].hidden")
+    block = src[d0_idx: d0_idx + 200]
+    assert "'ban'" in block and "'reallyban'" in block, (
+        "agents.html datasets[0].hidden must reference both 'ban' and 'reallyban' (1.7.8)"
     )
 
 

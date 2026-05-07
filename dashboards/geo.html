@@ -88,9 +88,18 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+
+#load-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
+  padding:3px 10px;border-radius:10px;letter-spacing:.3px;transition:background .3s,color .3s,border-color .3s;
+  border:1px solid var(--yellow);background:rgba(210,153,34,.15);color:var(--yellow)}
+#load-status.ready{border-color:var(--green);background:var(--green);color:#000}
+#load-status .dot{width:6px;height:6px;border-radius:50%;background:currentColor;
+  animation:ls-pulse 1s ease-in-out infinite}
+#load-status.ready .dot{animation:none}
+@keyframes ls-pulse{0%,100%{opacity:1}50%{opacity:.3}}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.6 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.7 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -104,7 +113,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-    <h2 style="margin:0">World-map of accesses <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">circle size ∝ hits · click any circle for top IPs / reasons / paths</span></h2>
+    <h2 style="margin:0"><span id="load-status"><span class="dot"></span>Loading</span>&nbsp;&nbsp;World-map of accesses <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">circle size ∝ hits · click any circle for top IPs / reasons / paths</span></h2>
     <div style="display:flex;gap:6px;align-items:center;font-size:11px;flex-wrap:wrap">
       <span class="dim">window:</span>
       <select id="range" class="ctrl">
@@ -697,6 +706,13 @@ async function tick(){
     renderCountries();
     renderMethods();      // 1.6.4
     renderAsns();         // 1.6.4
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const s = document.getElementById('load-status');
+      if (s && !s.classList.contains('ready')) {
+        s.classList.add('ready');
+        s.innerHTML = '<span class="dot"></span>Loading Ready';
+      }
+    }));
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch(e) {
     const _errEl = document.getElementById('live');
