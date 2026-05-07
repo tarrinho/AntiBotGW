@@ -910,10 +910,16 @@ async def tarpit_endpoint(request):
     return await _te(request)
 
 
-# Patch core.proxy_handler.get_ip to the namespace-aware version above
-# so test patches (proxy.TRUSTED_PROXIES_NETS = ...) propagate via globals().
+# Patch core.proxy_handler.get_ip to the namespace-aware version above so that
+# test patches (proxy.TRUSTED_PROXIES_NETS = ...) propagate via globals().
+# Guard: only override if core.proxy_handler.get_ip is still the original helpers
+# version — this prevents test helper copies of proxy.py (e.g. _test_proxy_abuseipdb
+# loaded via importlib in db_load tests) from hijacking the patch after the real
+# proxy entry-point has already applied it.
 import core.proxy_handler as _cph_gip
-_cph_gip.get_ip = get_ip
+import helpers as _h_gip_patch
+if _cph_gip.__dict__.get("get_ip") is _h_gip_patch.__dict__.get("get_ip"):
+    _cph_gip.get_ip = get_ip
 
 
 if __name__ == "__main__":
