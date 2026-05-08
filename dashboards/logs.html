@@ -108,7 +108,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
   <a href="/antibot-appsec-gateway/secured/logs" class="active">Logs</a>
   <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-  <a href="#" id="nav-acct" onclick="_openAcctModal();return false;">My Account</a>
+  <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
   <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
 
 <div class="card">
@@ -205,12 +205,11 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 
 <script>
 function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:#1e1e2e;border:1px solid #f85149;color:#e6edf3;padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.5)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
 const _timers=[];
-const url = (p) => p;
 
 let kind = 'requests';
 let paused = false;
-let lastIds = new Set();    // dedup helper for connection logs
 let serverState = {};
 
 function fmtTs(ts){
@@ -437,7 +436,7 @@ document.getElementById('refresh').onclick = () => tick(true);
 // ── Server LOG_LEVEL push ────────────────────────────────────────────
 async function loadServerState(){
   try {
-    const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
     const d = await r.json();
     serverState = d.state || {};
     paintLvlButtons();
@@ -462,11 +461,11 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
   b.onclick = async () => {
     const lvl = b.dataset.lvl;
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
         {method:'POST', headers:{'Content-Type':'application/json'},
          credentials:'include', body: JSON.stringify({LOG_LEVEL: lvl})});
       if (!r.ok) {
-        alert('Server error ' + r.status + (r.status === 401 || r.status === 403 ? ' — session may have expired, please reload' : ''));
+        _gwAlert('Server error ' + r.status + (r.status === 401 || r.status === 403 ? ' — session may have expired, please reload' : ''));
         return;
       }
       const d = await r.json();
@@ -474,9 +473,9 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
         serverState.LOG_LEVEL = lvl;
         paintLvlButtons();
       } else {
-        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        _gwAlert('Rejected — ' + JSON.stringify(d.rejected||{}));
       }
-    } catch(e) { alert('Network error: ' + e.message); }
+    } catch(e) { _gwAlert('Network error: ' + e.message); }
   };
 });
 
@@ -550,7 +549,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </div>
 <script>
 (function(){
-  const url = (p) => p;
   const pill = document.getElementById('gw-status-pill');
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
@@ -605,7 +603,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   // 1.6.5 — log-level combo box: read current value, push on change, persist.
   async function loadLogLevel(){
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
       const d = await r.json();
       const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
       lvlSelect.value = cur;
@@ -614,20 +612,20 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   lvlSelect.onchange = async () => {
     const lvl = lvlSelect.value;
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
         {method:'POST', headers:{'Content-Type':'application/json'},
          credentials:'include', body: JSON.stringify({LOG_LEVEL: lvl})});
       if (!r.ok) {
-        alert('Server error ' + r.status + (r.status === 401 || r.status === 403 ? ' — session may have expired, please reload' : ''));
+        _gwAlert('Server error ' + r.status + (r.status === 401 || r.status === 403 ? ' — session may have expired, please reload' : ''));
         loadLogLevel();
         return;
       }
       const d = await r.json();
       if (!(d.applied && d.applied.LOG_LEVEL)) {
-        alert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        _gwAlert('Rejected — ' + JSON.stringify(d.rejected||{}));
         loadLogLevel();
       }
-    } catch(e){ alert('Network error: ' + e.message); }
+    } catch(e){ _gwAlert('Network error: ' + e.message); }
   };
   loadLogLevel();
   _timers.push(setInterval(loadLogLevel, 30000));
@@ -648,14 +646,14 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </div>
 <script>
 (function(){
-  window._userRole='admin';window._acctUsername='';
+  var _userRole='admin',_username='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
     if(!d)return;
-    window._userRole=(d.user&&d.user.role)||'admin';
-    window._acctUsername=d.username||'';
+    _userRole=(d.user&&d.user.role)||'admin';
+    _username=d.username||'';
     var ns=document.getElementById('nav-settings');
-    if(ns&&window._userRole!=='admin')ns.style.display='none';
-    if(window._userRole==='viewer')document.body.dataset.viewerRole='1';
+    if(ns&&_userRole!=='admin')ns.style.display='none';
+    if(_userRole==='viewer')document.body.dataset.viewerRole='1';
   }).catch(function(){});
   function _openAcctModal(){document.getElementById('acct-modal').style.display='flex';_acctLoadBody();}
   function _acctLoadBody(){
@@ -667,7 +665,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button onclick="_acctChangePw()" style="font-size:12px;padding:5px 12px;background:#388bfd;color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button onclick="window._acct.changePw()" style="font-size:12px;padding:5px 12px;background:#388bfd;color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>';
       _acctLoadSessions();
@@ -679,7 +677,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     var msg=document.getElementById('acct-pw-msg');
     if(!curPw){if(msg)msg.textContent='Current password required';return;}
     if(pw.length<8){if(msg)msg.textContent='Min 8 chars';return;}
-    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(window._acctUsername),{method:'PATCH',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:curPw,password:pw})})
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username),{method:'PATCH',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:curPw,password:pw})})
       .then(function(r){return r.json();}).then(function(d){
         if(msg)msg.textContent=d.error?'Error: '+d.error:'✓ Password updated';
         if(!d.error){var ic=document.getElementById('acct-pw-cur');if(ic)ic.value='';var i=document.getElementById('acct-pw-new');if(i)i.value='';}
@@ -687,22 +685,22 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
   function _acctLoadSessions(){
     var el=document.getElementById('acct-sessions');if(!el)return;
-    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(window._acctUsername)+'/sessions',{credentials:'include'})
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username)+'/sessions',{credentials:'include'})
       .then(function(r){return r.json();}).then(function(d){
         var sessions=(d.sessions||[]).filter(function(s){return s.status==='active';});
         var curSid=d.current_sid||'';
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML='<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button onclick="_acctRevokeSession('+JSON.stringify(s.sid)+')" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button onclick="window._acct.revokeSession('+JSON.stringify(s.sid)+')" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>';
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
   }
   function _acctRevokeSession(sid){
-    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(window._acctUsername)+'/sessions/'+encodeURIComponent(sid)+'/revoke',{method:'POST',credentials:'include'})
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username)+'/sessions/'+encodeURIComponent(sid)+'/revoke',{method:'POST',credentials:'include'})
       .then(function(r){return r.json();}).then(function(d){if(d.self_revoke){window.location='/antibot-appsec-gateway/login';return;}_acctLoadSessions();}).catch(function(){});
   }
-  window._openAcctModal=_openAcctModal;window._acctLoadBody=_acctLoadBody;window._acctChangePw=_acctChangePw;window._acctLoadSessions=_acctLoadSessions;window._acctRevokeSession=_acctRevokeSession;
+  window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
 })();
 </script>
 </body></html>

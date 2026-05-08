@@ -332,10 +332,9 @@ def test_167_session_revoke_invalidates_cookie(proxy_module):
     assert not proxy_module._internal_authed(_AuthReq(cookie=token))
 
 
-# ── Dashboard static analysis: k_q defined before use ────────────────────
-# Regression: k_q was used in four fetch() calls in main.html but never
-# declared, causing ReferenceError → defense-threshold slider (B and S)
-# showed 0 and the throughput cap widget failed silently.
+# ── Dashboard static analysis: k_q removed ───────────────────────────────
+# k_q was a always-empty-string dead variable appended to fetch URLs.
+# It has been removed (DC-04 cleanup). Tests replaced with absence check.
 
 def _main_html_lines():
     from pathlib import Path
@@ -343,36 +342,11 @@ def _main_html_lines():
     return src.splitlines()
 
 
-def test_main_html_k_q_declared():
-    """k_q must have an explicit declaration (const/let/var) somewhere in
-    main.html. Absence means every fetch call throws ReferenceError."""
+def test_main_html_k_q_absent():
+    """k_q was an always-empty dead variable. Verify it no longer exists in main.html."""
     lines = _main_html_lines()
-    decls = [i for i, ln in enumerate(lines)
-             if "k_q" in ln and any(kw in ln for kw in ("const ", "let ", "var "))]
-    assert decls, "k_q is not declared in main.html — will throw ReferenceError"
-
-
-def test_main_html_k_q_declaration_precedes_all_uses():
-    """The k_q declaration must appear before every fetch call that appends it.
-    Out-of-order declaration still triggers ReferenceError in the IIFE that
-    runs first."""
-    import re
-    lines = _main_html_lines()
-    # Declaration: (const|let|var) k_q = ...
-    _decl_re = re.compile(r'\b(const|let|var)\s+k_q\b')
-    # Usage: k_q appears but NOT as the declared variable name
-    _use_re  = re.compile(r'\bk_q\b')
-    decl_lines = [i for i, ln in enumerate(lines) if _decl_re.search(ln)]
-    use_lines  = [i for i, ln in enumerate(lines)
-                  if _use_re.search(ln) and not _decl_re.search(ln)]
-    assert decl_lines, "k_q not declared"
-    assert use_lines,  "k_q not used anywhere — test is stale"
-    first_decl = min(decl_lines)
-    first_use  = min(use_lines)
-    assert first_decl < first_use, (
-        f"k_q declared on line {first_decl+1} but first use on line {first_use+1}; "
-        "declaration must precede all uses"
-    )
+    hits = [i for i, ln in enumerate(lines) if "k_q" in ln]
+    assert not hits, f"k_q still present in main.html at lines {[i+1 for i in hits]}"
 
 
 # Regression: typographic characters (smart quotes U+2018/2019/201C/201D and
@@ -1678,13 +1652,13 @@ def test_controls_bypass_uses_credentials_include():
 
 
 def test_controls_bypass_requires_user_confirmation():
-    """controls.html bypass activation must show a confirm() dialog before disabling all controls."""
+    """controls.html bypass activation must show a confirmation dialog before disabling all controls."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
     bypass_block = src[src.find("_BYPASS_ACTIVE_KEY"):]
-    assert "confirm(" in bypass_block, (
+    assert "_asyncConfirm(" in bypass_block, (
         "controls.html bypass switch must require explicit user confirmation "
-        "via confirm() before disabling all bot detection controls"
+        "via _asyncConfirm() before disabling all bot detection controls"
     )
 
 
@@ -3434,4 +3408,220 @@ def test_bypass_paths_early_return_no_record_call():
     )
     assert "record(" not in block, (
         "Bypass block must NOT call record() — ip_state must stay empty for bypassed paths"
+    )
+
+
+# ── 1.7.7 dashboard code-review fixes ────────────────────────────────────────
+
+_DASHBOARD_FILES = [
+    "main.html", "agents.html", "controls.html", "geo.html",
+    "logs.html", "service.html", "settings.html", "login.html",
+]
+
+def _dash(name):
+    from pathlib import Path
+    return (Path(__file__).resolve().parent.parent / "dashboards" / name).read_text()
+
+
+# BP-05: window._acct namespace ──────────────────────────────────────────────
+
+def test_no_window_open_acct_modal_global():
+    """BP-05: window._openAcctModal must not exist in any dashboard — collapsed into window._acct."""
+    for f in _DASHBOARD_FILES:
+        src = _dash(f)
+        assert "window._openAcctModal" not in src, (
+            f"{f} still exposes window._openAcctModal; use window._acct.openModal"
+        )
+
+
+def test_no_window_acct_username_global():
+    """BP-05: window._acctUsername must not exist in any dashboard — closure-scoped as _username."""
+    for f in _DASHBOARD_FILES:
+        src = _dash(f)
+        assert "window._acctUsername" not in src, (
+            f"{f} still exposes window._acctUsername; must be closure-scoped _username"
+        )
+
+
+def test_no_window_acct_change_pw_global():
+    """BP-05: window._acctChangePw must not exist — collapsed into window._acct.changePw."""
+    for f in _DASHBOARD_FILES:
+        src = _dash(f)
+        assert "window._acctChangePw" not in src, (
+            f"{f} still exposes window._acctChangePw; use window._acct.changePw"
+        )
+
+
+def test_no_window_acct_revoke_session_global():
+    """BP-05: window._acctRevokeSession must not exist — collapsed into window._acct.revokeSession."""
+    for f in _DASHBOARD_FILES:
+        src = _dash(f)
+        assert "window._acctRevokeSession" not in src, (
+            f"{f} still exposes window._acctRevokeSession; use window._acct.revokeSession"
+        )
+
+
+def test_window_acct_namespace_exposed():
+    """BP-05: Every dashboard with account modal must expose window._acct object."""
+    modal_files = [f for f in _DASHBOARD_FILES if f != "login.html"]
+    for f in modal_files:
+        src = _dash(f)
+        assert "window._acct=" in src or "window._acct =" in src, (
+            f"{f} missing window._acct namespace assignment"
+        )
+
+
+def test_agents_html_acct_exposes_user_role():
+    """BP-05: agents.html window._acct assignment must include userRole key (read by external code at line ~531)."""
+    src = _dash("agents.html")
+    # Find the actual namespace assignment (not nav-link usage)
+    assign_idx = src.find("window._acct={")
+    assert assign_idx != -1, "agents.html missing window._acct={...} assignment"
+    block = src[assign_idx: assign_idx + 200]
+    assert "userRole" in block, (
+        "agents.html window._acct must expose userRole property for external code"
+    )
+
+
+def test_agents_html_external_user_role_uses_acct_namespace():
+    """BP-05: switchHtml conditional must read window._acct.userRole not window._userRole."""
+    src = _dash("agents.html")
+    sw_idx = src.find("switchHtml")
+    assert sw_idx != -1
+    block = src[sw_idx: sw_idx + 120]
+    assert "window._acct" in block, (
+        "agents.html switchHtml must read window._acct.userRole, not window._userRole"
+    )
+    assert "window._userRole" not in block, (
+        "agents.html switchHtml must not use window._userRole directly"
+    )
+
+
+# BP-07: _asyncConfirm — no blocking confirm() ───────────────────────────────
+
+def test_controls_no_raw_confirm_calls():
+    """BP-07: controls.html <script> blocks must have no raw confirm() calls — all replaced by _asyncConfirm().
+    Logout nav-link onclick="return confirm(...)" is excluded (native browser confirm appropriate for navigation)."""
+    import re
+    src = _dash("controls.html")
+    # Extract only <script>...</script> content, exclude HTML attribute handlers
+    scripts = re.findall(r'<script[^>]*>(.*?)</script>', src, re.DOTALL)
+    for script in scripts:
+        calls = re.findall(r'\bconfirm\s*\(', script)
+        assert not calls, (
+            f"controls.html <script> block has {len(calls)} raw confirm() call(s); replace with _asyncConfirm()"
+        )
+
+
+def test_controls_async_confirm_defined():
+    """BP-07: controls.html must define _asyncConfirm() using showSimpleModal + Promise."""
+    src = _dash("controls.html")
+    assert "_asyncConfirm" in src, "controls.html missing _asyncConfirm function"
+    assert "showSimpleModal" in src[src.find("_asyncConfirm"):src.find("_asyncConfirm") + 400], (
+        "_asyncConfirm must delegate to showSimpleModal"
+    )
+
+
+# BP-08: _gwAlert — no blocking alert() ─────────────────────────────────────
+
+def test_no_raw_alert_calls_in_dashboards():
+    """BP-08: No dashboard <script> block must call alert() — all replaced by _gwAlert()."""
+    import re
+    skip = {"login.html"}
+    for f in _DASHBOARD_FILES:
+        if f in skip:
+            continue
+        src = _dash(f)
+        scripts = re.findall(r'<script[^>]*>(.*?)</script>', src, re.DOTALL)
+        for script in scripts:
+            calls = re.findall(r'\balert\s*\(', script)
+            assert not calls, (
+                f"{f} <script> block has {len(calls)} raw alert() call(s); replace with _gwAlert()"
+            )
+
+
+def test_gw_alert_defined_in_dashboard_files():
+    """BP-08: Every non-login dashboard with fetch calls must define _gwAlert()."""
+    skip = {"login.html"}
+    for f in _DASHBOARD_FILES:
+        if f in skip:
+            continue
+        src = _dash(f)
+        assert "_gwAlert" in src, f"{f} missing _gwAlert() definition"
+
+
+# BUG-04: controls.html DELETE admin-IP URL ──────────────────────────────────
+
+def test_controls_delete_admin_ip_url_correct():
+    """BUG-04: DELETE admin-IP fetch must use ?cidr= not &cidr= (malformed URL bug)."""
+    src = _dash("controls.html")
+    assert "&cidr=" not in src, (
+        "controls.html DELETE admin-IP URL uses &cidr= — must be ?cidr="
+    )
+    assert "?cidr=" in src, (
+        "controls.html DELETE admin-IP URL missing expected ?cidr= query separator"
+    )
+
+
+# BUG-08: double-save guard in inline-edit ───────────────────────────────────
+
+def test_controls_inline_edit_double_save_guard():
+    """BUG-08: controls.html inline-edit save() must have _descSaved/_thrSaved guard to prevent blur+Enter double-PATCH."""
+    src = _dash("controls.html")
+    assert "_descSaved" in src, "controls.html missing _descSaved double-save guard"
+    assert "_thrSaved" in src, "controls.html missing _thrSaved double-save guard"
+
+
+# BUG-01: agents.html m-total not overwritten by filtered count ──────────────
+
+def test_agents_html_no_m_total_suspects_length_overwrite():
+    """BUG-01: agents.html must not overwrite m-total with suspects.length (overwrites backend total with filtered count)."""
+    src = _dash("agents.html")
+    assert "getElementById('m-total').textContent = suspects.length" not in src, (
+        "agents.html sets m-total to suspects.length — overwrites backend total with filtered count"
+    )
+
+
+# BUG-02: main.html no duplicate getRangeMin ─────────────────────────────────
+
+def test_main_html_no_duplicate_get_range_min():
+    """BUG-02: main.html must define getRangeMin() exactly once."""
+    src = _dash("main.html")
+    count = src.count("function getRangeMin(")
+    assert count == 1, (
+        f"main.html defines getRangeMin() {count} times — must be exactly 1"
+    )
+
+
+# INC-02: settings.html credentials consistency ──────────────────────────────
+
+def test_settings_html_no_credentials_same_origin():
+    """INC-02: settings.html must use credentials:'include' not credentials:'same-origin'."""
+    src = _dash("settings.html")
+    assert "credentials:\"same-origin\"" not in src, (
+        "settings.html uses credentials:\"same-origin\" — must use 'include' (consistent with other dashboards)"
+    )
+    assert "credentials:'same-origin'" not in src, (
+        "settings.html uses credentials:'same-origin' — must use 'include'"
+    )
+
+
+# DC-01: no url() identity wrapper ───────────────────────────────────────────
+
+def test_no_url_identity_wrapper_in_dashboards():
+    """DC-01: No dashboard must define const url = (p) => p — dead no-op wrapper removed."""
+    for f in _DASHBOARD_FILES:
+        src = _dash(f)
+        assert "const url = (p) => p" not in src, (
+            f"{f} still has dead const url = (p) => p identity wrapper"
+        )
+
+
+# DC-07: logs.html no stale lastIds ─────────────────────────────────────────
+
+def test_logs_html_no_last_ids_variable():
+    """DC-07: logs.html must not define let lastIds — unused variable removed."""
+    src = _dash("logs.html")
+    assert "let lastIds" not in src, (
+        "logs.html still defines let lastIds — dead variable; remove it"
     )

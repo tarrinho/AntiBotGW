@@ -31,15 +31,34 @@ Author: Pedro Tarrinho
 - `test_bypass_paths_early_return_no_record_call` updated — now verifies `db_queue.put_nowait` present and reason `bypass-path` in bypass block, in addition to confirming `record()` is not called
 - `test_bypass_paths_no_ip_state_recorded` docstring updated — clarifies audit event is written to db_queue but ip_state stays empty
 
+### Fixed (continued — 2026-05-08 dashboard code review)
+- **`controls.html` DELETE admin-IP URL malformed** — `&cidr=` → `?cidr=` (BUG-04)
+- **Double-save on inline edit** — `_descSaved`/`_thrSaved` guard prevents blur+Enter firing two PATCH requests (BUG-08)
+- **`geo.html` loading pill text** — removed spurious "Loading" prefix from "Ready" state (BUG-07)
+- **`confirm()` blocking dialogs** — replaced 5 calls with non-blocking `_asyncConfirm()` Promise wrapper using `showSimpleModal` (BP-07)
+- **`alert()` blocking dialogs** — replaced all 14 calls across 7 files with `_gwAlert()` transient DOM div (auto-removes after 7s) (BP-08)
+- **Window namespace pollution** — 7 separate `window._acct*` globals collapsed to `window._acct = {openModal, changePw, revokeSession, userRole}` across all 8 dashboard files (BP-05)
+- **Dead `url()` identity function** — removed `const url = (p) => p` from 7 locations; fixed 9 broken fetch calls where orphan `)` caused comma-expression (options silently discarded) (DC-01)
+- **`credentials:"same-origin"` inconsistency** — normalized to `credentials:'include'` throughout `settings.html` (INC-02)
+- **`main.html` duplicate `getRangeMin()`** — removed duplicate function declaration (BUG-02)
+- **`agents.html` `m-total` overwrote backend total with filtered count** — removed stale line (BUG-01)
+- **`logs.html` stale `lastIds` set** — removed unused variable (DC-07)
+- Various dead variables and dead nav-patch blocks removed (DC-02/03/04)
+
+### Tests (continued — 2026-05-08)
+- `test_controls_bypass_requires_user_confirmation` — updated to check `_asyncConfirm(` (was `confirm(`)
+- `test_main_html_k_q_absent` — replaces two stale k_q tests; asserts `k_q` no longer present
+
 ### Validation
-- **Unit tests**: 408 passed, 0 failed
+- **Unit tests**: 407 passed, 0 failed (test_critical 116 + test_pure 281 + test_async 10)
 - **Functional**: 22 passed · **Integration**: 23 passed
 - **Regression**: 142 passed, 0 failed
-- **Bandit**: 0 High / 0 Critical (1 Low B110 pre-existing, below -ll threshold)
-- **Semgrep**: 151 rules · 9 files · 0 findings
+- **Bandit**: 0 High / 0 Critical (1 Low B104 intentional, below -ll threshold)
+- **Semgrep**: 151 rules · 5 files · 0 findings
 - **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all arches)
-- **Total combined**: 699 passed, 1 skipped, 0 failed
-- **Harbor**: amd64 `sha256:739b9c39` · arm64 `sha256:5dac25f9` · armv7 `sha256:f9fefb75` · manifest `sha256:2a89f401`
+- **Total combined**: 594 passed, 0 failed
+- **Harbor**: amd64 `sha256:37ec1d56` · arm64 `sha256:7a28f6f0` · armv7 `sha256:74a949de` · manifest `sha256:2a89f401`
+- **Live harness** (§4/§6/§8/§12/§15): p99=3.4ms · 200-req burst 0 failed · 72 MiB RSS · all 6 body injection detectors firing · all OWASP path vectors detected · DAST pass
 
 ---
 

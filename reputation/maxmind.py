@@ -216,13 +216,43 @@ def _init_maxmind():
             print(f"[maxmind] failed to load {MAXMIND_CITY_DB_PATH}: {e}", flush=True)
 
 
+# ── Lookup cache ───────────────────────────────────────────────────────────
+# Keyed by IP string. ASN / city data changes at most monthly; 1-hour TTL
+# is more than sufficient. Max 8 192 entries (~10 MB) — FIFO eviction via
+# dict insertion order (Python 3.7+). Disabled/error results are not cached
+# so a missing mmdb at startup doesn't permanently poison the cache.
+
+_LOOKUP_CACHE_TTL  = 86400  # seconds (24 h — ASN/geo data stable for days)
+_LOOKUP_CACHE_MAX  = 8192   # entries
+
+_asn_cache:  dict = {}      # ip → (result_tuple, expiry)
+_city_cache: dict = {}      # ip → (result_tuple, expiry)
+
+
+def _cache_get(cache: dict, ip: str):
+    entry = cache.get(ip)
+    if entry and entry[1] > _t.time():
+        return entry[0]
+    return None
+
+
+def _cache_put(cache: dict, ip: str, result) -> None:
+    if len(cache) >= _LOOKUP_CACHE_MAX:
+        cache.pop(next(iter(cache)))
+    cache[ip] = (result, _t.time() + _LOOKUP_CACHE_TTL)
+
+
 # ── Lookup functions ───────────────────────────────────────────────────────
 
 def _city_lookup(ip: str):
     """Return (lat, lng, country_code, city_name) or None if unknown.
-    City DB lookup latency ~0.1ms — same DB family as ASN."""
+    City DB lookup latency ~0.1ms — same DB family as ASN. Results cached
+    for _LOOKUP_CACHE_TTL seconds to avoid redundant mmdb reads per request."""
     if _city_reader is None or not ip:
         return None
+    cached = _cache_get(_city_cache, ip)
+    if cached is not None:
+        return cached
     try:
         rec = _city_reader.get(ip)
         if not rec:
@@ -233,13 +263,16 @@ def _city_lookup(ip: str):
             return None
         country = (rec.get("country") or {}).get("iso_code") or ""
         city    = ((rec.get("city") or {}).get("names") or {}).get("en") or ""
-        return (float(lat), float(lng), country, city)
+        result = (float(lat), float(lng), country, city)
+        _cache_put(_city_cache, ip, result)
+        return result
     except Exception:
         return None
 
 
 def _asn_lookup(ip: str):
-    """Returns (asn:int|None, organisation:str, is_hosting:bool, source:str)."""
+    """Returns (asn:int|None, organisation:str, is_hosting:bool, source:str).
+    Results cached for _LOOKUP_CACHE_TTL seconds; disabled/error not cached."""
     if not MAXMIND_ENABLED or _asn_reader is None:
         return None, "", False, "disabled"
     try:
@@ -248,6 +281,9 @@ def _asn_lookup(ip: str):
             return None, "", False, "private"
     except (ValueError, TypeError):
         return None, "", False, "invalid"
+    cached = _cache_get(_asn_cache, ip)
+    if cached is not None:
+        return cached
     _asn_stats["lookups_total"] += 1
     t0 = _t.time()
     try:
@@ -269,7 +305,9 @@ def _asn_lookup(ip: str):
     is_hosting = any(k in org_lower for k in HOSTING_ASN_KEYWORDS)
     if is_hosting:
         _asn_stats["hits_hosting"] += 1
-    return asn, org, is_hosting, "ok"
+    result = asn, org, is_hosting, "ok"
+    _cache_put(_asn_cache, ip, result)
+    return result
 
 
 # ── AI-crawler IP-range verification ──────────────────────────────────────
