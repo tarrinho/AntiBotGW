@@ -62,7 +62,26 @@ Author: Pedro Tarrinho
 - **Semgrep**: 151 rules · 9 files · 0 findings
 - **Version consistency**: PASSED (test_gw_version_constant + test_no_stale_version_strings_in_source)
 - **ELB health check**: 8 passed
-- **Harbor**: amd64 `sha256:d681d3f2` · arm64 `sha256:fb7afd40` · armv7 `sha256:a407af4b` · manifest `sha256:5f1fe86c`
+- **Harbor (session 5 final)**: amd64 `sha256:0a653f51` · arm64 `sha256:08086a2d` · armv7 `sha256:bfb99bc7` · manifest `sha256:5ca935dc`
+- **Fix**: bypass-mode requests now record with empty reason → show as clean allowed traffic in dashboard (no "bypass-mode" label)
+
+### Fixed (session 6 — 2026-05-08)
+- **BYPASS_MODE must not persist to DB** (`core/proxy_handler.py`, `admin/settings.py`) — added `_NOT_PERSIST_KNOBS = frozenset({"BYPASS_MODE"})` and guarded both the config endpoint write path and the settings import write path so BYPASS_MODE is never stored in `config_kv`. BYPASS_MODE is an incident-response toggle that must reset to `False` on every cold start; persisting it would let a stale `True` survive a container restart and silently bypass all detection thereafter.
+- **Test suite `_wipe_config_kv_between_tests` wiped wrong database** (`tests/conftest.py`) — the autouse wipe fixture used `os.environ.get("DB_PATH")` to locate the DB to clean. `test_functional.py` overrides `os.environ["DB_PATH"]` at module import time (to its own private tmp DB), but the proxy module reuses the already-imported `config` module and therefore writes to the *conftest* DB path. The wipe was cleaning the unused tmp DB while the conftest DB accumulated `config_kv` rows across tests — growing from 4 to 15 knobs by the time `test_risk_increments_on_block` ran. Fixed: the wipe now reads `proxy.DB_PATH` from the live proxy module so it always targets the same DB the proxy writes to. Root cause of two previously-flaky tests: `test_risk_increments_on_block` (accumulated knobs overrode risk weights) and `test_security_headers_injected_on_html` (accumulated `INJECT_SECURITY_HEADERS=false` knob disabled header injection).
+
+### Tests (session 6 — 2026-05-08)
+- **5 new BYPASS_MODE / BYPASS_PATHS functional QA tests** (`tests/test_functional.py`): `test_bypass_mode_skips_ua_detection` (BYPASS_MODE=True suppresses ua-too-short/ua-blocked), `test_bypass_mode_false_blocks_bot_ua` (sanity: BYPASS_MODE=False still blocks bot UAs), `test_bypass_mode_not_written_to_db` (config POST accepts BYPASS_MODE but never writes it to config_kv), `test_bypass_paths_skips_honeypot_detection` (path in BYPASS_PATHS bypasses honeypot-silent), `test_bypass_paths_traffic_appears_in_timeline` (bypass-path requests appear in proxy.timeline via record() call).
+
+### Fixed (session 6 continued — 2026-05-08)
+- **Operator accesses invisible in clients table / timeline** (`core/proxy_handler.py`, `core/metrics.py`) — Authenticated operator requests on non-admin upstream paths hit the `_internal_authed + _admin_ip_allowed` bypass block at line 2544 which did `return await handler(request)` immediately, exiting `protect()` before the `record()` call at line 3147. Result: no `ip_state` update, no timeline bucket bump, no DB entry — operator accesses were completely invisible in the Clients dashboard. Fixed: block now captures the response, calls `await record(ip, ua, path, status, "operator-passthrough", ...)`, then returns the response. Additionally, `"operator-passthrough"` was not in `_PASSTHROUGH_REASONS`, which would have caused operator accesses to count as "blocked" once recorded — added to the frozenset.
+
+### Tests (session 6 continued — 2026-05-08)
+- **`test_operator_passthrough_in_passthrough_reasons`** (`tests/test_pure.py`) — asserts `"operator-passthrough"` is in `_PASSTHROUGH_REASONS` so operator accesses count as allowed, not blocked.
+- **`test_protect_upstream_operator_bypass_calls_record`** (`tests/test_pure.py`) — source-inspection test: verifies the `_internal_authed + _admin_ip_allowed` bypass block in `protect()` contains `await record(`, passes `"operator-passthrough"`, and that `record()` appears before `return _op_resp` (ensuring the early-return bug cannot silently regress).
+
+### Validation (session 6 — 2026-05-08)
+- **Full suite**: 763 passed, 1 skipped, 0 failed (+2 from session 6 continued: operator-passthrough regression tests)
+- **Previously flaky (now fixed)**: `test_risk_increments_on_block`, `test_security_headers_injected_on_html` — conftest DB wipe was targeting wrong path
 
 ---
 

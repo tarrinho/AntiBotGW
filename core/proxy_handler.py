@@ -1920,7 +1920,8 @@ _HOT_RELOAD_KNOBS = {
     "POW_MIN_SOLVE_MS":          (int, lambda v: 0 <= v <= 5000),
     # 1.6.5 — FingerprintJS BotD client-side detection
     "BOTD_ENABLED":           (_to_bool, None),
-    # 1.7.8 — Dashboard bypass mode (all detection + ban enforcement off)
+    # 1.7.8 — Dashboard bypass mode (all detection + ban enforcement off).
+    # Listed as NOT_PERSIST so it resets to False on container restart.
     "BYPASS_MODE":            (_to_bool, None),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
@@ -1968,6 +1969,12 @@ _HOT_RELOAD_KNOBS = {
 # TURNSTILE_ENABLED and JS_CHALLENGE are intentionally excluded: the env sets
 # the startup default but the dashboard must be able to toggle them at runtime
 # (e.g. disabling Turnstile for a maintenance window without a container restart).
+# Knobs that are NOT persisted to the config_kv DB table. They remain
+# session-only and always reset to their default on container restart.
+# BYPASS_MODE is intentionally here: it's an incident-response toggle that
+# must default to False on every cold start for safety.
+_NOT_PERSIST_KNOBS: frozenset = frozenset({"BYPASS_MODE"})
+
 _ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE"}
 _ENV_PROVIDED_KNOBS = {
     k for k in _HOT_RELOAD_KNOBS
@@ -2076,7 +2083,8 @@ async def config_endpoint(request: web.Request):
             applied[k] = sorted(value) if isinstance(value, set) else value
             # 1.5.5 — persist to DB so the change survives container restart.
             # JSON-encode so ints / floats / bools / strings / lists round-trip.
-            if db_queue is not None:
+            # _NOT_PERSIST_KNOBS are session-only and intentionally not stored.
+            if db_queue is not None and k not in _NOT_PERSIST_KNOBS:
                 try:
                     db_queue.put_nowait((
                         "set_config",
@@ -2288,23 +2296,15 @@ async def protect(request: web.Request, handler):
                     ja4=_request_ja4(request), request_id=rid)
 
     # Operator-defined detection bypass paths — prefix match, skips detection.
-    # Uses db_queue only (not record()) so static-asset fetches do not pollute
-    # ip_state with per-asset entries.
+    # Calls record() with empty reason so traffic appears in the dashboard timeline
+    # and clients table as clean allowed traffic. All bypass-path requests from the
+    # same IP update the same single ip_state entry — no fan-out per request.
     if BYPASS_PATHS and any(request.path.startswith(p) for p in BYPASS_PATHS):
         resp = await handler(request)
-        if db_queue is not None:
-            try:
-                db_queue.put_nowait(("event", (
-                    _t.time(),
-                    get_ip(request),
-                    request.headers.get("User-Agent", "")[:200],
-                    request.path[:200],
-                    "",
-                    resp.status,
-                    "bypass-path",
-                )))
-            except asyncio.QueueFull:
-                pass  # nosec B110 — best-effort audit log; request already served
+        _bp_ip = get_ip(request) or request.remote or ""
+        await record(_bp_ip, request.headers.get("User-Agent", ""),
+                     request.path, resp.status, "",
+                     track_key=_bp_ip, request_id=rid)
         return resp
 
     # 1.7.8 — Dashboard bypass mode. When BYPASS_MODE=True (set by the Controls
@@ -2314,8 +2314,9 @@ async def protect(request: web.Request, handler):
     if BYPASS_MODE and not _is_admin_path(request.path):
         resp = await handler(request)
         _bm_ip = get_ip(request) or request.remote or ""
+        # Empty reason → shows as clean allowed traffic in dashboard (no label).
         await record(_bm_ip, request.headers.get("User-Agent", ""),
-                     request.path, resp.status, "bypass-mode",
+                     request.path, resp.status, "",
                      track_key=_bm_ip, request_id=rid)
         return resp
 
@@ -2542,7 +2543,15 @@ async def protect(request: web.Request, handler):
     # WOULD have fired but was bypassed for an authenticated operator).
     if _internal_authed(request) and _admin_ip_allowed(request):
         request["_operator_bypass"] = True
-        return await handler(request)
+        _op_resp = await handler(request)
+        _op_ip = get_ip(request) or request.remote or ""
+        _op_ua = request.headers.get("User-Agent", "")
+        await record(_op_ip, _op_ua, request.path, _op_resp.status,
+                     "operator-passthrough",
+                     track_key=_op_ip,
+                     ja4=_request_ja4(request),
+                     request_id=rid)
+        return _op_resp
 
     # ── Hybrid identity (primary tracking key) ──
     # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,

@@ -1234,10 +1234,9 @@ def test_bypass_paths_empty_list_inspects_all(proxy_module):
     _run(go())
 
 
-def test_bypass_paths_no_ip_state_recorded(proxy_module):
-    """Bypass path requests must not create ip_state entries — detection and
-    risk scoring are skipped. An audit event is written to db_queue (event log)
-    but record() is never called, so ip_state stays empty."""
+def test_bypass_paths_records_in_ip_state(proxy_module):
+    """Bypass path requests must create an ip_state entry via record() so they
+    appear in the main dashboard timeline and clients table as allowed traffic."""
     from state import ip_state
     async def go():
         async with _spin_upstream() as up:
@@ -1251,10 +1250,14 @@ def test_bypass_paths_no_ip_state_recorded(proxy_module):
                     (k for k, s in ip_state.items() if s.last_ip == "127.0.0.1"),
                     None,
                 )
-                assert key is None, (
-                    "Bypass path must not create an ip_state entry — "
-                    "record() must not be called for bypassed requests"
+                assert key is not None, (
+                    "Bypass path must create an ip_state entry via record() "
+                    "so traffic is visible in the dashboard"
                 )
+                s = ip_state[key]
+                assert s.request_count >= 1
+                assert s.allowed_count >= 1
+                assert s.blocked_count == 0
     _run(go())
 
 

@@ -158,7 +158,7 @@ async def settings_import_endpoint(request: web.Request):
     import sys as _sys_imp
     try:
         from core.proxy_handler import (_HOT_RELOAD_KNOBS, _ENV_PROVIDED_KNOBS,
-                                         _SECRET_KEYS, _json_safe)
+                                         _SECRET_KEYS, _json_safe, _NOT_PERSIST_KNOBS)
         _proxy_mod = _sys_imp.modules.get("core.proxy_handler")
         g = vars(_proxy_mod) if _proxy_mod else {}
     except Exception:
@@ -166,6 +166,7 @@ async def settings_import_endpoint(request: web.Request):
         _ENV_PROVIDED_KNOBS = ()
         _SECRET_KEYS = {}
         _json_safe = lambda v: v  # noqa: E731
+        _NOT_PERSIST_KNOBS = frozenset()
         g = {}
 
     dry_run = (request.query.get("dry_run") or "0").lower() in ("1", "true", "yes")
@@ -268,7 +269,7 @@ async def settings_import_endpoint(request: web.Request):
                 if g:
                     g[name] = value
                 applied_v = sorted(value) if isinstance(value, set) else value
-                if db_queue is not None:
+                if db_queue is not None and name not in _NOT_PERSIST_KNOBS:
                     try:
                         db_queue.put_nowait((
                             "set_config",
