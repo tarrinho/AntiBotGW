@@ -13,6 +13,7 @@ from contextlib import asynccontextmanager
 
 from aiohttp import web
 from aiohttp.test_utils import TestServer, TestClient
+import challenge.js_challenge as _jsc
 
 
 def _run(coro):
@@ -423,9 +424,11 @@ def test_js_challenge_html_served_when_enabled(proxy_module):
     # 1.5.5 — Turnstile is risk-gated by `_turnstile_active_threshold()`.
     # Patch it to always return -1 so the widget renders on every fresh
     # request (the in-test new identity has risk_score=0 ≥ -1 → shown).
+    # IMPORTANT: patch on challenge.js_challenge (where _js_challenge_applicable
+    # calls it), NOT on proxy (which has an independent name binding).
     _saved_open = list(proxy_module.JS_CHAL_OPEN_PATHS)
-    _saved_active_threshold = proxy_module._turnstile_active_threshold
-    proxy_module._turnstile_active_threshold = lambda: -1.0
+    _saved_active_threshold = _jsc._turnstile_active_threshold
+    _jsc._turnstile_active_threshold = lambda: -1.0
     proxy_module.JS_CHAL_OPEN_PATHS = []
 
     async def go():
@@ -443,7 +446,7 @@ def test_js_challenge_html_served_when_enabled(proxy_module):
     finally:
         proxy_module.JS_CHALLENGE = False
         proxy_module.TURNSTILE_ENABLED = False
-        proxy_module._turnstile_active_threshold = _saved_active_threshold
+        _jsc._turnstile_active_threshold = _saved_active_threshold
         proxy_module.JS_CHAL_OPEN_PATHS = _saved_open
 
 
@@ -460,9 +463,11 @@ def test_js_challenge_endpoint_requires_turnstile_token(proxy_module):
     proxy_module.TURNSTILE_SITEKEY = "test-key"
     proxy_module.TURNSTILE_SECRET = "test-secret"
     # 1.5.5 — risk-gated Turnstile: patch the threshold getter to always-show.
-    _saved_active_threshold = proxy_module._turnstile_active_threshold
+    # IMPORTANT: patch on challenge.js_challenge (where _js_challenge_applicable
+    # calls it), NOT on proxy (which has an independent name binding).
+    _saved_active_threshold = _jsc._turnstile_active_threshold
     _saved_open = list(proxy_module.JS_CHAL_OPEN_PATHS)
-    proxy_module._turnstile_active_threshold = lambda: -1.0
+    _jsc._turnstile_active_threshold = lambda: -1.0
     proxy_module.JS_CHAL_OPEN_PATHS = []
 
     async def go():
@@ -496,7 +501,7 @@ def test_js_challenge_endpoint_requires_turnstile_token(proxy_module):
     finally:
         proxy_module.JS_CHALLENGE = False
         proxy_module.TURNSTILE_ENABLED = False
-        proxy_module._turnstile_active_threshold = _saved_active_threshold
+        _jsc._turnstile_active_threshold = _saved_active_threshold
         proxy_module.JS_CHAL_OPEN_PATHS = _saved_open
 
 
