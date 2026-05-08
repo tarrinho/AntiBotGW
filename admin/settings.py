@@ -39,9 +39,11 @@ def _settings_build_xml(include_secrets: bool) -> bytes:
     secrets) into a self-describing XML document. Kept stdlib-only — no
     external XML deps in the runtime image. Returns UTF-8 encoded bytes."""
     import xml.etree.ElementTree as _ET
+    import sys as _sys_exp
     try:
         from core.proxy_handler import _read_hot_reload_state, _SECRET_KEYS
-        g = vars(_proxy)
+        _proxy_mod = _sys_exp.modules.get("core.proxy_handler")
+        g = vars(_proxy_mod) if _proxy_mod else {}
     except Exception:
         _read_hot_reload_state = lambda: {}  # noqa: E731
         _SECRET_KEYS = {}
@@ -153,13 +155,17 @@ async def settings_import_endpoint(request: web.Request):
     import xml.etree.ElementTree as _ET
     import ipaddress as _ipaddress
 
+    import sys as _sys_imp
     try:
-        from core.proxy_handler import _HOT_RELOAD_KNOBS, _ENV_PROVIDED_KNOBS, _SECRET_KEYS
-        g = vars(_proxy)
+        from core.proxy_handler import (_HOT_RELOAD_KNOBS, _ENV_PROVIDED_KNOBS,
+                                         _SECRET_KEYS, _json_safe)
+        _proxy_mod = _sys_imp.modules.get("core.proxy_handler")
+        g = vars(_proxy_mod) if _proxy_mod else {}
     except Exception:
         _HOT_RELOAD_KNOBS = {}
         _ENV_PROVIDED_KNOBS = ()
         _SECRET_KEYS = {}
+        _json_safe = lambda v: v  # noqa: E731
         g = {}
 
     dry_run = (request.query.get("dry_run") or "0").lower() in ("1", "true", "yes")
@@ -266,7 +272,7 @@ async def settings_import_endpoint(request: web.Request):
                     try:
                         db_queue.put_nowait((
                             "set_config",
-                            (name, json.dumps(applied_v), _t.time()),
+                            (name, json.dumps(_json_safe(applied_v)), _t.time()),
                         ))
                     except asyncio.QueueFull:
                         pass

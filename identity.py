@@ -195,6 +195,6 @@ async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
                 import asyncio as _asyncio
                 _asyncio.create_task(_observe_ja4_ban(ja4))
             except Exception:
-                pass
+                pass  # nosec B110 — JA4 ban task is best-effort; integration may be absent
         return True
     return False

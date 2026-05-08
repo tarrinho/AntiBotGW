@@ -535,7 +535,7 @@ def db_load_config():
             try:
                 type(_me).__setattr__(_me, _k, globals()[_k])
             except Exception:
-                pass
+                pass  # nosec B110 — best-effort knob propagation to module proxy; non-fatal if setattr unsupported
 
 
 def db_load_secrets():
@@ -668,11 +668,18 @@ def _eval_custom_rules(request, ip: str):
                     ok = False
                     break
         if ok:
-            cidr_list = cond.get("ip_cidr")
-            if cidr_list is not None:
+            nets = cond.get("_ip_nets")
+            if nets is None:
+                raw = cond.get("ip_cidr")
+                if raw:
+                    try:
+                        nets = [_ipa.ip_network(c, strict=False) for c in raw]
+                    except (ValueError, TypeError):
+                        nets = []
+            if nets:
                 try:
                     pip = _ipa.ip_address(ip)
-                    if not any(pip in net for net in cidr_list):
+                    if not any(pip in n for n in nets):
                         ok = False
                 except (ValueError, TypeError):
                     ok = False

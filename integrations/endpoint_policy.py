@@ -168,17 +168,19 @@ def _to_custom_rules(v):
         tag = str(item.get("tag", "")).strip()
         if not isinstance(cond, dict) or action not in _ACTIONS:
             continue
-        # Pre-compile any ip_cidr conditions for speed (skip rule on bad cidr).
+        # Pre-compile ip_cidr for O(1) matching; keep raw strings in ip_cidr
+        # so the rule dict stays JSON-serialisable for config state output.
         cidrs = cond.get("ip_cidr")
         if cidrs is not None:
             if not isinstance(cidrs, list):
                 cidrs = [cidrs]
+            raw = [str(c).strip() for c in cidrs if str(c).strip()]
             try:
-                cidrs = [_ipaddress.ip_network(str(c).strip(), strict=False)
-                         for c in cidrs if str(c).strip()]
+                compiled = [_ipaddress.ip_network(c, strict=False) for c in raw]
             except (ValueError, TypeError):
                 continue
-            cond = dict(cond, ip_cidr=cidrs)
+            # ip_cidr = strings (JSON-safe); _ip_nets = compiled (matching only)
+            cond = dict(cond, ip_cidr=raw, _ip_nets=compiled)
         out.append({"if": cond, "then": action, "tag": tag})
     return out
 
@@ -268,13 +270,20 @@ def _eval_custom_rules(request, ip: str):
                 if query.get(k.split(".", 1)[1], "") != str(want):
                     ok = False
                     break
-        # ip in CIDR
+        # ip in CIDR — use pre-compiled _ip_nets when available
         if ok:
-            cidrs = cond.get("ip_cidr")
-            if cidrs:
+            nets = cond.get("_ip_nets")
+            if nets is None:
+                raw = cond.get("ip_cidr")
+                if raw:
+                    try:
+                        nets = [_ipaddress.ip_network(c, strict=False) for c in raw]
+                    except (ValueError, TypeError):
+                        nets = []
+            if nets:
                 try:
                     ipa = _ipaddress.ip_address(ip)
-                    if not any(ipa in c for c in cidrs):
+                    if not any(ipa in n for n in nets):
                         ok = False
                 except (ValueError, TypeError):
                     ok = False

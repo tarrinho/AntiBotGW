@@ -1304,3 +1304,304 @@ def test_bypass_paths_hot_reload_via_config_endpoint(proxy_module):
     finally:
         proxy_module.BYPASS_PATHS = pre
         _propagate_to_all_modules("BYPASS_PATHS", pre)
+
+
+# ── Config endpoint QA — response always valid JSON, fields apply correctly ──
+
+def test_config_post_rate_limit_burst_applies(proxy_module):
+    """RATE_LIMIT_BURST: valid in-range value must be applied and response
+    must be valid JSON. Regression for the 'JSON.parse: unexpected character
+    at column 5' error seen when saving threshold fields."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre = proxy_module.RATE_LIMIT_BURST
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({"RATE_LIMIT_BURST": 25}),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200
+                    text = await r.text()
+                    body = _json.loads(text)           # must not raise
+                    assert "applied" in body
+                    assert body["applied"].get("RATE_LIMIT_BURST") == 25
+                    assert proxy_module.RATE_LIMIT_BURST == 25
+                finally:
+                    proxy_module.RATE_LIMIT_BURST = pre
+                    _propagate_to_all_modules("RATE_LIMIT_BURST", pre)
+    _run(go())
+
+
+def test_config_post_rate_limit_refill_applies(proxy_module):
+    """RATE_LIMIT_REFILL float applies correctly."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre = proxy_module.RATE_LIMIT_REFILL
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({"RATE_LIMIT_REFILL": 5.0}),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200
+                    body = _json.loads(await r.text())
+                    assert body["applied"].get("RATE_LIMIT_REFILL") == 5.0
+                    assert proxy_module.RATE_LIMIT_REFILL == 5.0
+                finally:
+                    proxy_module.RATE_LIMIT_REFILL = pre
+                    _propagate_to_all_modules("RATE_LIMIT_REFILL", pre)
+    _run(go())
+
+
+def test_config_post_ip_burst_and_refill_apply(proxy_module):
+    """IP_BURST and IP_REFILL (per-socket-IP bucket) apply correctly."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre_burst  = proxy_module.IP_BURST
+                pre_refill = proxy_module.IP_REFILL
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({"IP_BURST": 30, "IP_REFILL": 4.0}),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200
+                    body = _json.loads(await r.text())
+                    assert body["applied"].get("IP_BURST")  == 30
+                    assert body["applied"].get("IP_REFILL") == 4.0
+                    assert proxy_module.IP_BURST  == 30
+                    assert proxy_module.IP_REFILL == 4.0
+                finally:
+                    proxy_module.IP_BURST  = pre_burst
+                    proxy_module.IP_REFILL = pre_refill
+                    _propagate_to_all_modules("IP_BURST",  pre_burst)
+                    _propagate_to_all_modules("IP_REFILL", pre_refill)
+    _run(go())
+
+
+def test_config_post_custom_rules_ip_cidr_response_is_valid_json(proxy_module):
+    """CUSTOM_RULES with ip_cidr — applied response must be valid JSON even
+    though _to_custom_rules stores compiled IPv4Network objects in _ip_nets.
+    Regression: config_endpoint was missing _json_safe(applied), causing
+    TypeError during json.dumps when CUSTOM_RULES contained ip_cidr rules."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre = proxy_module.CUSTOM_RULES
+                rules = [{"if": {"ip_cidr": "10.0.0.0/8"}, "then": "allow"}]
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({"CUSTOM_RULES": rules}),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200, f"expected 200, got {r.status}"
+                    text = await r.text()
+                    body = _json.loads(text)           # must not raise TypeError
+                    assert "CUSTOM_RULES" in body.get("applied", {}), (
+                        "CUSTOM_RULES must be in applied — response was: " + text[:200]
+                    )
+                    # Serialised form strips _ip_nets (private key)
+                    applied_rules = body["applied"]["CUSTOM_RULES"]
+                    assert isinstance(applied_rules, list)
+                    assert applied_rules[0]["if"]["ip_cidr"] == ["10.0.0.0/8"]
+                    assert "_ip_nets" not in applied_rules[0]["if"]
+                    # State snapshot also must not expose _ip_nets
+                    state_rules = body.get("state", {}).get("CUSTOM_RULES", [])
+                    if state_rules:
+                        assert "_ip_nets" not in state_rules[0].get("if", {})
+                finally:
+                    proxy_module.CUSTOM_RULES = pre
+                    _propagate_to_all_modules("CUSTOM_RULES", pre)
+    _run(go())
+
+
+def test_config_post_out_of_bounds_numeric_rejected(proxy_module):
+    """Out-of-bounds numeric values are rejected; response is valid JSON."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                r = await client.post(
+                    "/antibot-appsec-gateway/secured/config",
+                    data=_json.dumps({
+                        "RATE_LIMIT_BURST":  0,          # below min=1
+                        "RATE_LIMIT_REFILL": 0.0,        # below min>0
+                        "IP_BURST":          999999999,  # above max
+                    }),
+                    headers={"Content-Type": "application/json"},
+                    cookies=_admin_cookie(proxy_module),
+                )
+                assert r.status == 200
+                body = _json.loads(await r.text())
+                assert "RATE_LIMIT_BURST"  in body["rejected"]
+                assert "RATE_LIMIT_REFILL" in body["rejected"]
+                assert "IP_BURST"          in body["rejected"]
+    _run(go())
+
+
+def test_config_post_unknown_knob_rejected(proxy_module):
+    """Fields not in _HOT_RELOAD_KNOBS are rejected; known fields still apply."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre = proxy_module.RATE_LIMIT_BURST
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({
+                            "RATE_LIMIT_BURST": 22,
+                            "UPSTREAM":         "https://evil.com",
+                            "SECRET_KEY":       "hacked",
+                            "__PROTO__":        "injection",
+                        }),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200
+                    body = _json.loads(await r.text())
+                    assert body["applied"].get("RATE_LIMIT_BURST") == 22
+                    assert "UPSTREAM"    in body["rejected"]
+                    assert "SECRET_KEY"  in body["rejected"]
+                    assert "__PROTO__"   in body["rejected"]
+                finally:
+                    proxy_module.RATE_LIMIT_BURST = pre
+                    _propagate_to_all_modules("RATE_LIMIT_BURST", pre)
+    _run(go())
+
+
+def test_config_post_hostile_ban_secs_applies(proxy_module):
+    """HOSTILE_BAN_SECS and REALLY_BAN_SECS update correctly."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre_h = proxy_module.HOSTILE_BAN_SECS
+                pre_r = proxy_module.REALLY_BAN_SECS
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({"HOSTILE_BAN_SECS": 3600,
+                                          "REALLY_BAN_SECS": 86400}),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200
+                    body = _json.loads(await r.text())
+                    assert body["applied"].get("HOSTILE_BAN_SECS") == 3600
+                    assert body["applied"].get("REALLY_BAN_SECS") == 86400
+                    assert proxy_module.HOSTILE_BAN_SECS == 3600
+                    assert proxy_module.REALLY_BAN_SECS  == 86400
+                finally:
+                    proxy_module.HOSTILE_BAN_SECS = pre_h
+                    proxy_module.REALLY_BAN_SECS  = pre_r
+                    _propagate_to_all_modules("HOSTILE_BAN_SECS", pre_h)
+                    _propagate_to_all_modules("REALLY_BAN_SECS",  pre_r)
+    _run(go())
+
+
+def test_config_post_bool_fields_apply(proxy_module):
+    """Boolean knobs toggle correctly and response is valid JSON."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                for knob in ("BODY_PATTERN_MATCH", "INJECT_SECURITY_HEADERS",
+                             "DLP_ENABLED", "TARPIT_ENABLED"):
+                    pre = getattr(proxy_module, knob)
+                    try:
+                        r = await client.post(
+                            "/antibot-appsec-gateway/secured/config",
+                            data=_json.dumps({knob: not pre}),
+                            headers={"Content-Type": "application/json"},
+                            cookies=_admin_cookie(proxy_module),
+                        )
+                        assert r.status == 200, f"{knob}: expected 200"
+                        body = _json.loads(await r.text())
+                        assert knob in body.get("applied", {}), (
+                            f"{knob} must appear in 'applied'"
+                        )
+                        assert getattr(proxy_module, knob) is (not pre), (
+                            f"{knob} in-memory state not updated"
+                        )
+                    finally:
+                        setattr(proxy_module, knob, pre)
+                        _propagate_to_all_modules(knob, pre)
+    _run(go())
+
+
+def test_config_post_list_fields_apply(proxy_module):
+    """List knobs (JA4_DENY_LIST, JWT_VALIDATE_PATHS) apply and response is valid JSON."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                pre_ja4 = proxy_module.JA4_DENY_LIST
+                pre_jwt = proxy_module.JWT_VALIDATE_PATHS
+                try:
+                    r = await client.post(
+                        "/antibot-appsec-gateway/secured/config",
+                        data=_json.dumps({
+                            "JA4_DENY_LIST":    ["t13d1517h2_8daaf6152771_b0da82dd1658"],
+                            "JWT_VALIDATE_PATHS": ["/api/private/*"],
+                        }),
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
+                    )
+                    assert r.status == 200
+                    body = _json.loads(await r.text())
+                    assert "JA4_DENY_LIST"     in body["applied"]
+                    assert "JWT_VALIDATE_PATHS" in body["applied"]
+                finally:
+                    proxy_module.JA4_DENY_LIST     = pre_ja4
+                    proxy_module.JWT_VALIDATE_PATHS = pre_jwt
+                    _propagate_to_all_modules("JA4_DENY_LIST",     pre_ja4)
+                    _propagate_to_all_modules("JWT_VALIDATE_PATHS", pre_jwt)
+    _run(go())
+
+
+def test_config_get_includes_rate_limit_fields(proxy_module):
+    """GET /secured/config must include all rate-limit threshold fields
+    so the controls dashboard can render them correctly."""
+    import json as _json
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up,
+                                    INTERNAL_KEY="testkey") as client:
+                r = await client.get(
+                    "/antibot-appsec-gateway/secured/config",
+                    cookies=_admin_cookie(proxy_module),
+                )
+                assert r.status == 200
+                body = _json.loads(await r.text())
+                state = body.get("state", {})
+                for field in ("RATE_LIMIT_BURST", "RATE_LIMIT_REFILL",
+                              "IP_BURST", "IP_REFILL",
+                              "HOSTILE_BAN_SECS", "REALLY_BAN_SECS",
+                              "RISK_BAN_THRESHOLD", "SOFT_CHALLENGE_SCORE"):
+                    assert field in state, (
+                        f"{field} missing from GET /secured/config state"
+                    )
+    _run(go())

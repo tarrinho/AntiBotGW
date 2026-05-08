@@ -126,7 +126,7 @@ def _save_signal_order(sig: str, order: int, actor: str) -> None:
                         (gw_id, sig, order, ts, actor),
                     )
         except Exception:
-            pass  # PG mirror is best-effort; SQLite is authoritative
+            pass  # nosec B110 — PG mirror is best-effort; SQLite is authoritative
 
 
 # ── Escalation score helper ────────────────────────────────────────────────
@@ -200,7 +200,7 @@ async def ban(ip: str, secs: int = HONEYPOT_BAN_SECS, reason: str = "honeypot"):
         from integrations.redis import _shared_ban_set
         await _shared_ban_set(ip, _t.time() + secs, reason)
     except Exception:
-        pass
+        pass  # nosec B110 — Redis integration is optional; ban is already recorded locally
 
 
 # ── Core risk-score + ban function ────────────────────────────────────────
@@ -275,5 +275,5 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
                     "hostile":    reason in _HOSTILE_REASONS,
                 }))
         except Exception:
-            pass
+            pass  # nosec B110 — webhook dispatch is best-effort; ban was already applied
     return triggered
