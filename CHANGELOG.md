@@ -20,13 +20,26 @@ Author: Pedro Tarrinho
 - `test_protect_authenticated_admin_path_calls_record` — `protect()` calls `record()` in authenticated admin path branch
 - `test_protect_authenticated_admin_path_uses_operator_passthrough_reason` — reason is `'operator-passthrough'`
 
+### Added (continued)
+- **BYPASS_PATHS audit trail** (`core/proxy_handler.py`) — bypass-path requests previously returned early with zero recording, making them invisible in all dashboards and logs. Now proxies the request first, then writes an `("event", ..., "bypass-path")` entry to `db_queue` so every bypassed access appears in the events table. `ip_state` intentionally stays empty (no bot scoring) but the access is traceable.
+- **Path search in main dashboard** (`dashboards/main.html`) — text input in the category filter bar filters the clients table live by `last_path` substring match. Also triggers a query to `/secured/logs-data?q=<path>` and renders a new "Path event log" panel below the clients card, showing all matching events from the DB including `bypass-path` entries (timestamp, IP, path, status, reason, UA). Debounced 300 ms. Clear button shown when active.
+
+### Fixed (continued)
+- **BYPASS_PATHS not visible in any dashboard or log** — root cause: early `return await handler(request)` before any `db_queue` write. Fixed by capturing response, writing `bypass-path` event, then returning.
+
+### Tests (continued)
+- `test_bypass_paths_early_return_no_record_call` updated — now verifies `db_queue.put_nowait` present and reason `bypass-path` in bypass block, in addition to confirming `record()` is not called
+- `test_bypass_paths_no_ip_state_recorded` docstring updated — clarifies audit event is written to db_queue but ip_state stays empty
+
 ### Validation
-- **Unit tests**: 398 passed, 0 failed (`test_critical.py` 116 + `test_pure.py` 272 + `test_async.py` 10)
+- **Unit tests**: 408 passed, 0 failed
 - **Functional**: 22 passed · **Integration**: 23 passed
-- **Regression**: 134 passed, 2 pre-existing classified (JS-challenge tests, since 1.5.4)
-- **Bandit**: 0 High / 0 Critical (1 Low B104 intentional)
-- **Semgrep**: 151 rules · 5 files · 0 findings
-- **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (`appsec-antibot-gw:1.7.7`)
+- **Regression**: 142 passed, 0 failed
+- **Bandit**: 0 High / 0 Critical (1 Low B110 pre-existing, below -ll threshold)
+- **Semgrep**: 151 rules · 9 files · 0 findings
+- **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all arches)
+- **Total combined**: 699 passed, 1 skipped, 0 failed
+- **Harbor**: amd64 `sha256:739b9c39` · arm64 `sha256:5dac25f9` · armv7 `sha256:f9fefb75` · manifest `sha256:2a89f401`
 
 ---
 
