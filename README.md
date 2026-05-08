@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.7.7` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.7.8` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.7.6 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.7.7 \
+  appsec-antibot-gw:1.7.8 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.7` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.8` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.7.7
+  appsec-antibot-gw:1.7.8
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.7.7 .
-trivy image appsec-antibot-gw:1.7.7        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.7.8 .
+trivy image appsec-antibot-gw:1.7.8        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1081,6 +1081,7 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.7.8** | _(in progress)_ |
 | **1.7.7** | **GW Mgmt filter fix — authenticated operator dashboard accesses now visible.** `protect()` middleware was returning early for authenticated admin-path requests without calling `record()`, so operator dashboard browsing never entered `ip_state`. The GW Mgmt filter pill (added 1.7.6) showed zero entries even while the operator was actively viewing the dashboard. Fix: await the handler response then call `record()` with `reason='operator-passthrough'` before returning, ensuring every `/antibot-appsec-gateway/…` access by a logged-in operator is written to `ip_state` with `last_path` set to the GW path and classified as `gwmgmt` by `_clientCats` / `_agentCats`. **Tests**: 116 critical + 267 pure + 10 async = **393 passing** (+2 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |
 | **1.7.6** | **Category filter bar on main and agents dashboards.** Five colour-coded toggle pills (● Allowed / ● Blocked / ● Missed / ● Auth Bots / ● GW Mgmt) filter both timeline chart datasets and the clients/suspects table simultaneously. `_clientCats` / `_agentCats` classifiers map each entry to a category; `_applyFilters()` applies the active set on every tick. GW Mgmt captures accesses to `/antibot-appsec-gateway/` paths (table-only, no chart dataset). Fixes: auth bot priority over gwmgmt path check in cat functions; auth bots dropped by `min_score` gate in `agents_data_endpoint` (stealth_score ≈ 0 caused all to be excluded — zero entries under Auth Bots filter on agents page); null comps/mets for score-0 auth bots crashing frontend component bar. **Tests**: 116 critical + 265 pure + 10 async = **391 passing** (+57 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |
 | **1.7.5** | **Authorized bots shown in purple on all dashboards.** Monitoring bots with `reason=authorized-robot` now appear as a distinct purple dataset on the main dashboard traffic chart (5th line, `#bc8cff`, dashed) and the agents chart (4th dataset); geo map renders purple circles for authorized-robot events with a dedicated legend entry and tooltip. Backend: `metrics_endpoint` timeline extracts `authorized_robot` from `by_reason`; `agents_timeline_endpoint` adds SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies authorized-robot as its own kind (no longer inflates `blocked`). **Tests**: 199 pure + 116 critical + 19 async = **334 passing** (+8 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |

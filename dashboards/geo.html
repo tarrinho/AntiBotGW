@@ -47,7 +47,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .dim{color:var(--dim)}
 .notice{background:#3d2a1a;border:1px solid #5b3f1f;color:#e6c068;padding:10px 14px;border-radius:6px;margin-top:12px;font-size:12px;display:none}
 .notice.show{display:block}
-.split{display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:start;margin-top:14px}
+.split{display:grid;grid-template-columns:1fr 360px;gap:14px;align-items:start;margin-top:14px}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
 .scrubber{display:flex;gap:10px;align-items:center;padding:10px 12px;background:var(--card);
           border:1px solid var(--line);border-radius:6px;margin-top:8px;flex-wrap:wrap}
@@ -99,7 +99,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 @keyframes ls-pulse{0%,100%{opacity:1}50%{opacity:.3}}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.7 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.8 &middot; GeoMap <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -123,6 +123,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         <option value="720">12 h</option>
         <option value="1440">24 h</option>
         <option value="10080">7 days</option>
+        <option value="43200">30 days</option>
       </select>
       <label class="toggle" id="lbl-tor"><input type="checkbox" id="ovly-tor"> Tor overlay</label>
       <label class="toggle" id="lbl-dc"><input type="checkbox" id="ovly-dc"> DC/VPN overlay</label>
@@ -166,6 +167,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 
     <div class="card" style="padding:10px 12px;margin:0">
       <h2 style="margin-bottom:6px">Top countries <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px">click <span style="color:var(--red)">deny</span> to push the ISO into COUNTRY_DENYLIST</span></h2>
+      <div style="overflow-x:auto">
       <table class="country-tbl">
         <thead><tr>
           <th>iso</th><th class="num">clean</th>
@@ -176,6 +178,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         </tr></thead>
         <tbody id="country-tbody"><tr><td colspan="7" class="dim">loading…</td></tr></tbody>
       </table>
+      </div>
       <div class="dim" style="font-size:10px;margin-top:8px">
         <code id="dl-state">denylist: —</code><br>
         <code id="al-state">allowlist: —</code>
@@ -185,6 +188,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
       <div id="method-bars" style="font-family:ui-monospace,Menlo,monospace;font-size:11px"></div>
 
       <h2 style="margin:14px 0 6px 0">Top ASN providers <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">where attack traffic originates</span></h2>
+      <div style="overflow-x:auto">
       <table class="country-tbl">
         <thead><tr>
           <th style="font-size:10px">asn org</th>
@@ -193,6 +197,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
         </tr></thead>
         <tbody id="asn-tbody"><tr><td colspan="3" class="dim">loading…</td></tr></tbody>
       </table>
+      </div>
     </div>
   </div>
 </div>
@@ -655,7 +660,28 @@ function refreshGeoControls(){
   }
 }
 
+let _lpTimer = null, _lpVal = 0;
+function _setLoadPct(pct) {
+  const s = document.getElementById('load-status');
+  if (!s || s.classList.contains('ready')) return;
+  s.innerHTML = '<span class="dot"></span>Loading ' + pct + '%';
+}
+function _startLoadPct() {
+  if (_lpTimer) { clearInterval(_lpTimer); _lpTimer = null; }
+  const s = document.getElementById('load-status');
+  if (!s || s.classList.contains('ready')) return;
+  _lpVal = 0; _setLoadPct(0);
+  _lpTimer = setInterval(() => {
+    _lpVal = Math.min(90, _lpVal + (90 - _lpVal) * 0.08);
+    _setLoadPct(Math.round(_lpVal));
+  }, 100);
+}
+function _finishLoadPct() {
+  if (_lpTimer) { clearInterval(_lpTimer); _lpTimer = null; }
+  _setLoadPct(100);
+}
 async function tick(){
+  _startLoadPct();
   const params = new URLSearchParams({range: document.getElementById('range').value});
   if (endEpoch !== null) params.set('end', endEpoch.toString());
   try {
@@ -707,6 +733,7 @@ async function tick(){
     renderCountries();
     renderMethods();      // 1.6.4
     renderAsns();         // 1.6.4
+    _finishLoadPct();
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const s = document.getElementById('load-status');
       if (s && !s.classList.contains('ready')) {
@@ -716,6 +743,7 @@ async function tick(){
     }));
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch(e) {
+    if (_lpTimer) { clearInterval(_lpTimer); _lpTimer = null; }
     const _errEl = document.getElementById('live');
     _errEl.style.background = 'var(--red)';
     _errEl.textContent = '○ ERR';

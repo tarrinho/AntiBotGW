@@ -369,7 +369,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="order:3"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.35);color:#f85149}
 </style></head><body>
 
-<h1 class="page-title">AppSecGW_1.7.7 &middot; Controls <span class="pill">LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.7.8 &middot; Controls <span class="pill">LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -427,6 +427,12 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       <div id="bypass-paths"></div>
     </div>
   </section>
+
+  <div class="actions">
+    <button id="apply" disabled>Apply changes</button>
+    <button class="secondary" id="reset" disabled>Reset</button>
+    <span class="hint" id="hint">No pending changes.</span>
+  </div>
 
   <section class="card" id="card-scoring">
     <h2>🛡️ Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
@@ -592,12 +598,6 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <div id="thresholds-rich"></div>
   </section>
 
-  <div class="actions">
-    <button id="apply" disabled>Apply changes</button>
-    <button class="secondary" id="reset" disabled>Reset</button>
-    <span class="hint" id="hint">No pending changes.</span>
-  </div>
-
   <section class="card" id="card-admin-ip" style="margin-top:20px">
     <h2>🔒 Admin IP allowlist</h2>
     <div class="hint" style="margin-bottom:8px">
@@ -670,6 +670,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div class="toast" id="toast"></div>
 
 <script>
+const url = p => p;   // identity — kept for the ~30 fetch call-sites throughout this file
 function _gwAlert(msg){var d=document.createElement('div');d.textContent=msg;d.style.cssText='position:fixed;top:16px;right:16px;z-index:99999;background:var(--card,#161b22);border:1px solid var(--red,#f85149);color:var(--fg,#c9d1d9);padding:10px 16px;border-radius:6px;font-size:13px;max-width:360px;word-break:break-word';document.body.appendChild(d);setTimeout(()=>d.remove(),7000);}
 
 // Async confirm dialog — non-blocking modal replacement.

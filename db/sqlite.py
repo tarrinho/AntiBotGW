@@ -400,20 +400,20 @@ async def db_writer_loop():
                         # backend sees the same configuration. Best-effort;
                         # SQLite is the source of truth.
                         try: _pg_mirror_kv("set_config", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "del_config":
                         conn.execute("DELETE FROM config_kv WHERE key = ?", args)
                         try: _pg_mirror_kv("del_config", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "set_secret":
                         # 1.5.5 — runtime integration-secret persistence.
                         conn.execute("INSERT OR REPLACE INTO secrets_kv (key,value,ts) VALUES (?,?,?)", args)
                         try: _pg_mirror_kv("set_secret", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "del_secret":
                         conn.execute("DELETE FROM secrets_kv WHERE key = ?", args)
                         try: _pg_mirror_kv("del_secret", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "ban":
                         conn.execute("""
                           INSERT INTO bans (ip,banned_until,reason,ts) VALUES (?,?,?,?)
@@ -456,19 +456,19 @@ async def db_writer_loop():
                             "VALUES (?, ?, ?, ?, ?)",
                             args)
                         try: _pg_mirror_kv("set_admin_ip", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "admin_ip_remove":
                         # args = (cidr,)
                         conn.execute("DELETE FROM admin_ips WHERE cidr = ?", args)
                         try: _pg_mirror_kv("del_admin_ip", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "admin_ip_update_description":
                         # args = (description, cidr)
                         conn.execute(
                             "UPDATE admin_ips SET description=? WHERE cidr=?",
                             args)
                         try: _pg_mirror_kv("update_admin_ip_description", args)
-                        except Exception: pass
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     elif op == "abuseipdb_set":
                         # args = (ip, score, country, ts)
                         conn.execute(
@@ -873,7 +873,7 @@ def db_load_state() -> None:
         s.last_path = r["last_path"] or ""
         if r["blocks_by_reason"]:
             try: s.blocks_by_reason = defaultdict(int, json.loads(r["blocks_by_reason"]))
-            except: pass
+            except (ValueError, TypeError): pass
 
     # Compute global totals from events table (always accurate, beats stale KV)
     row = conn.execute("""

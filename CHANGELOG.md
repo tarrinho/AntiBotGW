@@ -6,6 +6,12 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.8] — 2026-05-08
+
+_(in progress)_
+
+---
+
 ## [1.7.7] — 2026-05-07
 
 ### Added
@@ -34,7 +40,7 @@ Author: Pedro Tarrinho
 ### Fixed (continued — 2026-05-08 dashboard code review)
 - **`controls.html` DELETE admin-IP URL malformed** — `&cidr=` → `?cidr=` (BUG-04)
 - **Double-save on inline edit** — `_descSaved`/`_thrSaved` guard prevents blur+Enter firing two PATCH requests (BUG-08)
-- **`geo.html` loading pill text** — removed spurious "Loading" prefix from "Ready" state (BUG-07)
+- **`geo.html` ready-state pill text** — ready state was accidentally set to plain "Ready"; corrected to "Loading Ready" to match the JS flip logic intent and the validation spec (BUG-07)
 - **`confirm()` blocking dialogs** — replaced 5 calls with non-blocking `_asyncConfirm()` Promise wrapper using `showSimpleModal` (BP-07)
 - **`alert()` blocking dialogs** — replaced all 14 calls across 7 files with `_gwAlert()` transient DOM div (auto-removes after 7s) (BP-08)
 - **Window namespace pollution** — 7 separate `window._acct*` globals collapsed to `window._acct = {openModal, changePw, revokeSession, userRole}` across all 8 dashboard files (BP-05)
@@ -49,16 +55,47 @@ Author: Pedro Tarrinho
 - `test_controls_bypass_requires_user_confirmation` — updated to check `_asyncConfirm(` (was `confirm(`)
 - `test_main_html_k_q_absent` — replaces two stale k_q tests; asserts `k_q` no longer present
 
-### Validation
-- **Unit tests**: 407 passed, 0 failed (test_critical 116 + test_pure 281 + test_async 10)
+### Added (session 2 — 2026-05-08)
+- **MaxMind in-process lookup cache** (`reputation/maxmind.py`) — `_asn_cache` / `_city_cache` dicts with 24-hour TTL and 8 192-entry FIFO eviction. Eliminates repeated mmdb reads (~4/request for the same IP). Cache check in `_city_lookup` placed before the reader-null guard so cached results survive monthly mmdb refresh cycles.
+- **`logs.html` category filter pills** (`dashboards/logs.html`) — Five toggle pills (Allowed · Ban · Really Ban · Auth Bots · GW Mgmt) in a filter bar shown on the Requests tab. `_logCat()` classifier: `authorized-robot` → authbots; `/antibot-appsec-gateway/` path → gwmgmt; hard-ban reasons (canary-echo/honeypot-silent/honeypot) → reallyban; any non-OK reason → ban; else → allowed. Client-side filtering, no round-trip.
+- **`rules.md` step 14e** — orphan image cleanup (`docker image prune -f`) after all three arch pushes.
+
+### Fixed (session 2 — 2026-05-08)
+- **`controls.html` `url()` identity function removed incorrectly** (`dashboards/controls.html`) — DC-01 in the previous pass removed `const url = p => p` from controls.html which has ~30 `url(path)` fetch call-sites. All dashboard panels threw `ReferenceError: url is not defined`. Restored.
+- **`controls.html` Apply/Reset placement** (`dashboards/controls.html`) — Action bar moved from below Thresholds to immediately before Defenses & Scoring, visible without scrolling.
+- **Service metrics default window too short** (`config.py`) — interval default 10 s → 60 s; retention default 4 320 → 43 200 (30-day window at ~22 MB). Previously only 12 hours of service data were retained.
+
+### Tests (session 2 — 2026-05-08)
+- 39 new tests in `tests/test_pure.py`: MaxMind cache (TTL, max, hit, no-cache-on-disabled, eviction, city-cache-before-reader ordering), service-metrics defaults/overrides/window calculation, geo.html pill text, logs.html cat filter bar visibility/categories/JS functions/tab wiring, controls.html actions placement, `url` identity present in controls.html.
+
+### Validation (session 2 — 2026-05-08)
+- **Unit tests**: 446 passed, 0 failed (test_critical 116 + test_pure 320 + test_async 10)
 - **Functional**: 22 passed · **Integration**: 23 passed
 - **Regression**: 142 passed, 0 failed
 - **Bandit**: 0 High / 0 Critical (1 Low B104 intentional, below -ll threshold)
 - **Semgrep**: 151 rules · 5 files · 0 findings
 - **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all arches)
-- **Total combined**: 594 passed, 0 failed
-- **Harbor**: amd64 `sha256:37ec1d56` · arm64 `sha256:7a28f6f0` · armv7 `sha256:74a949de` · manifest `sha256:2a89f401`
-- **Live harness** (§4/§6/§8/§12/§15): p99=3.4ms · 200-req burst 0 failed · 72 MiB RSS · all 6 body injection detectors firing · all OWASP path vectors detected · DAST pass
+- **Total combined**: 737 passed, 1 skipped, 0 failed
+- **Harbor**: armv7 rebuilt `sha256:f6c9aeb6` · manifest updated `sha256:3b502c78` (amd64 `sha256:37ec1d56` · arm64 `sha256:7a28f6f0` unchanged)
+
+### Added (session 3 — 2026-05-08)
+- **Geo-map 30-day view** (`dashboards/geo.html`, `core/proxy_handler.py`) — added `30 days` (43 200 min) option to the window select. Raised range cap from 10 080 → 43 200 in `geo_data_endpoint` and `geo_drill_endpoint`. Events table never pruned so depth is available. Two performance countermeasures: (1) cursor iteration replaces `fetchall()` — constant RAM for any window size; (2) reservoir sampling (Algorithm R) replaces first-5000 approach — scrubber `events_sample` now uniformly covers the full window rather than only the oldest time slice. `ORDER BY` removed (not needed; `rebuildBuckets()` bins by `ts` value directly).
+
+### Tests (session 3 — 2026-05-08)
+- 5 new tests in `tests/test_pure.py`: geo.html 30-day option present, geo_data_endpoint cap ≤ 43200, geo_drill_endpoint cap ≤ 43200, cursor-not-fetchall, reservoir sampling present.
+- `test_geo_data_range_clamped_high` in `tests/test_geo_dashboard.py` updated: asserts ≤ 43200 (was 10080).
+
+### Validation (session 3 — 2026-05-08)
+- **Unit tests**: 451 passed, 0 failed (test_critical 116 + test_pure 325 + test_async 10)
+- **Total combined**: 742 passed, 1 skipped, 0 failed
+- **Bandit**: 0 High / 0 Critical (1 Low B110 intentional try/except/pass in hot-reload setter)
+- **Semgrep**: 151 rules · 9 files · 0 findings
+- **Harbor**: armv7 rebuilt `sha256:7d8df3f3` · manifest updated `sha256:729082df` (amd64 `sha256:37ec1d56` · arm64 `sha256:7a28f6f0` unchanged)
+
+### Validation (session 4 — 2026-05-08)
+- **Step 11a (secure code review)** added to `validation/1.7.7.md` — PASS on all 8 checks; no new external deps; cursor/reservoir code reviewed clean
+- **Multi-arch parity rebuild**: amd64 and arm64 rebuilt with all session 2+3 code (were on session-1 binary); armv7 unchanged
+- **Harbor push** (final): amd64 `sha256:549e9879` · arm64 `sha256:a5d0cad8` · armv7 `sha256:7d8df3f3` · manifest `sha256:596d4514`
 
 ---
 
