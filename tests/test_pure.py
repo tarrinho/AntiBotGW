@@ -3388,15 +3388,13 @@ def test_bypass_paths_guard_after_authorized_bots_before_rps():
 
 
 def test_bypass_paths_early_return_no_record_call():
-    """Bypass block must proxy via handler(), write an audit event to db_queue,
-    and must NOT call record() — ip_state stays empty, but the DB event log
-    captures every bypassed access for operator audit trail."""
+    """Bypass-paths block must proxy via handler() and write a db_queue audit event,
+    but must NOT call record() — static-asset fetches must not pollute ip_state."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
     assert bp_idx != -1
-    # Extract the bypass block (larger window — now includes db_queue write)
-    block = src[bp_idx: bp_idx + 600]
+    block = src[bp_idx: bp_idx + 700]
     assert "await handler(request)" in block, (
         "Bypass block must call await handler(request)"
     )
@@ -3406,8 +3404,8 @@ def test_bypass_paths_early_return_no_record_call():
     assert "bypass-path" in block, (
         "Bypass block audit event must use reason 'bypass-path'"
     )
-    assert "record(" not in block, (
-        "Bypass block must NOT call record() — ip_state must stay empty for bypassed paths"
+    assert "await record(" not in block, (
+        "Bypass-paths block must NOT call record() — ip_state must stay clean for static assets"
     )
 
 

@@ -425,10 +425,11 @@ def test_161_custom_rules_parser():
     """Accepts JSON string + decoded list. Drops unknown actions / empty paths."""
     rs = proxy._to_custom_rules('[{"if":{"path":"/a"},"then":"allow"}]')
     assert rs == [{"if": {"path": "/a"}, "then": "allow", "tag": ""}]
-    # cidr pre-compiled into ip_network objects
+    # ip_cidr kept as strings (JSON-safe); compiled nets in _ip_nets
     rs = proxy._to_custom_rules([{"if": {"ip_cidr": "10.0.0.0/8"}, "then": "block"}])
     import ipaddress
-    assert isinstance(rs[0]["if"]["ip_cidr"][0], ipaddress.IPv4Network)
+    assert rs[0]["if"]["ip_cidr"] == ["10.0.0.0/8"]
+    assert isinstance(rs[0]["if"]["_ip_nets"][0], ipaddress.IPv4Network)
     # unknown action dropped
     assert proxy._to_custom_rules('[{"if":{"path":"/a"},"then":"nuke"}]') == []
     # empty / malformed
@@ -1079,6 +1080,7 @@ def test_165_every_knob_persists_round_trip():
              "ips": [], "action": "authorized-robot", "enabled": True},
         ],
         "BYPASS_PATHS": ["/static/", "/assets/"],
+        "BYPASS_MODE": False,
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

@@ -3463,14 +3463,17 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     const knobs = _boolKnobs();
     if (!knobs.length){ showToast('No bool controls in state — load config first', 'err'); return; }
 
-    // Save current bool state snapshot
+    // Save current bool state snapshot (include BYPASS_MODE so restore turns it off)
     const snap = {};
     knobs.forEach(n => { snap[n] = serverState[n]; });
+    if ('BYPASS_MODE' in serverState) snap['BYPASS_MODE'] = serverState['BYPASS_MODE'];
     localStorage.setItem(_BYPASS_SNAP_KEY, JSON.stringify(snap));
 
-    // Build payload: all false
+    // Build payload: all bool knobs false, then BYPASS_MODE=true so
+    // the server skips ban enforcement even for previously-banned identities.
     const payload = {};
     knobs.forEach(n => { payload[n] = false; });
+    payload['BYPASS_MODE'] = true;
 
     try {
       const r = await fetch(url('/antibot-appsec-gateway/secured/config'),

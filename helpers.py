@@ -55,7 +55,7 @@ def slog(event: str, level: str = "info", **fields) -> None:
                 **fields,
             })
         except Exception:
-            pass
+            pass  # nosec B110 — log ring is best-effort; drop on overflow or dict errors
     if _LOG_LEVELS.get(level, 20) < _LOG_LEVEL_N:
         return
     ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

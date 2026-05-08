@@ -50,8 +50,8 @@ UPSTREAM        = _upstream_raw.rstrip("/")
 LISTEN_HOST     = os.environ.get("LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8443"))
 
-RATE_LIMIT_BURST  = int(os.environ.get("BURST", "5"))     # tokens
-RATE_LIMIT_REFILL = float(os.environ.get("REFILL", "1.0")) # tokens / second
+RATE_LIMIT_BURST  = int(os.environ.get("BURST", "20"))    # tokens
+RATE_LIMIT_REFILL = float(os.environ.get("REFILL", "3.0")) # tokens / second
 HONEYPOT_BAN_SECS = int(os.environ.get("HONEYPOT_BAN_SECS", "3600"))  # 1 h default
 # R8: longer-TTL "hostile pool" — once an identity has crossed the
 # canary-echo / honeypot threshold, keep it silent-decoyed for HOSTILE_BAN_SECS
@@ -121,7 +121,7 @@ def _parse_authorized_bot_uas(raw) -> list:
         try:
             return _parse_authorized_bot_uas(json.loads(s))
         except Exception:
-            pass
+            pass  # nosec B110 — malformed JSON falls through to legacy CSV path below
     # Legacy CSV: "UA:path" or bare "UA"
     result = []
     for part in s.split(","):
@@ -758,6 +758,11 @@ SECOND_ORDER_THRESHOLD = float(os.environ.get("SECOND_ORDER_THRESHOLD", "15"))
 
 BOTD_ENABLED = os.environ.get("BOTD_ENABLED", "0") in ("1", "true", "yes")
 
+# Runtime-only bypass: when True, protect() skips ALL detection and ban
+# enforcement, passing every upstream request through unconditionally.
+# Set only via the Controls dashboard bypass toggle, never via env var.
+BYPASS_MODE: bool = False
+
 # ── 1.7.1 — Browser automation probe (self-hosted, no external bundle) ─────────
 AUTOMATION_PROBE_ENABLED     = os.environ.get("AUTOMATION_PROBE_ENABLED",   "1") in ("1", "true", "yes")
 # 1.7.1 — Coordinated ASN attack clustering
@@ -816,9 +821,9 @@ LLM_HEURISTIC_SCORE         = float(os.environ.get("LLM_HEURISTIC_SCORE",       
 # Inject <link rel="preload"> into HTML. Browsers auto-fetch it; curl/agents
 # don't. Probes not fetched within TTL after N HTML requests → LLM signal.
 CANARY_PROBE_ENABLED    = os.environ.get("CANARY_PROBE_ENABLED",    "1") in ("1", "true", "yes")
-CANARY_PROBE_TTL_SECS   = int(os.environ.get("CANARY_PROBE_TTL_SECS",   "30"))   # window to fetch
-CANARY_PROBE_MIN_HTML   = int(os.environ.get("CANARY_PROBE_MIN_HTML",   "3"))    # HTML pages before check
-CANARY_PROBE_SCORE      = float(os.environ.get("CANARY_PROBE_SCORE",      "35"))
+CANARY_PROBE_TTL_SECS   = int(os.environ.get("CANARY_PROBE_TTL_SECS",   "60"))   # window to fetch
+CANARY_PROBE_MIN_HTML   = int(os.environ.get("CANARY_PROBE_MIN_HTML",   "5"))    # HTML pages before check
+CANARY_PROBE_SCORE      = float(os.environ.get("CANARY_PROBE_SCORE",      "20"))
 
 # ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
 FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")

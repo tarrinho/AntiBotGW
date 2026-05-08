@@ -1920,6 +1920,8 @@ _HOT_RELOAD_KNOBS = {
     "POW_MIN_SOLVE_MS":          (int, lambda v: 0 <= v <= 5000),
     # 1.6.5 — FingerprintJS BotD client-side detection
     "BOTD_ENABLED":           (_to_bool, None),
+    # 1.7.8 — Dashboard bypass mode (all detection + ban enforcement off)
+    "BYPASS_MODE":            (_to_bool, None),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
     # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
@@ -1980,6 +1982,18 @@ if "DB_BACKEND" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
 
 
+def _json_safe(v):
+    """Recursively strip private _ keys from dicts (e.g. compiled ip_network
+    objects stored in CUSTOM_RULES._ip_nets) so the state is always
+    JSON-serialisable without a custom encoder."""
+    if isinstance(v, list):
+        return [_json_safe(i) for i in v]
+    if isinstance(v, dict):
+        return {k: _json_safe(val) for k, val in v.items()
+                if not k.startswith("_")}
+    return v
+
+
 def _read_hot_reload_state() -> dict:
     out = {}
     g = globals()
@@ -1990,7 +2004,7 @@ def _read_hot_reload_state() -> dict:
         # Sets are not JSON-serialisable directly.
         if isinstance(v, set):
             v = sorted(v)
-        out[k] = v
+        out[k] = _json_safe(v)
     return out
 
 
@@ -2109,7 +2123,7 @@ async def config_endpoint(request: web.Request):
              rid=request.get("_rid", ""), applied=list(applied.keys()),
              rejected=rejected)
     return web.json_response(
-        {"applied": applied, "rejected": rejected, "warnings": warnings,
+        {"applied": _json_safe(applied), "rejected": rejected, "warnings": warnings,
          "state": _read_hot_reload_state()},
         headers={"Cache-Control": "no-store"})
 
@@ -2273,8 +2287,9 @@ async def protect(request: web.Request, handler):
                     _req_ip, _mon_ua, request.path, _ban_reason,
                     ja4=_request_ja4(request), request_id=rid)
 
-    # Operator-defined detection bypass paths — prefix match, skips detection
-    # but still writes an audit event so every access is traceable in logs.
+    # Operator-defined detection bypass paths — prefix match, skips detection.
+    # Uses db_queue only (not record()) so static-asset fetches do not pollute
+    # ip_state with per-asset entries.
     if BYPASS_PATHS and any(request.path.startswith(p) for p in BYPASS_PATHS):
         resp = await handler(request)
         if db_queue is not None:
@@ -2289,7 +2304,19 @@ async def protect(request: web.Request, handler):
                     "bypass-path",
                 )))
             except asyncio.QueueFull:
-                pass
+                pass  # nosec B110 — best-effort audit log; request already served
+        return resp
+
+    # 1.7.8 — Dashboard bypass mode. When BYPASS_MODE=True (set by the Controls
+    # bypass toggle) every non-admin upstream request is passed through with zero
+    # detection or ban enforcement. Admin-namespace paths still go through the
+    # normal protect() flow so admin auth remains in effect.
+    if BYPASS_MODE and not _is_admin_path(request.path):
+        resp = await handler(request)
+        _bm_ip = get_ip(request) or request.remote or ""
+        await record(_bm_ip, request.headers.get("User-Agent", ""),
+                     request.path, resp.status, "bypass-mode",
+                     track_key=_bm_ip, request_id=rid)
         return resp
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
