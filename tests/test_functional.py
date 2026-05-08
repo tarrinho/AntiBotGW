@@ -76,7 +76,13 @@ async def gw_client(fake_upstream, aiohttp_client):
     proxy.JS_CHALLENGE = False                     # off for these tests
     proxy.TURNSTILE_ENABLED = False
     proxy.ANUBIS_ENABLED = False
-    # Fresh in-memory state so test order doesn't bleed
+
+    app = proxy.make_app()
+    # Ensure on_startup ran (sets up db_queue, prune_task, etc.)
+    # aiohttp_client triggers app lifecycle hooks automatically.
+    client = await aiohttp_client(app)
+    # Clear in-memory state AFTER on_startup so db_load_state() doesn't
+    # repopulate ip_state/timeline with stale rows from prior tests.
     proxy.ip_state.clear()
     proxy.events.clear()
     proxy.metrics["total_requests"] = 0
@@ -85,11 +91,7 @@ async def gw_client(fake_upstream, aiohttp_client):
     proxy.metrics["by_reason"].clear()
     proxy.metrics["by_status"].clear()
     proxy.timeline.clear()
-
-    app = proxy.make_app()
-    # Ensure on_startup ran (sets up db_queue, prune_task, etc.)
-    # aiohttp_client triggers app lifecycle hooks automatically.
-    return await aiohttp_client(app)
+    return client
 
 
 # ── F1 — basic forwarding works for legit clients ────────────────────────
@@ -552,3 +554,110 @@ async def test_tarpit_endpoint_disabled_returns_404(gw_client):
         assert resp.status == 404, f"Disabled labyrinth should 404, got {resp.status}"
     finally:
         proxy.LABYRINTH_ENABLED = orig
+
+
+# ── F11 — BYPASS_MODE QA (1.7.8) ─────────────────────────────────────────────
+# protect() reads BYPASS_MODE from core.proxy_handler globals, not from the
+# importlib-loaded proxy module — patch there directly.
+
+@pytest.mark.asyncio
+async def test_bypass_mode_skips_ua_detection(gw_client):
+    """When BYPASS_MODE=True, bot-UA must pass with no block reason recorded."""
+    import core.proxy_handler as _cph
+    orig = _cph.BYPASS_MODE
+    _cph.BYPASS_MODE = True
+    try:
+        await gw_client.get("/", headers={"User-Agent": "curl/8.0.1"})
+        assert not (_has_block_reason(proxy, "ua-too-short")
+                    or _has_block_reason(proxy, "ua-blocked")), (
+            f"BYPASS_MODE=True must suppress UA detection, "
+            f"by_reason={dict(proxy.metrics['by_reason'])}"
+        )
+    finally:
+        _cph.BYPASS_MODE = orig
+
+
+@pytest.mark.asyncio
+async def test_bypass_mode_false_blocks_bot_ua(gw_client):
+    """Sanity check: with BYPASS_MODE=False the same bot UA is blocked."""
+    import core.proxy_handler as _cph
+    _cph.BYPASS_MODE = False
+    await gw_client.get("/", headers={"User-Agent": "curl/8.0.1"})
+    assert (
+        _has_block_reason(proxy, "ua-too-short")
+        or _has_block_reason(proxy, "ua-blocked")
+    ), "BYPASS_MODE=False must still block bot UAs"
+
+
+@pytest.mark.asyncio
+async def test_bypass_mode_not_written_to_db(gw_client):
+    """Setting BYPASS_MODE via the config endpoint must NOT persist it to config_kv."""
+    import sqlite3
+
+    resp = await gw_client.post(
+        "/antibot-appsec-gateway/secured/config",
+        json={"BYPASS_MODE": True},
+        cookies=_admin_cookie(),
+    )
+    assert resp.status == 200
+    body = await resp.json()
+    assert "BYPASS_MODE" in body.get("applied", {}), (
+        "BYPASS_MODE must be accepted by the config endpoint (in _HOT_RELOAD_KNOBS)"
+    )
+    await asyncio.sleep(0.1)   # let db_writer drain
+    conn = sqlite3.connect(proxy.DB_PATH)
+    rows = dict(conn.execute("SELECT key, value FROM config_kv").fetchall())
+    conn.close()
+    assert "BYPASS_MODE" not in rows, (
+        "BYPASS_MODE must NOT be written to config_kv — it is session-only "
+        "(_NOT_PERSIST_KNOBS) and must reset to False on container restart"
+    )
+
+
+# ── F12 — BYPASS_PATHS QA (1.7.8) ────────────────────────────────────────────
+# protect() reads BYPASS_PATHS from core.proxy_handler globals — patch there.
+
+@pytest.mark.asyncio
+async def test_bypass_paths_skips_honeypot_detection(gw_client):
+    """A path in BYPASS_PATHS must NOT trigger honeypot detection."""
+    import core.proxy_handler as _cph
+    orig_bp = _cph.BYPASS_PATHS
+    _cph.BYPASS_PATHS = ["/.env"]
+    try:
+        await gw_client.get(
+            "/.env",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        assert not _has_block_reason(proxy, "honeypot-silent"), (
+            "honeypot-silent must NOT fire when path is in BYPASS_PATHS; "
+            f"by_reason={dict(proxy.metrics['by_reason'])}"
+        )
+    finally:
+        _cph.BYPASS_PATHS = orig_bp
+
+
+@pytest.mark.asyncio
+async def test_bypass_paths_traffic_appears_in_timeline(gw_client):
+    """Requests matching BYPASS_PATHS must appear in timeline (record() with empty reason)."""
+    import core.proxy_handler as _cph
+    orig_bp = _cph.BYPASS_PATHS
+    _cph.BYPASS_PATHS = ["/health"]
+    proxy.timeline.clear()
+    try:
+        await gw_client.get(
+            "/health",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        assert len(proxy.timeline) > 0, (
+            "BYPASS_PATHS request must appear in proxy.timeline — "
+            "record() must be called with empty reason so bypass traffic is "
+            "visible in the main dashboard"
+        )
+    finally:
+        _cph.BYPASS_PATHS = orig_bp

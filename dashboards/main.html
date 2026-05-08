@@ -176,8 +176,13 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
            border:1px solid var(--line);color:var(--fg);padding:3px 8px;border-radius:5px;
            width:220px;outline:none"
     oninput="_applyFilters()"
+    onkeydown="if(event.key==='Enter')_applyFilters()"
     onfocus="this.style.borderColor='var(--blue)'"
     onblur="this.style.borderColor='var(--line)'">
+  <button title="Apply path filter" onclick="_applyFilters()"
+    style="background:#0e2c4a;border:1px solid #1f5fa6;color:#79c0ff;padding:3px 10px;
+           border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;line-height:1.4">
+    Filter ↵</button>
   <button id="path-search-clear" title="Clear path filter"
     style="display:none;background:none;border:none;color:var(--dim);cursor:pointer;
            font-size:14px;padding:0 4px;line-height:1"
@@ -662,6 +667,47 @@ async function _fetchPathEvents(pathQ) {
   }
 }
 
+function _renderEvents(events) {
+  const pathQ = (document.getElementById('path-search')?.value || '').trim().toLowerCase();
+  const showGwMgmt = window._activeFilters.has('gwmgmt');
+  const filtered = (events || []).filter(e => {
+    const p = e.path || '';
+    if (!showGwMgmt && p.startsWith('/antibot-appsec-gateway/')) return false;
+    if (pathQ && !p.toLowerCase().includes(pathQ)) return false;
+    return true;
+  });
+  const eEl = document.getElementById('events');
+  eEl.innerHTML = filtered.map(e => {
+    const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
+    const isOk = (e.reason === 'OK' || e.reason === '');
+    const isAuthorized = (e.reason === 'authorized-robot' || e.reason === 'operator-passthrough');
+    const evtCls = isOk ? 'evt-ok' : isAuthorized ? 'evt-authorized' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
+    const tagHtml = isOk
+      ? `<span class="tag ${safeClass(e.reason)}" title="Request reached upstream — no detector fired.">OK</span>`
+      : isAuthorized
+        ? `<span class="tag authorized-robot" title="${e.reason === 'operator-passthrough' ? 'Operator access — bypassed detection, recorded as allowed.' : 'Authorized monitoring bot — bypassed detection, not counted as blocked.'}">${escapeHtml(e.reason)}</span>`
+        : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
+    let statusHint = '';
+    if (!isOk && !isAuthorized) {
+      if (e.status === 200) statusHint = ' · silent-decoy (HTTP 200, mirrors upstream — bot can\'t tell it was blocked)';
+      else if (e.status === 404) statusHint = ' · upstream-404 mirror or honeypot decoy';
+      else if (e.status === 403) statusHint = ' · hard reject';
+      else if (e.status === 429) statusHint = ' · rate-limited';
+      else if (e.status === 402) statusHint = ' · PoW required';
+    }
+    return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint}">
+      <span class="dim">${escapeHtml(time)}</span>
+      <span>${tagHtml}</span>
+      <span>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</span>
+      <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
+      <span class="dim" title="request id (X-Request-ID)" style="font-family:ui-monospace;font-size:10.5px">${escapeHtml(e.rid || '')}</span>
+    </div>`;
+  }).join('') || '<span class="dim">no events yet</span>';
+  eEl.querySelectorAll('.reason-drill').forEach(el => {
+    el.onclick = ev => { ev.preventDefault(); openReasonDrill(el.dataset.reason); };
+  });
+}
+
 function _applyFilters() {
   if (chart) {
     chart.data.datasets[1].hidden = !window._activeFilters.has('allowed');
@@ -683,6 +729,7 @@ function _applyFilters() {
     return true;
   });
   _renderClientsTable(filtered);
+  _renderEvents(window._lastEvents || []);
   // Debounce path-event log fetch (300 ms) so we don't hammer on every keystroke
   clearTimeout(_pathEventsTimer);
   _pathEventsTimer = setTimeout(() => _fetchPathEvents(pathQ), 300);
@@ -1011,42 +1058,9 @@ async function tick() {
       tr.onclick = () => openPathDrill(tr.dataset.path);
     });
 
-    // Events
-    const eEl = document.getElementById('events');
-    eEl.innerHTML = (d.events || []).map(e => {
-      const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
-      const isOk = (e.reason === 'OK' || e.reason === '');
-      const isAuthorized = (e.reason === 'authorized-robot');
-      const evtCls = isOk ? 'evt-ok' : isAuthorized ? 'evt-authorized' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
-      // 1.5.5 — make reason tag click-to-explain.  Tooltip on the row's
-      // OK/blocked indicator clarifies the decision (silent decoys can
-      // return 200 even when blocked, etc.)
-      const tagHtml = isOk
-        ? `<span class="tag ${safeClass(e.reason)}" title="Request reached upstream — no detector fired.">OK</span>`
-        : isAuthorized
-          ? `<span class="tag authorized-robot" title="Authorized monitoring bot — bypassed detection, not counted as blocked.">authorized-robot</span>`
-          : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
-      // Status hint based on HTTP code seen + whether reason fired
-      let statusHint = '';
-      if (!isOk && !isAuthorized) {
-        if (e.status === 200) statusHint = ' · silent-decoy (HTTP 200, mirrors upstream — bot can\'t tell it was blocked)';
-        else if (e.status === 404) statusHint = ' · upstream-404 mirror or honeypot decoy';
-        else if (e.status === 403) statusHint = ' · hard reject';
-        else if (e.status === 429) statusHint = ' · rate-limited';
-        else if (e.status === 402) statusHint = ' · PoW required';
-      }
-      return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint}">
-        <span class="dim">${escapeHtml(time)}</span>
-        <span>${tagHtml}</span>
-        <span>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</span>
-        <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
-        <span class="dim" title="request id (X-Request-ID)" style="font-family:ui-monospace;font-size:10.5px">${escapeHtml(e.rid || '')}</span>
-      </div>`;
-    }).join('') || '<span class="dim">no events yet</span>';
-    // Wire click handlers on the just-rendered events.
-    eEl.querySelectorAll('.reason-drill').forEach(el => {
-      el.onclick = ev => { ev.preventDefault(); openReasonDrill(el.dataset.reason); };
-    });
+    // Events — store raw list; _renderEvents() applies category + path filters
+    window._lastEvents = d.events || [];
+    _renderEvents(window._lastEvents);
 
     // Timeline chart
     if (d.timeline && d.timeline.length) {

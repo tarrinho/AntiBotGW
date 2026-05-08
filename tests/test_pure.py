@@ -3387,25 +3387,39 @@ def test_bypass_paths_guard_after_authorized_bots_before_rps():
     )
 
 
-def test_bypass_paths_early_return_no_record_call():
-    """Bypass-paths block must proxy via handler() and write a db_queue audit event,
-    but must NOT call record() — static-asset fetches must not pollute ip_state."""
+def test_bypass_paths_early_return_calls_record():
+    """Bypass-paths block must proxy via handler() and call record() with empty reason
+    so traffic appears in the main dashboard timeline and clients table."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
     assert bp_idx != -1
-    block = src[bp_idx: bp_idx + 700]
+    block = src[bp_idx: bp_idx + 400]
     assert "await handler(request)" in block, (
         "Bypass block must call await handler(request)"
     )
-    assert "db_queue.put_nowait" in block, (
-        "Bypass block must write an audit event to db_queue"
+    assert "await record(" in block, (
+        "Bypass block must call record() so traffic appears in the dashboard timeline"
     )
-    assert "bypass-path" in block, (
-        "Bypass block audit event must use reason 'bypass-path'"
+
+
+def test_bypass_mode_not_persisted_to_db():
+    """BYPASS_MODE must be in _NOT_PERSIST_KNOBS so it always resets to False
+    on container restart. Persisting it would let a stale True value survive
+    restarts and bypass all detection silently."""
+    from core.proxy_handler import _NOT_PERSIST_KNOBS
+    assert "BYPASS_MODE" in _NOT_PERSIST_KNOBS, (
+        "BYPASS_MODE must be in _NOT_PERSIST_KNOBS — "
+        "it is a session-only incident-response toggle that must default to False on cold start"
     )
-    assert "await record(" not in block, (
-        "Bypass-paths block must NOT call record() — ip_state must stay clean for static assets"
+
+
+def test_bypass_mode_in_hot_reload_knobs():
+    """BYPASS_MODE must still be in _HOT_RELOAD_KNOBS so it can be toggled at runtime
+    even though it is excluded from DB persistence."""
+    from core.proxy_handler import _HOT_RELOAD_KNOBS
+    assert "BYPASS_MODE" in _HOT_RELOAD_KNOBS, (
+        "BYPASS_MODE must remain in _HOT_RELOAD_KNOBS so the Controls dashboard can toggle it"
     )
 
 
@@ -3991,6 +4005,52 @@ def test_geo_html_load_status_pct_helper():
     )
     assert "Loading ' + pct + '%'" in html, (
         "_setLoadPct must render 'Loading X%' text"
+    )
+
+
+def test_operator_passthrough_in_passthrough_reasons():
+    """'operator-passthrough' must be in _PASSTHROUGH_REASONS so operator
+    accesses count as 'allowed' (not 'blocked') in metrics and timeline."""
+    from core.metrics import _PASSTHROUGH_REASONS
+    assert "operator-passthrough" in _PASSTHROUGH_REASONS, (
+        "_PASSTHROUGH_REASONS must include 'operator-passthrough' so authenticated "
+        "operator accesses are not counted as blocked in metrics/timeline (1.7.8)"
+    )
+
+
+def test_protect_upstream_operator_bypass_calls_record():
+    """The non-admin upstream operator bypass block in protect() must call
+    record() with reason='operator-passthrough' before returning.
+
+    Before the 1.7.8 fix, 'return await handler(request)' exited protect()
+    immediately, skipping the record() at the end of the function.  Operator
+    accesses were therefore invisible in the clients table and timeline.
+    """
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    # Find the non-admin upstream operator bypass block
+    upstream_bypass_idx = src.find("_internal_authed(request) and _admin_ip_allowed(request)")
+    assert upstream_bypass_idx != -1, (
+        "protect() must have the upstream operator bypass condition "
+        "'_internal_authed(request) and _admin_ip_allowed(request)'"
+    )
+    # Grab the block up to the next return — must contain record() call
+    block = src[upstream_bypass_idx: upstream_bypass_idx + 600]
+    assert "await record(" in block, (
+        "protect() upstream operator bypass must call record() before returning "
+        "so accesses appear in ip_state / clients table / timeline (1.7.8)"
+    )
+    assert '"operator-passthrough"' in block, (
+        "protect() upstream operator bypass must pass reason='operator-passthrough' "
+        "to record() (1.7.8)"
+    )
+    # Sanity: record() must come BEFORE the 'return _op_resp' line
+    record_pos = block.find("await record(")
+    return_pos = block.find("return _op_resp")
+    assert 0 < record_pos < return_pos, (
+        "record() call must appear before 'return _op_resp' in the operator bypass block — "
+        "if it comes after, the return exits protect() first and record() is never called"
     )
 
 

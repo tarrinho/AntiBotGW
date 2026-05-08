@@ -46,8 +46,8 @@ def _cost_bump(elapsed_ms: float):
 # Reasons that bypass detection but are still recorded — not counted as blocked.
 _PASSTHROUGH_REASONS: frozenset = frozenset({
     "authorized-robot",
-    "bypass-path",   # BYPASS_PATHS prefix match — allowed, no detection
-    "bypass-mode",   # BYPASS_MODE global toggle — allowed, no detection or ban check
+    "bypass-path",         # BYPASS_PATHS prefix match — allowed, no detection
+    "operator-passthrough",# authenticated operator accessing upstream — allowed
 })
 
 
