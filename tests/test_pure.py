@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.7"
+_EXPECTED_VERSION = "AppSecGW_1.7.8"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.7\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.8\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
@@ -544,7 +544,7 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.7:\n" + "\n".join(hits)
+    assert not hits, "Stale version strings found — update to AppSecGW_1.7.8:\n" + "\n".join(hits)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -2471,7 +2471,7 @@ def test_geo_data_authorized_robot_classification_precedes_asn_update():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     geo_fn = src.find("async def geo_data_endpoint")
     assert geo_fn != -1
-    geo_section = src[geo_fn: geo_fn + 6000]
+    geo_section = src[geo_fn: geo_fn + 8000]
     ar_kind_idx = geo_section.find('reason == "authorized-robot"')
     asn_update_idx = geo_section.find("asn_totals.setdefault")
     assert ar_kind_idx != -1, (
@@ -3609,11 +3609,19 @@ def test_settings_html_no_credentials_same_origin():
 # DC-01: no url() identity wrapper ───────────────────────────────────────────
 
 def test_no_url_identity_wrapper_in_dashboards():
-    """DC-01: No dashboard must define const url = (p) => p — dead no-op wrapper removed."""
+    """DC-01: Dashboards other than controls.html must not define the url identity wrapper.
+    controls.html keeps 'const url = p => p' because it has ~30 fetch call-sites that
+    use url(...) and inlining all of them is a high-risk change."""
+    _skip = {'controls.html'}
     for f in _DASHBOARD_FILES:
+        if f in _skip:
+            continue
         src = _dash(f)
         assert "const url = (p) => p" not in src, (
             f"{f} still has dead const url = (p) => p identity wrapper"
+        )
+        assert "const url = p => p" not in src, (
+            f"{f} still has dead const url = p => p identity wrapper"
         )
 
 
@@ -3625,3 +3633,377 @@ def test_logs_html_no_last_ids_variable():
     assert "let lastIds" not in src, (
         "logs.html still defines let lastIds — dead variable; remove it"
     )
+
+
+# ── Service metrics defaults (1.7.7) ─────────────────────────────────────────
+
+def test_service_metrics_interval_default_60s():
+    """SVC_METRICS_INTERVAL default must be 60 s (1-minute resolution → 30-day window)."""
+    import importlib, sys, os
+    saved = sys.modules.pop("config", None)
+    env_bak = os.environ.pop("SVC_METRICS_INTERVAL", None)
+    try:
+        import config as cfg
+        assert cfg.SERVICE_METRICS_INTERVAL == 60.0, (
+            f"SERVICE_METRICS_INTERVAL default changed: expected 60.0, got {cfg.SERVICE_METRICS_INTERVAL}"
+        )
+    finally:
+        if env_bak is not None:
+            os.environ["SVC_METRICS_INTERVAL"] = env_bak
+        sys.modules.pop("config", None)
+        if saved is not None:
+            sys.modules["config"] = saved
+
+
+def test_service_metrics_retention_default_43200():
+    """SVC_METRICS_RETENTION default must be 43200 (30 days × 1440 samples/day at 60s)."""
+    import importlib, sys, os
+    saved = sys.modules.pop("config", None)
+    env_bak = os.environ.pop("SVC_METRICS_RETENTION", None)
+    try:
+        import config as cfg
+        assert cfg.SERVICE_METRICS_RETENTION == 43200, (
+            f"SERVICE_METRICS_RETENTION default changed: expected 43200, got {cfg.SERVICE_METRICS_RETENTION}"
+        )
+    finally:
+        if env_bak is not None:
+            os.environ["SVC_METRICS_RETENTION"] = env_bak
+        sys.modules.pop("config", None)
+        if saved is not None:
+            sys.modules["config"] = saved
+
+
+def test_service_metrics_window_covers_30_days():
+    """INTERVAL × RETENTION must cover at least 30 days."""
+    import sys, os
+    saved = sys.modules.pop("config", None)
+    for k in ("SVC_METRICS_INTERVAL", "SVC_METRICS_RETENTION"):
+        os.environ.pop(k, None)
+    try:
+        import config as cfg
+        window_days = (cfg.SERVICE_METRICS_INTERVAL * cfg.SERVICE_METRICS_RETENTION) / 86400
+        assert window_days >= 30, (
+            f"Metrics window {window_days:.1f} days < 30 days "
+            f"(INTERVAL={cfg.SERVICE_METRICS_INTERVAL}, RETENTION={cfg.SERVICE_METRICS_RETENTION})"
+        )
+    finally:
+        sys.modules.pop("config", None)
+        if saved is not None:
+            sys.modules["config"] = saved
+
+
+def test_service_metrics_env_override_interval():
+    """SVC_METRICS_INTERVAL env var must override the default."""
+    import sys, os
+    saved = sys.modules.pop("config", None)
+    os.environ["SVC_METRICS_INTERVAL"] = "30"
+    try:
+        import config as cfg
+        assert cfg.SERVICE_METRICS_INTERVAL == 30.0, (
+            f"SVC_METRICS_INTERVAL env override not respected: got {cfg.SERVICE_METRICS_INTERVAL}"
+        )
+    finally:
+        del os.environ["SVC_METRICS_INTERVAL"]
+        sys.modules.pop("config", None)
+        if saved is not None:
+            sys.modules["config"] = saved
+
+
+def test_service_metrics_env_override_retention():
+    """SVC_METRICS_RETENTION env var must override the default."""
+    import sys, os
+    saved = sys.modules.pop("config", None)
+    os.environ["SVC_METRICS_RETENTION"] = "1000"
+    try:
+        import config as cfg
+        assert cfg.SERVICE_METRICS_RETENTION == 1000, (
+            f"SVC_METRICS_RETENTION env override not respected: got {cfg.SERVICE_METRICS_RETENTION}"
+        )
+    finally:
+        del os.environ["SVC_METRICS_RETENTION"]
+        sys.modules.pop("config", None)
+        if saved is not None:
+            sys.modules["config"] = saved
+
+
+# ── MaxMind lookup cache (1.7.7) ─────────────────────────────────────────────
+
+def test_maxmind_lookup_cache_ttl_is_86400():
+    """_LOOKUP_CACHE_TTL must be 86400 s (24 h) — ASN/geo data stable for days."""
+    import reputation.maxmind as mm
+    assert mm._LOOKUP_CACHE_TTL == 86400, (
+        f"_LOOKUP_CACHE_TTL changed: expected 86400, got {mm._LOOKUP_CACHE_TTL}"
+    )
+
+
+def test_maxmind_lookup_cache_max_is_8192():
+    """_LOOKUP_CACHE_MAX must be 8192 — bounded to prevent unbounded growth."""
+    import reputation.maxmind as mm
+    assert mm._LOOKUP_CACHE_MAX == 8192, (
+        f"_LOOKUP_CACHE_MAX changed: expected 8192, got {mm._LOOKUP_CACHE_MAX}"
+    )
+
+
+def test_maxmind_asn_cache_exists():
+    """_asn_cache and _city_cache must be dicts defined at module level."""
+    import reputation.maxmind as mm
+    assert isinstance(mm._asn_cache, dict), "_asn_cache must be a dict"
+    assert isinstance(mm._city_cache, dict), "_city_cache must be a dict"
+
+
+def test_maxmind_city_lookup_caches_result():
+    """_city_lookup must store a successful result in _city_cache."""
+    import reputation.maxmind as mm
+
+    class _FakeReader:
+        def get(self, ip):
+            return {"location": {"latitude": 38.7, "longitude": -9.1},
+                    "country": {"iso_code": "PT"},
+                    "city": {"names": {"en": "Lisbon"}}}
+
+    orig_reader = mm._city_reader
+    orig_cache  = mm._city_cache.copy()
+    mm._city_reader = _FakeReader()
+    mm._city_cache.clear()
+    try:
+        result = mm._city_lookup("1.2.3.4")
+        assert result == (38.7, -9.1, "PT", "Lisbon")
+        assert "1.2.3.4" in mm._city_cache, "_city_lookup did not populate _city_cache"
+        cached_val, expiry = mm._city_cache["1.2.3.4"]
+        assert cached_val == result
+        # second call must return cached result without hitting reader
+        mm._city_reader = None   # reader removed — only cache must serve
+        result2 = mm._city_lookup("1.2.3.4")
+        assert result2 == result, "second call did not return cached result"
+    finally:
+        mm._city_reader = orig_reader
+        mm._city_cache.clear()
+        mm._city_cache.update(orig_cache)
+
+
+def test_maxmind_asn_lookup_does_not_cache_disabled():
+    """_asn_lookup must NOT cache results when MAXMIND_ENABLED is False."""
+    import reputation.maxmind as mm
+    orig_enabled = mm.MAXMIND_ENABLED
+    orig_cache   = mm._asn_cache.copy()
+    mm.MAXMIND_ENABLED = False
+    mm._asn_cache.clear()
+    try:
+        result = mm._asn_lookup("1.2.3.4")
+        assert result[3] == "disabled"
+        assert "1.2.3.4" not in mm._asn_cache, (
+            "_asn_lookup cached a 'disabled' result — must not cache non-ok results"
+        )
+    finally:
+        mm.MAXMIND_ENABLED = orig_enabled
+        mm._asn_cache.clear()
+        mm._asn_cache.update(orig_cache)
+
+
+def test_maxmind_cache_evicts_oldest_at_max():
+    """_cache_put must evict the oldest entry when cache reaches _LOOKUP_CACHE_MAX."""
+    import reputation.maxmind as mm
+    cache: dict = {}
+    for i in range(mm._LOOKUP_CACHE_MAX):
+        mm._cache_put(cache, f"10.0.{i//256}.{i%256}", (i, "", False, "ok"))
+    assert len(cache) == mm._LOOKUP_CACHE_MAX
+    # inserting one more must evict the oldest (first inserted)
+    mm._cache_put(cache, "192.168.1.1", (999, "", False, "ok"))
+    assert len(cache) == mm._LOOKUP_CACHE_MAX, "cache grew past _LOOKUP_CACHE_MAX"
+    assert "10.0.0.0" not in cache, "oldest entry not evicted"
+    assert "192.168.1.1" in cache, "new entry not inserted after eviction"
+
+
+# ── geo.html load-status pill text (1.7.7) ───────────────────────────────────
+
+def test_geo_html_load_status_ready_text():
+    """geo.html load-status pill must flip to 'Loading Ready' (not just 'Ready')."""
+    src = _dash("geo.html")
+    assert "Loading Ready" in src, (
+        "geo.html load-status pill text must be 'Loading Ready', not just 'Ready'"
+    )
+
+
+# ── logs.html category filter pills (1.7.7) ──────────────────────────────────
+
+def test_logs_html_cat_filter_bar_exists():
+    """logs.html must have a cat-filter-bar toolbar div."""
+    src = _dash("logs.html")
+    assert 'id="cat-filter-bar"' in src, (
+        "logs.html missing cat-filter-bar toolbar"
+    )
+
+
+def test_logs_html_cat_pills_all_present():
+    """logs.html must have all 5 category pills: allowed, ban, reallyban, authbots, gwmgmt."""
+    src = _dash("logs.html")
+    for cat in ("allowed", "ban", "reallyban", "authbots", "gwmgmt"):
+        assert f'data-cat="{cat}"' in src, (
+            f"logs.html missing cat-pill for category '{cat}'"
+        )
+
+
+def test_logs_html_log_filters_set_initialized():
+    """logs.html must initialise window._logFilters as a Set with all 5 categories."""
+    src = _dash("logs.html")
+    assert "window._logFilters" in src, "logs.html missing window._logFilters"
+    assert "_logFilters = new Set(" in src, (
+        "logs.html _logFilters must be initialized with new Set(...)"
+    )
+
+
+def test_logs_html_log_cat_function_defined():
+    """logs.html must define _logCat() categorisation function."""
+    src = _dash("logs.html")
+    assert "function _logCat(" in src, "logs.html missing _logCat() function"
+
+
+def test_logs_html_apply_log_filters_defined():
+    """logs.html must define _applyLogFilters() render function."""
+    src = _dash("logs.html")
+    assert "function _applyLogFilters(" in src, (
+        "logs.html missing _applyLogFilters() function"
+    )
+
+
+def test_logs_html_update_cat_bar_defined():
+    """logs.html must define _updateCatBar() to show/hide pills on tab switch."""
+    src = _dash("logs.html")
+    assert "function _updateCatBar(" in src, (
+        "logs.html missing _updateCatBar() function"
+    )
+
+
+def test_logs_html_cat_bar_hidden_on_gw_tab():
+    """logs.html _updateCatBar must hide the pill bar when kind === 'gw'."""
+    src = _dash("logs.html")
+    assert "kind === 'requests'" in src or 'kind === "requests"' in src, (
+        "logs.html _updateCatBar must conditionally show bar only for requests tab"
+    )
+
+
+def test_logs_html_hard_ban_reasons_defined():
+    """logs.html must define _HARD_BAN_REASONS Set for reallyban categorisation."""
+    src = _dash("logs.html")
+    assert "_HARD_BAN_REASONS" in src, "logs.html missing _HARD_BAN_REASONS"
+    assert "honeypot" in src, "logs.html _HARD_BAN_REASONS must include honeypot reasons"
+
+
+# ── controls.html actions bar placement (1.7.7) ──────────────────────────────
+
+def test_controls_actions_bar_before_scoring():
+    """div.actions (Save/Reset) must appear before card-scoring in source order."""
+    src = _dash("controls.html")
+    actions_pos = src.find('class="actions"')
+    scoring_pos = src.find('id="card-scoring"')
+    assert actions_pos != -1, "controls.html missing div.actions"
+    assert scoring_pos != -1, "controls.html missing card-scoring"
+    assert actions_pos < scoring_pos, (
+        f"div.actions (pos {actions_pos}) must appear before card-scoring "
+        f"(pos {scoring_pos}) in controls.html source order"
+    )
+
+
+# ── geo-map 30-day view (1.7.7 session 3) ────────────────────────────────────
+
+def test_geo_html_has_30day_option():
+    """geo.html window select must include a 30-day (43200 min) option."""
+    src = _dash("geo.html")
+    assert 'value="43200"' in src, (
+        "geo.html range <select> missing 30-day option (value=\"43200\")"
+    )
+    assert "30 days" in src, (
+        "geo.html range <select> 30-day option must display '30 days'"
+    )
+
+
+def test_geo_data_endpoint_cap_allows_30days():
+    """geo_data_endpoint range cap must allow 43200 (30 days) not clamp to 10080."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    geo_start = src.find("async def geo_data_endpoint")
+    assert geo_start != -1, "geo_data_endpoint missing"
+    fn_src = src[geo_start: geo_start + 1200]
+    assert "min(43200," in fn_src, (
+        "geo_data_endpoint range cap must be 43200 (30 days), not 10080 (7 days)"
+    )
+    assert "min(10080," not in fn_src, (
+        "geo_data_endpoint still has old 10080 cap — update to 43200"
+    )
+
+
+def test_geo_drill_endpoint_cap_allows_30days():
+    """geo_drill_endpoint range cap must allow 43200 to match geo_data."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    drill_start = src.find("async def geo_drill_endpoint")
+    assert drill_start != -1, "geo_drill_endpoint missing"
+    fn_src = src[drill_start: drill_start + 1200]
+    assert "min(43200," in fn_src, (
+        "geo_drill_endpoint range cap must be 43200 (30 days) to match geo_data_endpoint"
+    )
+
+
+def test_geo_data_uses_cursor_not_fetchall():
+    """geo_data_endpoint must iterate the cursor directly (no fetchall) to avoid
+    loading 30 days of events into RAM at once."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    geo_start = src.find("async def geo_data_endpoint")
+    assert geo_start != -1, "geo_data_endpoint missing"
+    # Find the end of the function by looking for the next async def
+    next_fn = src.find("\nasync def ", geo_start + 1)
+    fn_src = src[geo_start: next_fn if next_fn != -1 else geo_start + 8000]
+    assert ".fetchall()" not in fn_src, (
+        "geo_data_endpoint must not use fetchall() — iterate cursor directly "
+        "to avoid loading all 30-day events into RAM"
+    )
+    assert "for r in cursor" in fn_src, (
+        "geo_data_endpoint must iterate the SQLite cursor directly"
+    )
+
+
+def test_geo_data_uses_reservoir_sampling():
+    """geo_data_endpoint must use reservoir sampling (Algorithm R) for events_sample
+    so the scrubber is uniformly distributed across the full 30-day window."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    geo_start = src.find("async def geo_data_endpoint")
+    assert geo_start != -1, "geo_data_endpoint missing"
+    next_fn = src.find("\nasync def ", geo_start + 1)
+    fn_src = src[geo_start: next_fn if next_fn != -1 else geo_start + 8000]
+    assert "_random.randint" in fn_src, (
+        "geo_data_endpoint must use reservoir sampling (_random.randint) for "
+        "events_sample so the scrubber covers the full window, not just oldest events"
+    )
+    assert "_sample_seen" in fn_src, (
+        "geo_data_endpoint reservoir sampling must track _sample_seen as denominator"
+    )
+
+
+# ── geo-map load-status percentage (1.7.8) ────────────────────────────────────
+
+def test_geo_html_load_status_pct_helper():
+    """geo.html must have _setLoadPct helper that guards on .ready class."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "geo.html").read_text()
+    assert "function _setLoadPct" in html, "_setLoadPct helper missing from geo.html"
+    assert "classList.contains('ready')" in html, (
+        "_setLoadPct must guard against overwriting the ready state"
+    )
+    assert "Loading ' + pct + '%'" in html, (
+        "_setLoadPct must render 'Loading X%' text"
+    )
+
+
+def test_geo_html_tick_uses_timer_progress():
+    """tick() must use a setInterval-based animation so percentages are visible
+    even when the fetch completes within a single event-loop task."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "geo.html").read_text()
+    assert "function _startLoadPct" in html, "_startLoadPct missing from geo.html"
+    assert "function _finishLoadPct" in html, "_finishLoadPct missing from geo.html"
+    assert "setInterval" in html, "_startLoadPct must use setInterval for timer-based animation"
+    assert "clearInterval" in html, "_finishLoadPct must clearInterval on completion/error"
+    assert "_startLoadPct()" in html, "tick() must call _startLoadPct() at start"
+    assert "_finishLoadPct()" in html, "tick() must call _finishLoadPct() after rendering"

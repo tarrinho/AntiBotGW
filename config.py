@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.7.7"
+GW_VERSION = "AppSecGW_1.7.8"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -179,7 +179,7 @@ def _resolve_key_dir() -> str:
         try:
             os.makedirs(d, mode=0o700, exist_ok=True)
             try: os.chmod(d, 0o700)
-            except OSError: pass
+            except OSError: pass  # nosec B110 — chmod is best-effort hardening; dir already writable
             return d
         except OSError as _e:
             print(f"[keys] APPSECGW_KEY_DIR={env_dir!r} not writable "
@@ -607,8 +607,8 @@ WEBHOOK_EVENT_FILTER = [
 ]
 
 # ── v1.4: Service-metrics collection ──────────────────────────────────────
-SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
-SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "8640"))  # in-mem samples
+SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "60"))    # secs (60s → 30-day window at ~22 MB)
+SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "43200"))  # in-mem samples (30 days × 1440/day)
 SVC_DB_RETENTION_HOURS = int(os.environ.get("SVC_DB_RETENTION_HOURS", "720"))    # on-disk retention
 _PROC = "/proc"
 _DATA_PATH = os.environ.get("DB_PATH", "/data/antibot.db")

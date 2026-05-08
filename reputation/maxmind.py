@@ -169,7 +169,7 @@ async def _maxmind_refresh_loop():
                   flush=True)
             for p in stale:
                 try: os.remove(p)
-                except OSError: pass
+                except OSError: pass  # nosec B110 — stale DB file may already be removed; race is harmless
             _maxmind_auto_fetch()
             try:
                 import maxminddb
@@ -248,11 +248,13 @@ def _city_lookup(ip: str):
     """Return (lat, lng, country_code, city_name) or None if unknown.
     City DB lookup latency ~0.1ms — same DB family as ASN. Results cached
     for _LOOKUP_CACHE_TTL seconds to avoid redundant mmdb reads per request."""
-    if _city_reader is None or not ip:
+    if not ip:
         return None
     cached = _cache_get(_city_cache, ip)
     if cached is not None:
         return cached
+    if _city_reader is None:
+        return None
     try:
         rec = _city_reader.get(ip)
         if not rec:

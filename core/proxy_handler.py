@@ -22,6 +22,7 @@ import os
 import re
 import secrets
 import sqlite3
+import random as _random
 import time as _t
 
 import aiohttp
@@ -1624,7 +1625,7 @@ async def secrets_endpoint(request: web.Request):
         # Clear DB
         if db_queue is not None:
             try: db_queue.put_nowait(("del_secret", (public_name,)))
-            except asyncio.QueueFull: pass
+            except asyncio.QueueFull: pass  # nosec B110 — best-effort DB sync; in-memory state already updated
         # Revert global to env (or empty)
         g[global_name] = os.environ.get(env_name, "").strip()
         _refresh_integration_state(globals())
@@ -4636,7 +4637,7 @@ async def geo_data_endpoint(request: web.Request):
                      "or set MAXMIND_CITY_DB_PATH"},
             headers={"Cache-Control": "no-store"})
     try:
-        range_min = max(5, min(10080, int(request.query.get("range", "60"))))
+        range_min = max(5, min(43200, int(request.query.get("range", "60"))))
     except ValueError:
         range_min = 60
     try:
@@ -4660,20 +4661,6 @@ async def geo_data_endpoint(request: web.Request):
     points = {}  # {(lat_round, lng_round): {"country","city","clean","missed","blocked","tor_hits","dc_hits"}}
     countries = {}  # {iso: {"clean","missed","blocked"}}
     events_sample = []  # for the time scrubber (capped)
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT ts, ip, reason FROM events "
-            "WHERE ts >= ? AND ts <= ? ORDER BY ts ASC",
-            (start_epoch, end_epoch),
-        ).fetchall()
-        conn.close()
-    except Exception as e:
-        return web.json_response(
-            {"error": f"db: {e}", "points": []}, status=500,
-            headers={"Cache-Control": "no-store"})
-
     # Resolve each unique IP only once. 1.6.3 — also flag Tor exits and
     # hosting ASNs so the dashboard can render them with distinct markers.
     # 1.6.4 — also resolve ASN org so we can rank top providers globally.
@@ -4681,71 +4668,98 @@ async def geo_data_endpoint(request: web.Request):
     ip_flags = {}   # ip → {"tor": bool, "dc": bool, "asn_org": str}
     asn_totals = {}  # asn_org → {clean, blocked}
     skipped_no_geo = 0  # events dropped because IP has no geoip record (private/unresolvable)
-    for r in rows:
-        ip = r["ip"]
-        if not ip:
-            continue
-        if ip not in ip_geo:
-            ip_geo[ip] = _city_lookup(ip)
-            tor_hit = ip in _tor_exits
-            dc_hit = False
-            asn_org = ""
-            if MAXMIND_ENABLED:
-                _asn, _org, _is_hosting, _ = _asn_lookup(ip)
-                dc_hit = bool(_is_hosting)
-                asn_org = (_org or "")[:80]
-            ip_flags[ip] = {"tor": tor_hit, "dc": dc_hit, "asn_org": asn_org}
-        loc = ip_geo[ip]
-        if loc is None:
-            skipped_no_geo += 1
-            continue
-        lat, lng, country, city = loc
-        # Round to 0.5° to merge nearby cities into a single bubble
-        key = (round(lat * 2) / 2, round(lng * 2) / 2)
-        if key not in points:
-            # 1.6.4 — `methods` counts blocks per detection-method bucket
-            # at this cell. Operators see WHICH layer is doing the work.
-            points[key] = {"country": country, "city": city,
-                           "clean": 0, "missed": 0, "blocked": 0,
-                           "authorized_robot": 0,
-                           "tor_hits": 0, "dc_hits": 0,
-                           "methods": {}}
-        reason = (r["reason"] or "")
-        if reason == "authorized-robot":
-            kind = "authorized_robot"
-        elif reason and reason != "OK":
-            kind = "blocked"
-        else:
-            kind = "clean"
-        points[key][kind] += 1
-        # 1.6.4 — bucket the block reason by method
-        if kind == "blocked":
-            method = _reason_method(reason)
-            points[key]["methods"][method] = points[key]["methods"].get(method, 0) + 1
-        # Country aggregation (also methods + asn_org per country)
-        if country:
-            if country not in countries:
-                countries[country] = {"clean": 0, "missed": 0, "blocked": 0,
-                                       "authorized_robot": 0, "methods": {}}
-            countries[country][kind] += 1
-            if kind == "blocked":
-                method = _reason_method(reason)
-                countries[country]["methods"][method] = (
-                    countries[country]["methods"].get(method, 0) + 1)
-        # Tor / DC counts at this point
-        flags = ip_flags.get(ip) or {}
-        if flags.get("tor"):
-            points[key]["tor_hits"] += 1
-        if flags.get("dc"):
-            points[key]["dc_hits"] += 1
-        # 1.6.4 — global ASN totals (top providers per range)
-        org = (flags.get("asn_org") or "").strip()
-        if org:
-            asn_totals.setdefault(org, {"clean": 0, "blocked": 0, "authorized_robot": 0})
-            asn_totals[org][kind] = asn_totals[org].get(kind, 0) + 1
-        # Sample for time-scrubber playback (cap at 5000 events)
-        if len(events_sample) < 5000:
-            events_sample.append([float(r["ts"]), lat, lng, kind])
+    _sample_seen = 0   # geo-resolved row count — denominator for reservoir sampling
+    _SCRUBBER_CAP = 5000
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        try:
+            # Cursor iteration (no fetchall) — avoids loading all rows into RAM for
+            # large windows (e.g. 30 days). ORDER BY omitted: rebuildBuckets() bins
+            # by ts value directly so sort order doesn't matter for correctness.
+            cursor = conn.execute(
+                "SELECT ts, ip, reason FROM events "
+                "WHERE ts >= ? AND ts <= ?",
+                (start_epoch, end_epoch),
+            )
+            for r in cursor:
+                ip = r["ip"]
+                if not ip:
+                    continue
+                if ip not in ip_geo:
+                    ip_geo[ip] = _city_lookup(ip)
+                    tor_hit = ip in _tor_exits
+                    dc_hit = False
+                    asn_org = ""
+                    if MAXMIND_ENABLED:
+                        _asn, _org, _is_hosting, _ = _asn_lookup(ip)
+                        dc_hit = bool(_is_hosting)
+                        asn_org = (_org or "")[:80]
+                    ip_flags[ip] = {"tor": tor_hit, "dc": dc_hit, "asn_org": asn_org}
+                loc = ip_geo[ip]
+                if loc is None:
+                    skipped_no_geo += 1
+                    continue
+                lat, lng, country, city = loc
+                # Round to 0.5° to merge nearby cities into a single bubble
+                key = (round(lat * 2) / 2, round(lng * 2) / 2)
+                if key not in points:
+                    # 1.6.4 — `methods` counts blocks per detection-method bucket
+                    # at this cell. Operators see WHICH layer is doing the work.
+                    points[key] = {"country": country, "city": city,
+                                   "clean": 0, "missed": 0, "blocked": 0,
+                                   "authorized_robot": 0,
+                                   "tor_hits": 0, "dc_hits": 0,
+                                   "methods": {}}
+                reason = (r["reason"] or "")
+                if reason == "authorized-robot":
+                    kind = "authorized_robot"
+                elif reason and reason != "OK":
+                    kind = "blocked"
+                else:
+                    kind = "clean"
+                points[key][kind] += 1
+                # 1.6.4 — bucket the block reason by method
+                if kind == "blocked":
+                    method = _reason_method(reason)
+                    points[key]["methods"][method] = points[key]["methods"].get(method, 0) + 1
+                # Country aggregation (also methods + asn_org per country)
+                if country:
+                    if country not in countries:
+                        countries[country] = {"clean": 0, "missed": 0, "blocked": 0,
+                                               "authorized_robot": 0, "methods": {}}
+                    countries[country][kind] += 1
+                    if kind == "blocked":
+                        method = _reason_method(reason)
+                        countries[country]["methods"][method] = (
+                            countries[country]["methods"].get(method, 0) + 1)
+                # Tor / DC counts at this point
+                flags = ip_flags.get(ip) or {}
+                if flags.get("tor"):
+                    points[key]["tor_hits"] += 1
+                if flags.get("dc"):
+                    points[key]["dc_hits"] += 1
+                # 1.6.4 — global ASN totals (top providers per range)
+                org = (flags.get("asn_org") or "").strip()
+                if org:
+                    asn_totals.setdefault(org, {"clean": 0, "blocked": 0, "authorized_robot": 0})
+                    asn_totals[org][kind] = asn_totals[org].get(kind, 0) + 1
+                # Reservoir sampling (Algorithm R) — uniform sample across the full
+                # window so the scrubber replay represents all 30 days, not just the
+                # first 5 000 events (which would all fall in the oldest time slice).
+                _sample_seen += 1
+                if _sample_seen <= _SCRUBBER_CAP:
+                    events_sample.append([float(r["ts"]), lat, lng, kind])
+                else:
+                    j = _random.randint(0, _sample_seen - 1)
+                    if j < _SCRUBBER_CAP:
+                        events_sample[j] = [float(r["ts"]), lat, lng, kind]
+        finally:
+            conn.close()
+    except Exception as e:
+        return web.json_response(
+            {"error": f"db: {e}", "points": []}, status=500,
+            headers={"Cache-Control": "no-store"})
 
     # We don't have per-event "missed" classification in the events table.
     # Approximate "missed" via current per-identity risk band: any client
@@ -4906,7 +4920,7 @@ async def geo_drill_endpoint(request: web.Request):
     try:
         lat = float(request.query.get("lat", "nan"))
         lng = float(request.query.get("lng", "nan"))
-        range_min = max(5, min(10080, int(request.query.get("range", "60"))))
+        range_min = max(5, min(43200, int(request.query.get("range", "60"))))
         end_epoch = int(request.query.get("end", str(int(_t.time()))))
     except (ValueError, TypeError):
         return web.json_response(

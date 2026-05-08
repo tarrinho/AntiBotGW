@@ -60,11 +60,11 @@ def _internal_authed(request) -> bool:
     try:
         request["_session_user"] = u
         request["_session_sid"]  = sid
-    except (TypeError, AttributeError): pass
+    except (TypeError, AttributeError): pass  # nosec B110 — fake request objects in unit tests do not support item assignment
     # Bump the in-memory last-seen marker so the Users list can show
     # an online indicator without persisting per-request writes.
     try: _ACTIVE_SESSIONS[u] = _t.time()
-    except Exception: pass
+    except (TypeError, KeyError): pass  # nosec B110 — defensive guard on shared dict; not on the request path
     if sid:
         _session_touch(sid)
     return True
