@@ -82,82 +82,55 @@ Author: Pedro Tarrinho
 ### Added
 - **Geo dashboard loading/ready pill** (`dashboards/geo.html`) — `#load-status` CSS pill placed in the "World-map of accesses" h2. Starts yellow with a pulsing dot animation ("Loading") on page open; flips to solid green "Loading Ready" inside double `requestAnimationFrame` after the first successful `tick()` data fetch (after `renderAsns()` completes). Matches the controls dashboard `#load-status` pattern. CSS uses `--yellow`/`--green` variables with `@keyframes ls-pulse`; JS flip is idempotent (guarded by `!classList.contains('ready')`).
 
+- **BYPASS_PATHS audit trail** (`core/proxy_handler.py`) — bypass-path requests previously returned early with zero recording, making them invisible in all dashboards and logs. Now proxies the request first, then writes an `("event", ..., "bypass-path")` entry to `db_queue` so every bypassed access appears in the events table. `ip_state` intentionally stays empty (no bot scoring) but the access is traceable.
+- **Path search in main dashboard** (`dashboards/main.html`) — text input in the category filter bar filters the clients table live by `last_path` substring match. Also triggers a query to `/secured/logs-data?q=<path>` and renders a new "Path event log" panel below the clients card, showing all matching events from the DB including `bypass-path` entries (timestamp, IP, path, status, reason, UA). Debounced 300 ms. Clear button shown when active.
+
+- **MaxMind in-process lookup cache** (`reputation/maxmind.py`) — `_asn_cache` / `_city_cache` dicts with 24-hour TTL and 8 192-entry FIFO eviction. Eliminates repeated mmdb reads (~4/request for the same IP). Cache check in `_city_lookup` placed before the reader-null guard so cached results survive monthly mmdb refresh cycles.
+- **`logs.html` category filter pills** (`dashboards/logs.html`) — Five toggle pills (Allowed · Ban · Really Ban · Auth Bots · GW Mgmt) in a filter bar shown on the Requests tab. `_logCat()` classifier: `authorized-robot` → authbots; `/antibot-appsec-gateway/` path → gwmgmt; hard-ban reasons (canary-echo/honeypot-silent/honeypot) → reallyban; any non-OK reason → ban; else → allowed. Client-side filtering, no round-trip.
+- **`rules.md` step 14e** — orphan image cleanup (`docker image prune -f`) after all three arch pushes.
+
+- **Geo-map 30-day view** (`dashboards/geo.html`, `core/proxy_handler.py`) — added `30 days` (43 200 min) option to the window select. Raised range cap from 10 080 → 43 200 in `geo_data_endpoint` and `geo_drill_endpoint`. Events table never pruned so depth is available. Two performance countermeasures: (1) cursor iteration replaces `fetchall()` — constant RAM for any window size; (2) reservoir sampling (Algorithm R) replaces first-5000 approach — scrubber `events_sample` now uniformly covers the full window rather than only the oldest time slice. `ORDER BY` removed (not needed; `rebuildBuckets()` bins by `ts` value directly).
+
 ### Fixed
 - **GW Mgmt filter showed zero entries despite active operator dashboard browsing** (`core/proxy_handler.py`) — `protect()` returned `await handler(request)` immediately for authenticated admin-path requests (`_admin_ip_allowed and _internal_authed`) without calling `record()`. Operator dashboard accesses never entered `ip_state` and were invisible to `_clientCats` / `_agentCats`. Fix: await the handler first, then call `record()` with `reason='operator-passthrough'` before returning.
 - **Three stale `test_dashboard_data.py` tests** — response key renames not reflected in tests: `agents-data` (`agents`→`suspects`), `logs-data` (`events`→`rows`), `path-hits` (missing `?path=` param + `paths`→`ips`).
+
+- **BYPASS_PATHS not visible in any dashboard or log** — root cause: early `return await handler(request)` before any `db_queue` write. Fixed by capturing response, writing `bypass-path` event, then returning.
+
+- **`controls.html` DELETE admin-IP URL malformed** — `&cidr=` → `?cidr=`
+- **Double-save on inline edit** — `_descSaved`/`_thrSaved` guard prevents blur+Enter firing two PATCH requests
+- **`geo.html` ready-state pill text** — ready state was accidentally set to plain "Ready"; corrected to "Loading Ready" to match the JS flip logic intent and the validation spec
+- **`confirm()` blocking dialogs** — replaced 5 calls with non-blocking `_asyncConfirm()` Promise wrapper using `showSimpleModal`
+- **`alert()` blocking dialogs** — replaced all 14 calls across 7 files with `_gwAlert()` transient DOM div (auto-removes after 7s)
+- **Window namespace pollution** — 7 separate `window._acct*` globals collapsed to `window._acct = {openModal, changePw, revokeSession, userRole}` across all 8 dashboard files
+- **Dead `url()` identity function** — removed `const url = (p) => p` from 7 locations; fixed 9 broken fetch calls where orphan `)` caused comma-expression (options silently discarded)
+- **`credentials:"same-origin"` inconsistency** — normalized to `credentials:'include'` throughout `settings.html`
+- **`main.html` duplicate `getRangeMin()`** — removed duplicate function declaration
+- **`agents.html` `m-total` overwrote backend total with filtered count** — removed stale line
+- **`logs.html` stale `lastIds` set** — removed unused variable
+- Various dead variables and dead nav-patch blocks removed
+
+- **`controls.html` `url()` identity function removed incorrectly** (`dashboards/controls.html`) — DC-01 in the previous pass removed `const url = p => p` from controls.html which has ~30 `url(path)` fetch call-sites. All dashboard panels threw `ReferenceError: url is not defined`. Restored.
+- **`controls.html` Apply/Reset placement** (`dashboards/controls.html`) — Action bar moved from below Thresholds to immediately before Defenses & Scoring, visible without scrolling.
+- **Service metrics default window too short** (`config.py`) — interval default 10 s → 60 s; retention default 4 320 → 43 200 (30-day window at ~22 MB). Previously only 12 hours of service data were retained.
 
 ### Tests
 - **`tests/test_geo_dashboard.py`** — 55 new tests: 16 unit (geo.html static analysis: pill element, CSS rules, JS flip logic, double-RAF, idempotency), 22 functional (`/secured/geo` page serving + `/secured/geo-data` API shape/params/security headers/unconfigured path), 17 regression (existing geo features intact)
 - `test_protect_authenticated_admin_path_calls_record` — `protect()` calls `record()` in authenticated admin path branch
 - `test_protect_authenticated_admin_path_uses_operator_passthrough_reason` — reason is `'operator-passthrough'`
 
-### Added (continued)
-- **BYPASS_PATHS audit trail** (`core/proxy_handler.py`) — bypass-path requests previously returned early with zero recording, making them invisible in all dashboards and logs. Now proxies the request first, then writes an `("event", ..., "bypass-path")` entry to `db_queue` so every bypassed access appears in the events table. `ip_state` intentionally stays empty (no bot scoring) but the access is traceable.
-- **Path search in main dashboard** (`dashboards/main.html`) — text input in the category filter bar filters the clients table live by `last_path` substring match. Also triggers a query to `/secured/logs-data?q=<path>` and renders a new "Path event log" panel below the clients card, showing all matching events from the DB including `bypass-path` entries (timestamp, IP, path, status, reason, UA). Debounced 300 ms. Clear button shown when active.
-
-### Fixed (continued)
-- **BYPASS_PATHS not visible in any dashboard or log** — root cause: early `return await handler(request)` before any `db_queue` write. Fixed by capturing response, writing `bypass-path` event, then returning.
-
-### Tests (continued)
 - `test_bypass_paths_early_return_no_record_call` updated — now verifies `db_queue.put_nowait` present and reason `bypass-path` in bypass block, in addition to confirming `record()` is not called
 - `test_bypass_paths_no_ip_state_recorded` docstring updated — clarifies audit event is written to db_queue but ip_state stays empty
 
-### Fixed (continued — 2026-05-08 dashboard code review)
-- **`controls.html` DELETE admin-IP URL malformed** — `&cidr=` → `?cidr=` (BUG-04)
-- **Double-save on inline edit** — `_descSaved`/`_thrSaved` guard prevents blur+Enter firing two PATCH requests (BUG-08)
-- **`geo.html` ready-state pill text** — ready state was accidentally set to plain "Ready"; corrected to "Loading Ready" to match the JS flip logic intent and the validation spec (BUG-07)
-- **`confirm()` blocking dialogs** — replaced 5 calls with non-blocking `_asyncConfirm()` Promise wrapper using `showSimpleModal` (BP-07)
-- **`alert()` blocking dialogs** — replaced all 14 calls across 7 files with `_gwAlert()` transient DOM div (auto-removes after 7s) (BP-08)
-- **Window namespace pollution** — 7 separate `window._acct*` globals collapsed to `window._acct = {openModal, changePw, revokeSession, userRole}` across all 8 dashboard files (BP-05)
-- **Dead `url()` identity function** — removed `const url = (p) => p` from 7 locations; fixed 9 broken fetch calls where orphan `)` caused comma-expression (options silently discarded) (DC-01)
-- **`credentials:"same-origin"` inconsistency** — normalized to `credentials:'include'` throughout `settings.html` (INC-02)
-- **`main.html` duplicate `getRangeMin()`** — removed duplicate function declaration (BUG-02)
-- **`agents.html` `m-total` overwrote backend total with filtered count** — removed stale line (BUG-01)
-- **`logs.html` stale `lastIds` set** — removed unused variable (DC-07)
-- Various dead variables and dead nav-patch blocks removed (DC-02/03/04)
-
-### Tests (continued — 2026-05-08)
 - `test_controls_bypass_requires_user_confirmation` — updated to check `_asyncConfirm(` (was `confirm(`)
 - `test_main_html_k_q_absent` — replaces two stale k_q tests; asserts `k_q` no longer present
 
-### Added (session 2 — 2026-05-08)
-- **MaxMind in-process lookup cache** (`reputation/maxmind.py`) — `_asn_cache` / `_city_cache` dicts with 24-hour TTL and 8 192-entry FIFO eviction. Eliminates repeated mmdb reads (~4/request for the same IP). Cache check in `_city_lookup` placed before the reader-null guard so cached results survive monthly mmdb refresh cycles.
-- **`logs.html` category filter pills** (`dashboards/logs.html`) — Five toggle pills (Allowed · Ban · Really Ban · Auth Bots · GW Mgmt) in a filter bar shown on the Requests tab. `_logCat()` classifier: `authorized-robot` → authbots; `/antibot-appsec-gateway/` path → gwmgmt; hard-ban reasons (canary-echo/honeypot-silent/honeypot) → reallyban; any non-OK reason → ban; else → allowed. Client-side filtering, no round-trip.
-- **`rules.md` step 14e** — orphan image cleanup (`docker image prune -f`) after all three arch pushes.
-
-### Fixed (session 2 — 2026-05-08)
-- **`controls.html` `url()` identity function removed incorrectly** (`dashboards/controls.html`) — DC-01 in the previous pass removed `const url = p => p` from controls.html which has ~30 `url(path)` fetch call-sites. All dashboard panels threw `ReferenceError: url is not defined`. Restored.
-- **`controls.html` Apply/Reset placement** (`dashboards/controls.html`) — Action bar moved from below Thresholds to immediately before Defenses & Scoring, visible without scrolling.
-- **Service metrics default window too short** (`config.py`) — interval default 10 s → 60 s; retention default 4 320 → 43 200 (30-day window at ~22 MB). Previously only 12 hours of service data were retained.
-
-### Tests (session 2 — 2026-05-08)
 - 39 new tests in `tests/test_pure.py`: MaxMind cache (TTL, max, hit, no-cache-on-disabled, eviction, city-cache-before-reader ordering), service-metrics defaults/overrides/window calculation, geo.html pill text, logs.html cat filter bar visibility/categories/JS functions/tab wiring, controls.html actions placement, `url` identity present in controls.html.
 
-### Validation (session 2 — 2026-05-08)
-- **Unit tests**: 446 passed, 0 failed (test_critical 116 + test_pure 320 + test_async 10)
-- **Functional**: 22 passed · **Integration**: 23 passed
-- **Regression**: 142 passed, 0 failed
-- **Bandit**: 0 High / 0 Critical (1 Low B104 intentional, below -ll threshold)
-- **Semgrep**: 151 rules · 5 files · 0 findings
-- **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all arches)
-- **Total combined**: 737 passed, 1 skipped, 0 failed
-- **Harbor**: armv7 rebuilt `sha256:f6c9aeb6` · manifest updated `sha256:3b502c78` (amd64 `sha256:37ec1d56` · arm64 `sha256:7a28f6f0` unchanged)
-
-### Added (session 3 — 2026-05-08)
-- **Geo-map 30-day view** (`dashboards/geo.html`, `core/proxy_handler.py`) — added `30 days` (43 200 min) option to the window select. Raised range cap from 10 080 → 43 200 in `geo_data_endpoint` and `geo_drill_endpoint`. Events table never pruned so depth is available. Two performance countermeasures: (1) cursor iteration replaces `fetchall()` — constant RAM for any window size; (2) reservoir sampling (Algorithm R) replaces first-5000 approach — scrubber `events_sample` now uniformly covers the full window rather than only the oldest time slice. `ORDER BY` removed (not needed; `rebuildBuckets()` bins by `ts` value directly).
-
-### Tests (session 3 — 2026-05-08)
 - 5 new tests in `tests/test_pure.py`: geo.html 30-day option present, geo_data_endpoint cap ≤ 43200, geo_drill_endpoint cap ≤ 43200, cursor-not-fetchall, reservoir sampling present.
 - `test_geo_data_range_clamped_high` in `tests/test_geo_dashboard.py` updated: asserts ≤ 43200 (was 10080).
 
-### Validation (session 3 — 2026-05-08)
-- **Unit tests**: 451 passed, 0 failed (test_critical 116 + test_pure 325 + test_async 10)
-- **Total combined**: 742 passed, 1 skipped, 0 failed
-- **Bandit**: 0 High / 0 Critical (1 Low B110 intentional try/except/pass in hot-reload setter)
-- **Semgrep**: 151 rules · 9 files · 0 findings
-- **Harbor**: armv7 rebuilt `sha256:7d8df3f3` · manifest updated `sha256:729082df` (amd64 `sha256:37ec1d56` · arm64 `sha256:7a28f6f0` unchanged)
-
-### Validation (session 4 — 2026-05-08)
+### Validation
 - **Step 11a (secure code review)** added to `validation/1.7.7.md` — PASS on all 8 checks; no new external deps; cursor/reservoir code reviewed clean
 - **Multi-arch parity rebuild**: amd64 and arm64 rebuilt with all session 2+3 code (were on session-1 binary); armv7 unchanged
 - **Harbor push** (final): amd64 `sha256:549e9879` · arm64 `sha256:a5d0cad8` · armv7 `sha256:7d8df3f3` · manifest `sha256:596d4514`
@@ -200,12 +173,14 @@ Author: Pedro Tarrinho
 
 ## [1.7.5] — 2026-05-06 · updated 2026-05-07
 
-### Added (2026-05-07)
+### Added
 - **Bucket drill-down: live section move on action** (`dashboards/main.html`, `dashboards/agents.html`) — clicking Ban / Hard ban / Allow / Auth Bot in the bucket detail modal now moves the entry between sections in real-time (400 ms after the button shows ✓). The in-memory data object `d` is mutated (`_moveEntry`), then `_renderAndWire` / `_renderAndWireA` re-renders all four sections from the updated state. Ban/Hard ban moves the entry to BLOCKED (detected); Allow moves it to ALLOWED (clean); Auth Bot moves it to AUTHORIZED BOTS. Section entry counts in headers update accordingly. Previously the button only showed ✓/✗ with no visual feedback that the entry had changed category. `ipAction` / `_ipActionR` now returns a boolean so callers can gate the move on success.
 - **Clients table scrollable up to 100 entries** (`dashboards/main.html`) — the Clients card now wraps `#clients-tbl` in a `max-height:420px; overflow-y:auto` div and renders up to 100 entries (previously capped at 25). Column headers are sticky via `#clients-tbl thead th { position:sticky; top:0; z-index:1 }` so they remain visible while scrolling.
 - **Auth Bot button always visible in bucket modals** (`dashboards/main.html`, `dashboards/agents.html`) — the Auth Bot button was previously hidden when `e.ua` was falsy (empty-string UA). Changed to always render the button unconditionally and store `data-authbot=""` as a safe fallback. Added `.act.authbot { background:#1f1a2e; color:#bc8cff }` CSS rule in both dashboards so the button is visually consistent with the authorized-bot purple theme.
 
-### Fixed (2026-05-07)
+- **Authorized bots shown in purple on all traffic graphs** (`dashboards/main.html`, `dashboards/agents.html`, `dashboards/geo.html`, `core/proxy_handler.py`, `dashboards/agents.py`) — monitoring bots that are explicitly authorized (reason `authorized-robot`) were previously invisible on the time-series charts and geo map, or incorrectly counted as "blocked". They are now tracked as a distinct fifth dataset (purple, `#bc8cff`, dashed line) on the main dashboard traffic chart and the agents chart, and rendered as purple circles on the geo map with a separate legend entry. Backend changes: `metrics_endpoint` timeline now extracts `authorized_robot` from each bucket's `by_reason` (in-memory `defaultdict` or DB JSON column); `agents_timeline_endpoint` gains a dedicated SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies `authorized-robot` events as `kind='authorized_robot'` instead of `'blocked'` so they no longer inflate blocked counts on the map. Scrubber playback also tracks the new kind via `ar` counter in bucket points.
+
+### Fixed
 - **Controls: action combo box removed from authorized bots section** (`dashboards/controls.html`) — the "Authorized bot / Allow / Ban / Really ban" dropdown next to each authorized-bot entry had no meaningful purpose (authorized bots are always pass-through). Removed the `<select class="bot-action-sel">` element and associated CSS; `readBots()` now always writes `action: 'authorized-robot'`. Updated section description text accordingly.
 - **Block-Rate Trend aligned with main graph timeline** (`dashboards/main.html`) — the block-rate chart used independent label computation and `maxTicksLimit:6` for x-axis ticks while the main chart used `autoSkipPadding:18`. This caused the two timelines to show different tick spacings, making the charts appear out of sync. Fix: main chart stores its resolved labels in `window._lastMainLabels`; block-rate chart reads `_lastMainLabels` and applies the same `autoSkipPadding:18` x-axis config.
 - **CI workflow bad substitution** (`.github/workflows/`) — `IMAGE="…:pre-${inputs.version}"` caused `sh: syntax error: bad substitution` because `inputs.version` contains a dot, which is invalid in a POSIX shell variable name. Fix: use `${{ inputs.version }}` (GitHub Actions expression syntax) which is resolved by the Actions runner before the shell script executes.
@@ -215,10 +190,6 @@ Author: Pedro Tarrinho
   - `test_r7_canary_injected_into_html` — `X-Trace-Id` header absent (empty trace). Root cause: `ip_state["127.0.0.1"]` retained high risk scores or bans from prior tests, causing the GET to be blocked (decoy response, no upstream HTML, no canary injection).
   - Fix for both: `_spin_proxy` now calls `ip_state.clear()`, `ip_buckets.clear()`, `ip_new_sessions.clear()` at setup (before `yield`) and again in `finally` after teardown.
 
-### Added
-- **Authorized bots shown in purple on all traffic graphs** (`dashboards/main.html`, `dashboards/agents.html`, `dashboards/geo.html`, `core/proxy_handler.py`, `dashboards/agents.py`) — monitoring bots that are explicitly authorized (reason `authorized-robot`) were previously invisible on the time-series charts and geo map, or incorrectly counted as "blocked". They are now tracked as a distinct fifth dataset (purple, `#bc8cff`, dashed line) on the main dashboard traffic chart and the agents chart, and rendered as purple circles on the geo map with a separate legend entry. Backend changes: `metrics_endpoint` timeline now extracts `authorized_robot` from each bucket's `by_reason` (in-memory `defaultdict` or DB JSON column); `agents_timeline_endpoint` gains a dedicated SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies `authorized-robot` events as `kind='authorized_robot'` instead of `'blocked'` so they no longer inflate blocked counts on the map. Scrubber playback also tracks the new kind via `ar` counter in bucket points.
-
-### Fixed
 - **armv7 image built with wrong architecture** — `docker build -f Dockerfile.armv7` on an arm64 host without `--platform linux/arm/v7` silently produces an arm64 image tagged as `-armv7`. The container fails with exit code 159 on the target armv7 device ("platform linux/arm64 does not match detected host platform linux/arm/v8"). Fix: always pass `--platform linux/arm/v7` for armv7 builds.
 
 ### Tests
@@ -233,25 +204,22 @@ Author: Pedro Tarrinho
 - **New config knobs**: `ELB_HEALTH_CHECK_PATH`, `ELB_HEALTH_CHECK_UA`.
 - **§17h added to `rules.md`** — documents the ELB health check pass-through: signal table, two-factor security model, configuration example, and verification command.
 
+- **Authorized monitoring bot pass-through** (`config.py`, `core/proxy_handler.py`, `core/metrics.py`) — UptimeRobot, Pingdom, StatusCake, Site24x7 and similar availability monitors probe `"/"` with non-browser UAs and minimal headers, accumulating `ua-non-browser` (+25) + `ai-headers-incomplete` (+20) = 45 pts per request and being banned after two hits. New bypass: when the request path is `"/"` and the `User-Agent` contains any substring from `AUTHORIZED_BOT_UAS`, the request short-circuits detection, returns `200 ok`, and is recorded as `"authorized-robot"` — **not counted as blocked** (`_PASSTHROUGH_REASONS` set in `core/metrics.py`). Recorded in `by_reason` so operators see the traffic in the dashboard reasons breakdown. Default UA list: `UptimeRobot`, `Pingdom`, `StatusCake`, `Site24x7`, `freshping`, `hetrix`, `Better Uptime`, `uptimia`, `updown.io`, `HetrixTools`, `statuscake`. Set `AUTHORIZED_BOT_UAS=""` to disable. New env var: `AUTHORIZED_BOT_UAS`.
+- **"authorized-robot" dashboard display** (`dashboards/main.html`, `dashboards/logs.html`) — authorized monitoring bot events appear with a blue `authorized-robot` tag (`.tag.authorized-robot`) and blue left-border row (`.evt.evt-authorized`) in the live events stream, not as blocked (red) rows. In `logs.html` the reason is shown in `var(--blue)` instead of red.
+
+- **Master bypass switch** (`dashboards/controls.html`) — prominent toggle bar at the top of the Controls page. When turned ON (after confirmation): snapshots all current `bool` control states to `localStorage`, POSTs all bool knobs as `false` in a single request, and shows a red "BYPASS ACTIVE" warning. When turned OFF: reads the snapshot from `localStorage` and POSTs the restore payload in one request. Intended for temporary maintenance / debugging windows where bot protection must be fully suspended. Snapshot + active flag persist across page reloads so the warning survives navigation; both are cleared on restore.
+- **Per-card collapse toggles** (`dashboards/controls.html`) — every card on the Controls page now has a clickable `<h2>` that collapses/expands the card body. A chevron `▼` rotates `◁` when collapsed. Collapse state is persisted per card to `localStorage`, so sections stay folded across page reloads. Added `id` attributes to the three previously-unnamed cards (`card-unban`, `card-admin-ip`, `card-audit-log`) so their collapse state keys are stable.
+
 ### Fixed
 - **Dashboard time-window bucket auto-adapt** (`dashboards/service.html`, `dashboards/main.html`) — selecting a time window > 3 h left the bucket selector at its default (5 s for Service, 1 min for Dashboard) causing the API to return thousands of mostly-zero data points for the selected window. Chart.js rendered a near-invisible flat line at y = 0 giving the impression that graphs were blank. Root cause: the main chart `range.onchange` handler called `tick()` directly without updating the bucket selector, while the stat-card click-to-zoom modal already contained a correct `pickBucketForRange()` helper. Fix: hoisted `pickBucketForRange` to global scope in both files; wired it into the `range.onchange` handler so the bucket is always set to a sensible granularity before the data fetch. Removed the duplicate local definition from the stat-card IIFE in `service.html`. Resulting point counts stay ≤ ~720 across all window sizes (5 min → 5 s; 1 h → 30 s; 6 h → 1 min; 24 h → 5 min; 7 d → 15 min; > 7 d → 1 h).
 - **`escHtml` → `escapeHtml` in all dashboards** (`dashboards/logs.html`, `dashboards/main.html`, `dashboards/service.html`, `dashboards/controls.html`, `dashboards/geo.html`) — 5 dashboard files called `escHtml()` which is undefined; only the canonical `escapeHtml()` function is defined at global script scope. Affected call sites: health-score pill modal rows, account modal username/role display, session list IP display, and request table method cells. Result was a silent `ReferenceError` in the browser console whenever these UI sections rendered. All occurrences replaced with `escapeHtml()`.
 - **`r.ok` guard before `r.json()` in logs.html LOG_LEVEL POST handlers** — both the level-button click handler and the dropdown `onchange` handler in `logs.html` called `r.json()` unconditionally. When a session expires and the server returns a non-JSON response (HTML 404 silent-decoy), `JSON.parse` threw "unexpected non-whitespace character after JSON data at line 1 column 5". Added `if (!r.ok)` guard that shows a clear alert ("Server error 401 — session may have expired, please reload") and returns early without calling `r.json()`.
 - **`_LOG_LEVEL_N` not propagated on LOG_LEVEL hot-reload** (`core/proxy_handler.py` `config_endpoint`) — the LOG_LEVEL hot-reload path updated the `LOG_LEVEL` string in all module namespaces via the generic `_HOT_RELOAD_KNOBS` loop, but did not update the derived numeric sentinel `_LOG_LEVEL_N` used by `slog()` for level filtering. Since `helpers.py` imports `_LOG_LEVEL_N` at module load time (`from config import _LOG_LEVEL_N`), Python creates a local copy of the value; changing `config._LOG_LEVEL_N` does not update `helpers._LOG_LEVEL_N`. Result: changing the log level from the dashboard had no effect on actual log output. Fix: after the generic propagation loop, `config_endpoint` now explicitly recomputes `_LOG_LEVEL_N = _LOG_LEVELS.get(value, 20)` and propagates it to all loaded modules via `setattr`.
 
-### Fixed (continued)
 - **`NameError: name '_city_lookup' is not defined` in `ip_intel_endpoint`** (`admin/users.py`) — `ip_intel_endpoint` called `_city_lookup`, `_asn_lookup`, `_abuseipdb_lookup`, `_crowdsec_check`, and `_tor_exits` without importing them. `proxy_handler.py` has all five in its global namespace via its own import block; `admin/users.py` is a separate module with its own namespace and had none of them. Any call to the IP intel popover (identity-details in agents.html / main.html) raised `NameError` and returned HTTP 500. Fix: added `from reputation.maxmind import _city_lookup, _asn_lookup`, `from reputation.abuseipdb import _abuseipdb_lookup`, `from reputation.crowdsec import _crowdsec_check`, `from reputation.tor import _tor_exits` at module level in `admin/users.py`.
 - **Dockerfile pip deps pinned to exact versions** (`Dockerfile`, `Dockerfile.armv7`) — previously used range specifiers (`>=x,<y`), flagged as DL3013 / supply-chain unpinned by Aikido. Resolved currently installed versions (`aiohttp==3.13.5`, `maxminddb==2.8.2`, `psycopg[binary]==3.3.4`, `redis==5.3.1`, `pyjwt==2.12.1`) and pinned all direct deps to exact `==` constraints. Builds remain reproducible.
 - **Dockerfile builder stage drops root before final stage** (`Dockerfile`, `Dockerfile.armv7`) — Aikido DL3002: builder stage set `USER root` (line 6) and never reverted. Final runtime stage already runs as `USER 65532:65532`, but the linter checks per-stage. Fixed by adding `USER nonroot` at end of the Chainguard builder stage and `USER nobody` at end of the Alpine builder stage.
 - **7-day graph no date labels in main/agents dashboards** (`dashboards/main.html`, `dashboards/agents.html`) — `pickBucketForRange` mapped the 7-day window to 900 s (15-min) buckets, producing 672 data points all labeled `"HH:MM"` by `fmtTime`'s sub-3600 s branch (no date component). Changed to map 7 d → 3600 s buckets (168 points, labeled `"May 3 14:00"`) and ≥ 30 d → 86400 s buckets (30 points, labeled `"May 3"`). Added `<option value="43200">30 days</option>` to the range selector in both dashboards. Added `tPickBucketForRange` + `tAutoSelectBucket` to `agents.html` (which had no equivalent auto-bucket logic) and wired it into the `t-range` change handler.
-
-### Added (monitoring bot pass-through)
-- **Authorized monitoring bot pass-through** (`config.py`, `core/proxy_handler.py`, `core/metrics.py`) — UptimeRobot, Pingdom, StatusCake, Site24x7 and similar availability monitors probe `"/"` with non-browser UAs and minimal headers, accumulating `ua-non-browser` (+25) + `ai-headers-incomplete` (+20) = 45 pts per request and being banned after two hits. New bypass: when the request path is `"/"` and the `User-Agent` contains any substring from `AUTHORIZED_BOT_UAS`, the request short-circuits detection, returns `200 ok`, and is recorded as `"authorized-robot"` — **not counted as blocked** (`_PASSTHROUGH_REASONS` set in `core/metrics.py`). Recorded in `by_reason` so operators see the traffic in the dashboard reasons breakdown. Default UA list: `UptimeRobot`, `Pingdom`, `StatusCake`, `Site24x7`, `freshping`, `hetrix`, `Better Uptime`, `uptimia`, `updown.io`, `HetrixTools`, `statuscake`. Set `AUTHORIZED_BOT_UAS=""` to disable. New env var: `AUTHORIZED_BOT_UAS`.
-- **"authorized-robot" dashboard display** (`dashboards/main.html`, `dashboards/logs.html`) — authorized monitoring bot events appear with a blue `authorized-robot` tag (`.tag.authorized-robot`) and blue left-border row (`.evt.evt-authorized`) in the live events stream, not as blocked (red) rows. In `logs.html` the reason is shown in `var(--blue)` instead of red.
-
-### Added (controls dashboard UX)
-- **Master bypass switch** (`dashboards/controls.html`) — prominent toggle bar at the top of the Controls page. When turned ON (after confirmation): snapshots all current `bool` control states to `localStorage`, POSTs all bool knobs as `false` in a single request, and shows a red "BYPASS ACTIVE" warning. When turned OFF: reads the snapshot from `localStorage` and POSTs the restore payload in one request. Intended for temporary maintenance / debugging windows where bot protection must be fully suspended. Snapshot + active flag persist across page reloads so the warning survives navigation; both are cleared on restore.
-- **Per-card collapse toggles** (`dashboards/controls.html`) — every card on the Controls page now has a clickable `<h2>` that collapses/expands the card body. A chevron `▼` rotates `◁` when collapsed. Collapse state is persisted per card to `localStorage`, so sections stay folded across page reloads. Added `id` attributes to the three previously-unnamed cards (`card-unban`, `card-admin-ip`, `card-audit-log`) so their collapse state keys are stable.
 
 ### Tests
 - **Version strings bumped** — `tests/test_pure.py` `_EXPECTED_VERSION`, `test_gw_version_constant`, and `test_no_stale_version_strings_in_source` updated to `AppSecGW_1.7.4`.
@@ -309,6 +277,12 @@ Author: Pedro Tarrinho
 - **New risk signals** in scoring table: `honey-cred` (+90), `redirect-maze-bot` (+55), `llm-no-subresources` (+40), `canary-probe-miss` (+35).
 - **`path-sweep` + `honey-cred` in signal cost table** — `kind: state/in-process`, `typical: < 0.1 ms` (no I/O).
 
+- **Three-tier ban durations** — `REALLY_BAN_SECS` (default 30 d = 2592000 s) added to `config.py` as a new config knob. Ban tier logic in `scoring.py` updated: definitive bot-proof signals (`canary-echo`, `honeypot-silent`, `honeypot`) now earn `REALLY_BAN_SECS`; hostile signals earn `HOSTILE_BAN_SECS` (24 h); risk-threshold bans earn `RISK_BAN_DURATION_SECS` (1 h). `REALLY_BAN_SECS` is hot-reloadable via `/secured/config`.
+- **Controls dashboard — ban duration knobs** — `HOSTILE_BAN_SECS` and `REALLY_BAN_SECS` added to the Thresholds & rate limits card in `controls.html`, allowing operators to adjust ban durations live without container restart.
+- **Settings dashboard — Storage card** — new "Storage" card added to `settings.html` showing disk usage bar (used/total), SQLite DB + WAL + SHM file sizes, and a "Vacuum DB" button. Card calls new admin endpoints `GET /secured/disk-stats` and `POST /secured/db-vacuum` (`VACUUM` + `PRAGMA wal_checkpoint(TRUNCATE)`).
+- **Disk stats endpoint** (`GET /antibot-appsec-gateway/secured/disk-stats`) — returns JSON with `disk_used_bytes`, `disk_total_bytes`, `disk_free_bytes`, `db_bytes`, `wal_bytes`, `shm_bytes`. Secured (admin IP + session).
+- **DB vacuum endpoint** (`POST /antibot-appsec-gateway/secured/db-vacuum`) — runs SQLite `VACUUM` + WAL checkpoint truncate; returns `{ok, db_bytes_before, db_bytes_after, wal_bytes_before, wal_bytes_after}`. Secured.
+
 ### Fixed
 - **Admin-path bypass scope too broad** — Global RPS limit and Method allowlist were exempt for ALL requests to admin-namespace paths regardless of source IP. Fixed: exemption now only applies when the request comes from an admin IP. Non-admin IPs hitting admin paths are now subject to rate limiting and method filtering.
 - **`geo_data_endpoint` stale `LIMIT 200000`** — removed `ORDER BY ts ASC LIMIT 200000`; query now returns all events in the window.
@@ -323,13 +297,6 @@ Author: Pedro Tarrinho
 
 - **`ALLOWED_HOSTS` URL parsing bug** — `_to_host_set()` in `integrations/endpoint_policy.py` accepted bare hostnames only; full URLs with scheme (e.g. `https://example.com/`) stored verbatim, causing every request to match `host-not-allowed` (bare hostname `example.com` ≠ full URL string). Fixed: `_to_host_set()` now uses `urllib.parse.urlparse` to normalise each entry — strips scheme, path, and case. Startup parser in `proxy_handler.py` updated to use the same function. Regression tests added to `test_pure.py` (`test_to_host_set_strips_scheme_and_path`).
 - **Dashboard version string regression** — dashboard HTML files (`main.html`, `agents.html`, `controls.html`, `geo.html`, `logs.html`, `service.html`, `settings.html`) had `AppSecGW_1.7.2` hardcoded in `<title>` and `<h1>` tags after `config.py` was bumped to `1.7.3`; the version is not template-rendered but literal text. Updated all 7 files to `AppSecGW_1.7.3`. Added `test_no_stale_version_strings_in_source` (now includes `.html` in suffix set) and `test_dashboard_html_version_strings()` to `test_pure.py`; added `test_dashboard_html_version_matches_config()` to `test_control_regressions.py`. Added explicit file list to `rules.md` step 13b.
-
-### Added (post-release)
-- **Three-tier ban durations** — `REALLY_BAN_SECS` (default 30 d = 2592000 s) added to `config.py` as a new config knob. Ban tier logic in `scoring.py` updated: definitive bot-proof signals (`canary-echo`, `honeypot-silent`, `honeypot`) now earn `REALLY_BAN_SECS`; hostile signals earn `HOSTILE_BAN_SECS` (24 h); risk-threshold bans earn `RISK_BAN_DURATION_SECS` (1 h). `REALLY_BAN_SECS` is hot-reloadable via `/secured/config`.
-- **Controls dashboard — ban duration knobs** — `HOSTILE_BAN_SECS` and `REALLY_BAN_SECS` added to the Thresholds & rate limits card in `controls.html`, allowing operators to adjust ban durations live without container restart.
-- **Settings dashboard — Storage card** — new "Storage" card added to `settings.html` showing disk usage bar (used/total), SQLite DB + WAL + SHM file sizes, and a "Vacuum DB" button. Card calls new admin endpoints `GET /secured/disk-stats` and `POST /secured/db-vacuum` (`VACUUM` + `PRAGMA wal_checkpoint(TRUNCATE)`).
-- **Disk stats endpoint** (`GET /antibot-appsec-gateway/secured/disk-stats`) — returns JSON with `disk_used_bytes`, `disk_total_bytes`, `disk_free_bytes`, `db_bytes`, `wal_bytes`, `shm_bytes`. Secured (admin IP + session).
-- **DB vacuum endpoint** (`POST /antibot-appsec-gateway/secured/db-vacuum`) — runs SQLite `VACUUM` + WAL checkpoint truncate; returns `{ok, db_bytes_before, db_bytes_after, wal_bytes_before, wal_bytes_after}`. Secured.
 
 ### Tests
 - **37 new unit tests** in `tests/test_v173.py`: P1 honey_cred (10), P2 redirect_maze (7), P3 llm_heuristic (9), P4 canary_probe (11).
@@ -1040,3 +1007,4 @@ Author: Pedro Tarrinho
 ### Added
 - 6-layer reverse-proxy prototype: UA filter, header completeness, honeypot paths,
   AI-probe paths, cookie gate, risk-score model.
+
