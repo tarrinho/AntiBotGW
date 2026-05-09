@@ -543,7 +543,8 @@ function _wireBanCtrls(container) {
         if (btn.dataset.action === 'auth-bot') {
           try {
             const gr = await fetch(_cfgUrl, {credentials:'include'});
-            const gs = await gr.json().catch(()=>({}));
+            let gs; try { gs = await gr.json(); } catch { gs = { _error: true }; }
+            if (gs._error) { _gwAlert('Config load failed'); return; }
             const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
             const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
             const newBots = existing
@@ -554,7 +555,8 @@ function _wireBanCtrls(container) {
               headers:{'Content-Type':'application/json'},
               body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
             });
-            const pb = await pr.json().catch(()=>({}));
+            let pb; try { pb = await pr.json(); } catch { pb = { _error: true }; }
+            if (pb._error) { _gwAlert('Action failed (parse error)'); return; }
             if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
               _patchAuthBot(id, true);
               ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
@@ -572,7 +574,8 @@ function _wireBanCtrls(container) {
         if (currentlyAuthBot && ua) {
           try {
             const gr = await fetch(_cfgUrl, {credentials:'include'});
-            const gs = await gr.json().catch(()=>({}));
+            let gs; try { gs = await gr.json(); } catch { gs = { _error: true }; }
+            if (gs._error) return;
             const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
             const newBots = bots.map(b =>
               (b.ua === ua || (b.ua && ua.includes(b.ua))) ? {...b, enabled:false} : b
@@ -590,7 +593,8 @@ function _wireBanCtrls(container) {
           : `/antibot-appsec-gateway/secured/ban?id=${encodeURIComponent(id)}&secs=${secs}`;
         try {
           const r = await fetch(endpoint, {credentials:'include'});
-          const b = await r.json().catch(()=>({}));
+          let b; try { b = await r.json(); } catch { b = { _error: true }; }
+          if (b._error) { _gwAlert('Action failed (parse error)'); return; }
           if (r.ok && (b.banned !== undefined || b.cleared !== undefined)) {
             ctrl.querySelectorAll('.ban-btn').forEach(b2 => b2.classList.remove('active'));
             btn.classList.add('active');
@@ -680,6 +684,10 @@ async function _fetchPathEvents(pathQ) {
   try {
     const params = new URLSearchParams({ kind: 'requests', q: pathQ, limit: '200', level: 'debug' });
     const r = await fetch('/antibot-appsec-gateway/secured/logs-data?' + params, { cache: 'no-store', credentials: 'include' });
+    if (!r.ok) {
+      body.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--yellow);text-align:center">Session may have expired (HTTP ${r.status}) — please refresh the page.</td></tr>`;
+      return;
+    }
     const d = await r.json();
     const rows = (d.rows || []).filter(e => (e.path || '').toLowerCase().includes(pathQ));
     count.textContent = `(${rows.length} events)`;
@@ -1500,7 +1508,8 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
       if (ub_k) ub_p.set('key', ub_k);
       const r = await fetch('/antibot-appsec-gateway/secured/unban?' + ub_p.toString(),
                             {credentials:'include'});
-      const b = await r.json().catch(()=>({}));
+      let b; try { b = await r.json(); } catch { b = { _error: true }; }
+      if (b._error) { _gwAlert('Unban failed (parse error)'); return; }
       if (r.ok && b.cleared){
         btn.textContent = 'Unbanned';
         btn.style.background = 'var(--green)';
@@ -1915,7 +1924,8 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           abBtn.disabled = true; abBtn.textContent = '…';
           try {
             const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
-            const gs = await gr.json().catch(()=>({}));
+            let gs; try { gs = await gr.json(); } catch { gs = { _error: true }; }
+            if (gs._error) { _gwAlert('Config load failed'); return; }
             const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
             const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
             const newBots = existing
@@ -1926,7 +1936,8 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
               headers:{'Content-Type':'application/json'},
               body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
             });
-            const pb = await pr.json().catch(()=>({}));
+            let pb; try { pb = await pr.json(); } catch { pb = { _error: true }; }
+            if (pb._error) { _gwAlert('Action failed (parse error)'); return; }
             if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
               abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
               if (ip) setTimeout(() => { _moveEntry(ip, 'authorized_robot'); _renderAndWire(); }, 400);

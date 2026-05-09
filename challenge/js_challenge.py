@@ -571,8 +571,8 @@ def _js_challenge_required(request) -> bool:
         # identity's risk score has climbed into the soft-challenge band
         # (SOFT_CHALLENGE_SCORE ≤ score < RISK_BAN_THRESHOLD). Forces a fresh
         # cookie mint on a path that would otherwise be exempt.
-        # _track_key is set at proxy_handler.py:2511, after the JS challenge
-        # gate at 2282 — derive identity directly here instead.
+        # _track_key is set in protect() after the JS challenge gate —
+        # see rules.md §16b canonical pattern — derive identity directly here instead.
         if SOFT_CHALLENGE_SCORE > 0:
             try:
                 from identity import get_identity
@@ -611,9 +611,9 @@ def _js_challenge_applicable(request) -> bool:
     if not TURNSTILE_ENABLED:
         return False
     # 1.5.4 — gate Turnstile on the identity's risk score.
-    # _track_key is set at proxy_handler.py:2511, which is AFTER the JS
-    # challenge gate at line 2282 — so request.get("_track_key") is always
-    # None here. Derive identity directly to get the current risk score.
+    # _track_key is set in protect() after the JS challenge gate —
+    # see rules.md §16b canonical pattern — so request.get("_track_key") is
+    # always None here. Derive identity directly to get the current risk score.
     try:
         from identity import get_identity
         _tj_id, *_ = get_identity(request)
