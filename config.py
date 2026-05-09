@@ -658,6 +658,14 @@ _ADMIN_PUBLIC_SUBPATHS = (
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout")
 
+# High-frequency read-only polling endpoints that must not flood the events
+# buffer — recording them every 2–15 s displaces real traffic events.
+_ADMIN_POLL_SUBPATHS = frozenset({
+    "/secured/metrics",
+    "/secured/health-score",
+    "/secured/status",
+})
+
 # ── Risk scoring ───────────────────────────────────────────────────────────
 RISK_WEIGHTS = {
     # 1.6.3 — calibrated weights (post-Tier-C review)

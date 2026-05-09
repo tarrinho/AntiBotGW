@@ -661,3 +661,165 @@ async def test_bypass_paths_traffic_appears_in_timeline(gw_client):
         )
     finally:
         _cph.BYPASS_PATHS = orig_bp
+
+
+# ── 1.7.8 — Live Events filter QA (dynamic) ──────────────────────────────
+# These tests verify that the category + path filters on the main dashboard
+# Live Events panel correctly show/hide events when toggled.
+# The JS filter logic (_renderEvents) is simulated in Python so the test
+# runs without a browser.
+
+_BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+_BROWSER_HDR = {"User-Agent": _BROWSER_UA, "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"}
+_ADMIN_NS = "/antibot-appsec-gateway"
+
+
+def _js_event_filter(events, active_filters, path_q=""):
+    """Python replica of the JS _renderEvents() filter logic (main.html).
+    active_filters: set of pill names currently active
+                    {'allowed','ban','reallyban','missed','authbots','gwmgmt'}
+    path_q:         lower-cased path search term (empty = no path filter)
+    """
+    result = []
+    for e in events:
+        p = (e.get("path") or "").lower()
+        if "gwmgmt" not in active_filters and p.startswith(_ADMIN_NS.lower()):
+            continue
+        if path_q and path_q not in p:
+            continue
+        result.append(e)
+    return result
+
+
+_ALL_FILTERS = frozenset({"allowed", "ban", "reallyban", "missed", "authbots", "gwmgmt"})
+_NO_GWMGMT   = _ALL_FILTERS - {"gwmgmt"}
+
+
+@pytest.mark.asyncio
+async def test_events_different_upstream_paths_all_recorded(gw_client):
+    """Requests to different upstream paths must each appear in proxy.events
+    with their exact path so the Live Events panel can display them."""
+    proxy.events.clear()
+    paths = ["/", "/products", "/api/v1/items", "/about"]
+    for p in paths:
+        await gw_client.get(p, headers=_BROWSER_HDR)
+
+    recorded = {(e.get("path") or "") for e in proxy.events}
+    for p in paths:
+        assert p in recorded, (
+            f"Path '{p}' not found in proxy.events — "
+            f"recorded paths: {recorded}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_events_blocked_and_allowed_both_recorded(gw_client):
+    """Allowed (browser UA) and blocked (bot UA) requests must both appear
+    in proxy.events so the Live Events panel shows both green and red rows."""
+    proxy.events.clear()
+    await gw_client.get("/page-ok",  headers=_BROWSER_HDR)
+    await gw_client.get("/page-bot", headers={"User-Agent": "curl/8.0"})
+
+    reasons = {(e.get("reason") or "OK") for e in proxy.events}
+    passthrough = {"operator-passthrough", "authorized-robot", "bypass-path", "bypass-mode"}
+    has_ok    = any(r in ("", "OK") for r in reasons)
+    has_block = any(r not in ("", "OK") and r not in passthrough for r in reasons)
+    assert has_ok,    f"No allowed event recorded — reasons={reasons}"
+    assert has_block, f"No blocked event recorded — reasons={reasons}"
+
+
+@pytest.mark.asyncio
+async def test_events_admin_path_recorded_as_gwmgmt(gw_client):
+    """An authenticated request to a non-polling admin path must be recorded in
+    proxy.events with reason 'operator-passthrough'. High-frequency polling paths
+    (/secured/metrics, /secured/health-score, /secured/status) are excluded from
+    the events buffer to prevent them from displacing real traffic events."""
+    proxy.events.clear()
+    await gw_client.get(
+        "/antibot-appsec-gateway/secured/dashboard",
+        cookies=_admin_cookie(),
+    )
+    gw_events = [
+        e for e in proxy.events
+        if (e.get("path") or "").startswith(_ADMIN_NS)
+    ]
+    assert gw_events, (
+        "Authenticated admin request must appear in proxy.events with "
+        f"path starting '{_ADMIN_NS}'"
+    )
+    reasons = {e.get("reason") for e in gw_events}
+    assert "operator-passthrough" in reasons, (
+        f"GW Mgmt event must have reason='operator-passthrough', got: {reasons}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_events_gwmgmt_filter_off_hides_admin_paths(gw_client):
+    """When the GW Mgmt pill is off, /antibot-appsec-gateway/* events must
+    be hidden by _renderEvents(); upstream events must remain visible.
+    Simulates the JS filter logic against live proxy.events data."""
+    proxy.events.clear()
+    # Upstream traffic (should survive gwmgmt-off filter)
+    await gw_client.get("/products", headers=_BROWSER_HDR)
+    await gw_client.get("/api/items", headers=_BROWSER_HDR)
+    # GW Mgmt traffic (should be hidden when gwmgmt filter is off)
+    # Use /secured/dashboard — /secured/metrics is a poll path excluded from events buffer
+    await gw_client.get(
+        "/antibot-appsec-gateway/secured/dashboard",
+        cookies=_admin_cookie(),
+    )
+
+    all_events = list(proxy.events)
+    assert all_events, "proxy.events must not be empty after requests"
+
+    shown_all    = _js_event_filter(all_events, _ALL_FILTERS)
+    shown_no_gw  = _js_event_filter(all_events, _NO_GWMGMT)
+
+    gw_in_all    = [e for e in shown_all   if (e.get("path") or "").startswith(_ADMIN_NS)]
+    gw_in_no_gw  = [e for e in shown_no_gw if (e.get("path") or "").startswith(_ADMIN_NS)]
+    up_in_no_gw  = [e for e in shown_no_gw if not (e.get("path") or "").startswith(_ADMIN_NS)]
+
+    assert gw_in_all, (
+        "With GW Mgmt ON, /antibot-appsec-gateway/* events must be visible"
+    )
+    assert not gw_in_no_gw, (
+        "With GW Mgmt OFF, /antibot-appsec-gateway/* events must be hidden — "
+        f"still visible: {[e.get('path') for e in gw_in_no_gw]}"
+    )
+    assert up_in_no_gw, (
+        "With GW Mgmt OFF, upstream events (/products, /api/items) must still be visible"
+    )
+
+
+@pytest.mark.asyncio
+async def test_events_path_filter_narrows_live_events(gw_client):
+    """The path search filter must include only events whose path contains
+    the search term (case-insensitive), hiding all non-matching events."""
+    proxy.events.clear()
+    await gw_client.get("/products/123", headers=_BROWSER_HDR)
+    await gw_client.get("/api/items",    headers=_BROWSER_HDR)
+    await gw_client.get("/login-page",   headers=_BROWSER_HDR)
+
+    all_events = list(proxy.events)
+    assert len(all_events) >= 3, "Need at least 3 events for path filter test"
+
+    # Filter by '/products' — only /products/123 must survive
+    products = _js_event_filter(all_events, _ALL_FILTERS, path_q="/products")
+    assert all("/products" in (e.get("path") or "") for e in products), (
+        "path filter '/products' must only include events with '/products' in path"
+    )
+    assert products, "path filter '/products' must match at least one event"
+
+    # Filter by '/api' — only /api/items must survive; /products must not appear
+    api = _js_event_filter(all_events, _ALL_FILTERS, path_q="/api")
+    assert all("/api" in (e.get("path") or "") for e in api)
+    assert all("/products" not in (e.get("path") or "") for e in api), (
+        "path filter '/api' must not include /products events"
+    )
+
+    # Filter by '/zzz-nonexistent' — nothing must survive
+    none_ = _js_event_filter(all_events, _ALL_FILTERS, path_q="/zzz-nonexistent")
+    assert not none_, (
+        "path filter with no match must return empty list — "
+        f"got: {[e.get('path') for e in none_]}"
+    )
