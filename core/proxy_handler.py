@@ -58,7 +58,7 @@ from config import _REQUEST_ID_HEADER, _REQUEST_ID_RE  # noqa: F401 — leading 
 from config import _parse_authorized_bot_uas  # noqa: F401
 from config import (  # noqa: F401 — more underscore config constants
     _CANARY_PREFIX, _CANARY_USED_MAX, _CANARY_RE,
-    _ADMIN_PUBLIC_SUBPATHS, _ADMIN_LOGIN_SUBPATHS,
+    _ADMIN_PUBLIC_SUBPATHS, _ADMIN_LOGIN_SUBPATHS, _ADMIN_POLL_SUBPATHS,
     _HOSTILE_REASONS, _JS_CHAL_OPEN_PATHS_RAW,
     _TURNSTILE_CONFIGURED, _PROC,
 )
@@ -101,7 +101,7 @@ from detection.fp_enrichment import _inject_fp_probe, fp_report_endpoint  # noqa
 from challenge.js_challenge import sw_js_endpoint  # noqa: F401
 from state import _fp_canvas_store  # noqa: F401
 from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
-from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING  # noqa: F401
+from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING, events_by_cat  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
 from admin.mesh import _gw_local_id  # noqa: F401
 from dashboards.service_metrics import _disk_usage  # noqa: F401
@@ -2508,10 +2508,11 @@ async def protect(request: web.Request, handler):
             # else: fall through to silent decoy
         elif _admin_ip_allowed(request) and _internal_authed(request):
             _adm_resp = await handler(request)
-            _adm_ip = get_ip(request)
-            _adm_ua = request.headers.get("User-Agent", "")
-            await record(_adm_ip, _adm_ua, request.path,
-                          _adm_resp.status, "operator-passthrough", request_id=rid)
+            if sub not in _ADMIN_POLL_SUBPATHS:
+                _adm_ip = get_ip(request)
+                _adm_ua = request.headers.get("User-Agent", "")
+                await record(_adm_ip, _adm_ua, request.path,
+                              _adm_resp.status, "operator-passthrough", request_id=rid)
             return _adm_resp
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
@@ -2525,33 +2526,6 @@ async def protect(request: web.Request, handler):
                       _upstream_404_cache.get("status") or 404,
                       reason, request_id=rid)
         return await _serve_mirrored_404()
-
-    # 1.6.7+ — Authenticated-operator bypass. When the request carries a
-    # valid `agw_session` cookie AND comes from an admin-allowed IP, we
-    # treat it as a signed-in operator and forward DIRECTLY to the upstream
-    # handler. This guards against the operator being silent-decoyed by a
-    # detector their own dashboard work is supposed to oversee:
-    #   - they may be testing the upstream from the same browser tab the
-    #     dashboard is open in,
-    #   - their IP may have scored high on AbuseIPDB / CrowdSec or even
-    #     hit the internal ban list during a prior probing session,
-    #   - they may have triggered RPS / ai-headers / honeypot etc. while
-    #     debugging — none of which should lock them out of the system
-    #     they are actively administering.
-    # The request is still recorded so it surfaces in the Logs dashboard
-    # with reason='operator-passthrough' (visible signal that a detector
-    # WOULD have fired but was bypassed for an authenticated operator).
-    if _internal_authed(request) and _admin_ip_allowed(request):
-        request["_operator_bypass"] = True
-        _op_resp = await handler(request)
-        _op_ip = get_ip(request) or request.remote or ""
-        _op_ua = request.headers.get("User-Agent", "")
-        await record(_op_ip, _op_ua, request.path, _op_resp.status,
-                     "operator-passthrough",
-                     track_key=_op_ip,
-                     ja4=_request_ja4(request),
-                     request_id=rid)
-        return _op_resp
 
     # ── Hybrid identity (primary tracking key) ──
     # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,
@@ -3152,8 +3126,7 @@ async def protect(request: web.Request, handler):
         if _s:
             _decay_risk(_s, now())
             _score_now = _s.risk_score
-    _rec_reason = "operator-passthrough" if request.get("_operator_bypass") else ""
-    await record(ip, ua, path, response.status, _rec_reason,
+    await record(ip, ua, path, response.status, "",
                  track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid,
                  signals=request.get("_signals", []),
                  score=_score_now)
@@ -3919,8 +3892,16 @@ async def metrics_endpoint(request: web.Request):
                 "is_admin_ip": _is_admin_ip(s.last_ip or key),
                 "is_authorized_bot": _is_auth_bot,
             })
-        recent_events = list(events)[-50:]
-        recent_events.reverse()  # newest first
+        # Merge per-category ring buffers. ?cats=allowed,ban,missed,authbots,gwmgmt
+        # selects which buckets to include; defaults to all five.
+        _valid_cats = {"allowed", "ban", "missed", "authbots", "gwmgmt"}
+        _cats_param = request.query.get("cats", "")
+        _req_cats = {c for c in _cats_param.split(",") if c in _valid_cats} if _cats_param else _valid_cats
+        _merged: list = []
+        for _cat in _req_cats:
+            _merged.extend(events_by_cat[_cat])
+        _merged.sort(key=lambda e: e["ts"], reverse=True)
+        recent_events = _merged[:50]
         top_paths = sorted(metrics["by_path"].items(),
                            key=lambda kv: kv[1], reverse=True)[:10]
 
@@ -3942,6 +3923,7 @@ async def metrics_endpoint(request: web.Request):
             end_epoch = int(request.query.get("end", str(int(_t.time()))))
         except ValueError:
             end_epoch = int(_t.time())
+        path_q = (request.query.get("path") or "").strip().lower()
 
         # Round end to bucket boundary for stable X-axis ticks
         end_b = (end_epoch // bucket_secs) * bucket_secs
@@ -3953,50 +3935,99 @@ async def metrics_endpoint(request: web.Request):
         # If bucket >= 1m, aggregate the in-memory minute buckets into coarser ones.
         # For older data outside in-memory retention, query the DB.
         timeline_out = []
-        # In-memory available range
-        in_mem_oldest = end_b - TIMELINE_RETAIN_SECS
-        # DB fallback only if needed
-        db_buckets = {}
-        if start_b < in_mem_oldest:
+
+        if path_q:
+            # Path-filtered timeline: query events table, aggregate into buckets
+            _passthrough = {"", "ok", "operator-passthrough", "bypass-mode",
+                            "bypass-path", "authorized-robot"}
+            _admin_pfx   = ADMIN_NS.lower()
             try:
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
-                for row in conn.execute(
-                    "SELECT bucket_minute, total, allowed, blocked, missed, by_reason FROM timeline "
-                    "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
-                    (start_b, end_b + 60)
-                ):
-                    db_buckets[row["bucket_minute"]] = row
+                rows = conn.execute(
+                    "SELECT ts, path, reason FROM events "
+                    "WHERE ts >= ? AND ts <= ? AND LOWER(path) LIKE ? ORDER BY ts",
+                    (start_b, end_b + bucket_secs, f"%{path_q}%")
+                ).fetchall()
                 conn.close()
+                # Also scan in-memory events (recent, not yet flushed to DB)
+                from state import events as _mem_events
+                mem_rows = [
+                    {"ts": e["ts"], "path": e.get("path", ""), "reason": e.get("reason", "")}
+                    for e in _mem_events
+                    if start_b <= e["ts"] <= end_b + bucket_secs
+                    and path_q in (e.get("path") or "").lower()
+                ]
+                # Bucket all rows
+                path_buckets: dict = {}
+                for row in list(rows) + mem_rows:
+                    slot = (int(row["ts"]) // bucket_secs) * bucket_secs
+                    b = path_buckets.setdefault(slot, {"total": 0, "allowed": 0, "blocked": 0,
+                                                       "missed": 0, "authorized_robot": 0, "gwmgmt": 0})
+                    b["total"] += 1
+                    r = (row["reason"] or "").lower()
+                    p = (row["path"] or "").lower()
+                    if p.startswith(_admin_pfx):
+                        b["gwmgmt"] += 1
+                    if r == "authorized-robot":
+                        b["authorized_robot"] += 1
+                    if r and r not in _passthrough:
+                        b["blocked"] += 1
+                    else:
+                        b["allowed"] += 1
+                for slot in range(start_b, end_b + 1, bucket_secs):
+                    timeline_out.append({"t": slot, **path_buckets.get(slot,
+                        {"total": 0, "allowed": 0, "blocked": 0,
+                         "missed": 0, "authorized_robot": 0, "gwmgmt": 0})})
             except Exception:
-                pass
+                path_q = ""  # fall through to unfiltered on error
 
-        for slot in range(start_b, end_b + 1, bucket_secs):
-            agg = {"total": 0, "allowed": 0, "blocked": 0, "missed": 0, "authorized_robot": 0}
-            # Sum every 1-min bucket falling inside [slot, slot + bucket_secs)
-            for m in range(slot, slot + bucket_secs, 60):
-                d = timeline.get(m)
-                if not d:
-                    d = db_buckets.get(m)
-                if d:
-                    agg["total"] += d["total"]
-                    agg["allowed"] += d["allowed"]
-                    agg["blocked"] += d["blocked"]
-                    # `missed` only present in 1.5.4+ rows
-                    try:
-                        agg["missed"] += (d["missed"] if d["missed"] is not None else 0)
-                    except (IndexError, KeyError):
-                        pass
-                    # authorized_robot: from by_reason (in-memory = defaultdict, DB = JSON str)
-                    try:
-                        br = d["by_reason"]
-                        if isinstance(br, str):
-                            agg["authorized_robot"] += json.loads(br or "{}").get("authorized-robot", 0)
-                        elif hasattr(br, "get"):
-                            agg["authorized_robot"] += br.get("authorized-robot", 0)
-                    except (KeyError, IndexError, TypeError):
-                        pass
-            timeline_out.append({"t": slot, **agg})
+        if not path_q:
+            # In-memory available range
+            in_mem_oldest = end_b - TIMELINE_RETAIN_SECS
+            # DB fallback only if needed
+            db_buckets = {}
+            if start_b < in_mem_oldest:
+                try:
+                    conn = sqlite3.connect(DB_PATH)
+                    conn.row_factory = sqlite3.Row
+                    for row in conn.execute(
+                        "SELECT bucket_minute, total, allowed, blocked, missed, by_reason FROM timeline "
+                        "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
+                        (start_b, end_b + 60)
+                    ):
+                        db_buckets[row["bucket_minute"]] = row
+                    conn.close()
+                except Exception:
+                    pass
+
+            for slot in range(start_b, end_b + 1, bucket_secs):
+                agg = {"total": 0, "allowed": 0, "blocked": 0, "missed": 0, "authorized_robot": 0, "gwmgmt": 0}
+                for m in range(slot, slot + bucket_secs, 60):
+                    d = timeline.get(m)
+                    if not d:
+                        d = db_buckets.get(m)
+                    if d:
+                        agg["total"] += d["total"]
+                        agg["allowed"] += d["allowed"]
+                        agg["blocked"] += d["blocked"]
+                        try:
+                            agg["missed"] += (d["missed"] if d["missed"] is not None else 0)
+                        except (IndexError, KeyError):
+                            pass
+                        try:
+                            agg["gwmgmt"] += (d["gwmgmt"] if d.get("gwmgmt") is not None else 0)
+                        except (IndexError, KeyError):
+                            pass
+                        try:
+                            br = d["by_reason"]
+                            if isinstance(br, str):
+                                agg["authorized_robot"] += json.loads(br or "{}").get("authorized-robot", 0)
+                            elif hasattr(br, "get"):
+                                agg["authorized_robot"] += br.get("authorized-robot", 0)
+                        except (KeyError, IndexError, TypeError):
+                            pass
+                timeline_out.append({"t": slot, **agg})
 
         # 1.5.1: live throughput from the rolling 1-second window. Used by
         # the main-dashboard threshold slider to show current load vs limit.

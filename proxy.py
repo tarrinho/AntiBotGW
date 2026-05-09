@@ -49,6 +49,7 @@ from config import _DASHBOARDS_DIR  # noqa: F401 — leading underscore not in *
 from config import _SESSION_COOKIE  # noqa: F401 — gateway session cookie name
 from config import (  # noqa: F401 — underscore config vars for test access
     _TURNSTILE_CONFIGURED, _ADMIN_PUBLIC_SUBPATHS, _ADMIN_LOGIN_SUBPATHS,
+    _ADMIN_POLL_SUBPATHS,
 )
 from helpers import (  # noqa: F401
     _strip_admin_key_from_qs, _strip_own_session_cookie,

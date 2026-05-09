@@ -2035,7 +2035,7 @@ def test_metrics_timeline_has_authorized_robot_field():
     assert loop_start != -1, (
         "metrics_endpoint timeline agg dict must init 'authorized_robot': 0 (1.7.5)"
     )
-    assert "authorized-robot" in src[loop_start:loop_start + 1200], (
+    assert "authorized-robot" in src[loop_start:loop_start + 1600], (
         "metrics_endpoint must extract by_reason['authorized-robot'] into authorized_robot"
     )
 
@@ -2964,17 +2964,25 @@ def test_agents_html_cat_filter_pills_present():
 
 
 def test_main_html_apply_filters_hides_chart_datasets():
-    """main.html _applyFilters must set chart.data.datasets[1-4].hidden from _activeFilters."""
+    """main.html _applyChartFilters must set chart.data.datasets[1-5].hidden from _activeFilters,
+    and _applyFilters must call _applyChartFilters (delegated in 1.7.9)."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
-    af_idx = src.find("function _applyFilters()")
-    assert af_idx != -1, "main.html must define _applyFilters() (1.7.6)"
-    block = src[af_idx: af_idx + 500]
-    assert "datasets[1].hidden" in block, "_applyFilters must set datasets[1].hidden"
-    assert "datasets[2].hidden" in block, "_applyFilters must set datasets[2].hidden"
-    assert "datasets[3].hidden" in block, "_applyFilters must set datasets[3].hidden"
-    assert "datasets[4].hidden" in block, "_applyFilters must set datasets[4].hidden"
-    assert "_activeFilters" in block, "_applyFilters must reference _activeFilters"
+    af_idx = src.find("function _applyChartFilters(")
+    assert af_idx != -1, "main.html must define _applyChartFilters() (1.7.9)"
+    block = src[af_idx: af_idx + 800]
+    assert "datasets[1].hidden" in block, "_applyChartFilters must set datasets[1].hidden"
+    assert "datasets[2].hidden" in block, "_applyChartFilters must set datasets[2].hidden"
+    assert "datasets[3].hidden" in block, "_applyChartFilters must set datasets[3].hidden"
+    assert "datasets[4].hidden" in block, "_applyChartFilters must set datasets[4].hidden"
+    assert "datasets[5].hidden" in block, "_applyChartFilters must set datasets[5].hidden (gwmgmt)"
+    assert "_activeFilters" in block, "_applyChartFilters must reference _activeFilters"
+    # _applyFilters must delegate to _applyChartFilters
+    apply_idx = src.find("function _applyFilters()")
+    assert apply_idx != -1, "main.html must define _applyFilters()"
+    assert "_applyChartFilters" in src[apply_idx: apply_idx + 200], (
+        "_applyFilters must call _applyChartFilters"
+    )
 
 
 def test_agents_html_cat_filter_hides_chart_datasets():
@@ -3211,15 +3219,15 @@ def test_agents_html_agent_cats_hard_ban_reasons():
 
 
 def test_main_html_apply_filters_ban_maps_to_dataset2():
-    """_applyFilters must show dataset[2] (blocked) when EITHER ban OR reallyban is active."""
+    """_applyChartFilters must show dataset[2] (blocked) when EITHER ban OR reallyban is active."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
-    af_idx = src.find("function _applyFilters()")
+    af_idx = src.find("function _applyChartFilters(")
     assert af_idx != -1
-    block = src[af_idx: af_idx + 400]
-    assert "datasets[2].hidden" in block, "_applyFilters must toggle datasets[2] (1.7.8)"
+    block = src[af_idx: af_idx + 600]
+    assert "datasets[2].hidden" in block, "_applyChartFilters must toggle datasets[2] (1.7.9)"
     assert "'ban'" in block and "'reallyban'" in block, (
-        "_applyFilters datasets[2].hidden must reference both 'ban' and 'reallyban' (1.7.8)"
+        "_applyChartFilters datasets[2].hidden must reference both 'ban' and 'reallyban' (1.7.9)"
     )
 
 
@@ -4019,38 +4027,20 @@ def test_operator_passthrough_in_passthrough_reasons():
 
 
 def test_protect_upstream_operator_bypass_calls_record():
-    """The non-admin upstream operator bypass block in protect() must call
-    record() with reason='operator-passthrough' before returning.
+    """The upstream operator bypass block must NOT exist in protect().
 
-    Before the 1.7.8 fix, 'return await handler(request)' exited protect()
-    immediately, skipping the record() at the end of the function.  Operator
-    accesses were therefore invisible in the clients table and timeline.
+    Removed in 1.7.9: admin IPs accessing upstream paths (non-admin namespace)
+    now go through normal bot detection like any other client. operator-passthrough
+    is only recorded for requests inside /antibot-appsec-gateway/ (admin namespace).
     """
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    # Find the non-admin upstream operator bypass block
-    upstream_bypass_idx = src.find("_internal_authed(request) and _admin_ip_allowed(request)")
-    assert upstream_bypass_idx != -1, (
-        "protect() must have the upstream operator bypass condition "
-        "'_internal_authed(request) and _admin_ip_allowed(request)'"
-    )
-    # Grab the block up to the next return — must contain record() call
-    block = src[upstream_bypass_idx: upstream_bypass_idx + 600]
-    assert "await record(" in block, (
-        "protect() upstream operator bypass must call record() before returning "
-        "so accesses appear in ip_state / clients table / timeline (1.7.8)"
-    )
-    assert '"operator-passthrough"' in block, (
-        "protect() upstream operator bypass must pass reason='operator-passthrough' "
-        "to record() (1.7.8)"
-    )
-    # Sanity: record() must come BEFORE the 'return _op_resp' line
-    record_pos = block.find("await record(")
-    return_pos = block.find("return _op_resp")
-    assert 0 < record_pos < return_pos, (
-        "record() call must appear before 'return _op_resp' in the operator bypass block — "
-        "if it comes after, the return exits protect() first and record() is never called"
+    # The upstream bypass condition must no longer exist outside the admin-path block
+    # (the admin-path block uses _admin_ip_allowed + _internal_authed with 'sub' context)
+    assert "_operator_bypass" not in src, (
+        "protect() must not set _operator_bypass — upstream operator bypass removed in 1.7.9; "
+        "admin IPs on non-admin paths go through normal detection"
     )
 
 

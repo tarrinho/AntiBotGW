@@ -67,7 +67,23 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.ai-no-assets{background:#4a1a3d;color:#ff8acc}
 .tag.banned-silent{background:#2d1a4a;color:#a78bfa}
 .tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
-.tag.authorized-robot{background:#0d2340;color:var(--blue)}
+.tag.authorized-robot{background:#2d1a4a;color:#bc8cff}
+.tag.gwmgmt-tag{background:#0d2340;color:var(--blue)}
+.info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+  border-radius:50%;border:1px solid var(--dim);color:var(--dim);font-size:9px;font-weight:700;
+  cursor:default;margin-left:6px;vertical-align:middle;line-height:1;font-style:normal;
+  position:relative;font-family:ui-sans-serif,sans-serif}
+.info-icon:hover{border-color:var(--blue);color:var(--blue)}
+.info-icon .info-tip{display:none;position:absolute;top:18px;left:0;z-index:999;
+  background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;
+  min-width:320px;max-width:420px;font-size:11px;font-weight:400;text-transform:none;
+  letter-spacing:0;line-height:1.6;color:var(--fg);white-space:normal;box-shadow:0 4px 16px #0008;
+  font-family:ui-sans-serif,sans-serif}
+.info-icon:hover .info-tip{display:block}
+.info-tip table{border-collapse:collapse;width:100%}
+.info-tip td{padding:2px 6px;vertical-align:top}
+.info-tip tr:nth-child(even) td{background:rgba(255,255,255,.03);border-radius:2px}
+.info-tip .swatch{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin-top:4px}
 .bar>div{height:100%;background:var(--blue)}
 .reasons{display:grid;grid-template-columns:1fr auto;gap:4px 8px;font-size:11.5px}
@@ -75,9 +91,12 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .reasons .val{font-family:ui-monospace;color:#fff;font-weight:600;text-align:right}
 code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .dim{color:var(--dim)}
-.evt{font-size:11px;display:grid;grid-template-columns:80px 90px 130px 1fr;gap:8px;
+.evt,.evt-hdr{font-size:11px;display:grid;grid-template-columns:70px 90px 120px 52px 45px 1fr 205px;gap:8px;
      padding:3px 6px;border-bottom:1px solid var(--line);font-family:ui-monospace;
      border-left:3px solid transparent}
+.evt-hdr{color:var(--dim);font-size:10px;font-weight:600;text-transform:uppercase;
+     letter-spacing:.05em;border-left-color:transparent;border-bottom:1px solid var(--line);
+     padding-bottom:5px;margin-bottom:2px}
 .evt:nth-child(even){background:#0a0e13}
 .evt.evt-ok{border-left-color:var(--green);background:rgba(63,185,80,0.06)}
 .evt.evt-ok:nth-child(even){background:rgba(63,185,80,0.10)}
@@ -151,6 +170,8 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill[data-cat="missed"]{border-color:#ff7b3a;color:#ff7b3a}
 .cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
 .cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
+.cat-pill[data-cat="path"]{border-color:#e3b341;color:#e3b341}
+.cat-pill.active[data-cat="path"]{background:#e3b341;color:#000}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
 .cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
 .cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
@@ -170,23 +191,19 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <button class="cat-pill active" data-cat="missed">● Missed</button>
   <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
   <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
-  <span style="margin-left:10px;font-size:11px;color:var(--dim)">Path:</span>
-  <input id="path-search" type="text" placeholder="filter by path…"
-    style="font-family:ui-monospace,Menlo,monospace;font-size:12px;background:#0d1117;
-           border:1px solid var(--line);color:var(--fg);padding:3px 8px;border-radius:5px;
-           width:220px;outline:none"
-    oninput="_applyFilters()"
-    onkeydown="if(event.key==='Enter')_applyFilters()"
-    onfocus="this.style.borderColor='var(--blue)'"
-    onblur="this.style.borderColor='var(--line)'">
-  <button title="Apply path filter" onclick="_applyFilters()"
-    style="background:#0e2c4a;border:1px solid #1f5fa6;color:#79c0ff;padding:3px 10px;
-           border-radius:5px;font-size:11px;cursor:pointer;font-family:inherit;line-height:1.4">
-    Filter ↵</button>
-  <button id="path-search-clear" title="Clear path filter"
-    style="display:none;background:none;border:none;color:var(--dim);cursor:pointer;
-           font-size:14px;padding:0 4px;line-height:1"
-    onclick="document.getElementById('path-search').value='';_applyFilters();this.style.display='none'">✕</button>
+  <span id="path-pill" class="cat-pill" data-cat="path"
+    style="margin-left:10px;cursor:default;display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 10px">
+    <span style="opacity:.6;font-size:10px">⬡</span>
+    <input id="path-search" type="text" placeholder="path filter…"
+      style="font-family:ui-monospace,Menlo,monospace;font-size:11px;background:transparent;
+             border:none;color:inherit;width:160px;outline:none;padding:0"
+      oninput="_applyFilters()"
+      onkeydown="if(event.key==='Enter')_applyFilters()">
+    <button id="path-search-clear" title="Clear path filter"
+      style="display:none;background:none;border:none;color:inherit;cursor:pointer;
+             font-size:13px;padding:0 2px;line-height:1;opacity:.7"
+      onclick="document.getElementById('path-search').value='';_applyFilters()">✕</button>
+  </span>
 </div>
 
 <!-- column-header tooltip -->
@@ -224,7 +241,15 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Timeline · total / allowed / blocked <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span></h2>
+      <h2 style="margin:0">Timeline · total / allowed / blocked <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span><i class="info-icon">i<span class="info-tip"><table>
+        <tr><td><span class="swatch" style="background:#58a6ff"></span><b>Total</b></td><td>Sum of all active filter bands</td></tr>
+        <tr><td><span class="swatch" style="background:#3fb950"></span><b>Allowed</b></td><td>Requests that reached upstream — no threat detected</td></tr>
+        <tr><td><span class="swatch" style="background:#f85149"></span><b>Blocked</b></td><td>Ban + Really Ban — requests rejected or decoyed</td></tr>
+        <tr><td><span class="swatch" style="background:#ff7b3a"></span><b>Missed</b></td><td>Allowed through but identity is in the medium-risk band</td></tr>
+        <tr><td><span class="swatch" style="background:#bc8cff"></span><b>Auth Bots</b></td><td>Whitelisted monitoring bots — bypassed detection</td></tr>
+        <tr><td><span class="swatch" style="background:#39d353"></span><b>GW Mgmt</b></td><td>Requests to the admin namespace (/antibot-appsec-gateway/…)</td></tr>
+        <tr><td colspan=2 style="padding-top:6px;color:var(--dim)">Toggle filter pills to show/hide bands. Total updates to reflect only active bands. Path filter narrows to matching requests only.</td></tr>
+      </table></span></i></h2>
       <div style="display:flex;gap:6px;align-items:center;font-size:11px">
         <button id="prev"  class="ctrl">‹ back</button>
         <button id="now"   class="ctrl ctrl-now">now</button>
@@ -420,13 +445,28 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </div>
   </div>
 
-  <div class="row" style="grid-template-columns:1fr 1fr">
+  <div class="row" style="grid-template-columns:1fr">
     <div class="card">
       <h2>Top paths</h2>
       <table id="paths-tbl"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
     </div>
-    <div class="card">
-      <h2>Live events (last 50)</h2>
+  </div>
+
+  <div class="card" style="margin-top:14px">
+    <h2>Live events <span id="events-count" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span><i class="info-icon">i<span class="info-tip"><table>
+      <tr><td><span class="swatch" style="background:#3fb950"></span><b>Delivered</b></td><td>Passed all detectors — reached upstream</td></tr>
+      <tr><td><span class="swatch" style="background:#58a6ff"></span><b>GW Mgmt</b></td><td>Admin namespace path (/antibot-appsec-gateway/…)</td></tr>
+      <tr><td><span class="swatch" style="background:#bc8cff"></span><b>authorized-robot</b></td><td>Whitelisted monitoring bot — bypassed detection</td></tr>
+      <tr><td><span class="swatch" style="background:#d29922"></span><b>missed</b></td><td>Allowed but identity is in medium-risk band</td></tr>
+      <tr><td><span class="swatch" style="background:#f85149"></span><b>banned / honeypot / …</b></td><td>Blocked — rejected or served a silent decoy</td></tr>
+      <tr><td><span class="swatch" style="background:#ff7b3a"></span><b>rate-limit</b></td><td>Too many requests from this identity</td></tr>
+      <tr><td><span class="swatch" style="background:#dab8ff"></span><b>ai-probe / ua-* / …</b></td><td>Specific detector fired — click tag to drill down</td></tr>
+      <tr><td colspan=2 style="padding-top:6px;color:var(--dim)">Click any red verdict tag to see offending IPs. Use filter pills to hide/show categories.</td></tr>
+    </table></span></i></h2>
+    <div style="max-height:420px;overflow-y:auto">
+      <div class="evt-hdr" style="position:sticky;top:0;background:#161b22;z-index:1">
+        <span>Time</span><span>Verdict</span><span>IP</span><span>Status</span><span>Score</span><span>Path</span><span>Action</span>
+      </div>
       <div id="events"></div>
     </div>
   </div>
@@ -491,58 +531,8 @@ function _clientCats(c) {
   return cats;
 }
 
-function _renderClientsTable(list) {
-  const tbody = document.querySelector('#clients-tbl tbody');
-  window._clientsView = list;
-  const cntEl = document.getElementById('clients-count');
-  if (cntEl) cntEl.textContent = `(${list.length})`;
-
-  tbody.innerHTML = list.slice(0, 100).map((c, i) => {
-    const _bsec = c.banned_secs || 0;
-    const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
-                 : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
-                 : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
-                 : '<span class="dim">—</span>';
-    const id = (c.id || c.ip || '');
-    const lastIp = c.last_ip || '?';
-    const score = c.stealth_score || 0;
-    const scoreColor = score >= 80 ? 'var(--red)'
-                     : score >= 60 ? 'var(--orange,#ff7b3a)'
-                     : score >= 40 ? 'var(--yellow)'
-                     : score >= 20 ? 'var(--blue)'
-                     : 'var(--dim)';
-    const _mbs = c.banned_secs || 0;
-    const _abPatchM = window._authBotPatch;
-    const _isAuthBotM = (_abPatchM && id in _abPatchM) ? _abPatchM[id] : !!c.is_authorized_bot;
-    const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
-    const switchHtml = `
-      <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
-        <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
-        <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
-        <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
-        <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
-      </div>`;
-    return `<tr>
-      <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
-      <td class="dim">${escapeHtml(lastIp)}</td>
-      <td>${c.requests}</td>
-      <td style="color:var(--green)">${c.allowed}</td>
-      <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
-      <td style="color:${scoreColor};font-weight:600">${
-        score > 0
-          ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${score}</span>`
-          : score
-      }</td>
-      <td>${banned}</td>
-      <td>${c.tokens}</td>
-      <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
-      <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
-      <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
-      <td>${switchHtml}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
-  _updateCliSortHeaders();
-  tbody.querySelectorAll('.ban-ctrl').forEach(ctrl => {
+function _wireBanCtrls(container) {
+  container.querySelectorAll('.ban-ctrl').forEach(ctrl => {
     ctrl.querySelectorAll('.ban-btn').forEach(btn => {
       btn.addEventListener('click', async (ev) => {
         ev.stopPropagation();
@@ -613,6 +603,60 @@ function _renderClientsTable(list) {
       });
     });
   });
+}
+
+function _renderClientsTable(list) {
+  const tbody = document.querySelector('#clients-tbl tbody');
+  window._clientsView = list;
+  const cntEl = document.getElementById('clients-count');
+  if (cntEl) cntEl.textContent = `(${list.length})`;
+
+  tbody.innerHTML = list.slice(0, 100).map((c, i) => {
+    const _bsec = c.banned_secs || 0;
+    const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
+                 : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
+                 : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
+                 : '<span class="dim">—</span>';
+    const id = (c.id || c.ip || '');
+    const lastIp = c.last_ip || '?';
+    const score = c.stealth_score || 0;
+    const scoreColor = score >= 80 ? 'var(--red)'
+                     : score >= 60 ? 'var(--orange,#ff7b3a)'
+                     : score >= 40 ? 'var(--yellow)'
+                     : score >= 20 ? 'var(--blue)'
+                     : 'var(--dim)';
+    const _mbs = c.banned_secs || 0;
+    const _abPatchM = window._authBotPatch;
+    const _isAuthBotM = (_abPatchM && id in _abPatchM) ? _abPatchM[id] : !!c.is_authorized_bot;
+    const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
+    const switchHtml = `
+      <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
+        <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
+        <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
+        <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
+        <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
+      </div>`;
+    return `<tr>
+      <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
+      <td class="dim">${escapeHtml(lastIp)}</td>
+      <td>${c.requests}</td>
+      <td style="color:var(--green)">${c.allowed}</td>
+      <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
+      <td style="color:${scoreColor};font-weight:600">${
+        score > 0
+          ? `<span class="cell-click" data-pop="risk-main" data-i="${i}" title="click for reason breakdown">${score}</span>`
+          : score
+      }</td>
+      <td>${banned}</td>
+      <td>${c.tokens}</td>
+      <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
+      <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
+      <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
+      <td>${switchHtml}</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+  _updateCliSortHeaders();
+  _wireBanCtrls(tbody);
   tbody.querySelectorAll('.cell-click').forEach(el => {
     el.onclick = ev => {
       const c = window._clientsView[+el.dataset.i];
@@ -670,23 +714,35 @@ async function _fetchPathEvents(pathQ) {
 function _renderEvents(events) {
   const pathQ = (document.getElementById('path-search')?.value || '').trim().toLowerCase();
   const showGwMgmt = window._activeFilters.has('gwmgmt');
+  const total = (events || []).length;
   const filtered = (events || []).filter(e => {
     const p = e.path || '';
     if (!showGwMgmt && p.startsWith('/antibot-appsec-gateway/')) return false;
     if (pathQ && !p.toLowerCase().includes(pathQ)) return false;
     return true;
   });
+  const cntEl = document.getElementById('events-count');
+  if (cntEl) {
+    const hidden = total - filtered.length;
+    let label = `(${total} total`;
+    if (hidden > 0) label += ` · ${hidden} hidden by filter`;
+    label += ')';
+    cntEl.textContent = label;
+  }
   const eEl = document.getElementById('events');
   eEl.innerHTML = filtered.map(e => {
     const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
+    const isGwMgmt = (e.path || '').startsWith('/antibot-appsec-gateway/');
     const isOk = (e.reason === 'OK' || e.reason === '');
     const isAuthorized = (e.reason === 'authorized-robot' || e.reason === 'operator-passthrough');
-    const evtCls = isOk ? 'evt-ok' : isAuthorized ? 'evt-authorized' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
-    const tagHtml = isOk
-      ? `<span class="tag ${safeClass(e.reason)}" title="Request reached upstream — no detector fired.">OK</span>`
-      : isAuthorized
-        ? `<span class="tag authorized-robot" title="${e.reason === 'operator-passthrough' ? 'Operator access — bypassed detection, recorded as allowed.' : 'Authorized monitoring bot — bypassed detection, not counted as blocked.'}">${escapeHtml(e.reason)}</span>`
-        : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
+    const evtCls = isGwMgmt ? 'evt-authorized' : isOk ? 'evt-ok' : isAuthorized ? 'evt-authorized' : (e.reason === 'rate-limit' || e.reason === 'rate-limit-ip') ? 'evt-warn' : 'evt-block';
+    const tagHtml = isGwMgmt
+      ? `<span class="tag gwmgmt-tag" title="Gateway management request (${escapeHtml(e.reason)})">GW Mgmt</span>`
+      : isOk
+        ? `<span class="tag ${safeClass(e.reason)}" title="Request reached upstream — no detector fired.">Delivered</span>`
+        : isAuthorized
+          ? `<span class="tag authorized-robot" title="${e.reason === 'operator-passthrough' ? 'Operator access — bypassed detection, recorded as allowed.' : 'Authorized monitoring bot — bypassed detection, not counted as blocked.'}">${escapeHtml(e.reason)}</span>`
+          : `<a href="#" class="reason-drill" data-reason="${escapeHtml(e.reason)}" title="click for full explanation + offending identities"><span class="tag ${safeClass(e.reason)}">${escapeHtml(e.reason)}</span></a>`;
     let statusHint = '';
     if (!isOk && !isAuthorized) {
       if (e.status === 200) statusHint = ' · silent-decoy (HTTP 200, mirrors upstream — bot can\'t tell it was blocked)';
@@ -695,30 +751,71 @@ function _renderEvents(events) {
       else if (e.status === 429) statusHint = ' · rate-limited';
       else if (e.status === 402) statusHint = ' · PoW required';
     }
-    return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint}">
+    const statusColor = (e.status||0) >= 500 ? 'var(--red)' : (e.status||0) >= 400 ? 'var(--yellow)' : (e.status||0) >= 300 ? 'var(--blue)' : 'var(--green)';
+    const score = e.score || 0;
+    const scoreColor = score >= 80 ? 'var(--red)' : score >= 60 ? 'var(--orange,#ff7b3a)' : score >= 40 ? 'var(--yellow)' : score >= 20 ? 'var(--blue)' : 'var(--dim)';
+    const trackKey = e.track_key || e.ip || '';
+    const clients = window._clientsList || [];
+    const cl = clients.find(c => (c.id || c.ip) === trackKey);
+    const _abPatchM = window._authBotPatch || {};
+    const _isAuthBot = (trackKey in _abPatchM) ? _abPatchM[trackKey] : !!(cl && cl.is_authorized_bot);
+    const _bsec = cl ? (cl.banned_secs || 0) : 0;
+    const _mst = _isAuthBot ? 'authorized-bot' : _bsec > 86400 ? 'really-banned' : _bsec > 0 ? 'banned' : 'allow';
+    const banCtrl = `<div class="ban-ctrl" data-id="${escapeHtml(trackKey)}" data-ua="${escapeHtml((e.ua||'').slice(0,120))}">
+      <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
+      <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban 24h">Banned</button>
+      <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban 30d">Really Banned</button>
+      <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots">Auth Bot</button>
+    </div>`;
+    return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint} · rid:${escapeHtml(e.rid||'')}">
       <span class="dim">${escapeHtml(time)}</span>
       <span>${tagHtml}</span>
       <span>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</span>
-      <span class="dim">${escapeHtml((e.path||'').slice(0,40))}</span>
-      <span class="dim" title="request id (X-Request-ID)" style="font-family:ui-monospace;font-size:10.5px">${escapeHtml(e.rid || '')}</span>
+      <span style="color:${statusColor};font-weight:600">${e.status||'?'}</span>
+      <span style="color:${scoreColor};font-weight:600">${score > 0 ? score : '<span class="dim">—</span>'}</span>
+      <span class="dim" title="${escapeHtml(e.path||'')}">${escapeHtml((e.path||'').slice(0,50))}</span>
+      <span>${banCtrl}</span>
     </div>`;
   }).join('') || '<span class="dim">no events yet</span>';
   eEl.querySelectorAll('.reason-drill').forEach(el => {
     el.onclick = ev => { ev.preventDefault(); openReasonDrill(el.dataset.reason); };
   });
+  _wireBanCtrls(eEl);
+}
+
+function _applyChartFilters(c) {
+  const showAllowed  = window._activeFilters.has('allowed');
+  const showBan      = window._activeFilters.has('ban') || window._activeFilters.has('reallyban');
+  const showMissed   = window._activeFilters.has('missed');
+  const showAuthBots = window._activeFilters.has('authbots');
+  const showGwMgmt   = window._activeFilters.has('gwmgmt');
+  c.data.datasets[1].hidden = !showAllowed;
+  c.data.datasets[2].hidden = !showBan;
+  c.data.datasets[3].hidden = !showMissed;
+  c.data.datasets[4].hidden = !showAuthBots;
+  c.data.datasets[5].hidden = !showGwMgmt;
+  const tl = window._tlAllowed || [];
+  c.data.datasets[0].data = tl.map((_, i) => {
+    let s = 0;
+    if (showAllowed)  s += (window._tlAllowed[i]  || 0);
+    if (showBan)      s += (window._tlBlocks[i]   || 0);
+    if (showMissed)   s += (window._tlMissed[i]   || 0);
+    if (showAuthBots) s += (window._tlAuthBots[i] || 0);
+    if (showGwMgmt)   s += (window._tlGwMgmt[i]  || 0);
+    return s;
+  });
 }
 
 function _applyFilters() {
   if (chart) {
-    chart.data.datasets[1].hidden = !window._activeFilters.has('allowed');
-    chart.data.datasets[2].hidden = !window._activeFilters.has('ban') && !window._activeFilters.has('reallyban');
-    chart.data.datasets[3].hidden = !window._activeFilters.has('missed');
-    chart.data.datasets[4].hidden = !window._activeFilters.has('authbots');
+    _applyChartFilters(chart);
     chart.update();
   }
   const pathQ = (document.getElementById('path-search')?.value || '').trim().toLowerCase();
   const clearBtn = document.getElementById('path-search-clear');
   if (clearBtn) clearBtn.style.display = pathQ ? 'inline' : 'none';
+  const pathPill = document.getElementById('path-pill');
+  if (pathPill) pathPill.classList.toggle('active', !!pathQ);
   const all = window._clientsList || [];
   const filtered = all.filter(cl => {
     const cats = _clientCats(cl);
@@ -730,14 +827,15 @@ function _applyFilters() {
   });
   _renderClientsTable(filtered);
   _renderEvents(window._lastEvents || []);
-  // Debounce path-event log fetch (300 ms) so we don't hammer on every keystroke
+  // Debounce path-event log fetch + chart refresh (300 ms) so we don't hammer on every keystroke
   clearTimeout(_pathEventsTimer);
-  _pathEventsTimer = setTimeout(() => _fetchPathEvents(pathQ), 300);
+  _pathEventsTimer = setTimeout(() => { _fetchPathEvents(pathQ); tick(); }, 300);
 }
 
 document.querySelectorAll('.cat-pill').forEach(btn => {
   btn.addEventListener('click', () => {
     const cat = btn.dataset.cat;
+    if (cat === 'path') return; // path pill driven by input value, not click toggle
     if (window._activeFilters.has(cat)) {
       window._activeFilters.delete(cat);
       btn.classList.remove('active');
@@ -746,6 +844,7 @@ document.querySelectorAll('.cat-pill').forEach(btn => {
       btn.classList.add('active');
     }
     _applyFilters();
+    tick(); // re-fetch with updated cats so server returns the right per-category events
   });
 });
 function ensureCostChart() {
@@ -828,6 +927,10 @@ function ensureChart() {
         { label: 'authorized bots', data: [], borderColor: '#bc8cff',
           backgroundColor: 'rgba(188,140,255,0.15)', tension: 0.25, fill: false,
           borderWidth: 2, borderDash: [2,3], pointRadius: 0, pointHoverRadius: 4 },
+        // 1.7.9 — teal: GW Mgmt (admin-namespace requests)
+        { label: 'gw mgmt', data: [], borderColor: '#39d353',
+          backgroundColor: 'rgba(57,211,83,0.10)', tension: 0.25, fill: false,
+          borderWidth: 2, borderDash: [3,4], pointRadius: 0, pointHoverRadius: 4 },
       ],
     },
     options: {
@@ -988,6 +1091,10 @@ async function tick() {
       bucket: getBucketSec().toString(),
     });
     if (endEpoch !== null) params.set('end', endEpoch.toString());
+    const _pathQ = (document.getElementById('path-search')?.value || '').trim();
+    if (_pathQ) params.set('path', _pathQ);
+    const _activeCats = Array.from(window._activeFilters).filter(c => ['allowed','ban','missed','authbots','gwmgmt'].includes(c));
+    if (_activeCats.length && _activeCats.length < 5) params.set('cats', _activeCats.join(','));
     const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
     const _liveEl = document.getElementById('live');
@@ -1042,8 +1149,10 @@ async function tick() {
     sEl.innerHTML = Object.entries(statuses).sort()
       .map(([k,v]) => `<span class="lbl">HTTP ${k}</span><span class="val">${v}</span>`).join('');
 
-    // Clients
+    // Clients + Events — update data stores first, then filter once through _applyFilters()
+    // so both the clients table and live events panel always reflect the current filter state.
     window._clientsList = _sortClients(d.clients || []);
+    window._lastEvents = d.events || [];
     _applyFilters();
 
     // Top paths — 1.5.5: click any row to see who hit that path
@@ -1058,10 +1167,6 @@ async function tick() {
       tr.onclick = () => openPathDrill(tr.dataset.path);
     });
 
-    // Events — store raw list; _renderEvents() applies category + path filters
-    window._lastEvents = d.events || [];
-    _renderEvents(window._lastEvents);
-
     // Timeline chart
     if (d.timeline && d.timeline.length) {
       const c = ensureChart();
@@ -1071,25 +1176,22 @@ async function tick() {
       window._lastMainBucketSecs = bucketSec;
       const rangeMin = getRangeMin();
       const labels = d.timeline.map(b => fmtTime(b.t, bucketSec, rangeMin));
-      const totals = d.timeline.map(b => b.total);
-      const allowed = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
-      const blocks = d.timeline.map(b => b.blocked);
-      const missed = d.timeline.map(b => b.missed || 0);
-      const authBots = d.timeline.map(b => b.authorized_robot || 0);
+      window._tlAllowed  = d.timeline.map(b => b.allowed != null ? b.allowed : Math.max(0, (b.total||0) - (b.blocked||0)));
+      window._tlBlocks   = d.timeline.map(b => b.blocked || 0);
+      window._tlMissed   = d.timeline.map(b => b.missed || 0);
+      window._tlAuthBots = d.timeline.map(b => b.authorized_robot || 0);
+      window._tlGwMgmt   = d.timeline.map(b => b.gwmgmt || 0);
       // Dynamic decimation: aim at ~10 labels regardless of how many points
       const step = Math.max(1, Math.floor(labels.length / 10));
       const labelsView = labels.map((l, i) => (i % step === 0 || i === labels.length-1) ? l : '');
       window._lastMainLabels = labelsView;   // shared with paintBlockRate
       c.data.labels = labelsView;
-      c.data.datasets[0].data = totals;
-      c.data.datasets[1].data = allowed;
-      c.data.datasets[2].data = blocks;
-      c.data.datasets[3].data = missed;
-      c.data.datasets[4].data = authBots;
-      c.data.datasets[1].hidden = !window._activeFilters.has('allowed');
-      c.data.datasets[2].hidden = !window._activeFilters.has('ban') && !window._activeFilters.has('reallyban');
-      c.data.datasets[3].hidden = !window._activeFilters.has('missed');
-      c.data.datasets[4].hidden = !window._activeFilters.has('authbots');
+      c.data.datasets[1].data = window._tlAllowed;
+      c.data.datasets[2].data = window._tlBlocks;
+      c.data.datasets[3].data = window._tlMissed;
+      c.data.datasets[4].data = window._tlAuthBots;
+      c.data.datasets[5].data = window._tlGwMgmt;
+      _applyChartFilters(c);
       c.update('none');
       if (typeof window._paintBlockRate === 'function') window._paintBlockRate();
     }
@@ -1654,8 +1756,8 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
   // Reuses the /antibot-appsec-gateway/secured/agents-bucket endpoint (which returns detected/missed/clean).
   window.openMainBucketDetail = async function(bucketEntry, bucketSecs, datasetIndex){
     const t = bucketEntry.t;
-    // datasetIndex: 0=total, 1=allowed, 2=blocked, 3=missed, 4=authorized_robot
-    const focusKind = ['total','allowed','blocked','missed','authorized_robot'][datasetIndex] || null;
+    // datasetIndex: 0=total, 1=allowed, 2=blocked, 3=missed, 4=authorized_robot, 5=gwmgmt
+    const focusKind = ['total','allowed','blocked','missed','authorized_robot','gwmgmt'][datasetIndex] || null;
     const params = new URLSearchParams({ t, bucket_secs: bucketSecs, all_blocks: '1' });
     let d = {}, _fetchErr = null;
     try {

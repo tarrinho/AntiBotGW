@@ -90,7 +90,14 @@ metrics = {
     "by_ja4":    defaultdict(int),    # R0: TLS handshake fingerprints seen
     "rps_buckets": deque(maxlen=60),  # one entry per second (last 60s)
 }
-events = deque(maxlen=200)            # last 200 events for the live log
+events = deque(maxlen=200)            # last 200 events for path-filter scanning
+events_by_cat: dict = {               # per-category ring buffers — never crowd each other out
+    "allowed":  deque(maxlen=50),
+    "ban":      deque(maxlen=50),
+    "missed":   deque(maxlen=50),
+    "authbots": deque(maxlen=50),
+    "gwmgmt":   deque(maxlen=50),
+}
 
 # ── Global RPS window ─────────────────────────────────────────────────────
 _global_rps_window: deque = deque(maxlen=20000)   # timestamps within the last 1s

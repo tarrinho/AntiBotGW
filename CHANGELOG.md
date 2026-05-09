@@ -83,6 +83,11 @@ Author: Pedro Tarrinho
 - **Full suite**: 763 passed, 1 skipped, 0 failed (+2 from session 6 continued: operator-passthrough regression tests)
 - **Previously flaky (now fixed)**: `test_risk_increments_on_block`, `test_security_headers_injected_on_html` — conftest DB wipe was targeting wrong path
 
+### Changed (session 7 — 2026-05-08)
+- **Upstream changed to `https://jtsl.pt`** — running container `appsec-antibot-gw1.7.8` restarted with `UPSTREAM=https://jtsl.pt`.
+- **GW Mgmt + path filter wired to Live Events panel** (`dashboards/main.html`) — extracted `_renderEvents(events)` from inline `tick()` code; `_applyFilters()` now calls `_renderEvents(window._lastEvents || [])` so toggling any filter pill or submitting the path filter updates the Live Events list. Added "Filter ↵" submit button and Enter-key handler to path input.
+- **Live Events debug counter** (`dashboards/main.html`) — `<h2>Live events <span id="events-count">` updated by `_renderEvents` on every render: shows `(N total · M hidden by filter)` when filters are active, making filter behaviour directly observable without devtools.
+
 ---
 
 ## [1.7.7] — 2026-05-07

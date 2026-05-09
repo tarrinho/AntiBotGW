@@ -16,7 +16,7 @@ import time as _t
 
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
-from state import _postgres_available  # noqa: F401 — underscore not exported by *
+from state import _postgres_available, events_by_cat  # noqa: F401 — underscores/explicit not exported by *
 from helpers import now, slog  # noqa: F401
 from admin.auth import _is_admin_ip  # noqa: F401
 
@@ -51,23 +51,26 @@ _PASSTHROUGH_REASONS: frozenset = frozenset({
 })
 
 
-def _timeline_bump(reason: str, missed: bool = False):
+def _timeline_bump(reason: str, missed: bool = False, path: str = ""):
     """Update the current minute bucket.  Caller must hold state_lock.
-    `missed` = allowed AND identity score >= SOFT_CHALLENGE_SCORE (medium band)."""
+    `missed` = allowed AND identity score >= SOFT_CHALLENGE_SCORE (medium band).
+    `path`   = request path, used to count gwmgmt (admin-namespace) hits."""
     from collections import defaultdict
     b = _bucket_now()
     if b not in timeline:
         timeline[b] = {"total": 0, "blocked": 0, "allowed": 0, "missed": 0,
-                       "by_reason": defaultdict(int)}
+                       "gwmgmt": 0, "by_reason": defaultdict(int)}
         # cleanup buckets older than retention
         cutoff = b - TIMELINE_RETAIN_SECS
         for k in [k for k in timeline if k < cutoff]:
             del timeline[k]
     bucket = timeline[b]
-    # Backfill `missed` on buckets restored from older snapshots that lacked it
-    if "missed" not in bucket:
-        bucket["missed"] = 0
+    # Backfill fields on buckets restored from older snapshots that lacked them
+    if "missed"  not in bucket: bucket["missed"]  = 0
+    if "gwmgmt"  not in bucket: bucket["gwmgmt"]  = 0
     bucket["total"] += 1
+    if path and path.startswith(ADMIN_NS):
+        bucket["gwmgmt"] += 1
     if reason and reason not in _PASSTHROUGH_REASONS:
         bucket["blocked"] += 1
         bucket["by_reason"][reason] += 1
@@ -110,7 +113,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         _decay_risk(s, now())
         is_missed = (not reason) and SOFT_CHALLENGE_SCORE > 0 and \
                     SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD
-        _timeline_bump(reason, missed=is_missed)
+        _timeline_bump(reason, missed=is_missed, path=path)
         s.last_seen = now()
         s.last_user_agent = ua[:120]
         s.last_path = path[:120]
@@ -184,7 +187,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
                     db_queue.put_nowait(("set_kv", ("by_path", json.dumps(dict(metrics["by_path"])))))
             except asyncio.QueueFull:
                 pass  # drop on overload, not critical
-        events.append({
+        _evt = {
             "ts": _t.time(),
             "ip": ip,
             "is_admin_ip": _is_admin_ip(ip or ""),
@@ -195,7 +198,22 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
             "reason": reason or "OK",
             "ja4": ja4[:64] if ja4 else "",
             "rid": request_id[:32] if request_id else "",
-        })
+            "score": round(float(score or 0.0), 1),
+            "track_key": (track_key or ip or "")[:32],
+        }
+        events.append(_evt)
+        # Per-category ring buffers — categories are mutually exclusive, priority order:
+        # gwmgmt > authbots > ban > missed > allowed
+        if path and path.startswith(ADMIN_NS):
+            events_by_cat["gwmgmt"].append(_evt)
+        elif reason == "authorized-robot":
+            events_by_cat["authbots"].append(_evt)
+        elif reason and reason not in _PASSTHROUGH_REASONS:
+            events_by_cat["ban"].append(_evt)
+        elif is_missed:
+            events_by_cat["missed"].append(_evt)
+        else:
+            events_by_cat["allowed"].append(_evt)
         # 1.4.6: emit one structured log line per recorded request so the
         # full forensic record (request_id, verdict, ja4, identity) lands
         # in stdout for downstream ingestion.
