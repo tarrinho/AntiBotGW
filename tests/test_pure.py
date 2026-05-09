@@ -4055,3 +4055,69 @@ def test_geo_html_tick_uses_timer_progress():
     assert "clearInterval" in html, "_finishLoadPct must clearInterval on completion/error"
     assert "_startLoadPct()" in html, "tick() must call _startLoadPct() at start"
     assert "_finishLoadPct()" in html, "tick() must call _finishLoadPct() after rendering"
+
+
+# ── F-04/F-06/F-07 dashboard security fixes (1.7.9) ──────────────────────────
+
+def test_agents_html_no_silent_catch_on_ui_fetch():
+    """agents.html must not use .catch(()=>({})) on any fetch — §17e."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert "catch(()=>({}))" not in html, (
+        "agents.html contains silent .catch(()=>({})) swallowing fetch/parse failures — "
+        "replace with structured try/catch per §17e"
+    )
+
+
+def test_main_html_no_silent_catch_on_ui_fetch():
+    """main.html must not use .catch(()=>({})) on any fetch — §17e."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "catch(()=>({}))" not in html, (
+        "main.html contains silent .catch(()=>({})) swallowing fetch/parse failures — "
+        "replace with structured try/catch per §17e"
+    )
+
+
+def test_controls_html_no_silent_catch_on_ui_fetch():
+    """controls.html must not use .catch(()=>({})) on any fetch — §17e."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
+    assert "catch(()=>({}))" not in html, (
+        "controls.html contains silent .catch(()=>({})) swallowing fetch/parse failures — "
+        "replace with structured try/catch per §17e"
+    )
+
+
+def test_login_redirect_response_validated_through_safenext():
+    """login.html post-login redirect must go through safeNext() — §17c DiD.
+    Server validates next_url server-side; this is a client-side defense-in-depth."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "login.html").read_text()
+    assert "j.redirect" not in html or "safeNext(j.redirect)" in html, (
+        "login.html uses j.redirect without safeNext() validation — "
+        "use safeNext(j.redirect) || next per §17c"
+    )
+    assert "safeNext(j.redirect)" in html, (
+        "login.html must validate j.redirect through safeNext() per §17c"
+    )
+
+
+def test_geo_setinterval_tracked():
+    """Named timers in geo.html that use setInterval must be pushed into _timers[]
+    for beforeunload cleanup — §17b. Checks playTimer and _lpTimer explicitly;
+    also verifies inline _timers.push(setInterval(...)) calls remain intact."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "geo.html").read_text()
+    assert "_timers.push(playTimer)" in html, (
+        "geo.html: playTimer not pushed to _timers[] — "
+        "add _timers.push(playTimer) after setInterval assignment per §17b"
+    )
+    assert "_timers.push(_lpTimer)" in html, (
+        "geo.html: _lpTimer not pushed to _timers[] — "
+        "add _timers.push(_lpTimer) after setInterval assignment per §17b"
+    )
+    assert "_timers.push(setInterval(" in html, (
+        "geo.html: inline _timers.push(setInterval(...)) pattern missing — "
+        "existing tick/refresh intervals must remain tracked per §17b"
+    )

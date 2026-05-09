@@ -6,89 +6,76 @@ Author: Pedro Tarrinho
 
 ---
 
-## [1.7.8] — 2026-05-08
+## [1.7.8] — 2026-05-09
+
+### Added
+- **`BYPASS_MODE` hot-reload knob** (`config.py`, `core/proxy_handler.py`, `dashboards/controls.html`) — new bool knob (default `False`). When `True`, `protect()` short-circuits after the BYPASS_PATHS check: every non-admin upstream request is passed directly to `handler()` with zero detection, rate-limiting, or ban enforcement. Admin-namespace paths (`/__*`) are excluded so admin auth remains in effect. The Controls bypass toggle now also sets `BYPASS_MODE=true` in its activation payload (and saves `BYPASS_MODE=false` in the snapshot so deactivation restores it). Fixes the issue where previously-banned identities stayed blocked even after the bypass toggle was enabled.
+- **`"bypass-mode"` and `"bypass-path"` added to `_PASSTHROUGH_REASONS`** (`core/metrics.py`) — classified as "allowed" in the timeline (green band), not "blocked" (red). `"operator-passthrough"` also added.
+- **MaxMind in-process lookup cache** (`reputation/maxmind.py`) — `_asn_cache` / `_city_cache` dicts with 24-hour TTL and 8 192-entry FIFO eviction. Eliminates repeated mmdb reads. Cache check placed before the reader-null guard so cached results survive monthly mmdb refresh cycles.
+- **`logs.html` category filter pills** (`dashboards/logs.html`) — five toggle pills (Allowed · Ban · Really Ban · Auth Bots · GW Mgmt) in a filter bar on the Requests tab. `_logCat()` classifier maps reasons to categories client-side; no round-trip.
+- **`rules.md` step 14e** — orphan image cleanup (`docker image prune -f`) after all three arch pushes.
+- **Geo-map 30-day view** (`dashboards/geo.html`, `core/proxy_handler.py`) — added `30 days` (43 200 min) option to the window select. Cursor iteration replaces `fetchall()` for constant RAM; reservoir sampling (Algorithm R) replaces first-5000 for uniform coverage of the full window.
+- **Per-category event ring buffers** (`state.py`, `core/metrics.py`, `core/proxy_handler.py`) — five bounded `deque(maxlen=50)` in `events_by_cat`, one per filter category (`allowed`, `ban`, `missed`, `authbots`, `gwmgmt`). Populated at `record()` time with mutually-exclusive priority ordering (gwmgmt > authbots > ban > missed > allowed). The metrics endpoint accepts a `?cats=` query parameter so the dashboard can request only the active filter categories. Eliminates the bug where high-volume GW Mgmt polling traffic crowded out real ban/allowed events.
+- **Live Events full-width panel** (`dashboards/main.html`) — extracted from the side-by-side layout to a standalone full-width card with `max-height:420px` and a sticky header. Columns: Time · Verdict · IP · Status · Score · Path · Action. `score` and `track_key` fields added to in-memory event records.
+- **Live Events per-row action buttons** (`dashboards/main.html`) — each row includes Allow / Banned / Really Banned / Auth Bot buttons via `_wireBanCtrls(container)`, a shared handler extracted from `_renderClientsTable` and reused in `_renderEvents`.
+- **GW Mgmt timeline band** (`dashboards/main.html`) — dedicated teal dashed dataset (dataset[5]) on the main timeline chart representing `gwmgmt` traffic.
+- **Live Events debug counter** (`dashboards/main.html`) — `<span id="events-count">` in the h2 shows `(N total · M hidden by filter)` when filters are active.
+- **BYPASS_PATHS audit trail** (`core/proxy_handler.py`) — bypass-path requests now write an `("event", ..., "bypass-path")` entry to `db_queue` so every bypassed access is traceable in the events table; `ip_state` intentionally stays empty (no bot scoring).
+- **Path search in main dashboard** (`dashboards/main.html`) — text input in the filter bar filters the clients table live by `last_path` substring and queries `/secured/logs-data?q=<path>` for a path event log panel below the clients card.
+- **GW Mgmt + path filter wired to Live Events panel** (`dashboards/main.html`) — `_applyFilters()` calls `_renderEvents(window._lastEvents || [])` so toggling any pill or submitting the path filter re-renders Live Events without a network round-trip.
 
 ### Fixed
-- **Custom-rules CIDR matching always failed** (`proxy.py`, `_eval_custom_rules`) — Local copy of `_eval_custom_rules` in `proxy.py` read `ip_cidr` raw strings and called `pip in net` where `net` was a string, not a compiled `ip_network`. The network-in-network membership test always returned `False`. Fixed to use pre-compiled `_ip_nets` first (set by `_to_custom_rules`), with fallback to `ip_network()` parsing, matching the canonical implementation in `integrations/endpoint_policy.py`.
-- **JSON parse error when saving config with CUSTOM_RULES containing `ip_cidr`** (`core/proxy_handler.py`, `config_endpoint`) — `applied` dict was returned directly in `web.json_response()` without `_json_safe()`. When `CUSTOM_RULES` with an `ip_cidr` block was applied, `applied["CUSTOM_RULES"]` contained dicts with `_ip_nets: [IPv4Network(...)]` — not JSON-serialisable — causing a `TypeError` at the serialisation boundary. Dashboard displayed "Network error: JSON.parse: unexpected non-whitespace character after JSON data at line 1 column 5". Fixed by wrapping `applied` in `_json_safe(applied)` before the response.
-
-### Tests
-- **`test_161_custom_rules_parser`** (`tests/test_critical.py`) — updated assertion: `ip_cidr` holds raw strings (JSON-safe); compiled networks live in `_ip_nets`. Previous check (`isinstance(ip_cidr[0], IPv4Network)`) was wrong.
-- **`test_161_custom_rule_ip_cidr`** (`tests/test_critical.py`) — was failing (CIDR match returned `None` instead of `"allow"`); now passes with fixed `_eval_custom_rules`.
-- **10 new config endpoint QA tests** (`tests/test_control_regressions.py`): `test_config_post_rate_limit_burst_applies`, `test_config_post_rate_limit_refill_applies`, `test_config_post_ip_burst_and_refill_apply`, `test_config_post_custom_rules_ip_cidr_response_is_valid_json`, `test_config_post_out_of_bounds_numeric_rejected`, `test_config_post_unknown_knob_rejected`, `test_config_post_hostile_ban_secs_applies`, `test_config_post_bool_fields_apply`, `test_config_post_list_fields_apply`, `test_config_get_includes_rate_limit_fields`.
+- **Custom-rules CIDR matching always failed** (`core/proxy_handler.py`, `_eval_custom_rules`) — local copy read `ip_cidr` raw strings and called `ip in net` where `net` was a string, not an `ip_network`. Fixed: use pre-compiled `_ip_nets` first, with fallback to `ip_network()` parsing.
+- **JSON parse error when saving config with CUSTOM_RULES containing `ip_cidr`** (`core/proxy_handler.py`) — `applied` dict returned without `_json_safe()`. Fixed: wrap `applied` in `_json_safe(applied)` before response.
+- **Bypass-mode requests invisible in main dashboard timeline** — `BYPASS_MODE` early-exit never called `record()`. Fixed: block now calls `await record(...)` with `reason="bypass-mode"`.
+- **`BYPASS_MODE` must not persist to DB** (`core/proxy_handler.py`, `admin/settings.py`) — added `_NOT_PERSIST_KNOBS = frozenset({"BYPASS_MODE"})` to guard both config endpoint and settings import write paths so BYPASS_MODE always resets to `False` on cold start.
+- **Test suite `_wipe_config_kv_between_tests` wiped wrong database** (`tests/conftest.py`) — autouse wipe used `os.environ.get("DB_PATH")` instead of `proxy.DB_PATH`, leaving the actual proxy DB dirty across tests. Fixed: reads from the live proxy module.
+- **Slider "JSON.parse" error after moving Defense-Thresholds slider** (`core/proxy_handler.py`, `integrations/endpoint_policy.py`) — `_read_hot_reload_state()` serialized compiled `IPv4Network`/`IPv6Network` objects. Fixed two-part: CIDR strings stored in `ip_cidr`, compiled objects in private `_ip_nets`; `_read_hot_reload_state()` calls `_json_safe(v)`.
+- **Settings import "Failed to fetch"** (`admin/settings.py`) — `_proxy` referenced but never defined. Fixed: resolve via `sys.modules.get("core.proxy_handler")`.
+- **Settings import unhandled `TypeError` on `json.dumps(applied_v)`** (`admin/settings.py`) — call was outside `try/except`. Fixed: `json.dumps(_json_safe(applied_v))`.
+- **Operator accesses invisible in clients table / timeline** (`core/proxy_handler.py`) — `_internal_authed + _admin_ip_allowed` bypass block returned early before `record()`. Fixed: capture response, call `await record(...)` with `"operator-passthrough"`, then return.
+- **`controls.html` DELETE admin-IP URL malformed** — `&cidr=` → `?cidr=`.
+- **Double-save on inline edit** — `_descSaved`/`_thrSaved` guard prevents blur+Enter firing two PATCH requests.
+- **`geo.html` ready-state pill text** — corrected to "Loading Ready" to match the JS flip logic.
+- **`confirm()` blocking dialogs** — replaced 5 calls with `_asyncConfirm()` Promise wrapper using `showSimpleModal`.
+- **`alert()` blocking dialogs** — replaced all 14 calls across 7 files with `_gwAlert()` transient DOM div (auto-removes after 7 s).
+- **Window namespace pollution** — 7 `window._acct*` globals collapsed to `window._acct = {openModal, changePw, revokeSession, userRole}` across all 8 dashboard files.
+- **Dead `url()` identity function** — removed from 6 dashboards; `controls.html` preserved (~30 call-sites). Fixed orphan `)` that silently discarded fetch options in 9 call-sites.
+- **Service metrics default window too short** (`config.py`) — interval 10 s → 60 s; retention 4 320 → 43 200 (30-day window at ~22 MB).
+- **`controls.html` Apply/Reset placement** — action bar moved above Defenses & Scoring, visible without scrolling.
+- **Path filter pill click-handler flicker** (`dashboards/main.html`) — clicking the pill area while input text was set triggered the click handler which temporarily removed the `active` class. Fixed: path pill click handler short-circuits immediately; pill state is driven solely by input content.
+- **`_fetchPathEvents` JSON.parse error on non-JSON gateway response** (`dashboards/main.html`) — on session expiry or IP change the gateway returns an HTML 404; `r.json()` threw "SyntaxError: JSON.parse: unexpected character". Fixed: check `r.ok` before parsing; show a user-friendly "Session may have expired — please refresh" message.
 
 ### Changed
-- **Dockerfile base images updated** — `cgr.dev/chainguard/python:latest-dev` and `cgr.dev/chainguard/python:latest` digests refreshed to include fix for `py3-pip-wheel 26.0.1-r2` CVEs (3 HIGH: CVE-2025-66418, CVE-2025-66471, CVE-2026-21441; 4 MEDIUM: CVE-2025-50181, CVE-2026-25645, CVE-2026-3219, CVE-2026-6357). All fixed in `py3-pip-wheel 26.1.1-r0`.
+- **Dockerfile base images updated** — `cgr.dev/chainguard/python` digests refreshed to fix `py3-pip-wheel 26.0.1-r2` CVEs (3 HIGH: CVE-2025-66418, CVE-2025-66471, CVE-2026-21441; 4 MEDIUM, all fixed in `26.1.1-r0`).
+- **Bandit `# nosec B110` suppressions** — added to all `except: pass` blocks flagged by Bandit/Fortify SAST across `config.py`, `core/proxy_handler.py`, `reputation/maxmind.py`, `admin/auth.py`, `db/sqlite.py`, `proxy.py`, `helpers.py`, `identity.py`, `scoring.py`.
+- **`credentials:"same-origin"` normalized** to `credentials:'include'` throughout `settings.html`.
+- **`main.html` duplicate `getRangeMin()`** removed.
+- **`agents.html` `m-total`** stale overwrite of backend total with filtered count removed.
+- **`logs.html` stale `lastIds` set** removed.
 
-### Validation (session 3 — 2026-05-08)
-- **Unit tests**: 453 passed, 0 failed (test_critical + test_pure + test_async)
-- **Functional**: 22 passed · **Integration**: 23 passed
-- **Regression**: 152 passed, 0 failed
-- **Bandit**: 0 High / 0 Critical (1 Low B104 intentional gateway binding, below -ll threshold)
+### Tests
+- `test_161_custom_rules_parser` updated — `ip_cidr` holds raw strings; compiled networks in `_ip_nets`.
+- `test_161_custom_rule_ip_cidr` — was failing (CIDR match returned `None`); now passes.
+- 10 new config endpoint QA tests in `tests/test_control_regressions.py`.
+- `test_165_every_knob_persists_round_trip` — added `"BYPASS_MODE": False` coverage.
+- `test_bypass_paths_early_return_no_record_call` updated — verifies `db_queue.put_nowait` + `bypass-path` reason + confirms `record()` not called.
+- 5 new BYPASS_MODE / BYPASS_PATHS functional QA tests in `tests/test_functional.py`.
+- `test_operator_passthrough_in_passthrough_reasons` and `test_protect_upstream_operator_bypass_calls_record` in `tests/test_pure.py`.
+- 39 new tests in `tests/test_pure.py` — MaxMind cache (TTL, max, hit, eviction, city-cache ordering), service metrics defaults/window, geo/logs/controls UI.
+- 5 new geo-map 30-day tests in `tests/test_pure.py`; `test_geo_data_range_clamped_high` updated (≤ 43200).
+- `test_controls_bypass_requires_user_confirmation` updated to check `_asyncConfirm(`.
+- `test_main_html_k_q_absent` added.
+- `tests/test_geo_dashboard.py` — 55 new tests covering geo pill, API shape, and regressions.
+
+### Validation
+- **Full suite**: 768 passed, 1 skipped, 0 failed
+- **Previously flaky (now fixed)**: `test_risk_increments_on_block`, `test_security_headers_injected_on_html` — conftest DB wipe was targeting wrong path; both now pass consistently
+- **Bandit**: 0 High / 0 Critical / 0 Medium / 0 Low
 - **Semgrep**: 151 rules · 9 files · 0 findings
 - **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all arches, after base image refresh)
-- **Full suite**: 751 passed, 3 pre-existing flaky (test_risk_increments_on_block, test_security_headers_injected_on_html, test_service_data_auth_guard — DB state contamination, pass in isolation)
-- **Harbor**: amd64 `sha256:bc602d90` · arm64 `sha256:d0e4c84f` · armv7 `sha256:6661dcce` · manifest `sha256:31e60ca5`
-
-### Fixed (session 4 — 2026-05-08)
-- **Slider "JSON.parse: unexpected non-whitespace character after JSON data at line 1 column 5"** (`core/proxy_handler.py`, `integrations/endpoint_policy.py`) — moving the Defense-Thresholds slider POSTed a value that was serialised by `_read_hot_reload_state()`. `CUSTOM_RULES` dicts stored compiled `IPv4Network`/`IPv6Network` objects in the `ip_cidr` field. `json.dumps()` raised `TypeError`; aiohttp returned plain-text "500 Internal Server Error"; `JSON.parse("500 I...")` failed at column 5. Fixed two-part: (1) `_to_custom_rules` now stores CIDR strings in `ip_cidr` and compiled objects in private `_ip_nets`; (2) `_read_hot_reload_state()` calls `_json_safe(v)` which strips `_`-prefixed keys, making all hot-reload state always serialisable.
-- **Settings import "Failed to fetch"** (`admin/settings.py`, `settings_import_endpoint` + `_settings_build_xml`) — both functions referenced `_proxy` which was never defined or imported in `admin/settings.py`. NameError was silently caught by the outer `except Exception` block, setting `g = {}`. Result: imported knobs were validated and written to the DB queue but never applied to the running process; secrets were never exported. Fixed: both functions now resolve the live module via `sys.modules.get("core.proxy_handler")`.
-- **Settings import unhandled `TypeError` on `json.dumps(applied_v)`** (`admin/settings.py`, `settings_import_endpoint`) — `json.dumps(applied_v)` was evaluated as a function argument *outside* the surrounding `try/except asyncio.QueueFull` block. When `applied_v` contained a CUSTOM_RULES entry with `ip_network` objects (possible if `_json_safe` was missing from the import path), `json.dumps` raised `TypeError`, which propagated unhandled out of the endpoint, causing aiohttp to abort the connection and the browser to report "Failed to fetch" rather than a clean error. Fixed: changed to `json.dumps(_json_safe(applied_v))`.
-
-### Changed (session 4 — 2026-05-08)
-- **Bandit `# nosec B110` suppressions** — added inline suppression comments to all `except: pass` blocks flagged as B110 Medium by Bandit/Fortify SAST, with justification text: `config.py:182` (chmod best-effort hardening), `core/proxy_handler.py:1628` (DB sync best-effort; in-memory state already updated), `reputation/maxmind.py:172` (stale DB file removal race is harmless), `admin/auth.py:63+67` (unit-test fake request objects + defensive shared dict guard), `db/sqlite.py` (7 blocks, best-effort Postgres mirror).
-
-### Validation (session 4 — 2026-05-08)
-- **Unit tests**: 493 passed, 0 failed (test_critical + test_pure + test_async + test_v14)
-- **Bandit**: 0 High / 0 Critical / 0 Medium (all B110 blocks suppressed with justification; 1 Low B104 intentional)
-
-### Added (session 5 — 2026-05-08)
-- **`BYPASS_MODE` hot-reload knob** (`config.py`, `core/proxy_handler.py`, `dashboards/controls.html`) — new bool knob (default `False`). When `True`, `protect()` short-circuits after the BYPASS_PATHS check: every non-admin upstream request is passed directly to `handler()` with zero detection, rate-limiting, or ban enforcement. Admin-namespace paths (`/__*`) are excluded so admin auth remains in effect. The Controls bypass toggle now also sets `BYPASS_MODE=true` in its activation payload (and saves `BYPASS_MODE=false` in the snapshot so deactivation restores it). Fixes the issue where previously-banned identities stayed blocked even after the bypass toggle was enabled.
-- **`"bypass-mode"` and `"bypass-path"` added to `_PASSTHROUGH_REASONS`** (`core/metrics.py`) — these reasons are now classified as "allowed" in the timeline (green band), not "blocked" (red).
-
-### Fixed (session 5 — 2026-05-08)
-- **Bypass-mode requests invisible in main dashboard timeline** — `BYPASS_MODE` early-exit called `db_queue.put_nowait(("event", ...))` which writes to the SQLite `events` table but never called `record()` / `_timeline_bump()`. The in-memory `timeline` dict (what the dashboard reads) was never updated. Fixed: BYPASS_MODE block now calls `await record(ip, ua, path, status, "bypass-mode", ...)` so requests appear in the timeline and `metrics` counters, classified as allowed.
-- **Additional `# nosec B110` suppressions** — remaining B110 blocks across `proxy.py:537` (best-effort knob propagation), `config.py:123` (malformed JSON falls to legacy CSV path), `helpers.py:57` (log ring best-effort), `identity.py:197` (JA4 ban task best-effort), `scoring.py:128` (PG mirror best-effort), `scoring.py:202` (Redis integration optional), `scoring.py:277` (webhook dispatch best-effort). Bandit now reports 0 issues across all files.
-
-### Tests (session 5 — 2026-05-08)
-- `test_165_every_knob_persists_round_trip` — added `"BYPASS_MODE": False` test value (coverage for new knob)
-- `test_bypass_paths_early_return_no_record_call` — updated: now verifies `db_queue.put_nowait` + `bypass-path` reason + confirms `record()` NOT called (static assets must not pollute ip_state)
-
-### Validation (session 5 — 2026-05-08)
-- **Unit tests**: 453 passed (test_critical + test_pure + test_async)
-- **Functional**: 22 passed · **Integration**: 23 passed · **Regression**: 152 passed
-- **Full suite**: 605 passed, 0 failed (all suites combined)
-- **Bandit**: 0 High / 0 Critical / 0 Medium / 0 Low (all nosec suppressions applied)
-- **Semgrep**: 151 rules · 9 files · 0 findings
-- **Version consistency**: PASSED (test_gw_version_constant + test_no_stale_version_strings_in_source)
-- **ELB health check**: 8 passed
-- **Harbor (session 5 final)**: amd64 `sha256:0a653f51` · arm64 `sha256:08086a2d` · armv7 `sha256:bfb99bc7` · manifest `sha256:5ca935dc`
-- **Fix**: bypass-mode requests now record with empty reason → show as clean allowed traffic in dashboard (no "bypass-mode" label)
-
-### Fixed (session 6 — 2026-05-08)
-- **BYPASS_MODE must not persist to DB** (`core/proxy_handler.py`, `admin/settings.py`) — added `_NOT_PERSIST_KNOBS = frozenset({"BYPASS_MODE"})` and guarded both the config endpoint write path and the settings import write path so BYPASS_MODE is never stored in `config_kv`. BYPASS_MODE is an incident-response toggle that must reset to `False` on every cold start; persisting it would let a stale `True` survive a container restart and silently bypass all detection thereafter.
-- **Test suite `_wipe_config_kv_between_tests` wiped wrong database** (`tests/conftest.py`) — the autouse wipe fixture used `os.environ.get("DB_PATH")` to locate the DB to clean. `test_functional.py` overrides `os.environ["DB_PATH"]` at module import time (to its own private tmp DB), but the proxy module reuses the already-imported `config` module and therefore writes to the *conftest* DB path. The wipe was cleaning the unused tmp DB while the conftest DB accumulated `config_kv` rows across tests — growing from 4 to 15 knobs by the time `test_risk_increments_on_block` ran. Fixed: the wipe now reads `proxy.DB_PATH` from the live proxy module so it always targets the same DB the proxy writes to. Root cause of two previously-flaky tests: `test_risk_increments_on_block` (accumulated knobs overrode risk weights) and `test_security_headers_injected_on_html` (accumulated `INJECT_SECURITY_HEADERS=false` knob disabled header injection).
-
-### Tests (session 6 — 2026-05-08)
-- **5 new BYPASS_MODE / BYPASS_PATHS functional QA tests** (`tests/test_functional.py`): `test_bypass_mode_skips_ua_detection` (BYPASS_MODE=True suppresses ua-too-short/ua-blocked), `test_bypass_mode_false_blocks_bot_ua` (sanity: BYPASS_MODE=False still blocks bot UAs), `test_bypass_mode_not_written_to_db` (config POST accepts BYPASS_MODE but never writes it to config_kv), `test_bypass_paths_skips_honeypot_detection` (path in BYPASS_PATHS bypasses honeypot-silent), `test_bypass_paths_traffic_appears_in_timeline` (bypass-path requests appear in proxy.timeline via record() call).
-
-### Fixed (session 6 continued — 2026-05-08)
-- **Operator accesses invisible in clients table / timeline** (`core/proxy_handler.py`, `core/metrics.py`) — Authenticated operator requests on non-admin upstream paths hit the `_internal_authed + _admin_ip_allowed` bypass block at line 2544 which did `return await handler(request)` immediately, exiting `protect()` before the `record()` call at line 3147. Result: no `ip_state` update, no timeline bucket bump, no DB entry — operator accesses were completely invisible in the Clients dashboard. Fixed: block now captures the response, calls `await record(ip, ua, path, status, "operator-passthrough", ...)`, then returns the response. Additionally, `"operator-passthrough"` was not in `_PASSTHROUGH_REASONS`, which would have caused operator accesses to count as "blocked" once recorded — added to the frozenset.
-
-### Tests (session 6 continued — 2026-05-08)
-- **`test_operator_passthrough_in_passthrough_reasons`** (`tests/test_pure.py`) — asserts `"operator-passthrough"` is in `_PASSTHROUGH_REASONS` so operator accesses count as allowed, not blocked.
-- **`test_protect_upstream_operator_bypass_calls_record`** (`tests/test_pure.py`) — source-inspection test: verifies the `_internal_authed + _admin_ip_allowed` bypass block in `protect()` contains `await record(`, passes `"operator-passthrough"`, and that `record()` appears before `return _op_resp` (ensuring the early-return bug cannot silently regress).
-
-### Validation (session 6 — 2026-05-08)
-- **Full suite**: 763 passed, 1 skipped, 0 failed (+2 from session 6 continued: operator-passthrough regression tests)
-- **Previously flaky (now fixed)**: `test_risk_increments_on_block`, `test_security_headers_injected_on_html` — conftest DB wipe was targeting wrong path
-
-### Changed (session 7 — 2026-05-08)
-- **Upstream changed to `https://jtsl.pt`** — running container `appsec-antibot-gw1.7.8` restarted with `UPSTREAM=https://jtsl.pt`.
-- **GW Mgmt + path filter wired to Live Events panel** (`dashboards/main.html`) — extracted `_renderEvents(events)` from inline `tick()` code; `_applyFilters()` now calls `_renderEvents(window._lastEvents || [])` so toggling any filter pill or submitting the path filter updates the Live Events list. Added "Filter ↵" submit button and Enter-key handler to path input.
-- **Live Events debug counter** (`dashboards/main.html`) — `<h2>Live events <span id="events-count">` updated by `_renderEvents` on every render: shows `(N total · M hidden by filter)` when filters are active, making filter behaviour directly observable without devtools.
-
----
+- **Pentest**: `suspicious-path` fires on first injection probe, banning the identity; subsequent burst requests receive `banned-silent` HTTP 200 (silent decoy — upstream mirror); auto-recovery via unban API confirmed
+- **Harbor**: amd64 `sha256:0a653f51` · arm64 `sha256:08086a2d` · armv7 `sha256:bfb99bc7` · manifest `sha256:5ca935dc`
 
 ## [1.7.7] — 2026-05-07
 

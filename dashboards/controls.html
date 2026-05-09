@@ -1378,7 +1378,8 @@ async function unban(scope, value){
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify(body),
     });
-    const b = await r.json().catch(()=>({}));
+    let b; try { b = await r.json(); } catch { b = { _error: true }; }
+    if (b._error) { msg.textContent = 'failed (parse error)'; msg.style.color = 'var(--red)'; return; }
     if (r.ok && b.cleared !== undefined){
       msg.textContent = `cleared ${b.cleared} identit${b.cleared===1?'y':'ies'}`;
       msg.style.color = 'var(--green)';

@@ -105,7 +105,7 @@ document.getElementById("login-form").addEventListener("submit", async (ev) => {
       btn.disabled = false;
       return;
     }
-    location.href = j.redirect || next;
+    location.href = safeNext(j.redirect) || next;
   } catch (e) {
     errEl.textContent = "Network error: " + e.message;
     errEl.classList.add("show");

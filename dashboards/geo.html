@@ -605,6 +605,7 @@ document.getElementById('play').onclick = () => {
       }
       renderMap();
     }, 800);
+    _timers.push(playTimer);
   } else if (playTimer) {
     clearInterval(playTimer); playTimer = null;
   }
@@ -675,6 +676,7 @@ function _startLoadPct() {
     _lpVal = Math.min(90, _lpVal + (90 - _lpVal) * 0.08);
     _setLoadPct(Math.round(_lpVal));
   }, 100);
+  _timers.push(_lpTimer);
 }
 function _finishLoadPct() {
   if (_lpTimer) { clearInterval(_lpTimer); _lpTimer = null; }
