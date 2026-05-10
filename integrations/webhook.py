@@ -23,6 +23,15 @@ import json
 
 from aiohttp import ClientSession, ClientTimeout
 
+# Shared session — avoids a new TCP handshake per webhook POST.
+_http_session: "ClientSession | None" = None
+
+def _get_session() -> ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = ClientSession()
+    return _http_session
+
 from config import *   # noqa: F401,F403
 from helpers import slog
 
@@ -85,11 +94,10 @@ async def _post_webhook(event: dict) -> None:
         except Exception:
             pass
     try:
-        async with ClientSession(
-                timeout=ClientTimeout(total=5)) as session:
-            async with session.post(WEBHOOK_URL, data=body,
-                                     headers=headers) as r:
-                await r.read()
+        async with _get_session().post(
+                WEBHOOK_URL, data=body, headers=headers,
+                timeout=ClientTimeout(total=5)) as r:
+            await r.read()
     except Exception as e:
         slog("webhook_failed", level="warn", url=WEBHOOK_URL,
              error=str(e)[:120])

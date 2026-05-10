@@ -2776,7 +2776,7 @@ async def protect(request: web.Request, handler):
 
     # 2b. Suspicious path PATTERN (flag-hunting, file-hunting, CTF recon).
     #     Catches /flag.txt, /myflag, /backup.sql, /id_rsa, /.git/HEAD, etc.
-    if SUSPICIOUS_PATH_ENABLED and is_suspicious_path(request.path):
+    if SUSPICIOUS_PATH_ENABLED and is_suspicious_path(request.path_qs):
         await update_risk_and_maybe_ban(track_key, "suspicious-path", ip)
         return await _silent_decoy_response(
             ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid

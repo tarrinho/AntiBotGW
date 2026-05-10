@@ -163,7 +163,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
   <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
   <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
-  <a href="/antibot-appsec-gateway/logout" onclick="return confirm('Sign out and return to the login page?');" style="color:var(--red)">Sign out</a></nav>
+  <form method="post" action="/antibot-appsec-gateway/logout" style="display:inline;margin:0"><button type="submit" onclick="return confirm('Sign out and return to the login page?');" style="background:none;border:none;cursor:pointer;color:var(--red);padding:0;font:inherit">Sign out</button></form></nav>
 
 <div class="grid">
 

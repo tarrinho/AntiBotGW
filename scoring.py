@@ -17,6 +17,10 @@ from config import REALLY_BAN_SECS   # noqa: F401 — hot-reload propagated via 
 # Signals that are definitive proof of an automated agent — earn REALLY_BAN_SECS.
 # Subset of _HOSTILE_REASONS; other hostile reasons earn HOSTILE_BAN_SECS.
 _REALLY_BAN_REASONS = {"canary-echo", "honeypot-silent", "honeypot"}
+
+# Prevents fire-and-forget tasks from being GC'd before completion.
+_background_tasks: set = set()
+
 from state import *    # noqa: F401,F403
 from state import _signal_order_cache  # explicit: underscore not exported by import *
 from helpers import slog, now
@@ -49,16 +53,11 @@ def _should_run_signal(sig: str, esc_score: float) -> bool:
 def _load_signal_order_cache() -> None:
     """Load per-gateway signal-order overrides from SQLite into _signal_order_cache."""
     global _signal_order_cache
-    # Phase 8: _gw_local_id now lives in admin.mesh; fall back to proxy for compat
     try:
         from admin.mesh import _gw_local_id
         gw_id = _gw_local_id()
     except Exception:
-        try:
-            from admin.mesh import _gw_local_id
-            gw_id = _gw_local_id()
-        except Exception:
-            return
+        return
     try:
         conn = sqlite3.connect(DB_PATH)
         rows = conn.execute(
@@ -77,16 +76,11 @@ def _load_signal_order_cache() -> None:
 def _save_signal_order(sig: str, order: int, actor: str) -> None:
     """Persist a single signal-order override to SQLite (and mirror to PG)."""
     global _signal_order_cache
-    # Phase 8: _gw_local_id now lives in admin.mesh; fall back to proxy for compat
     try:
         from admin.mesh import _gw_local_id
         gw_id = _gw_local_id()
     except Exception:
-        try:
-            from admin.mesh import _gw_local_id
-            gw_id = _gw_local_id()
-        except Exception:
-            return
+        return
     ts = _t.time()
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -260,9 +254,11 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
                 f"risk-score:{int(s.risk_score)}:{reason}")
             last_ja4 = (s.last_ja4 or "")
             if last_ja4:
-                asyncio.create_task(_observe_ja4_ban(last_ja4))
+                _t1 = asyncio.create_task(_observe_ja4_ban(last_ja4))
+                _background_tasks.add(_t1)
+                _t1.add_done_callback(_background_tasks.discard)
             if WEBHOOK_URL:
-                asyncio.create_task(_post_webhook({
+                _t2 = asyncio.create_task(_post_webhook({
                     "event":      "ban",
                     "ts":         int(_t.time()),
                     "reason":     reason,
@@ -274,6 +270,8 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
                     "duration_s": ban_dur,
                     "hostile":    reason in _HOSTILE_REASONS,
                 }))
+                _background_tasks.add(_t2)
+                _t2.add_done_callback(_background_tasks.discard)
         except Exception:
             pass  # nosec B110 — webhook dispatch is best-effort; ban was already applied
     return triggered

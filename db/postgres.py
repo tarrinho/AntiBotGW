@@ -6,8 +6,12 @@ Dependency rule: imports from config.py and state.py only (plus stdlib).
 """
 
 import logging as _logging
+import os as _os
+import queue as _queue
 import sqlite3
+import threading as _threading
 import time as _t
+from contextlib import contextmanager
 
 from config import (
     DB_BACKEND,
@@ -16,12 +20,16 @@ from config import (
 )
 import state as _state
 
+# ── Pool configuration ─────────────────────────────────────────────────────
+_PG_POOL_SIZE    = int(_os.environ.get("PG_POOL_SIZE",    "5"))
+_PG_POOL_TIMEOUT = float(_os.environ.get("PG_POOL_TIMEOUT", "2.0"))
+
 # ── Postgres module reference (lazy-loaded) ────────────────────────────────
 # Mirror of the state.py attributes; accessed via _state module so
 # all callers share one live reference.
 #   _state._postgres          — the psycopg module, or None
 #   _state._postgres_available — bool: psycopg loaded AND DSN set
-#   _state._postgres_pool     — reserved for future connection-pool use
+#   _state._postgres_pool     — the _PgPool singleton (H3 fix)
 
 # ── Schema migration registry ──────────────────────────────────────────────
 # Imported here so _apply_pg_migrations can reference it.
@@ -42,6 +50,124 @@ def _postgres_load_module():
         return None
 
 
+# ── Connection pool ────────────────────────────────────────────────────────
+
+class _PgPool:
+    """Thread-safe bounded connection pool (psycopg v3 sync, autocommit=True).
+
+    Connections validated on acquire with a lightweight ping. Dead
+    connections are discarded and replaced up to the pool size cap.
+    Acquisition blocks at most PG_POOL_TIMEOUT seconds before raising.
+    """
+
+    def __init__(self, dsn: str, size: int, connect_timeout: float = 5.0):
+        self._dsn = dsn
+        self._connect_timeout = connect_timeout
+        self._idle: _queue.LifoQueue = _queue.LifoQueue(maxsize=size)  # LIFO = warmest conn first
+        self._lock = _threading.Lock()
+        self._total = 0   # connections in pool + in use
+        self._max = size
+
+    def _connect(self):
+        pg = _postgres_load_module()
+        return pg.connect(self._dsn,
+                          connect_timeout=self._connect_timeout,
+                          autocommit=True)
+
+    def _ping(self, conn) -> bool:
+        try:
+            conn.execute("SELECT 1")
+            return True
+        except Exception:
+            return False
+
+    @contextmanager
+    def connection(self, timeout: float = _PG_POOL_TIMEOUT):
+        """Acquire a pooled connection; release on exit, discard on exception."""
+        conn = self._acquire(timeout)
+        try:
+            yield conn
+            self._release(conn)
+        except Exception:
+            self._discard(conn)
+            raise
+
+    def _acquire(self, timeout: float):
+        # Fast path: take an idle connection.
+        try:
+            conn = self._idle.get_nowait()
+            if self._ping(conn):
+                return conn
+            self._discard(conn)
+        except _queue.Empty:
+            pass
+
+        # Under limit: create a fresh connection.
+        with self._lock:
+            if self._total < self._max:
+                self._total += 1
+                do_create = True
+            else:
+                do_create = False
+
+        if do_create:
+            try:
+                return self._connect()
+            except Exception:
+                with self._lock:
+                    self._total -= 1
+                raise
+
+        # At max: wait for one to be returned.
+        try:
+            conn = self._idle.get(timeout=timeout)
+        except _queue.Empty:
+            raise TimeoutError(
+                f"PG pool exhausted (max={self._max}, timeout={timeout}s)"
+            )
+        if self._ping(conn):
+            return conn
+        # Returned connection is dead — replace it inline.
+        self._discard(conn)
+        try:
+            return self._connect()
+        except Exception:
+            with self._lock:
+                self._total -= 1
+            raise
+
+    def _release(self, conn) -> None:
+        """Return a healthy connection to the idle queue."""
+        try:
+            self._idle.put_nowait(conn)
+        except _queue.Full:
+            self._discard(conn)
+
+    def _discard(self, conn) -> None:
+        """Close a connection and free its slot."""
+        with self._lock:
+            self._total -= 1
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    @property
+    def stats(self) -> dict:
+        return {"total": self._total, "idle": self._idle.qsize(), "max": self._max}
+
+
+def _get_pool() -> "_PgPool | None":
+    """Return the module-level pool, creating it on first call."""
+    if _state._postgres_pool is not None:
+        return _state._postgres_pool
+    if not POSTGRES_DSN or _postgres_load_module() is None:
+        return None
+    pool = _PgPool(POSTGRES_DSN, size=_PG_POOL_SIZE)
+    _state._postgres_pool = pool
+    return pool
+
+
 def _pg_mirror_kv(op: str, args: tuple) -> bool:
     """1.6.5 — best-effort dual-write of config / secret / admin-ip
     changes to Postgres (in addition to SQLite). Lets the standby
@@ -57,12 +183,11 @@ def _pg_mirror_kv(op: str, args: tuple) -> bool:
     so the operator's intent is durable. Re-sync happens on the next
     successful Postgres write or on operator-triggered table reload.
     """
-    pg = _postgres_load_module()
-    if pg is None or not POSTGRES_DSN:
+    pool = _get_pool()
+    if pool is None:
         return False
     try:
-        with pg.connect(POSTGRES_DSN, connect_timeout=2,
-                          autocommit=True) as conn:
+        with pool.connection(timeout=2.0) as conn:
             with conn.cursor() as cur:
                 if op == "set_config":
                     cur.execute(
@@ -402,22 +527,22 @@ def pg_insert_event(ts: float, ip: str, ua: str, path: str,
     """1.6.5 — append one event row to the Postgres backend. Returns True
     on success, False on transient failure (caller falls back to dropping
     silently — events are best-effort, never block the request path)."""
-    pg = _postgres_load_module()
-    if pg is None or DB_BACKEND != "postgres":
+    if DB_BACKEND != "postgres":
+        return False
+    pool = _get_pool()
+    if pool is None:
         return False
     try:
-        with pg.connect(POSTGRES_DSN, connect_timeout=2,
-                          autocommit=True) as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO events (ts, ip, ua, path, status, reason, "
-                    "track_key, sid, fp, ja4, request_id) "
-                    "VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (ts, ip, (ua or "")[:500], path or "", int(status),
-                     reason or "", track_key or "", sid or "",
-                     fp or "", ja4 or "", request_id or ""))
+        with pool.connection(timeout=2.0) as conn:
+            conn.execute(
+                "INSERT INTO events (ts, ip, ua, path, status, reason, "
+                "track_key, sid, fp, ja4, request_id) "
+                "VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (ts, ip, (ua or "")[:500], path or "", int(status),
+                 reason or "", track_key or "", sid or "",
+                 fp or "", ja4 or "", request_id or ""))
         return True
-    except Exception as e:
+    except Exception:
         # Don't spam — the dashboards' /__db-test endpoint surfaces health.
         return False
 
@@ -434,11 +559,11 @@ def pg_db_size() -> dict:
       tx_total        — xact_commit + xact_rollback (monotonic counter;
                         graph deltas client-side for tx/s)
     Probes whenever POSTGRES_DSN is set, regardless of the active backend."""
-    pg = _postgres_load_module()
-    if pg is None or not POSTGRES_DSN:
+    pool = _get_pool()
+    if pool is None:
         return {"ok": False, "reason": "POSTGRES_DSN not configured"}
     try:
-        with pg.connect(POSTGRES_DSN, connect_timeout=2) as conn:
+        with pool.connection(timeout=2.0) as conn:
             with conn.cursor() as cur:
                 # Single round-trip — every sub-select runs once per call.
                 cur.execute("""

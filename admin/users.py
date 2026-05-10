@@ -309,6 +309,10 @@ async def _login_rate_limit(ip: str) -> bool:
     successful login does not reset (cheap, good-enough back-pressure)."""
     n = _t.time()
     async with _LOGIN_BUCKET_LOCK:
+        # H5: evict expired windows to prevent unbounded growth from unique attacker IPs.
+        _expired = [_ip for _ip, (_w, _) in _LOGIN_BUCKET.items() if n - _w > 60]
+        for _ip in _expired:
+            del _LOGIN_BUCKET[_ip]
         st = _LOGIN_BUCKET.get(ip)
         if st is None or n - st[0] > 60:
             _LOGIN_BUCKET[ip] = [n, 1]
@@ -436,10 +440,10 @@ async def login_submit_endpoint(request: web.Request):
 
 
 async def logout_endpoint(request: web.Request):
-    """GET /antibot-appsec-gateway/logout — revoke the current session
+    """POST /antibot-appsec-gateway/logout — revoke the current session
     server-side AND clear the cookie. Revoking on the server makes the
     cookie unusable even if it leaks; the operator's other sessions on
-    the same account stay live."""
+    the same account stay live. POST prevents CSRF logout via GET link."""
     user = ""
     sid  = ""
     cookie = request.cookies.get(_SESSION_COOKIE, "")

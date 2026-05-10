@@ -1139,6 +1139,53 @@ def test_beforeunload_cleanup_present(fname):
     )
 
 
+# ── DES-2: setInterval must always carry a numeric delay argument ─────────────
+# Bug: settings.html gw-registry auto-refresh called setInterval(fn) with no delay,
+# defaulting to 0ms and flooding the browser → ERR_INSUFFICIENT_RESOURCES.
+
+@_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
+                                     'controls.html','geo.html','logs.html','settings.html'])
+def test_setinterval_has_numeric_delay(fname):
+    """Every setInterval() call in dashboard HTML must carry a numeric delay argument.
+    Omitting the delay defaults to 0ms, flooding the browser with back-to-back
+    requests and producing ERR_INSUFFICIENT_RESOURCES in the console."""
+    src = _read_dash(fname)
+    import re as _re2
+    positions = [m.start() for m in _re2.finditer(r'setInterval\(', src)]
+    missing = []
+    for pos in positions:
+        # Inspect up to 3000 chars after the opening — covers multiline arrow functions.
+        block = src[pos: pos + 3000]
+        # A valid call has ", <digits>" before it closes: e.g. }, 30000) or fn, 15000)
+        if not _re2.search(r',\s*\d{3,6}\s*\)', block):
+            # Find the line number for a helpful error message.
+            line = src[:pos].count('\n') + 1
+            missing.append(f"line {line}")
+    assert not missing, (
+        f"{fname}: setInterval() call(s) at {missing} have no numeric delay argument — "
+        "omitting the delay defaults to 0ms and floods the browser with requests."
+    )
+
+
+def test_settings_gw_registry_autorefresh_delay():
+    """settings.html gw-registry list auto-refresh interval must be exactly 30000ms.
+    The comment says 'every 30s'; the implementation must match."""
+    src = _read_dash('settings.html')
+    import re as _re2
+    # Locate the setInterval( that immediately precedes the loadList call.
+    # The delay argument (}, 30000)) comes AFTER loadList, so we search from
+    # the setInterval opening up to 2000 chars (covers the full multiline body).
+    m = _re2.search(r'setInterval\([\s\S]{0,2000}?loadList', src)
+    assert m, "settings.html: no setInterval containing loadList found"
+    # From that setInterval, check the next 500 chars for the delay.
+    tail = src[m.start(): m.start() + 2500]
+    assert _re2.search(r',\s*30000\s*\)', tail), (
+        "settings.html: gw-registry auto-refresh setInterval must pass 30000ms delay. "
+        "The interval fires the loadList() fetch; without a delay it defaults to 0ms "
+        "and produces ERR_INSUFFICIENT_RESOURCES in the browser console."
+    )
+
+
 # ── SEC-1 additional: login.html safeNext unit test ───────────────────────────
 # Unit test for the safeNext() logic correctness (separate from source checks).
 
