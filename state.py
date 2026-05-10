@@ -98,6 +98,13 @@ events_by_cat: dict = {               # per-category ring buffers — never crow
     "authbots": deque(maxlen=50),
     "gwmgmt":   deque(maxlen=50),
 }
+by_path_by_cat: dict = {              # per-category path hit counters (mirrors events_by_cat keys)
+    "allowed":  defaultdict(int),
+    "ban":      defaultdict(int),
+    "missed":   defaultdict(int),
+    "authbots": defaultdict(int),
+    "gwmgmt":   defaultdict(int),
+}
 
 # ── Global RPS window ─────────────────────────────────────────────────────
 _global_rps_window: deque = deque(maxlen=20000)   # timestamps within the last 1s

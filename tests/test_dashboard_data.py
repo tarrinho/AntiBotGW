@@ -201,6 +201,46 @@ def test_agents_timeline_returns_buckets(proxy_module):
     _run(go())
 
 
+def test_agents_timeline_gwmgmt_in_timeline_entries(proxy_module):
+    """Every timeline bucket must carry a gwmgmt key so the chart dataset[4]
+    (gw mgmt line) and its tooltip entry always have a value to display."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as c:
+                cookie = _make_admin_session(proxy_module)
+                r = await c.get(NS + "/agents-timeline",
+                                cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 200
+                d = await r.json()
+                timeline = d.get("timeline", [])
+                assert timeline, "agents-timeline returned empty timeline"
+                missing = [i for i, b in enumerate(timeline) if "gwmgmt" not in b]
+                assert not missing, (
+                    f"agents-timeline: {len(missing)} bucket(s) missing 'gwmgmt' key "
+                    f"(indices {missing[:5]}). Chart dataset[4] needs this field."
+                )
+    _run(go())
+
+
+def test_agents_timeline_gwmgmt_in_totals(proxy_module):
+    """The totals object must include gwmgmt so the summary line in the
+    agents dashboard can display the total gateway-management request count."""
+    async def go():
+        async with _spin_upstream() as up:
+            async with _spin_proxy(proxy_module, up) as c:
+                cookie = _make_admin_session(proxy_module)
+                r = await c.get(NS + "/agents-timeline",
+                                cookies={proxy_module._SESSION_COOKIE: cookie})
+                assert r.status == 200
+                d = await r.json()
+                assert "totals" in d, "agents-timeline response missing 'totals' key"
+                assert "gwmgmt" in d["totals"], (
+                    f"agents-timeline totals missing 'gwmgmt' key. "
+                    f"Got keys: {list(d['totals'].keys())}"
+                )
+    _run(go())
+
+
 # ── /secured/service-data ────────────────────────────────────────────────
 
 def test_service_data_auth_guard(proxy_module):
@@ -365,6 +405,70 @@ def test_path_hits_returns_paths(proxy_module):
                 assert "ips" in d
                 assert isinstance(d["ips"], list)
     _run(go())
+
+
+def test_events_table_has_path_ts_index(proxy_module):
+    """db/sqlite.py must define idx_events_path_ts ON events(path, ts).
+    Without it the path-hits query (WHERE path=? AND ts>=?) does a full table
+    scan and slows to several seconds on busy installs.
+
+    Checks the schema source rather than the test-session DB so the assertion
+    is not affected by cached session state."""
+    from pathlib import Path
+    schema_src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
+    assert "idx_events_path_ts" in schema_src, (
+        "idx_events_path_ts not found in db/sqlite.py. "
+        "Add: CREATE INDEX IF NOT EXISTS idx_events_path_ts ON events(path, ts)."
+    )
+
+
+def test_path_hits_responds_quickly_with_large_dataset(proxy_module):
+    """path-hits endpoint must return in < 500 ms for 5 000 seeded events.
+    Root cause of slowness: missing idx_events_path_ts index on events(path, ts)
+    caused a full table scan; now offloaded to run_in_executor so the event loop
+    is not blocked either."""
+    import sqlite3, time
+    db = proxy_module.DB_PATH
+    path = "/__qa_stress_path_hits__"
+    now_ts = time.time()
+    conn = sqlite3.connect(db)
+    conn.executemany(
+        "INSERT INTO events(ts, ip, ua, path, method, status, reason) "
+        "VALUES (?,?,?,?,?,?,?)",
+        [
+            (now_ts - i * 17, f"10.{i//65536%256}.{i//256%256}.{i%256}",
+             "stress-UA", path, "GET", 200, "")
+            for i in range(5000)
+        ],
+    )
+    conn.commit()
+    conn.close()
+    try:
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_session(proxy_module)
+                    t0 = time.monotonic()
+                    r = await c.get(
+                        NS + f"/path-hits?path={path}&range=1440",
+                        cookies={proxy_module._SESSION_COOKIE: cookie},
+                    )
+                    elapsed_ms = (time.monotonic() - t0) * 1000
+                    assert r.status == 200
+                    d = await r.json()
+                    assert d.get("total_rows", 0) > 0, \
+                        "path-hits returned no rows for the seeded path"
+                    assert elapsed_ms < 500, (
+                        f"path-hits took {elapsed_ms:.0f} ms for 5000 events — "
+                        "idx_events_path_ts index missing or query still blocking "
+                        "the event loop."
+                    )
+        _run(go())
+    finally:
+        conn2 = sqlite3.connect(db)
+        conn2.execute("DELETE FROM events WHERE path = ?", (path,))
+        conn2.commit()
+        conn2.close()
 
 
 # ── /secured/whoami ──────────────────────────────────────────────────────

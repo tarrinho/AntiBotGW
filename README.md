@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.7.8` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.7.10` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.7.6 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.7.8 \
+  appsec-antibot-gw:1.7.10 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.8` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.10` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.7.8
+  appsec-antibot-gw:1.7.10
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.7.8 .
-trivy image appsec-antibot-gw:1.7.8        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.7.10 .
+trivy image appsec-antibot-gw:1.7.10        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1081,7 +1081,9 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
-| **1.7.8** | **Custom-rules CIDR fix + config endpoint JSON safety + base image CVE refresh.** `_eval_custom_rules` in `proxy.py` used raw `ip_cidr` strings instead of pre-compiled `_ip_nets` objects — CIDR match always returned `False`. `config_endpoint` returned `applied` without `_json_safe()` — IPv4Network objects in CUSTOM_RULES caused a JSON serialisation error in the dashboard. Dockerfile base images updated: `py3-pip-wheel 26.0.1-r2` → `26.1.1-r0` (fixes 3 HIGH + 4 MEDIUM CVEs). 10 new config endpoint regression tests. **Tests**: 453 unit + 22 functional + 23 integration + 152 regression = **751 passing** (+12 tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). |
+| **1.7.10** | **Shared identity popover renderer (`window._gwIdentityPopover`).** Single IIFE (identical in `main.html` and `agents.html`) exposes `normalizeId()`, `buildIdHtml()`, `buildRiskHtml()`. `normalizeId()` maps both data shapes to canonical fields — handles `s.ip`/`c.last_ip`, `blocks_breakdown` array or `blocks_by_reason` object. `buildIdHtml()` uses agents-style `.kv` grid with all best-of-both fields (admin lock, JA4, stealth, tokens, visual bars). `buildRiskHtml()` shows `+N` bars from `risk_breakdown` or `N×` from `blocks_breakdown` fallback. `openPopover` / `openClientPopover` reduced to thin wrappers. `main.html` gains `.kv`/`.rsn` modal CSS. 26 new tests including byte-identical drift guard. **Tests**: 495 unit + 32 functional + 23 integration + 152 regression — all passing. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:30ade761` · arm64 `sha256:af4b88c9` · armv7 `sha256:bbac2cf5` · manifest `sha256:166d673a`. |
+| **1.7.9** | **Top Paths filtered by category pills + bidirectional chart legend ↔ pill sync + panel mini-legends.** `by_path_by_cat` dict added to `state.py` (one counter per category: allowed/ban/missed/authbots/gwmgmt); incremented in `record()` alongside `events_by_cat`; `metrics_endpoint` uses the merged category subset when a `cats` filter is active, falls back to full `metrics["by_path"]` aggregate when all five are on. Chart `plugins.legend.onClick` now calls `_toggleCatFilter()` so clicking a chart dataset toggles the corresponding pill (and vice versa). Clients, Top Paths, and Live Events panels each gain a `.panel-legend` mini-legend row with the same five colour-coded items; all three surfaces sync through `_applyFilters()` → `_syncPanelLegends()`. **Fixed**: `status_endpoint` now returns `Cache-Control: no-store`. **Tests**: 509 unit + 114 dynamic endpoint + 32 functional + 23 integration + 152 regression — all passing. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:77061de9` · arm64 `sha256:4a881b9d` · armv7 `sha256:5cb144a2` · manifest `sha256:a53435e3`. |
+| **1.7.8** | **Custom-rules CIDR fix + JSON safety + base image CVE refresh + BYPASS_MODE + dashboard security hardening (§17b/c/e).** `_eval_custom_rules` CIDR fix; `config_endpoint` `_json_safe`; Dockerfile base images updated (`py3-pip-wheel 26.1.1-r0`, fixes 3 HIGH + 4 MEDIUM CVEs); `BYPASS_MODE` hot-reload knob; 14 silent-catch occurrences in agents/main/controls dashboards replaced with structured `_error` guards (§17e); `safeNext()` redirect guard in login (§17c); geo `playTimer`/`_lpTimer` timer tracking (§17b); stale line-number references in `js_challenge.py` corrected. **Tests**: 772 passing, 1 pre-existing failure. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:7ccb35ac` · arm64 `sha256:c97c192c` · armv7 `sha256:f54a2158` · manifest `sha256:1a5113a9`. |
 | **1.7.7** | **GW Mgmt filter fix — authenticated operator dashboard accesses now visible.** `protect()` middleware was returning early for authenticated admin-path requests without calling `record()`, so operator dashboard browsing never entered `ip_state`. The GW Mgmt filter pill (added 1.7.6) showed zero entries even while the operator was actively viewing the dashboard. Fix: await the handler response then call `record()` with `reason='operator-passthrough'` before returning, ensuring every `/antibot-appsec-gateway/…` access by a logged-in operator is written to `ip_state` with `last_path` set to the GW path and classified as `gwmgmt` by `_clientCats` / `_agentCats`. **Tests**: 116 critical + 267 pure + 10 async = **393 passing** (+2 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |
 | **1.7.6** | **Category filter bar on main and agents dashboards.** Five colour-coded toggle pills (● Allowed / ● Blocked / ● Missed / ● Auth Bots / ● GW Mgmt) filter both timeline chart datasets and the clients/suspects table simultaneously. `_clientCats` / `_agentCats` classifiers map each entry to a category; `_applyFilters()` applies the active set on every tick. GW Mgmt captures accesses to `/antibot-appsec-gateway/` paths (table-only, no chart dataset). Fixes: auth bot priority over gwmgmt path check in cat functions; auth bots dropped by `min_score` gate in `agents_data_endpoint` (stealth_score ≈ 0 caused all to be excluded — zero entries under Auth Bots filter on agents page); null comps/mets for score-0 auth bots crashing frontend component bar. **Tests**: 116 critical + 265 pure + 10 async = **391 passing** (+57 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |
 | **1.7.5** | **Authorized bots shown in purple on all dashboards.** Monitoring bots with `reason=authorized-robot` now appear as a distinct purple dataset on the main dashboard traffic chart (5th line, `#bc8cff`, dashed) and the agents chart (4th dataset); geo map renders purple circles for authorized-robot events with a dedicated legend entry and tooltip. Backend: `metrics_endpoint` timeline extracts `authorized_robot` from `by_reason`; `agents_timeline_endpoint` adds SQL query for `reason='authorized-robot'`; `geo_data_endpoint` classifies authorized-robot as its own kind (no longer inflates `blocked`). **Tests**: 199 pure + 116 critical + 19 async = **334 passing** (+8 regression tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. |

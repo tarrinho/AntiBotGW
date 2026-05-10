@@ -101,7 +101,7 @@ from detection.fp_enrichment import _inject_fp_probe, fp_report_endpoint  # noqa
 from challenge.js_challenge import sw_js_endpoint  # noqa: F401
 from state import _fp_canvas_store  # noqa: F401
 from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
-from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING, events_by_cat  # noqa: F401
+from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING, events_by_cat, by_path_by_cat  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
 from admin.mesh import _gw_local_id  # noqa: F401
 from dashboards.service_metrics import _disk_usage  # noqa: F401
@@ -283,7 +283,7 @@ async def _fetch_upstream_404() -> bool:
     try:
         timeout = ClientTimeout(total=5)
         async with ClientSession(timeout=timeout) as session:
-            async with session.get(UPSTREAM + probe, ssl=False,
+            async with session.get(UPSTREAM + probe,
                                     allow_redirects=False) as resp:
                 _upstream_404_cache["body"]   = await resp.read()
                 _upstream_404_cache["ctype"]  = resp.headers.get(
@@ -315,12 +315,12 @@ async def _serve_mirrored_404() -> web.Response:
     cold) the upstream is fetched synchronously; on cache miss/expiry the
     serving path uses whatever's cached and a background refresh kicks in."""
     n = _t.time()
-    if (not _upstream_404_cache["body"]
-            or n - _upstream_404_cache["fetched_at"] > _UPSTREAM_404_TTL):
+    if (not _upstream_404_cache.get("body")
+            or n - _upstream_404_cache.get("fetched_at", 0) > _UPSTREAM_404_TTL):
         await _fetch_upstream_404()
-    body   = _upstream_404_cache["body"] or b"Not Found\n"
-    ctype  = _upstream_404_cache["ctype"]
-    status = _upstream_404_cache["status"] or 404
+    body   = _upstream_404_cache.get("body") or b"Not Found\n"
+    ctype  = _upstream_404_cache.get("ctype") or "text/plain"
+    status = _upstream_404_cache.get("status") or 404
     return web.Response(status=status, body=body, headers={
         "Content-Type": ctype,
         "Cache-Control": "no-store",
@@ -1954,6 +1954,9 @@ _HOT_RELOAD_KNOBS = {
     "FP_ENRICHMENT_ENABLED":        (_to_bool, None),
     "SW_CHALLENGE_ENABLED":         (_to_bool, None),
     "POW_CHAL_THRESHOLD":           (float, lambda v: 0.0 <= v <= 100000.0),
+    # 1.7.9 — runtime upstream switch (always overrideable regardless of env pin)
+    "UPSTREAM": (lambda v: str(v).rstrip("/"),
+                 lambda v: v.startswith(("http://", "https://")) and len(v) <= 2048),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -1975,7 +1978,7 @@ _HOT_RELOAD_KNOBS = {
 # must default to False on every cold start for safety.
 _NOT_PERSIST_KNOBS: frozenset = frozenset({"BYPASS_MODE"})
 
-_ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE"}
+_ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE", "UPSTREAM"}
 _ENV_PROVIDED_KNOBS = {
     k for k in _HOT_RELOAD_KNOBS
     if k not in _ENV_PIN_EXCLUDE and os.environ.get(k, "").strip()
@@ -2081,6 +2084,15 @@ async def config_endpoint(request: web.Request):
                         except (AttributeError, TypeError):
                             pass
             applied[k] = sorted(value) if isinstance(value, set) else value
+            # 1.7.9 — when UPSTREAM changes, flush the 404-body cache so the
+            # new upstream gets a fresh probe on the next non-matching request.
+            if k == "UPSTREAM":
+                # .clear() keeps the same dict object so importers that held
+                # `from core.proxy_handler import _upstream_404_cache` still
+                # have a valid reference (= {} rebinds the name here, leaving
+                # importers on the stale object → KeyError on next access).
+                _upstream_404_cache.clear()  # noqa: global not needed — mutating, not rebinding
+                slog("config_upstream_changed", level="info", new_upstream=value)
             # 1.5.5 — persist to DB so the change survives container restart.
             # JSON-encode so ints / floats / bools / strings / lists round-trip.
             # _NOT_PERSIST_KNOBS are session-only and intentionally not stored.
@@ -2152,7 +2164,7 @@ async def status_endpoint(request: web.Request):
     return web.json_response({"clients": out, "config": {
         "burst": RATE_LIMIT_BURST, "refill_per_sec": RATE_LIMIT_REFILL,
         "pow_difficulty": POW_DIFFICULTY, "honeypot_ban_secs": HONEYPOT_BAN_SECS,
-    }})
+    }}, headers={"Cache-Control": "no-store"})
 @web.middleware
 async def protect(request: web.Request, handler):
     # 1.4.6 — request correlation. Honour an inbound X-Request-ID if it's
@@ -3415,7 +3427,7 @@ async def db_switch_endpoint(request: web.Request):
     if target == "postgres" and body_dsn:
         globals()["POSTGRES_DSN"] = body_dsn
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         migration = await loop.run_in_executor(
             None, _migrate_recent_events, target, 60)
     finally:
@@ -3902,8 +3914,15 @@ async def metrics_endpoint(request: web.Request):
             _merged.extend(events_by_cat[_cat])
         _merged.sort(key=lambda e: e["ts"], reverse=True)
         recent_events = _merged[:50]
-        top_paths = sorted(metrics["by_path"].items(),
-                           key=lambda kv: kv[1], reverse=True)[:10]
+        if _req_cats == _valid_cats:
+            top_paths = sorted(metrics["by_path"].items(),
+                               key=lambda kv: kv[1], reverse=True)[:10]
+        else:
+            _merged_paths: dict = {}
+            for _cat in _req_cats:
+                for _p, _n in by_path_by_cat[_cat].items():
+                    _merged_paths[_p] = _merged_paths.get(_p, 0) + _n
+            top_paths = sorted(_merged_paths.items(), key=lambda kv: kv[1], reverse=True)[:10]
 
         # Build a timeline window with configurable granularity + scroll position.
         #   ?range=N    → window length in minutes (5..1440)
@@ -5323,16 +5342,21 @@ async def path_hits_endpoint(request: web.Request):
         range_min, limit = 1440, 100
     start_epoch = _t.time() - range_min * 60
 
-    rows = []
-    try:
-        conn = sqlite3.connect(DB_PATH)
+    def _fetch_path_rows(db_path, path_val, since):
+        conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
+        result = conn.execute(
             "SELECT ip, ua, reason, status, ts FROM events "
             "WHERE path = ? AND ts >= ? ORDER BY ts DESC LIMIT 50000",
-            (p, start_epoch),
+            (path_val, since),
         ).fetchall()
         conn.close()
+        return result
+
+    rows = []
+    try:
+        loop = asyncio.get_running_loop()
+        rows = await loop.run_in_executor(None, _fetch_path_rows, DB_PATH, p, start_epoch)
     except Exception as e:
         return web.json_response({"error": f"db: {e}"}, status=500,
                                   headers={"Cache-Control":"no-store"})
@@ -5521,6 +5545,28 @@ async def agents_bucket_detail_endpoint(request: web.Request):
                     "last_path": s.last_path,
                 })
 
+    gwmgmt_set: dict = {}
+    try:
+        conn3 = sqlite3.connect(DB_PATH)
+        conn3.row_factory = sqlite3.Row
+        for r in conn3.execute(
+            "SELECT ip, ua, path FROM events "
+            "WHERE ts >= ? AND ts < ? AND path LIKE '/antibot-appsec-gateway/%' LIMIT 20000",
+            (t, end),
+        ):
+            ip = r["ip"] or "?"
+            entry = gwmgmt_set.setdefault(ip, {
+                "ip": ip, "ua": r["ua"] or "", "count": 0,
+                "is_admin_ip": _is_admin_ip(ip),
+                "last_path": r["path"] or "",
+                "identities": ip_to_idents.get(ip, []),
+            })
+            entry["count"] += 1
+            entry["last_path"] = r["path"] or entry["last_path"]
+        conn3.close()
+    except Exception:
+        pass
+
     payload = {
         "bucket_t":         t,
         "bucket_secs":      bucket,
@@ -5528,6 +5574,7 @@ async def agents_bucket_detail_endpoint(request: web.Request):
         "missed":           sorted(missed_list,              key=lambda r: r["stealth_score"], reverse=True)[:500],
         "clean":            sorted(clean_set.values(),       key=lambda r: r["count"], reverse=True)[:500],
         "authorized_robot": sorted(auth_robot_set.values(),  key=lambda r: r["count"], reverse=True)[:500],
+        "gwmgmt":           sorted(gwmgmt_set.values(),      key=lambda r: r["count"], reverse=True)[:500],
     }
     if kind in ("detected","missed","clean"):
         payload["only"] = kind

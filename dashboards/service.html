@@ -66,7 +66,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .topnav a:hover{color:var(--fg);background:#1f2730}
 .topnav a.active{color:var(--fg);background:#1f2730}
 </style>
-<h1>AppSecGW_1.7.8 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.11 &middot; Service Metrics <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav" id="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -200,10 +200,10 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
         <select id="range" class="ctrl">
           <option value="5">5 min</option>
           <option value="15">15 min</option>
-          <option value="60" selected>1 h</option>
+          <option value="60">1 h</option>
           <option value="180">3 h</option>
           <option value="360">6 h</option>
-          <option value="720">12 h</option>
+          <option value="720" selected>12 h</option>
           <!-- 1.6.5 — extended windows up to 1 month -->
           <option value="1440">24 h</option>
           <option value="4320">3 d</option>
@@ -213,10 +213,10 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
         </select>
         <span class="dim" style="margin-left:6px">bucket:</span>
         <select id="bucket" class="ctrl">
-          <option value="5" selected>5 sec</option>
+          <option value="5">5 sec</option>
           <option value="30">30 sec</option>
           <option value="60">1 min</option>
-          <option value="300">5 min</option>
+          <option value="300" selected>5 min</option>
           <option value="900">15 min</option>
           <option value="3600">1 hour</option>
         </select>
@@ -317,6 +317,7 @@ const fmtBps = b => fmtBytes(b) + '/s';
 
 let cpuMemChart=null, netChart=null, procChart=null, dbChart=null, pgDbChart=null;
 
+
 function ensureCharts(){
   if (cpuMemChart) return;
   const opts = {
@@ -330,10 +331,12 @@ function ensureCharts(){
   };
   cpuMemChart = new Chart(document.getElementById('chart-cpu-mem').getContext('2d'),{
     type:'line', data:{labels:[],datasets:[
-      {label:'CPU %',    data:[], borderColor:'#58a6ff', backgroundColor:'rgba(88,166,255,0.10)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
-      {label:'Memory %', data:[], borderColor:'#bc8cff', backgroundColor:'rgba(188,140,255,0.10)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0, yAxisID:'y'},
+      {label:'CPU %',    data:[], borderColor:'#58a6ff',
+        backgroundColor:'rgba(88,166,255,0.35)',
+        tension:0.25, fill:'origin', borderWidth:2, pointRadius:0, yAxisID:'y'},
+      {label:'Memory %', data:[], borderColor:'#bc8cff',
+        backgroundColor:'rgba(188,140,255,0.35)',
+        tension:0.25, fill:'origin', borderWidth:2, pointRadius:0, yAxisID:'y'},
       {label:'⚠ warn 75%', data:[], borderColor:'rgba(210,153,34,0.75)', borderDash:[5,4],
         tension:0, fill:false, borderWidth:1.5, pointRadius:0, yAxisID:'y'},
       {label:'✕ crit 90%', data:[], borderColor:'rgba(248,81,73,0.75)', borderDash:[5,4],
@@ -343,10 +346,12 @@ function ensureCharts(){
   });
   netChart = new Chart(document.getElementById('chart-net').getContext('2d'),{
     type:'line', data:{labels:[],datasets:[
-      {label:'RX bytes/s', data:[], borderColor:'#3fb950', backgroundColor:'rgba(63,185,80,0.12)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0},
-      {label:'TX bytes/s', data:[], borderColor:'#ff7b3a', backgroundColor:'rgba(255,123,58,0.12)',
-        tension:0.25, fill:true, borderWidth:2, pointRadius:0},
+      {label:'RX bytes/s', data:[], borderColor:'#3fb950',
+        backgroundColor:'rgba(63,185,80,0.35)',
+        tension:0.25, fill:'origin', borderWidth:2, pointRadius:0},
+      {label:'TX bytes/s', data:[], borderColor:'#ff7b3a',
+        backgroundColor:'rgba(255,123,58,0.35)',
+        tension:0.25, fill:'origin', borderWidth:2, pointRadius:0},
     ]}, options:opts
   });
   procChart = new Chart(document.getElementById('chart-procs').getContext('2d'),{
@@ -409,8 +414,8 @@ function ensureCharts(){
   pgDbChart = new Chart(document.getElementById('chart-pg-db').getContext('2d'),{
     type:'line', data:{labels:[],datasets:[
       {label:'pg_db_bytes', data:[], borderColor:'#bc8cff',
-       backgroundColor:'rgba(188,140,255,0.18)', tension:0.25, fill:true,
-       borderWidth:2, pointRadius:0},
+       backgroundColor:'rgba(188,140,255,0.35)',
+       tension:0.25, fill:'origin', borderWidth:2, pointRadius:0},
     ]}, options:optsBytes,
   });
 }
@@ -424,8 +429,8 @@ const fmtTime = ts => {
 
 // ── Time-control state (mirrors main dashboard pattern) ─────────────────
 let endEpoch = null;   // null = live, otherwise number = scrolled-back right edge
-function getRangeMin(){ return parseInt(document.getElementById('range').value||'60',10); }
-function getBucketSec(){return parseInt(document.getElementById('bucket').value||'5',10); }
+function getRangeMin(){ return parseInt(document.getElementById('range').value||'720',10); }
+function getBucketSec(){return parseInt(document.getElementById('bucket').value||'300',10); }
 function pickBucketForRange(rangeMin) {
   if (rangeMin <= 15)    return 5;
   if (rangeMin <= 60)    return 30;
@@ -900,10 +905,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       <select id="sm-range" class="ctrl">
         <option value="5">5 min</option>
         <option value="15">15 min</option>
-        <option value="60" selected>1 h</option>
+        <option value="60">1 h</option>
         <option value="180">3 h</option>
         <option value="360">6 h</option>
-        <option value="720">12 h</option>
+        <option value="720" selected>12 h</option>
         <option value="1440">24 h</option>
         <option value="4320">3 d</option>
         <option value="10080">7 d</option>
@@ -914,8 +919,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       <select id="sm-bucket" class="ctrl">
         <option value="5">5 sec</option>
         <option value="30">30 sec</option>
-        <option value="60" selected>1 min</option>
-        <option value="300">5 min</option>
+        <option value="60">1 min</option>
+        <option value="300" selected>5 min</option>
         <option value="900">15 min</option>
         <option value="3600">1 hour</option>
       </select>
@@ -950,8 +955,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
   async function loadAndRender() {
     if (!currentStat) return;
-    const range = parseInt(rangeEl.value, 10) || 60;
-    const bucket = parseInt(bucketEl.value, 10) || 60;
+    const range = parseInt(rangeEl.value, 10) || 720;
+    const bucket = parseInt(bucketEl.value, 10) || 300;
     const key = currentStat.stat;
     const unit = currentStat.unit || 'count';
     const label = currentStat.label || key;
@@ -1025,9 +1030,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           label,
           data,
           borderColor: '#58a6ff',
-          backgroundColor: 'rgba(88,166,255,.12)',
+          backgroundColor: 'rgba(88,166,255,0.35)',
           borderWidth: 1.5,
-          fill: true,
+          fill: 'origin',
           tension: 0.2,
           pointRadius: 0,
           pointHoverRadius: 4,
@@ -1068,13 +1073,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         unit:  el.dataset.unit  || 'count',
       };
       titleEl.textContent = currentStat.label + ' · history';
-      bucketEl.value = pickBucketForRange(parseInt(rangeEl.value,10) || 60);
+      bucketEl.value = pickBucketForRange(parseInt(rangeEl.value,10) || 720);
       modal.classList.add('show');
       loadAndRender();
     });
   });
   rangeEl.addEventListener('change', () => {
-    bucketEl.value = pickBucketForRange(parseInt(rangeEl.value,10) || 60);
+    bucketEl.value = pickBucketForRange(parseInt(rangeEl.value,10) || 720);
     loadAndRender();
   });
   bucketEl.addEventListener('change', loadAndRender);

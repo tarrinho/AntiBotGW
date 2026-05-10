@@ -35,6 +35,7 @@ _SUBRES_EXTS = frozenset({
 
 # identity → deque of (ts, is_subresource: bool)
 _req_log: dict = defaultdict(lambda: deque(maxlen=256))
+_REQ_LOG_MAX  = 16384  # evict when exceeded
 # identity → set: signals already fired (prevent double-counting per window)
 _fired: dict = {}
 _FIRED_TTL    = LLM_HEURISTIC_WINDOW_SECS * 2
@@ -70,6 +71,14 @@ def observe(identity: str, method: str, path: str, accept: str) -> None:
     is_html = _is_html_request(method, accept, path)
     if is_sub or is_html:
         _req_log[identity].append((now, is_sub))
+        if len(_req_log) > _REQ_LOG_MAX:
+            cutoff = now - _FIRED_TTL
+            stale = [k for k, dq in _req_log.items() if not dq or dq[-1][0] < cutoff]
+            for k in stale:
+                _req_log.pop(k, None)
+            if len(_req_log) > _REQ_LOG_MAX:
+                for k in list(_req_log.keys())[: _REQ_LOG_MAX // 4]:
+                    _req_log.pop(k, None)
 
 
 def check(identity: str, ip: str) -> float:

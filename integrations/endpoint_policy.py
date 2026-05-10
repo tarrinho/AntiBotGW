@@ -342,6 +342,8 @@ def _endpoint_rule(path: str):
 
 _endpoint_buckets: dict = {}
 _endpoint_buckets_lock = asyncio.Lock()
+_ENDPOINT_BUCKET_MAX  = 50_000   # trigger prune above this count
+_ENDPOINT_BUCKET_IDLE = 3_600.0  # monotonic seconds — evict if idle > 1 h
 
 
 async def _endpoint_rate_consume(rule: dict, identity: str) -> bool:
@@ -355,6 +357,12 @@ async def _endpoint_rate_consume(rule: dict, identity: str) -> bool:
     n = time.monotonic()
     key = (rule.get("path", ""), identity)
     async with _endpoint_buckets_lock:
+        # Opportunistic prune: O(n) scan only when dict is oversized.
+        if len(_endpoint_buckets) > _ENDPOINT_BUCKET_MAX:
+            stale = [k for k, v in _endpoint_buckets.items()
+                     if n - v["ts"] > _ENDPOINT_BUCKET_IDLE]
+            for k in stale:
+                del _endpoint_buckets[k]
         st = _endpoint_buckets.get(key)
         if st is None:
             st = {"tokens": float(burst), "ts": n}

@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.8"
+_EXPECTED_VERSION = "AppSecGW_1.7.11"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,10 +520,10 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.8\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.7\.11\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
-    skip_files = {"CHANGELOG.md", "README.md", "rules.md"}
+    skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
     hits = []
     for path in root.rglob("*"):
         if path.is_dir():
@@ -544,7 +544,7 @@ def test_no_stale_version_strings_in_source():
                 continue
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
-    assert not hits, "Stale version strings found — update to AppSecGW_1.7.8:\n" + "\n".join(hits)
+    assert not hits, f"Stale version strings found — update to {_EXPECTED_VERSION}:\n" + "\n".join(hits)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -1837,19 +1837,18 @@ def test_main_tooltip_callback_uses_timeline_epoch():
         "format the bucket end time correctly"
     )
     # Must use .dataIndex (Chart.js TooltipItem API), not .index (onClick element API)
-    # ensureChart() is the main traffic chart function (ensureCostChart is separate)
-    chart_fn_start = src.find("function ensureChart(")
-    callbacks_start = src.find("callbacks:", chart_fn_start)
-    callbacks_area = src[callbacks_start:callbacks_start + 600]
-    assert "dataIndex" in callbacks_area, (
-        "main.html tooltip callback must use items[0].dataIndex (Chart.js v3 "
+    # _tooltipTitle() helper contains the dataIndex access; callbacks delegate to it.
+    tt_start = src.find("function _tooltipTitle(")
+    tt_end   = src.find("\n}", tt_start) + 2
+    tt_body  = src[tt_start:tt_end]
+    assert "dataIndex" in tt_body, (
+        "main.html _tooltipTitle helper must use items[0].dataIndex (Chart.js v3 "
         "TooltipItem property) — items[0].index is undefined in tooltip callbacks "
         "causing the epoch lookup to fail and the title to show as empty string"
     )
-    # The callback must produce a human-readable date (not just relay the axis label)
-    tooltip_block = src[src.find("callbacks:"):src.find("callbacks:") + 800]
-    assert "toLocaleDateString" in tooltip_block or "toLocaleString" in tooltip_block, (
-        "main.html tooltip title callback must format the epoch as a readable "
+    # The helper must produce a human-readable date (not just relay the axis label)
+    assert "toLocaleDateString" in tt_body or "toLocaleString" in tt_body, (
+        "main.html _tooltipTitle helper must format the epoch as a readable "
         "date string (toLocaleDateString / toLocaleString)"
     )
 
@@ -1876,11 +1875,12 @@ def test_agents_tooltip_config_defined():
     assert "_lastAgentBucketSecs" in src, (
         "agents.html tooltip title callback must reference _lastAgentBucketSecs"
     )
-    # Must use .dataIndex, not .index
-    tl_start = src.find("_lastAgentTimeline")
-    tl_area = src[max(0, tl_start - 200):tl_start + 50]
-    assert "dataIndex" in tl_area, (
-        "agents.html tooltip callback must use items[0].dataIndex (Chart.js v3 "
+    # Must use .dataIndex, not .index — _tooltipTitle() helper contains the access.
+    tt_start = src.find("function _tooltipTitle(")
+    tt_end   = src.find("\n}", tt_start) + 2
+    tt_body  = src[tt_start:tt_end]
+    assert "dataIndex" in tt_body, (
+        "agents.html _tooltipTitle helper must use items[0].dataIndex (Chart.js v3 "
         "TooltipItem API) — items[0].index is undefined in tooltip context, "
         "causing epoch lookup to fail and tooltip title to appear empty"
     )
@@ -1890,11 +1890,12 @@ def test_agents_tooltip_callback_formats_date():
     """agents.html tooltip title callback must format the epoch as a readable date."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
-    tooltip_start = src.find("_lastAgentTimeline")
-    tooltip_area  = src[max(0, tooltip_start - 100):tooltip_start + 400]
-    assert "toLocaleDateString" in tooltip_area or "toLocaleString" in tooltip_area, (
-        "agents.html tooltip must call toLocaleDateString/toLocaleString to "
-        "format the bucket start as a human-readable date"
+    tt_start = src.find("function _tooltipTitle(")
+    tt_end   = src.find("\n}", tt_start) + 2
+    tt_body  = src[tt_start:tt_end]
+    assert "toLocaleDateString" in tt_body or "toLocaleString" in tt_body, (
+        "agents.html _tooltipTitle helper must call toLocaleDateString/toLocaleString "
+        "to format the bucket start as a human-readable date"
     )
 
 
@@ -2609,34 +2610,36 @@ def test_main_html_mst_checks_is_authorized_bot():
 
 
 def test_agents_html_popover_banline_has_authorized_bot_case():
-    """agents.html openPopover banLine must show blue 'Authorized Bot' status."""
+    """agents.html identity popover banLine must show blue 'Authorized Bot' status.
+    Logic now lives in window._gwIdentityPopover.buildIdHtml — search there."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
-    pop_idx = src.find("function openPopover")
-    assert pop_idx != -1
-    pop_section = src[pop_idx: pop_idx + 1500]
+    pop_idx = src.find("window._gwIdentityPopover")
+    assert pop_idx != -1, "agents.html must define window._gwIdentityPopover"
+    pop_section = src[pop_idx: pop_idx + 4000]
     assert "is_authorized_bot" in pop_section, (
-        "agents.html openPopover banLine must check s.is_authorized_bot — "
+        "agents.html _gwIdentityPopover.buildIdHtml must check is_authorized_bot — "
         "without it the popover status line never shows 'Authorized Bot'"
     )
     assert "Authorized Bot" in pop_section, (
-        "agents.html openPopover banLine must include 'Authorized Bot' text label"
+        "agents.html _gwIdentityPopover.buildIdHtml must include 'Authorized Bot' text label"
     )
 
 
 def test_main_html_popover_banline_has_authorized_bot_case():
-    """main.html openClientPopover banLine must show blue 'Authorized Bot' status."""
+    """main.html identity popover banLine must show blue 'Authorized Bot' status.
+    Logic now lives in window._gwIdentityPopover.buildIdHtml — search there."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
-    pop_idx = src.find("window.openClientPopover")
-    assert pop_idx != -1, "main.html must define window.openClientPopover"
-    pop_section = src[pop_idx: pop_idx + 1500]
+    pop_idx = src.find("window._gwIdentityPopover")
+    assert pop_idx != -1, "main.html must define window._gwIdentityPopover"
+    pop_section = src[pop_idx: pop_idx + 4000]
     assert "is_authorized_bot" in pop_section, (
-        "main.html openClientPopover banLine must check c.is_authorized_bot — "
+        "main.html _gwIdentityPopover.buildIdHtml must check is_authorized_bot — "
         "without it the popover status line never shows 'Authorized Bot'"
     )
     assert "Authorized Bot" in pop_section, (
-        "main.html openClientPopover banLine must include 'Authorized Bot' text label"
+        "main.html _gwIdentityPopover.buildIdHtml must include 'Authorized Bot' text label"
     )
 
 
@@ -4120,4 +4123,701 @@ def test_geo_setinterval_tracked():
     assert "_timers.push(setInterval(" in html, (
         "geo.html: inline _timers.push(setInterval(...)) pattern missing — "
         "existing tick/refresh intervals must remain tracked per §17b"
+    )
+
+
+# ── Top-paths category filter (1.7.9) ─────────────────────────────────────────
+
+def test_by_path_by_cat_exists_in_state():
+    """state.py must export by_path_by_cat with all five category keys."""
+    import state
+    assert hasattr(state, "by_path_by_cat"), "state.py missing by_path_by_cat"
+    for cat in ("allowed", "ban", "missed", "authbots", "gwmgmt"):
+        assert cat in state.by_path_by_cat, f"by_path_by_cat missing key '{cat}'"
+
+
+def test_by_path_by_cat_imported_in_metrics():
+    """core/metrics.py must import by_path_by_cat from state."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "metrics.py").read_text()
+    assert "by_path_by_cat" in src, (
+        "core/metrics.py does not reference by_path_by_cat — "
+        "top-paths category filtering requires it to be imported and incremented"
+    )
+
+
+def test_metrics_endpoint_uses_by_path_by_cat_for_filtered_cats():
+    """metrics_endpoint must use by_path_by_cat when cats subset is requested."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    assert "by_path_by_cat" in src, (
+        "proxy_handler.py metrics_endpoint must reference by_path_by_cat "
+        "to serve category-filtered top_paths"
+    )
+    assert "_req_cats == _valid_cats" in src or "req_cats" in src, (
+        "metrics_endpoint must branch on whether all or a subset of cats are requested"
+    )
+
+
+# ── Timeline legend ↔ filter pill sync (1.7.9) ────────────────────────────────
+
+def test_main_html_chart_legend_onclick_syncs_pills():
+    """Timeline chart legend onClick must update _activeFilters and call _applyFilters()
+    so that clicking a legend item in the graph toggles the matching filter pill."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "_DS_CATS" in html, (
+        "main.html: timeline chart legend onClick missing _DS_CATS mapping — "
+        "chart legend clicks must sync to filter pills"
+    )
+    assert "legend" in html and "onClick" in html, (
+        "main.html: timeline chart plugins.legend must define an onClick handler"
+    )
+    assert "_applyFilters()" in html, "main.html: legend onClick must call _applyFilters()"
+
+
+# ── Panel legend sync (1.7.9) ─────────────────────────────────────────────────
+
+def test_main_html_panel_legends_present():
+    """Clients, Top Paths, and Live Events panels must each contain a .panel-legend
+    with the five category items so filter state can be toggled from each panel."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert html.count('class="panel-legend"') >= 3, (
+        "main.html: expected panel-legend on Clients, Top Paths, and Live Events panels"
+    )
+    assert html.count('panel-leg-item') >= 15, (
+        "main.html: expected 5 panel-leg-item entries per panel (3 panels × 5 cats = 15)"
+    )
+
+
+def test_main_html_toggle_cat_filter_function_defined():
+    """_toggleCatFilter() must exist as a shared function called by chart legend,
+    panel legends, and (indirectly) pill clicks."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert "function _toggleCatFilter" in html, (
+        "main.html: _toggleCatFilter() function missing"
+    )
+    assert "function _syncPanelLegends" in html, (
+        "main.html: _syncPanelLegends() function missing"
+    )
+
+
+def test_main_html_apply_filters_calls_sync_panel_legends():
+    """_applyFilters() must call _syncPanelLegends() so pill clicks and tick()
+    keep all three panel legends in sync with _activeFilters."""
+    from pathlib import Path
+    html = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    # _syncPanelLegends() must appear inside _applyFilters() body
+    import re as _re
+    af_start = html.index("function _applyFilters()")
+    nxt = _re.search(r'\nfunction ', html[af_start + 30:])
+    af_end = af_start + 30 + nxt.start() if nxt else len(html)
+    assert "_syncPanelLegends()" in html[af_start:af_end], (
+        "main.html: _applyFilters() does not call _syncPanelLegends()"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.7.10 — shared identity popover (_gwIdentityPopover)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _gw_popover_section(dashboard: str) -> str:
+    """Return the _gwIdentityPopover block from the given dashboard file."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / dashboard).read_text()
+    idx = src.find("window._gwIdentityPopover")
+    assert idx != -1, f"{dashboard} must define window._gwIdentityPopover"
+    return src[idx: idx + 5000]
+
+
+def test_gw_identity_popover_defined_in_agents_html():
+    """agents.html must define window._gwIdentityPopover as a shared renderer."""
+    sec = _gw_popover_section("agents.html")
+    assert "normalizeId" in sec
+    assert "buildIdHtml" in sec
+    assert "buildRiskHtml" in sec
+
+
+def test_gw_identity_popover_defined_in_main_html():
+    """main.html must define window._gwIdentityPopover as a shared renderer."""
+    sec = _gw_popover_section("main.html")
+    assert "normalizeId" in sec
+    assert "buildIdHtml" in sec
+    assert "buildRiskHtml" in sec
+
+
+def test_gw_identity_popover_normalize_maps_agents_fields():
+    """normalizeId must handle agents.html data shape: s.ip, s.ua, s.metrics.risk_score,
+    s.blocks_breakdown (array), s.risk_breakdown."""
+    sec = _gw_popover_section("agents.html")
+    assert "raw.ip" in sec, "normalizeId must map raw.ip (agents shape)"
+    assert "raw.ua" in sec, "normalizeId must map raw.ua (agents shape)"
+    assert "raw.metrics" in sec, "normalizeId must handle raw.metrics.risk_score (agents shape)"
+    assert "blocks_breakdown" in sec, "normalizeId must map blocks_breakdown"
+    assert "risk_breakdown" in sec, "normalizeId must map risk_breakdown"
+
+
+def test_gw_identity_popover_normalize_maps_main_fields():
+    """normalizeId must handle main.html data shape: c.last_ip, c.last_ua,
+    c.last_session, c.last_fingerprint, c.blocks_by_reason (object), c.tokens."""
+    sec = _gw_popover_section("main.html")
+    assert "raw.last_ip" in sec, "normalizeId must map raw.last_ip (main shape)"
+    assert "raw.last_ua" in sec, "normalizeId must map raw.last_ua (main shape)"
+    assert "raw.last_session" in sec, "normalizeId must map raw.last_session (main shape)"
+    assert "raw.last_fingerprint" in sec, "normalizeId must map raw.last_fingerprint (main shape)"
+    assert "blocks_by_reason" in sec, "normalizeId must convert blocks_by_reason object to array"
+    assert "raw.tokens" in sec, "normalizeId must map raw.tokens (main shape)"
+
+
+def test_gw_identity_popover_build_id_html_has_all_fields():
+    """buildIdHtml must render all best-of-both fields: JA4, stealth (conditional),
+    tokens (conditional), admin lock, .kv grid layout."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "JA4" in sec, f"{dashboard} buildIdHtml must include JA4 field"
+        assert "stealth_score" in sec, f"{dashboard} buildIdHtml must include stealth_score (conditional)"
+        assert "tokens" in sec, f"{dashboard} buildIdHtml must include tokens (conditional)"
+        assert "_adminLock" in sec, f"{dashboard} buildIdHtml must call _adminLock for admin IP icon"
+        assert "kv" in sec, f"{dashboard} buildIdHtml must use .kv grid layout"
+
+
+def test_gw_identity_popover_build_risk_html_uses_weighted_bars():
+    """buildRiskHtml must render bars using risk_breakdown (weighted) when available,
+    falling back to blocks_breakdown (counts). Both use the same .rsn bar markup."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "risk_breakdown" in sec, f"{dashboard} buildRiskHtml must prefer risk_breakdown"
+        assert "blocks_breakdown" in sec, f"{dashboard} buildRiskHtml must fall back to blocks_breakdown"
+        assert "rsn-bar" in sec, f"{dashboard} buildRiskHtml must render visual bars (.rsn-bar)"
+        assert "isWeighted" in sec, f"{dashboard} buildRiskHtml must distinguish weighted vs count display"
+
+
+def test_gw_identity_popover_open_popover_agents_is_thin_wrapper():
+    """agents.html openPopover must delegate to _gwIdentityPopover — not contain
+    inline HTML rendering logic for the identity body."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    pop_idx = src.find("function openPopover")
+    assert pop_idx != -1, "agents.html must define openPopover"
+    pop_body = src[pop_idx: pop_idx + 600]
+    assert "_gwIdentityPopover.normalizeId" in pop_body, (
+        "openPopover must call _gwIdentityPopover.normalizeId() — it should not inline normalization"
+    )
+    assert "_gwIdentityPopover.buildIdHtml" in pop_body, (
+        "openPopover must call _gwIdentityPopover.buildIdHtml() — it should not inline HTML rendering"
+    )
+    assert "_gwIdentityPopover.buildRiskHtml" in pop_body, (
+        "openPopover must call _gwIdentityPopover.buildRiskHtml() for the risk breakdown kind"
+    )
+
+
+def test_gw_identity_popover_open_client_popover_main_is_thin_wrapper():
+    """main.html openClientPopover must delegate to _gwIdentityPopover — not contain
+    inline HTML rendering logic for the identity body."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    pop_idx = src.find("window.openClientPopover")
+    assert pop_idx != -1, "main.html must define window.openClientPopover"
+    pop_body = src[pop_idx: pop_idx + 600]
+    assert "_gwIdentityPopover.normalizeId" in pop_body, (
+        "openClientPopover must call _gwIdentityPopover.normalizeId()"
+    )
+    assert "_gwIdentityPopover.buildIdHtml" in pop_body, (
+        "openClientPopover must call _gwIdentityPopover.buildIdHtml()"
+    )
+    assert "_gwIdentityPopover.buildRiskHtml" in pop_body, (
+        "openClientPopover must call _gwIdentityPopover.buildRiskHtml()"
+    )
+
+
+def test_main_html_has_kv_and_rsn_css_for_popover():
+    """main.html must define .kv and .rsn CSS classes so the shared buildIdHtml
+    and buildRiskHtml output renders correctly (previously used <table> layout)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    assert ".modal .kv{" in src or ".modal .kv {" in src, (
+        "main.html must define .modal .kv CSS for the shared identity popover grid layout"
+    )
+    assert ".modal .rsn{" in src or ".modal .rsn {" in src, (
+        "main.html must define .modal .rsn CSS for the shared risk bar layout"
+    )
+    assert ".modal .rsn-bar" in src, (
+        "main.html must define .modal .rsn-bar CSS for visual risk bars"
+    )
+
+
+def test_gw_identity_popover_fmt_is_private():
+    """_gwIdentityPopover IIFE must define a private _fmt time formatter so the object
+    does not depend on either page's fmtSecs global."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "function _fmt" in sec, (
+            f"{dashboard} _gwIdentityPopover must define private _fmt() — "
+            "avoids depending on fmtSecs from either page scope"
+        )
+
+
+def test_gw_identity_popover_blocks_by_reason_object_converted():
+    """normalizeId must convert blocks_by_reason object → sorted array so buildIdHtml
+    can use a uniform [[reason, count], ...] format regardless of data source."""
+    sec = _gw_popover_section("main.html")
+    assert "Object.entries" in sec, (
+        "normalizeId must use Object.entries(raw.blocks_by_reason) to convert object → array"
+    )
+    assert ".sort(" in sec, (
+        "normalizeId must sort the blocks_by_reason entries by count descending"
+    )
+
+
+# ── agents.html must have .popover .kv / .rsn CSS ─────────────────────────
+
+def test_agents_html_has_kv_and_rsn_css_for_popover():
+    """agents.html must define .popover .kv and .popover .rsn CSS so the shared
+    buildIdHtml / buildRiskHtml output renders correctly in the popover."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    assert ".popover .kv{" in src or ".popover .kv {" in src, (
+        "agents.html must define .popover .kv CSS for the shared identity popover grid layout"
+    )
+    assert ".popover .rsn{" in src or ".popover .rsn {" in src, (
+        "agents.html must define .popover .rsn CSS for the shared risk bar layout"
+    )
+    assert ".popover .rsn-bar" in src, (
+        "agents.html must define .popover .rsn-bar CSS for visual risk contribution bars"
+    )
+
+
+# ── null-check discipline: stealth_score and tokens must use != null ──────
+
+def test_gw_identity_popover_stealth_score_uses_strict_null_check():
+    """buildIdHtml must gate the stealth row with != null (not truthy check)
+    so a score of 0 is shown rather than silently omitted."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "stealth_score != null" in sec, (
+            f"{dashboard} buildIdHtml stealth conditional must use '!= null' — "
+            "a truthy check would hide a score of 0"
+        )
+
+
+def test_gw_identity_popover_tokens_uses_strict_null_check():
+    """buildIdHtml must gate the tokens row with != null (not truthy check)
+    so a count of 0 is shown rather than silently omitted."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "tokens != null" in sec, (
+            f"{dashboard} buildIdHtml tokens conditional must use '!= null' — "
+            "a truthy check would hide a token count of 0"
+        )
+
+
+def test_gw_identity_popover_normalize_stealth_uses_strict_null_check():
+    """normalizeId must preserve stealth_score=0 using != null (not falsy ||)."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "stealth_score != null" in sec, (
+            f"{dashboard} normalizeId must use 'stealth_score != null' — "
+            "using || would coerce 0 to null, hiding a valid zero score"
+        )
+
+
+def test_gw_identity_popover_normalize_tokens_uses_strict_null_check():
+    """normalizeId must preserve tokens=0 using != null (not falsy ||)."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "raw.tokens != null" in sec, (
+            f"{dashboard} normalizeId must use 'raw.tokens != null' — "
+            "using || would coerce 0 to null, hiding a valid zero token count"
+        )
+
+
+# ── buildRiskHtml: weighted vs count label format ─────────────────────────
+
+def test_gw_identity_popover_build_risk_html_weighted_labels():
+    """buildRiskHtml must display '+N' for weighted risk_breakdown entries and 'N×'
+    for plain count blocks_breakdown fallback entries."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "isWeighted" in sec, (
+            f"{dashboard} buildRiskHtml must use isWeighted flag to distinguish modes"
+        )
+        assert "isWeighted?'+':''" in sec or "isWeighted ? '+' : ''" in sec, (
+            f"{dashboard} buildRiskHtml must prefix weighted values with '+'"
+        )
+        assert "isWeighted?'':'×'" in sec or "isWeighted ? '' : '×'" in sec, (
+            f"{dashboard} buildRiskHtml must suffix count values with '×'"
+        )
+
+
+def test_gw_identity_popover_build_risk_html_empty_fallback_message():
+    """buildRiskHtml must render a human-readable message when both breakdown
+    arrays are empty, not an empty block."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "no contributing signals" in sec, (
+            f"{dashboard} buildRiskHtml must render 'no contributing signals' "
+            "when breakdown array is empty (score may have decayed)"
+        )
+
+
+# ── normalizeId: missing-data fallbacks must not crash ────────────────────
+
+def test_gw_identity_popover_normalize_blocks_by_reason_empty_fallback():
+    """normalizeId must default blocks_by_reason to {} when absent so
+    Object.entries() never receives undefined."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "blocks_by_reason || {}" in sec, (
+            f"{dashboard} normalizeId must use 'raw.blocks_by_reason || {{}}' — "
+            "passing undefined to Object.entries() raises TypeError"
+        )
+
+
+def test_gw_identity_popover_normalize_risk_score_metrics_branch():
+    """normalizeId must extract risk_score from raw.metrics.risk_score (agents shape)
+    with a fallback to raw.risk_score (main shape)."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "raw.metrics ? raw.metrics.risk_score" in sec, (
+            f"{dashboard} normalizeId must branch on raw.metrics for agents data shape"
+        )
+        assert "raw.risk_score" in sec, (
+            f"{dashboard} normalizeId must fall back to raw.risk_score for main data shape"
+        )
+
+
+# ── open functions use the normalized d.ip, not the raw field ─────────────
+
+def test_gw_identity_popover_open_popover_calls_fetch_with_normalized_ip():
+    """agents.html openPopover must pass d.ip (normalizeId output) to fetchIpIntel,
+    not the raw s.ip — ensures fallback to last_ip is applied."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    pop_idx = src.find("function openPopover")
+    assert pop_idx != -1
+    pop_body = src[pop_idx: pop_idx + 800]
+    assert "fetchIpIntel(d.ip)" in pop_body, (
+        "openPopover must pass d.ip to fetchIpIntel, not s.ip — "
+        "d.ip is the normalizeId output which handles the ip/last_ip fallback chain"
+    )
+
+
+def test_gw_identity_popover_open_client_popover_calls_fetch_with_normalized_ip():
+    """main.html openClientPopover must pass d.ip (normalizeId output) to fetchIpIntel,
+    not the raw c.last_ip."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+    pop_idx = src.find("window.openClientPopover")
+    assert pop_idx != -1
+    pop_body = src[pop_idx: pop_idx + 800]
+    assert "fetchIpIntel(d.ip)" in pop_body, (
+        "openClientPopover must pass d.ip to fetchIpIntel, not c.last_ip — "
+        "d.ip is the normalizeId output which handles the ip/last_ip fallback chain"
+    )
+
+
+# ── buildIdHtml always renders the ip-intel placeholder div ───────────────
+
+def test_gw_identity_popover_build_id_html_has_ip_intel_section():
+    """buildIdHtml must always render <div id='ip-intel-section'> so the async
+    fetchIpIntel result has a target node to inject into."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "ip-intel-section" in sec, (
+            f"{dashboard} buildIdHtml must render <div id='ip-intel-section'> — "
+            "fetchIpIntel needs this node to inject the IP reputation block"
+        )
+
+
+# ── risk_score displayed with .toFixed(1) ─────────────────────────────────
+
+def test_gw_identity_popover_risk_score_uses_to_fixed():
+    """buildIdHtml and buildRiskHtml must call .toFixed(1) when risk_score is a number
+    so the display is consistent (e.g. '42.0' not '42')."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        assert "toFixed(1)" in sec, (
+            f"{dashboard} _gwIdentityPopover must use .toFixed(1) for risk_score display — "
+            "avoids inconsistent '42' vs '42.0' rendering"
+        )
+
+
+# ── escapeHtml applied to all user-controlled fields ─────────────────────
+
+def test_gw_identity_popover_escape_html_applied_to_user_fields():
+    """buildIdHtml must call escapeHtml() on ip, ua, session, fingerprint, ja4,
+    last_path and reason fields to prevent XSS via crafted identity values."""
+    for dashboard in ("agents.html", "main.html"):
+        sec = _gw_popover_section(dashboard)
+        for field in ("d.ip", "d.ua", "d.session", "d.fingerprint", "d.ja4", "d.last_path"):
+            assert f"escapeHtml({field})" in sec, (
+                f"{dashboard} buildIdHtml must call escapeHtml({field}) — "
+                f"unescaped {field} would allow XSS via crafted identity data"
+            )
+
+
+# ── _gwIdentityPopover logic identical in both files ──────────────────────
+
+def test_gw_identity_popover_core_logic_identical_in_both_files():
+    """The _gwIdentityPopover IIFE implementation must be identical in agents.html
+    and main.html — drift between the two copies would cause inconsistent behavior."""
+    from pathlib import Path
+
+    def _extract_iife(src: str) -> str:
+        start = src.find("function _fmt")
+        assert start != -1
+        end = src.find("return { normalizeId, buildIdHtml, buildRiskHtml };", start)
+        assert end != -1
+        return src[start: end].strip()
+
+    agents_src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
+    main_src   = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
+
+    agents_iife = _extract_iife(agents_src)
+    main_iife   = _extract_iife(main_src)
+
+    assert agents_iife == main_iife, (
+        "_gwIdentityPopover IIFE differs between agents.html and main.html — "
+        "the two copies have drifted; update both files to match"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.7.10 — GW Mgmt white-blue colour (#e4f0ff) + drill-down / chart fixes
+# ═══════════════════════════════════════════════════════════════════════════
+
+_GWMGMT_COLOR = "#e4f0ff"
+_GWMGMT_OLD_TEAL = "#26c6da"
+
+
+def test_gwmgmt_color_is_white_blue_in_agents_html():
+    """agents.html: gwmgmt pill border/text, active-pill background, chart
+    borderColor and backgroundColor must all use #e4f0ff (white-blue)."""
+    src = _dash("agents.html")
+    assert f'data-cat="gwmgmt"{{border-color:{_GWMGMT_COLOR};color:{_GWMGMT_COLOR}}}' in src or \
+           f"gwmgmt" in src and _GWMGMT_COLOR in src, (
+        "agents.html: gwmgmt pill must use #e4f0ff"
+    )
+    assert f'.cat-pill[data-cat="gwmgmt"]{{border-color:{_GWMGMT_COLOR};color:{_GWMGMT_COLOR}}}' in src, (
+        "agents.html: gwmgmt inactive pill must use #e4f0ff for border and text"
+    )
+    assert f'.cat-pill.active[data-cat="gwmgmt"]{{background:{_GWMGMT_COLOR}' in src, (
+        "agents.html: gwmgmt active pill background must be #e4f0ff"
+    )
+    assert f"borderColor:'{_GWMGMT_COLOR}'" in src, (
+        "agents.html: chart dataset borderColor for gw mgmt must be #e4f0ff"
+    )
+    assert "rgba(228,240,255," in src, (
+        "agents.html: chart dataset backgroundColor for gw mgmt must start with rgba(228,240,255,...)"
+    )
+
+
+def test_gwmgmt_color_is_white_blue_in_logs_html():
+    """logs.html: gwmgmt pill border/text and active-pill background must use #e4f0ff."""
+    src = _dash("logs.html")
+    assert f'.cat-pill[data-cat="gwmgmt"]{{border-color:{_GWMGMT_COLOR};color:{_GWMGMT_COLOR}}}' in src, (
+        "logs.html: gwmgmt inactive pill must use #e4f0ff for border and text"
+    )
+    assert f'.cat-pill.active[data-cat="gwmgmt"]{{background:{_GWMGMT_COLOR}' in src, (
+        "logs.html: gwmgmt active pill background must be #e4f0ff"
+    )
+
+
+def test_gwmgmt_color_is_white_blue_in_main_html():
+    """main.html: every gwmgmt colour surface (pill, panel-legend, gwmgmt-tag,
+    swatches, chart) must use #e4f0ff."""
+    src = _dash("main.html")
+    assert f'.cat-pill[data-cat="gwmgmt"]{{border-color:{_GWMGMT_COLOR};color:{_GWMGMT_COLOR}}}' in src, (
+        "main.html: gwmgmt inactive pill must use #e4f0ff"
+    )
+    assert f'.cat-pill.active[data-cat="gwmgmt"]{{background:{_GWMGMT_COLOR}' in src, (
+        "main.html: gwmgmt active pill background must be #e4f0ff"
+    )
+    assert f'.panel-leg-item[data-leg-cats="gwmgmt"]{{color:{_GWMGMT_COLOR}}}' in src, (
+        "main.html: panel legend gwmgmt item must use #e4f0ff"
+    )
+    assert f'.tag.gwmgmt-tag{{background:#0d2340;color:{_GWMGMT_COLOR}}}' in src, (
+        "main.html: gwmgmt-tag text color must be #e4f0ff"
+    )
+    assert src.count(f'background:{_GWMGMT_COLOR}') >= 2, (
+        "main.html: at least 2 GW Mgmt swatch inline backgrounds must use #e4f0ff "
+        "(Timeline tooltip + Live Events tooltip)"
+    )
+    assert f"borderColor: '{_GWMGMT_COLOR}'" in src, (
+        "main.html: chart dataset borderColor for gw mgmt must be #e4f0ff"
+    )
+    assert "rgba(228,240,255," in src, (
+        "main.html: chart dataset backgroundColor for gw mgmt must use rgba(228,240,255,…)"
+    )
+
+
+def test_gwmgmt_old_teal_absent_from_all_dashboards():
+    """#26c6da (old teal) must not appear anywhere in the three dashboards —
+    it has been fully replaced by #e4f0ff."""
+    for name in ("agents.html", "logs.html", "main.html"):
+        src = _dash(name)
+        assert _GWMGMT_OLD_TEAL not in src, (
+            f"{name}: old gwmgmt teal color {_GWMGMT_OLD_TEAL} still present — "
+            "replace every occurrence with #e4f0ff"
+        )
+
+
+def test_main_html_path_drill_gwmgmt_aware():
+    """openPathDrill must detect admin-namespace paths and use #e4f0ff for
+    the explainBlock border and code color instead of var(--blue)."""
+    src = _dash("main.html")
+    # isGwMgmt flag and pathColor variable must exist inside openPathDrill
+    drill_start = src.index("window.openPathDrill")
+    drill_end   = src.index("window.openMainBucketDetail")
+    drill_body  = src[drill_start:drill_end]
+    assert "isGwMgmt" in drill_body, (
+        "openPathDrill: missing isGwMgmt flag for admin-namespace path detection"
+    )
+    assert "pathColor" in drill_body, (
+        "openPathDrill: missing pathColor variable for gwmgmt-conditional coloring"
+    )
+    assert "/antibot-appsec-gateway/" in drill_body, (
+        "openPathDrill: admin-namespace prefix check missing"
+    )
+    assert _GWMGMT_COLOR in drill_body, (
+        f"openPathDrill: gwmgmt color {_GWMGMT_COLOR} not used in drill-down block"
+    )
+
+
+def test_main_html_path_drill_modal_title_uses_pathcolor():
+    """openPathDrill modal title must colour the path <code> with pathColor,
+    not the hardcoded var(--blue), so gwmgmt paths render in #e4f0ff."""
+    src = _dash("main.html")
+    drill_start = src.index("window.openPathDrill")
+    drill_end   = src.index("window.openMainBucketDetail")
+    drill_body  = src[drill_start:drill_end]
+    # Modal title must reference pathColor, not a hardcoded var(--blue)
+    assert "modal-title" in drill_body, "openPathDrill must set modal-title innerHTML"
+    title_idx = drill_body.index("modal-title")
+    title_snippet = drill_body[title_idx: title_idx + 200]
+    assert "pathColor" in title_snippet, (
+        "modal-title code color must use pathColor variable, not hardcoded var(--blue)"
+    )
+    assert "var(--blue)" not in title_snippet, (
+        "modal-title must not hardcode var(--blue) — gwmgmt paths need #e4f0ff"
+    )
+
+
+def test_main_html_path_row_gwmgmt_tooltip():
+    """Top Paths table: gwmgmt path rows must show 'click to see requestors'
+    (not 'offender IPs') to reflect that admin-namespace traffic is not hostile."""
+    src = _dash("main.html")
+    assert "click to see requestors" in src, (
+        "main.html: gwmgmt path row tooltip must say 'click to see requestors'"
+    )
+    # The generic tooltip for non-gwmgmt paths must still exist
+    assert "click to see offender IPs / identities" in src, (
+        "main.html: non-gwmgmt path row tooltip 'click to see offender IPs / identities' removed"
+    )
+
+
+def test_main_html_path_row_gwmgmt_color():
+    """Top Paths table rows must apply #e4f0ff text/underline for gwmgmt paths
+    via an isGw flag, and fall back to var(--blue) for all other paths."""
+    src = _dash("main.html")
+    # Must have isGw / rowColor / rowTip logic in path row renderer
+    assert "isGw" in src, (
+        "main.html: isGw flag missing from Top Paths table row renderer"
+    )
+    assert "rowColor" in src, (
+        "main.html: rowColor variable missing from Top Paths table row renderer"
+    )
+    assert "rowTip" in src, (
+        "main.html: rowTip variable missing from Top Paths table row renderer"
+    )
+
+
+def test_gwmgmt_off_by_default_in_main_and_agents():
+    """GW Mgmt must be excluded from the initial _activeFilters set and the pill
+    button must not carry the 'active' class on main.html page load.
+
+    Note: agents.html intentionally keeps gwmgmt ON by default (reverted by design).
+    """
+    import re as _re
+    src = _dash("main.html")
+    # _activeFilters initial set must NOT include gwmgmt
+    filters_line = src.split("_activeFilters = new Set(")[1].split(")")[0]
+    assert "'gwmgmt'" not in filters_line, (
+        "main.html: 'gwmgmt' must not be in the initial _activeFilters Set — "
+        "GW Mgmt should be off by default"
+    )
+    # The pill button must not have class 'active'
+    pill_match = _re.search(r'<button[^>]*data-cat="gwmgmt"[^>]*>', src)
+    assert pill_match, "main.html: gwmgmt cat-pill button not found"
+    assert "active" not in pill_match.group(0), (
+        "main.html: gwmgmt pill button must not have 'active' class on initial render"
+    )
+
+
+def test_main_html_total_dataset_hidden_when_single_band():
+    """When only one chart band is active, the 'total' dataset (datasets[0])
+    must be hidden to prevent a blue total line from masking the single-band color."""
+    src = _dash("main.html")
+    assert "_activeBandCount" in src, (
+        "main.html: _activeBandCount variable missing — total dataset must be "
+        "hidden when only one band is active"
+    )
+    assert "datasets[0].hidden = _activeBandCount <= 1" in src, (
+        "main.html: datasets[0].hidden must be set to (_activeBandCount <= 1)"
+    )
+
+
+def test_main_html_bucket_detail_has_gwmgmt_section():
+    """openMainBucketDetail sections array must include a gwmgmt entry with
+    renderGwMgmt so clicking a gwmgmt chart bucket shows GW Mgmt traffic."""
+    src = _dash("main.html")
+    assert "renderGwMgmt" in src, (
+        "main.html: renderGwMgmt renderer missing from openMainBucketDetail"
+    )
+    # gwmgmt must appear in the sections array
+    detail_start = src.index("window.openMainBucketDetail")
+    detail_body  = src[detail_start: detail_start + 8000]
+    assert "kind:'gwmgmt'" in detail_body, (
+        "main.html: 'gwmgmt' section missing from openMainBucketDetail sections array"
+    )
+    assert "'GW MGMT'" in detail_body or "GW MGMT" in detail_body, (
+        "main.html: GW MGMT label missing from gwmgmt section in bucket detail"
+    )
+
+
+def test_main_html_bucket_detail_gwmgmt_color_matches_pill():
+    """renderGwMgmt hit-count cell must use #e4f0ff — matching the gwmgmt
+    pill and chart line color — for visual consistency."""
+    src = _dash("main.html")
+    render_start = src.index("renderGwMgmt")
+    render_body  = src[render_start: render_start + 600]
+    assert _GWMGMT_COLOR in render_body, (
+        f"renderGwMgmt: hit-count color must be {_GWMGMT_COLOR} (white-blue gwmgmt color)"
+    )
+
+
+def test_main_html_bucket_detail_kind_to_key_has_gwmgmt():
+    """KIND_TO_KEY in openMainBucketDetail must map 'gwmgmt' → 'gwmgmt' so
+    _moveEntry() and focusKind highlighting work for GW Mgmt buckets."""
+    src = _dash("main.html")
+    detail_start = src.index("window.openMainBucketDetail")
+    detail_body  = src[detail_start: detail_start + 3000]
+    assert "KIND_TO_KEY" in detail_body, (
+        "main.html: KIND_TO_KEY missing from openMainBucketDetail"
+    )
+    ktk_start = detail_body.index("KIND_TO_KEY")
+    ktk_line  = detail_body[ktk_start: ktk_start + 300]
+    assert "gwmgmt" in ktk_line, (
+        "main.html: KIND_TO_KEY must include gwmgmt mapping"
+    )
+
+
+def test_main_html_bucket_detail_totalcount_includes_gwmgmt():
+    """totalCount in _renderAndWire must include d.gwmgmt.length so the
+    'N IPs in this bucket' header counts GW Mgmt requestors."""
+    src = _dash("main.html")
+    assert "d.gwmgmt" in src, (
+        "main.html: d.gwmgmt missing from totalCount calculation in _renderAndWire"
     )

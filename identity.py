@@ -33,7 +33,7 @@ from helpers import slog, get_ip, now
 
 
 def _sign_session(sid: str) -> str:
-    sig = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()
+    sig = hmac.new(SESSION_KEY, b"session:" + sid.encode(), hashlib.sha256).hexdigest()
     return f"{sid}.{sig}"
 
 
@@ -51,7 +51,7 @@ def _verify_session(token: str):
     # N3: also clamp sid length and charset (token_urlsafe alphabet only).
     if len(sid) > 64 or not all(c.isalnum() or c in "-_" for c in sid):
         return None
-    expected = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(SESSION_KEY, b"session:" + sid.encode(), hashlib.sha256).hexdigest()
     return sid if hmac.compare_digest(sig, expected) else None
 
 

@@ -5,6 +5,7 @@ Extracted from proxy.py as part of Phase 2 modular refactoring.
 Dependency rule: imports from config.py and state.py only (plus stdlib).
 """
 
+import logging as _logging
 import sqlite3
 import time as _t
 
@@ -105,8 +106,8 @@ def _pg_mirror_kv(op: str, args: tuple) -> bool:
         last = getattr(_pg_mirror_kv, "_last_warn_min", -1)
         cur_min = int(_t.time()) // 60
         if last != cur_min:
-            print(f"[db-pg] kv mirror failed (op={op}): "
-                  f"{type(e).__name__}: {str(e)[:120]}", flush=True)
+            _logging.warning("[db-pg] kv mirror failed (op=%s): %s: %s",
+                             op, type(e).__name__, str(e)[:120])
             _pg_mirror_kv._last_warn_min = cur_min
         return False
 
@@ -202,7 +203,7 @@ def _apply_pg_migrations(cur) -> None:
                 f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {col} {pg_ddl}"  # nosec B608
             )
         except Exception as _e:
-            print(f"[migrate-pg] {table}.{col}: {_e}", flush=True)
+            _logging.warning("[migrate-pg] %s.%s: %s", table, col, _e)
 
 
 def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
@@ -248,9 +249,10 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                         request_id  TEXT,
                         PRIMARY KEY (ts, id)
                       );
-                      CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
-                      CREATE INDEX IF NOT EXISTS idx_events_ip     ON events(ip);
-                      CREATE INDEX IF NOT EXISTS idx_events_reason ON events(reason);
+                      CREATE INDEX IF NOT EXISTS idx_events_ts      ON events(ts);
+                      CREATE INDEX IF NOT EXISTS idx_events_ip      ON events(ip);
+                      CREATE INDEX IF NOT EXISTS idx_events_reason  ON events(reason);
+                      CREATE INDEX IF NOT EXISTS idx_events_path_ts ON events(path, ts);
 
                       -- 1.6.5 — operational KV tables mirrored from SQLite so
                       -- every config / secret / admin-IP change is persisted
@@ -374,24 +376,22 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                                     "SELECT create_hypertable('events', 'ts', "
                                     " if_not_exists => TRUE, "
                                     " chunk_time_interval => INTERVAL '1 day')")
-                                print("[db-pg] Timescale hypertable on events(ts)",
-                                      flush=True)
+                                _logging.info("[db-pg] Timescale hypertable on events(ts)")
                             except Exception as _e:
                                 # Already a hypertable, or older API.
                                 pass
                     except Exception:
                         pass
             if attempt > 1:
-                print(f"[db-pg] init succeeded on attempt {attempt}",
-                      flush=True)
+                _logging.info("[db-pg] init succeeded on attempt %d", attempt)
             return True
         except Exception as e:
             last_err = e
             if attempt < max_attempts:
                 _t.sleep(backoff_s * attempt)
                 continue
-    print(f"[db-pg] init failed after {max_attempts} attempts: "
-          f"{type(last_err).__name__}: {last_err}", flush=True)
+    _logging.error("[db-pg] init failed after %d attempts: %s: %s",
+                   max_attempts, type(last_err).__name__, last_err)
     return False
 
 

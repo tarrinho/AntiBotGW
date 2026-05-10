@@ -246,6 +246,8 @@ async def _gw_sync_state(gw_id: str, is_local: bool, can_distribute: bool,
 async def gw_registry_list_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry — list all gateways with live
     sync state per row (computed from Redis at request time)."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     rows = _gw_load_all()
     local_id = _gw_local_id()
     redis_available = bool(REDIS_URL and _redis is not None)
@@ -269,6 +271,8 @@ async def gw_registry_get_endpoint(request: web.Request):
     explicitly opts in via `?reveal=1`. The FE Settings dashboard's
     "Reveal" button is the only path that sets this flag — every
     other consumer (list, edit, sync-status) leaves it absent."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     ok, msg = _gw_validate_id(gw_id)
     if not ok:

@@ -133,15 +133,15 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill[data-cat="reallyban"]{border-color:#b91c1c;color:#ff4444}
 .cat-pill[data-cat="missed"]{border-color:#ff7b3a;color:#ff7b3a}
 .cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
-.cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
+.cat-pill[data-cat="gwmgmt"]{border-color:#e4f0ff;color:#e4f0ff}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
 .cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
 .cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
 .cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
-.cat-pill.active[data-cat="gwmgmt"]{background:#58a6ff;color:#000}
+.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:#0a1628}
 </style>
-<h1>AppSecGW_1.7.8 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.11 &middot; Stealth Agent Hunter <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.7.6 — category filter bar -->
 <div id="cat-filter">
@@ -200,17 +200,17 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         <span class="dim" style="margin-left:6px">window:</span>
         <select id="t-range" class="ctrl">
           <option value="15">15 min</option>
-          <option value="60" selected>1 h</option>
+          <option value="60">1 h</option>
           <option value="180">3 h</option>
-          <option value="720">12 h</option>
+          <option value="720" selected>12 h</option>
           <option value="1440">24 h</option>
           <option value="10080">7 days</option>
           <option value="43200">30 days</option>
         </select>
         <span class="dim">bucket:</span>
         <select id="t-bucket" class="ctrl">
-          <option value="60" selected>1 min</option>
-          <option value="300">5 min</option>
+          <option value="60">1 min</option>
+          <option value="300" selected>5 min</option>
           <option value="900">15 min</option>
           <option value="3600">1 hour</option>
           <option value="86400">1 day</option>
@@ -434,6 +434,7 @@ document.querySelectorAll('.cat-pill').forEach(btn => {
       agentChart.data.datasets[1].hidden = !window._activeFilters.has('missed');
       agentChart.data.datasets[2].hidden = !window._activeFilters.has('allowed');
       agentChart.data.datasets[3].hidden = !window._activeFilters.has('authbots');
+      agentChart.data.datasets[4].hidden = !window._activeFilters.has('gwmgmt');
       agentChart.update();
     }
     tick();
@@ -665,6 +666,20 @@ async function tick(){
     _errEl.title='Error fetching agent data: ' + (e && e.message ? e.message : String(e));
   }
 }
+// Shared tooltip title formatter — same logic as main.html _tooltipTitle().
+// tl: timeline array, bs: bucket seconds, items: Chart.js tooltip items array.
+function _tooltipTitle(tl, bs, items) {
+  const idx = items[0].dataIndex;
+  if (!tl || !tl[idx]) return items[0].label;
+  const d     = new Date(tl[idx].t * 1000);
+  if (bs >= 86400)
+    return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+  const end   = new Date((tl[idx].t + bs) * 1000);
+  const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+  const fmtT  = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+  return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
+}
+
 // Detection-vs-miss timeline chart
 let agentChart = null;
 function ensureAgentChart(){
@@ -674,17 +689,20 @@ function ensureAgentChart(){
     type: 'line',
     data: { labels: [], datasets: [
       { label:'detected (blocked agent)', data:[], borderColor:'#f85149',
-        backgroundColor:'rgba(248,81,73,0.20)', tension:0.25, fill:true,
+        backgroundColor:'rgba(248,81,73,0.35)', tension:0.25, fill:'origin',
         borderWidth:2, pointRadius:0, pointHoverRadius:4 },
       { label:'missed (allowed but stealth)', data:[], borderColor:'#ff7b3a',
-        backgroundColor:'rgba(255,123,58,0.18)', tension:0.25, fill:true,
+        backgroundColor:'rgba(255,123,58,0.35)', tension:0.25, fill:'origin',
         borderWidth:2, pointRadius:0, pointHoverRadius:4 },
       { label:'clean allowed', data:[], borderColor:'#3fb950',
-        backgroundColor:'rgba(63,185,80,0.10)', tension:0.25, fill:true,
+        backgroundColor:'rgba(63,185,80,0.35)', tension:0.25, fill:'origin',
         borderWidth:2, pointRadius:0, pointHoverRadius:4 },
       { label:'authorized bots', data:[], borderColor:'#bc8cff',
-        backgroundColor:'rgba(188,140,255,0.15)', tension:0.25, fill:false,
+        backgroundColor:'rgba(188,140,255,0.35)', tension:0.25, fill:'origin',
         borderWidth:2, borderDash:[2,3], pointRadius:0, pointHoverRadius:4 },
+      { label:'gw mgmt', data:[], borderColor:'#e4f0ff',
+        backgroundColor:'rgba(228,240,255,0.35)', tension:0.25, fill:'origin',
+        borderWidth:2, borderDash:[3,4], pointRadius:0, pointHoverRadius:4 },
     ]},
     options: { responsive:true, maintainAspectRatio:false,
       animation:{duration:200}, interaction:{mode:'index',intersect:false},
@@ -694,19 +712,11 @@ function ensureAgentChart(){
           backgroundColor:'#161b22', borderColor:'#30363d', borderWidth:1,
           titleColor:'#c9d1d9', bodyColor:'#c9d1d9',
           callbacks:{
-            title: items => {
-              const idx = items[0].dataIndex;
-              const tl  = window._lastAgentTimeline;
-              const bs  = window._lastAgentBucketSecs || 60;
-              if (!tl || !tl[idx]) return items[0].label;
-              const d   = new Date(tl[idx].t * 1000);
-              if (bs >= 86400)
-                return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
-              const end   = new Date((tl[idx].t + bs) * 1000);
-              const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
-              const fmtT  = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
-              return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
-            }
+            title: items => _tooltipTitle(
+              window._lastAgentTimeline,
+              window._lastAgentBucketSecs || 60,
+              items
+            )
           }
         }
       },
@@ -727,7 +737,7 @@ function ensureAgentChart(){
   });
   return agentChart;
 }
-function fmtTimeBucket(epochSec, bucketSec, rangeMin){
+function fmtTime(epochSec, bucketSec, rangeMin){
   const d = new Date(epochSec*1000);
   const rm = rangeMin || 0;
   if (bucketSec >= 86400 || rm >= 10080) return d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
@@ -747,30 +757,32 @@ async function tickChart(){
     const c = ensureAgentChart();
     const bs = d.bucket_secs || 60;
     const rm = tGetRangeMin();
-    const labels = d.timeline.map(b=>fmtTimeBucket(b.t, bs, rm));
+    const labels = d.timeline.map(b=>fmtTime(b.t, bs, rm));
     const step = Math.max(1, Math.floor(labels.length/10));
     c.data.labels = labels.map((l,i)=>(i%step===0||i===labels.length-1)?l:'');
     c.data.datasets[0].data = d.timeline.map(b=>b.detected);
     c.data.datasets[1].data = d.timeline.map(b=>b.missed);
     c.data.datasets[2].data = d.timeline.map(b=>b.clean_allowed);
     c.data.datasets[3].data = d.timeline.map(b=>b.authorized_robot||0);
+    c.data.datasets[4].data = d.timeline.map(b=>b.gwmgmt||0);
     // Apply category filter to chart datasets
     c.data.datasets[0].hidden = !window._activeFilters.has('ban') && !window._activeFilters.has('reallyban');
     c.data.datasets[1].hidden = !window._activeFilters.has('missed');
     c.data.datasets[2].hidden = !window._activeFilters.has('allowed');
     c.data.datasets[3].hidden = !window._activeFilters.has('authbots');
+    c.data.datasets[4].hidden = !window._activeFilters.has('gwmgmt');
     // 1.5.4 — stash for click-to-drill-down handler
     window._lastAgentTimeline   = d.timeline;
     window._lastAgentBucketSecs = bs;
     c.update('none');
     const t = d.totals;
     document.getElementById('t-totals').textContent =
-      `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} auth-bots=${t.authorized_robot||0} · stealth IPs=${d.stealth_ips_count}`;
+      `· Σ detected=${t.detected} missed=${t.missed} clean=${t.clean_allowed} auth-bots=${t.authorized_robot||0} gwmgmt=${t.gwmgmt||0} · stealth IPs=${d.stealth_ips_count}`;
   }catch(e){ console.warn('[tickChart] error:', e); }
 }
 // Time-window navigation state for the timeline chart
 let tEndEpoch = null;   // null = live; epoch seconds = scrolled-back right edge
-function tGetRangeMin(){ return parseInt(document.getElementById('t-range').value||'60',10); }
+function tGetRangeMin(){ return parseInt(document.getElementById('t-range').value||'720',10); }
 function tPickBucketForRange(rangeMin){
   if (rangeMin <= 360)   return 60;
   if (rangeMin <= 1440)  return 300;
@@ -1128,92 +1140,141 @@ function fmtSecs(s){
   return (s/86400).toFixed(1)+'d ago';
 }
 
-function openPopover(kind, s, x, y){
-  let title, body;
-  if (kind === 'id'){
-    title = 'Identity details';
-    const _bsec = s.banned_secs || 0;
-    const banLine = s.is_authorized_bot
+// ── Shared identity popover renderer (same object in main.html) ──────
+// normalizeId() maps both data shapes to a canonical form.
+// buildIdHtml() / buildRiskHtml() produce the HTML; each page's local
+// open function handles positioning and DOM show/hide.
+// Uses escapeHtml + _adminLock as page-level globals; _fmt is private.
+window._gwIdentityPopover = (function(){
+  function _fmt(s){
+    if (s == null) return '—';
+    if (s < 60)   return Math.round(s)+'s ago';
+    if (s < 3600) return Math.round(s/60)+'m ago';
+    if (s < 86400)return (s/3600).toFixed(1)+'h ago';
+    return (s/86400).toFixed(1)+'d ago';
+  }
+  function normalizeId(raw){
+    const bbd = Array.isArray(raw.blocks_breakdown)
+      ? raw.blocks_breakdown
+      : Object.entries(raw.blocks_by_reason || {}).sort((a,b)=>b[1]-a[1]);
+    return {
+      id:               raw.id || '',
+      ip:               raw.ip || raw.last_ip || '',
+      ua:               raw.ua || raw.last_ua || '',
+      session:          raw.session    || raw.last_session    || '—',
+      fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '—',
+      ja4:              raw.ja4 || '—',
+      stealth_score:    raw.stealth_score != null ? raw.stealth_score : null,
+      risk_score:       raw.metrics ? raw.metrics.risk_score : (raw.risk_score || 0),
+      banned_secs:      raw.banned_secs || 0,
+      is_authorized_bot:raw.is_authorized_bot || false,
+      is_admin_ip:      raw.is_admin_ip || false,
+      first_seen_secs_ago: raw.first_seen_secs_ago,
+      last_seen_secs_ago:  raw.last_seen_secs_ago,
+      requests: raw.requests || 0,
+      allowed:  raw.allowed  || 0,
+      blocked:  raw.blocked  || 0,
+      last_path:        raw.last_path || '—',
+      tokens:           raw.tokens != null ? raw.tokens : null,
+      blocks_breakdown: bbd,
+      risk_breakdown:   raw.risk_breakdown || null,
+    };
+  }
+  function buildIdHtml(d){
+    const bsec = d.banned_secs;
+    const banLine = d.is_authorized_bot
       ? `<span style="color:var(--blue);font-weight:600">Authorized Bot · UA matched bot list</span>`
-      : _bsec > 86400
-      ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(_bsec/86400).toFixed(1)}d remaining</span>`
-      : _bsec > 0
-      ? `<span style="color:#d29922;font-weight:600">Banned · ~${(_bsec/3600).toFixed(1)}h remaining</span>`
+      : bsec > 86400
+      ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(bsec/86400).toFixed(1)}d remaining</span>`
+      : bsec > 0
+      ? `<span style="color:#d29922;font-weight:600">Banned · ~${(bsec/3600).toFixed(1)}h remaining</span>`
       : `<span style="color:var(--green)">allowed</span>`;
-    const blocksRows = (s.blocks_breakdown||[]).map(([r,c]) =>
+    const blocksRows = d.blocks_breakdown.map(([r,c]) =>
       `<div class="rsn"><span class="rsn-name">${escapeHtml(r)}</span>
        <div class="rsn-bar"><div style="width:${Math.min(100,c*10)}%"></div></div>
        <span class="rsn-val">${c}×</span></div>`).join('');
-    body = `
+    const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
+    return `
       <div class="kv">
-        <span class="k">id</span>          <span class="v">${escapeHtml(s.id||'')}</span>
+        <span class="k">id</span>          <span class="v">${escapeHtml(d.id)}</span>
         <span class="k">status</span>      <span class="v">${banLine}</span>
-        <span class="k">ip</span>          <span class="v">${_adminLock(s.ip||'', s.is_admin_ip)}${escapeHtml(s.ip||'')}</span>
-        <span class="k">user-agent</span>  <span class="v">${escapeHtml(s.ua||'')}</span>
-        <span class="k">session</span>     <span class="v">${escapeHtml(s.session||'—')}</span>
-        <span class="k">fingerprint</span> <span class="v">${escapeHtml(s.fingerprint||'—')}</span>
-        <span class="k">JA4 (TLS)</span>   <span class="v">${escapeHtml(s.ja4||'—')}</span>
-        <span class="k">first seen</span>  <span class="v">${fmtSecs(s.first_seen_secs_ago)}</span>
-        <span class="k">last seen</span>   <span class="v">${fmtSecs(s.last_seen_secs_ago)}</span>
-        <span class="k">requests</span>    <span class="v">${s.requests} (${s.allowed} ok / ${s.blocked} blocked)</span>
-        <span class="k">last path</span>   <span class="v">${escapeHtml(s.last_path||'—')}</span>
-        <span class="k">stealth</span>     <span class="v">${s.stealth_score}/100</span>
-        <span class="k">risk score</span>  <span class="v">${s.metrics.risk_score}</span>
+        <span class="k">ip</span>          <span class="v">${_adminLock(d.ip, d.is_admin_ip)}${escapeHtml(d.ip)}</span>
+        <span class="k">user-agent</span>  <span class="v">${escapeHtml(d.ua)}</span>
+        <span class="k">session</span>     <span class="v">${escapeHtml(d.session)}</span>
+        <span class="k">fingerprint</span> <span class="v">${escapeHtml(d.fingerprint)}</span>
+        <span class="k">JA4 (TLS)</span>   <span class="v">${escapeHtml(d.ja4)}</span>
+        <span class="k">first seen</span>  <span class="v">${_fmt(d.first_seen_secs_ago)}</span>
+        <span class="k">last seen</span>   <span class="v">${_fmt(d.last_seen_secs_ago)}</span>
+        <span class="k">requests</span>    <span class="v">${d.requests} (${d.allowed} ok / ${d.blocked} blocked)</span>
+        <span class="k">last path</span>   <span class="v">${escapeHtml(d.last_path)}</span>
+        ${d.stealth_score != null ? `<span class="k">stealth</span>     <span class="v">${d.stealth_score}/100</span>` : ''}
+        ${d.tokens != null ? `<span class="k">tokens</span>      <span class="v">${d.tokens}</span>` : ''}
+        <span class="k">risk score</span>  <span class="v">${rs}</span>
       </div>
       <div id="ip-intel-section" style="margin-top:14px">
         <h3 style="margin:0 0 6px 0">IP intelligence
           <span class="dim" style="font-weight:400;font-size:11px">· loading…</span></h3>
       </div>
       ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3>${blocksRows}` : ''}`;
-  } else if (kind === 'risk'){
-    title = 'Risk score breakdown';
-    const breakdown = s.risk_breakdown || [];
+  }
+  function buildRiskHtml(d){
+    const breakdown = d.risk_breakdown || d.blocks_breakdown || [];
+    const isWeighted = !!d.risk_breakdown;
     const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
+    const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
     const rows = breakdown.length
-      ? breakdown.map(([reason, weighted])=>{
-          const pct = (weighted/total*100).toFixed(0);
+      ? breakdown.map(([reason, val])=>{
+          const pct = (val/total*100).toFixed(0);
           return `<div class="rsn">
             <span class="rsn-name">${escapeHtml(reason)}</span>
             <div class="rsn-bar"><div style="width:${pct}%"></div></div>
-            <span class="rsn-val">+${weighted}</span></div>`;
+            <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
       : `<div class="empty">no contributing signals (score may be from already-decayed events)</div>`;
-    body = `
+    return `
       <div class="dim" style="margin-bottom:8px">
-        Live risk: <b style="color:var(--red)">${s.metrics.risk_score}</b> ·
+        Live risk: <b style="color:var(--red)">${rs}</b> ·
         decays at half-life 1h ·
         ban threshold ≥ 50 (≥100 for NAT)
       </div>
       ${rows}`;
-  } else { return; }
+  }
+  return { normalizeId, buildIdHtml, buildRiskHtml };
+})();
+
+function openPopover(kind, s, x, y){
+  const d = window._gwIdentityPopover.normalizeId(s);
+  let title, body;
+  if      (kind === 'id')   { title = 'Identity details';     body = window._gwIdentityPopover.buildIdHtml(d); }
+  else if (kind === 'risk') { title = 'Risk score breakdown'; body = window._gwIdentityPopover.buildRiskHtml(d); }
+  else { return; }
   document.getElementById('pop-title').innerHTML =
     `${title} <span class="x" id="pop-close">×</span>`;
   document.getElementById('pop-close').onclick = closePopover;
   document.getElementById('pop-body').innerHTML = body;
-  // 1.6.7+ — async-fill the IP intelligence block on the identity popover
-  // (separate fetch, so the existing identity payload doesn't grow).
-  if (kind === 'id' && s && s.ip) {
-    fetchIpIntel(s.ip).then(html => {
+  if (kind === 'id' && d.ip) {
+    fetchIpIntel(d.ip).then(html => {
       const node = document.getElementById('ip-intel-section');
       if (node) node.innerHTML = html;
     }).catch(() => {});
   }
-  // Position near click, clamp to viewport.
   POP.style.display = 'block';
   POP.classList.add('show');
   POP_BACK.classList.add('show');
-  // 1.5.4 — clear any centered transform / size overrides from openBucketDetail()
+  // clear any centered transform / size overrides from openBucketDetail()
   POP.style.transform = '';
   POP.style.maxWidth = '';
-  POP.style.maxHeight = '';
-  POP.style.overflowY = '';
+  // constrain to viewport height so tall identity details are always scrollable
+  POP.style.maxHeight = (window.innerHeight - 24) + 'px';
+  POP.style.overflowY = 'auto';
   const rect = POP.getBoundingClientRect();
   let px = x + 10, py = y + 10;
-  if (px + rect.width  > window.innerWidth - 10) px = window.innerWidth - rect.width - 10;
-  if (py + rect.height > window.innerHeight - 10) py = window.innerHeight - rect.height - 10;
-  if (px < 10) px = 10; if (py < 10) py = 10;
-  POP.style.left = px+'px';
-  POP.style.top  = py+'px';
+  if (px + rect.width  > window.innerWidth  - 12) px = window.innerWidth  - rect.width  - 12;
+  if (py + rect.height > window.innerHeight - 12) py = window.innerHeight - rect.height - 12;
+  if (px < 12) px = 12;
+  if (py < 12) py = 12;
+  POP.style.left = px + 'px';
+  POP.style.top  = py + 'px';
 }
 
 // 1.6.7+ — fetch the per-IP intel payload and render as HTML. Pulls

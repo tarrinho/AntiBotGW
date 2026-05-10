@@ -61,12 +61,11 @@ def _tor_fetch():
         _tor_feed_stats["size"] = len(_tor_exits)
         _tor_feed_stats["last_error"] = ""
         _tor_feed_stats["fetches"] += 1
-        print(f"[tor] loaded {len(_tor_exits)} exit nodes from {TOR_FEED_URL}",
-              flush=True)
+        slog("tor_exits_loaded", level="info",
+             count=len(_tor_exits), url=TOR_FEED_URL)
     except Exception as e:
         _tor_feed_stats["last_error"] = f"{type(e).__name__}: {str(e)[:160]}"
-        print(f"[tor] fetch failed: {_tor_feed_stats['last_error']}",
-              flush=True)
+        slog("tor_fetch_failed", level="warn", error=_tor_feed_stats["last_error"])
 
 
 async def _tor_refresh_loop():
@@ -74,8 +73,8 @@ async def _tor_refresh_loop():
     while True:
         try:
             if TOR_BLOCK_ENABLED:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, _tor_fetch)
         except Exception as e:
-            print(f"[tor] refresh loop error: {e}", flush=True)
+            slog("tor_refresh_loop_error", level="error", error=str(e))
         await asyncio.sleep(TOR_REFRESH_SECS)

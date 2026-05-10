@@ -190,6 +190,18 @@ Each release MUST update:
    Author: Pedro Tarrinho. Reports must NOT reference any AI tooling.
 
 ### 13a. Architecture + version consistency review
+
+**Step 0 — automated version bump (run this first):**
+```bash
+./bump-version.sh <prev-version> <new-version>
+# e.g. ./bump-version.sh 1.7.10 1.7.11
+```
+`bump-version.sh` atomically updates every canonical version location:
+`config.py` · `test_pure.py` (`_EXPECTED_VERSION` + stale-string regex) · `proxy.py` docstring ·
+`docker-compose.yml` (image tag + container_name) · all `dashboards/*.html` ·
+`README.md` quickstart refs · `tests/test_geo_dashboard.py`.
+Run it **before** any manual checks below — then verify the output shows no `WARN: pattern not found` lines.
+
 Before declaring documentation complete, verify:
 - `config.py` `GW_VERSION` constant matches the release tag (e.g. `AppSecGW_1.7.0`).
 - Run `pytest tests/test_pure.py::test_gw_version_constant tests/test_pure.py::test_no_stale_version_strings_in_source` — both must PASS.  The second test scans all `.py/.yml/.yaml/.sh/.md` source files for `AppSecGW_X.Y` strings that do not match the current release (excluding comments, CHANGELOG, README, rules.md, and the validation/ directory).
@@ -204,8 +216,8 @@ Before declaring documentation complete, verify:
   release entry is stamped — nothing left undocumented.
 
 ### 13b. Full version-string sweep
-Run this grep before declaring the release done. Every file that embeds
-the version number must agree with the release tag — stale strings are a
+Run `./bump-version.sh PREV NEW` first (see §13a), then verify with the grep below.
+Every file that embeds the version number must agree with the release tag — stale strings are a
 support and audit liability.
 
 ```bash
@@ -710,6 +722,33 @@ curl -sk http://localhost:8443/$ELB_HEALTH_CHECK_PATH \
 # Expected: 200 OK, body "ok"
 ```
 
+### 17i. Chart fill QA (dashboard visual integrity)
+
+Every release that touches `dashboards/main.html`, `dashboards/service.html`, or
+`dashboards/agents.html` must pass the chart fill static-analysis suite:
+
+```
+pytest tests/test_dashboard_charts.py -v
+```
+
+**What it checks (15 tests across 3 files):**
+
+| Check | Rule |
+|-------|------|
+| `fill: 'origin'` count | ≥ 9 in main.html, ≥ 6 in service.html, ≥ 5 in agents.html |
+| No gradient fills | `createLinearGradient` must not appear in any of the three files |
+| No scriptable backgroundColor | `backgroundColor: function(` / arrow-function form is forbidden |
+| rgba alpha ≥ 0.30 | All `backgroundColor: 'rgba(...)'` values must be visibly solid |
+| rgba count ≥ fill:'origin' count | Every fill:'origin' dataset must have a matching backgroundColor |
+
+**Pass criterion:** 15/15 green. Any failure blocks the release — it means either a
+fill was accidentally removed, opacity was set too low (faint/invisible), or a gradient
+was re-introduced.
+
+**Context:** Threshold/dashed lines (`fill: false`, no backgroundColor) and stacked
+db-chart datasets (`fill: true`, alpha 0.55) are not tested here — only data-series
+fills to origin.
+
 ---
 
 ## Findings policy
@@ -728,3 +767,20 @@ are classified at the top of the report — never silently inherited.
 - Harbor:        amd64 ✓ · arm64 ✓ · armv7 ✓ · manifest ✓
 - Pre-existing failures: <list or "none">
 ```
+
+---
+
+## Demo Environments
+
+| # | Service | Tool | Notes |
+|---|---------|------|-------|
+| 1 | Demo Service 1 | ngrok | Subject to free-tier request limits |
+| 2 | Demo Service 2 | Cloudflare Tunnel (trycloudflare) | No rate limits; quick tunnel, no account needed |
+
+**trycloudflare quick start (arm64):**
+```bash
+wget https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64 -O cloudflared
+chmod +x cloudflared
+./cloudflared tunnel --url http://localhost:8080
+```
+Produces a `*.trycloudflare.com` URL valid for the tunnel session.

@@ -103,5 +103,3 @@ async def _crowdsec_check(ip: str):
             _crowdsec_stats["p99_latency_ms"] = round(
                 _s[max(0, int(len(_s) * 0.99) - 1)], 1)
         _crowdsec_stats["lookups_api"] += 1
-        _crowdsec_stats["active_bans"] = sum(
-            1 for v in _crowdsec_cache.values() if v[0] is not None and v[1] > _t.time())

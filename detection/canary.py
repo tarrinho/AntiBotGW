@@ -310,6 +310,14 @@ def inject_canary_probe(body: bytes, identity: str) -> bytes:
 
     # Track HTML page count per identity
     now = _t.time()
+    if len(_probe_html_counts) >= _PROBE_COUNTS_MAX:
+        stale = [k for k, v in _probe_html_counts.items()
+                 if v[0] > 0 and now - v[0] > 86400]
+        for k in stale:
+            _probe_html_counts.pop(k, None)
+        if len(_probe_html_counts) >= _PROBE_COUNTS_MAX:
+            for k in list(_probe_html_counts.keys())[: _PROBE_COUNTS_MAX // 8]:
+                _probe_html_counts.pop(k, None)
     rec = _probe_html_counts[identity]
     if rec[1] == 0:
         rec[0] = now  # first_seen_ts

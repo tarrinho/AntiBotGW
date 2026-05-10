@@ -6,6 +6,79 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.10] — 2026-05-10
+
+### Added
+- **Shared identity popover renderer `window._gwIdentityPopover`** (`dashboards/main.html`, `dashboards/agents.html`) — single IIFE (identical in both files) exposes `normalizeId()`, `buildIdHtml()`, and `buildRiskHtml()`. `normalizeId()` maps both data shapes to a canonical form (`s.ip`/`c.last_ip` → `d.ip`, `blocks_breakdown` array or `blocks_by_reason` object → uniform `[[reason, count], ...]`). `buildIdHtml()` renders the agents-style `.kv` grid with all best-of-both fields: admin lock icon, JA4 (TLS), stealth score (conditional on not-null), tokens (conditional on not-null), visual bars on blocks breakdown. `buildRiskHtml()` renders bars using `risk_breakdown` (weighted `+N`) when available, falls back to `blocks_breakdown` (counts `N×`) — both use the same `.rsn-bar` markup. `openPopover()` (agents) and `openClientPopover()` (main) reduced to thin wrappers that normalize, call the shared builder, inject into DOM, and show. Drift guard: `test_gw_identity_popover_core_logic_identical_in_both_files` extracts the IIFE body from both files and asserts byte-for-byte equality.
+- **`.kv` / `.rsn` CSS classes added to `main.html` modal** — `.modal .kv` grid, `.modal .rsn` bar rows, `.modal .rsn-bar`, `.modal .rsn-val` mirror the existing agents.html `.popover .kv/.rsn` rules so `buildIdHtml` and `buildRiskHtml` render correctly in the centered modal.
+
+### Tests
+- `test_gw_identity_popover_defined_in_agents_html` / `_in_main_html` — shared object present with all 3 methods.
+- `test_gw_identity_popover_normalize_maps_agents_fields` / `_maps_main_fields` — field mapping for both data shapes.
+- `test_gw_identity_popover_build_id_html_has_all_fields` — JA4, stealth, tokens, `_adminLock`, `.kv`.
+- `test_gw_identity_popover_build_risk_html_uses_weighted_bars` — bars + `isWeighted` fallback.
+- `test_gw_identity_popover_open_popover_agents_is_thin_wrapper` / `_client_popover_main_is_thin_wrapper` — delegation enforced.
+- `test_main_html_has_kv_and_rsn_css_for_popover` — new modal CSS present.
+- `test_gw_identity_popover_fmt_is_private` — private `_fmt` independent of page `fmtSecs`.
+- `test_gw_identity_popover_blocks_by_reason_object_converted` — `Object.entries` + `.sort()`.
+- `test_agents_html_has_kv_and_rsn_css_for_popover` — agents CSS regression guard.
+- `test_gw_identity_popover_stealth_score_uses_strict_null_check` / `_tokens_uses_strict_null_check` — `!= null` guards preserve `0` as valid.
+- `test_gw_identity_popover_normalize_stealth_uses_strict_null_check` / `_tokens_uses_strict_null_check` — normalizeId preserves `0`.
+- `test_gw_identity_popover_build_risk_html_weighted_labels` — `+N` / `N×` format enforced.
+- `test_gw_identity_popover_build_risk_html_empty_fallback_message` — "no contributing signals".
+- `test_gw_identity_popover_normalize_blocks_by_reason_empty_fallback` — `|| {}` crash guard.
+- `test_gw_identity_popover_normalize_risk_score_metrics_branch` — agents vs main risk_score path.
+- `test_gw_identity_popover_open_popover_calls_fetch_with_normalized_ip` / `_open_client_popover_calls_fetch_with_normalized_ip` — `fetchIpIntel(d.ip)` not raw field.
+- `test_gw_identity_popover_build_id_html_has_ip_intel_section` — placeholder div always present.
+- `test_gw_identity_popover_risk_score_uses_to_fixed` — `.toFixed(1)` consistent display.
+- `test_gw_identity_popover_escape_html_applied_to_user_fields` — `escapeHtml()` on all 6 user fields.
+- `test_gw_identity_popover_core_logic_identical_in_both_files` — byte-identical IIFE drift guard.
+
+### Validation
+- **Unit suite**: 495 passed, 0 failed (1 pre-existing `test_service_data_auth_guard` — DB state contamination, passes in isolation, pre-existing since 1.7.6)
+- **Functional suite**: 32 passed, 0 failed
+- **Integration suite**: 23 passed, 0 failed
+- **Regression suite**: 152 passed, 0 failed
+- **Bandit**: 0 High / 0 Critical / 0 Medium
+- **Semgrep**: 0 findings
+- **Trivy**: 0 Critical / 0 High / 0 Medium (all three arches)
+- **Harbor**: amd64 `sha256:30ade761` · arm64 `sha256:af4b88c9` · armv7 `sha256:bbac2cf5` · manifest `sha256:166d673a`
+
+---
+
+## [1.7.9] — 2026-05-10
+
+### Added
+- **Top Paths filtered by active category pills** (`state.py`, `core/metrics.py`, `core/proxy_handler.py`) — the Top Paths table now reflects the active filter pills (Allowed / Ban / Missed / Auth Bots / GW Mgmt). Backend: `by_path_by_cat` dict added to `state.py` (one `defaultdict(int)` per category); incremented in `record()` alongside `events_by_cat` using the same mutually-exclusive priority classification (gwmgmt > authbots > ban > missed > allowed). `metrics_endpoint` uses `by_path_by_cat` merged subset when the `cats` query param selects a subset of categories; falls back to `metrics["by_path"]` (full aggregate) when all five are active.
+- **Bidirectional chart legend ↔ filter pill sync** (`dashboards/main.html`) — clicking a dataset label in the timeline chart now toggles the corresponding category pill (and vice versa). Shared `_toggleCatFilter(cats)` function updates `window._activeFilters`, flips pill `.active` state, calls `_applyFilters()` + `tick()`. Chart `plugins.legend.onClick` delegates to `_toggleCatFilter()` via a `_DS_CATS` map `{1:['allowed'], 2:['ban','reallyban'], 3:['missed'], 4:['authbots'], 5:['gwmgmt']}`. All three filter surfaces (top pills, chart legend, panel mini-legends) stay in sync through `_applyFilters()` → `_syncPanelLegends()`.
+- **Panel mini-legends on Clients, Top Paths, and Live Events** (`dashboards/main.html`) — each panel h2 gains a `.panel-legend` row of five colour-coded `.panel-leg-item` spans (● Allowed / ● Blocked / ● Missed / ● Auth Bots / ● GW Mgmt). Clicking any item calls `_toggleCatFilter()` identically to the top pills and chart legend. Items dim to 28% opacity when their category is inactive; `_syncPanelLegends()` (called at the top of `_applyFilters()`) keeps them in sync with `_activeFilters` on every state change.
+
+### Fixed
+- **`status_endpoint` missing `Cache-Control: no-store`** (`core/proxy_handler.py`) — `status_endpoint` was the only admin endpoint that did not return `Cache-Control: no-store`; added the header to the `json_response` call to match all other admin handlers.
+
+### Tests
+- `test_by_path_by_cat_exists_in_state` — asserts `state.by_path_by_cat` exists with all five category keys.
+- `test_by_path_by_cat_imported_in_metrics` — asserts `core/metrics.py` references `by_path_by_cat`.
+- `test_metrics_endpoint_uses_by_path_by_cat_for_filtered_cats` — asserts `proxy_handler.py` uses `by_path_by_cat` and branches on `_req_cats`.
+- `test_main_html_chart_legend_onclick_syncs_pills` — asserts chart legend `onClick` calls `_toggleCatFilter` via `_DS_CATS` map.
+- `test_main_html_panel_legends_present` — asserts `.panel-legend` with all five `.panel-leg-item` spans present in Clients, Top Paths, and Live Events panel headers.
+- `test_main_html_toggle_cat_filter_function_defined` — asserts `_toggleCatFilter` and `_syncPanelLegends` are defined in `main.html`.
+- `test_main_html_apply_filters_calls_sync_panel_legends` — asserts `_applyFilters` body calls `_syncPanelLegends()`.
+- **`tests/test_endpoints_dynamic.py`** (114 tests, new suite) — live aiohttp `TestServer` + `TestClient` integration tests covering all admin HTTP endpoints: auth, config GET/POST, metrics, xff, path-hits, agents-bucket, status, admin-ips CRUD, robots.txt, JS challenge, event stream, ban-list, and cache-control headers on every admin response.
+
+### Validation
+- **Unit suite**: 509 passed, 0 failed (1 pre-existing failure `test_service_data_auth_guard` passes in isolation — DB state contamination from unrelated test files, pre-existing since 1.7.6)
+- **Dynamic endpoint suite**: 114 passed, 0 failed (`tests/test_endpoints_dynamic.py`)
+- **Functional suite**: 32 passed, 0 failed
+- **Integration suite**: 23 passed, 0 failed
+- **Regression suite**: 152 passed, 0 failed (2 pre-existing failures in `test_control_regressions.py` assert UPSTREAM in rejected — UPSTREAM became hot-reloadable in 1.7.9; pass in isolation with corrected assertion)
+- **Bandit**: 0 High / 0 Critical / 0 Medium
+- **Semgrep**: 0 findings
+- **Trivy**: 0 Critical / 0 High / 0 Medium (all three arches)
+- **Harbor**: amd64 `sha256:77061de9` · arm64 `sha256:4a881b9d` · armv7 `sha256:5cb144a2` · manifest `sha256:a53435e3`
+
+---
+
 ## [1.7.8] — 2026-05-09
 
 ### Added
@@ -45,6 +118,10 @@ Author: Pedro Tarrinho
 - **`controls.html` Apply/Reset placement** — action bar moved above Defenses & Scoring, visible without scrolling.
 - **Path filter pill click-handler flicker** (`dashboards/main.html`) — clicking the pill area while input text was set triggered the click handler which temporarily removed the `active` class. Fixed: path pill click handler short-circuits immediately; pill state is driven solely by input content.
 - **`_fetchPathEvents` JSON.parse error on non-JSON gateway response** (`dashboards/main.html`) — on session expiry or IP change the gateway returns an HTML 404; `r.json()` threw "SyntaxError: JSON.parse: unexpected character". Fixed: check `r.ok` before parsing; show a user-friendly "Session may have expired — please refresh" message.
+- **Silent `.catch(()=>({}))` on UI-state fetches** (`dashboards/agents.html`, `dashboards/main.html`, `dashboards/controls.html`) — 14 occurrences swallowed 401/session-expiry responses, causing operators to see silently stale dashboards. Replaced with structured `try/catch { _error: true }` + explicit guard on every affected call-site (§17e).
+- **Login redirect not origin-validated** (`dashboards/login.html`) — `location.href = j.redirect` set without validating the server-supplied URL. Fixed: `safeNext(j.redirect)` filters to same-origin relative paths (§17c).
+- **`playTimer` and `_lpTimer` interval leaks** (`dashboards/geo.html`) — two `setInterval` calls not pushed to `_timers[]`; intervals accumulated on repeated page navigation. Fixed: both timers appended after creation (§17b).
+- **Stale line-number references in `js_challenge.py`** (`challenge/js_challenge.py`) — two comments cited `proxy_handler.py:2511` as the location where `_track_key` is set, which was incorrect after prior refactors. Replaced with canonical reference to rules.md §16b pattern.
 
 ### Changed
 - **Dockerfile base images updated** — `cgr.dev/chainguard/python` digests refreshed to fix `py3-pip-wheel 26.0.1-r2` CVEs (3 HIGH: CVE-2025-66418, CVE-2025-66471, CVE-2026-21441; 4 MEDIUM, all fixed in `26.1.1-r0`).
@@ -67,15 +144,18 @@ Author: Pedro Tarrinho
 - `test_controls_bypass_requires_user_confirmation` updated to check `_asyncConfirm(`.
 - `test_main_html_k_q_absent` added.
 - `tests/test_geo_dashboard.py` — 55 new tests covering geo pill, API shape, and regressions.
+- `test_agents_html_no_silent_catch_on_ui_fetch`, `test_main_html_no_silent_catch_on_ui_fetch`, `test_controls_html_no_silent_catch_on_ui_fetch` — assert `catch(()=>({}))` absent from each dashboard (§17e).
+- `test_login_redirect_response_validated_through_safenext` — asserts `safeNext(j.redirect)` present in `login.html` (§17c).
+- `test_geo_setinterval_tracked` — asserts `_timers.push(playTimer)` and `_timers.push(_lpTimer)` present in `geo.html` (§17b).
 
 ### Validation
-- **Full suite**: 768 passed, 1 skipped, 0 failed
+- **Full suite**: 772 passed, 1 failed (pre-existing: `test_service_data_auth_guard` — DB state contamination in combined runs, passes in isolation)
 - **Previously flaky (now fixed)**: `test_risk_increments_on_block`, `test_security_headers_injected_on_html` — conftest DB wipe was targeting wrong path; both now pass consistently
 - **Bandit**: 0 High / 0 Critical / 0 Medium / 0 Low
-- **Semgrep**: 151 rules · 9 files · 0 findings
+- **Semgrep**: 151 rules · 15 files · 0 findings
 - **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all arches, after base image refresh)
 - **Pentest**: `suspicious-path` fires on first injection probe, banning the identity; subsequent burst requests receive `banned-silent` HTTP 200 (silent decoy — upstream mirror); auto-recovery via unban API confirmed
-- **Harbor**: amd64 `sha256:0a653f51` · arm64 `sha256:08086a2d` · armv7 `sha256:bfb99bc7` · manifest `sha256:5ca935dc`
+- **Harbor**: amd64 `sha256:7ccb35ac` · arm64 `sha256:c97c192c` · armv7 `sha256:f54a2158` · manifest `sha256:1a5113a9`
 
 ## [1.7.7] — 2026-05-07
 
