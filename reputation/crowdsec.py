@@ -16,6 +16,15 @@ import aiohttp
 import ipaddress as _ipaddress
 from aiohttp import ClientSession, ClientTimeout
 
+# Shared session — avoids a new TCP handshake per CrowdSec LAPI call.
+_http_session: "ClientSession | None" = None
+
+def _get_session() -> ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = ClientSession()
+    return _http_session
+
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
 from helpers import slog, now
@@ -66,19 +75,19 @@ async def _crowdsec_check(ip: str):
     t0 = _t.time()
     try:
         timeout = ClientTimeout(total=CROWDSEC_TIMEOUT_S)
-        async with ClientSession(timeout=timeout) as session:
-            async with session.get(
+        async with _get_session().get(
                 f"{CROWDSEC_LAPI_URL}/v1/decisions",
                 params={"ip": ip},
                 headers={"X-Api-Key": CROWDSEC_API_KEY,
-                          "Accept": "application/json"}) as resp:
-                if resp.status == 404 or resp.status == 200:
-                    pass
-                elif resp.status >= 500:
-                    _crowdsec_stats["errors"] += 1
-                    _crowdsec_stats["last_error"] = f"HTTP {resp.status}"
-                    return None, "error"
-                data = await resp.json()
+                          "Accept": "application/json"},
+                timeout=timeout) as resp:
+            if resp.status == 404 or resp.status == 200:
+                pass
+            elif resp.status >= 500:
+                _crowdsec_stats["errors"] += 1
+                _crowdsec_stats["last_error"] = f"HTTP {resp.status}"
+                return None, "error"
+            data = await resp.json()
         # data is None / [] / {} when no active decisions
         if not data or not isinstance(data, list):
             _crowdsec_cache[ip] = (None, n + CROWDSEC_CACHE_SECS)

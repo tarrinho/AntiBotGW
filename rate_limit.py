@@ -22,6 +22,9 @@ from state import (
     by_path_by_cat,
     _canary_tokens,
     _fp_canvas_store,
+    _ACTIVE_SESSIONS,
+    _signal_order_cache,
+    _asn_path_clusters,
 )
 from helpers import slog, now
 
@@ -180,6 +183,30 @@ async def _prune_state_loop():
                         if _v[0] is not None and _v[1] > _cs_now)
                 except ImportError:
                     pass
+                # 10. H5: prune remaining unbounded dicts.
+                # _ACTIVE_SESSIONS: username → last_seen_ts (wall clock from _t.time()).
+                # Use _time.time() not n (which is monotonic) for the comparison.
+                _AS_PRUNE_TTL = 43200  # 12 h — matches _SESSION_TTL in admin/users.py
+                _wall_now = _time.time()
+                _stale_as = [_u for _u, _ts in list(_ACTIVE_SESSIONS.items())
+                             if _wall_now - _ts > _AS_PRUNE_TTL]
+                for _u in _stale_as:
+                    _ACTIVE_SESSIONS.pop(_u, None)
+                # _signal_order_cache: signal → order int. Bounded by distinct DB
+                # rows, but cap defensively so a signal-orders table explosion
+                # cannot bloat memory indefinitely.
+                if len(_signal_order_cache) > 2000:
+                    _surplus = len(_signal_order_cache) - 1000
+                    for _sk in list(_signal_order_cache)[:_surplus]:
+                        _signal_order_cache.pop(_sk, None)
+                # _asn_path_clusters: (asn, path_prefix, minute) → set.
+                # proxy_handler prunes by size when >10 k; add time-based prune
+                # here to expire clusters older than 10 minutes regardless of size.
+                _now_min = int(_time.time() // 60)
+                _stale_ck = [_ck for _ck in list(_asn_path_clusters)
+                             if _ck[2] < _now_min - 10]
+                for _ck in _stale_ck:
+                    _asn_path_clusters.pop(_ck, None)
         except asyncio.CancelledError:
             break
         except Exception as e:

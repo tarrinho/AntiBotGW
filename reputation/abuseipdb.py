@@ -17,6 +17,15 @@ import aiohttp
 import ipaddress as _ipaddress
 from aiohttp import ClientSession, ClientTimeout
 
+# Shared session — avoids a new TCP handshake per AbuseIPDB API call.
+_http_session: "ClientSession | None" = None
+
+def _get_session() -> ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = ClientSession()
+    return _http_session
+
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
 from helpers import slog, now
@@ -63,39 +72,44 @@ async def _abuseipdb_lookup(ip: str):
         return 0, "", "invalid"
     _abuseipdb_stats["lookups_total"] += 1
     n = _t.time()
-    # Cache check
-    try:
+    # Cache check — run in executor so sqlite3 does not block the event loop
+    def _cache_lookup():
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT score, country, ts FROM abuseipdb_cache WHERE ip = ?",
-            (ip,)).fetchone()
-        conn.close()
+        try:
+            return conn.execute(
+                "SELECT score, country, ts FROM abuseipdb_cache WHERE ip = ?",
+                (ip,)).fetchone()
+        finally:
+            conn.close()
+    try:
+        row = await asyncio.get_event_loop().run_in_executor(None, _cache_lookup)
         if row and (n - (row["ts"] or 0)) < ABUSEIPDB_CACHE_HOURS * 3600:
             _abuseipdb_stats["lookups_cached"] += 1
             return int(row["score"] or 0), row["country"] or "", "cache"
     except Exception as e:
         _abuseipdb_stats["errors"] += 1
         _abuseipdb_stats["last_error"] = f"cache: {e}"[:200]
-    # API call
+    # API call — reuse shared session to avoid per-call TCP handshake
     t0 = _t.time()
     try:
         timeout = ClientTimeout(total=ABUSEIPDB_TIMEOUT_S)
-        async with ClientSession(timeout=timeout) as session:
-            async with session.get(
+        session = _get_session()
+        async with session.get(
                 ABUSEIPDB_URL,
                 params={"ipAddress": ip, "maxAgeInDays": 90},
                 headers={"Key": ABUSEIPDB_KEY,
-                          "Accept": "application/json"}) as resp:
-                if resp.status == 429:
-                    _abuseipdb_stats["rate_limited"] += 1
-                    _abuseipdb_stats["last_error"] = "API quota exceeded"
-                    return 0, "", "rate-limited"
-                if resp.status != 200:
-                    _abuseipdb_stats["errors"] += 1
-                    _abuseipdb_stats["last_error"] = f"HTTP {resp.status}"
-                    return 0, "", "error"
-                data = await resp.json()
+                          "Accept": "application/json"},
+                timeout=timeout) as resp:
+            if resp.status == 429:
+                _abuseipdb_stats["rate_limited"] += 1
+                _abuseipdb_stats["last_error"] = "API quota exceeded"
+                return 0, "", "rate-limited"
+            if resp.status != 200:
+                _abuseipdb_stats["errors"] += 1
+                _abuseipdb_stats["last_error"] = f"HTTP {resp.status}"
+                return 0, "", "error"
+            data = await resp.json()
         score   = int((data.get("data") or {}).get("abuseConfidenceScore") or 0)
         country = ((data.get("data") or {}).get("countryCode") or "")[:8]
     except (asyncio.TimeoutError, aiohttp.ClientError, ValueError) as e:

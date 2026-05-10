@@ -49,7 +49,7 @@ from config import _DASHBOARDS_DIR  # noqa: F401 — leading underscore not in *
 from config import _SESSION_COOKIE  # noqa: F401 — gateway session cookie name
 from config import (  # noqa: F401 — underscore config vars for test access
     _TURNSTILE_CONFIGURED, _ADMIN_PUBLIC_SUBPATHS, _ADMIN_LOGIN_SUBPATHS,
-    _ADMIN_POLL_SUBPATHS,
+    _ADMIN_POLL_SUBPATHS, _KEY_FILE,
 )
 from helpers import (  # noqa: F401
     _strip_admin_key_from_qs, _strip_own_session_cookie,
@@ -272,7 +272,7 @@ async def on_startup(app):
         if ADMIN_KEY_FROM_ENV:
             _bootstrap_pw_line = "   pass: see your ADMIN_KEY env var"
         else:
-            _bootstrap_pw_line = ("   pass: " + INTERNAL_KEY)
+            _bootstrap_pw_line = f"   pass: {INTERNAL_KEY[:4]}***  (read {_KEY_FILE})"
         print(f"  ║ {_bootstrap_pw_line:<57}║")
         print("  ║   then change the password in Settings → Users           ║")
         print("  ╚══════════════════════════════════════════════════════════╝",
@@ -472,7 +472,7 @@ def make_app() -> web.Application:
     # 1.6.7 — Login flow + Users CRUD ────────────────────────────────
     app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
-    app.router.add_get  (PUBLIC + "/logout", logout_endpoint)
+    app.router.add_post (PUBLIC + "/logout", logout_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
     app.router.add_get  (SEC    + "/ip-intel/{ip}", ip_intel_endpoint)
     USERS = SEC + "/admin/users"

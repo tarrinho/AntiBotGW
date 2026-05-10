@@ -51,7 +51,7 @@ LISTEN_HOST     = os.environ.get("LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8443"))
 
 RATE_LIMIT_BURST  = int(os.environ.get("BURST", "20"))    # tokens
-RATE_LIMIT_REFILL = float(os.environ.get("REFILL", "3.0")) # tokens / second
+RATE_LIMIT_REFILL = max(0.001, float(os.environ.get("REFILL", "3.0")))  # tokens / second; guarded against div-by-zero
 HONEYPOT_BAN_SECS = int(os.environ.get("HONEYPOT_BAN_SECS", "3600"))  # 1 h default
 # R8: longer-TTL "hostile pool" — once an identity has crossed the
 # canary-echo / honeypot threshold, keep it silent-decoyed for HOSTILE_BAN_SECS
@@ -270,7 +270,7 @@ SESSION_TTL_SECS = 30 * 86400          # 30 days
 NEW_SESSIONS_PER_IP_PER_MIN = 30        # anti cookie-rotation
 _ss = os.environ.get("SESSION_SAMESITE", "Lax").capitalize()
 SESSION_SAMESITE = _ss if _ss in ("Lax", "Strict", "None") else "Lax"
-SESSION_SECURE = os.environ.get("SESSION_SECURE", "1") not in ("0", "false", "False", "")
+SESSION_SECURE = os.environ.get("SESSION_SECURE", "1").strip().lower() not in ("0", "false", "no", "off", "")
 
 HONEYPOT_PATHS = {
     # web admin / config
@@ -463,7 +463,10 @@ H2_FP_ENABLED             = os.environ.get("H2_FP_ENABLED",             "0") in 
 # 1.6.10 — PoW minimum solve time (ms): reject solutions that arrive suspiciously fast
 POW_MIN_SOLVE_MS          = int(os.environ.get("POW_MIN_SOLVE_MS",      "200"))
 # 1.6.10 — tighter session-churn threshold for hosting/datacenter ASNs
-NEW_SESSIONS_PER_IP_PER_MIN_HOSTING = int(os.environ.get("NEW_SESSIONS_PER_HOSTING", "10"))
+NEW_SESSIONS_PER_IP_PER_MIN_HOSTING = int(
+    os.environ.get("NEW_SESSIONS_PER_IP_PER_MIN_HOSTING") or
+    os.environ.get("NEW_SESSIONS_PER_HOSTING", "10")
+)
 
 _TARPIT_TOPICS = [
     ("System Configuration Reference",   "configuration"),
@@ -888,7 +891,7 @@ _POW_SEEN_MAX = 10000
 
 # ── Per-socket-IP token bucket ─────────────────────────────────────────────
 IP_BURST  = int(os.environ.get("IP_BURST",  "30"))
-IP_REFILL = float(os.environ.get("IP_REFILL", "5.0"))
+IP_REFILL = max(0.001, float(os.environ.get("IP_REFILL", "5.0")))
 
 # ── _to_bool_default_true helper (used during config init) ─────────────────
 def _to_bool_default_true(v):
