@@ -83,6 +83,10 @@ def _wipe_config_kv_between_tests():
             # to fail when those entries are mixed with the fresh test identity.
             conn.execute("DELETE FROM clients")
             conn.execute("DELETE FROM timeline")
+            # Wipe events so agents-bucket / path-hits queries in the next test
+            # don't see seeded rows from prior tests (events table is not
+            # cleared by db_load_state, so cross-test contamination accumulates).
+            conn.execute("DELETE FROM events")
             conn.commit()
             conn.close()
         except sqlite3.OperationalError:

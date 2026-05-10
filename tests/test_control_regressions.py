@@ -796,7 +796,8 @@ def test_v147_config_post_applies_and_rejects(proxy_module):
                         "/api/", "/v1/"]
                     # Rejected
                     assert "RATE_LIMIT_BURST" in body["rejected"]
-                    assert "UPSTREAM"        in body["rejected"]
+                    # UPSTREAM became hot-reloadable in 1.7.9 — valid URLs are applied
+                    assert "UPSTREAM"        in body["applied"]
                     assert "SESSION_KEY"     in body["rejected"]
                     # In-memory mutation actually happened.
                     assert proxy_module.JS_CHALLENGE is False
@@ -1483,7 +1484,8 @@ def test_config_post_unknown_knob_rejected(proxy_module):
                     assert r.status == 200
                     body = _json.loads(await r.text())
                     assert body["applied"].get("RATE_LIMIT_BURST") == 22
-                    assert "UPSTREAM"    in body["rejected"]
+                    # UPSTREAM became hot-reloadable in 1.7.9 — valid URLs are applied
+                    assert "UPSTREAM"    in body["applied"]
                     assert "SECRET_KEY"  in body["rejected"]
                     assert "__PROTO__"   in body["rejected"]
                 finally:

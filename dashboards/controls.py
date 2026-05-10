@@ -28,6 +28,6 @@ async def controls_dashboard_endpoint(request: web.Request):
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "
-                "frame-ancestors 'none'; base-uri 'none'"
+                "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
             ),
         })

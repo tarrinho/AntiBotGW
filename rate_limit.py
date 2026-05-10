@@ -7,6 +7,7 @@ Dependency rule: imports from config, state, helpers only.
 
 import asyncio
 import os as _os
+import time as _time
 
 from config import (
     RATE_LIMIT_BURST,
@@ -17,6 +18,10 @@ from state import (
     ip_buckets,
     ip_new_sessions,
     state_lock,
+    metrics,
+    by_path_by_cat,
+    _canary_tokens,
+    _fp_canvas_store,
 )
 from helpers import slog, now
 
@@ -126,7 +131,56 @@ async def _prune_state_loop():
                                         key=lambda kv: kv[1]["last"])[:overflow]
                     for k, _ in candidates:
                         del ip_buckets[k]
+                # 4c. M4/M6: reset cookie_ghost_misses + clear unique_paths for
+                # surviving non-banned identities idle > 1h (prevents indefinite
+                # accumulation without a full eviction).
+                for _s in ip_state.values():
+                    if _s.banned_until <= n and (n - _s.last_seen) > 3600:
+                        _s.cookie_ghost_misses = 0
+                        _s.unique_paths.clear()
+                # 5. Evict expired canary tokens (value IS the expiry epoch).
+                expired_canary = [k for k, exp in list(_canary_tokens.items()) if exp < n]
+                for k in expired_canary:
+                    _canary_tokens.pop(k, None)
+                # 6. Evict stale canvas fingerprints (older than 2h).
+                stale_canvas = [k for k, v in list(_fp_canvas_store.items())
+                                if v.get("ts", 0) < n - 7200]
+                for k in stale_canvas:
+                    _fp_canvas_store.pop(k, None)
+                # 7. Cap by_path and by_ja4 — keep top 2500 by count.
+                _BY_PATH_MAX = 5000
+                if len(metrics["by_path"]) > _BY_PATH_MAX:
+                    keep = sorted(metrics["by_path"].items(),
+                                  key=lambda kv: kv[1], reverse=True)[:2500]
+                    metrics["by_path"].clear()
+                    metrics["by_path"].update(keep)
+                if len(metrics.get("by_ja4", {})) > _BY_PATH_MAX:
+                    keep = sorted(metrics["by_ja4"].items(),
+                                  key=lambda kv: kv[1], reverse=True)[:2500]
+                    metrics["by_ja4"].clear()
+                    metrics["by_ja4"].update(keep)
+                # 8. Cap per-category path counters (1000 each).
+                _BY_CAT_MAX = 1000
+                for _cat_dict in by_path_by_cat.values():
+                    if len(_cat_dict) > _BY_CAT_MAX:
+                        keep = sorted(_cat_dict.items(),
+                                      key=lambda kv: kv[1], reverse=True)[:500]
+                        _cat_dict.clear()
+                        _cat_dict.update(keep)
+                # 9. Prune expired CrowdSec cache entries + recount active_bans.
+                try:
+                    from reputation.crowdsec import _crowdsec_cache, _crowdsec_stats
+                    _cs_now = _time.time()
+                    _cs_expired = [_ip for _ip, (_, _exp) in list(_crowdsec_cache.items())
+                                   if _exp < _cs_now]
+                    for _ip in _cs_expired:
+                        _crowdsec_cache.pop(_ip, None)
+                    _crowdsec_stats["active_bans"] = sum(
+                        1 for _v in _crowdsec_cache.values()
+                        if _v[0] is not None and _v[1] > _cs_now)
+                except ImportError:
+                    pass
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"[prune] error: {e}")
+            slog("prune_loop_error", level="error", error=str(e))

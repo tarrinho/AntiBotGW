@@ -1081,6 +1081,7 @@ def test_165_every_knob_persists_round_trip():
         ],
         "BYPASS_PATHS": ["/static/", "/assets/"],
         "BYPASS_MODE": False,
+        "UPSTREAM": "https://test-upstream.example.com",
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

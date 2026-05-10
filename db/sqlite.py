@@ -97,9 +97,9 @@ def _apply_sqlite_migrations(conn) -> None:
                 continue
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {sqlite_ddl}")  # nosec B608
             pragma_cache[table].add(col)
-            print(f"[migrate-sqlite] +{table}.{col}", flush=True)
+            slog("db_migrate_sqlite_add", level="info", table=table, col=col)
         except Exception as _e:
-            print(f"[migrate-sqlite] {table}.{col}: {_e}", flush=True)
+            slog("db_migrate_sqlite_err", level="warn", table=table, col=col, error=str(_e))
 
 
 def db_init():
@@ -116,9 +116,10 @@ def db_init():
         status  INTEGER,
         reason  TEXT
     );
-    CREATE INDEX IF NOT EXISTS idx_events_ts     ON events(ts);
-    CREATE INDEX IF NOT EXISTS idx_events_ip     ON events(ip);
-    CREATE INDEX IF NOT EXISTS idx_events_reason ON events(reason);
+    CREATE INDEX IF NOT EXISTS idx_events_ts      ON events(ts);
+    CREATE INDEX IF NOT EXISTS idx_events_ip      ON events(ip);
+    CREATE INDEX IF NOT EXISTS idx_events_reason  ON events(reason);
+    CREATE INDEX IF NOT EXISTS idx_events_path_ts ON events(path, ts);
 
     CREATE TABLE IF NOT EXISTS clients (
         ip                TEXT PRIMARY KEY,
@@ -351,6 +352,7 @@ async def db_writer_loop():
     conn.execute("PRAGMA journal_mode=WAL")  # better concurrency
     conn.execute("PRAGMA synchronous=NORMAL")
     last_checkpoint = _t.time()
+    last_vacuum = _t.time()
     while True:
         try:
             batch = [await _state.db_queue.get()]
@@ -627,7 +629,7 @@ async def db_writer_loop():
                             "SET status = ?, confirmed_ts = ? WHERE id = ?",
                             (args[1], args[2], args[0]))
                 except Exception as e:
-                    print(f"[db] write failed: {e} args={args!r}")
+                    slog("db_write_failed", level="error", error=str(e), op=op)
             conn.commit()
             for _ in batch:
                 _state.db_queue.task_done()
@@ -642,10 +644,16 @@ async def db_writer_loop():
                 except sqlite3.OperationalError:
                     pass    # readers active, retry next tick
                 last_checkpoint = now_ts
+            if now_ts - last_vacuum > 86400:
+                try:
+                    conn.execute("VACUUM")
+                except sqlite3.OperationalError:
+                    pass    # readers active, skip this cycle
+                last_vacuum = now_ts
         except asyncio.CancelledError:
             break
         except Exception as e:
-            print(f"[db] loop error: {e}")
+            slog("db_loop_error", level="error", error=str(e))
 
 
 # ── 1.5.5 — runtime integration-secret store ──────────────────────────────
@@ -724,7 +732,7 @@ def db_load_secrets(proxy_globals: dict) -> None:
         rows = conn.execute("SELECT key, value FROM secrets_kv").fetchall()
         conn.close()
     except Exception as e:
-        print(f"[secrets-kv] load failed: {e}", flush=True)
+        slog("db_secrets_load_failed", level="error", error=str(e))
         return
     g = proxy_globals
     applied, env_pinned = 0, 0
@@ -742,8 +750,7 @@ def db_load_secrets(proxy_globals: dict) -> None:
     # Re-derive "configured" / "enabled" markers
     _refresh_integration_state(proxy_globals)
     if applied or env_pinned:
-        print(f"[secrets-kv] loaded {applied} secret(s) from DB "
-              f"(env-pinned {env_pinned})", flush=True)
+        slog("db_secrets_loaded", level="info", applied=applied, env_pinned=env_pinned)
 
 
 def db_load_config(proxy_globals: dict) -> None:
@@ -767,7 +774,7 @@ def db_load_config(proxy_globals: dict) -> None:
         rows = conn.execute("SELECT key, value FROM config_kv").fetchall()
         conn.close()
     except Exception as e:
-        print(f"[config-kv] load failed: {e}", flush=True)
+        slog("db_config_load_failed", level="error", error=str(e))
         return
     _HOT_RELOAD_KNOBS = g.get("_HOT_RELOAD_KNOBS", {})
     _ENV_PROVIDED_KNOBS = g.get("_ENV_PROVIDED_KNOBS", set())
@@ -813,33 +820,37 @@ def db_load_config(proxy_globals: dict) -> None:
             raw = json.loads(r["value"])
             value = parser(raw)
             if validator is not None and not validator(value):
-                print(f"[config-kv] {key} failed validator — env default kept",
-                      flush=True)
+                slog("db_config_invalid", level="warn", key=key, reason="validator")
                 skipped += 1
                 continue
             g[key] = value
             applied += 1
         except (ValueError, TypeError, json.JSONDecodeError) as e:
-            print(f"[config-kv] {key} failed to parse ({e}) — env default kept",
-                  flush=True)
+            slog("db_config_parse_err", level="warn", key=key, error=str(e))
             skipped += 1
     # Mutual exclusion: JS_CHAL_REQUIRE_JA4 + TURNSTILE_ENABLED cannot both be
     # active. TURNSTILE_ENABLED wins — Turnstile topology implies Cloudflare CDN
     # terminates TLS, making JA4 unavailable and causing every challenge to fail.
     if g.get("JS_CHAL_REQUIRE_JA4") and g.get("TURNSTILE_ENABLED"):
         g["JS_CHAL_REQUIRE_JA4"] = False
-        print("[config-kv] JS_CHAL_REQUIRE_JA4 forced off — "
-              "incompatible with TURNSTILE_ENABLED (JA4 absent behind Cloudflare CDN)",
-              flush=True)
+        slog("db_config_ja4_forced_off", level="warn",
+             reason="incompatible with TURNSTILE_ENABLED")
     if applied or skipped or env_pinned:
-        print(f"[config-kv] loaded {applied} knob(s) from DB "
-              f"(skipped {skipped}, env-pinned {env_pinned})", flush=True)
+        slog("db_config_loaded", level="info",
+             applied=applied, skipped=skipped, env_pinned=env_pinned)
 
 
 def db_load_state() -> None:
     """Load saved state at startup. Populates state-module objects
     (ip_state, metrics, events, timeline, SERVICE_METRICS_HISTORY)
     directly — these are mutable containers imported by reference."""
+    # Reset in-memory identity state so stale entries from a previous startup
+    # (or a prior test invocation) don't persist when the DB table is empty.
+    # In production on_startup is called once on a fresh container so ip_state
+    # is always empty here; in tests each make_app() / on_startup() call must
+    # see a clean slate to avoid cross-test risk-score contamination.
+    ip_state.clear()
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
 
@@ -939,8 +950,8 @@ def db_load_state() -> None:
             SERVICE_METRICS_HISTORY.append({k: row[k] for k in row.keys()})
         svc_loaded = len(rows_svc)
     except Exception as e:
-        print(f"[db] svc_metrics not loaded: {e}")
+        slog("db_svc_metrics_not_loaded", level="warn", error=str(e))
     conn.close()
-    print(f"[db] loaded: {len(rows)} clients, {len(timeline)} timeline buckets, "
-          f"{metrics['total_requests']} total requests, "
-          f"{svc_loaded} svc-metrics samples")
+    slog("db_state_loaded", level="info",
+         clients=len(rows), timeline_buckets=len(timeline),
+         total_requests=metrics["total_requests"], svc_metrics=svc_loaded)

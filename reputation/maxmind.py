@@ -86,10 +86,10 @@ def _maxmind_seed_from_image():
                 while chunk := r.read(64 * 1024):
                     w.write(chunk)
             size_mb = os.path.getsize(dest) / (1024 * 1024)
-            print(f"[maxmind] seeded {os.path.basename(dest)} from image "
-                  f"({size_mb:.1f} MB)", flush=True)
+            slog("maxmind_seeded", level="info",
+                 file=os.path.basename(dest), mb=round(size_mb, 1))
         except OSError as e:
-            print(f"[maxmind] seed copy failed for {dest}: {e}", flush=True)
+            slog("maxmind_seed_failed", level="warn", dest=dest, error=str(e))
 
 
 def _maxmind_auto_fetch():
@@ -111,15 +111,13 @@ def _maxmind_auto_fetch():
         try:
             url = (f"https://download.maxmind.com/app/geoip_download"
                    f"?edition_id={edition}&license_key={key}&suffix=tar.gz")
-            print(f"[maxmind] {dest} missing — downloading {edition}…",
-                  flush=True)
+            slog("maxmind_downloading", level="info", edition=edition, dest=dest)
             with tempfile.TemporaryDirectory() as td:
                 tgz = os.path.join(td, f"{edition}.tar.gz")
                 with urllib.request.urlopen(url, timeout=60) as r:  # nosec B310 — hardcoded HTTPS to MaxMind; no user-controlled scheme
                     if r.status != 200:
-                        print(f"[maxmind] {edition} HTTP {r.status} — "
-                              "license-key invalid or rate-limited",
-                              flush=True)
+                        slog("maxmind_download_http_err", level="warn",
+                             edition=edition, status=r.status)
                         continue
                     with open(tgz, "wb") as f:
                         while chunk := r.read(64 * 1024):
@@ -131,8 +129,7 @@ def _maxmind_auto_fetch():
                         None,
                     )
                     if member is None:
-                        print(f"[maxmind] {edition}.mmdb not in archive",
-                              flush=True)
+                        slog("maxmind_not_in_archive", level="warn", edition=edition)
                         continue
                     fobj = tar.extractfile(member)
                     if fobj is None:
@@ -142,10 +139,10 @@ def _maxmind_auto_fetch():
                         while chunk := fobj.read(64 * 1024):
                             out.write(chunk)
             size_mb = os.path.getsize(dest) / (1024 * 1024)
-            print(f"[maxmind] {edition} → {dest} ({size_mb:.1f} MB)",
-                  flush=True)
+            slog("maxmind_downloaded", level="info",
+                 edition=edition, dest=dest, mb=round(size_mb, 1))
         except (urllib.error.URLError, OSError, tarfile.TarError) as e:
-            print(f"[maxmind] {edition} fetch failed: {e}", flush=True)
+            slog("maxmind_fetch_failed", level="warn", edition=edition, error=str(e))
 
 
 async def _maxmind_refresh_loop():
@@ -165,8 +162,7 @@ async def _maxmind_refresh_loop():
                     stale.append(path)
             if not stale:
                 continue
-            print(f"[maxmind] {len(stale)} db(s) older than 30d — refreshing",
-                  flush=True)
+            slog("maxmind_refreshing_stale", level="info", stale_count=len(stale))
             for p in stale:
                 try: os.remove(p)
                 except OSError: pass  # nosec B110 — stale DB file may already be removed; race is harmless
@@ -179,11 +175,11 @@ async def _maxmind_refresh_loop():
                 if os.path.exists(MAXMIND_CITY_DB_PATH):
                     _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
                     MAXMIND_CITY_ENABLED = True
-                print("[maxmind] readers refreshed", flush=True)
+                slog("maxmind_readers_refreshed", level="info")
             except Exception as e:
-                print(f"[maxmind] reload failed: {e}", flush=True)
+                slog("maxmind_reload_failed", level="error", error=str(e))
         except Exception as e:
-            print(f"[maxmind] refresh loop error: {e}", flush=True)
+            slog("maxmind_refresh_loop_error", level="error", error=str(e))
 
 
 def _init_maxmind():
@@ -197,23 +193,25 @@ def _init_maxmind():
     try:
         import maxminddb
     except Exception as e:
-        print(f"[maxmind] maxminddb python lib missing: {e}", flush=True)
+        slog("maxmind_lib_missing", level="warn", error=str(e))
         return
     if os.path.exists(MAXMIND_ASN_DB_PATH):
         try:
             _asn_reader = maxminddb.open_database(MAXMIND_ASN_DB_PATH)
             MAXMIND_ENABLED = True
-            print(f"[maxmind] ASN DB loaded from {MAXMIND_ASN_DB_PATH}", flush=True)
+            slog("maxmind_asn_loaded", level="info", path=MAXMIND_ASN_DB_PATH)
         except Exception as e:
             _asn_stats["last_error"] = f"init: {e}"[:200]
-            print(f"[maxmind] failed to load {MAXMIND_ASN_DB_PATH}: {e}", flush=True)
+            slog("maxmind_asn_load_failed", level="error",
+                 path=MAXMIND_ASN_DB_PATH, error=str(e))
     if os.path.exists(MAXMIND_CITY_DB_PATH):
         try:
             _city_reader = maxminddb.open_database(MAXMIND_CITY_DB_PATH)
             MAXMIND_CITY_ENABLED = True
-            print(f"[maxmind] City DB loaded from {MAXMIND_CITY_DB_PATH}", flush=True)
+            slog("maxmind_city_loaded", level="info", path=MAXMIND_CITY_DB_PATH)
         except Exception as e:
-            print(f"[maxmind] failed to load {MAXMIND_CITY_DB_PATH}: {e}", flush=True)
+            slog("maxmind_city_load_failed", level="error",
+                 path=MAXMIND_CITY_DB_PATH, error=str(e))
 
 
 # ── Lookup cache ───────────────────────────────────────────────────────────

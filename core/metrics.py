@@ -16,7 +16,7 @@ import time as _t
 
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
-from state import _postgres_available, events_by_cat  # noqa: F401 — underscores/explicit not exported by *
+from state import _postgres_available, events_by_cat, by_path_by_cat  # noqa: F401 — underscores/explicit not exported by *
 from helpers import now, slog  # noqa: F401
 from admin.auth import _is_admin_ip  # noqa: F401
 
@@ -144,7 +144,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
             # both backends see the row. The Postgres write is best-effort.
             if DB_BACKEND == "postgres" and _postgres_available:
                 try:
-                    asyncio.get_event_loop().run_in_executor(
+                    asyncio.get_running_loop().run_in_executor(
                         None, pg_insert_event,
                         event_ts, ip, ua[:200], path[:200],
                         status, reason or "",
@@ -205,15 +205,17 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         # Per-category ring buffers — categories are mutually exclusive, priority order:
         # gwmgmt > authbots > ban > missed > allowed
         if path and path.startswith(ADMIN_NS):
-            events_by_cat["gwmgmt"].append(_evt)
+            _req_cat = "gwmgmt"
         elif reason == "authorized-robot":
-            events_by_cat["authbots"].append(_evt)
+            _req_cat = "authbots"
         elif reason and reason not in _PASSTHROUGH_REASONS:
-            events_by_cat["ban"].append(_evt)
+            _req_cat = "ban"
         elif is_missed:
-            events_by_cat["missed"].append(_evt)
+            _req_cat = "missed"
         else:
-            events_by_cat["allowed"].append(_evt)
+            _req_cat = "allowed"
+        events_by_cat[_req_cat].append(_evt)
+        by_path_by_cat[_req_cat][path] += 1
         # 1.4.6: emit one structured log line per recorded request so the
         # full forensic record (request_id, verdict, ja4, identity) lands
         # in stdout for downstream ingestion.

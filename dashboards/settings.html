@@ -131,7 +131,7 @@ button.danger{background:var(--red)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1 class="page-title">AppSecGW_1.7.8 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
+<h1 class="page-title">AppSecGW_1.7.11 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
 <nav class="topnav">
   <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
   <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
@@ -152,10 +152,18 @@ button.danger{background:var(--red)}
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--blue);font-weight:600"
          id="gw-host">—</div>
   </div>
-  <div>
+  <div style="display:flex;flex-direction:column;gap:4px;min-width:260px">
     <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Upstream</div>
-    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
-         id="gw-upstream">—</div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input id="gw-upstream-input" type="url"
+             style="font-family:ui-monospace,Menlo,monospace;font-size:12px;
+                    background:#0d1117;border:1px solid var(--line);border-radius:4px;
+                    color:var(--fg);padding:3px 8px;flex:1;min-width:200px"
+             placeholder="https://example.com" spellcheck="false">
+      <button id="gw-upstream-apply"
+              style="font-size:11px;padding:3px 10px;white-space:nowrap">Apply</button>
+      <span id="gw-upstream-status" style="font-size:11px;color:var(--dim)"></span>
+    </div>
   </div>
   <div>
     <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Version</div>
@@ -496,7 +504,7 @@ $("gw-host").textContent = window.location.host || "—";
     const r = await fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' });
     if (!r.ok) return;
     const j = await r.json();
-    if (j.upstream)         $("gw-upstream").textContent = j.upstream;
+    if (j.upstream)         $("gw-upstream-input").value = j.upstream;
     if (j.version)          $("gw-version").textContent  = j.version;
     if (j.db_backend)       $("gw-db").textContent       = j.db_backend;
     if (j.uptime_secs != null) {
@@ -507,6 +515,43 @@ $("gw-host").textContent = window.location.host || "—";
     }
   } catch (e) { /* leave dashes */ }
 })();
+
+// 1.7.9 — upstream Apply button
+$("gw-upstream-apply").addEventListener("click", async () => {
+  const btn    = $("gw-upstream-apply");
+  const status = $("gw-upstream-status");
+  const val    = $("gw-upstream-input").value.trim().replace(/\/+$/, "");
+  if (!val.startsWith("http://") && !val.startsWith("https://")) {
+    status.textContent = "must start with http:// or https://";
+    status.style.color = "var(--red)";
+    return;
+  }
+  btn.disabled = true; btn.textContent = "…";
+  status.textContent = ""; status.style.color = "";
+  try {
+    const r = await fetch("/antibot-appsec-gateway/secured/config", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ UPSTREAM: val }),
+    });
+    const d = await r.json();
+    if (r.ok && d.applied && d.applied.UPSTREAM !== undefined) {
+      $("gw-upstream-input").value = d.applied.UPSTREAM;
+      status.textContent = "✓ applied";
+      status.style.color = "var(--green)";
+    } else {
+      const reason = (d.rejected && d.rejected.UPSTREAM) || d.error || "rejected";
+      status.textContent = "✗ " + reason;
+      status.style.color = "var(--red)";
+    }
+  } catch (e) {
+    status.textContent = "✗ " + e.message;
+    status.style.color = "var(--red)";
+  } finally {
+    btn.disabled = false; btn.textContent = "Apply";
+    setTimeout(() => { status.textContent = ""; }, 4000);
+  }
+});
 
 // 1.6.7 — fill the "Logged in as" cell from /secured/whoami.
 (async () => {

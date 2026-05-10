@@ -1,5 +1,5 @@
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.7.8 · Dashboard</title>
+<title>AppSecGW_1.7.11 · Dashboard</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -68,7 +68,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.banned-silent{background:#2d1a4a;color:#a78bfa}
 .tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
 .tag.authorized-robot{background:#2d1a4a;color:#bc8cff}
-.tag.gwmgmt-tag{background:#0d2340;color:var(--blue)}
+.tag.gwmgmt-tag{background:#0d2340;color:#e4f0ff}
 .info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
   border-radius:50%;border:1px solid var(--dim);color:var(--dim);font-size:9px;font-weight:700;
   cursor:default;margin-left:6px;vertical-align:middle;line-height:1;font-style:normal;
@@ -142,6 +142,16 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .modal table{width:100%}
 .modal td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace;font-size:11.5px}
 .modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
+.modal .kv{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.modal .kv .k{color:var(--dim);text-align:right}
+.modal .kv .v{color:var(--fg);word-break:break-all}
+.modal .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:8px;align-items:center;
+            padding:5px 0;border-bottom:1px solid var(--line)}
+.modal .rsn:last-child{border-bottom:0}
+.modal .rsn-name{color:var(--fg)}
+.modal .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
+.modal .rsn-bar>div{height:100%;background:var(--red)}
+.modal .rsn-val{color:var(--red);text-align:right;font-weight:600}
 .act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
 .act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
 
@@ -158,6 +168,16 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   color:var(--fg);box-shadow:0 6px 24px rgba(0,0,0,.55);display:none;pointer-events:none}
 #col-tip-pop b{color:var(--blue);display:block;margin-bottom:3px;font-size:11px;
   text-transform:uppercase;letter-spacing:.5px}
+/* panel mini-legends (same cats as chart legend, synced both ways) */
+.panel-legend{display:inline-flex;gap:10px;margin-left:14px;font-size:10px;font-weight:500;letter-spacing:.3px;vertical-align:middle}
+.panel-leg-item{cursor:pointer;opacity:.28;transition:opacity .15s;user-select:none}
+.panel-leg-item.active{opacity:1}
+.panel-leg-item:hover{opacity:.65}
+.panel-leg-item[data-leg-cats="allowed"]{color:#3fb950}
+.panel-leg-item[data-leg-cats="ban,reallyban"]{color:#f85149}
+.panel-leg-item[data-leg-cats="missed"]{color:#ff7b3a}
+.panel-leg-item[data-leg-cats="authbots"]{color:#bc8cff}
+.panel-leg-item[data-leg-cats="gwmgmt"]{color:#e4f0ff}
 /* 1.7.6 — category filter pills */
 #cat-filter{display:flex;gap:6px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
 #cat-filter-label{font-size:11px;color:var(--dim);margin-right:2px}
@@ -169,7 +189,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill[data-cat="reallyban"]{border-color:#b91c1c;color:#ff4444}
 .cat-pill[data-cat="missed"]{border-color:#ff7b3a;color:#ff7b3a}
 .cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
-.cat-pill[data-cat="gwmgmt"]{border-color:#58a6ff;color:#58a6ff}
+.cat-pill[data-cat="gwmgmt"]{border-color:#e4f0ff;color:#e4f0ff}
 .cat-pill[data-cat="path"]{border-color:#e3b341;color:#e3b341}
 .cat-pill.active[data-cat="path"]{background:#e3b341;color:#000}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
@@ -177,10 +197,10 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
 .cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
-.cat-pill.active[data-cat="gwmgmt"]{background:#58a6ff;color:#000}
+.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:#0a1628}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.8 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
+<h1>AppSecGW_1.7.11 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
 
 <!-- 1.7.7 — category filter bar + path search -->
 <div id="cat-filter">
@@ -190,7 +210,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <button class="cat-pill active" data-cat="reallyban">● Really Ban</button>
   <button class="cat-pill active" data-cat="missed">● Missed</button>
   <button class="cat-pill active" data-cat="authbots">● Auth Bots</button>
-  <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
+  <button class="cat-pill" data-cat="gwmgmt">● GW Mgmt</button>
   <span id="path-pill" class="cat-pill" data-cat="path"
     style="margin-left:10px;cursor:default;display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 10px">
     <span style="opacity:.6;font-size:10px">⬡</span>
@@ -247,7 +267,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         <tr><td><span class="swatch" style="background:#f85149"></span><b>Blocked</b></td><td>Ban + Really Ban — requests rejected or decoyed</td></tr>
         <tr><td><span class="swatch" style="background:#ff7b3a"></span><b>Missed</b></td><td>Allowed through but identity is in the medium-risk band</td></tr>
         <tr><td><span class="swatch" style="background:#bc8cff"></span><b>Auth Bots</b></td><td>Whitelisted monitoring bots — bypassed detection</td></tr>
-        <tr><td><span class="swatch" style="background:#39d353"></span><b>GW Mgmt</b></td><td>Requests to the admin namespace (/antibot-appsec-gateway/…)</td></tr>
+        <tr><td><span class="swatch" style="background:#e4f0ff"></span><b>GW Mgmt</b></td><td>Requests to the admin namespace (/antibot-appsec-gateway/…)</td></tr>
         <tr><td colspan=2 style="padding-top:6px;color:var(--dim)">Toggle filter pills to show/hide bands. Total updates to reflect only active bands. Path filter narrows to matching requests only.</td></tr>
       </table></span></i></h2>
       <div style="display:flex;gap:6px;align-items:center;font-size:11px">
@@ -257,10 +277,10 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         <span class="dim" style="margin-left:6px">window:</span>
         <select id="range" class="ctrl">
           <option value="15">15 min</option>
-          <option value="60" selected>1 h</option>
+          <option value="60">1 h</option>
           <option value="180">3 h</option>
           <option value="360">6 h</option>
-          <option value="720">12 h</option>
+          <option value="720" selected>12 h</option>
           <option value="1440">24 h</option>
           <option value="4320">3 days</option>
           <option value="10080">7 days</option>
@@ -268,8 +288,8 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         </select>
         <span class="dim" style="margin-left:6px">bucket:</span>
         <select id="bucket" class="ctrl">
-          <option value="60" selected>1 min</option>
-          <option value="300">5 min</option>
+          <option value="60">1 min</option>
+          <option value="300" selected>5 min</option>
           <option value="900">15 min</option>
           <option value="3600">1 hour</option>
           <option value="86400">1 day</option>
@@ -402,7 +422,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
 
   <div class="card">
-    <h2>Clients <span id="clients-count" class="dim" style="font-size:12px;font-weight:400"></span></h2>
+    <h2>Clients <span id="clients-count" class="dim" style="font-size:12px;font-weight:400"></span><span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
     <div style="max-height:420px;overflow-y:auto">
     <table id="clients-tbl">
       <thead><tr>
@@ -447,15 +467,15 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 
   <div class="row" style="grid-template-columns:1fr">
     <div class="card">
-      <h2>Top paths</h2>
+      <h2>Top paths<span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
       <table id="paths-tbl"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 
   <div class="card" style="margin-top:14px">
-    <h2>Live events <span id="events-count" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span><i class="info-icon">i<span class="info-tip"><table>
+    <h2>Live events <span id="events-count" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span><span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span><i class="info-icon">i<span class="info-tip"><table>
       <tr><td><span class="swatch" style="background:#3fb950"></span><b>Delivered</b></td><td>Passed all detectors — reached upstream</td></tr>
-      <tr><td><span class="swatch" style="background:#58a6ff"></span><b>GW Mgmt</b></td><td>Admin namespace path (/antibot-appsec-gateway/…)</td></tr>
+      <tr><td><span class="swatch" style="background:#e4f0ff"></span><b>GW Mgmt</b></td><td>Admin namespace path (/antibot-appsec-gateway/…)</td></tr>
       <tr><td><span class="swatch" style="background:#bc8cff"></span><b>authorized-robot</b></td><td>Whitelisted monitoring bot — bypassed detection</td></tr>
       <tr><td><span class="swatch" style="background:#d29922"></span><b>missed</b></td><td>Allowed but identity is in medium-risk band</td></tr>
       <tr><td><span class="swatch" style="background:#f85149"></span><b>banned / honeypot / …</b></td><td>Blocked — rejected or served a silent decoy</td></tr>
@@ -506,8 +526,9 @@ let lastTotal = 0, lastTime = Date.now();
 let chart = null;
 let costChart = null;
 
+
 // 1.7.6 — category filter state
-window._activeFilters = new Set(['allowed','ban','reallyban','missed','authbots','gwmgmt']);
+window._activeFilters = new Set(['allowed','ban','reallyban','missed','authbots']);
 const _cfgUrl = '/antibot-appsec-gateway/secured/config';
 window._authBotPatch = window._authBotPatch || {};
 function _patchAuthBot(id, val) {
@@ -802,6 +823,8 @@ function _applyChartFilters(c) {
   c.data.datasets[3].hidden = !showMissed;
   c.data.datasets[4].hidden = !showAuthBots;
   c.data.datasets[5].hidden = !showGwMgmt;
+  const _activeBandCount = [showAllowed, showBan, showMissed, showAuthBots, showGwMgmt].filter(Boolean).length;
+  c.data.datasets[0].hidden = _activeBandCount <= 1;
   const tl = window._tlAllowed || [];
   c.data.datasets[0].data = tl.map((_, i) => {
     let s = 0;
@@ -814,11 +837,30 @@ function _applyChartFilters(c) {
   });
 }
 
+function _toggleCatFilter(cats) {
+  const anyActive = cats.some(c => window._activeFilters.has(c));
+  cats.forEach(c => {
+    if (anyActive) window._activeFilters.delete(c); else window._activeFilters.add(c);
+    const pill = document.querySelector(`.cat-pill[data-cat="${c}"]`);
+    if (pill) pill.classList.toggle('active', !anyActive);
+  });
+  _applyFilters();
+  tick();
+}
+
+function _syncPanelLegends() {
+  document.querySelectorAll('.panel-leg-item').forEach(el => {
+    const cats = (el.dataset.legCats || '').split(',').filter(Boolean);
+    el.classList.toggle('active', cats.some(c => window._activeFilters.has(c)));
+  });
+}
+
 function _applyFilters() {
   if (chart) {
     _applyChartFilters(chart);
     chart.update();
   }
+  _syncPanelLegends();
   const pathQ = (document.getElementById('path-search')?.value || '').trim().toLowerCase();
   const clearBtn = document.getElementById('path-search-clear');
   if (clearBtn) clearBtn.style.display = pathQ ? 'inline' : 'none';
@@ -855,6 +897,20 @@ document.querySelectorAll('.cat-pill').forEach(btn => {
     tick(); // re-fetch with updated cats so server returns the right per-category events
   });
 });
+// Shared tooltip title formatter — same function as agents.html _tooltipTitle().
+// tl: timeline array, bs: bucket seconds, items: Chart.js tooltip items array.
+function _tooltipTitle(tl, bs, items) {
+  const idx = items[0].dataIndex;
+  if (!tl || !tl[idx]) return items[0].label;
+  const d     = new Date(tl[idx].t * 1000);
+  if (bs >= 86400)
+    return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
+  const end   = new Date((tl[idx].t + bs) * 1000);
+  const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
+  const fmtT  = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
+  return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
+}
+
 function ensureCostChart() {
   if (costChart) return costChart;
   const ctx = document.getElementById('cost-chart').getContext('2d');
@@ -862,11 +918,11 @@ function ensureCostChart() {
     type: 'line',
     data: { labels: [], datasets: [
       { label: 'avg ms', data: [], borderColor: '#3fb950',
-        backgroundColor: 'rgba(63,185,80,0.18)', tension: 0.25, fill: true,
-        borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+        backgroundColor: 'rgba(63,185,80,0.35)',
+        tension: 0.25, fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
       { label: 'max ms', data: [], borderColor: '#ff7b3a',
-        backgroundColor: 'rgba(255,123,58,0.10)', tension: 0.25, fill: false,
-        borderWidth: 1.5, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
+        backgroundColor: 'rgba(255,123,58,0.35)',
+        tension: 0.25, fill: 'origin', borderWidth: 1.5, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
     ]},
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -885,19 +941,11 @@ function ensureCostChart() {
       plugins: { legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
                  tooltip: { backgroundColor:'#161b22', borderColor:'#30363d',
                             borderWidth:1, titleColor:'#c9d1d9', bodyColor:'#c9d1d9',
-                            callbacks: { title: items => {
-                              const idx = items[0].dataIndex;
-                              const tl = window._lastCostTimeline;
-                              const bs = window._lastCostBucketSecs || 60;
-                              if (!tl || !tl[idx]) return items[0].label || '';
-                              const d = new Date(tl[idx].t * 1000);
-                              if (bs >= 86400)
-                                return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
-                              const end = new Date((tl[idx].t + bs) * 1000);
-                              const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
-                              const fmtT = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
-                              return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
-                            }}} },
+                            callbacks: { title: items => _tooltipTitle(
+                              window._lastCostTimeline,
+                              window._lastCostBucketSecs || 60,
+                              items
+                            )}} },
       scales: {
         x: { ticks: { color:'#8b949e', font:{size:10}, maxRotation:0, autoSkipPadding:18 }, grid: { color:'#21262d' } },
         y: { beginAtZero: true,
@@ -918,27 +966,23 @@ function ensureChart() {
       labels: [],
       datasets: [
         { label: 'total', data: [], borderColor: '#58a6ff',
-          backgroundColor: 'rgba(88,166,255,0.06)', tension: 0.25, fill: false,
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+          backgroundColor: 'rgba(88,166,255,0.35)',
+          tension: 0.25, fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
         { label: 'allowed (good)', data: [], borderColor: '#3fb950',
-          backgroundColor: 'rgba(63,185,80,0.18)', tension: 0.25, fill: true,
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
+          backgroundColor: 'rgba(63,185,80,0.35)',
+          tension: 0.25, fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
         { label: 'blocked', data: [], borderColor: '#f85149',
-          backgroundColor: 'rgba(248,81,73,0.18)', tension: 0.25, fill: true,
-          borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
-        // 1.5.4 — orange: allowed-but-medium-risk ("missed" — likely bots
-        // that haven't crossed the ban threshold yet)
+          backgroundColor: 'rgba(248,81,73,0.35)',
+          tension: 0.25, fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
         { label: 'missed (medium risk)', data: [], borderColor: '#ff7b3a',
-          backgroundColor: 'rgba(255,123,58,0.18)', tension: 0.25, fill: false,
-          borderWidth: 2, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
-        // 1.7.5 — purple: authorized monitoring bots (bypass detection, allowed through)
+          backgroundColor: 'rgba(255,123,58,0.35)',
+          tension: 0.25, fill: 'origin', borderWidth: 2, borderDash: [4,3], pointRadius: 0, pointHoverRadius: 4 },
         { label: 'authorized bots', data: [], borderColor: '#bc8cff',
-          backgroundColor: 'rgba(188,140,255,0.15)', tension: 0.25, fill: false,
-          borderWidth: 2, borderDash: [2,3], pointRadius: 0, pointHoverRadius: 4 },
-        // 1.7.9 — teal: GW Mgmt (admin-namespace requests)
-        { label: 'gw mgmt', data: [], borderColor: '#39d353',
-          backgroundColor: 'rgba(57,211,83,0.10)', tension: 0.25, fill: false,
-          borderWidth: 2, borderDash: [3,4], pointRadius: 0, pointHoverRadius: 4 },
+          backgroundColor: 'rgba(188,140,255,0.35)',
+          tension: 0.25, fill: 'origin', borderWidth: 2, borderDash: [2,3], pointRadius: 0, pointHoverRadius: 4 },
+        { label: 'gw mgmt', data: [], borderColor: '#e4f0ff',
+          backgroundColor: 'rgba(228,240,255,0.35)',
+          tension: 0.25, fill: 'origin', borderWidth: 2, borderDash: [3,4], pointRadius: 0, pointHoverRadius: 4 },
       ],
     },
     options: {
@@ -959,24 +1003,23 @@ function ensureChart() {
         ev.native && (ev.native.target.style.cursor = items.length ? 'pointer' : 'default');
       },
       plugins: {
-        legend: { labels: { color: '#c9d1d9', font: { size: 11 } } },
+        legend: {
+          labels: { color: '#c9d1d9', font: { size: 11 } },
+          onClick: (e, legendItem) => {
+            const _DS_CATS = {1:['allowed'], 2:['ban','reallyban'], 3:['missed'], 4:['authbots'], 5:['gwmgmt']};
+            const cats = _DS_CATS[legendItem.datasetIndex];
+            if (cats) _toggleCatFilter(cats);
+          },
+        },
         tooltip: {
           backgroundColor: '#161b22', borderColor: '#30363d', borderWidth: 1,
           titleColor: '#c9d1d9', bodyColor: '#c9d1d9',
           callbacks: {
-            title: items => {
-              const idx = items[0].dataIndex;
-              const tl  = window._lastMainTimeline;
-              const bs  = window._lastMainBucketSecs || 60;
-              if (!tl || !tl[idx]) return items[0].label;
-              const d   = new Date(tl[idx].t * 1000);
-              if (bs >= 86400)
-                return d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric', year:'numeric'});
-              const end   = new Date((tl[idx].t + bs) * 1000);
-              const fmtDt = d.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'});
-              const fmtT  = dt => dt.toLocaleTimeString(undefined, {hour:'2-digit', minute:'2-digit'});
-              return fmtDt + ' · ' + fmtT(d) + '–' + fmtT(end);
-            }
+            title: items => _tooltipTitle(
+              window._lastMainTimeline,
+              window._lastMainBucketSecs || 60,
+              items
+            )
           }
         },
       },
@@ -1033,8 +1076,8 @@ _updateCliSortHeaders();
 // Timeline navigation state
 let endEpoch = null;   // null = live (now); number = scrolled-back epoch (right edge of window)
 
-function getRangeMin() { return parseInt(document.getElementById('range').value || '60', 10); }
-function getBucketSec() { return parseInt(document.getElementById('bucket').value || '60', 10); }
+function getRangeMin() { return parseInt(document.getElementById('range').value || '720', 10); }
+function getBucketSec() { return parseInt(document.getElementById('bucket').value || '300', 10); }
 function pickBucketForRange(rangeMin) {
   if (rangeMin <= 360)   return 60;
   if (rangeMin <= 1440)  return 300;
@@ -1165,12 +1208,15 @@ async function tick() {
 
     // Top paths — 1.5.5: click any row to see who hit that path
     const pBody = document.querySelector('#paths-tbl tbody');
-    pBody.innerHTML = (d.top_paths || []).map(p =>
-      `<tr class="path-row" data-path="${escapeHtml(p.path)}" style="cursor:pointer" title="click to see offender IPs / identities">
-        <td><b class="cell-click" style="border-bottom:1px dotted var(--blue)">${escapeHtml(p.path)}</b></td>
+    pBody.innerHTML = (d.top_paths || []).map(p => {
+      const isGw = p.path.startsWith('/antibot-appsec-gateway/');
+      const rowColor = isGw ? '#e4f0ff' : 'var(--blue)';
+      const rowTip = isGw ? 'click to see requestors' : 'click to see offender IPs / identities';
+      return `<tr class="path-row" data-path="${escapeHtml(p.path)}" style="cursor:pointer" title="${rowTip}">
+        <td><b class="cell-click" style="border-bottom:1px dotted ${rowColor};color:${rowColor}">${escapeHtml(p.path)}</b></td>
         <td style="text-align:right;font-weight:600">${p.count}</td>
-      </tr>`
-    ).join('') || '<tr><td colspan=2 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
+      </tr>`;
+    }).join('') || '<tr><td colspan=2 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
     pBody.querySelectorAll('.path-row').forEach(tr => {
       tr.onclick = () => openPathDrill(tr.dataset.path);
     });
@@ -1310,7 +1356,11 @@ fetch('/antibot-appsec-gateway/secured/admin-ips', {credentials:'include'})
   .then(r => r.ok ? r.json() : null)
   .then(d => { if (d && d.entries) window._adminIpEntries = d.entries; })
   .catch(() => {});
-const _adminLock = (ip, f) => f ? `<span title="${escapeHtml(_adminIpTip(ip))}" style="cursor:help;margin-right:3px">🔒</span>` : '';
+const _adminLock = (ip, f) => {
+  if (!f) return '';
+  const tip = escapeHtml(_adminIpTip(ip));  // \n not escaped — pre-wrap renders as line-breaks
+  return `<i class="info-icon" style="border-color:var(--yellow);color:var(--yellow);font-size:8px;width:12px;height:12px;margin-right:4px;margin-left:0">A<span class="info-tip" style="white-space:pre-wrap">${tip}</span></i>`;
+};
 // 1.5.4 — progressive unit formatter: s → min (>3600s) → h (>240min=14400s) → d (>48h=172800s)
 // Negative or invalid values render as "—" (was a 1.5.3 bug where stale DB-loaded
 // timestamps mixed epoch + monotonic).
@@ -1416,8 +1466,8 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           label: 'block %',
           data,
           borderColor: '#f85149',
-          backgroundColor: 'rgba(248,81,73,.15)',
-          borderWidth: 1.5, fill: true, tension: .25, pointRadius: 0,
+          backgroundColor: 'rgba(248,81,73,0.35)',
+          borderWidth: 1.5, fill: 'origin', tension: .25, pointRadius: 0,
         }]},
         options: {
           responsive: true, maintainAspectRatio: false,
@@ -1526,6 +1576,108 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
   });
 })();
 
+// ── Shared identity popover renderer (same object in agents.html) ────
+// normalizeId() maps both data shapes to a canonical form.
+// buildIdHtml() / buildRiskHtml() produce the HTML; each page's local
+// open function handles positioning and DOM show/hide.
+// Uses escapeHtml + _adminLock as page-level globals; _fmt is private.
+window._gwIdentityPopover = (function(){
+  function _fmt(s){
+    if (s == null) return '—';
+    if (s < 60)   return Math.round(s)+'s ago';
+    if (s < 3600) return Math.round(s/60)+'m ago';
+    if (s < 86400)return (s/3600).toFixed(1)+'h ago';
+    return (s/86400).toFixed(1)+'d ago';
+  }
+  function normalizeId(raw){
+    const bbd = Array.isArray(raw.blocks_breakdown)
+      ? raw.blocks_breakdown
+      : Object.entries(raw.blocks_by_reason || {}).sort((a,b)=>b[1]-a[1]);
+    return {
+      id:               raw.id || '',
+      ip:               raw.ip || raw.last_ip || '',
+      ua:               raw.ua || raw.last_ua || '',
+      session:          raw.session    || raw.last_session    || '—',
+      fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '—',
+      ja4:              raw.ja4 || '—',
+      stealth_score:    raw.stealth_score != null ? raw.stealth_score : null,
+      risk_score:       raw.metrics ? raw.metrics.risk_score : (raw.risk_score || 0),
+      banned_secs:      raw.banned_secs || 0,
+      is_authorized_bot:raw.is_authorized_bot || false,
+      is_admin_ip:      raw.is_admin_ip || false,
+      first_seen_secs_ago: raw.first_seen_secs_ago,
+      last_seen_secs_ago:  raw.last_seen_secs_ago,
+      requests: raw.requests || 0,
+      allowed:  raw.allowed  || 0,
+      blocked:  raw.blocked  || 0,
+      last_path:        raw.last_path || '—',
+      tokens:           raw.tokens != null ? raw.tokens : null,
+      blocks_breakdown: bbd,
+      risk_breakdown:   raw.risk_breakdown || null,
+    };
+  }
+  function buildIdHtml(d){
+    const bsec = d.banned_secs;
+    const banLine = d.is_authorized_bot
+      ? `<span style="color:var(--blue);font-weight:600">Authorized Bot · UA matched bot list</span>`
+      : bsec > 86400
+      ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(bsec/86400).toFixed(1)}d remaining</span>`
+      : bsec > 0
+      ? `<span style="color:#d29922;font-weight:600">Banned · ~${(bsec/3600).toFixed(1)}h remaining</span>`
+      : `<span style="color:var(--green)">allowed</span>`;
+    const blocksRows = d.blocks_breakdown.map(([r,c]) =>
+      `<div class="rsn"><span class="rsn-name">${escapeHtml(r)}</span>
+       <div class="rsn-bar"><div style="width:${Math.min(100,c*10)}%"></div></div>
+       <span class="rsn-val">${c}×</span></div>`).join('');
+    const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
+    return `
+      <div class="kv">
+        <span class="k">id</span>          <span class="v">${escapeHtml(d.id)}</span>
+        <span class="k">status</span>      <span class="v">${banLine}</span>
+        <span class="k">ip</span>          <span class="v">${_adminLock(d.ip, d.is_admin_ip)}${escapeHtml(d.ip)}</span>
+        <span class="k">user-agent</span>  <span class="v">${escapeHtml(d.ua)}</span>
+        <span class="k">session</span>     <span class="v">${escapeHtml(d.session)}</span>
+        <span class="k">fingerprint</span> <span class="v">${escapeHtml(d.fingerprint)}</span>
+        <span class="k">JA4 (TLS)</span>   <span class="v">${escapeHtml(d.ja4)}</span>
+        <span class="k">first seen</span>  <span class="v">${_fmt(d.first_seen_secs_ago)}</span>
+        <span class="k">last seen</span>   <span class="v">${_fmt(d.last_seen_secs_ago)}</span>
+        <span class="k">requests</span>    <span class="v">${d.requests} (${d.allowed} ok / ${d.blocked} blocked)</span>
+        <span class="k">last path</span>   <span class="v">${escapeHtml(d.last_path)}</span>
+        ${d.stealth_score != null ? `<span class="k">stealth</span>     <span class="v">${d.stealth_score}/100</span>` : ''}
+        ${d.tokens != null ? `<span class="k">tokens</span>      <span class="v">${d.tokens}</span>` : ''}
+        <span class="k">risk score</span>  <span class="v">${rs}</span>
+      </div>
+      <div id="ip-intel-section" style="margin-top:14px">
+        <h3 style="margin:0 0 6px 0">IP intelligence
+          <span class="dim" style="font-weight:400;font-size:11px">· loading…</span></h3>
+      </div>
+      ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3>${blocksRows}` : ''}`;
+  }
+  function buildRiskHtml(d){
+    const breakdown = d.risk_breakdown || d.blocks_breakdown || [];
+    const isWeighted = !!d.risk_breakdown;
+    const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
+    const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
+    const rows = breakdown.length
+      ? breakdown.map(([reason, val])=>{
+          const pct = (val/total*100).toFixed(0);
+          return `<div class="rsn">
+            <span class="rsn-name">${escapeHtml(reason)}</span>
+            <div class="rsn-bar"><div style="width:${pct}%"></div></div>
+            <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
+        }).join('')
+      : `<div class="empty">no contributing signals (score may be from already-decayed events)</div>`;
+    return `
+      <div class="dim" style="margin-bottom:8px">
+        Live risk: <b style="color:var(--red)">${rs}</b> ·
+        decays at half-life 1h ·
+        ban threshold ≥ 50 (≥100 for NAT)
+      </div>
+      ${rows}`;
+  }
+  return { normalizeId, buildIdHtml, buildRiskHtml };
+})();
+
 // ── 1.5.4 Reason drill-down + identity popovers ─────────────────────
 (function(){
   const back = document.getElementById('modal-back');
@@ -1535,80 +1687,19 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
   document.getElementById('modal-close').onclick = close;
   document.addEventListener('keydown', e => { if (e.key==='Escape') close(); });
 
-  // 1.5.4 — click identity / risk in the Clients table → details modal
-  // (mirrors the popover UX from the agents dashboard).
-  function fmtSecs(s){
-    if (s == null) return '—';
-    if (s < 60)   return Math.round(s)+'s ago';
-    if (s < 3600) return Math.round(s/60)+'m ago';
-    if (s < 86400)return (s/3600).toFixed(1)+'h ago';
-    return (s/86400).toFixed(1)+'d ago';
-  }
   window.openClientPopover = function(kind, c){
+    const d = window._gwIdentityPopover.normalizeId(c);
     let title, body;
-    if (kind === 'id-main'){
-      title = 'Identity details';
-      const _pbs = c.banned_secs || 0;
-      const banLine = c.is_authorized_bot
-        ? `<span style="color:var(--blue);font-weight:600">Authorized Bot · UA matched bot list</span>`
-        : _pbs > 86400
-        ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(_pbs/86400).toFixed(1)}d remaining</span>`
-        : _pbs > 0
-        ? `<span style="color:#d29922;font-weight:600">Banned · ~${(_pbs/3600).toFixed(1)}h remaining</span>`
-        : `<span style="color:var(--green)">allowed</span>`;
-      const blocksRows = Object.entries(c.blocks_by_reason || {})
-        .sort((a,b)=>b[1]-a[1])
-        .map(([r,n]) =>
-          `<tr><td><code>${escapeHtml(r)}</code></td><td style="color:var(--red);font-weight:600;text-align:right">${n}×</td></tr>`
-        ).join('');
-      body = `
-        <table>
-          <tr><td class="dim" style="text-align:right">id</td>          <td><code>${escapeHtml(c.id||'')}</code></td></tr>
-          <tr><td class="dim" style="text-align:right">status</td>      <td>${banLine}</td></tr>
-          <tr><td class="dim" style="text-align:right">ip</td>          <td>${escapeHtml(c.last_ip||'')}</td></tr>
-          <tr><td class="dim" style="text-align:right">user-agent</td>  <td style="word-break:break-all">${escapeHtml(c.last_ua||'')}</td></tr>
-          <tr><td class="dim" style="text-align:right">session</td>     <td>${escapeHtml(c.last_session||'—')}</td></tr>
-          <tr><td class="dim" style="text-align:right">fingerprint</td> <td>${escapeHtml(c.last_fingerprint||'—')}</td></tr>
-          <tr><td class="dim" style="text-align:right">first seen</td>  <td>${fmtSecs(c.first_seen_secs_ago)}</td></tr>
-          <tr><td class="dim" style="text-align:right">last seen</td>   <td>${fmtSecs(c.last_seen_secs_ago)}</td></tr>
-          <tr><td class="dim" style="text-align:right">requests</td>    <td>${c.requests} (${c.allowed} ok / ${c.blocked} blocked)</td></tr>
-          <tr><td class="dim" style="text-align:right">last path</td>   <td>${escapeHtml(c.last_path||'—')}</td></tr>
-          <tr><td class="dim" style="text-align:right">tokens</td>      <td>${c.tokens}</td></tr>
-          <tr><td class="dim" style="text-align:right">risk score</td>  <td><b>${(c.risk_score||0).toFixed(1)}</b></td></tr>
-        </table>
-        <div id="ip-intel-section" style="margin-top:14px">
-          <h3 style="margin:0 0 6px 0">IP intelligence
-            <span class="dim" style="font-weight:400;font-size:11px">· loading…</span></h3>
-        </div>
-        ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3><table>${blocksRows}</table>` : ''}`;
-    } else if (kind === 'risk-main'){
-      title = 'Risk score breakdown';
-      const blocks = Object.entries(c.blocks_by_reason || {})
-        .sort((a,b)=>b[1]-a[1]);
-      const rows = blocks.length
-        ? '<table>' + blocks.map(([r,n]) =>
-            `<tr><td><code>${escapeHtml(r)}</code></td><td style="color:var(--red);font-weight:600;text-align:right">${n}×</td></tr>`
-          ).join('') + '</table>'
-        : '<div class="empty">no contributing reasons currently in memory (may have decayed)</div>';
-      body = `
-        <div class="dim" style="margin-bottom:8px">
-          Live risk: <b style="color:var(--red)">${(c.risk_score||0).toFixed(1)}</b> ·
-          decays at half-life 1h ·
-          ban threshold ≥ 50 (≥100 for NAT)
-        </div>
-        ${rows}
-        <div class="dim" style="margin-top:8px;font-size:10.5px">
-          Tip: open the Agents dashboard for per-signal weighted contribution bars.
-        </div>`;
-    } else { return; }
+    if      (kind === 'id-main')   { title = 'Identity details';     body = window._gwIdentityPopover.buildIdHtml(d); }
+    else if (kind === 'risk-main') { title = 'Risk score breakdown'; body = window._gwIdentityPopover.buildRiskHtml(d); }
+    else { return; }
     document.getElementById('modal-title').innerHTML =
       `${title} <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
     document.getElementById('modal-body').innerHTML = body;
     back.classList.add('show'); modal.classList.add('show');
-    // 1.6.7+ — async-fill IP intelligence block on the identity modal.
-    if (kind === 'id-main' && c && c.last_ip) {
-      window.fetchIpIntel(c.last_ip).then(html => {
+    if (kind === 'id-main' && d.ip) {
+      window.fetchIpIntel(d.ip).then(html => {
         const node = document.getElementById('ip-intel-section');
         if (node) node.innerHTML = html;
       }).catch(() => {});
@@ -1697,25 +1788,118 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
       </div>`;
   };
 
+  // Shared action-button helpers (used by openPathDrill + openMainBucketDetail).
+  const _GW_ADMIN_NS = '/antibot-appsec-gateway/secured';
+  async function _ipAction(btn, url){
+    btn.disabled = true; btn.textContent = '…';
+    try {
+      const r = await fetch(url, {method:'POST', credentials:'include'});
+      btn.textContent = r.ok ? '✓' : '✗';
+      btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+      return r.ok;
+    } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; return false; }
+  }
+  function _actionBtns(ip, id, ua){
+    const enc = encodeURIComponent(ip);
+    const encId = id ? encodeURIComponent(id) : null;
+    const banUrl  = encId
+      ? `${_GW_ADMIN_NS}/ban?id=${encId}&secs=3600&reason=manual-ban`
+      : `${_GW_ADMIN_NS}/ban?ip=${enc}&secs=3600&reason=manual-ban`;
+    const hbanUrl = encId
+      ? `${_GW_ADMIN_NS}/ban?id=${encId}&secs=2678400&reason=hard-ban`
+      : `${_GW_ADMIN_NS}/ban?ip=${enc}&secs=2678400&reason=hard-ban`;
+    const allowUrl = `${_GW_ADMIN_NS}/unban?ip=${enc}`;
+    return `<span class="act-btns" data-ban="${banUrl}" data-hban="${hbanUrl}" data-allow="${allowUrl}" data-authbot="${escapeHtml(ua||'')}">`+
+      `<button class="act ban"  title="Ban 1 h">Ban</button>`+
+      `<button class="act hban" title="Hard ban 31 d">Hard ban</button>`+
+      `<button class="act allow" title="Unban / allow">Allow</button>`+
+      `<button class="act authbot" title="Add to authorized bots">Auth Bot</button>`+
+      `</span>`;
+  }
+  function _extractIp(span) {
+    const m = (span.dataset.allow||'').match(/[?&]ip=([^&]+)/);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  async function _wireAuthBot(abBtn, ip, moveEntryFn, rerenderFn){
+    abBtn.onclick = async e => {
+      e.preventDefault();
+      const ua = abBtn.closest('.act-btns').dataset.authbot || '';
+      abBtn.disabled = true; abBtn.textContent = '…';
+      try {
+        const gr = await fetch(`${_GW_ADMIN_NS}/config`, {credentials:'include'});
+        let gs; try { gs = await gr.json(); } catch { gs = { _error: true }; }
+        if (gs._error) { _gwAlert('Config load failed'); return; }
+        const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
+        const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
+        const newBots = existing
+          ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
+          : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
+        const pr = await fetch(`${_GW_ADMIN_NS}/config`, {
+          method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
+        });
+        let pb; try { pb = await pr.json(); } catch { pb = { _error: true }; }
+        if (pb._error) { _gwAlert('Action failed (parse error)'); return; }
+        if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
+          abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
+          if (ip && moveEntryFn) setTimeout(() => { moveEntryFn(ip, 'authorized_robot'); rerenderFn && rerenderFn(); }, 400);
+        } else {
+          abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
+        }
+      } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
+    };
+  }
+
   // 1.5.5 — Click any row in the Top-paths table → modal with offender IPs.
   window.openPathDrill = async function(path){
     const params = new URLSearchParams({ path, range: 1440, limit: 100 });
-    let d = {};
+    let d = {}, cfgState = {};
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/path-hits?' + params, {credentials:'include'});
-      d = await r.json();
+      const [r1, r2] = await Promise.all([
+        fetch('/antibot-appsec-gateway/secured/path-hits?' + params, {credentials:'include'}),
+        fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'}),
+      ]);
+      d = await r1.json();
+      if (r2.ok) { const cj = await r2.json(); cfgState = cj.state || {}; }
     } catch(e){ d = {ips:[], total_rows:0}; }
     const ips = d.ips || [];
     const totalRows = d.total_rows || 0;
+    const isGwMgmt = path.startsWith('/antibot-appsec-gateway/');
+    const pathColor = isGwMgmt ? '#e4f0ff' : 'var(--blue)';
+
+    // Path category control helpers
+    let _bypassList = cfgState.BYPASS_PATHS || [];
+    let _jsOpenList = cfgState.JS_CHAL_OPEN_PATHS || [];
+    const _pathMatch = (list, p) => {
+      if (list.includes(p)) return 'exact';
+      if (list.find(e => p.startsWith(e))) return 'prefix';
+      return 'none';
+    };
+    const _catBtnStyle = (state) =>
+      state !== 'none'
+        ? 'background:rgba(35,134,54,.22);color:var(--green);border-color:var(--green)'
+        : 'background:transparent;color:var(--dim);border-color:var(--line)';
+    const _bypassLabel = (state) =>
+      state === 'exact' ? 'Bypass ON' : state === 'prefix' ? 'Bypass ON ↑' : 'Bypass OFF';
+    const _jsLabel    = (state) =>
+      state === 'exact' ? 'JS chal: open' : state === 'prefix' ? 'JS chal: open ↑' : 'JS chal: gated';
+
+    const pathCtrlsHtml = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding:6px 10px;background:#0a0e13;border-radius:4px;border:1px solid var(--line)">
+      <span style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">Path category:</span>
+      <button id="pd-bypass" style="font-size:11px;padding:2px 10px;border-radius:12px;border:1px solid;cursor:pointer;${_catBtnStyle(_pathMatch(_bypassList,path))}" title="Add/remove this path from BYPASS_PATHS — bypassed paths skip all bot detection">${_bypassLabel(_pathMatch(_bypassList,path))}</button>
+      <button id="pd-jschal" style="font-size:11px;padding:2px 10px;border-radius:12px;border:1px solid;cursor:pointer;${_catBtnStyle(_pathMatch(_jsOpenList,path))}" title="Add/remove from JS_CHAL_OPEN_PATHS — open paths are not gated by the JS challenge">${_jsLabel(_pathMatch(_jsOpenList,path))}</button>
+    </div>`;
+
     const explainBlock = `
-      <div style="border-left:3px solid var(--blue);padding:8px 12px;margin-bottom:12px;background:#0a0e13;border-radius:0 4px 4px 0">
-        <code style="color:var(--blue);font-weight:600">${escapeHtml(path)}</code>
+      <div style="border-left:3px solid ${pathColor};padding:8px 12px;margin-bottom:12px;background:#0a0e13;border-radius:0 4px 4px 0">
+        <code style="color:${pathColor};font-weight:600">${escapeHtml(path)}</code>
         <div class="dim" style="font-size:11.5px;margin-top:4px">
           ${totalRows} total events from ${ips.length} unique IP${ips.length===1?'':'s'} in the last 24 h.
           Click a row's identity column for full details.
         </div>
       </div>`;
-    let body = explainBlock;
+    let body = pathCtrlsHtml + explainBlock;
     if (!ips.length){
       body += '<div class="empty">no events recorded for this path in the window</div>';
     } else {
@@ -1726,6 +1910,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           : idents.length === 1
             ? `<b title="${escapeHtml(idents[0].id)}">${escapeHtml(idents[0].id.slice(0,12))}</b>`
             : `<b title="${idents.map(i=>escapeHtml(i.id)).join('\\n')}">${idents.length} ids</b>`;
+        const primaryId = idents.length === 1 ? idents[0].id : null;
         const topRsn = e.top_reason || 'OK';
         const rsnColor = topRsn === 'OK' ? 'var(--green)' : 'var(--red)';
         const banned = idents.some(i => i.banned)
@@ -1741,6 +1926,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,30))}</td>
           <td class="dim">${e.last_seen_secs_ago != null ? Math.round(e.last_seen_secs_ago)+'s ago' : '—'}</td>
           <td>${banned}</td>
+          <td>${_actionBtns(e.ip, primaryId, e.ua)}</td>
         </tr>`;
       }).join('');
       body += `<table><thead><tr>
@@ -1751,12 +1937,63 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           <th style="text-align:left">UA</th>
           <th style="text-align:left">Last seen</th>
           <th>Status</th>
+          <th>Actions</th>
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
     document.getElementById('modal-title').innerHTML =
-      `Path drill-down · <code style="color:var(--blue)">${escapeHtml(path.length>50?path.slice(0,50)+'…':path)}</code> <span class="x" id="modal-close">×</span>`;
+      `Path drill-down · <code style="color:${pathColor}">${escapeHtml(path.length>50?path.slice(0,50)+'…':path)}</code> <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
-    document.getElementById('modal-body').innerHTML = body;
+    const modalBody = document.getElementById('modal-body');
+    modalBody.innerHTML = body;
+
+    // Wire path category toggle buttons
+    const _togglePathKnob = async (knob, getList, setList, labelFn, btnEl) => {
+      const list = getList();
+      const state = _pathMatch(list, path);
+      if (state === 'prefix') return; // covered by parent prefix — no action
+      const newList = state === 'exact'
+        ? list.filter(p => p !== path)
+        : [...list, path];
+      btnEl.disabled = true;
+      try {
+        const r = await fetch('/antibot-appsec-gateway/secured/config', {
+          method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({[knob]: newList}),
+        });
+        if (r.ok) {
+          const rj = await r.json();
+          const updated = (rj.applied && Array.isArray(rj.applied[knob])) ? rj.applied[knob] : newList;
+          setList(updated);
+          const ns = _pathMatch(updated, path);
+          btnEl.textContent = labelFn(ns);
+          btnEl.style.cssText = `font-size:11px;padding:2px 10px;border-radius:12px;border:1px solid;cursor:pointer;${_catBtnStyle(ns)}`;
+        }
+      } catch(e) {}
+      btnEl.disabled = false;
+    };
+    const bypassBtn = modalBody.querySelector('#pd-bypass');
+    if (bypassBtn) bypassBtn.onclick = () => _togglePathKnob(
+      'BYPASS_PATHS', () => _bypassList, v => { _bypassList = v; }, _bypassLabel, bypassBtn);
+    const jschalBtn = modalBody.querySelector('#pd-jschal');
+    if (jschalBtn) jschalBtn.onclick = () => _togglePathKnob(
+      'JS_CHAL_OPEN_PATHS', () => _jsOpenList, v => { _jsOpenList = v; }, _jsLabel, jschalBtn);
+
+    // Wire IP action buttons
+    modalBody.querySelectorAll('.act-btns').forEach(span => {
+      const ip = _extractIp(span);
+      span.querySelector('.ban').onclick = async e => {
+        e.preventDefault(); await _ipAction(e.target, span.dataset.ban);
+      };
+      span.querySelector('.hban').onclick = async e => {
+        e.preventDefault(); await _ipAction(e.target, span.dataset.hban);
+      };
+      span.querySelector('.allow').onclick = async e => {
+        e.preventDefault(); await _ipAction(e.target, span.dataset.allow);
+      };
+      const abBtn = span.querySelector('.authbot');
+      if (abBtn) _wireAuthBot(abBtn, ip, null, null);
+    });
     back.classList.add('show'); modal.classList.add('show');
   };
 
@@ -1775,14 +2012,8 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
       d = await r.json();
     } catch(e) { d = {detected:[], missed:[], clean:[]}; _fetchErr = String(e); }
     const fmt = epoch => new Date(epoch*1000).toLocaleString();
-    const adminNs = '/antibot-appsec-gateway/secured';
     // kind → d key mapping (allowed uses d.clean, blocked uses d.detected)
-    const KIND_TO_KEY = {allowed:'clean', blocked:'detected', missed:'missed', authorized_robot:'authorized_robot'};
-
-    function _extractIp(span) {
-      const m = (span.dataset.allow||'').match(/[?&]ip=([^&]+)/);
-      return m ? decodeURIComponent(m[1]) : null;
-    }
+    const KIND_TO_KEY = {allowed:'clean', blocked:'detected', missed:'missed', authorized_robot:'authorized_robot', gwmgmt:'gwmgmt'};
 
     function _moveEntry(ip, targetKind) {
       const targetKey = KIND_TO_KEY[targetKind];
@@ -1796,32 +2027,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
       }
     }
 
-    async function ipAction(btn, url){
-      btn.disabled = true; btn.textContent = '…';
-      try {
-        const r = await fetch(url, {method:'POST', credentials:'include'});
-        btn.textContent = r.ok ? '✓' : '✗';
-        btn.style.color = r.ok ? 'var(--green)' : 'var(--red)';
-        return r.ok;
-      } catch { btn.textContent = '✗'; btn.style.color = 'var(--red)'; return false; }
-    }
-    function actionBtns(ip, id, ua){
-      const enc = encodeURIComponent(ip);
-      const encId = id ? encodeURIComponent(id) : null;
-      const banUrl  = encId
-        ? `${adminNs}/ban?id=${encId}&secs=3600&reason=manual-ban`
-        : `${adminNs}/ban?ip=${enc}&secs=3600&reason=manual-ban`;
-      const hbanUrl = encId
-        ? `${adminNs}/ban?id=${encId}&secs=2678400&reason=hard-ban`
-        : `${adminNs}/ban?ip=${enc}&secs=2678400&reason=hard-ban`;
-      const allowUrl = `${adminNs}/unban?ip=${enc}`;
-      return `<span class="act-btns" data-ban="${banUrl}" data-hban="${hbanUrl}" data-allow="${allowUrl}" data-authbot="${escapeHtml(ua||'')}">`+
-        `<button class="act ban"  title="Ban 1 h">Ban</button>`+
-        `<button class="act hban" title="Hard ban 31 d">Hard ban</button>`+
-        `<button class="act allow" title="Unban / allow">Allow</button>`+
-        `<button class="act authbot" title="Add to authorized bots">Auth Bot</button>`+
-        `</span>`;
-    }
+    // actionBtns / ipAction / extractIp lifted to shared scope above openPathDrill
     const renderClean = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
         <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Last path</th><th>Actions</th>
@@ -1831,7 +2037,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
         <td style="color:var(--green);font-weight:600;text-align:right">${e.count}</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-        <td>${actionBtns(e.ip, null, e.ua)}</td>
+        <td>${_actionBtns(e.ip, null, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
     const renderBlocked = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
@@ -1845,7 +2051,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
           <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
           <td><code style="color:var(--red)">${escapeHtml(top[0])}</code> ×${top[1]}</td>
           <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-          <td>${actionBtns(e.ip, null, e.ua)}</td>
+          <td>${_actionBtns(e.ip, null, e.ua)}</td>
         </tr>`;
       }).join('') + '</tbody></table>';
     const renderMissed = list => !list.length ? '<div class="empty">no entries</div>' :
@@ -1858,7 +2064,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
         <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
         <td style="text-align:right">${e.risk_score}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-        <td>${actionBtns(e.ip, e.id, e.ua)}</td>
+        <td>${_actionBtns(e.ip, e.id, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
     const renderAuthBots = list => !list.length ? '<div class="empty">no entries</div>' :
       `<table><thead><tr>
@@ -1869,16 +2075,28 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
         <td style="color:#bc8cff;font-weight:600;text-align:right">${e.count}</td>
         <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
-        <td>${actionBtns(e.ip)}</td>
+        <td>${_actionBtns(e.ip)}</td>
+      </tr>`).join('') + '</tbody></table>';
+    const renderGwMgmt = list => !list.length ? '<div class="empty">no entries</div>' :
+      `<table><thead><tr>
+        <th style="text-align:left">IP</th><th>Hits</th><th style="text-align:left">UA</th><th style="text-align:left">Last path</th><th>Actions</th>
+      </tr></thead><tbody>` +
+      list.map(e => `<tr>
+        <td>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</td>
+        <td style="color:#e4f0ff;font-weight:600;text-align:right">${e.count}</td>
+        <td class="dim" title="${escapeHtml(e.ua)}">${escapeHtml((e.ua||'').slice(0,40))}</td>
+        <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
+        <td>${_actionBtns(e.ip, null, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
 
     function _renderAndWire() {
-      const totalCount = (d.clean||[]).length + (d.detected||[]).length + (d.missed||[]).length + (d.authorized_robot||[]).length;
+      const totalCount = (d.clean||[]).length + (d.detected||[]).length + (d.missed||[]).length + (d.authorized_robot||[]).length + (d.gwmgmt||[]).length;
       const sections = [
         {kind:'allowed',          label:'ALLOWED (clean)',         color:'#3fb950', list:d.clean           ||[], render:renderClean},
         {kind:'blocked',          label:'BLOCKED (detected)',      color:'#f85149', list:d.detected        ||[], render:renderBlocked},
         {kind:'missed',           label:'MISSED (medium risk)',    color:'#ff7b3a', list:d.missed          ||[], render:renderMissed},
         {kind:'authorized_robot', label:'AUTHORIZED BOTS',        color:'#bc8cff', list:d.authorized_robot||[], render:renderAuthBots},
+        {kind:'gwmgmt',           label:'GW MGMT',                color:'#e4f0ff', list:d.gwmgmt          ||[], render:renderGwMgmt},
       ];
       if (focusKind && focusKind !== 'total'){
         sections.sort((a,b) => (a.kind === focusKind ? -1 : b.kind === focusKind ? 1 : 0));
@@ -1904,48 +2122,21 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
         const ip = _extractIp(span);
         span.querySelector('.ban').onclick = async e => {
           e.preventDefault();
-          const ok = await ipAction(e.target, span.dataset.ban);
+          const ok = await _ipAction(e.target, span.dataset.ban);
           if (ok && ip) setTimeout(() => { _moveEntry(ip, 'blocked'); _renderAndWire(); }, 400);
         };
         span.querySelector('.hban').onclick = async e => {
           e.preventDefault();
-          const ok = await ipAction(e.target, span.dataset.hban);
+          const ok = await _ipAction(e.target, span.dataset.hban);
           if (ok && ip) setTimeout(() => { _moveEntry(ip, 'blocked'); _renderAndWire(); }, 400);
         };
         span.querySelector('.allow').onclick = async e => {
           e.preventDefault();
-          const ok = await ipAction(e.target, span.dataset.allow);
+          const ok = await _ipAction(e.target, span.dataset.allow);
           if (ok && ip) setTimeout(() => { _moveEntry(ip, 'allowed'); _renderAndWire(); }, 400);
         };
         const abBtn = span.querySelector('.authbot');
-        if (abBtn) abBtn.onclick = async e => {
-          e.preventDefault();
-          const ua = span.dataset.authbot || '';
-          abBtn.disabled = true; abBtn.textContent = '…';
-          try {
-            const gr = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
-            let gs; try { gs = await gr.json(); } catch { gs = { _error: true }; }
-            if (gs._error) { _gwAlert('Config load failed'); return; }
-            const bots = (gs.state && gs.state.AUTHORIZED_BOT_UAS) ? gs.state.AUTHORIZED_BOT_UAS : [];
-            const existing = bots.find(b => b.ua === ua || (b.ua && ua.includes(b.ua)));
-            const newBots = existing
-              ? bots.map(b => b.ua === ua ? {...b, enabled:true, action:'authorized-robot'} : b)
-              : [...bots, {name:ua.slice(0,40)||'unknown', ua, path:'/', ips:[], action:'authorized-robot', enabled:true}];
-            const pr = await fetch('/antibot-appsec-gateway/secured/config', {
-              method:'POST', credentials:'include',
-              headers:{'Content-Type':'application/json'},
-              body: JSON.stringify({AUTHORIZED_BOT_UAS: newBots})
-            });
-            let pb; try { pb = await pr.json(); } catch { pb = { _error: true }; }
-            if (pb._error) { _gwAlert('Action failed (parse error)'); return; }
-            if (pr.ok && pb.applied && pb.applied.AUTHORIZED_BOT_UAS !== undefined) {
-              abBtn.textContent = '✓'; abBtn.style.color = 'var(--green)';
-              if (ip) setTimeout(() => { _moveEntry(ip, 'authorized_robot'); _renderAndWire(); }, 400);
-            } else {
-              abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)';
-            }
-          } catch { abBtn.textContent = '✗'; abBtn.style.color = 'var(--red)'; }
-        };
+        if (abBtn) _wireAuthBot(abBtn, ip, _moveEntry, _renderAndWire);
       });
     }
     _renderAndWire();

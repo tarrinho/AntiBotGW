@@ -68,10 +68,10 @@ def _load_signal_order_cache() -> None:
         conn.close()
         _signal_order_cache.update({sig: n for sig, n in rows if n in (1, 2, 3)})
         if _signal_order_cache:
-            print(f"[signal-orders] {len(_signal_order_cache)} override(s) loaded "
-                  f"for {gw_id}", flush=True)
+            slog("signal_orders_loaded", level="info",
+                 count=len(_signal_order_cache), gw_id=gw_id)
     except Exception as exc:
-        print(f"[signal-orders] load failed: {exc}", flush=True)
+        slog("signal_orders_load_failed", level="warn", error=str(exc))
 
 
 def _save_signal_order(sig: str, order: int, actor: str) -> None:
@@ -102,7 +102,7 @@ def _save_signal_order(sig: str, order: int, actor: str) -> None:
         conn.commit()
         conn.close()
     except Exception as exc:
-        print(f"[signal-orders] save failed: {exc}", flush=True)
+        slog("signal_orders_save_failed", level="warn", error=str(exc))
         return
     _signal_order_cache[sig] = order
     # Mirror to Postgres if available
