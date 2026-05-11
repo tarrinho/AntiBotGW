@@ -17,6 +17,7 @@ from state import (
     ip_state,
     ip_buckets,
     ip_new_sessions,
+    ip_to_identities,
     state_lock,
     metrics,
     by_path_by_cat,
@@ -106,6 +107,9 @@ async def _prune_state_loop():
                         if s.banned_until <= n
                         and (n - s.last_seen) > PRUNE_IDLE_SECS]
                 for k in idle:
+                    _old_ip = ip_state[k].last_ip
+                    if _old_ip:
+                        ip_to_identities[_old_ip].discard(k)
                     del ip_state[k]
                 # 2. Cap total count — drop oldest-last-seen first
                 if len(ip_state) > MAX_IDENTITIES:
@@ -116,7 +120,14 @@ async def _prune_state_loop():
                         key=lambda kv: kv[1],
                     )[:overflow]
                     for k, _ in candidates:
+                        _old_ip = ip_state[k].last_ip
+                        if _old_ip:
+                            ip_to_identities[_old_ip].discard(k)
                         del ip_state[k]
+                # 2b. Prune now-empty ip_to_identities buckets.
+                _stale_ip_idx = [_ip for _ip, _s in ip_to_identities.items() if not _s]
+                for _ip in _stale_ip_idx:
+                    del ip_to_identities[_ip]
                 # 3. Prune the per-IP new-session identity map
                 stale_ips = [ip for ip, m in ip_new_sessions.items()
                              if not m or max(m.values()) < n - 3600]

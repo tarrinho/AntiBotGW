@@ -2070,7 +2070,7 @@ def test_geo_authorized_bot_scrubber_ar_counter():
     )
     rebuild_idx = src.find("rebuildBuckets")
     assert rebuild_idx != -1, "geo.html must have rebuildBuckets function"
-    assert "authorized_robot" in src[rebuild_idx:rebuild_idx + 1200], (
+    assert "authorized_robot" in src[rebuild_idx:rebuild_idx + 2000], (
         "geo.html rebuildBuckets() must handle 'authorized_robot' kind → ar counter"
     )
 

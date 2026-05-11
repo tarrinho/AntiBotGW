@@ -1905,7 +1905,7 @@ _HOT_RELOAD_KNOBS = {
     "LABYRINTH_ENABLED":        (_to_bool, None),
     "LABYRINTH_SLOW_MS":        (int, lambda v: 0 <= v <= 30000),
     "LABYRINTH_MAX_DEPTH":      (int, lambda v: 1 <= v <= 20),
-    "LABYRINTH_LINKS_PER_PAGE": (int, lambda v: 1 <= v <= 10),
+    "LABYRINTH_LINKS_PER":      (int, lambda v: 1 <= v <= 10),
     "LABYRINTH_JITTER_ENABLED": (_to_bool, None),
     "ACCEPT_FP_ENABLED":        (_to_bool, None),
     "HEADER_CANARY_ENABLED":    (_to_bool, None),
@@ -2295,6 +2295,7 @@ async def protect(request: web.Request, handler):
                 async with state_lock:
                     _bs = ip_state[_req_ip]
                     _bs.banned_until = _t.time() + _ban_secs
+                    ip_to_identities[_req_ip].add(_req_ip)
                     _bs.last_ip = _req_ip
                 await _shared_ban_set(_req_ip, _t.time() + _ban_secs, _ban_reason)
                 if db_queue is not None:
@@ -4756,6 +4757,12 @@ async def geo_data_endpoint(request: web.Request):
     skipped_no_geo = 0  # events dropped because IP has no geoip record (private/unresolvable)
     _sample_seen = 0   # geo-resolved row count — denominator for reservoir sampling
     _SCRUBBER_CAP = 5000
+    N_ANIM = 24
+    _anim_step = max(1.0, (end_epoch - start_epoch) / N_ANIM)
+    anim_buckets = [
+        {"ts": start_epoch + (i + 1) * _anim_step, "points": {}}
+        for i in range(N_ANIM)
+    ]
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -4805,6 +4812,13 @@ async def geo_data_endpoint(request: web.Request):
                 else:
                     kind = "clean"
                 points[key][kind] += 1
+                # Server-side animation bucket — exact count, no sampling loss.
+                _bidx = min(N_ANIM - 1, max(0, int((float(r["ts"]) - start_epoch) / _anim_step)))
+                _bkey = f"{key[0]},{key[1]}"
+                _bp = anim_buckets[_bidx]["points"]
+                if _bkey not in _bp:
+                    _bp[_bkey] = {"c": 0, "m": 0, "b": 0, "ar": 0}
+                _bp[_bkey]["c" if kind == "clean" else "ar" if kind == "authorized_robot" else "b"] += 1
                 # 1.6.4 — bucket the block reason by method
                 if kind == "blocked":
                     method = _reason_method(reason)
@@ -4964,7 +4978,8 @@ async def geo_data_endpoint(request: web.Request):
         "points":     out_points,
         "countries":  out_countries,                     # 1.6.3 + 1.6.4 (methods, eff)
         "asns":       out_asns,                          # 1.6.4 — top ASN providers
-        "events":     events_sample,                     # 1.6.3 — for scrubber
+        "anim_buckets": anim_buckets,                    # exact server-side animation buckets
+        "events":     events_sample,                     # legacy reservoir sample (fallback)
         "geo_state":  geo_state,                         # 1.6.3
         "summary": {
             "total_points":  len(out_points),
