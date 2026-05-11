@@ -1049,7 +1049,7 @@ def test_165_every_knob_persists_round_trip():
         "TARPIT_ENABLED": True, "TARPIT_DELAY_MS": 2000,
         "BOTD_ENABLED": True,
         "LABYRINTH_ENABLED": True, "LABYRINTH_SLOW_MS": 400,
-        "LABYRINTH_MAX_DEPTH": 3, "LABYRINTH_LINKS_PER_PAGE": 2,
+        "LABYRINTH_MAX_DEPTH": 3, "LABYRINTH_LINKS_PER": 2,
         "LABYRINTH_JITTER_ENABLED": True,
         "ACCEPT_FP_ENABLED": True,
         "HEADER_CANARY_ENABLED": True,
@@ -1475,7 +1475,7 @@ def test_165_reason_method_buckets():
 def test_168_labyrinth_knobs_in_hot_reload():
     """LABYRINTH_* hot-reload knobs are registered and validators are correct."""
     for knob in ("LABYRINTH_ENABLED", "LABYRINTH_SLOW_MS",
-                 "LABYRINTH_MAX_DEPTH", "LABYRINTH_LINKS_PER_PAGE"):
+                 "LABYRINTH_MAX_DEPTH", "LABYRINTH_LINKS_PER"):
         assert knob in proxy._HOT_RELOAD_KNOBS, f"{knob} missing from _HOT_RELOAD_KNOBS"
 
     _, v_ms = proxy._HOT_RELOAD_KNOBS["LABYRINTH_SLOW_MS"]
@@ -1490,7 +1490,7 @@ def test_168_labyrinth_knobs_in_hot_reload():
     assert v_depth(0) is False
     assert v_depth(21) is False
 
-    _, v_links = proxy._HOT_RELOAD_KNOBS["LABYRINTH_LINKS_PER_PAGE"]
+    _, v_links = proxy._HOT_RELOAD_KNOBS["LABYRINTH_LINKS_PER"]
     assert v_links(1) is True
     assert v_links(10) is True
     assert v_links(0) is False

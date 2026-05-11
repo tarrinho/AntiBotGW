@@ -117,7 +117,10 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         s.last_seen = now()
         s.last_user_agent = ua[:120]
         s.last_path = path[:120]
+        if s.last_ip and s.last_ip != ip:
+            ip_to_identities[s.last_ip].discard(key)
         s.last_ip = ip
+        ip_to_identities[ip].add(key)
         if sid: s.last_session = sid[:24]
         if fp:  s.last_fingerprint = fp
         if ja4: s.last_ja4 = ja4[:64]

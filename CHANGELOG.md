@@ -6,6 +6,54 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.7.11] — 2026-05-10
+
+### Added
+- **agents-bucket `gwmgmt` key** — `agents_bucket_detail_endpoint` now includes a `gwmgmt` counter reflecting admin-namespace (`/antibot-appsec-gateway/`) events within the time bucket, giving operators visibility into dashboard polling load.
+- **`BYPASS_PATHS` hot-reload knob** — comma-separated path prefixes that skip all detection; configurable at runtime via `POST /secured/config` without container restart.
+- **`JS_CHAL_OPEN_PATHS` hot-reload knob** — comma-separated paths exempted from the JS challenge gate; configurable at runtime.
+- **`bump-version.sh`** — shell script atomically updates every canonical version string across the repo (config.py, test_pure.py stale-string regex, proxy.py docstring, docker-compose, all dashboard HTML, README quickstart, test_geo_dashboard.py).
+- **`tests/test_endpoints_dynamic.py`** — 114-test live aiohttp `TestServer` + `TestClient` integration suite covering every admin HTTP endpoint and Cache-Control headers.
+- **`tests/test_v1711.py`** — 13 static QA tests for H5 prune logic, M2 dead-code removal, and LOGIN_BUCKET inline eviction.
+- **`tests/test_h5_m2_dynamic.py`** — 18 dynamic tests running real coroutines: `_prune_state_loop` (asyncio.sleep patched to single-iteration), `_login_rate_limit` end-to-end, `_load_signal_order_cache` / `_save_signal_order` with stubbed `admin.mesh`.
+- **`tests/test_settings_config_functional.py`** — 49-test functional suite for settings export/import and `GET/POST /secured/config`; includes `TestSettingsImportEnvPinned` (6 tests) verified against live dynamic check.
+- **`rules.md` §13a bump-version step** — `bump-version.sh OLD NEW` added as Step 0 to the version consistency review section.
+
+### Fixed
+- **`_serve_mirrored_404` crash fix** — guarded against `KeyError` when `_upstream_404_cache` is empty (cold-start race condition).
+- **UPSTREAM hot-reload flushes 404 cache** — when `UPSTREAM` changes via `/secured/config`, the cached 404 body is cleared so the next admin-blocked request fetches from the new upstream.
+- **`status_endpoint` Cache-Control** — `status_endpoint` now returns `Cache-Control: no-store` (was the only admin endpoint missing it).
+- **`LABYRINTH_LINKS_PER` knob name** — `_HOT_RELOAD_KNOBS` had `LABYRINTH_LINKS_PER_PAGE` (the env-var name) instead of `LABYRINTH_LINKS_PER` (the Python variable name); `_read_hot_reload_state()` silently skipped it, causing the knob to never appear in `GET /config` or exports.
+
+### Security
+- **H5 — unbounded dict growth** (`rate_limit.py`, `admin/users.py`) — four dicts previously grew without bound under flooding or UA/cookie rotation:
+  - `state._ACTIVE_SESSIONS` — evicted in `_prune_state_loop` step 10 using `_time.time()` (wall clock, not monotonic) with 12 h TTL matching `_SESSION_TTL`.
+  - `state._signal_order_cache` — capped 2 000 → 1 000 entries in step 10.
+  - `state._asn_path_clusters` — entries older than 10 minutes evicted in step 10.
+  - `admin.users._LOGIN_BUCKET` — inline O(n) eviction inside `_LOGIN_BUCKET_LOCK` on every `_login_rate_limit()` call.
+- **M2 — dead duplicate try/except removed** (`scoring.py`) — `_load_signal_order_cache()` and `_save_signal_order()` each had an unreachable nested try/except block for `from admin.mesh import _gw_local_id`; second block could never execute, creating dead code that obscured the control flow. Collapsed to a single try/except per function.
+
+### Tests
+- `test_h5_active_sessions_prune_evicts_old` / `_keeps_recent` / `_empty_noop` — `_ACTIVE_SESSIONS` TTL eviction.
+- `test_h5_signal_order_cache_capped` / `_under_limit_untouched` — 2 000 → 1 000 cap.
+- `test_h5_asn_path_clusters_old_evicted` / `_recent_kept` / `_empty_noop` — minute-epoch eviction.
+- `test_h5_login_bucket_evicts_expired_on_call` / `_blocked_ip_stays_blocked` / `_expired_ip_resets` — `_LOGIN_BUCKET` inline eviction.
+- `test_m2_load_has_single_import` / `_save_has_single_import` / `_load_exits_cleanly` / `_save_exits_cleanly` — M2 dead-code removal.
+- 18 dynamic tests in `test_h5_m2_dynamic.py` running real code paths.
+- 49 functional tests in `test_settings_config_functional.py` including env-pinned import rejection (live-verified 2026-05-10: 114 applied, 10 env-pinned rejected, 0 errors).
+
+### Validation
+- **Unit suite**: 509 passed, 0 failed
+- **Full suite (all files)**: 1258 passed, 0 failed (1 pre-existing skip in test_timescaledb_soak.py)
+- **Bandit**: 0 High / 0 Critical / 0 Medium
+- **Semgrep**: 0 findings (151 rules, 9 files)
+- **Secret scan**: 0 hits
+- **Trivy (iteration 2 rebuild)**: 0 Critical / 0 High / 0 Medium (arm64 + armv7)
+- **Harbor (iteration 2)**: arm64 `sha256:0838866854da` · armv7 `sha256:a93a3a2e6729` · manifest `sha256:a48598752f45`
+- **CodeRabbit**: CLI not installed on build host — skipped
+
+---
+
 ## [1.7.10] — 2026-05-10
 
 ### Added

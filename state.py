@@ -71,6 +71,11 @@ class IpState:
 ip_state: Dict[str, IpState] = defaultdict(IpState)
 state_lock = asyncio.Lock()
 
+# Inverted index: ip → set of track_keys whose last_ip == ip.
+# Maintained at every last_ip write site; allows O(1) NAT-detection lookup
+# instead of a linear scan over all of ip_state.
+ip_to_identities: Dict[str, set] = defaultdict(set)
+
 # Per-IP session-creation tracking — maps ip → {identity: last_seen_ts}.
 ip_new_sessions: Dict[str, dict] = defaultdict(dict)
 

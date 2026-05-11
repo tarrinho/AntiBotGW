@@ -215,9 +215,11 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
         s.risk_score += weight
         s.risk_by_reason[reason] = s.risk_by_reason.get(reason, 0.0) + weight
         # Count only "legitimate-looking" identities at this IP toward NAT detection.
+        # O(m) via inverted index instead of O(N) full ip_state scan.
         identities_at_ip = sum(
-            1 for k, st in ip_state.items()
-            if st.last_ip == ip
+            1 for k in ip_to_identities.get(ip, ())
+            if (st := ip_state.get(k)) is not None
+            and st.last_ip == ip        # guard against stale index entries
             and (n - st.last_seen) < 3600
             and st.static_loads >= 1
             and st.allowed_count >= 3
