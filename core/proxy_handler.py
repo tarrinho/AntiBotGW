@@ -1897,6 +1897,7 @@ _HOT_RELOAD_KNOBS = {
     # operators staging a migration) but won't switch live connections
     # until the container restarts.
     "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
+    "STRICT_VHOST":           (_to_bool, None),
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
     "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
     # 1.6.5 — escalation threshold (cost gate for expensive / 3rd-order detectors)
@@ -1997,6 +1998,8 @@ if "DB_BACKEND" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
 if "ALLOW_PRIVATE_UPSTREAM" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"ALLOW_PRIVATE_UPSTREAM"}
+if "STRICT_VHOST" in os.environ:
+    _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"STRICT_VHOST"}
 
 
 def _json_safe(v):
@@ -2637,6 +2640,11 @@ async def protect(request: web.Request, handler):
                       _upstream_404_cache.get("status") or 404,
                       reason, request_id=rid)
         return await _serve_mirrored_404()
+
+    # STRICT_VHOST: reject unconfigured inbound hosts before any proxy logic.
+    if STRICT_VHOST and not vhost_is_configured():
+        return web.Response(status=502, text="no upstream configured for this host\n",
+                            headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 
     # ── Hybrid identity (primary tracking key) ──
     # 'identity' = HMAC(session_cookie + browser_fingerprint) for browser flow,
