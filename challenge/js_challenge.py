@@ -37,6 +37,7 @@ from aiohttp import web, ClientSession, ClientTimeout
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip
+from vhost import vc as _vc_jsc
 
 
 # ── IP-tier helpers ───────────────────────────────────────────────────────
@@ -540,7 +541,7 @@ def _js_challenge_required(request) -> bool:
         screens AND complete one round trip before reaching API paths,
         without requiring any third-party service)."""
     # 1.5.4: ANUBIS_ENABLED forces the gate even if JS_CHALLENGE=0.
-    if not (JS_CHALLENGE or ANUBIS_ENABLED):
+    if not (_vc_jsc('JS_CHALLENGE') or _vc_jsc('ANUBIS_ENABLED')):
         return False
     from helpers import _is_admin_path
     from integrations.endpoint_policy import _endpoint_policy

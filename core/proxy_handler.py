@@ -51,6 +51,7 @@ from integrations.endpoint_policy import (  # noqa: F401
     _to_custom_rules, _eval_custom_rules,
 )
 from admin import *        # noqa: F401,F403
+from vhost import vc, set_vhost, VHOSTS, get_vhost_rps_window, current_vhost_host
 from core.metrics import record, _timeline_bump, _bucket_now  # noqa: F401
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading underscore not in *
 from config import _LOG_LEVELS, _LOG_LEVEL_N  # noqa: F401 — leading underscore not in *
@@ -64,7 +65,7 @@ from config import (  # noqa: F401 — more underscore config constants
 )
 from dashboards.agents import _stealth_score, AGENT_BLOCK_REASONS  # noqa: F401
 # Underscore-prefixed functions not exported by import * — explicit imports required
-from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied  # noqa: F401
+from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied, _request_username  # noqa: F401
 from integrations.ja4 import _request_ja4, _tls_fingerprint_blocked  # noqa: F401
 from integrations.redis import _shared_ban_set  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
@@ -451,7 +452,7 @@ async def proxy_websocket(request: web.Request):
     """Bidirectional WebSocket bridge to upstream. Headers/cookies/origin
     rewrites match the HTTP path; aiohttp manages the Sec-WebSocket-* dance."""
     from urllib.parse import urlparse
-    u = urlparse(UPSTREAM)
+    _vc_upstream = vc('UPSTREAM'); u = urlparse(_vc_upstream)
     upstream_host = u.netloc
     upstream_scheme_host = f"{u.scheme}://{u.netloc}"
     ws_scheme = "wss" if u.scheme == "https" else "ws"
@@ -557,7 +558,7 @@ async def proxy(request: web.Request):
     if request.method not in ALLOWED_METHODS:
         return web.Response(status=405, text="method not allowed\n")
 
-    target = UPSTREAM + _strip_admin_key_from_qs(request.path_qs)
+    _vc_upstream = vc('UPSTREAM'); target = _vc_upstream + _strip_admin_key_from_qs(request.path_qs)
 
     # C3 + H5: build forwarded headers from an allowlist-by-exclusion list.
     # All hop-by-hop and source-spoof headers stripped. Cookie has our own
@@ -587,7 +588,7 @@ async def proxy(request: web.Request):
     # sees its own canonical origin instead of the gateway's public hostname.
     # Without this, upstream reverse-proxy aware backends (Keycloak, UFE) 403
     # CORS preflight + auth POSTs because Origin != upstream's expected scheme://host.
-    upstream_origin = UPSTREAM.rstrip("/")
+    upstream_origin = _vc_upstream.rstrip("/")
     try:
         from urllib.parse import urlparse
         u = urlparse(upstream_origin)
@@ -784,7 +785,7 @@ async def proxy(request: web.Request):
                 from multidict import CIMultiDict
                 response_headers = CIMultiDict()
                 from urllib.parse import urlparse as _urlparse
-                up_parsed = _urlparse(UPSTREAM)
+                up_parsed = _urlparse(_vc_upstream)
                 client_scheme = (request.headers.get("X-Forwarded-Proto")
                                  or ("https" if request.secure else "http"))
                 client_host = request.host or up_parsed.netloc
@@ -794,22 +795,25 @@ async def proxy(request: web.Request):
                     if kl in HOP_BY_HOP_RESPONSE:
                         continue
 
-                    # SSO flow #1: rewrite Location header in 3xx redirects
-                    # so the browser keeps coming back through the gateway.
+                    # Rewrite Location header in 3xx redirects so the browser
+                    # always comes back through the gateway — both same-domain
+                    # and cross-domain upstreams (e.g. upstream that 301s to a
+                    # different hostname). Embedded upstream-URL references in
+                    # OAuth redirect_uri params are also rewritten.
                     if kl == "location" and 300 <= resp.status < 400:
                         try:
                             lp = _urlparse(v)
-                            if lp.scheme and lp.netloc and lp.netloc == up_parsed.netloc:
+                            if lp.scheme and lp.netloc:
+                                # Always rewrite scheme+host to the gateway's inbound
+                                # hostname; preserve path / query / fragment.
                                 rewritten = f"{client_scheme}://{client_host}{lp.path or ''}"
                                 if lp.query:    rewritten += "?" + lp.query
                                 if lp.fragment: rewritten += "#" + lp.fragment
                                 v = rewritten
-                            else:
-                                # External IdP redirect (e.g. Keycloak). Rewrite
-                                # any embedded `scheme://upstream-host` references
-                                # (URL-encoded or not) inside the URL — typically
-                                # the redirect_uri / state OAuth2 params — so the
-                                # IdP sends the user back THROUGH the gateway.
+                            # Also rewrite any embedded upstream-origin references
+                            # in the (possibly already-rewritten) value so that
+                            # OAuth redirect_uri params point back through the gateway.
+                            if up_parsed.netloc:
                                 up_url_raw = f"{up_parsed.scheme}://{up_parsed.netloc}"
                                 gw_url_raw = f"{client_scheme}://{client_host}"
                                 from urllib.parse import quote as _q
@@ -2025,8 +2029,28 @@ async def config_endpoint(request: web.Request):
     type-coerced and bounds-checked. Anything not in the whitelist is
     rejected (explicit allowlist — never an attribute-write attack)."""
     if request.method == "GET":
-        return web.json_response({"state": _read_hot_reload_state()},
-                                  headers={"Cache-Control": "no-store"})
+        _vhost_q = request.query.get("vhost", "").strip().lower()
+        _base = _read_hot_reload_state()
+        try:
+            from vhost import VHOSTS as _VH, _json_safe as _vjs
+        except Exception:
+            _VH, _vjs = {}, lambda x: x  # noqa: E731
+        _all_vhosts = sorted(_VH.keys())
+        if _vhost_q:
+            _ov_raw = _VH.get(_vhost_q, {})
+            _merged = dict(_base)
+            _overridden: list = []
+            for _k, _v in _ov_raw.items():
+                _ku = _k.upper()
+                _merged[_ku] = _vjs(_v)
+                _overridden.append(_ku)
+            return web.json_response(
+                {"state": _merged, "vhost": _vhost_q,
+                 "overridden": sorted(_overridden), "vhosts": _all_vhosts},
+                headers={"Cache-Control": "no-store"})
+        return web.json_response(
+            {"state": _base, "vhost": "", "overridden": [], "vhosts": _all_vhosts},
+            headers={"Cache-Control": "no-store"})
     if request.method != "POST":
         return web.json_response({"error": "method not allowed"}, status=405,
                                   headers={"Cache-Control": "no-store"})
@@ -2041,6 +2065,58 @@ async def config_endpoint(request: web.Request):
     except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
         return web.json_response({"error": f"bad request: {e}"}, status=400,
                                   headers={"Cache-Control": "no-store"})
+
+    # Per-vhost override writes — ?vhost=<host> routes through vhost_set()
+    _vhost_target = request.query.get("vhost", "").strip().lower()
+    if _vhost_target:
+        try:
+            from vhost import vhost_set as _vhost_set_fn, _VHOST_COERCE as _VHC
+        except ImportError as _imp_e:
+            return web.json_response({"error": f"vhost module unavailable: {_imp_e}"},
+                                      status=500, headers={"Cache-Control": "no-store"})
+        _vhost_overrides: dict = {}
+        _vhost_rejected: dict = {}
+        for _k, _raw_v in updates.items():
+            _ku = _k.upper()
+            _coerce = _VHC.get(_ku)
+            if _coerce is None:
+                _vhost_rejected[_k] = "not-vhost-overridable"
+                continue
+            try:
+                _vhost_overrides[_ku] = _coerce(_raw_v)
+            except (ValueError, TypeError) as _ce:
+                _vhost_rejected[_k] = str(_ce)[:120]
+        _vhost_applied: dict = {}
+        if _vhost_overrides:
+            _ok, _err = _vhost_set_fn(_vhost_target, _vhost_overrides)
+            if not _ok:
+                return web.json_response({"error": _err}, status=400,
+                                          headers={"Cache-Control": "no-store"})
+            _vhost_applied = {
+                k: (sorted(v) if isinstance(v, (frozenset, set)) else v)
+                for k, v in _vhost_overrides.items()
+            }
+            slog("config_vhost_changed", level="warn",
+                 rid=request.get("_rid", ""), actor=_request_username(request),
+                 vhost=_vhost_target,
+                 applied=list(_vhost_applied.keys()), rejected=_vhost_rejected)
+            if db_queue is not None:
+                _det = json.dumps(
+                    {"vhost": _vhost_target, "applied": list(_vhost_applied.keys())},
+                    separators=(",", ":"), default=str)
+                try:
+                    db_queue.put_nowait((
+                        "gw_audit_add",
+                        (_t.time(), "config_vhost_change", _gw_local_id(),
+                         _request_username(request), _det),
+                    ))
+                except asyncio.QueueFull:
+                    pass
+        return web.json_response(
+            {"applied": _vhost_applied, "rejected": _vhost_rejected, "warnings": [],
+             "vhost": _vhost_target, "state": _read_hot_reload_state()},
+            headers={"Cache-Control": "no-store"})
+
     applied, rejected, warnings = {}, {}, []
     g = globals()
     for k, raw_v in updates.items():
@@ -2056,6 +2132,7 @@ async def config_endpoint(request: web.Request):
             continue
         parser, validator = spec
         try:
+            old_v = g.get(k)
             value = parser(raw_v)
             if validator is not None and not validator(value):
                 rejected[k] = "validation failed"
@@ -2084,6 +2161,18 @@ async def config_endpoint(request: web.Request):
                         except (AttributeError, TypeError):
                             pass
             applied[k] = sorted(value) if isinstance(value, set) else value
+            if db_queue is not None:
+                _old_safe = sorted(old_v) if isinstance(old_v, set) else old_v
+                _det = json.dumps({"key": k, "old": _old_safe, "new": applied[k]},
+                                   separators=(",", ":"), default=str)
+                try:
+                    db_queue.put_nowait((
+                        "gw_audit_add",
+                        (_t.time(), "config_change", _gw_local_id(),
+                         _request_username(request), _det),
+                    ))
+                except asyncio.QueueFull:
+                    pass
             # 1.7.9 — when UPSTREAM changes, flush the 404-body cache so the
             # new upstream gets a fresh probe on the next non-matching request.
             if k == "UPSTREAM":
@@ -2140,8 +2229,8 @@ async def config_endpoint(request: web.Request):
 
     if applied or rejected:
         slog("config_changed", level="warn",
-             rid=request.get("_rid", ""), applied=list(applied.keys()),
-             rejected=rejected)
+             rid=request.get("_rid", ""), actor=_request_username(request),
+             applied=list(applied.keys()), rejected=rejected)
     return web.json_response(
         {"applied": _json_safe(applied), "rejected": rejected, "warnings": warnings,
          "state": _read_hot_reload_state()},
@@ -2174,6 +2263,7 @@ async def protect(request: web.Request, handler):
     rid = (inbound_rid if inbound_rid and _REQUEST_ID_RE.match(inbound_rid)
            else _new_request_id())
     request["_rid"] = rid
+    set_vhost(request.host or "")
 
     # L3+N5: reject paths/query with ANY ASCII control byte (0x00-0x1F or 0x7F).
     # CR/LF would enable header injection on legacy backends; NUL truncates
@@ -2294,7 +2384,7 @@ async def protect(request: web.Request, handler):
                 _ban_reason = f"bot-rule-{'really-ban' if _bot_act == 'really-ban' else 'ban'}"
                 async with state_lock:
                     _bs = ip_state[_req_ip]
-                    _bs.banned_until = _t.time() + _ban_secs
+                    _bs.banned_until = now() + _ban_secs
                     ip_to_identities[_req_ip].add(_req_ip)
                     _bs.last_ip = _req_ip
                 await _shared_ban_set(_req_ip, _t.time() + _ban_secs, _ban_reason)
@@ -2312,25 +2402,25 @@ async def protect(request: web.Request, handler):
     # Calls record() with empty reason so traffic appears in the dashboard timeline
     # and clients table as clean allowed traffic. All bypass-path requests from the
     # same IP update the same single ip_state entry — no fan-out per request.
-    if BYPASS_PATHS and any(request.path.startswith(p) for p in BYPASS_PATHS):
+    if vc('BYPASS_PATHS') and any(request.path.startswith(p) for p in vc('BYPASS_PATHS')):
         resp = await handler(request)
         _bp_ip = get_ip(request) or request.remote or ""
         await record(_bp_ip, request.headers.get("User-Agent", ""),
                      request.path, resp.status, "",
-                     track_key=_bp_ip, request_id=rid)
+                     track_key=_bp_ip, request_id=rid, method=request.method)
         return resp
 
     # 1.7.8 — Dashboard bypass mode. When BYPASS_MODE=True (set by the Controls
     # bypass toggle) every non-admin upstream request is passed through with zero
     # detection or ban enforcement. Admin-namespace paths still go through the
     # normal protect() flow so admin auth remains in effect.
-    if BYPASS_MODE and not _is_admin_path(request.path):
+    if vc('BYPASS_MODE') and not _is_admin_path(request.path):
         resp = await handler(request)
         _bm_ip = get_ip(request) or request.remote or ""
         # Empty reason → shows as clean allowed traffic in dashboard (no label).
         await record(_bm_ip, request.headers.get("User-Agent", ""),
                      request.path, resp.status, "",
-                     track_key=_bm_ip, request_id=rid)
+                     track_key=_bm_ip, request_id=rid, method=request.method)
         return resp
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
@@ -2338,19 +2428,20 @@ async def protect(request: web.Request, handler):
     # request. Internal admin paths are exempt so health-checks and admin
     # tools keep working under load. Operator drives this via the main
     # dashboard slider (or POST <NS>/secured/config GLOBAL_RPS_LIMIT=N).
-    if GLOBAL_RPS_LIMIT > 0 and (not _is_admin_path(request.path) or not _admin_ip_allowed(request)):
+    _vrps_limit = vc('GLOBAL_RPS_LIMIT')
+    if _vrps_limit > 0 and (not _is_admin_path(request.path) or not _admin_ip_allowed(request)):
         n_ts = _t.time()
         cutoff = n_ts - 1.0
-        # Lazy-trim
-        while _global_rps_window and _global_rps_window[0] < cutoff:
-            _global_rps_window.popleft()
-        if len(_global_rps_window) >= GLOBAL_RPS_LIMIT:
+        _vrps_win = get_vhost_rps_window(current_vhost_host()) or _global_rps_window
+        while _vrps_win and _vrps_win[0] < cutoff:
+            _vrps_win.popleft()
+        if len(_vrps_win) >= _vrps_limit:
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(
                 ip, ua, request.path, "traffic-threshold",
                 ja4=_request_ja4(request), request_id=rid)
-        _global_rps_window.append(n_ts)
+        _vrps_win.append(n_ts)
 
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
@@ -2383,8 +2474,12 @@ async def protect(request: web.Request, handler):
         _ip = get_ip(request)
         _action, _tag = _eval_custom_rules(request, _ip)
         if _action == "allow":
-            request["_custom_rule_allow"] = True   # surfaced in record()
-            return await handler(request)
+            request["_custom_rule_allow"] = True
+            _allow_resp = await handler(request)
+            await record(_ip, request.headers.get("User-Agent", ""),
+                         request.path, _allow_resp.status, "",
+                         request_id=rid, method=request.method)
+            return _allow_resp
         if _action == "authorized-robot":
             _ar_ua = request.headers.get("User-Agent", "")
             await record(_ip, _ar_ua, request.path, 200, "authorized-robot",
@@ -2651,16 +2746,18 @@ async def protect(request: web.Request, handler):
     # to the denylist (the lesson learned from a stale test entry on
     # 2026-05-01 — PT was added during a probe and persisted in
     # config_kv, silent-decoying the operator's own browser).
-    if (COUNTRY_BLOCK_ENABLED and _city_reader is not None
+    if (vc('COUNTRY_BLOCK_ENABLED') and _city_reader is not None
             and not _admin_ip_allowed(request)):
         _geo = _city_lookup(ip)
         if _geo:
             _, _, _cc, _ = _geo
             _cc_u = (_cc or "").upper()
             _block = False
-            if COUNTRY_ALLOWLIST and _cc_u and _cc_u not in COUNTRY_ALLOWLIST:
+            _vc_al = vc('COUNTRY_ALLOWLIST')
+            _vc_dl = vc('COUNTRY_DENYLIST')
+            if _vc_al and _cc_u and _cc_u not in _vc_al:
                 _block = True
-            elif _cc_u and _cc_u in COUNTRY_DENYLIST:
+            elif _cc_u and _cc_u in _vc_dl:
                 _block = True
             if _block:
                 await update_risk_and_maybe_ban(identity, "country-blocked", ip)
@@ -2769,7 +2866,7 @@ async def protect(request: web.Request, handler):
 
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
     #    Threshold-based: at NAT-like IPs, requires accumulated badness.
-    if HONEYPOT_ENABLED and request.path in HONEYPOT_PATHS:
+    if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
         await update_risk_and_maybe_ban(track_key, "honeypot-silent", ip)
         return await _silent_decoy_response(
             ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
@@ -2777,7 +2874,7 @@ async def protect(request: web.Request, handler):
 
     # 2b. Suspicious path PATTERN (flag-hunting, file-hunting, CTF recon).
     #     Catches /flag.txt, /myflag, /backup.sql, /id_rsa, /.git/HEAD, etc.
-    if SUSPICIOUS_PATH_ENABLED and is_suspicious_path(request.path_qs):
+    if vc('SUSPICIOUS_PATH_ENABLED') and is_suspicious_path(request.path_qs):
         await update_risk_and_maybe_ban(track_key, "suspicious-path", ip)
         return await _silent_decoy_response(
             ip, ua, path, "suspicious-path", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
@@ -2801,7 +2898,7 @@ async def protect(request: web.Request, handler):
     request_signals = []                       # collected for log
     ua_stripped = ua.strip()
     ua_lower = ua_stripped.lower()
-    if UA_FILTER_ENABLED:
+    if vc('UA_FILTER_ENABLED'):
         if not ua_stripped:
             return await deny(403, "ua-empty",
                               {"error": "missing User-Agent header"})
@@ -3034,7 +3131,7 @@ async def protect(request: web.Request, handler):
                               {"error": "rate limit exceeded", "retry_after": int(retry) + 1},
                               extra_headers={
                                   "Retry-After": str(int(retry) + 1),
-                                  "X-RateLimit-Limit": str(RATE_LIMIT_BURST),
+                                  "X-RateLimit-Limit": str(vc('RATE_LIMIT_BURST')),
                                   "X-RateLimit-Remaining": "0",
                               })
 
@@ -3142,7 +3239,7 @@ async def protect(request: web.Request, handler):
     await record(ip, ua, path, response.status, "",
                  track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid,
                  signals=request.get("_signals", []),
-                 score=_score_now)
+                 score=_score_now, method=request.method)
     # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
     async with state_lock:
         st = ip_state[track_key]
@@ -3859,6 +3956,7 @@ async def health_score_endpoint(request: web.Request):
 
 async def metrics_endpoint(request: web.Request):
     """JSON metrics dump consumed by the dashboard."""
+    _vhost_pre = request.query.get("vhost", "").strip().lower()
     async with state_lock:
         n = now()
         clients = []
@@ -3884,6 +3982,8 @@ async def metrics_endpoint(request: web.Request):
                 and _b.get("ua", "") and _b["ua"] in _cli_ua
                 for _b in AUTHORIZED_BOT_UAS
             )
+            if _vhost_pre and s.last_vhost != _vhost_pre:
+                continue
             clients.append({
                 "id": key,
                 "ip": key,
@@ -3904,18 +4004,28 @@ async def metrics_endpoint(request: web.Request):
                 "stealth_score": _ssc,
                 "is_admin_ip": _is_admin_ip(s.last_ip or key),
                 "is_authorized_bot": _is_auth_bot,
+                "vhost": s.last_vhost,
             })
         # Merge per-category ring buffers. ?cats=allowed,ban,missed,authbots,gwmgmt
         # selects which buckets to include; defaults to all five.
+        # ?vhost=<hostname> filters to events from that vhost only (1.8.0).
         _valid_cats = {"allowed", "ban", "missed", "authbots", "gwmgmt"}
         _cats_param = request.query.get("cats", "")
         _req_cats = {c for c in _cats_param.split(",") if c in _valid_cats} if _cats_param else _valid_cats
+        _vhost_filter = _vhost_pre
         _merged: list = []
         for _cat in _req_cats:
             _merged.extend(events_by_cat[_cat])
+        if _vhost_filter:
+            _merged = [e for e in _merged if e.get("vhost", "") == _vhost_filter]
         _merged.sort(key=lambda e: e["ts"], reverse=True)
         recent_events = _merged[:50]
-        if _req_cats == _valid_cats:
+        if _vhost_filter:
+            _vhost_paths: dict = {}
+            for e in _merged:
+                _vhost_paths[e["path"]] = _vhost_paths.get(e["path"], 0) + 1
+            top_paths = sorted(_vhost_paths.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        elif _req_cats == _valid_cats:
             top_paths = sorted(metrics["by_path"].items(),
                                key=lambda kv: kv[1], reverse=True)[:10]
         else:
@@ -3924,6 +4034,20 @@ async def metrics_endpoint(request: web.Request):
                 for _p, _n in by_path_by_cat[_cat].items():
                     _merged_paths[_p] = _merged_paths.get(_p, 0) + _n
             top_paths = sorted(_merged_paths.items(), key=lambda kv: kv[1], reverse=True)[:10]
+
+        # Build path→most-common-vhost from event ring buffers for display in dashboard
+        _pv_counts: dict = {}
+        for _cat_evts in events_by_cat.values():
+            for _e in _cat_evts:
+                _ep = _e.get("path", "")
+                _ev = _e.get("vhost", "")
+                if _ep and _ev:
+                    _pv_counts.setdefault(_ep, {})
+                    _pv_counts[_ep][_ev] = _pv_counts[_ep].get(_ev, 0) + 1
+        _path_to_vhost: dict = {
+            _p: max(_vc, key=_vc.get)
+            for _p, _vc in _pv_counts.items()
+        }
 
         # Build a timeline window with configurable granularity + scroll position.
         #   ?range=N    → window length in minutes (5..1440)
@@ -3956,18 +4080,27 @@ async def metrics_endpoint(request: web.Request):
         # For older data outside in-memory retention, query the DB.
         timeline_out = []
 
-        if path_q:
-            # Path-filtered timeline: query events table, aggregate into buckets
+        if path_q or _vhost_filter:
+            # Filtered timeline: query events table and aggregate into buckets.
+            # Covers three modes: path only, vhost only, or both together.
             _passthrough = {"", "ok", "operator-passthrough", "bypass-mode",
                             "bypass-path", "authorized-robot"}
             _admin_pfx   = ADMIN_NS.lower()
             try:
                 conn = sqlite3.connect(DB_PATH)
                 conn.row_factory = sqlite3.Row
-                rows = conn.execute(
-                    "SELECT ts, path, reason FROM events "
-                    "WHERE ts >= ? AND ts <= ? AND LOWER(path) LIKE ? ORDER BY ts",
-                    (start_b, end_b + bucket_secs, f"%{path_q}%")
+                _where_parts = ["ts >= ?", "ts <= ?"]
+                _params: list = [start_b, end_b + bucket_secs]
+                if path_q:
+                    _where_parts.append("LOWER(path) LIKE ?")
+                    _params.append(f"%{path_q}%")
+                if _vhost_filter:
+                    _where_parts.append("vhost = ?")
+                    _params.append(_vhost_filter)
+                rows = conn.execute(  # nosec B608 — where parts are hardcoded strings; values parameterized
+                    "SELECT ts, path, reason FROM events WHERE "
+                    + " AND ".join(_where_parts) + " ORDER BY ts",
+                    _params,
                 ).fetchall()
                 conn.close()
                 # Also scan in-memory events (recent, not yet flushed to DB)
@@ -3976,7 +4109,8 @@ async def metrics_endpoint(request: web.Request):
                     {"ts": e["ts"], "path": e.get("path", ""), "reason": e.get("reason", "")}
                     for e in _mem_events
                     if start_b <= e["ts"] <= end_b + bucket_secs
-                    and path_q in (e.get("path") or "").lower()
+                    and (not path_q or path_q in (e.get("path") or "").lower())
+                    and (not _vhost_filter or (e.get("vhost") or "") == _vhost_filter)
                 ]
                 # Bucket all rows
                 path_buckets: dict = {}
@@ -4000,9 +4134,10 @@ async def metrics_endpoint(request: web.Request):
                         {"total": 0, "allowed": 0, "blocked": 0,
                          "missed": 0, "authorized_robot": 0, "gwmgmt": 0})})
             except Exception:
-                path_q = ""  # fall through to unfiltered on error
+                path_q = ""
+                _vhost_filter = ""  # fall through to unfiltered on error
 
-        if not path_q:
+        if not path_q and not _vhost_filter:
             # In-memory available range
             in_mem_oldest = end_b - TIMELINE_RETAIN_SECS
             # DB fallback only if needed
@@ -4143,7 +4278,7 @@ async def metrics_endpoint(request: web.Request):
             "missed": metrics.get("missed", 0),
             "by_reason": dict(metrics["by_reason"]),
             "by_status": {str(k): v for k, v in metrics["by_status"].items()},
-            "top_paths": [{"path": p, "count": c} for p, c in top_paths],
+            "top_paths": [{"path": p, "count": c, "vhost": _path_to_vhost.get(p, "")} for p, c in top_paths],
             "clients": clients,
             "events": recent_events,
             "live_rps": live_rps,
@@ -4189,6 +4324,29 @@ async def dashboard_endpoint(request: web.Request):
     )
 
 DASHBOARD_HTML         = (_DASHBOARDS_DIR / "main.html").read_text(encoding="utf-8")
+CONTROL_CENTER_HTML    = (_DASHBOARDS_DIR / "control_center.html").read_text(encoding="utf-8")
+
+
+async def control_center_endpoint(request: web.Request):
+    """Control Center — landing page after login; shows vhost traffic summary."""
+    return web.Response(
+        text=CONTROL_CENTER_HTML,
+        content_type="text/html",
+        headers={
+            "Cache-Control": "no-store",
+            "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; "
+                "connect-src 'self'; "
+                "frame-ancestors 'none'; base-uri 'none'"
+            ),
+        },
+    )
 
 async def unban_endpoint(request: web.Request):
     """Admin: clear ban + risk score for an identity (or all). Useful when a
@@ -4733,9 +4891,10 @@ async def geo_data_endpoint(request: web.Request):
         end_epoch = int(_t.time())
     start_epoch = end_epoch - range_min * 60
 
+    _geo_vhost = request.query.get("vhost", "").strip().lower()
     # In-process cache key: bucket the params on a 60s grain so live mode
     # doesn't run a fresh SQL query per dashboard tick.
-    cache_key = (range_min, end_epoch // 60)
+    cache_key = (range_min, end_epoch // 60, _geo_vhost)
     cached = _GEO_CACHE.get(cache_key)
     if cached and cached[0] > _t.time():
         return web.json_response(
@@ -4770,10 +4929,15 @@ async def geo_data_endpoint(request: web.Request):
             # Cursor iteration (no fetchall) — avoids loading all rows into RAM for
             # large windows (e.g. 30 days). ORDER BY omitted: rebuildBuckets() bins
             # by ts value directly so sort order doesn't matter for correctness.
+            _geo_sql_args = [start_epoch, end_epoch]
+            _geo_vhost_clause = ""
+            if _geo_vhost:
+                _geo_vhost_clause = " AND vhost = ?"
+                _geo_sql_args.append(_geo_vhost)
             cursor = conn.execute(
                 "SELECT ts, ip, reason FROM events "
-                "WHERE ts >= ? AND ts <= ?",
-                (start_epoch, end_epoch),
+                "WHERE ts >= ? AND ts <= ?" + _geo_vhost_clause,
+                _geo_sql_args,
             )
             for r in cursor:
                 ip = r["ip"]
@@ -5163,6 +5327,7 @@ async def logs_data_endpoint(request: web.Request):
         # 1.6.5 — extra filters
         method_filter = (request.query.get("method", "all") or "all").lower()
         iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
+        vhost_filter  = (request.query.get("vhost", "") or "").strip().lower()
         try:
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
@@ -5170,10 +5335,17 @@ async def logs_data_endpoint(request: web.Request):
             # (method/ip_type) without paginating multiple SQL queries.
             sql_cap = max(limit * 4, 1000) if (method_filter != "all" or
                                                  iptype_filter != "all") else limit
-            rows = conn.execute(
-                "SELECT id, ts, ip, ua, path, status, reason FROM events "
-                "ORDER BY id DESC LIMIT ?", (sql_cap,)
-            ).fetchall()
+            if vhost_filter:
+                rows = conn.execute(  # nosec B608 — vhost_filter value is parameterized
+                    "SELECT id, ts, ip, ua, path, status, reason FROM events "
+                    "WHERE vhost = ? ORDER BY id DESC LIMIT ?",
+                    (vhost_filter, sql_cap),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, ts, ip, ua, path, status, reason FROM events "
+                    "ORDER BY id DESC LIMIT ?", (sql_cap,)
+                ).fetchall()
             conn.close()
         except Exception as e:
             return web.json_response({"error": f"db: {e}"}, status=500,

@@ -354,7 +354,9 @@ async def login_page_endpoint(request: web.Request):
     rendered only until the operator's first successful login."""
     if request.cookies.get(_SESSION_COOKIE) and _session_verify(
             request.cookies.get(_SESSION_COOKIE)):
-        next_url = request.query.get("next") or "/antibot-appsec-gateway/secured/dashboard"
+        next_url = request.query.get("next") or "/antibot-appsec-gateway/secured/control-center"
+        if not next_url.startswith("/") or next_url.startswith("//"):
+            next_url = "/antibot-appsec-gateway/secured/control-center"
         return web.HTTPFound(next_url)
     body = (_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8").replace(
         "__BOOTSTRAP_HINT__", _bootstrap_hint_html())
@@ -392,9 +394,9 @@ async def login_submit_endpoint(request: web.Request):
                                   headers={"Cache-Control": "no-store"})
     username = (params.get("username", [""])[0] or "").strip().lower()
     password = params.get("password", [""])[0] or ""
-    next_url = params.get("next", ["/antibot-appsec-gateway/secured/dashboard"])[0]
+    next_url = params.get("next", ["/antibot-appsec-gateway/secured/control-center"])[0]
     if not next_url.startswith("/") or next_url.startswith("//"):
-        next_url = "/antibot-appsec-gateway/secured/dashboard"
+        next_url = "/antibot-appsec-gateway/secured/control-center"
     ok, msg = _user_validate_username(username)
     if not ok or not password:
         slog("login_failed", level="warn", username=username, ip=ip,

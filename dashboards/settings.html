@@ -1,19 +1,52 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW · Settings</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppSecGW_1.8.1 · Settings</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font:13.5px/1.45 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
-     background:var(--bg);color:var(--fg);padding:14px}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 a{color:var(--blue);text-decoration:none}
-h1.page-title{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;margin:0}
-h1.page-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
-.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
-.topnav a{color:var(--dim);padding:4px 8px;border-radius:4px;transition:color .1s}
-.topnav a:hover{color:var(--fg);background:#1f2730}
-.topnav a.active{color:var(--fg);background:#1f2730}
+/* ── Sidebar ── */
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
+#sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
+#sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
+#sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
+#sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
+#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
+#sidebar-footer button.signout:hover{background:#1f2730}
+/* ── Main area ── */
+#main-area{flex:1;min-width:0;display:flex;flex-direction:column}
+/* ── Topbar ── */
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
+#topbar-right{display:flex;align-items:center;gap:8px}
+#page-content{flex:1;padding:14px}
+@media(max-width:600px){
+  #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
+  #sidebar.mob-open{transform:translateX(0)}
+  #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:199}
+  #mob-overlay.mob-open{display:block}
+  #mob-menu{display:flex!important}
+  #main-area{margin-left:0}
+}
+@media(min-width:601px){#mob-menu{display:none!important}}
+@media(max-width:480px){
+  .card{padding:12px 10px}
+  .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+  .btn{min-height:36px;padding:8px 12px}
+  .btn-sm{min-height:32px;padding:6px 10px}
+}
 main{max-width:1100px;margin:0 auto}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:780px){.row{grid-template-columns:1fr}}
@@ -131,40 +164,42 @@ button.danger{background:var(--red)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 </style></head>
 <body>
-<h1 class="page-title">AppSecGW_1.7.11 &middot; Settings <span class="pill" id="live">● LIVE</span></h1>
-<nav class="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings" class="active">Settings</a>
-  <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
-  <form method="post" action="/antibot-appsec-gateway/logout" style="display:inline;margin:0"><button type="submit" onclick="return confirm('Sign out and return to the login page?');" style="background:none;border:none;cursor:pointer;color:var(--red);padding:0;font:inherit">Sign out</button></form></nav>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<div id="sidebar">
+  <div id="sidebar-brand">
+    <div id="sidebar-brand-name">AppSecGW</div>
+    <div id="sidebar-brand-ver">1.8.1</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
+    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings" class="active">Settings</a>
+  </nav>
+  <div id="sidebar-footer">
+    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
+    <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+    </form>
+  </div>
+</div>
+<div id="main-area">
+<div id="topbar">
+  <div id="topbar-title">Settings</div>
+  <div id="topbar-right"></div>
+</div>
+<div id="page-content">
 
 <main>
 <!-- ── 1.6.6 — Gateway identity strip ──────────────────────────── -->
 <div class="card" style="display:flex;flex-wrap:wrap;gap:10px 32px;align-items:center;
                           padding:12px 16px;margin-bottom:14px">
-  <div>
-    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Domain</div>
-    <div style="font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--blue);font-weight:600"
-         id="gw-host">—</div>
-  </div>
-  <div style="display:flex;flex-direction:column;gap:4px;min-width:260px">
-    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Upstream</div>
-    <div style="display:flex;gap:6px;align-items:center">
-      <input id="gw-upstream-input" type="url"
-             style="font-family:ui-monospace,Menlo,monospace;font-size:12px;
-                    background:#0d1117;border:1px solid var(--line);border-radius:4px;
-                    color:var(--fg);padding:3px 8px;flex:1;min-width:200px"
-             placeholder="https://example.com" spellcheck="false">
-      <button id="gw-upstream-apply"
-              style="font-size:11px;padding:3px 10px;white-space:nowrap">Apply</button>
-      <span id="gw-upstream-status" style="font-size:11px;color:var(--dim)"></span>
-    </div>
-  </div>
   <div>
     <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Version</div>
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
@@ -185,6 +220,325 @@ button.danger{background:var(--red)}
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--green);font-weight:600"
          id="gw-whoami">—</div>  </div>
 </div>
+
+<!-- ── Virtual Hosts ─────────────────────────────────────────────── -->
+<div class="card" id="card-vhosts">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+    <div>
+      <h2 style="margin-bottom:3px">Virtual Hosts</h2>
+      <p class="desc" style="margin:0">Map inbound domains to upstream services. Each entry overrides per-domain security policy. Changes apply immediately and persist across restarts.</p>
+    </div>
+    <button id="vhost-add-btn" style="white-space:nowrap;font-size:12px;padding:6px 14px">+ Add</button>
+  </div>
+  <table class="gw-tbl" id="vhost-tbl" style="width:100%">
+    <thead><tr>
+      <th>Inbound hostname</th>
+      <th>Upstream</th>
+      <th>UA filter</th>
+      <th>Honeypot</th>
+      <th>Burst</th>
+      <th>Refill /s</th>
+      <th>Login</th>
+      <th style="width:80px"></th>
+    </tr></thead>
+    <tbody id="vhost-tbody"><tr><td colspan="8" class="gw-empty">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- ── Discovered hosts ─────────────────────────────────────────── -->
+<div class="card" id="card-discovered">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+    <h2 style="margin:0">Discovered Hosts</h2>
+    <label style="font-size:12px;color:var(--muted);cursor:pointer;user-select:none">
+      <input type="checkbox" id="discovered-show-dismissed" style="margin-right:4px">Show dismissed
+    </label>
+  </div>
+  <p class="desc" style="margin:0 0 12px">Active in the last hour but not yet configured as virtual hosts. Click Register to open the add form pre-filled.</p>
+  <table class="gw-tbl" style="width:100%">
+    <thead><tr>
+      <th>Hostname</th>
+      <th style="text-align:right">Hits (1h)</th>
+      <th style="text-align:right">Blocked (1h)</th>
+      <th style="width:160px"></th>
+    </tr></thead>
+    <tbody id="discovered-tbody"><tr><td colspan="4" class="gw-empty">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+<!-- vhost edit modal -->
+<div id="vhost-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:9000;align-items:center;justify-content:center">
+  <div style="background:var(--card);border:1px solid var(--line);border-radius:8px;
+              padding:24px;min-width:420px;max-width:560px;max-height:90vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <b id="vhost-modal-title">Add Virtual Host</b>
+      <button onclick="closeVhostModal()" style="background:none;border:none;color:var(--fg);
+              cursor:pointer;font-size:18px">&#x2715;</button>
+    </div>
+    <div class="gw-form-grid">
+      <label>Inbound hostname</label>
+      <input id="vh-hostname" type="text" placeholder="example.com" spellcheck="false">
+      <label>Upstream URL</label>
+      <input id="vh-upstream" type="url" placeholder="https://backend.example.com" spellcheck="false">
+      <label>Rate limit burst</label>
+      <input id="vh-burst" type="number" min="1" max="10000" value="20">
+      <label>Refill / sec</label>
+      <input id="vh-refill" type="number" min="0.1" max="1000" step="0.1" value="5">
+      <label>UA filter</label>
+      <select id="vh-ua-filter">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <label>UA platform check</label>
+      <select id="vh-ua-platform">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <label>Honeypot</label>
+      <select id="vh-honeypot">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <label>Suspicious paths</label>
+      <select id="vh-suspicious">
+        <option value="true">Enabled</option>
+        <option value="false">Disabled</option>
+      </select>
+      <label>Country block</label>
+      <select id="vh-country-block">
+        <option value="false">Disabled</option>
+        <option value="true">Enabled</option>
+      </select>
+      <label>JS challenge</label>
+      <select id="vh-js">
+        <option value="false">Disabled</option>
+        <option value="true">Enabled</option>
+      </select>
+    </div>
+    <div id="vhost-modal-err" style="color:var(--red);font-size:11.5px;margin-top:10px;display:none"></div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px">
+      <button class="secondary" onclick="closeVhostModal()">Cancel</button>
+      <button id="vhost-modal-save">Save</button>
+    </div>
+  </div>
+</div>
+<script>
+/* vhost-init: deferred until DOMContentLoaded so _timers and escapeHtml
+   (defined in later <script> blocks) are guaranteed to exist. */
+document.addEventListener('DOMContentLoaded', function(){
+  var _editingHost = null;
+
+  function loadVhosts(){
+    var tb = document.getElementById('vhost-tbody');
+    fetch('/antibot-appsec-gateway/secured/vhosts',{credentials:'include'})
+      .then(function(r){
+        if(!r.ok) throw new Error('HTTP '+r.status);
+        return r.json();
+      })
+      .then(function(d){
+        var rows = (d.vhosts||[]);
+        if(!rows.length){
+          tb.innerHTML='<tr><td colspan="8" class="gw-empty"><strong>No virtual hosts configured</strong> — use + Add to route inbound domains to upstreams.</td></tr>';
+          return;
+        }
+        tb.innerHTML = rows.map(function(v){
+          var uaOn = v.UA_FILTER_ENABLED !== false;
+          var hpOn = v.HONEYPOT_ENABLED !== false;
+          var burst = v.RATE_LIMIT_BURST != null ? v.RATE_LIMIT_BURST : '—';
+          var refill = v.RATE_LIMIT_REFILL != null ? v.RATE_LIMIT_REFILL : '—';
+          return '<tr>'+
+            '<td><span class="gw-fp">'+escapeHtml(v.hostname)+'</span></td>'+
+            '<td style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--blue)">'+escapeHtml(v.UPSTREAM||'(global)')+'</td>'+
+            '<td><span class="pill-status '+(uaOn?'pill-active':'pill-inactive')+'">'+(uaOn?'ON':'OFF')+'</span></td>'+
+            '<td><span class="pill-status '+(hpOn?'pill-active':'pill-inactive')+'">'+(hpOn?'ON':'OFF')+'</span></td>'+
+            '<td style="text-align:right">'+escapeHtml(String(burst))+'</td>'+
+            '<td style="text-align:right">'+escapeHtml(String(refill))+'</td>'+
+            '<td><a href="https://'+encodeURIComponent(v.hostname)+'/antibot-appsec-gateway/login" target="_blank" rel="noopener" style="font-size:11px;color:var(--blue)">link</a></td>'+
+            '<td><button class="act-btn" onclick="editVhost(\''+escapeHtml(v.hostname)+'\')">Edit</button>'+
+                '<a class="act-btn" href="/antibot-appsec-gateway/secured/vhost-policy?hostname='+encodeURIComponent(v.hostname)+'" style="text-decoration:none">Policy</a>'+
+                '<button class="act-btn danger" onclick="deleteVhost(\''+escapeHtml(v.hostname)+'\')">Del</button></td>'+
+            '</tr>';
+        }).join('');
+      })
+      .catch(function(e){
+        tb.innerHTML='<tr><td colspan="8" class="gw-empty" style="color:var(--red)">Failed to load: '+escapeHtml(String(e))+'</td></tr>';
+      });
+  }
+
+  window.openVhostModal = function(host, data){
+    _editingHost = host || null;
+    document.getElementById('vhost-modal-title').textContent = host ? 'Edit — '+host : 'Add Virtual Host';
+    document.getElementById('vh-hostname').value = host || '';
+    document.getElementById('vh-hostname').disabled = false;
+    document.getElementById('vh-upstream').value = (data&&data.UPSTREAM)||'';
+    document.getElementById('vh-burst').value = (data&&data.RATE_LIMIT_BURST)||20;
+    document.getElementById('vh-refill').value = (data&&data.RATE_LIMIT_REFILL)||5;
+    document.getElementById('vh-ua-filter').value = String((data&&data.UA_FILTER_ENABLED)!==false?'true':'false');
+    document.getElementById('vh-ua-platform').value = String((data&&data.UA_PLATFORM_CHECK_ENABLED)!==false?'true':'false');
+    document.getElementById('vh-honeypot').value = String((data&&data.HONEYPOT_ENABLED)!==false?'true':'false');
+    document.getElementById('vh-suspicious').value = String((data&&data.SUSPICIOUS_PATH_ENABLED)!==false?'true':'false');
+    document.getElementById('vh-country-block').value = String(!!(data&&data.COUNTRY_BLOCK_ENABLED)?'true':'false');
+    document.getElementById('vh-js').value = String(!!(data&&data.JS_CHALLENGE)?'true':'false');
+    document.getElementById('vhost-modal-err').style.display='none';
+    document.getElementById('vhost-modal').style.display='flex';
+  };
+
+  window.closeVhostModal = function(){
+    document.getElementById('vhost-modal').style.display='none';
+    _editingHost = null;
+  };
+
+  window.editVhost = function(host){
+    fetch('/antibot-appsec-gateway/secured/vhosts',{credentials:'include'})
+      .then(function(r){return r.json();})
+      .then(function(d){
+        var entry = (d.vhosts||[]).find(function(v){return v.hostname===host;});
+        openVhostModal(host, entry||{hostname:host});
+      });
+  };
+
+  window.deleteVhost = function(host){
+    if(!confirm('Delete virtual host "'+host+'"?')) return;
+    fetch('/antibot-appsec-gateway/secured/vhosts',{
+      method:'DELETE', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({hostname:host})
+    }).then(function(r){return r.json();})
+      .then(function(d){ if(d.ok) loadVhosts(); else _gwAlert('Error: '+(d.error||'unknown')); })
+      .catch(function(e){ _gwAlert('Request failed: '+e.message); });
+  };
+
+  document.getElementById('vhost-add-btn').onclick = function(){ openVhostModal(null, null); };
+
+  document.getElementById('vhost-modal-save').onclick = function(){
+    var hostname = document.getElementById('vh-hostname').value.trim().toLowerCase();
+    var upstream = document.getElementById('vh-upstream').value.trim();
+    var err = document.getElementById('vhost-modal-err');
+    if(!hostname){ err.textContent='Hostname required'; err.style.display='block'; return; }
+    if(!upstream){ err.textContent='Upstream URL required'; err.style.display='block'; return; }
+    var payload = {
+      hostname: hostname,
+      UPSTREAM: upstream,
+      RATE_LIMIT_BURST: parseInt(document.getElementById('vh-burst').value)||20,
+      RATE_LIMIT_REFILL: parseFloat(document.getElementById('vh-refill').value)||5,
+      UA_FILTER_ENABLED: document.getElementById('vh-ua-filter').value==='true',
+      UA_PLATFORM_CHECK_ENABLED: document.getElementById('vh-ua-platform').value==='true',
+      HONEYPOT_ENABLED: document.getElementById('vh-honeypot').value==='true',
+      SUSPICIOUS_PATH_ENABLED: document.getElementById('vh-suspicious').value==='true',
+      COUNTRY_BLOCK_ENABLED: document.getElementById('vh-country-block').value==='true',
+      JS_CHALLENGE: document.getElementById('vh-js').value==='true'
+    };
+    var oldHost = _editingHost;
+    var isRename = oldHost && oldHost !== hostname;
+    err.style.display='none';
+    document.getElementById('vhost-modal-save').disabled = true;
+    fetch('/antibot-appsec-gateway/secured/vhosts',{
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    }).then(function(r){return r.json();})
+      .then(function(d){
+        if(!d.ok){
+          document.getElementById('vhost-modal-save').disabled = false;
+          err.textContent = d.error||'Unknown error'; err.style.display='block';
+          return;
+        }
+        if(isRename){
+          return fetch('/antibot-appsec-gateway/secured/vhosts',{
+            method:'DELETE', credentials:'include',
+            headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({hostname: oldHost})
+          }).then(function(r){return r.json();})
+            .then(function(){
+              document.getElementById('vhost-modal-save').disabled = false;
+              closeVhostModal(); loadVhosts();
+            });
+        }
+        document.getElementById('vhost-modal-save').disabled = false;
+        closeVhostModal(); loadVhosts();
+      })
+      .catch(function(e){
+        document.getElementById('vhost-modal-save').disabled = false;
+        err.textContent = 'Request failed: '+e.message; err.style.display='block';
+      });
+  };
+
+  /* ── Discovered hosts ── */
+  function loadDiscovered(){
+    Promise.all([
+      fetch('/antibot-appsec-gateway/secured/vhosts',{credentials:'include'}).then(function(r){return r.json();}),
+      fetch('/antibot-appsec-gateway/secured/vhost-stats',{credentials:'include'}).then(function(r){return r.ok?r.json():{stats:[]};})
+    ]).then(function(results){
+      var configured = new Set((results[0].vhosts||[]).map(function(v){return v.hostname;}));
+      var globalUpstream = '';
+      fetch('/antibot-appsec-gateway/secured/config',{credentials:'include'})
+        .then(function(r){return r.json();})
+        .then(function(cfg){globalUpstream=(cfg.state&&cfg.state.UPSTREAM)||'';});
+      var showDismissed = document.getElementById('discovered-show-dismissed').checked;
+      var all = (results[1].stats||[]).filter(function(s){
+        return !configured.has(s.hostname) && s.total_1h > 0;
+      });
+      var discovered = showDismissed ? all : all.filter(function(s){ return !s.dismissed; });
+      var tb = document.getElementById('discovered-tbody');
+      if(!discovered.length){
+        var msg = showDismissed
+          ? 'No new hosts detected in the last hour.'
+          : (all.length ? 'All discovered hosts are dismissed. Check "Show dismissed" to see them.' : 'No new hosts detected in the last hour.');
+        tb.innerHTML='<tr><td colspan="4" class="gw-empty">'+msg+'</td></tr>';
+        return;
+      }
+      tb.innerHTML = discovered.map(function(s){
+        var hn = escapeHtml(s.hostname);
+        var up = escapeHtml(globalUpstream||'');
+        var dimStyle = s.dismissed ? 'opacity:.5;' : '';
+        var dismissBtn = s.dismissed
+          ? '<button class="secondary" style="margin-left:4px" onclick="restoreDiscovered(\''+hn+'\')">Restore</button>'
+          : '<button class="secondary" style="margin-left:4px" onclick="dismissDiscovered(\''+hn+'\')">Remove</button>';
+        return '<tr style="'+dimStyle+'">'+
+          '<td><span class="gw-fp">'+hn+'</span></td>'+
+          '<td style="text-align:right">'+s.total_1h+'</td>'+
+          '<td style="text-align:right;color:var(--red)">'+s.blocked_1h+'</td>'+
+          '<td style="text-align:right;white-space:nowrap">'+
+            (s.dismissed ? '' : '<button class="act-btn" onclick="registerDiscovered(\''+hn+'\',\''+up+'\')">Register</button>')+
+            dismissBtn+
+          '</td>'+
+          '</tr>';
+      }).join('');
+    }).catch(function(){});
+  }
+
+  window.registerDiscovered = function(hostname, upstream){
+    openVhostModal(null, {UPSTREAM: upstream});
+    document.getElementById('vh-hostname').value = hostname;
+  };
+
+  window.dismissDiscovered = function(hostname){
+    fetch('/antibot-appsec-gateway/secured/vhost-dismiss',{
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({hostname:hostname})
+    }).then(function(){ loadDiscovered(); });
+  };
+
+  window.restoreDiscovered = function(hostname){
+    fetch('/antibot-appsec-gateway/secured/vhost-dismiss',{
+      method:'DELETE', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({hostname:hostname})
+    }).then(function(){ loadDiscovered(); });
+  };
+
+  document.getElementById('discovered-show-dismissed').addEventListener('change', loadDiscovered);
+
+  loadVhosts();
+  loadDiscovered();
+  _timers.push(setInterval(loadVhosts, 30000));
+  _timers.push(setInterval(loadDiscovered, 30000));
+});
+</script>
+<!-- /Virtual Hosts -->
+
+<!-- Vhost Traffic Summary moved to Control Center page (v1.8.1) -->
 
 <!-- ── 1.6.7 — Gateway Registry ─────────────────────────────────── -->
 <div class="card" id="card-gw-registry" style="margin-top:14px">
@@ -475,6 +829,7 @@ button.danger{background:var(--red)}
       <div class="fname" id="fname"></div>
     </div>
     <div class="row-controls" style="margin-top:12px">
+      <button id="btn-test" disabled>Test</button>
       <button id="btn-import" disabled>Apply</button>
       <button id="btn-clear" class="secondary">Clear</button>
     </div>
@@ -487,8 +842,18 @@ button.danger{background:var(--red)}
 
 <div id="toast" class="toast"></div>
 
+<script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script>
 "use strict";
+const _dp = (h) => {
+  if (typeof DOMPurify === "undefined") return h;
+  if (/^<t[rhd]/i.test((h||'').trimStart())) {
+    const _s = DOMPurify.sanitize('<table><tbody>' + h + '</tbody></table>');
+    const _e = document.createElement('div'); _e.innerHTML = _s;
+    return (_e.querySelector('tbody') || _e).innerHTML;
+  }
+  return DOMPurify.sanitize(h);
+};
 const $ = (id) => document.getElementById(id);
 const toast = (msg, kind) => {
   const t = $("toast"); t.textContent = msg; t.className = "toast show " + (kind || "");
@@ -496,15 +861,11 @@ const toast = (msg, kind) => {
 };
 
 // ── Gateway identity strip ────────────────────────────────────────
-// Domain comes from the URL the operator opened the page on.
-// Everything else comes from the JSON status feed.
-$("gw-host").textContent = window.location.host || "—";
 (async () => {
   try {
     const r = await fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' });
     if (!r.ok) return;
     const j = await r.json();
-    if (j.upstream)         $("gw-upstream-input").value = j.upstream;
     if (j.version)          $("gw-version").textContent  = j.version;
     if (j.db_backend)       $("gw-db").textContent       = j.db_backend;
     if (j.uptime_secs != null) {
@@ -516,42 +877,6 @@ $("gw-host").textContent = window.location.host || "—";
   } catch (e) { /* leave dashes */ }
 })();
 
-// 1.7.9 — upstream Apply button
-$("gw-upstream-apply").addEventListener("click", async () => {
-  const btn    = $("gw-upstream-apply");
-  const status = $("gw-upstream-status");
-  const val    = $("gw-upstream-input").value.trim().replace(/\/+$/, "");
-  if (!val.startsWith("http://") && !val.startsWith("https://")) {
-    status.textContent = "must start with http:// or https://";
-    status.style.color = "var(--red)";
-    return;
-  }
-  btn.disabled = true; btn.textContent = "…";
-  status.textContent = ""; status.style.color = "";
-  try {
-    const r = await fetch("/antibot-appsec-gateway/secured/config", {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ UPSTREAM: val }),
-    });
-    const d = await r.json();
-    if (r.ok && d.applied && d.applied.UPSTREAM !== undefined) {
-      $("gw-upstream-input").value = d.applied.UPSTREAM;
-      status.textContent = "✓ applied";
-      status.style.color = "var(--green)";
-    } else {
-      const reason = (d.rejected && d.rejected.UPSTREAM) || d.error || "rejected";
-      status.textContent = "✗ " + reason;
-      status.style.color = "var(--red)";
-    }
-  } catch (e) {
-    status.textContent = "✗ " + e.message;
-    status.style.color = "var(--red)";
-  } finally {
-    btn.disabled = false; btn.textContent = "Apply";
-    setTimeout(() => { status.textContent = ""; }, 4000);
-  }
-});
 
 // 1.6.7 — fill the "Logged in as" cell from /secured/whoami.
 (async () => {
@@ -609,17 +934,19 @@ let pending = null;
 const drop = $("drop");
 const fnameEl = $("fname");
 const btnImport = $("btn-import");
+const btnTest   = $("btn-test");
 
 const setFile = (f) => {
   if (!f) {
-    pending = null; fnameEl.textContent = ""; btnImport.disabled = true; return;
+    pending = null; fnameEl.textContent = "";
+    btnImport.disabled = true; btnTest.disabled = true; return;
   }
   if (!f.name.endsWith(".zip") && f.type !== "application/zip" && f.type !== "application/x-zip-compressed") {
     toast("Not a .zip file", "err"); return;
   }
   pending = f;
   fnameEl.textContent = f.name + "  (" + f.size + " bytes)";
-  btnImport.disabled = false;
+  btnImport.disabled = false; btnTest.disabled = false;
 };
 
 drop.addEventListener("click", () => {
@@ -641,14 +968,13 @@ $("btn-clear").addEventListener("click", () => {
   $("import-result").className = "result";
 });
 
-$("btn-import").addEventListener("click", async () => {
+async function _doImport(dry) {
   if (!pending) return;
   const ow = $("import-overwrite-secrets").checked ? "1" : "0";
-  const dry = $("import-dry-run").checked ? "1" : "0";
   const url = "/antibot-appsec-gateway/secured/settings-import?overwrite_secrets=" + ow + "&dry_run=" + dry;
   const result = $("import-result");
   result.className = "result";
-  btnImport.disabled = true;
+  btnImport.disabled = true; btnTest.disabled = true;
   try {
     const r = await fetch(url, {
       method: "POST",
@@ -659,28 +985,38 @@ $("btn-import").addEventListener("click", async () => {
     let j; try { j = await r.json(); } catch { j = {}; }
     if (!r.ok) {
       result.className = "result show err";
-      result.textContent = "Import failed (HTTP " + r.status + "):\n" +
+      result.textContent = (dry === "1" ? "Validation failed (HTTP " : "Import failed (HTTP ") + r.status + "):\n" +
                             JSON.stringify(j, null, 2);
-      toast("Import failed", "err");
+      toast(dry === "1" ? "Validation failed" : "Import failed", "err");
       return;
     }
-    result.className = "result show ok";
+    const errs = j.errors && j.errors.length;
+    result.className = "result show " + (errs ? "err" : "ok");
     const summary = [
-      "OK · " + (dry === "1" ? "DRY-RUN — no changes applied" : "configuration applied"),
+      (errs ? "INVALID" : "OK") + " · " + (dry === "1" ? "TEST — no changes applied" : "configuration applied"),
       "Knobs applied:    " + (j.knobs_applied || 0),
       "Knobs rejected:   " + (j.knobs_rejected || 0),
       "Admin-IPs added:  " + (j.admin_ips_added || 0),
       "Secrets applied:  " + (j.secrets_applied || 0),
     ].join("\n");
     result.textContent = summary + "\n\n" + JSON.stringify(j, null, 2);
-    toast(dry === "1" ? "Validation OK (dry-run)" : "Configuration applied", "ok");
+    toast(dry === "1" ? (errs ? "Validation failed" : "File is valid") : "Configuration applied",
+          errs ? "err" : "ok");
   } catch (e) {
     result.className = "result show err";
-    result.textContent = "Import failed: " + e.message;
-    toast("Import failed", "err");
+    result.textContent = (dry === "1" ? "Validation error: " : "Import failed: ") + e.message;
+    toast(dry === "1" ? "Validation error" : "Import failed", "err");
   } finally {
     btnImport.disabled = !pending;
+    btnTest.disabled = !pending;
   }
+}
+
+btnTest.addEventListener("click", () => _doImport("1"));
+
+$("btn-import").addEventListener("click", async () => {
+  const dry = $("import-dry-run").checked ? "1" : "0";
+  await _doImport(dry);
 });
 
 // ── 1.6.7 — Gateway Registry ─────────────────────────────────────────
@@ -743,10 +1079,10 @@ function showSimpleModal(innerHtml) {
     m.onclick = (e) => { if (e.target === m) closeSimpleModal(); };
     document.body.appendChild(m);
   }
-  m.innerHTML = `<div style="background:var(--card);border:1px solid var(--line);
+  m.innerHTML = _dp(`<div style="background:var(--card);border:1px solid var(--line);
     border-radius:8px;padding:20px 24px;max-width:680px;width:100%;max-height:86vh;overflow:auto;
     box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:-apple-system,'SF Pro',ui-sans-serif">
-    ${innerHtml}</div>`;
+    ${innerHtml}</div>`);
   m.style.display = "flex";
 }
 function closeSimpleModal() {
@@ -813,7 +1149,7 @@ function renderList() {
     </div></td></tr>`;
     return;
   }
-  tb.innerHTML = rows.map(r => `
+  tb.innerHTML = _dp(rows.map(r => `
     <tr class="${r.is_local ? 'gw-row-local' : ''}" data-gw="${escapeHtml(r.gw_id)}">
       <td><input type="checkbox" class="gw-row-cb" data-gw="${escapeHtml(r.gw_id)}"
                  ${GW_STATE.selected.has(r.gw_id) ? 'checked' : ''}></td>
@@ -848,7 +1184,7 @@ function renderList() {
         <button class="act-btn danger" data-act="delete" data-gw="${escapeHtml(r.gw_id)}"
                 ${r.is_local ? 'disabled title="cannot delete the local gateway"' : ''}>Delete</button>
       </td>
-    </tr>`).join("");
+    </tr>`).join(""));
 }
 
 document.querySelectorAll("#pane-list th[data-sort]").forEach(th => {
@@ -1282,7 +1618,7 @@ function renderMatrix() {
     body += "</tr>";
   }
   body += "</tbody>";
-  tbl.innerHTML = head + body;
+  tbl.innerHTML = _dp(head + body);
   tbl.querySelectorAll("td.cell").forEach(c => {
     if (c.classList.contains("disabled")) return;
     c.addEventListener("click", () => {
@@ -1329,14 +1665,14 @@ async function loadAudit() {
     if (!j.entries.length) {
       tb.innerHTML = '<tr><td colspan="5" class="dim" style="text-align:center;padding:18px">No entries match the filter.</td></tr>';
     } else {
-      tb.innerHTML = j.entries.map(e => `
+      tb.innerHTML = _dp(j.entries.map(e => `
         <tr>
           <td>${new Date((e.ts||0)*1000).toISOString().replace('T',' ').slice(0,19)}Z</td>
           <td><code>${escapeHtml(e.action)}</code></td>
           <td>${escapeHtml(e.gw_id || '*')}</td>
           <td>${escapeHtml(e.actor || '—')}</td>
           <td><code style="white-space:pre-wrap;word-break:break-all;font-size:10.5px">${escapeHtml(e.details || '')}</code></td>
-        </tr>`).join("");
+        </tr>`).join(""));
     }
     const last = Math.min(GW_STATE.audit.offset + GW_STATE.audit.limit, GW_STATE.audit.total);
     $("audit-pager-info").textContent = `${GW_STATE.audit.offset+1}–${last} of ${GW_STATE.audit.total}`;
@@ -1404,7 +1740,7 @@ async function loadUsers() {
       </td></tr>`;
       return;
     }
-    tb.innerHTML = rows.map(u => {
+    tb.innerHTML = _dp(rows.map(u => {
       const isCurrent = u.username === USERS_CURRENT;
       const onlineDot = u.online
         ? '<span title="signed in within the last minute" style="color:var(--green);font-weight:700">● online</span>'
@@ -1427,7 +1763,7 @@ async function loadUsers() {
                   ${isCurrent ? 'disabled title="cannot delete your own account"' : ''}>Delete</button>
         </td>
       </tr>`;
-    }).join("");
+    }).join(""));
   } catch (e) { toast("Users load failed: " + e.message, "err"); }
 }
 
@@ -1472,7 +1808,7 @@ async function openSessionsModal(username) {
     pane.classList.remove("dim");
     pane.style.padding = "0";
     pane.style.textAlign = "left";
-    pane.innerHTML = `
+    pane.innerHTML = _dp(`
       <div style="overflow-x:auto">
       <table class="gw-tbl">
         <thead><tr>
@@ -1506,7 +1842,7 @@ async function openSessionsModal(username) {
               </tr>`;
           }).join("")}
         </tbody>
-      </table></div>`;
+      </table></div>`);
     pane.querySelectorAll("[data-revoke-sid]").forEach(btn => {
       btn.addEventListener("click", async () => {
         const sid = btn.dataset.revokeSid;
@@ -1744,7 +2080,7 @@ async function loadStorage() {
     const total = fmtBytes(disk.total);
     const warn  = disk.pct >= 90;
     const color = warn ? 'var(--red)' : (disk.pct >= 75 ? '#e3b341' : '#3fb950');
-    el.innerHTML = `
+    el.innerHTML = _dp(`
       <div style="margin-bottom:10px">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px">
           <span style="color:var(--fg)">Disk usage</span>
@@ -1769,7 +2105,7 @@ async function loadStorage() {
           <div style="color:var(--fg);font-weight:600">${fmtBytes(d.shm_bytes)}</div>
         </div>
       </div>
-      <div style="color:var(--dim);font-size:11px;margin-top:8px">Path: ${d.db_path || '—'}</div>`;
+      <div style="color:var(--dim);font-size:11px;margin-top:8px">Path: ${d.db_path || '—'}</div>`);
   } catch(e) {
     el.innerHTML = '<span style="color:var(--red)">Error: '+e.message+'</span>';
   }
@@ -1906,9 +2242,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         <span class="det">${escapeHtml(r.detail||'')}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
       </div>`).join('');
-    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
       Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
-    </div>`;
+    </div>`);
     modal.classList.add('show');
   };
   document.addEventListener('keydown', e => {
@@ -1947,7 +2283,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
-  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:360px;max-width:480px;max-height:80vh;overflow-y:auto">
+  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <b>My Account</b>
       <button onclick="document.getElementById('acct-modal').style.display='none'" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&#x2715;</button>
@@ -1972,13 +2308,14 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     b.innerHTML='<div style="color:var(--dim)">Loading…</div>';
     fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
       var u=d.user||{};
-      b.innerHTML='<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
+      b.innerHTML=_dp('<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button onclick="window._acct.changePw()" style="font-size:12px;padding:5px 12px;background:#388bfd;color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
-        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>';
+        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
+      var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
       _acctLoadSessions();
     }).catch(function(){document.getElementById('acct-body').innerHTML='<div style="color:var(--red)">Failed to load.</div>';});
   }
@@ -2001,10 +2338,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         var sessions=(d.sessions||[]).filter(function(s){return s.status==='active';});
         var curSid=d.current_sid||'';
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
-        el.innerHTML='<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
+        el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button onclick="window._acct.revokeSession('+JSON.stringify(s.sid)+')" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
-        }).join('')+'</table>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+        }).join('')+'</table>');
+        el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
   }
   function _acctRevokeSession(sid){
@@ -2014,4 +2352,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
 })();
 </script>
+</div><!-- /page-content -->
+</div><!-- /main-area -->
 </body></html>

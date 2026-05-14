@@ -291,8 +291,10 @@ async def service_metrics_data_endpoint(request: web.Request):
       ?range=N    — window length in minutes (5..720, default 60)
       ?bucket=S   — bucket width in seconds (5,30,60,300,900,3600 — default 5)
       ?end=EPOCH  — right edge of the window (default = now / live)
+      ?vhost=H    — filter traffic counters to a single vhost (system metrics stay global)
     Samples within each bucket are averaged for cpu/mem/disk pct, max'd for
     counters (procs/fds/db_size), summed for net throughput."""
+    _vhost = request.query.get("vhost", "").strip().lower()
     raw = list(SERVICE_METRICS_HISTORY)
     current = raw[-1] if raw else {}
 
@@ -385,15 +387,40 @@ async def service_metrics_data_endpoint(request: web.Request):
     async with state_lock:
         identities = len(ip_state)
         ip_buckets_n = len(ip_buckets)
+        if _vhost:
+            identities = sum(1 for s in ip_state.values()
+                             if (getattr(s, "last_vhost", "") or "").lower() == _vhost)
+
+    # Per-vhost traffic counters from events table (when vhost filter is active).
+    vhost_total = vhost_allowed = vhost_blocked = None
+    if _vhost:
+        try:
+            import sqlite3 as _sq3
+            _win_start = end_b - window
+            conn = _sq3.connect(_DATA_PATH)
+            row = conn.execute(
+                "SELECT COUNT(*), "
+                "SUM(CASE WHEN reason IN ('ok','allowed','authorized-robot') THEN 1 ELSE 0 END), "
+                "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe') THEN 1 ELSE 0 END) "
+                "FROM events WHERE ts >= ? AND ts <= ? AND vhost = ?",
+                (_win_start, end_b + bucket_secs, _vhost),
+            ).fetchone()
+            conn.close()
+            if row and row[0]:
+                vhost_total, vhost_allowed, vhost_blocked = int(row[0]), int(row[1] or 0), int(row[2] or 0)
+        except Exception:
+            pass
+
     app_info = {
         "uptime_secs":     int(_t.time() - START_EPOCH),
-        "total_requests":  metrics["total_requests"],
-        "allowed":         metrics["allowed"],
-        "blocked":         metrics["blocked"],
+        "total_requests":  vhost_total   if _vhost and vhost_total   is not None else metrics["total_requests"],
+        "allowed":         vhost_allowed if _vhost and vhost_allowed is not None else metrics["allowed"],
+        "blocked":         vhost_blocked if _vhost and vhost_blocked is not None else metrics["blocked"],
         "identities":      identities,
         "ip_buckets":      ip_buckets_n,
         "events_buffered": len(events),
         "version":         GW_VERSION,
+        "vhost_filter":    _vhost or None,
     }
     return web.json_response({
         "current":          current,

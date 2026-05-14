@@ -62,8 +62,11 @@ The directory must be writable by the container user (UID 65532). If using a hos
 ```bash
 docker logs appsecgw | head -40
 # Expect: [keys] loaded … [db] sqlite WAL … [start] AppSecGW_1.7.3 listening on :8080
-curl -s http://localhost:8080/antibot-appsec-gateway/health | python3 -m json.tool
+curl -s http://localhost:8080/antibot-appsec-gateway/live
+# Returns: ok  (plain text — loopback-only; no JSON)
 ```
+
+> **Note — Cloudflare tunnel:** When `cloudflared tunnel` proxies the gateway, cloudflared connects from `127.0.0.1`, which is in `ADMIN_ALLOWED_NETS`. This means `/live` (and all admin endpoints) are reachable through the tunnel. This is expected behavior — restrict tunnel exposure via Cloudflare Access if public tunnel URLs must not expose admin surfaces.
 
 ---
 
@@ -190,7 +193,7 @@ curl -s -c jar -X POST http://localhost:8080/antibot-appsec-gateway/login \
   -d "username=admin&password=<INTERNAL_KEY>"
 
 # All subsequent admin requests use -b jar
-curl -s -b jar http://localhost:8080/antibot-appsec-gateway/secured/dashboard
+curl -s -b jar http://localhost:8080/antibot-appsec-gateway/secured/control-center
 ```
 
 ### Override the bootstrap password
@@ -408,7 +411,121 @@ With docker-compose the bundled `redis` service in `docker-compose.yml` handles 
 
 ---
 
-## 12. Tear down
+## 12. Virtual Hosts (v1.8.0)
+
+Virtual Hosts allow a single gateway container to front multiple upstream services, each identified by the inbound `Host` header. Per-vhost overrides apply only for requests matching that hostname; all other requests use the global configuration.
+
+### Configure via environment variable
+
+Pass a JSON object in `VHOSTS`:
+
+```bash
+docker run ... \
+  -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
+  appsec-antibot-gw:1.8.0
+```
+
+### Manage at runtime (Settings UI)
+
+Open **Settings → Virtual Hosts** in the admin dashboard. From there you can:
+
+- **Add** — enter a hostname and upstream URL; any supported override key can be set.
+- **Delete** — remove an existing entry; takes effect immediately.
+- **List** — the table refreshes every 5 s automatically.
+
+Changes are persisted to `/data/vhosts.json` and survive container restarts even if `VHOSTS` env is unchanged.
+
+### Manage via API
+
+```bash
+# List all vhosts
+curl -b session.cookie https://gw.example.com/antibot-appsec-gateway/secured/vhosts
+
+# Add / update
+curl -b session.cookie -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"hostname":"shop.example.com","UPSTREAM":"https://shop.example.com"}' \
+  https://gw.example.com/antibot-appsec-gateway/secured/vhosts
+
+# Delete
+curl -b session.cookie -X DELETE \
+  -H 'Content-Type: application/json' \
+  -d '{"hostname":"shop.example.com"}' \
+  https://gw.example.com/antibot-appsec-gateway/secured/vhosts
+```
+
+All endpoints require an authenticated admin session cookie.
+
+### Supported override keys
+
+| Key | Type | Description |
+|---|---|---|
+| `UPSTREAM` | string | Upstream base URL for this hostname (must be a public IP; RFC-1918/loopback blocked) |
+| `UA_FILTER_ENABLED` | bool | Enable/disable UA-based bot filter |
+| `UA_PLATFORM_CHECK_ENABLED` | bool | Enable/disable platform consistency check |
+| `SUSPICIOUS_PATH_ENABLED` | bool | Enable/disable path injection detector |
+| `HONEYPOT_ENABLED` | bool | Enable/disable honeypot paths |
+| `HONEYPOT_PATHS` | list of strings | Override honeypot path list |
+| `COUNTRY_BLOCK_ENABLED` | bool | Enable/disable geo blocking |
+| `COUNTRY_DENYLIST` | list of ISO-3166-1 alpha-2 | Block listed countries |
+| `COUNTRY_ALLOWLIST` | list of ISO-3166-1 alpha-2 | Allow only listed countries |
+| `RATE_LIMIT_BURST` | int | Per-IP burst token bucket size |
+| `RATE_LIMIT_REFILL` | float | Token refill rate (tokens/second) |
+| `GLOBAL_RPS_LIMIT` | int | Global RPS cap for this vhost |
+| `BYPASS_MODE` | bool | Pass all traffic without scoring |
+| `BYPASS_PATHS` | list of strings | Path prefixes exempt from all detectors |
+| `JS_CHALLENGE` | bool | Enable/disable JS challenge gate |
+| `ANUBIS_ENABLED` | bool | Enable/disable Anubis PoW challenge |
+
+### SSRF protection
+
+The `UPSTREAM` value is DNS-resolved at configuration time. Any address resolving to RFC-1918, loopback (127.x/::1), link-local (169.254.x/fe80::), CGNAT (100.64/10), multicast, or other reserved ranges is rejected with an error. This prevents the gateway from being turned into an SSRF pivot via operator-controlled vhost configuration.
+
+---
+
+## 13. Control Center &amp; dashboard navigation (v1.8.1)
+
+### Control Center
+
+After login, operators land on the **Control Center** (`/antibot-appsec-gateway/secured/control-center`). It shows:
+
+- **Vhost Traffic Summary** — per-vhost request counts (Total 1h, Allowed 1h, Blocked 1h, Block%, Total 24h, Blocked 24h, Banned IPs). Auto-refreshes every 30 s via `GET /secured/vhost-stats`.
+- **Active ban overview** — count of IPs currently banned, with time-to-expiry distribution.
+- **Gateway health stats** — total events, uptime indicator, detector status.
+
+The Control Center is the entry point for all post-login admin work. Use the top-nav to reach:
+
+| Page | URL slug | Purpose |
+|---|---|---|
+| Control Center | `control-center` | Post-login landing; vhost summary |
+| Live Feed | `live-feed` | Real-time traffic chart + client table |
+| Agents | `agents` | Bot/agent drill-down and identity view |
+| Service | `service` | Per-vhost service health |
+| Controls | `controls` | Knob tuning, bypass, JS-challenge |
+| Geo | `geo` | Geographic block/allow and map |
+| Logs | `logs` | Structured event log with category filter |
+| Settings | `settings` | Import/export config, user management |
+| Vhost Policy | `vhost-policy` | Per-vhost knob override inspector |
+
+### Vhost filtering in metrics and logs (v1.8.1)
+
+The metrics and log data endpoints accept an optional `?vhost=<hostname>` query parameter to scope results to a single virtual host:
+
+```bash
+# Metrics scoped to one vhost
+curl -b session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/metrics?vhost=shop.example.com"
+
+# Log events scoped to one vhost
+curl -b session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/logs-data?vhost=api.example.com&limit=100"
+```
+
+The `vhost` value is validated through `_validate_vhost_hostname()` (RFC-1123: max 253 chars, labels ≤ 63 chars, `[a-z0-9-]` only, no leading/trailing hyphen) before being passed as a bound SQL parameter. Invalid hostnames are rejected with HTTP 400.
+
+---
+
+## 14. Tear down
 
 ```bash
 # Stop and remove container; preserve data volume
@@ -427,7 +544,7 @@ docker compose down -v  # also removes named volumes
 
 ---
 
-## 13. Environment variable reference
+## 15. Environment variable reference
 
 ### Required
 

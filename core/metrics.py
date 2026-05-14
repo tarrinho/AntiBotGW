@@ -13,6 +13,7 @@ defined globally in proxy.py.  They depend only on:
 import asyncio
 import json
 import time as _t
+from vhost import current_vhost_host
 
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
@@ -88,7 +89,8 @@ def _timeline_bump(reason: str, missed: bool = False, path: str = ""):
 async def record(ip: str, ua: str, path: str, status: int, reason: str,
                  track_key: str = None, sid: str = "", fp: str = "",
                  ja4: str = "", request_id: str = "",
-                 signals: list = None, score: float = 0.0):
+                 signals: list = None, score: float = 0.0,
+                 method: str = ""):
     """Record one request decision into global metrics + per-identity state +
     event log + DB.
     track_key (identity) is the primary key.  ip is stored on IpState for
@@ -117,6 +119,7 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         s.last_seen = now()
         s.last_user_agent = ua[:120]
         s.last_path = path[:120]
+        s.last_vhost = current_vhost_host()
         if s.last_ip and s.last_ip != ip:
             ip_to_identities[s.last_ip].discard(key)
         s.last_ip = ip
@@ -157,7 +160,8 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
                     pass
             try:
                 db_queue.put_nowait(("event",
-                    (event_ts, ip, ua[:200], path[:200], "", status, reason or "")))
+                    (event_ts, ip, ua[:200], path[:200], method, status, reason or "",
+                     current_vhost_host())))
                 # Persist this client's snapshot
                 banned_until_epoch = (
                     event_ts + (s.banned_until - now()) if s.banned_until > now() else 0
@@ -196,13 +200,14 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
             "is_admin_ip": _is_admin_ip(ip or ""),
             "ua": ua[:80],
             "path": path[:80],
-            "method": "",   # filled by caller via closure (kept simple here)
+            "method": method,
             "status": status,
             "reason": reason or "OK",
             "ja4": ja4[:64] if ja4 else "",
             "rid": request_id[:32] if request_id else "",
             "score": round(float(score or 0.0), 1),
             "track_key": (track_key or ip or "")[:32],
+            "vhost": current_vhost_host(),
         }
         events.append(_evt)
         # Per-category ring buffers — categories are mutually exclusive, priority order:
@@ -225,6 +230,6 @@ async def record(ip: str, ua: str, path: str, status: int, reason: str,
         slog("request",
              level="info" if not reason else "warn",
              rid=request_id, ip=ip, ja4=ja4 or "", ua=ua[:120],
-             method="", path=path[:200], status=status,
+             method=method, path=path[:200], status=status,
              reason=reason or "ok", track_key=(track_key or "")[:32],
              signals=signals or [], score=round(float(score or 0.0), 1))

@@ -107,9 +107,12 @@ async def agents_timeline_endpoint(request: web.Request):
     except ValueError:
         min_score = 20
 
+    _atl_vhost = request.query.get("vhost", "").strip().lower()
     async with state_lock:
         stealth_ips = set()
         for k, s in ip_state.items():
+            if _atl_vhost and s.last_vhost != _atl_vhost:
+                continue
             if s.allowed_count and _stealth_score(s)[0] >= min_score:
                 if s.last_ip:
                     stealth_ips.add(s.last_ip)
@@ -119,6 +122,7 @@ async def agents_timeline_endpoint(request: web.Request):
     start_b = end_b - (bucket_count - 1) * bucket_secs
 
     detected, allowed_total, missed, authorized_robot, gwmgmt = {}, {}, {}, {}, {}
+    _vc = (" AND vhost = ?", [_atl_vhost]) if _atl_vhost else ("", [])
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -126,27 +130,27 @@ async def agents_timeline_endpoint(request: web.Request):
         for r in conn.execute(
             f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant; agent_q is "?,?,?" placeholders
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND reason IN ({agent_q}) "
+            f"WHERE ts >= ? AND ts <= ? AND reason IN ({agent_q}){_vc[0]} "
             f"GROUP BY b",
-            (start_b, end_b + bucket_secs, *AGENT_BLOCK_REASONS),
+            (start_b, end_b + bucket_secs, *AGENT_BLOCK_REASONS, *_vc[1]),
         ):
             detected[int(r["b"])] = r["n"]
 
         for r in conn.execute(
             f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK') "
+            f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK'){_vc[0]} "
             f"GROUP BY b",
-            (start_b, end_b + bucket_secs),
+            (start_b, end_b + bucket_secs, *_vc[1]),
         ):
             allowed_total[int(r["b"])] = r["n"]
 
         for r in conn.execute(
             f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND reason='authorized-robot' "
+            f"WHERE ts >= ? AND ts <= ? AND reason='authorized-robot'{_vc[0]} "
             f"GROUP BY b",
-            (start_b, end_b + bucket_secs),
+            (start_b, end_b + bucket_secs, *_vc[1]),
         ):
             authorized_robot[int(r["b"])] = r["n"]
 
@@ -156,17 +160,17 @@ async def agents_timeline_endpoint(request: web.Request):
                 f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant; ip_q is "?,?,?" placeholders
                 f"COUNT(*) AS n FROM events "
                 f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK') "
-                f"AND ip IN ({ip_q}) GROUP BY b",
-                (start_b, end_b + bucket_secs, *stealth_ips),
+                f"AND ip IN ({ip_q}){_vc[0]} GROUP BY b",
+                (start_b, end_b + bucket_secs, *stealth_ips, *_vc[1]),
             ):
                 missed[int(r["b"])] = r["n"]
 
         for r in conn.execute(  # nosec B608 — bucket_secs is int constant
             f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND path LIKE ? "
+            f"WHERE ts >= ? AND ts <= ? AND path LIKE ?{_vc[0]} "
             f"GROUP BY b",
-            (start_b, end_b + bucket_secs, ADMIN_NS + "%"),
+            (start_b, end_b + bucket_secs, ADMIN_NS + "%", *_vc[1]),
         ):
             gwmgmt[int(r["b"])] = r["n"]
         conn.close()
@@ -210,6 +214,7 @@ async def agents_data_endpoint(request: web.Request):
         limit = max(1, min(500, int(request.query.get("limit", "100"))))
     except ValueError:
         limit = 100
+    _ad_vhost = request.query.get("vhost", "").strip().lower()
 
     async with state_lock:
         n = now()
@@ -217,6 +222,8 @@ async def agents_data_endpoint(request: web.Request):
         clean = 0
         total_allowed_identities = 0
         for key, s in ip_state.items():
+            if _ad_vhost and s.last_vhost != _ad_vhost:
+                continue
             # 1.5.5 — broaden criteria.  Old logic skipped any identity
             # with allowed_count==0, hiding hard-blocked bots entirely.
             # New: include identities that EITHER have allowed traffic OR
@@ -289,6 +296,7 @@ async def agents_data_endpoint(request: web.Request):
             suspects.append({
                 "id": key,
                 "ip": s.last_ip or key,
+                "domain": s.last_vhost or "",
                 "is_admin_ip": _is_admin_ip(s.last_ip or key),
                 "is_authorized_bot": _s_is_auth_bot,
                 "session": s.last_session,

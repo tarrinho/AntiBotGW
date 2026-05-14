@@ -6,6 +6,133 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.1] — 2026-05-14
+
+### Added
+- **Control Center landing page** (`dashboards/control_center.html`) — new dedicated landing page shown after login; hosts the Vhost Traffic Summary table (moved from Settings), active ban list, and gateway overview stats. Served by `control_center_endpoint` at `/antibot-appsec-gateway/secured/control-center`. Cards: Vhost Traffic Summary (`id="card-vhost-stats"`), ban overview, gateway health.
+- **`control_center_endpoint`** (`core/proxy_handler.py`) — `GET /antibot-appsec-gateway/secured/control-center` serves `control_center.html`; auth-gated; replaces the old `center_control_endpoint`.
+- **Vhost filter in metrics and log endpoints** — `metrics_endpoint` and `logs_data_endpoint` now accept `?vhost=<hostname>` to scope returned data to a single virtual host; SQL uses bound parameter (`WHERE vhost = ?`) to prevent injection; `_vhost_filter` flag routes the events-table query path in `metrics_endpoint`.
+- **`_validate_vhost_hostname()`** (`vhost.py`) — RFC-1123 hostname validator; rejects empty strings, labels > 63 chars, overall > 253 chars, invalid chars, leading/trailing hyphens; called on all inbound hostnames before vhost lookups.
+- **Account modal on `vhost_policy.html`** — `#acct-modal` HTML, `_acct` IIFE (openModal / changePw / revokeSession), and `.portal-footer` CSS added; page now matches the full security standard shared by all other dashboard pages.
+- **Domain column in Live Feed top-paths table** (`dashboards/main.html`) — `#paths-tbl` now has three columns: Domain · Path · Hits. The Domain cell shows the most-frequently-seen virtual host for that path (derived from in-memory event ring buffers); empty vhost events are skipped so only real vhosts surface. Column cell is XSS-escaped and truncated with ellipsis + tooltip for long hostnames. API (`metrics_endpoint`) extended: each `top_paths` entry now includes a `"vhost"` field; `_path_to_vhost` dict is computed from `events_by_cat` ring buffers before the JSON response is built. Empty-state row colspan updated from 2 → 3.
+
+### Changed
+- **Route rename: `dashboard` → `live-feed`** — `proxy.py` `_ROUTES` slug updated; all nav links, login redirects, and test references updated across `admin/users.py`, `dashboards/login.html`, `dashboards/controls.py`, all 9 dashboard HTML nav blocks, and 4 test files.
+- **Route rename: `center-control` → `control-center`** — slug updated in `proxy.py`; `center_control_endpoint` renamed to `control_center_endpoint` in `proxy_handler.py`; HTML file renamed from `center_control.html` to `control_center.html`.
+- **Login redirect target** — `admin/users.py` both handlers now redirect to `/antibot-appsec-gateway/secured/control-center` (was `/secured/dashboard`); `next` param validation preserved.
+- **Vhost Traffic Summary moved from Settings to Control Center** — block removed from `settings.html` (replaced with comment); all `test_settings_vhost_stats_*` tests in `test_pure.py` updated to read `control_center.html`.
+- **`main.html` sidebar nav updated** — Control Center added as first item; Live Feed replaces Dashboard; sidebar uses `#sidebar-nav` pattern (distinct from top-nav on all other pages).
+- **Version bump** — `config.py` `GW_VERSION = "AppSecGW_1.8.1"`; all 9 dashboard `<title>` tags updated.
+
+### Design / UI
+- **`<!doctype html>` added** to 5 pages that were missing it: `main.html`, `agents.html`, `geo.html`, `logs.html`, `service.html`.
+- **`#388bfd` hardcoded blue replaced with `var(--blue)`** across all 9 dashboard HTML files.
+- **`agents.html`** — `<title>` and topbar corrected from "Agent Hunter" / "Stealth Agent Hunter" to "Agents"; metric font-size normalised to 26px.
+- **`service.html`** — `.vhost-pill` CSS fixed: `font-family:inherit`, `font-weight:600`, `line-height:1.6`, `max-width:220px`, `overflow:hidden`, `text-overflow:ellipsis`, `white-space:nowrap`.
+- **`logs.html`** — `[data-cat="missed"]` pill CSS variants added.
+- **`control_center.html`** — Card padding `14px 16px`; h2 `13.5px`; table header bg `#21262d`; row border `var(--line)`; stat value `font-weight:600`; `a.btn-sm` CSS class added; inline styles removed; `button.btn-sm.danger` class for Remove button; event delegation for Remove in `DOMContentLoaded`.
+- **`vhost_policy.html`** — Inline `padding-left:18px;font-size:11.5px` removed from nav link; `● LIVE` removed from topbar; portal footer and account modal added.
+- **`controls.html`, `settings.html`** — `● LIVE` removed from topbar; nav updated with Control Center / Live Feed links.
+- **Portal footer** present on all 9 pages.
+- **Account modal** present on all 9 pages (vhost_policy.html modal added this release).
+
+### Added (rebuild — chart suite)
+- **Chart.js 4.4.4 CDN** added to `control_center.html` — stacked-area **Traffic Over Time** chart driven by `/vhost-breakdown` endpoint (60 s auto-refresh); horizontal **Block Rate** bar chart and **Traffic Share** doughnut chart driven by `/vhost-stats`; per-vhost **RPS gauges**; inline **SVG sparklines** in the vhost-stats table Trend 1h column.
+- **`_hexRgba(hex, alpha)`** — converts `#rrggbb` palette entries to `rgba(r,g,b,a)` strings for Chart.js `backgroundColor`. **`_vhostColor(vhost)`** — stable colour mapping so each vhost keeps the same colour across chart refreshes.
+- **`_makeSpark(data)`** / **`_renderSparklines(rows)`** — SVG polyline sparklines in the 11th column of the vhost-stats table; `length < 2` guard prevents divide-by-zero on sparse data.
+- **`_showChartEmpty(canvasId, emptyId, msg)`** — hides canvas + shows `id="*-chart-empty"` placeholder when a chart has no data; all three canvas elements start hidden via CSS (`display:none`) and are shown on first successful render.
+- **`fill:'stack'`** in traffic chart datasets (not `fill:true`) so each area fills from the previous stacked series rather than independently to `y=0`.
+- **`_trafficChart.destroy()`** / **`_blockRateChart.destroy()`** / **`_donutChart.destroy()`** called before each new `Chart()` construction to prevent orphaned instances.
+- **Silent catch hardening** — two previously silent `.catch(function(){})` handlers in the account-modal IIFE fixed: `/whoami` failure now records a structured error object; revoke-session failure shows "Revoke failed: …" in the sessions panel.
+
+### Tests (rebuild — chart suite)
+- **`tests/test_control_center.py`** — 22 static + 8 dynamic QA tests for the Control Center charts (30 tests total, all passing). Static tests (S01–S22) verify Chart.js CDN tag, canvas IDs, empty-state IDs, RPS grid, no remove-vhost button/handler, 11-column thead, colspan consistency, `_hexRgba`, DOMContentLoaded calls, setInterval registration, chart render functions called from `loadVhostStats`, destroy-before-construct order, `fill:'stack'`, canvas hidden by default CSS, `data-spark-host` attribute, `_makeSpark` length guard, pin button in own `<td>`. Dynamic tests (D01–D08) verify control-center page serves Chart.js HTML, `/vhost-breakdown` schema and label count, seeded-event dataset, `/vhost-stats` fields, `bans` integer type, unauthenticated deflection, and `Cache-Control: no-store`.
+
+### Tests
+- **`test_pure.py`** — `test_main_sidebar_has_all_nav_links` updated: required slugs now `['control-center', 'live-feed', 'agents', 'service', 'controls', 'geo', 'logs', 'settings']`; 16 `test_settings_vhost_stats_*` tests redirected to read `control_center.html`.
+- **`test_integration.py`** — `test_dashboard_works_with_session_cookie` and `test_dashboard_silent_decoy_without_key` updated to use `/secured/live-feed`.
+- **`test_functional.py`** — 2 gwmgmt event buffering tests updated to use `/secured/live-feed`.
+- **`test_endpoints_dynamic.py`** — `test_dashboard_html` and `test_dashboard_unauthenticated_decoy` updated to use `/live-feed`; `SECURED_GETS` and `PAGES` lists updated: `"dashboard"` → `"live-feed"`, `"control-center"` added.
+- **23 new vhost-filter tests** in `tests/test_vhost_filtering.py`: metrics vhost scoping, logs vhost scoping, hostname validation edge cases (empty, too long, invalid chars, leading/trailing hyphens), SQL injection prevention via bound params.
+- **116 new gap-coverage tests** in `tests/test_v180_v181_gaps.py` — closes coverage gaps for 1.8.0 and 1.8.1 features not previously tested:
+  - **A — Domain column** (11 tests): `#paths-tbl` has 3 headers (Domain/Path/Hits), domain is first column, row builder uses `p.vhost` with `escapeHtml`, empty-state colspan=3, `_path_to_vhost` dict in `proxy_handler.py`, API `top_paths` entries carry `vhost` field, unit tests for max-count vhost selection and empty-vhost skip.
+  - **B — DOCTYPE** (9 tests, parametrised): `<!doctype html>` present as first line on all 9 dashboard pages.
+  - **C — No `#388bfd`** (9 tests, parametrised): hardcoded blue hex absent from all 9 dashboards.
+  - **D — Account modal HTML** (27 tests, parametrised): `#acct-modal` element + close control + `_openAcctModal` defined on all 9 pages.
+  - **E — Portal footer** (27 tests, parametrised): `<footer class="portal-footer">` + `.portal-footer` CSS + copyright text on all 9 pages.
+  - **F — Control Center structure** (9 tests): sidebar, topbar, title, all 8 nav slugs, vhost-stats card, active nav link, event delegation, confirm() before delete.
+  - **G — Login redirect** (3 tests): `users.py` has ≥2 occurrences of `/secured/control-center`, no old `/secured/dashboard` reference, `safeNext()` used in `login.html`.
+  - **H — agents.html title** (2 tests): positive "Agents" assertion in `<title>` and topbar; "Stealth" absent.
+  - **I — service.html `.vhost-pill` CSS** (7 tests): `font-family:inherit`, `font-weight:600`, `max-width`, `overflow:hidden`, `text-overflow:ellipsis`, `white-space:nowrap`, `line-height`.
+  - **J — logs.html missed-pill CSS** (2 tests): `[data-cat="missed"]` base and active variants.
+  - **K — Location header rewrite** (11 tests): source guards for 3xx-only, path/query/fragment preservation, netloc swap, embedded-URL rewrite; unit tests for absolute-URL rewrite, relative-URL passthrough, fragment preservation.
+
+### Validation
+- **Unit suite**: 748 passed, 0 failed (+30 new: test_control_center.py chart QA)
+- **Functional suite**: 32 passed, 0 failed
+- **Integration suite**: 23 passed, 0 failed
+- **Regression suite**: 152 passed, 0 failed (no regressions introduced)
+- **Full suite**: 985 passed, 1 skipped (pre-existing), 0 failed
+- **Dashboard charts (§17i)**: 22 passed
+- **Bandit**: 0 High / 0 Critical / 3 Medium (all confirmed FP: B310 https, B104 gateway bind, B608 numeric SQL)
+- **Semgrep**: 0 findings (151 rules, p/python ruleset)
+- **Trivy (arm64)**: 0 Critical / 0 High / 0 Medium CVEs
+- **Black-box pentest**: 14 probes, 0 bypasses (5 new chart endpoints + 6 injection + 3 OWASP)
+- **Harbor**: arm64 `sha256:0d255dd5fc725846a241644a518e40ce0c87b00519bc592521bdc4eab78d5ec0` ✓ · armv7 `sha256:90c93530b52d17c8e4a510cc869b36436468592644ecebb4ab15479f354cfa58` ✓ · amd64 ✗ (pre-existing — no QEMU x86_64 binfmt on arm64 host)
+
+---
+
+## [1.8.0] — 2026-05-13
+
+### Added
+- **Virtual Hosts management UI** (`dashboards/settings.html`) — new "Virtual Hosts" card on the Settings page lists all configured vhosts, allows adding new entries (hostname + upstream + any supported override keys), and deleting existing ones. Table is populated via `GET /antibot-appsec-gateway/secured/vhosts`; add/delete calls `POST`/`DELETE` on the same endpoint. `DOMContentLoaded` listener ensures `_timers` and `escapeHtml` (defined in later script blocks) are available before the vhost card initialises.
+- **`vhost.py` — CRUD API** — `vhost_set(hostname, overrides)`, `vhost_delete(hostname)`, `vhost_list()` functions with full validation through `_VHOST_COERCE` coerce map; atomic `os.replace` for persistence to `/data/vhosts.json`; `_load_vhosts_file()` merges persisted entries over env-derived entries on startup so operator changes survive container restarts.
+- **`admin/settings.py` — `vhosts_endpoint`** — `GET /antibot-appsec-gateway/secured/vhosts` returns `{"vhosts":[...]}` with `Cache-Control: no-store`; `POST` adds/updates; `DELETE` removes; all require admin auth; `ok=false` on validation failure with error message.
+- **`core/proxy_handler.py` — Location header rewrite** — cross-domain `Location` redirects from upstream are rewritten to preserve the gateway domain so multi-vhost configurations do not leak the upstream origin URL in redirect responses.
+
+### Changed
+- **SSRF guard scope narrowed** — `_assert_upstream_public()` retained in `vhost_set()` (API path) and the `VHOSTS` env var parsing loop; removed from module-level global `UPSTREAM` check (which fired before `test_functional.py` could set `UPSTREAM=http://127.0.0.1:18999`, causing `SystemExit`). Guard is unchanged for all operator-controlled inputs.
+- **Version bumped** — `config.py` `GW_VERSION = "AppSecGW_1.8.0"`; all 7 dashboard HTML `<h1>` version strings updated via sed.
+
+### Fixed
+- **DOMContentLoaded race** — Virtual Hosts `<script>` block was an IIFE that ran before `escapeHtml` and `_timers` (declared in later `<script>` blocks) were defined; wrapping in `document.addEventListener('DOMContentLoaded', …)` eliminates the `ReferenceError`.
+
+### Tests
+- **9 new static tests** in `test_pure.py` (`test_settings_vhosts_*`): `card_present`, `uses_domcontentloaded`, `no_iife_before_timers`, `fetch_error_shown_in_table`, `http_error_thrown`, `interval_tracked`, `uses_canonical_escapehtml`, `uses_gwAlert`, `api_path_correct`.
+- **9 new dynamic tests** in `tests/test_endpoints_dynamic.py` (`TestVhostsAPI`): `test_get_returns_json_structure`, `test_get_accessible_from_localhost`, `test_post_add_vhost`, `test_post_missing_hostname_rejected`, `test_post_missing_upstream_rejected`, `test_post_private_ip_upstream_blocked`, `test_delete_vhost`, `test_delete_nonexistent_vhost_idempotent`, `test_post_hostname_normalised_lowercase`.
+
+### Validation
+- **Unit suite**: 526 passed, 0 failed
+- **Functional suite**: 32 passed, 0 failed
+- **Integration suite**: 23 passed, 0 failed
+- **Regression suite**: 152 passed, 0 failed
+- **Bandit**: 0 High / 0 Critical / 0 Medium
+- **Semgrep**: 0 findings (p/python ruleset)
+- **Trivy (arm64)**: 0 Critical / 0 High / 0 Medium CVEs
+- **Black-box pentest**: 13 probes, 0 bypasses
+- **Harbor**: amd64 `sha256:ab9f8afca327` · arm64 `sha256:eaca86486128` · armv7 `sha256:5d28b156fa9e` · manifest (pending push)
+
+---
+
+## [1.7.12] — 2026-05-11
+
+### Added
+- **Import configuration "Test" button** — dedicated validation button in settings.html; always fires `POST /__settings-import?dry_run=1` regardless of the dry-run checkbox state; result labelled `TEST — no changes applied`; `_doImport(dry)` helper shared by Test and Apply buttons.
+- **DOMPurify output sanitisation** — `purify.min.js` (26 KB, cure53/DOMPurify) self-hosted in `dashboards/assets/`; script tag added to all 7 dashboard HTML files; 79 dynamic `innerHTML` assignments wrapped with `_dp()` helper (`DOMPurify.sanitize` with graceful fallback if script unavailable); addresses CSP `unsafe-inline` XSS risk via defence-in-depth.
+- **`tests/test_settings_config_functional.py`** — 7 new `TestSettingsImportTestButton` tests: HTTP 200, `dry_run=true` in response, no state mutation, zero errors on valid ZIP, 400 on empty body, knob counting, HTML presence of `btn-test`.
+
+### Security
+- **CSP `unsafe-inline` XSS risk mitigated** — DOMPurify wraps all dynamic `innerHTML` assignments across 7 admin dashboards; even if attacker-controlled data reaches an innerHTML call it cannot execute scripts or inject event handlers.
+
+### Tests / Validation
+- 724/724 tests pass (517 unit + 32 functional + 175 regression/integration)
+- Bandit: 0 High / 0 Critical / 0 Medium
+- Semgrep: 0 findings (151 rules)
+- Trivy: 0 Critical / 0 High / 0 Medium (arm64 + armv7)
+- Harbor: arm64 `sha256:016c3889dea3` · armv7 `sha256:77718e377963` · manifest `sha256:1c70c8cc47a8`
+
+---
+
 ## [1.7.11] — 2026-05-10
 
 ### Added

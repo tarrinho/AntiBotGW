@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.7.11"
+_EXPECTED_VERSION = "AppSecGW_1.8.1"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.7\.11\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.1\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -1184,6 +1184,516 @@ def test_settings_gw_registry_autorefresh_delay():
         "The interval fires the loadList() fetch; without a delay it defaults to 0ms "
         "and produces ERR_INSUFFICIENT_RESOURCES in the browser console."
     )
+
+
+# ── 1.8.1 Control Center charts (control_center.html) ────────────────────────────────────
+
+def test_control_center_chartjs_local_asset():
+    """control_center.html must load Chart.js from local /assets/, not a CDN."""
+    src = _read_dash('control_center.html')
+    assert 'cdn.jsdelivr.net' not in src, (
+        "control_center.html: Chart.js must not be loaded from a CDN — use local /assets/chart.umd.min.js"
+    )
+    assert 'chart.umd.min.js' in src, (
+        "control_center.html: missing Chart.js script tag (chart.umd.min.js)"
+    )
+
+
+def test_control_center_traffic_chart_canvas():
+    """control_center.html must contain the traffic-chart canvas element."""
+    src = _read_dash('control_center.html')
+    assert 'id="traffic-chart"' in src, (
+        "control_center.html: missing traffic chart canvas (id='traffic-chart')"
+    )
+
+
+def test_control_center_blockrate_chart_canvas():
+    """control_center.html must contain the blockrate-chart canvas element."""
+    src = _read_dash('control_center.html')
+    assert 'id="blockrate-chart"' in src, (
+        "control_center.html: missing block-rate chart canvas (id='blockrate-chart')"
+    )
+
+
+def test_control_center_donut_chart_canvas():
+    """control_center.html must contain the donut-chart canvas element."""
+    src = _read_dash('control_center.html')
+    assert 'id="donut-chart"' in src, (
+        "control_center.html: missing donut chart canvas (id='donut-chart')"
+    )
+
+
+def test_control_center_traffic_chart_fetches_vhost_breakdown():
+    """control_center.html traffic chart must fetch /vhost-breakdown."""
+    src = _read_dash('control_center.html')
+    assert 'vhost-breakdown' in src, (
+        "control_center.html: traffic chart must fetch /vhost-breakdown endpoint"
+    )
+
+
+def test_control_center_traffic_chart_type_line():
+    """control_center.html traffic chart must be type:'line' (stacked area)."""
+    import re as _re
+    src = _read_dash('control_center.html')
+    fn_start = src.find('_renderTrafficChart')
+    assert fn_start != -1, "control_center.html: _renderTrafficChart not found"
+    snippet = src[fn_start: fn_start + 2000]
+    assert _re.search(r"type\s*:\s*['\"]line['\"]", snippet), (
+        "control_center.html: traffic chart must use type:'line'"
+    )
+    assert 'stacked' in snippet, (
+        "control_center.html: traffic chart y-axis must be stacked:true"
+    )
+
+
+def test_control_center_blockrate_chart_type_bar():
+    """control_center.html block-rate chart must be type:'bar' with indexAxis:'y'."""
+    import re as _re
+    src = _read_dash('control_center.html')
+    fn_start = src.find('_renderBlockRateChart')
+    assert fn_start != -1, "control_center.html: _renderBlockRateChart not found"
+    snippet = src[fn_start: fn_start + 2000]
+    assert _re.search(r"type\s*:\s*['\"]bar['\"]", snippet), (
+        "control_center.html: block-rate chart must use type:'bar'"
+    )
+    assert "indexAxis" in snippet and "'y'" in snippet, (
+        "control_center.html: block-rate chart must use indexAxis:'y' (horizontal bars)"
+    )
+
+
+def test_control_center_donut_chart_type_doughnut():
+    """control_center.html donut chart must be type:'doughnut'."""
+    import re as _re
+    src = _read_dash('control_center.html')
+    fn_start = src.find('_renderDonutChart')
+    assert fn_start != -1, "control_center.html: _renderDonutChart not found"
+    snippet = src[fn_start: fn_start + 1500]
+    assert _re.search(r"type\s*:\s*['\"]doughnut['\"]", snippet), (
+        "control_center.html: donut chart must use type:'doughnut'"
+    )
+
+
+def test_control_center_traffic_chart_autorefresh():
+    """control_center.html traffic chart must auto-refresh via setInterval at 60000ms."""
+    import re as _re
+    src = _read_dash('control_center.html')
+    m = _re.search(r'setInterval\(loadTrafficChart\s*,\s*60000\s*\)', src)
+    assert m, (
+        "control_center.html: traffic chart setInterval must be setInterval(loadTrafficChart,60000)"
+    )
+
+
+def test_control_center_timers_push_for_all_intervals():
+    """control_center.html must track all setIntervals in _timers."""
+    import re as _re
+    src = _read_dash('control_center.html')
+    intervals = _re.findall(r'setInterval\(', src)
+    timers_push = _re.findall(r'_timers\.push\(setInterval\(', src)
+    assert len(timers_push) == len(intervals), (
+        f"control_center.html: {len(intervals)} setInterval calls but only "
+        f"{len(timers_push)} are tracked via _timers.push — leaked timers survive page navigation"
+    )
+
+
+def test_control_center_beforeunload_cleanup():
+    """control_center.html must clear _timers in beforeunload."""
+    src = _read_dash('control_center.html')
+    assert 'beforeunload' in src and 'clearInterval' in src, (
+        "control_center.html: must clear _timers via clearInterval in beforeunload handler"
+    )
+
+
+def test_control_center_escapehtml_used_in_dynamic_html():
+    """control_center.html must use escapeHtml for all user-controlled values in innerHTML."""
+    src = _read_dash('control_center.html')
+    fn_start = src.find('function escapeHtml')
+    assert fn_start != -1, "control_center.html: escapeHtml helper not defined"
+    assert src.find('escapeHtml', fn_start + 1) != -1, (
+        "control_center.html: escapeHtml defined but never called"
+    )
+
+
+def test_control_center_hexrgba_helper_defined():
+    """control_center.html must define _hexRgba helper used by chart dataset colours."""
+    src = _read_dash('control_center.html')
+    assert '_hexRgba' in src, (
+        "control_center.html: _hexRgba colour helper not defined — chart backgrounds will break"
+    )
+
+
+def test_control_center_vhost_stats_also_fetched():
+    """control_center.html must fetch /vhost-stats (for block-rate + donut charts)."""
+    src = _read_dash('control_center.html')
+    assert src.count('vhost-stats') >= 2, (
+        "control_center.html: /vhost-stats must be fetched for both block-rate and donut charts"
+    )
+
+
+# ── 1.8.0/1.8.1 vhost traffic summary (control_center.html) ──────────────────────────────
+
+def test_settings_vhost_stats_card_present():
+    """control_center.html must contain the vhost traffic summary card (#card-vhost-stats)."""
+    src = _read_dash('control_center.html')
+    assert 'id="card-vhost-stats"' in src, \
+        "control_center.html: missing vhost stats card (id='card-vhost-stats')"
+
+
+def test_settings_vhost_stats_fetch_endpoint():
+    """control_center.html must fetch /vhost-stats from the stats card JS."""
+    src = _read_dash('control_center.html')
+    assert 'vhost-stats' in src, \
+        "control_center.html: vhost stats card must fetch /vhost-stats endpoint"
+
+
+def test_settings_vhost_stats_autorefresh():
+    """control_center.html vhost stats card auto-refresh must be 30000ms."""
+    src = _read_dash('control_center.html')
+    import re as _re2
+    m = _re2.search(r'setInterval\([\s\S]{0,2000}?loadVhostStats', src)
+    assert m, "control_center.html: no setInterval containing loadVhostStats found"
+    tail = src[m.start(): m.start() + 2500]
+    assert _re2.search(r',\s*30000\s*\)', tail), \
+        "control_center.html: vhost stats auto-refresh setInterval must pass 30000ms delay"
+
+
+def test_settings_vhost_stats_columns():
+    """control_center.html vhost stats table must have all required columns."""
+    src = _read_dash('control_center.html')
+    for col in ('Total 1h', 'Blocked 1h', 'Block %', 'Total 24h', 'Banned IPs'):
+        assert col in src, \
+            f"control_center.html: vhost stats table missing column '{col}'"
+
+
+# ── 1.8.0 vhost breakdown chart (main.html) ──────────────────────────────────
+
+def test_main_vhost_breakdown_card_present():
+    """main.html must contain the vhost breakdown card (#card-vhost-breakdown)."""
+    src = _read_dash('main.html')
+    assert 'id="card-vhost-breakdown"' in src, \
+        "main.html: missing vhost breakdown card (id='card-vhost-breakdown')"
+
+
+def test_main_vhost_breakdown_canvas():
+    """main.html must contain the vhost breakdown canvas element."""
+    src = _read_dash('main.html')
+    assert 'id="vhost-breakdown-chart"' in src, \
+        "main.html: missing vhost breakdown canvas (id='vhost-breakdown-chart')"
+
+
+def test_main_vhost_breakdown_fetch_endpoint():
+    """main.html must fetch /vhost-breakdown from the chart JS."""
+    src = _read_dash('main.html')
+    assert 'vhost-breakdown' in src, \
+        "main.html: vhost breakdown chart must fetch /vhost-breakdown endpoint"
+
+
+def test_main_vhost_breakdown_stacked():
+    """main.html vhost breakdown chart must use stacked:true on the y axis."""
+    src = _read_dash('main.html')
+    assert 'stacked:true' in src or 'stacked: true' in src, \
+        "main.html: vhost breakdown chart y-axis must be stacked"
+
+
+def test_main_vhost_breakdown_autorefresh():
+    """main.html vhost breakdown chart must auto-refresh via setInterval at 30000ms."""
+    src = _read_dash('main.html')
+    import re as _re2
+    m = _re2.search(r'setInterval\([\s\S]{0,500}?loadVhostBreakdown', src)
+    assert m, "main.html: no setInterval containing loadVhostBreakdown found"
+    tail = src[m.start(): m.start() + 1000]
+    assert _re2.search(r',\s*30000\s*\)', tail), \
+        "main.html: vhost breakdown setInterval must pass 30000ms delay"
+
+
+def test_main_vhost_breakdown_syncs_range_bucket():
+    """main.html vhost breakdown JS must add change listeners on the range/bucket selectors."""
+    src = _read_dash('main.html')
+    assert "getElementById('range')" in src or 'getElementById("range")' in src, \
+        "main.html: vhost breakdown must read range selector value"
+    assert "getElementById('bucket')" in src or 'getElementById("bucket")' in src, \
+        "main.html: vhost breakdown must read bucket selector value"
+
+
+# ── 1.8.1 sidebar nav design (main.html) ─────────────────────────────────────
+
+def test_main_has_sidebar_element():
+    """main.html must have a #sidebar element (sidebar nav design)."""
+    src = _read_dash('main.html')
+    assert 'id="sidebar"' in src, \
+        "main.html: missing #sidebar element — sidebar nav not implemented"
+
+
+def test_main_sidebar_has_all_nav_links():
+    """main.html #sidebar must contain links to all dashboard pages."""
+    src = _read_dash('main.html')
+    required = ['control-center', 'live-feed', 'agents', 'service', 'controls', 'geo', 'logs', 'settings']
+    missing = [r for r in required if f'/secured/{r}' not in src]
+    assert not missing, f"main.html: sidebar missing nav links: {missing}"
+
+
+def test_main_sidebar_has_brand():
+    """main.html sidebar must contain a brand/logo block (#sidebar-brand)."""
+    src = _read_dash('main.html')
+    assert 'id="sidebar-brand"' in src, \
+        "main.html: missing #sidebar-brand element"
+
+
+def test_main_has_topbar_element():
+    """main.html must have a #topbar element (compact topbar)."""
+    src = _read_dash('main.html')
+    assert 'id="topbar"' in src, \
+        "main.html: missing #topbar element"
+
+
+def test_main_topbar_has_live_pill():
+    """main.html #topbar must contain the LIVE status pill."""
+    src = _read_dash('main.html')
+    assert 'id="live"' in src, \
+        "main.html: #live pill must be present inside the topbar"
+
+
+def test_main_has_vhost_select_dropdown():
+    """main.html must use a <select id='vhost-select'> instead of vhost pills."""
+    src = _read_dash('main.html')
+    assert 'id="vhost-select"' in src, \
+        "main.html: must have <select id='vhost-select'> for vhost filtering"
+
+
+def test_main_no_old_vhost_bar():
+    """main.html must not use the old #vhost-bar pill container."""
+    src = _read_dash('main.html')
+    assert 'id="vhost-bar"' not in src, \
+        "main.html: old #vhost-bar element still present — should be removed in sidebar design"
+
+
+def test_main_no_old_topnav():
+    """main.html must not use the old .topnav horizontal nav bar."""
+    src = _read_dash('main.html')
+    assert 'class="topnav"' not in src and "class='topnav'" not in src, \
+        "main.html: old .topnav element still present — replaced by sidebar"
+
+
+def test_main_has_main_area_wrapper():
+    """main.html must have a #main-area wrapper div alongside #sidebar."""
+    src = _read_dash('main.html')
+    assert 'id="main-area"' in src, \
+        "main.html: missing #main-area wrapper div"
+
+
+def test_main_has_page_content_wrapper():
+    """main.html must have a #page-content wrapper div for scrollable content."""
+    src = _read_dash('main.html')
+    assert 'id="page-content"' in src, \
+        "main.html: missing #page-content wrapper div"
+
+
+def test_main_sidebar_has_footer_with_account_signout():
+    """main.html sidebar footer must contain My Account link and Sign out button."""
+    src = _read_dash('main.html')
+    assert 'id="sidebar-footer"' in src, \
+        "main.html: missing #sidebar-footer element"
+    assert 'nav-acct' in src, \
+        "main.html: #nav-acct (My Account) must be in sidebar footer"
+    assert 'signout' in src or 'Sign out' in src, \
+        "main.html: Sign out must be in sidebar footer"
+
+
+def test_main_vhost_select_js_populates_options():
+    """main.html vhost select JS must add <option> elements from the /vhosts API."""
+    src = _read_dash('main.html')
+    assert "createElement('option')" in src or 'createElement("option")' in src, \
+        "main.html: vhost select JS must create <option> elements dynamically"
+
+
+def test_main_vhost_select_js_calls_tick():
+    """main.html vhost select change handler must call tick() to refresh data."""
+    src = _read_dash('main.html')
+    # Anchor to the change-listener block (inside DOMContentLoaded)
+    anchor = "addEventListener('change'" if "addEventListener('change'" in src \
+        else 'addEventListener("change"'
+    assert anchor in src, "main.html: vhost-select change listener missing"
+    pos = src.find(anchor)
+    block = src[pos: pos + 400]
+    assert 'tick()' in block, \
+        "main.html: vhost-select change handler must call tick() to refresh data"
+
+
+def test_main_vhost_select_persists_to_session_storage():
+    """main.html vhost select must save selection to sessionStorage(gw_vhost)."""
+    src = _read_dash('main.html')
+    assert "sessionStorage.setItem('gw_vhost'" in src or \
+           'sessionStorage.setItem("gw_vhost"' in src, \
+        "main.html: vhost select must persist selection via sessionStorage.setItem('gw_vhost',...)"
+
+
+# ── 1.8.0 vhost-policy dashboard ─────────────────────────────────────────────
+
+def test_vhost_policy_html_exists():
+    """dashboards/vhost_policy.html must exist (required by VHOST_POLICY_DASHBOARD_HTML load)."""
+    import pathlib as _pl
+    p = _pl.Path(__file__).parent.parent / "dashboards" / "vhost_policy.html"
+    assert p.exists(), "dashboards/vhost_policy.html does not exist"
+
+
+def test_vhost_policy_html_has_policy_data_fetch():
+    """vhost_policy.html must fetch from /vhost-policy-data endpoint."""
+    src = _read_dash('vhost_policy.html')
+    assert 'vhost-policy-data' in src, \
+        "vhost_policy.html: must fetch /vhost-policy-data to display per-vhost knobs"
+
+
+def test_vhost_policy_html_has_vhost_selector():
+    """vhost_policy.html must contain the vhost selector dropdown (#vhost-select)."""
+    src = _read_dash('vhost_policy.html')
+    assert 'id="vhost-select"' in src or "id='vhost-select'" in src, \
+        "vhost_policy.html: must have a vhost dropdown with id='vhost-select'"
+
+
+def test_vhost_policy_html_title_contains_version():
+    """vhost_policy.html <title> must reference AppSecGW and include 'Vhost Policy'."""
+    src = _read_dash('vhost_policy.html')
+    assert 'Vhost Policy' in src, \
+        "vhost_policy.html: page title/header must contain 'Vhost Policy'"
+    assert 'AppSecGW' in src, \
+        "vhost_policy.html: page must reference AppSecGW brand"
+
+
+def test_vhost_policy_html_nav_link_active():
+    """vhost_policy.html nav must mark the /vhost-policy link as .active."""
+    src = _read_dash('vhost_policy.html')
+    assert 'vhost-policy' in src and 'active' in src, \
+        "vhost_policy.html: nav must have an active link for the vhost-policy page"
+
+
+def test_vhost_policy_html_fetches_vhosts_for_selector():
+    """vhost_policy.html must populate the selector from /vhosts endpoint."""
+    src = _read_dash('vhost_policy.html')
+    assert '/vhosts' in src, \
+        "vhost_policy.html: must GET /vhosts to populate the hostname selector"
+
+
+# ── 1.8.1 — control_center.html vhost stats card security ─────────────────────────
+
+def test_settings_vhost_stats_uses_escapeHtml():
+    """Vhost stats card JS must use escapeHtml to prevent XSS in hostname display."""
+    src = _read_dash('control_center.html')
+    # Find the vhost stats card JS block (search full function body)
+    block_start = src.find('loadVhostStats')
+    assert block_start != -1, "control_center.html: loadVhostStats function not found"
+    # escapeHtml may appear anywhere after loadVhostStats definition
+    assert 'escapeHtml' in src[block_start:], \
+        "control_center.html: vhost stats table JS must use escapeHtml for hostname to prevent XSS"
+
+
+def test_settings_vhost_stats_uses_timers_push():
+    """Vhost stats setInterval must be tracked via _timers.push for cleanup."""
+    src = _read_dash('control_center.html')
+    import re as _re2
+    m = _re2.search(r'_timers\.push\(setInterval\([\s\S]{0,300}?loadVhostStats', src)
+    assert m, \
+        "control_center.html: vhost stats setInterval must be wrapped in _timers.push() for proper cleanup"
+
+
+def test_settings_vhost_stats_domcontentloaded():
+    """Vhost stats JS must be deferred via DOMContentLoaded."""
+    src = _read_dash('control_center.html')
+    assert 'loadVhostStats' in src, "control_center.html: loadVhostStats not found"
+    # loadVhostStats must appear inside or after a DOMContentLoaded block
+    dcl_pos = src.rfind('DOMContentLoaded')
+    stats_pos = src.rfind('loadVhostStats')
+    assert dcl_pos != -1, "control_center.html: no DOMContentLoaded listener found for vhost stats"
+    assert stats_pos > dcl_pos, \
+        "control_center.html: loadVhostStats must be called inside or after DOMContentLoaded"
+
+
+# ── 1.8.1 — Vhost Traffic Summary remove button (control_center.html) ──────────────────────────────
+
+def test_settings_vhost_stats_remove_no_inline_onclick():
+    """Vhost stats must not use legacy inline onclick (_removeVhostFromStats is removed)."""
+    src = _read_dash('control_center.html')
+    assert '_removeVhostFromStats' not in src, \
+        "control_center.html: _removeVhostFromStats global function must be removed"
+
+
+def test_settings_vhost_stats_table_colspan_updated():
+    """control_center.html vhost stats empty/error rows must use colspan matching actual column count."""
+    src = _read_dash('control_center.html')
+    import re as _re3
+    # Count actual <th> columns in vhost-stats thead
+    thead_m = _re3.search(r'<thead>(.*?)</thead>', src, _re3.DOTALL)
+    assert thead_m, "control_center.html: vhost stats table must have <thead>"
+    col_count = len(_re3.findall(r'<th', thead_m.group(1)))
+    assert col_count > 0, "control_center.html: no <th> found in thead"
+    pos = src.find('vhost-stats-tbody')
+    assert pos != -1
+    block = src[pos: pos + 3000]
+    expected = f'colspan="{col_count}"'
+    assert expected in block or f"colspan='{col_count}'" in block, \
+        f"control_center.html: vhost stats empty/error <td> must use colspan={col_count} to match {col_count} columns"
+
+
+# ── 1.8.1 — main.html vhost breakdown chart checks ───────────────────────────
+
+def test_main_vhost_breakdown_chart_type_line():
+    """Vhost breakdown chart must use Chart.js type 'line' (stacked area)."""
+    src = _read_dash('main.html')
+    import re as _re2
+    # The chart creation JS block is near 'loadVhostBreakdown' and 'new Chart'
+    block_pos = src.find('loadVhostBreakdown')
+    assert block_pos != -1, "main.html: loadVhostBreakdown function not found"
+    # Search in a 5000-char window around the function
+    block = src[block_pos: block_pos + 5000]
+    assert "type:'line'" in block or "type: 'line'" in block, \
+        "main.html: vhost breakdown chart must use type:'line' for stacked area rendering"
+
+
+def test_main_vhost_breakdown_hides_when_no_data():
+    """Breakdown chart JS must hide the card when no vhost datasets are returned."""
+    src = _read_dash('main.html')
+    assert "card.style.display='none'" in src or 'card.style.display = "none"' in src or \
+           "style.display='none'" in src, \
+        "main.html: breakdown chart must hide itself (display=none) when datasets array is empty"
+
+
+def test_main_vhost_breakdown_palette_defined():
+    """Vhost breakdown chart must define a colour palette for multi-vhost lines."""
+    src = _read_dash('main.html')
+    assert '_PALETTE' in src, \
+        "main.html: vhost breakdown chart must define _PALETTE for per-vhost colour assignment"
+
+
+def test_main_vhost_breakdown_uses_timers_push():
+    """Vhost breakdown setInterval must be tracked via _timers.push for cleanup."""
+    src = _read_dash('main.html')
+    import re as _re2
+    m = _re2.search(r'_timers\.push\(setInterval\([\s\S]{0,300}?loadVhostBreakdown', src)
+    assert m, \
+        "main.html: vhost breakdown setInterval must be wrapped in _timers.push() for proper cleanup"
+
+
+# ── 1.8.1 — admin/settings.py import guard ───────────────────────────────────
+
+def test_admin_settings_imports_data_path_explicitly():
+    """admin/settings.py must import _DATA_PATH explicitly (not via *-import).
+    _DATA_PATH has a leading underscore so `from config import *` excludes it;
+    if not imported explicitly the vhost stats/breakdown endpoints raise NameError."""
+    import pathlib as _pl
+    src = (_pl.Path(__file__).parent.parent / 'admin' / 'settings.py').read_text()
+    assert '_DATA_PATH' in src.split('\n', 20)[4], \
+        "admin/settings.py line 5 must include _DATA_PATH in the explicit config import"
+
+
+def test_admin_settings_vhost_stats_endpoint_no_invalid_sql():
+    """vhost_stats_endpoint SQL must NOT reference non-existent columns ban_level or last_vhost on clients."""
+    import pathlib as _pl
+    src = (_pl.Path(__file__).parent.parent / 'admin' / 'settings.py').read_text()
+    stats_start = src.find('async def vhost_stats_endpoint')
+    assert stats_start != -1
+    stats_block = src[stats_start: stats_start + 2000]
+    assert 'ban_level' not in stats_block, \
+        "vhost_stats_endpoint: must not query ban_level column (does not exist in clients table)"
+    assert 'FROM clients' not in stats_block or 'last_vhost' not in stats_block.split('FROM clients')[1][:200], \
+        "vhost_stats_endpoint: must not query last_vhost from clients table (column does not exist)"
 
 
 # ── SEC-1 additional: login.html safeNext unit test ───────────────────────────
@@ -1856,7 +2366,7 @@ def test_agents_auto_select_bucket_wired_to_range_change():
     )
     # Verify it is called from the range change listener
     range_listener_area = src[src.rfind("t-range") - 10:
-                               src.rfind("t-range") + 200]
+                               src.rfind("t-range") + 400]
     assert "tAutoSelectBucket" in range_listener_area, (
         "agents.html t-range change listener must call tAutoSelectBucket() so the "
         "bucket selector stays in sync with the chosen time window"
@@ -2106,7 +2616,7 @@ def test_geo_authorized_robot_kind_in_geo_data_endpoint():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     geo_start = src.find("async def geo_data_endpoint")
     assert geo_start != -1, "geo_data_endpoint must exist in proxy_handler.py"
-    geo_section = src[geo_start:geo_start + 5000]
+    geo_section = src[geo_start:geo_start + 6000]
     assert 'reason == "authorized-robot"' in geo_section, (
         "geo_data_endpoint must detect reason==\"authorized-robot\" for purple classification"
     )
@@ -2457,7 +2967,7 @@ def test_controls_load_clears_bypass_div():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "controls.html").read_text()
     load_idx = src.find("async function load()")
     assert load_idx != -1, "controls.html must define async function load()"
-    load_block = src[load_idx: load_idx + 500]
+    load_block = src[load_idx: load_idx + 3000]
     assert "'bypass'" in load_block or '"bypass"' in load_block, (
         "controls.html load() clearing list must include 'bypass' so stale "
         "AUTHORIZED_BOT_UAS entries are removed before re-rendering"
@@ -3331,9 +3841,12 @@ def test_bypass_paths_prefix_check_in_protect():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     assert "BYPASS_PATHS" in src, "proxy_handler.py must reference BYPASS_PATHS"
+    # Accept both the direct reference and the vhost-aware vc() form
     bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
-    assert bp_idx != -1, (
-        "protect() must contain: if BYPASS_PATHS and any(request.path.startswith(p) for p in BYPASS_PATHS)"
+    bp_idx_vc = src.find("vc('BYPASS_PATHS') and any(request.path.startswith")
+    assert bp_idx != -1 or bp_idx_vc != -1, (
+        "protect() must contain a BYPASS_PATHS prefix check "
+        "(either direct or via vc('BYPASS_PATHS') and any(request.path.startswith...))"
     )
 
 
@@ -3434,8 +3947,14 @@ def test_bypass_paths_guard_after_authorized_bots_before_rps():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     bot_idx  = src.find("AUTHORIZED_BOT_UAS:")
+    # Accept both direct and vhost-aware vc() form
     bp_idx   = src.find("BYPASS_PATHS and any(request.path.startswith")
+    if bp_idx == -1:
+        bp_idx = src.find("vc('BYPASS_PATHS') and any(request.path.startswith")
+    # Accept both direct and vhost-aware (_vrps_limit) form
     rps_idx  = src.find("GLOBAL_RPS_LIMIT > 0 and")
+    if rps_idx == -1:
+        rps_idx = src.find("_vrps_limit > 0 and")
     assert bot_idx != -1, "AUTHORIZED_BOT_UAS block not found in proxy_handler.py"
     assert bp_idx  != -1, "BYPASS_PATHS guard not found in proxy_handler.py"
     assert rps_idx != -1, "GLOBAL_RPS_LIMIT check not found in proxy_handler.py"
@@ -3450,7 +3969,10 @@ def test_bypass_paths_early_return_calls_record():
     so traffic appears in the main dashboard timeline and clients table."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    # Accept both direct and vhost-aware vc() form
     bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
+    if bp_idx == -1:
+        bp_idx = src.find("vc('BYPASS_PATHS') and any(request.path.startswith")
     assert bp_idx != -1
     block = src[bp_idx: bp_idx + 400]
     assert "await handler(request)" in block, (
@@ -4867,4 +5389,248 @@ def test_main_html_bucket_detail_totalcount_includes_gwmgmt():
     src = _dash("main.html")
     assert "d.gwmgmt" in src, (
         "main.html: d.gwmgmt missing from totalCount calculation in _renderAndWire"
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Virtual Hosts UI — settings.html static checks
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_settings_vhosts_card_present():
+    """settings.html must contain the Virtual Hosts card with expected structure."""
+    src = _dash("settings.html")
+    assert 'id="card-vhosts"' in src, (
+        "settings.html: Virtual Hosts card (id=card-vhosts) missing"
+    )
+    assert 'id="vhost-tbody"' in src, (
+        "settings.html: vhost-tbody tbody element missing"
+    )
+    assert 'id="vhost-add-btn"' in src, (
+        "settings.html: vhost-add-btn button missing"
+    )
+    assert 'id="vhost-modal"' in src, (
+        "settings.html: vhost-modal dialog element missing"
+    )
+
+
+def test_settings_vhosts_uses_domcontentloaded():
+    """settings.html vhost script must use DOMContentLoaded, not a bare IIFE.
+
+    The vhost <script> block appears before _timers and escapeHtml are defined.
+    Using an IIFE causes ReferenceError at runtime ('Loading…' stuck).
+    DOMContentLoaded fires after all synchronous scripts have run.
+    """
+    src = _dash("settings.html")
+    # Must have DOMContentLoaded listener
+    assert "DOMContentLoaded" in src, (
+        "settings.html: DOMContentLoaded missing — vhost script must defer via "
+        "document.addEventListener('DOMContentLoaded', ...) so _timers and "
+        "escapeHtml (defined later) are available when the script runs"
+    )
+    # The comment marker documenting the intent must be present
+    assert "vhost-init" in src, (
+        "settings.html: vhost-init comment missing — marker for the deferred "
+        "DOMContentLoaded init block"
+    )
+
+
+def test_settings_vhosts_no_iife_before_timers():
+    """settings.html vhost block must NOT use an immediately-invoked function expression.
+
+    An IIFE runs synchronously before later <script> blocks, causing ReferenceError
+    on _timers and escapeHtml.  The only safe pattern is DOMContentLoaded.
+    """
+    src = _dash("settings.html")
+    # Locate the vhost script block (between vhost-init comment and /Virtual Hosts)
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return  # structural test already caught this
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    # A bare IIFE looks like: })(  or  })()
+    bare_iife = _re.search(r'\}\s*\)\s*\(\s*\)', vhost_block)
+    assert not bare_iife, (
+        "settings.html: vhost script block contains a bare IIFE (})() — "
+        "this runs before _timers/_escapeHtml are defined. Use DOMContentLoaded."
+    )
+
+
+def test_settings_vhosts_fetch_error_shown_in_table():
+    """settings.html vhost fetch must surface errors in the table, not just console.error."""
+    src = _dash("settings.html")
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    assert "Failed to load" in vhost_block, (
+        "settings.html: vhost fetch .catch() must write 'Failed to load' into "
+        "the table cell so the operator sees the error, not just the browser console"
+    )
+
+
+def test_settings_vhosts_http_error_thrown():
+    """settings.html vhost fetch must throw on non-2xx to trigger .catch()."""
+    src = _dash("settings.html")
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    assert "r.ok" in vhost_block or "!r.ok" in vhost_block, (
+        "settings.html: vhost fetch must check r.ok and throw on HTTP errors"
+    )
+
+
+def test_settings_vhosts_interval_tracked():
+    """settings.html vhost setInterval call must be tracked via _timers.push()."""
+    src = _dash("settings.html")
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    assert "_timers.push(setInterval(" in vhost_block, (
+        "settings.html: vhost auto-refresh setInterval must be wrapped in "
+        "_timers.push(...) to prevent timer leaks on page navigation"
+    )
+
+
+def test_settings_vhosts_uses_canonical_escapehml():
+    """settings.html vhost block must call escapeHtml(), not a local alias."""
+    src = _dash("settings.html")
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    assert "escapeHtml(" in vhost_block, (
+        "settings.html: vhost block must call escapeHtml() — the canonical "
+        "function defined at global scope — not a local alias"
+    )
+    # Confirm no local alias is introduced inside the vhost block
+    local_def = _re.search(r'(?:const|function|var)\s+esc[Hh]tml\b', vhost_block)
+    assert not local_def, (
+        "settings.html: vhost block must not define a local escHtml/escapeHtml alias"
+    )
+
+
+def test_settings_vhosts_uses_gwAlert():
+    """settings.html vhost block must use _gwAlert(), not bare alert()."""
+    src = _dash("settings.html")
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    # bare alert( calls (not _gwAlert)
+    bare = _re.findall(r'(?<!_gw)(?<!_g)\balert\s*\(', vhost_block)
+    assert not bare, (
+        f"settings.html: vhost block has {len(bare)} bare alert() call(s) — "
+        "use _gwAlert() so all alerts pass through the dashboard's notification system"
+    )
+
+
+def test_settings_vhosts_api_path_correct():
+    """settings.html vhost fetch must target the correct secured endpoint path."""
+    src = _dash("settings.html")
+    if "vhost-init" not in src or "<!-- /Virtual Hosts" not in src:
+        return
+    vhost_block = src[src.index("vhost-init"): src.index("<!-- /Virtual Hosts")]
+    assert "/antibot-appsec-gateway/secured/vhosts" in vhost_block, (
+        "settings.html: vhost fetch URL must be "
+        "/antibot-appsec-gateway/secured/vhosts"
+    )
+
+
+# ── 1.8.1 — Vhost Policy page ────────────────────────────────────────────────
+
+def test_vhost_policy_html_version_string():
+    """vhost_policy.html must carry the current version string."""
+    src = _dash("vhost_policy.html")
+    assert "AppSecGW_1.8.1" in src, "vhost_policy.html: version string missing or stale"
+
+
+def test_vhost_policy_html_scope_bar():
+    """vhost_policy.html must have the vhost selector and add-override button."""
+    src = _dash("vhost_policy.html")
+    assert 'id="vhost-select"' in src, "vhost_policy.html: #vhost-select missing"
+    assert 'id="btn-add-override"' in src, "vhost_policy.html: #btn-add-override missing"
+    assert 'id="override-count"' in src, "vhost_policy.html: #override-count badge missing"
+
+
+def test_vhost_policy_html_overrides_container():
+    """vhost_policy.html must have the overrides container and card."""
+    src = _dash("vhost_policy.html")
+    assert 'id="overrides-container"' in src, "vhost_policy.html: #overrides-container missing"
+    assert 'id="card-overrides"' in src, "vhost_policy.html: #card-overrides missing"
+    assert 'id="card-title"' in src, "vhost_policy.html: #card-title missing"
+
+
+def test_vhost_policy_html_picker_modal():
+    """vhost_policy.html must have the knob picker modal."""
+    src = _dash("vhost_policy.html")
+    assert 'id="picker-modal"' in src, "vhost_policy.html: #picker-modal missing"
+    assert 'id="picker-search"' in src, "vhost_policy.html: #picker-search missing"
+    assert 'id="picker-body"' in src, "vhost_policy.html: #picker-body missing"
+    assert 'id="picker-close"' in src, "vhost_policy.html: #picker-close missing"
+
+
+def test_vhost_policy_html_unsaved_bar():
+    """vhost_policy.html must have unsaved changes bar with apply/reset buttons."""
+    src = _dash("vhost_policy.html")
+    assert 'id="unsaved-bar"' in src, "vhost_policy.html: #unsaved-bar missing"
+    assert 'id="btn-apply"' in src, "vhost_policy.html: #btn-apply missing"
+    assert 'id="btn-reset"' in src, "vhost_policy.html: #btn-reset missing"
+
+
+def test_vhost_policy_html_api_paths():
+    """vhost_policy.html must reference correct API endpoints."""
+    src = _dash("vhost_policy.html")
+    # Path built as ADMIN_NS+'/vhost-policy-data' at runtime
+    assert "vhost-policy-data" in src, (
+        "vhost_policy.html: vhost-policy-data API path segment missing"
+    )
+    assert "ADMIN_NS" in src, (
+        "vhost_policy.html: ADMIN_NS constant missing — needed for API paths"
+    )
+    assert "/vhosts" in src, (
+        "vhost_policy.html: /vhosts write endpoint missing"
+    )
+
+
+def test_vhost_policy_html_active_nav_link():
+    """vhost_policy.html nav must mark Vhost Policy as active."""
+    src = _dash("vhost_policy.html")
+    assert 'vhost-policy" class="active"' in src or 'vhost-policy" class="sub active"' in src, (
+        "vhost_policy.html: Vhost Policy nav link not marked active"
+    )
+
+
+def test_vhost_policy_html_knob_meta_coverage():
+    """vhost_policy.html KNOB_META must reference the same knobs as _VHOST_COERCE."""
+    import re
+    src = _dash("vhost_policy.html")
+    # Extract keys from KNOB_META object in the script
+    meta_keys = set(re.findall(r'^\s{2}([A-Z][A-Z0-9_]+):', src, re.MULTILINE))
+    # Must have at least 100 knobs declared (we added 116 to _VHOST_COERCE)
+    assert len(meta_keys) >= 100, (
+        f"vhost_policy.html: KNOB_META has only {len(meta_keys)} entries — "
+        "expected ≥100 to match expanded _VHOST_COERCE"
+    )
+
+
+def test_settings_vhost_table_has_policy_link():
+    """settings.html vhost table must include a Policy link per row."""
+    src = _dash("settings.html")
+    assert "vhost-policy?hostname=" in src, (
+        "settings.html: Policy link to vhost-policy page missing from vhost table"
+    )
+
+
+def test_settings_topnav_has_vhost_policy_link():
+    """settings.html topnav must include a link to the Vhost Policy page."""
+    src = _dash("settings.html")
+    assert "/antibot-appsec-gateway/secured/vhost-policy" in src, (
+        "settings.html: topnav missing Vhost Policy link"
+    )
+
+
+def test_vhost_coerce_expanded():
+    """_VHOST_COERCE must contain at least 100 knobs (expanded in 1.8.1)."""
+    import sys, os
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    import importlib
+    vhost_mod = importlib.import_module("vhost")
+    count = len(vhost_mod._VHOST_COERCE)
+    assert count >= 100, (
+        f"_VHOST_COERCE has only {count} entries — expected ≥100 after 1.8.1 expansion"
     )
