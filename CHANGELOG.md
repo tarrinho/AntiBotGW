@@ -45,8 +45,28 @@ Author: Pedro Tarrinho
 - **`_trafficChart.destroy()`** / **`_blockRateChart.destroy()`** / **`_donutChart.destroy()`** called before each new `Chart()` construction to prevent orphaned instances.
 - **Silent catch hardening** — two previously silent `.catch(function(){})` handlers in the account-modal IIFE fixed: `/whoami` failure now records a structured error object; revoke-session failure shows "Revoke failed: …" in the sessions panel.
 
-### Tests (rebuild — chart suite)
-- **`tests/test_control_center.py`** — 22 static + 8 dynamic QA tests for the Control Center charts (30 tests total, all passing). Static tests (S01–S22) verify Chart.js CDN tag, canvas IDs, empty-state IDs, RPS grid, no remove-vhost button/handler, 11-column thead, colspan consistency, `_hexRgba`, DOMContentLoaded calls, setInterval registration, chart render functions called from `loadVhostStats`, destroy-before-construct order, `fill:'stack'`, canvas hidden by default CSS, `data-spark-host` attribute, `_makeSpark` length guard, pin button in own `<td>`. Dynamic tests (D01–D08) verify control-center page serves Chart.js HTML, `/vhost-breakdown` schema and label count, seeded-event dataset, `/vhost-stats` fields, `bans` integer type, unauthenticated deflection, and `Cache-Control: no-store`.
+### Added (rebuild — threat intelligence chart suite)
+- **4 threat-overview stat tiles** (`id="stat-grid-threat"`) — Ghost/Decoy Hits, Current Clients, AI/Header Blocks, JS Challenges (24h); driven by `/secured/detector-stats` and `/secured/metrics`.
+- **Top Detection Signals** (`id="signals-chart"`) — horizontal bar chart of detector hit counts from `/secured/detector-stats`; top 12 signals by count.
+- **Attack Category Breakdown** (`id="attack-cat-chart"`) — bar chart grouping `detector_hits` into 8 categories via `_CAT_GROUPS` map (AI/Header, UA Filter, Path/Recon, Trap/Canary, Rate/Behavior, Integration, Challenge, Other); driven by `/secured/metrics`.
+- **Block Reasons Over Time** (`id="blockreason-chart"`) — stacked bar chart of block events per rule over a 2h / 5-min-bucket window; driven by `/secured/block-reasons-timeline?range=120&bucket=300`; operator-passthrough and internal-probe reasons filtered via `_REASON_SKIP`; legend labels truncated to 16 chars with `…` to prevent overflow.
+- **Geo — Blocked Traffic** (`id="geo-chart"`) — horizontal bar chart of top-10 countries by blocked request count; driven by `/secured/geo-data`; shows "GeoIP not configured" guard when MaxMind DB absent.
+- **Risk Score Distribution** (`id="riskscore-chart"`) — histogram of active client risk scores (0–100) binned per 10; 10 bars with green→yellow→red gradient per bin index; driven by `/secured/metrics` `clients[].risk_score`.
+- **JS Challenge Funnel** (`id="jschal-chart"`) — 3-step funnel bar (required → tokens minted → detector hits); driven by `/secured/metrics` `jschal_*` fields.
+- **Top Attacked Paths** (`id="toppaths-chart"`) — horizontal bar, top 10 paths by request count; driven by `/secured/top-attacked-paths?range=1440&limit=10`; admin namespace paths (`/antibot-appsec-gateway/`) filtered out before rendering.
+- **Bot vs Human Traffic** (`id="blocktimeline-chart"`) — dual-Y-axis line chart (2h, 5-min buckets) with `yBot` (left, red) for detected + likely-missed bots and `yClean` (right, green) for clean traffic; `fill:'origin'` on all three datasets so bot signals remain visible when clean traffic volume is orders of magnitude larger; driven by `/secured/agents-timeline?range=120&bucket=300`.
+- **Attack Heatmap — Hour × Day** (`id="heatmap-grid"`) — 7×24 CSS-grid heatmap of attack volume by day-of-week and hour; driven by `/secured/attack-heatmap?range=10080`; cell opacity scales from 0.08 (empty) to 0.90 (peak); driven by `cells[]` array `[dow, hour, count]` from API.
+- **`_CAT_GROUPS`** / **`_REASON_SKIP`** / **`_loadThreatSection()`** — category grouping map, operator-passthrough filter set, and master threat-section loader called from `DOMContentLoaded` and the 30-second `setInterval` refresh ticker.
+
+### Fixed
+- **Top Attacked Paths admin-namespace pollution** — paths matching `/antibot-appsec-gateway/` were appearing as top hits when the admin key or dashboard assets were probed; filtered out in `_renderTopPathsChart` before rendering.
+- **Block Reason chart legend overflow** — long reason strings (e.g. `banned-silent`) caused the Chart.js legend to overflow the card boundary; all `ds.reason` labels now truncated to 16 chars with `…`.
+- **Bot vs Human Traffic bot signals invisible** — previous `fill:'stack'` / single-Y-axis design caused bot series (typically 0–50 req) to be rendered at pixel-height zero when clean traffic (0–5000 req) dominated the Y scale; fixed with dual Y-axis: `yBot` (left, red) for bot datasets, `yClean` (right, green) for clean traffic.
+- **MANUAL.md stale image tag** — quick-start `docker run` example referenced `appsec-antibot-gw:1.8.0`; updated to `1.8.1`.
+
+### Tests (rebuild — threat intelligence chart suite)
+- **`tests/test_control_center.py`** — 22 static + 8 dynamic QA tests for the Control Center charts (30 tests total, all passing). Static tests (S01–S22) verify Chart.js CDN tag, canvas IDs, empty-state IDs, RPS grid, no remove-vhost button/handler, 13-column thead (Upstream + Overrides added by linter), colspan consistency, `_hexRgba`, DOMContentLoaded calls, setInterval registration, chart render functions called from `loadVhostStats`, destroy-before-construct order, canvas hidden by default CSS, `data-spark-host` attribute, `_makeSpark` length guard, pin button in own `<td>`. Dynamic tests (D01–D08) verify control-center page serves Chart.js HTML, `/vhost-breakdown` schema and label count, seeded-event dataset, `/vhost-stats` fields, `bans` integer type, unauthenticated deflection, and `Cache-Control: no-store`.
+- **22 new static tests (S23–S44)** in `test_control_center.py` for the threat intelligence chart suite: canvas IDs (8 new charts), empty-state IDs, stat tile IDs (4 threat tiles), load/render function existence, destroy-before-new-Chart order, chart vars declared, DOMContentLoaded wiring, setInterval, `_loadThreatSection` calls all loaders, `_CAT_GROUPS` defined, `_REASON_SKIP` filters operator-passthrough, bot-traffic chart dual-Y-axis (`yAxisID:'yBot'`/`yAxisID:'yClean'`) + `fill:'origin'`, CSS canvas hidden, endpoint targeting, geo unconfigured guard, risk bins, funnel fields, `.stat.yellow` CSS.
 
 ### Tests
 - **`test_pure.py`** — `test_main_sidebar_has_all_nav_links` updated: required slugs now `['control-center', 'live-feed', 'agents', 'service', 'controls', 'geo', 'logs', 'settings']`; 16 `test_settings_vhost_stats_*` tests redirected to read `control_center.html`.
@@ -68,16 +88,12 @@ Author: Pedro Tarrinho
   - **K — Location header rewrite** (11 tests): source guards for 3xx-only, path/query/fragment preservation, netloc swap, embedded-URL rewrite; unit tests for absolute-URL rewrite, relative-URL passthrough, fragment preservation.
 
 ### Validation
-- **Unit suite**: 748 passed, 0 failed (+30 new: test_control_center.py chart QA)
-- **Functional suite**: 32 passed, 0 failed
-- **Integration suite**: 23 passed, 0 failed
-- **Regression suite**: 152 passed, 0 failed (no regressions introduced)
-- **Full suite**: 985 passed, 1 skipped (pre-existing), 0 failed
-- **Dashboard charts (§17i)**: 22 passed
-- **Bandit**: 0 High / 0 Critical / 3 Medium (all confirmed FP: B310 https, B104 gateway bind, B608 numeric SQL)
-- **Semgrep**: 0 findings (151 rules, p/python ruleset)
-- **Trivy (arm64)**: 0 Critical / 0 High / 0 Medium CVEs
-- **Black-box pentest**: 14 probes, 0 bypasses (5 new chart endpoints + 6 injection + 3 OWASP)
+- **Full suite**: 1988 passed, 1 skipped (pre-existing JS-challenge HTML test), 0 failed
+- **Dashboard charts (§17i)**: 22 passed (main.html, service.html, agents.html) + 95 passed (control_center.html static QA)
+- **Bandit**: 0 High / 0 Critical; Medium: B608 agents.py:169 (numeric-controlled SQL — confirmed FP per rules.md); Low: B110/B112 service_metrics.py (try/except/pass — accepted)
+- **Semgrep**: 0 findings (p/python ruleset)
+- **Trivy (arm64)**: 0 Critical / 0 High / 0 Medium CVEs (wolfi base + all Python deps)
+- **Black-box pentest**: pre-existing 14 probes + 10 new chart endpoints verified; 0 bypasses
 - **Harbor**: arm64 `sha256:0d255dd5fc725846a241644a518e40ce0c87b00519bc592521bdc4eab78d5ec0` ✓ · armv7 `sha256:90c93530b52d17c8e4a510cc869b36436468592644ecebb4ab15479f354cfa58` ✓ · amd64 ✗ (pre-existing — no QEMU x86_64 binfmt on arm64 host)
 
 ---
