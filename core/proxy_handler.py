@@ -51,7 +51,7 @@ from integrations.endpoint_policy import (  # noqa: F401
     _to_custom_rules, _eval_custom_rules,
 )
 from admin import *        # noqa: F401,F403
-from vhost import vc, set_vhost, VHOSTS, get_vhost_rps_window, current_vhost_host
+from vhost import vc, set_vhost, VHOSTS, get_vhost_rps_window, current_vhost_host, vhost_is_configured
 from core.metrics import record, _timeline_bump, _bucket_now  # noqa: F401
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading underscore not in *
 from config import _LOG_LEVELS, _LOG_LEVEL_N  # noqa: F401 — leading underscore not in *
@@ -1896,6 +1896,7 @@ _HOT_RELOAD_KNOBS = {
     # this value at runtime updates the displayed setting (useful for
     # operators staging a migration) but won't switch live connections
     # until the container restarts.
+    "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
     "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
     # 1.6.5 — escalation threshold (cost gate for expensive / 3rd-order detectors)
@@ -1994,6 +1995,8 @@ if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
 # be caught above; this guard keeps the intent explicit in the code).
 if "DB_BACKEND" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
+if "ALLOW_PRIVATE_UPSTREAM" in os.environ:
+    _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"ALLOW_PRIVATE_UPSTREAM"}
 
 
 def _json_safe(v):

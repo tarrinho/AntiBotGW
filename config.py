@@ -47,6 +47,13 @@ except Exception as _e:
     print(f"FATAL: invalid UPSTREAM={_upstream_raw!r} — {_e}", flush=True)
     raise SystemExit(2)
 UPSTREAM        = _upstream_raw.rstrip("/")
+# Set ALLOW_PRIVATE_UPSTREAM=1 to permit upstream URLs that resolve to
+# RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x).
+# Only enable in trusted internal deployments — disables the SSRF guard.
+ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() == "1"
+# Set STRICT_VHOST=1 to return 502 for any inbound host not explicitly registered
+# as a vhost. Prevents the global UPSTREAM from acting as a catch-all fallback.
+STRICT_VHOST = os.environ.get("STRICT_VHOST", "0").strip() == "1"
 LISTEN_HOST     = os.environ.get("LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8443"))
 

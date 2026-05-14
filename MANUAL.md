@@ -422,7 +422,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.8.0
+  appsec-antibot-gw:1.8.1
 ```
 
 ### Manage at runtime (Settings UI)

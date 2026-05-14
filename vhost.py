@@ -102,7 +102,10 @@ def _assert_upstream_public(upstream: str, key: str = "UPSTREAM") -> None:
 
     Prevents accidental or malicious VHOSTS configs from turning the gateway
     into an SSRF vector that leaks internal infrastructure over public tunnels.
+    Skipped when ALLOW_PRIVATE_UPSTREAM=1 is set in the environment.
     """
+    if _cfg.ALLOW_PRIVATE_UPSTREAM:
+        return
     parsed = urllib.parse.urlparse(upstream)
     host = parsed.hostname
     if not host:
@@ -124,7 +127,7 @@ def _assert_upstream_public(upstream: str, key: str = "UPSTREAM") -> None:
                 raise SystemExit(
                     f"FATAL: {key}={upstream!r} resolves to private address "
                     f"{addr_str} ({net}) — internal exposure blocked. "
-                    f"Use a public upstream URL."
+                    f"Set ALLOW_PRIVATE_UPSTREAM=1 to permit internal upstreams."
                 )
 
 # ── Supported overridable keys and their type coercions ───────────────────────
@@ -479,6 +482,11 @@ def set_vhost(host: str) -> None:
 def current_vhost_host() -> str:
     """Return the normalised hostname for the current request."""
     return _vhost_host_ctx.get()
+
+
+def vhost_is_configured() -> bool:
+    """Return True if the current request's Host has an explicit vhost entry."""
+    return _vhost_ctx.get() is not None
 
 
 def vc(name: str) -> Any:

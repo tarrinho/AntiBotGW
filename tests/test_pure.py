@@ -1274,12 +1274,13 @@ def test_control_center_donut_chart_type_doughnut():
 
 
 def test_control_center_traffic_chart_autorefresh():
-    """control_center.html traffic chart must auto-refresh via setInterval at 60000ms."""
+    """control_center.html traffic chart must auto-refresh via setInterval at 60000ms (live-mode guard allowed)."""
     import re as _re
     src = _read_dash('control_center.html')
-    m = _re.search(r'setInterval\(loadTrafficChart\s*,\s*60000\s*\)', src)
+    # Accept bare call or live-mode guard wrapper
+    m = _re.search(r'setInterval\(\s*(?:loadTrafficChart|function\s*\(\)\s*\{[^}]*loadTrafficChart[^}]*\})\s*,\s*60000\s*\)', src)
     assert m, (
-        "control_center.html: traffic chart setInterval must be setInterval(loadTrafficChart,60000)"
+        "control_center.html: traffic chart must be auto-refreshed via setInterval(...,60000)"
     )
 
 

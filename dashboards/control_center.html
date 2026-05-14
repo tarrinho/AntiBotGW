@@ -93,6 +93,13 @@ button.btn-sm,a.btn-sm{background:#21262d;color:var(--fg);border:1px solid var(-
 button.btn-sm:hover,a.btn-sm:hover{border-color:var(--blue);color:var(--blue)}
 button.btn-sm.danger{background:#3d1f1f;border-color:#f8514933;color:var(--red)}
 button.btn-sm.danger:hover{border-color:var(--red);color:var(--red)}
+.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+      border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
+.ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
+.ctrl:disabled{opacity:.4;cursor:not-allowed}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.ctrl-now:hover:not(:disabled){background:#1c3d5a}
+#t-controls{display:flex;align-items:center;gap:6px;margin-bottom:14px;font-size:11px;flex-wrap:wrap}
 button.btn-sm.active-filter{border-color:var(--blue);color:var(--blue);opacity:1!important}
 .vhost-filter-btn{opacity:.5;transition:opacity .15s}
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);
@@ -173,12 +180,38 @@ canvas#riskscore-chart,canvas#jschal-chart,canvas#toppaths-chart,canvas#blocktim
   <div class="stat"><div class="label">Banned IPs</div><div class="value" id="stat-bans">—</div><div class="sub">currently banned across all vhosts</div></div>
 </div>
 
+<!-- ── Global time controls ───────────────────────────────────────── -->
+<div id="t-controls">
+  <button id="t-prev" class="ctrl">‹ back</button>
+  <button id="t-now"  class="ctrl ctrl-now">now</button>
+  <button id="t-next" class="ctrl" disabled>fwd ›</button>
+  <span class="dim" style="margin-left:4px">window:</span>
+  <select id="t-range" class="ctrl">
+    <option value="15">15 min</option>
+    <option value="60">1 h</option>
+    <option value="180">3 h</option>
+    <option value="720" selected>12 h</option>
+    <option value="1440">24 h</option>
+    <option value="10080">7 days</option>
+    <option value="43200">30 days</option>
+  </select>
+  <span class="dim">bucket:</span>
+  <select id="t-bucket" class="ctrl">
+    <option value="60">1 min</option>
+    <option value="300" selected>5 min</option>
+    <option value="900">15 min</option>
+    <option value="3600">1 hour</option>
+    <option value="86400">1 day</option>
+  </select>
+  <span id="t-window-label" class="dim" style="font-size:10px;margin-left:4px"></span>
+</div>
+
 <!-- ── Traffic over time (stacked area) ───────────────────────────── -->
 <div class="card" id="card-traffic-chart">
   <div class="section-header" style="margin-bottom:10px">
     <div>
       <h2>Traffic Over Time — All Vhosts</h2>
-      <p class="desc" style="margin:0">Stacked request volume per virtual host. 2-hour window, 5-minute buckets.</p>
+      <p class="desc" style="margin:0">Stacked request volume per virtual host. Use the time controls above to adjust the window.</p>
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <span class="ts" id="traffic-chart-ts"></span>
@@ -452,6 +485,57 @@ var _signalsChart=null,_attackCatChart=null,_blockReasonChart=null,_geoChart=nul
 var _riskScoreChart=null,_jsChalChart=null,_topPathsChart=null,_blockTimelineChart=null;
 var _bdCache=null;
 
+// ── Time-window navigation ────────────────────────────────────────────
+var tEndEpoch=null;
+function tGetRangeMin(){return parseInt(document.getElementById('t-range').value||'720',10);}
+function tPickBucketForRange(m){
+  if(m<=360)  return 60;
+  if(m<=1440) return 300;
+  if(m<=10080)return 3600;
+  return 86400;
+}
+function tAutoSelectBucket(){
+  var bs=tPickBucketForRange(tGetRangeMin()).toString();
+  var sel=document.getElementById('t-bucket');
+  if([].slice.call(sel.options).some(function(o){return o.value===bs;}))sel.value=bs;
+}
+function tRefreshControls(){
+  document.getElementById('t-next').disabled=(tEndEpoch===null);
+  document.getElementById('t-now').disabled=(tEndEpoch===null);
+  var lbl=document.getElementById('t-window-label');
+  var pill=document.getElementById('live');
+  if(tEndEpoch===null){
+    lbl.textContent='(live)';lbl.style.color='var(--green)';
+    if(pill){pill.textContent='● LIVE';pill.style.color='';}
+  }else{
+    var win=tGetRangeMin();
+    var s=new Date((tEndEpoch-win*60)*1000),e=new Date(tEndEpoch*1000);
+    var fmt=function(d){return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
+    lbl.textContent=fmt(s)+' → '+fmt(e)+' (paused)';lbl.style.color='var(--yellow)';
+    if(pill){pill.textContent='⏸ PAUSED';pill.style.color='var(--yellow)';}
+  }
+}
+function _loadTimeCharts(){
+  loadTrafficChart();loadBlockReasonChart();loadBlockTimelineChart();loadTopPathsChart();
+}
+document.getElementById('t-prev').onclick=function(){
+  var win=tGetRangeMin()*60,cur=tEndEpoch||Math.floor(Date.now()/1000);
+  tEndEpoch=cur-win;tRefreshControls();_loadTimeCharts();
+};
+document.getElementById('t-next').onclick=function(){
+  if(!tEndEpoch)return;
+  var win=tGetRangeMin()*60;
+  tEndEpoch=tEndEpoch+win;
+  if(tEndEpoch>Math.floor(Date.now()/1000))tEndEpoch=null;
+  tRefreshControls();_loadTimeCharts();
+};
+document.getElementById('t-now').onclick=function(){tEndEpoch=null;tRefreshControls();_loadTimeCharts();};
+document.getElementById('t-range').addEventListener('change',function(){
+  tEndEpoch=null;tAutoSelectBucket();tRefreshControls();_loadTimeCharts();
+});
+document.getElementById('t-bucket').addEventListener('change',_loadTimeCharts);
+tRefreshControls();
+
 // ── Hex to rgba helper ────────────────────────────────────────────────
 function _hexRgba(hex,a){
   var h=hex.replace('#','');
@@ -461,7 +545,9 @@ function _hexRgba(hex,a){
 
 // ── Traffic Over Time (stacked area) ─────────────────────────────────
 function loadTrafficChart(){
-  fetch('/antibot-appsec-gateway/secured/vhost-breakdown?range=120&bucket=300',{credentials:'include'})
+  var p=new URLSearchParams({range:tGetRangeMin(),bucket:document.getElementById('t-bucket').value});
+  if(tEndEpoch!==null)p.set('end',tEndEpoch.toString());
+  fetch('/antibot-appsec-gateway/secured/vhost-breakdown?'+p,{credentials:'include'})
     .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
     .then(function(d){
       _bdCache=d;
@@ -758,7 +844,7 @@ function loadVhostStats(){
         '<td class="r">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.total_24h.toLocaleString())+'</td>'+
         '<td class="r" style="color:var(--red)">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.blocked_24h.toLocaleString())+'</td>'+
         '<td class="r" style="color:'+(r.bans>0?'var(--yellow)':'var(--dim)')+'">'+r.bans+'</td>'+
-        '<td class='r' style='white-space:nowrap'>'+pinBtn+
+        '<td class="r" style="white-space:nowrap">'+pinBtn+
           '<a href="/antibot-appsec-gateway/secured/vhost-policy?hostname='+encodeURIComponent(r.hostname)+'" class="btn-sm">Policy</a>'+
         '</td>'+
         '</tr>';
@@ -901,7 +987,9 @@ var _REASON_COLORS={
 };
 function _reasonColor(r,i){return _REASON_COLORS[r]||_PALETTE[i%_PALETTE.length];}
 function loadBlockReasonChart(){
-  fetch('/antibot-appsec-gateway/secured/block-reasons-timeline?range=120&bucket=300',{credentials:'include'})
+  var p=new URLSearchParams({range:tGetRangeMin(),bucket:document.getElementById('t-bucket').value});
+  if(tEndEpoch!==null)p.set('end',tEndEpoch.toString());
+  fetch('/antibot-appsec-gateway/secured/block-reasons-timeline?'+p,{credentials:'include'})
     .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
     .then(function(d){_renderBlockReasonChart(d);})
     .catch(function(e){_showChartEmpty('blockreason-chart','blockreason-chart-empty','Failed: '+e.message);});
@@ -1080,7 +1168,9 @@ function _renderJsChalChart(d){
 
 // ── Top Attacked Paths — blocked traffic only (horizontal bar) ────────
 function loadTopPathsChart(){
-  fetch('/antibot-appsec-gateway/secured/top-attacked-paths?range=1440&limit=10',{credentials:'include'})
+  var p=new URLSearchParams({range:tGetRangeMin(),limit:10});
+  if(tEndEpoch!==null)p.set('end',tEndEpoch.toString());
+  fetch('/antibot-appsec-gateway/secured/top-attacked-paths?'+p,{credentials:'include'})
     .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
     .then(function(d){_renderTopPathsChart(d.paths||[]);})
     .catch(function(e){_showChartEmpty('toppaths-chart','toppaths-chart-empty','Failed: '+e.message);});
@@ -1116,7 +1206,9 @@ function _renderTopPathsChart(paths){
 
 // ── Bot vs Human Traffic (stacked area — agents-timeline) ─────────────
 function loadBlockTimelineChart(){
-  fetch('/antibot-appsec-gateway/secured/agents-timeline?range=120&bucket=300',{credentials:'include'})
+  var p=new URLSearchParams({range:tGetRangeMin(),bucket:document.getElementById('t-bucket').value});
+  if(tEndEpoch!==null)p.set('end',tEndEpoch.toString());
+  fetch('/antibot-appsec-gateway/secured/agents-timeline?'+p,{credentials:'include'})
     .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
     .then(function(d){_renderBlockTimelineChart(d.timeline||[]);})
     .catch(function(e){_showChartEmpty('blocktimeline-chart','blocktimeline-chart-empty','Failed: '+e.message);});
@@ -1231,10 +1323,13 @@ function _loadThreatSection(){
 document.addEventListener('DOMContentLoaded',function(){
   loadVhostStats();
   loadTrafficChart();
+  loadBlockRateChart();
+  loadDonutChart();
   _loadThreatSection();
   _timers.push(setInterval(loadVhostStats,30000));
-  _timers.push(setInterval(loadTrafficChart,60000));
-  _timers.push(setInterval(_loadThreatSection,30000));
+  _timers.push(setInterval(function(){if(tEndEpoch===null)loadTrafficChart();},60000));
+  _timers.push(setInterval(function(){loadBlockRateChart();loadDonutChart();},30000));
+  _timers.push(setInterval(function(){if(tEndEpoch===null)_loadThreatSection();},30000));
 });
 window.addEventListener('beforeunload',function(){_timers.forEach(clearInterval);});
 
