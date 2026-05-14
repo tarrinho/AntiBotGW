@@ -736,7 +736,7 @@ async def test_events_admin_path_recorded_as_gwmgmt(gw_client):
     the events buffer to prevent them from displacing real traffic events."""
     proxy.events.clear()
     await gw_client.get(
-        "/antibot-appsec-gateway/secured/dashboard",
+        "/antibot-appsec-gateway/secured/live-feed",
         cookies=_admin_cookie(),
     )
     gw_events = [
@@ -763,9 +763,9 @@ async def test_events_gwmgmt_filter_off_hides_admin_paths(gw_client):
     await gw_client.get("/products", headers=_BROWSER_HDR)
     await gw_client.get("/api/items", headers=_BROWSER_HDR)
     # GW Mgmt traffic (should be hidden when gwmgmt filter is off)
-    # Use /secured/dashboard — /secured/metrics is a poll path excluded from events buffer
+    # Use /secured/live-feed — /secured/metrics is a poll path excluded from events buffer
     await gw_client.get(
-        "/antibot-appsec-gateway/secured/dashboard",
+        "/antibot-appsec-gateway/secured/live-feed",
         cookies=_admin_cookie(),
     )
 

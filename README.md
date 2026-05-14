@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.7.10` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.8.1` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -218,7 +218,7 @@ docker run -d --name appsec-antibot-gw1.7.6 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.7.10 \
+  appsec-antibot-gw:1.8.1 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,7 +236,7 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.7.10` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.8.1` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -817,7 +817,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.7.10
+  appsec-antibot-gw:1.8.0
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1007,8 +1007,8 @@ docker pull  >harbor</antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.7.10 .
-trivy image appsec-antibot-gw:1.7.10        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.8.0 .
+trivy image appsec-antibot-gw:1.8.0        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1081,6 +1081,8 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.8.1** | **Control Center landing page + Live Feed rename + vhost filtering + design hardening + Control Center charts.** New `control_center.html` served at `/secured/control-center` as the post-login landing page; hosts Vhost Traffic Summary (moved from Settings), ban overview, and gateway stats. Route rename: `dashboard` → `live-feed`, `center-control` → `control-center`; login redirect updated accordingly. `_validate_vhost_hostname()` RFC-1123 validator in `vhost.py`. `metrics_endpoint` and `logs_data_endpoint` accept `?vhost=` filter (bound SQL param). Design: `<!doctype html>` added to 5 pages; `#388bfd` → `var(--blue)` across all 9 pages; `agents.html` title/topbar corrected; `service.html` vhost-pill CSS fixed; `logs.html` missed-pill variants added; `vhost_policy.html` account modal + portal footer added. **Control Center charts (rebuild)**: Chart.js 4.4.4 stacked-area traffic chart (`/vhost-breakdown`, 60s auto-refresh, `fill:'stack'`), horizontal block-rate bar chart and traffic-share doughnut (driven by `/vhost-stats`), per-vhost RPS gauges, inline SVG sparklines in the vhost-stats table. All three canvas elements hidden until data arrives. 11-column thead with Trend 1h sparkline column. `_hexRgba()` palette helper, `_vhostColor()` stable colour mapping, `_makeSpark()` with length<2 guard. `tests/test_control_center.py`: 22 static + 8 dynamic QA tests — 30/30 pass. **Tests**: 748 unit + 32 functional + 23 integration + 152 regression + 30 control-center — 985/985 pass. **Bandit**: 0 H / 0 C. **Trivy (arm64)**: 0 C / 0 H / 0 M. **Pentest**: 5 probes, 0 bypasses. Harbor: arm64 `sha256:0d255dd5` (updated) · armv7 `sha256:90c93530` · amd64 ✗ (pre-existing — no QEMU x86_64 binfmt). |
+| **1.8.0** | **Virtual Hosts management UI + multi-vhost CRUD API.** New "Virtual Hosts" card on the Settings dashboard: lists all configured vhosts, add (hostname + upstream + overrides) and delete via `GET`/`POST`/`DELETE /antibot-appsec-gateway/secured/vhosts`. `vhost.py` gains `vhost_set()`, `vhost_delete()`, `vhost_list()` with atomic `/data/vhosts.json` persistence and full `_VHOST_COERCE` validation. SSRF guard (`_assert_upstream_public`) retained on all operator-controlled inputs. `core/proxy_handler.py`: cross-domain `Location` header rewrite for multi-vhost redirect transparency. DOMContentLoaded fix eliminates `ReferenceError` on Settings page. **Tests**: 526 unit + 32 functional + 23 integration + 152 regression — 1306/1306 pass (1 pre-existing skip). **Bandit**: 0 H / 0 C / 0 M. **Semgrep**: 0 findings. **Trivy (arm64)**: 0 C / 0 H / 0 M. **Pentest**: 13 probes, 0 bypasses. Harbor: amd64 `sha256:ab9f8afc` · arm64 `sha256:eaca8648` · armv7 `sha256:5d28b156` · manifest (pending push). |
 | **1.7.10** | **Shared identity popover renderer (`window._gwIdentityPopover`).** Single IIFE (identical in `main.html` and `agents.html`) exposes `normalizeId()`, `buildIdHtml()`, `buildRiskHtml()`. `normalizeId()` maps both data shapes to canonical fields — handles `s.ip`/`c.last_ip`, `blocks_breakdown` array or `blocks_by_reason` object. `buildIdHtml()` uses agents-style `.kv` grid with all best-of-both fields (admin lock, JA4, stealth, tokens, visual bars). `buildRiskHtml()` shows `+N` bars from `risk_breakdown` or `N×` from `blocks_breakdown` fallback. `openPopover` / `openClientPopover` reduced to thin wrappers. `main.html` gains `.kv`/`.rsn` modal CSS. 26 new tests including byte-identical drift guard. **Tests**: 495 unit + 32 functional + 23 integration + 152 regression — all passing. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:30ade761` · arm64 `sha256:af4b88c9` · armv7 `sha256:bbac2cf5` · manifest `sha256:166d673a`. |
 | **1.7.9** | **Top Paths filtered by category pills + bidirectional chart legend ↔ pill sync + panel mini-legends.** `by_path_by_cat` dict added to `state.py` (one counter per category: allowed/ban/missed/authbots/gwmgmt); incremented in `record()` alongside `events_by_cat`; `metrics_endpoint` uses the merged category subset when a `cats` filter is active, falls back to full `metrics["by_path"]` aggregate when all five are on. Chart `plugins.legend.onClick` now calls `_toggleCatFilter()` so clicking a chart dataset toggles the corresponding pill (and vice versa). Clients, Top Paths, and Live Events panels each gain a `.panel-legend` mini-legend row with the same five colour-coded items; all three surfaces sync through `_applyFilters()` → `_syncPanelLegends()`. **Fixed**: `status_endpoint` now returns `Cache-Control: no-store`. **Tests**: 509 unit + 114 dynamic endpoint + 32 functional + 23 integration + 152 regression — all passing. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:77061de9` · arm64 `sha256:4a881b9d` · armv7 `sha256:5cb144a2` · manifest `sha256:a53435e3`. |
 | **1.7.8** | **Custom-rules CIDR fix + JSON safety + base image CVE refresh + BYPASS_MODE + dashboard security hardening (§17b/c/e).** `_eval_custom_rules` CIDR fix; `config_endpoint` `_json_safe`; Dockerfile base images updated (`py3-pip-wheel 26.1.1-r0`, fixes 3 HIGH + 4 MEDIUM CVEs); `BYPASS_MODE` hot-reload knob; 14 silent-catch occurrences in agents/main/controls dashboards replaced with structured `_error` guards (§17e); `safeNext()` redirect guard in login (§17c); geo `playTimer`/`_lpTimer` timer tracking (§17b); stale line-number references in `js_challenge.py` corrected. **Tests**: 772 passing, 1 pre-existing failure. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:7ccb35ac` · arm64 `sha256:c97c192c` · armv7 `sha256:f54a2158` · manifest `sha256:1a5113a9`. |

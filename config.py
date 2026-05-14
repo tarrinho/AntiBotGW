@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.7.11"
+GW_VERSION = "AppSecGW_1.8.1"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os

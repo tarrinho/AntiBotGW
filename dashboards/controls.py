@@ -13,7 +13,7 @@ LOGS_DASHBOARD_HTML     = (_DASHBOARDS_DIR / "logs.html").read_text(encoding="ut
 async def controls_dashboard_endpoint(request: web.Request):
     """Ops dashboard with on/off switches + thresholds for every hot-reloadable knob."""
     if _request_role(request) == "viewer":
-        return web.HTTPFound("/antibot-appsec-gateway/secured/dashboard")
+        return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
     body = CONTROLS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",

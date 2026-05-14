@@ -103,18 +103,18 @@ def test_live_endpoint_open_no_auth(proxy_module):
     _run(go())
 
 
-# ── /antibot-appsec-gateway/secured/dashboard requires admin key (silent-decoyed otherwise) ───────────
+# ── /antibot-appsec-gateway/secured/live-feed requires session cookie (silent-decoyed otherwise) ──────
 
 def test_dashboard_silent_decoy_without_key(proxy_module):
     async def go():
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as client:
-                r = await client.get("/antibot-appsec-gateway/secured/dashboard")
+                r = await client.get("/antibot-appsec-gateway/secured/live-feed")
                 # Silent decoy: 200 OK with NO X-Proxy header (admin handler
                 # would set X-Proxy via the dashboard response on real flows;
                 # the decoy doesn't).
                 assert r.status == 200
-                assert "AppSecGW · Dashboard" not in await r.text()
+                assert "AppSecGW · Live Feed" not in await r.text()
     _run(go())
 
 
@@ -134,12 +134,12 @@ def test_dashboard_works_with_session_cookie(proxy_module, url_safe_key):
                 proxy_module._SESSION_CACHE_READY = True
                 cookie = proxy_module._session_sign("admin", sid=sid)
                 r = await client.get(
-                    "/antibot-appsec-gateway/secured/dashboard",
+                    "/antibot-appsec-gateway/secured/live-feed",
                     cookies={proxy_module._SESSION_COOKIE: cookie})
                 body = await r.text()
                 assert r.status == 200
                 assert "AppSecGW" in body
-                assert "Dashboard" in body
+                assert "Live Feed" in body
     _run(go())
 
 

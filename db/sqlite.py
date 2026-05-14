@@ -77,6 +77,8 @@ _SCHEMA_MIGRATIONS: list[tuple[str, str, str | None, str | None]] = [
     ("gw_registry", "domain",          "TEXT",                          "TEXT"),
     # 1.6.7+
     ("gw_registry", "auto_apply",      "INTEGER NOT NULL DEFAULT 0",    "INTEGER NOT NULL DEFAULT 0"),
+    # 1.8.0 — per-event vhost hostname for multi-vhost dashboard filtering
+    ("events",      "vhost",           "TEXT DEFAULT ''",               "TEXT DEFAULT ''"),
 ]
 
 
@@ -366,8 +368,8 @@ async def db_writer_loop():
                 try:
                     if op == "event":
                         conn.execute(
-                            "INSERT INTO events (ts,ip,ua,path,method,status,reason) "
-                            "VALUES (?,?,?,?,?,?,?)", args)
+                            "INSERT INTO events (ts,ip,ua,path,method,status,reason,vhost) "
+                            "VALUES (?,?,?,?,?,?,?,?)", args)
                     elif op == "upsert_client":
                         conn.execute("""
                           INSERT INTO clients (ip, first_seen, last_seen, request_count,
@@ -554,6 +556,8 @@ async def db_writer_loop():
                             "(ts, action, gw_id, actor, details) "
                             "VALUES (?, ?, ?, ?, ?)",
                             args)
+                        try: _pg_mirror_kv("gw_audit_add", args)
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
                     # 1.6.7 — user accounts ───────────────────────────
                     elif op == "user_create":
                         # args = (username, password_hash, role, status,
@@ -630,9 +634,11 @@ async def db_writer_loop():
                             (args[1], args[2], args[0]))
                 except Exception as e:
                     slog("db_write_failed", level="error", error=str(e), op=op)
-            conn.commit()
-            for _ in batch:
-                _state.db_queue.task_done()
+            try:
+                conn.commit()
+            finally:
+                for _ in batch:
+                    _state.db_queue.task_done()
 
             # Truncate the WAL on a timer so it doesn't accumulate between
             # auto-checkpoints. PASSIVE first (no locking); only TRUNCATE if

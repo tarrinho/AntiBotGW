@@ -28,6 +28,7 @@ COPY helpers.py    /rootfs/app/helpers.py
 COPY identity.py   /rootfs/app/identity.py
 COPY rate_limit.py /rootfs/app/rate_limit.py
 COPY scoring.py    /rootfs/app/scoring.py
+COPY vhost.py      /rootfs/app/vhost.py
 COPY admin        /rootfs/app/admin
 COPY challenge    /rootfs/app/challenge
 COPY core         /rootfs/app/core

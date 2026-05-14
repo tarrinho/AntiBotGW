@@ -174,9 +174,10 @@ async def is_banned(ip: str) -> tuple[bool, float]:
     except Exception:
         until = 0.0
     if until > _t.time():
+        remaining = until - _t.time()
         async with state_lock:
-            ip_state[ip].banned_until = max(ip_state[ip].banned_until, until)
-        return True, until - _t.time()
+            ip_state[ip].banned_until = max(ip_state[ip].banned_until, now() + remaining)
+        return True, remaining
     return False, 0.0
 
 

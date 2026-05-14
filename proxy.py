@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.7.10 — entry point only.
+Anti-bot reverse proxy v1.8.1 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -27,6 +27,7 @@ from aiohttp import web
 
 # ── Package modules (import order = dependency order) ────────────────────────
 from config import *        # noqa: F401,F403 — env vars, constants, key paths
+import vhost as _vhost_module  # noqa: F401 — initialises VHOSTS at startup
 from state import *         # noqa: F401,F403 — mutable globals, IpState, queues
 from helpers import *       # noqa: F401,F403 — now(), slog(), get_ip(), etc.
 from db import *            # noqa: F401,F403 — SQLite + Postgres persistence
@@ -389,7 +390,8 @@ def make_app() -> web.Application:
         ("canary-probe/{token}",        "GET", canary_probe_endpoint,     False),
         # ── secured (admin-IP + admin-key gated) ────────────────
         ("status",            "GET",    status_endpoint,                       True),
-        ("dashboard",         "GET",    dashboard_endpoint,                    True),
+        ("control-center",    "GET",    control_center_endpoint,               True),
+        ("live-feed",         "GET",    dashboard_endpoint,                    True),
         ("metrics",           "GET",    metrics_endpoint,                      True),
         ("unban",             "GET",    unban_endpoint,                        True),
         ("unban",             "POST",   unban_endpoint,                        True),
@@ -437,7 +439,20 @@ def make_app() -> web.Application:
         ("settings",          "GET",    settings_dashboard_endpoint,           True),
         ("settings-export",   "GET",    settings_export_endpoint,              True),
         ("settings-import",   "POST",   settings_import_endpoint,              True),
-        ("xff",               "GET",    debug_xff,                             True),
+        ("audit-log",         "GET",    audit_log_endpoint,                    True),
+        ("vhosts",            "GET",    vhosts_endpoint,                       True),
+        ("vhosts",            "POST",   vhosts_endpoint,                       True),
+        ("vhosts",            "DELETE", vhosts_endpoint,                       True),
+        ("vhost-policy",      "GET",    vhost_policy_dashboard_endpoint,       True),
+        ("vhost-policy-data", "GET",    vhost_policy_data_endpoint,            True),
+        ("vhost-stats",       "GET",    vhost_stats_endpoint,                  True),
+        ("vhost-dismiss",     "POST",   vhost_dismiss_endpoint,                True),
+        ("vhost-dismiss",     "DELETE", vhost_dismiss_endpoint,                True),
+        ("vhost-breakdown",          "GET",    vhost_breakdown_endpoint,              True),
+        ("block-reasons-timeline",   "GET",    block_reasons_timeline_endpoint,       True),
+        ("top-attacked-paths",       "GET",    top_attacked_paths_endpoint,           True),
+        ("attack-heatmap",           "GET",    attack_heatmap_endpoint,               True),
+        ("xff",                      "GET",    debug_xff,                             True),
     ]
 
     _METHOD_MAP = {

@@ -1,0 +1,1304 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppSecGW_1.8.1 · Control Center</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
+a{color:var(--blue);text-decoration:none}
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
+#sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
+#sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
+#sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
+#sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
+#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
+#sidebar-footer button.signout:hover{background:#1f2730}
+#main-area{flex:1;min-width:0;display:flex;flex-direction:column}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
+#topbar-right{display:flex;align-items:center;gap:8px}
+#page-content{flex:1;padding:14px}
+@media(max-width:600px){
+  #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
+  #sidebar.mob-open{transform:translateX(0)}
+  #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:199}
+  #mob-overlay.mob-open{display:block}
+  #mob-menu{display:flex!important}
+  #main-area{margin-left:0}
+}
+@media(min-width:601px){#mob-menu{display:none!important}}
+@media(max-width:480px){
+  .card{padding:12px 10px}
+  .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+  .btn{min-height:36px;padding:8px 12px}
+  .btn-sm{min-height:32px;padding:6px 10px}
+}
+main{max-width:1200px;margin:0 auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
+.card h2{margin:0 0 6px 0;font-size:13.5px;font-weight:600;color:var(--fg)}
+.card .desc{color:var(--dim);font-size:11.5px;margin-bottom:14px;line-height:1.55}
+.stat-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+@media(max-width:900px){.stat-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:480px){.stat-grid{grid-template-columns:1fr}}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px}
+.stat .label{font-size:10.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.stat .value{font-size:26px;font-weight:600;font-family:ui-monospace,Menlo,monospace;color:#fff;line-height:1.1}
+.stat .sub{font-size:10.5px;color:var(--dim);margin-top:4px;font-family:ui-monospace,Menlo,monospace}
+.stat.green .value{color:var(--green)}
+.stat.red .value{color:var(--red)}
+.stat.blue .value{color:var(--blue)}
+.tbl{width:100%;border-collapse:collapse;font-size:12px}
+.tbl thead th{text-align:left;padding:6px 8px;background:#21262d;color:var(--dim);
+              font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600;
+              border-bottom:1px solid var(--line)}
+.tbl thead th.r{text-align:right}
+.tbl tbody td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tbody td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
+.tbl tbody td.r{text-align:right;font-family:ui-monospace,Menlo,monospace}
+.tbl tbody tr:hover td{background:#1a2030}
+.tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;font-family:-apple-system}
+.tag-green{background:rgba(63,185,80,.15);color:var(--green)}
+.tag-red{background:rgba(248,81,73,.15);color:var(--red)}
+.tag-dim{background:rgba(139,148,158,.1);color:var(--dim)}
+.pct-bar{width:80px;height:6px;background:#21262d;border-radius:3px;display:inline-block;vertical-align:middle;margin-left:6px;overflow:hidden}
+.pct-bar-fill{height:100%;border-radius:3px;transition:width .3s}
+.section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
+.section-header .ts{font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}
+.empty{padding:20px 8px;color:var(--dim);font-size:11.5px;text-align:center}
+.upstream-pill{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--blue);
+               background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.2);
+               padding:2px 8px;border-radius:4px;display:inline-block;max-width:260px;
+               overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
+.toast{position:fixed;bottom:20px;right:20px;background:var(--card);
+       border:1px solid var(--line);border-radius:6px;padding:10px 14px;
+       font-size:12.5px;box-shadow:0 4px 16px rgba(0,0,0,.4);
+       opacity:0;transition:opacity .15s;pointer-events:none;z-index:1000}
+.toast.show{opacity:1;pointer-events:auto}
+.toast.ok{border-color:var(--green)}
+.toast.err{border-color:var(--red)}
+button.btn-sm,a.btn-sm{background:#21262d;color:var(--fg);border:1px solid var(--line);
+              padding:3px 10px;border-radius:4px;font-size:11px;cursor:pointer;font-family:inherit;
+              text-decoration:none;display:inline-block}
+button.btn-sm:hover,a.btn-sm:hover{border-color:var(--blue);color:var(--blue)}
+button.btn-sm.danger{background:#3d1f1f;border-color:#f8514933;color:var(--red)}
+button.btn-sm.danger:hover{border-color:var(--red);color:var(--red)}
+button.btn-sm.active-filter{border-color:var(--blue);color:var(--blue);opacity:1!important}
+.vhost-filter-btn{opacity:.5;transition:opacity .15s}
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);
+               text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+               color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
+/* ── Chart styles ── */
+.chart-row{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+@media(max-width:740px){.chart-row{grid-template-columns:1fr}}
+.chart-wrap{position:relative}
+.chart-wrap canvas{display:block}
+.chart-empty{padding:40px 8px;color:var(--dim);font-size:11.5px;text-align:center}
+/* ── RPS gauge grid ── */
+.rps-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px;margin-top:4px}
+.rps-item{background:#21262d;border-radius:6px;padding:10px 8px 8px;text-align:center}
+.rps-item .rps-val{font-size:22px;font-weight:700;font-family:ui-monospace,monospace;line-height:1}
+.rps-item .rps-host{font-size:10px;color:var(--dim);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rps-item .rps-sub{font-size:9px;color:var(--dim);margin-top:2px;font-family:ui-monospace,monospace}
+/* ── Inline sparklines ── */
+svg.spark{width:70px;height:22px;vertical-align:middle;overflow:visible}
+/* Hide chart canvases until data is ready (shown by _render* functions) */
+canvas#traffic-chart,canvas#blockrate-chart,canvas#donut-chart{display:none}
+canvas#signals-chart,canvas#attack-cat-chart,canvas#blockreason-chart,canvas#geo-chart,
+canvas#riskscore-chart,canvas#jschal-chart,canvas#toppaths-chart,canvas#blocktimeline-chart{display:none}
+/* yellow stat tile */
+.stat.yellow .value{color:var(--yellow)}
+/* ── Attack heatmap grid ── */
+#heatmap-wrap{overflow-x:auto}
+.heatmap-grid{display:grid;grid-template-columns:44px repeat(24,1fr);gap:2px;font-size:9px;min-width:560px}
+.heatmap-cell{height:18px;border-radius:2px;cursor:default;transition:opacity .1s}
+.heatmap-cell:hover{outline:1px solid rgba(255,255,255,.4)}
+.heatmap-label{color:var(--dim);display:flex;align-items:center;justify-content:flex-end;
+               padding-right:5px;white-space:nowrap;height:18px}
+.heatmap-hour-label{color:var(--dim);text-align:center;height:14px;display:flex;align-items:center;justify-content:center}
+</style>
+<script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+</head>
+<body>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<div id="sidebar">
+  <div id="sidebar-brand">
+    <div id="sidebar-brand-name">AppSecGW</div>
+    <div id="sidebar-brand-ver">1.8.1</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="/antibot-appsec-gateway/secured/control-center" class="active">Control Center</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
+    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+  </nav>
+  <div id="sidebar-footer">
+    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
+    <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+    </form>
+  </div>
+</div>
+<div id="main-area">
+<div id="topbar">
+  <div id="topbar-title">Control Center <span class="pill" id="live">● LIVE</span></div>
+  <div id="topbar-right"></div>
+</div>
+<div id="page-content">
+
+<main>
+
+<!-- ── Stat tiles ─────────────────────────────────────────────────── -->
+<div class="stat-grid" id="stat-grid">
+  <div class="stat blue"><div class="label">Configured Vhosts</div><div class="value" id="stat-vhosts">—</div><div class="sub">virtual hosts registered</div></div>
+  <div class="stat"><div class="label">Total Traffic 1h</div><div class="value" id="stat-total1h">—</div><div class="sub">requests across all vhosts</div></div>
+  <div class="stat red"><div class="label">Blocked 1h</div><div class="value" id="stat-blocked1h">—</div><div class="sub">requests blocked last hour</div></div>
+  <div class="stat"><div class="label">Banned IPs</div><div class="value" id="stat-bans">—</div><div class="sub">currently banned across all vhosts</div></div>
+</div>
+
+<!-- ── Traffic over time (stacked area) ───────────────────────────── -->
+<div class="card" id="card-traffic-chart">
+  <div class="section-header" style="margin-bottom:10px">
+    <div>
+      <h2>Traffic Over Time — All Vhosts</h2>
+      <p class="desc" style="margin:0">Stacked request volume per virtual host. 2-hour window, 5-minute buckets.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="ts" id="traffic-chart-ts"></span>
+      <button class="btn-sm" onclick="loadTrafficChart()">↻</button>
+    </div>
+  </div>
+  <div class="chart-wrap" style="height:200px" id="traffic-chart-wrap">
+    <canvas id="traffic-chart"></canvas>
+    <div class="chart-empty" id="traffic-chart-empty" style="display:none">No traffic data yet.</div>
+  </div>
+</div>
+
+<!-- ── Block rate bar + Traffic share donut ───────────────────────── -->
+<div class="chart-row">
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div>
+        <h2>Block Rate by Vhost</h2>
+        <p class="desc" style="margin:0">% of requests blocked in the last hour.</p>
+      </div>
+      <button class="btn-sm" onclick="loadBlockRateChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:180px">
+      <canvas id="blockrate-chart"></canvas>
+      <div class="chart-empty" id="blockrate-chart-empty" style="display:none">No data.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div>
+        <h2>Traffic Share (1h)</h2>
+        <p class="desc" style="margin:0">Request volume distribution across vhosts.</p>
+      </div>
+      <button class="btn-sm" onclick="loadDonutChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:180px">
+      <canvas id="donut-chart"></canvas>
+      <div class="chart-empty" id="donut-chart-empty" style="display:none">No data.</div>
+    </div>
+  </div>
+</div>
+<div style="margin-bottom:14px"></div>
+
+<!-- ── Live RPS per vhost ──────────────────────────────────────────── -->
+<div class="card" id="card-rps">
+  <div class="section-header" style="margin-bottom:8px">
+    <div>
+      <h2>Live RPS per Vhost</h2>
+      <p class="desc" style="margin:0">Approximate requests per second averaged over the last hour.</p>
+    </div>
+    <span class="ts" id="rps-ts"></span>
+  </div>
+  <div class="rps-grid" id="rps-grid"><div style="color:var(--dim);font-size:11.5px;padding:10px 0">Loading…</div></div>
+</div>
+
+<!-- ── Vhost Traffic Summary ──────────────────────────────────────── -->
+<div class="card" id="card-vhost-stats">
+  <div class="section-header">
+    <div>
+      <h2>Vhost Traffic Summary</h2>
+      <p class="desc" style="margin:0">Per-virtual-host request counts, block rates and upstream config. Refreshes every 30 s.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <button class="btn-sm" onclick="loadVhostStats()">↻ Refresh</button>
+      <span class="ts" id="vhost-stats-ts"></span>
+      <div id="vhost-status-filter" style="display:flex;gap:4px">
+        <button class="btn-sm vhost-filter-btn active-filter" data-filter="active" style="opacity:1">● Active</button>
+        <button class="btn-sm vhost-filter-btn" data-filter="idle">◌ Idle</button>
+        <button class="btn-sm vhost-filter-btn" data-filter="inactive">○ Inactive</button>
+        <button class="btn-sm vhost-filter-btn" data-filter="all">All</button>
+      </div>
+    </div>
+  </div>
+  <table class="tbl" id="vhost-stats-tbl">
+    <thead><tr>
+      <th>Status</th>
+      <th>Hostname</th>
+      <th>Upstream</th>
+      <th class="r">Overrides</th>
+      <th class="r">Trend 1h</th>
+      <th class="r">Total 1h</th>
+      <th class="r">Allowed 1h</th>
+      <th class="r">Blocked 1h</th>
+      <th class="r">Block %</th>
+      <th class="r">Total 24h</th>
+      <th class="r">Blocked 24h</th>
+      <th class="r">Banned IPs</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="vhost-stats-tbody"><tr><td colspan="13" class="empty">Loading…</td></tr></tbody>
+  </table>
+</div>
+
+
+<!-- ── Threat Sensor Tiles ─────────────────────────────────────────────── -->
+<div class="stat-grid" id="stat-grid-threat">
+  <div class="stat red"><div class="label">Honeypot / Bot-Trap</div><div class="value" id="stat-honeypot">—</div><div class="sub">trap triggers this session</div></div>
+  <div class="stat yellow"><div class="label">Canary Echo</div><div class="value" id="stat-canary">—</div><div class="sub">canary probe hits</div></div>
+  <div class="stat blue"><div class="label">AI Probe</div><div class="value" id="stat-aiprobe">—</div><div class="sub">AI enumeration attempts</div></div>
+  <div class="stat"><div class="label">JS Challenges</div><div class="value" id="stat-jschal">—</div><div class="sub">challenges required</div></div>
+</div>
+
+<!-- ── Row A: Detection Signals + Attack Category ─────────────────────── -->
+<div class="chart-row">
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Top Detection Signals</h2><p class="desc" style="margin:0">Hit count per detection rule, current session.</p></div>
+      <button class="btn-sm" onclick="loadSignalsChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="signals-chart"></canvas>
+      <div class="chart-empty" id="signals-chart-empty" style="display:none">No signal hits recorded yet.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Attack Category Breakdown</h2><p class="desc" style="margin:0">Detector hits grouped by threat category.</p></div>
+      <button class="btn-sm" onclick="loadAttackCatChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="attack-cat-chart"></canvas>
+      <div class="chart-empty" id="attack-cat-chart-empty" style="display:none">No detector hits yet.</div>
+    </div>
+  </div>
+</div>
+<div style="margin-bottom:14px"></div>
+
+<!-- ── Row B: Block Reason + Geo ──────────────────────────────────────── -->
+<div class="chart-row">
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Block Reasons Over Time</h2><p class="desc" style="margin:0">Stacked blocks per rule — last 2h, 5-min buckets (top 8 rules).</p></div>
+      <button class="btn-sm" onclick="loadBlockReasonChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="blockreason-chart"></canvas>
+      <div class="chart-empty" id="blockreason-chart-empty" style="display:none">No blocks recorded.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Geo — Blocked Traffic (Top 10)</h2><p class="desc" style="margin:0">Countries ranked by blocked request count.</p></div>
+      <button class="btn-sm" onclick="loadGeoChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="geo-chart"></canvas>
+      <div class="chart-empty" id="geo-chart-empty" style="display:none">No geo data — requires GeoLite2-City.mmdb.</div>
+    </div>
+  </div>
+</div>
+<div style="margin-bottom:14px"></div>
+
+<!-- ── Row C: Risk Score + JS Challenge Funnel ────────────────────────── -->
+<div class="chart-row">
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Risk Score Distribution</h2><p class="desc" style="margin:0">Active client risk scores (0–100) binned per 10.</p></div>
+      <button class="btn-sm" onclick="loadRiskScoreChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="riskscore-chart"></canvas>
+      <div class="chart-empty" id="riskscore-chart-empty" style="display:none">No client data.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>JS Challenge Funnel</h2><p class="desc" style="margin:0">Challenges required → tokens minted → detector hits.</p></div>
+      <button class="btn-sm" onclick="loadJsChalChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="jschal-chart"></canvas>
+      <div class="chart-empty" id="jschal-chart-empty" style="display:none">No JS challenge activity.</div>
+    </div>
+  </div>
+</div>
+<div style="margin-bottom:14px"></div>
+
+<!-- ── Row D: Top Attacked Paths + Block Timeline ─────────────────────── -->
+<div class="chart-row">
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Top Attacked Paths</h2><p class="desc" style="margin:0">Most-hit paths by total request volume.</p></div>
+      <button class="btn-sm" onclick="loadTopPathsChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="toppaths-chart"></canvas>
+      <div class="chart-empty" id="toppaths-chart-empty" style="display:none">No path data.</div>
+    </div>
+  </div>
+  <div class="card" style="margin-bottom:0">
+    <div class="section-header" style="margin-bottom:10px">
+      <div><h2>Bot vs Human Traffic</h2><p class="desc" style="margin:0">Detected bots, likely-missed bots, and clean traffic — last 2h.</p></div>
+      <button class="btn-sm" onclick="loadBlockTimelineChart()">↻</button>
+    </div>
+    <div class="chart-wrap" style="height:200px">
+      <canvas id="blocktimeline-chart"></canvas>
+      <div class="chart-empty" id="blocktimeline-chart-empty" style="display:none">No traffic data yet.</div>
+    </div>
+  </div>
+</div>
+<div style="margin-bottom:14px"></div>
+
+<!-- ── Row E: Attack Heatmap (full width) ─────────────────────────────────── -->
+<div class="card" id="card-attack-heatmap">
+  <div class="section-header" style="margin-bottom:10px">
+    <div>
+      <h2>Attack Heatmap — Hour × Day</h2>
+      <p class="desc" style="margin:0">Blocked request intensity by UTC hour (columns) and weekday (rows) — last 7 days.</p>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <span class="ts" id="heatmap-ts"></span>
+      <button class="btn-sm" onclick="loadAttackHeatmap()">↻</button>
+    </div>
+  </div>
+  <div id="heatmap-wrap">
+    <div id="heatmap-grid" class="heatmap-grid"></div>
+    <div class="chart-empty" id="heatmap-empty" style="display:none">No blocked requests in the last 7 days.</div>
+  </div>
+</div>
+<div style="margin-bottom:14px"></div>
+
+</main>
+
+<div id="toast" class="toast"></div>
+
+<!-- ── Account modal ───────────────────────────────────────────────── -->
+<div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <b>My Account</b>
+      <button onclick="document.getElementById('acct-modal').style.display='none'" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&#x2715;</button>
+    </div>
+    <div id="acct-body"></div>
+  </div>
+</div>
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+
+<script>
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
+var _timers=[];
+
+function toast(msg,type){
+  var t=document.getElementById('toast');
+  t.textContent=msg;t.className='toast '+(type||'ok')+' show';
+  clearTimeout(t._tid);t._tid=setTimeout(function(){t.className='toast';},3000);
+}
+
+// ── Vhost colour palette ──────────────────────────────────────────────
+var _PALETTE=['#58a6ff','#3fb950','#d29922','#bc8cff','#f0883e','#79c0ff','#56d364',
+              '#ffa657','#ff7b72','#d2a8ff','#1f6feb','#4d94ff','#ffd33d','#8b949e'];
+var _colorMap={};
+function _vhostColor(vh){
+  if(!_colorMap[vh]){var n=Object.keys(_colorMap).length;_colorMap[vh]=_PALETTE[n%_PALETTE.length];}
+  return _colorMap[vh];
+}
+
+// ── Chart.js global defaults ──────────────────────────────────────────
+(function(){
+  if(typeof Chart==='undefined')return;
+  Chart.defaults.color='#8b949e';
+  Chart.defaults.borderColor='#30363d';
+  Chart.defaults.font.family='-apple-system,ui-sans-serif,sans-serif';
+  Chart.defaults.font.size=11;
+})();
+
+// ── Shared chart instances ────────────────────────────────────────────
+var _trafficChart=null,_blockRateChart=null,_donutChart=null;
+var _signalsChart=null,_attackCatChart=null,_blockReasonChart=null,_geoChart=null;
+var _riskScoreChart=null,_jsChalChart=null,_topPathsChart=null,_blockTimelineChart=null;
+var _bdCache=null;
+
+// ── Hex to rgba helper ────────────────────────────────────────────────
+function _hexRgba(hex,a){
+  var h=hex.replace('#','');
+  var r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  return 'rgba('+r+','+g+','+b+','+a+')';
+}
+
+// ── Traffic Over Time (stacked area) ─────────────────────────────────
+function loadTrafficChart(){
+  fetch('/antibot-appsec-gateway/secured/vhost-breakdown?range=120&bucket=300',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){
+      _bdCache=d;
+      _renderTrafficChart(d);
+      _renderSparklines(d);
+    })
+    .catch(function(e){
+      _showChartEmpty('traffic-chart','traffic-chart-empty','Failed: '+e.message);
+    });
+}
+
+function _renderTrafficChart(d){
+  var emptyEl=document.getElementById('traffic-chart-empty');
+  var canvas=document.getElementById('traffic-chart');
+  if(!d.datasets||!d.datasets.length||!d.labels||!d.labels.length){
+    _showChartEmpty('traffic-chart','traffic-chart-empty','No traffic data yet.');
+    return;
+  }
+  emptyEl.style.display='none';
+  canvas.style.display='block';
+  var labels=d.labels.map(function(ts){
+    var dt=new Date(ts*1000);
+    return dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0');
+  });
+  var datasets=d.datasets.map(function(ds){
+    var col=_vhostColor(ds.vhost);
+    return{
+      label:ds.vhost,data:ds.data,
+      borderColor:col,backgroundColor:_hexRgba(col,0.15),
+      fill:'stack',tension:.35,borderWidth:1.5,pointRadius:0,pointHoverRadius:3
+    };
+  });
+  var ctx=canvas.getContext('2d');
+  if(_trafficChart){_trafficChart.destroy();}
+  _trafficChart=new Chart(ctx,{
+    type:'line',
+    data:{labels:labels,datasets:datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:10,padding:12,color:'#8b949e'}},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+                 titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8}
+      },
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{maxTicksLimit:12,maxRotation:0}},
+        y:{grid:{color:'#21262d'},stacked:true,beginAtZero:true,ticks:{precision:0}}
+      }
+    }
+  });
+  document.getElementById('traffic-chart-ts').textContent='updated '+new Date().toLocaleTimeString();
+}
+
+function _showChartEmpty(canvasId,emptyId,msg){
+  var c=document.getElementById(canvasId);
+  var e=document.getElementById(emptyId);
+  if(c)c.style.display='none';
+  if(e){e.style.display='block';e.textContent=msg;}
+}
+
+// ── Block Rate bar chart ──────────────────────────────────────────────
+function loadBlockRateChart(){
+  fetch('/antibot-appsec-gateway/secured/vhost-stats',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderBlockRateChart(d.stats||[]);})
+    .catch(function(e){_showChartEmpty('blockrate-chart','blockrate-chart-empty','Failed: '+e.message);});
+}
+
+function _renderBlockRateChart(rows){
+  var active=rows.filter(function(r){return r.total_1h>0;});
+  if(!active.length){_showChartEmpty('blockrate-chart','blockrate-chart-empty','No traffic in the last hour.');return;}
+  active.sort(function(a,b){
+    var pa=a.total_1h>0?a.blocked_1h/a.total_1h:0;
+    var pb=b.total_1h>0?b.blocked_1h/b.total_1h:0;
+    return pb-pa;
+  });
+  var labels=active.map(function(r){return r.hostname;});
+  var data=active.map(function(r){return r.total_1h>0?+(r.blocked_1h/r.total_1h*100).toFixed(1):0;});
+  var colors=labels.map(function(vh){return _vhostColor(vh);});
+  document.getElementById('blockrate-chart-empty').style.display='none';
+  document.getElementById('blockrate-chart').style.display='block';
+  var ctx=document.getElementById('blockrate-chart').getContext('2d');
+  if(_blockRateChart){_blockRateChart.destroy();}
+  _blockRateChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[{
+      label:'Block %',data:data,
+      backgroundColor:colors.map(function(c){return _hexRgba(c,0.7);}),
+      borderColor:colors,borderWidth:1,borderRadius:3
+    }]},
+    options:{
+      indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          callbacks:{label:function(ctx){return ' '+ctx.raw+'%';}},
+          backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+          titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8
+        }
+      },
+      scales:{
+        x:{grid:{color:'#21262d'},min:0,max:100,ticks:{callback:function(v){return v+'%';}}},
+        y:{grid:{display:false},ticks:{font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Traffic Share donut ───────────────────────────────────────────────
+function loadDonutChart(){
+  fetch('/antibot-appsec-gateway/secured/vhost-stats',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderDonutChart(d.stats||[]);})
+    .catch(function(e){_showChartEmpty('donut-chart','donut-chart-empty','Failed: '+e.message);});
+}
+
+function _renderDonutChart(rows){
+  var active=rows.filter(function(r){return r.total_1h>0;});
+  if(!active.length){_showChartEmpty('donut-chart','donut-chart-empty','No traffic in the last hour.');return;}
+  var labels=active.map(function(r){return r.hostname;});
+  var data=active.map(function(r){return r.total_1h;});
+  var colors=labels.map(function(vh){return _vhostColor(vh);});
+  document.getElementById('donut-chart-empty').style.display='none';
+  document.getElementById('donut-chart').style.display='block';
+  var ctx=document.getElementById('donut-chart').getContext('2d');
+  if(_donutChart){_donutChart.destroy();}
+  _donutChart=new Chart(ctx,{
+    type:'doughnut',
+    data:{labels:labels,datasets:[{data:data,backgroundColor:colors,borderColor:'#161b22',borderWidth:2,hoverBorderColor:'#30363d'}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,cutout:'62%',
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:10,padding:10,color:'#8b949e',font:{size:10}}},
+        tooltip:{
+          callbacks:{label:function(ctx){
+            var total=ctx.dataset.data.reduce(function(a,b){return a+b;},0);
+            var pct=total>0?(ctx.raw/total*100).toFixed(1)+'%':'0%';
+            return ' '+ctx.label+': '+ctx.raw.toLocaleString()+' ('+pct+')';
+          }},
+          backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+          titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8
+        }
+      }
+    }
+  });
+}
+
+// ── Live RPS gauges ───────────────────────────────────────────────────
+function _renderRpsGauges(rows){
+  var grid=document.getElementById('rps-grid');
+  var active=rows.filter(function(r){return r.total_1h>0;});
+  if(!active.length){
+    grid.innerHTML='<div style="color:var(--dim);font-size:11.5px;padding:10px 0">No active vhosts in the last hour.</div>';
+    return;
+  }
+  grid.innerHTML=active.map(function(r){
+    var rps=r.total_1h/3600;
+    var rpsStr=rps<0.1?'<0.1':rps<10?rps.toFixed(2):rps.toFixed(1);
+    var blockPct=r.total_1h>0?(r.blocked_1h/r.total_1h*100).toFixed(0)+'% blocked':'';
+    var col=_vhostColor(r.hostname);
+    return '<div class="rps-item">'+
+      '<div class="rps-val" style="color:'+escapeHtml(col)+'">'+escapeHtml(rpsStr)+'</div>'+
+      '<div style="font-size:9px;color:var(--dim);margin-top:1px">req/s</div>'+
+      '<div class="rps-host" title="'+escapeHtml(r.hostname)+'">'+escapeHtml(r.hostname)+'</div>'+
+      '<div class="rps-sub">'+escapeHtml(blockPct)+'</div>'+
+      '</div>';
+  }).join('');
+  document.getElementById('rps-ts').textContent='updated '+new Date().toLocaleTimeString();
+}
+
+// ── Sparkline helper (inline SVG path) ───────────────────────────────
+function _makeSpark(data,color){
+  if(!data||data.length<2)return '<svg class="spark"></svg>';
+  var max=Math.max.apply(null,data)||1;
+  var min=Math.min.apply(null,data);
+  var W=70,H=22,pad=2,range=max-min||1;
+  var pts=data.map(function(v,i){
+    var x=pad+(i/(data.length-1))*(W-pad*2);
+    var y=H-pad-(v-min)/range*(H-pad*2);
+    return x.toFixed(1)+','+y.toFixed(1);
+  });
+  var linePath='M'+pts.join('L');
+  var fillPath=linePath+'L'+(W-pad).toFixed(1)+','+(H-pad)+'L'+pad+','+(H-pad)+'Z';
+  var fill=_hexRgba(color||'#58a6ff',0.15);
+  return '<svg class="spark" viewBox="0 0 '+W+' '+H+'">'
+    +'<path d="'+escapeHtml(fillPath)+'" fill="'+escapeHtml(fill)+'" stroke="none"/>'
+    +'<path d="'+escapeHtml(linePath)+'" fill="none" stroke="'+escapeHtml(color||'#58a6ff')+'" stroke-width="1.5"/>'
+    +'</svg>';
+}
+
+function _renderSparklines(bd){
+  var map={};
+  if(bd&&bd.datasets){bd.datasets.forEach(function(ds){map[ds.vhost]=ds.data;});}
+  document.querySelectorAll('[data-spark-host]').forEach(function(el){
+    var vh=el.getAttribute('data-spark-host');
+    el.innerHTML=_makeSpark(map[vh]||[],_vhostColor(vh));
+  });
+}
+
+// ── Vhost status filter + pin state ──────────────────────────────────
+var _vhostFilter='active';
+var _vhostPinned=(function(){
+  try{return new Set(JSON.parse(localStorage.getItem('vhost_pinned')||'[]'));}
+  catch(e){return new Set();}
+})();
+function _vhostStatusOf(age){
+  if(age<300) return 'active';
+  if(age<1800)return 'idle';
+  return 'inactive';
+}
+function _saveVhostPinned(){
+  try{localStorage.setItem('vhost_pinned',JSON.stringify([..._vhostPinned]));}catch(e){}
+}
+
+// ── Vhost Traffic Summary (merged with Configured Vhosts) ────────────
+function loadVhostStats(){
+  Promise.all([
+    fetch('/antibot-appsec-gateway/secured/vhosts',{credentials:'include'}).then(function(r){return r.ok?r.json():{vhosts:[]};}).catch(function(){return{vhosts:[]};}),
+    fetch('/antibot-appsec-gateway/secured/vhost-stats',{credentials:'include'}).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+  ]).then(function(results){
+    var cfgVhosts=results[0].vhosts||[];
+    var d=results[1];
+    var rows=d.stats||[];
+    var total1h=0,blocked1h=0,bans=0;
+    rows.forEach(function(r){total1h+=r.total_1h||0;blocked1h+=r.blocked_1h||0;bans+=r.bans||0;});
+    document.getElementById('stat-total1h').textContent=total1h.toLocaleString();
+    document.getElementById('stat-blocked1h').textContent=blocked1h.toLocaleString();
+    document.getElementById('stat-bans').textContent=bans.toLocaleString();
+    document.getElementById('stat-vhosts').textContent=cfgVhosts.length;
+    _renderRpsGauges(rows);
+    _renderBlockRateChart(rows);
+    _renderDonutChart(rows);
+    var tb=document.getElementById('vhost-stats-tbody');
+    var cfgMap={};
+    cfgVhosts.forEach(function(v){
+      cfgMap[v.hostname]={upstream:v.UPSTREAM||'(global upstream)',overrideCount:Object.keys(v).filter(function(k){return k!=='hostname';}).length};
+    });
+    var statsHostnames=new Set(rows.map(function(r){return r.hostname;}));
+    var extraRows=cfgVhosts.filter(function(v){return !statsHostnames.has(v.hostname);}).map(function(v){
+      return {hostname:v.hostname,total_1h:0,allowed_1h:0,blocked_1h:0,total_24h:0,blocked_24h:0,bans:0,last_seen_ts:0};
+    });
+    var allRows=rows.concat(extraRows);
+    if(!allRows.length){
+      tb.innerHTML='<tr><td colspan="13" class="empty">No virtual hosts configured. Add one in <a href="/antibot-appsec-gateway/secured/settings">Settings</a>.</td></tr>';
+      return;
+    }
+    var now=Date.now()/1000;
+    var visible=allRows.filter(function(r){
+      var age=r.last_seen_ts>0?now-r.last_seen_ts:Infinity;
+      var status=_vhostStatusOf(age);
+      return _vhostFilter==='all'||status===_vhostFilter||_vhostPinned.has(r.hostname);
+    });
+    if(!visible.length){
+      tb.innerHTML='<tr><td colspan="13" class="empty">No vhosts match the current filter.</td></tr>';
+      return;
+    }
+    tb.innerHTML=visible.map(function(r){
+      var hn=escapeHtml(r.hostname);
+      var cfg=cfgMap[r.hostname]||{upstream:'(global upstream)',overrideCount:0};
+      var pct=r.total_1h>0?(r.blocked_1h/r.total_1h*100).toFixed(1)+'%':'—';
+      var hi=r.total_1h>0&&r.blocked_1h/r.total_1h>0.3;
+      var fillW=r.total_1h>0?Math.round(r.blocked_1h/r.total_1h*100):0;
+      var age=r.last_seen_ts>0?now-r.last_seen_ts:Infinity;
+      var status=_vhostStatusOf(age);
+      var statusDot,statusLabel,statusColor,statusTitle;
+      if(status==='active'){statusDot='●';statusLabel='Active';statusColor='var(--green)';statusTitle='Last seen '+Math.round(age)+'s ago';}
+      else if(status==='idle'){statusDot='◌';statusLabel='Idle';statusColor='var(--yellow)';statusTitle='Last seen '+Math.round(age/60)+'m ago';}
+      else{statusDot='○';statusLabel='Inactive';statusColor='var(--dim)';statusTitle=r.last_seen_ts>0?'Last seen '+new Date(r.last_seen_ts*1000).toLocaleTimeString():'No traffic recorded';}
+      var isPinned=_vhostPinned.has(r.hostname);
+      var pinBtn=status!=='active'
+        ?'<button class="btn-sm" data-pin-vhost="'+escapeHtml(r.hostname)+'" title="'+(isPinned?'Unpin':'Pin')+' '+escapeHtml(r.hostname)+'">'+(isPinned?'📌 Pinned':'📌 Pin')+'</button> '
+        :'';
+      var dimRow=isPinned&&status!=='active'?'opacity:.75;':'';
+      var noTraffic=r.last_seen_ts===0;
+      var sparkData=(_bdCache&&_bdCache.datasets||[]).filter(function(ds){return ds.vhost===r.hostname;}).map(function(ds){return ds.data;})[0]||[];
+      var sparkHtml='<span data-spark-host="'+escapeHtml(r.hostname)+'" title="Traffic trend last 2h">'+_makeSpark(sparkData,_vhostColor(r.hostname))+'</span>';
+      var oc=cfg.overrideCount;
+      return '<tr style="'+dimRow+'">'+
+        '<td style="white-space:nowrap" title="'+escapeHtml(statusTitle)+'">'+
+          '<span style="color:'+statusColor+';font-size:13px">'+statusDot+'</span>'+
+          '<span style="margin-left:5px;font-size:11px;color:'+statusColor+'">'+statusLabel+'</span>'+
+          (isPinned?'<span style="font-size:10px;margin-left:4px;opacity:.6" title="Pinned — always visible">📌</span>':'')+
+        '</td>'+
+        '<td class="mono" style="color:var(--blue)">'+hn+'</td>'+
+        '<td><span class="upstream-pill" title="'+escapeHtml(cfg.upstream)+'">'+escapeHtml(cfg.upstream)+'</span></td>'+
+        '<td class="r"><span class="tag '+(oc>0?'tag-green':'tag-dim')+'">'+oc+' override'+(oc!==1?'s':'')+'</span></td>'+
+        '<td class="r">'+(noTraffic?'<span style="color:var(--dim)">—</span>':sparkHtml)+'</td>'+
+        '<td class="r">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.total_1h.toLocaleString())+'</td>'+
+        '<td class="r" style="color:var(--green)">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.allowed_1h.toLocaleString())+'</td>'+
+        '<td class="r" style="color:var(--red)">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.blocked_1h.toLocaleString())+'</td>'+
+        '<td class="r">'+(noTraffic?'<span style="color:var(--dim)">—</span>':'<span style="color:'+(hi?'var(--red)':'var(--green)')+'">'+pct+'</span>'+
+          '<span class="pct-bar"><span class="pct-bar-fill" style="width:'+fillW+'%;background:'+(hi?'var(--red)':'var(--green)')+'"></span></span>')+'</td>'+
+        '<td class="r">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.total_24h.toLocaleString())+'</td>'+
+        '<td class="r" style="color:var(--red)">'+(noTraffic?'<span style="color:var(--dim)">—</span>':r.blocked_24h.toLocaleString())+'</td>'+
+        '<td class="r" style="color:'+(r.bans>0?'var(--yellow)':'var(--dim)')+'">'+r.bans+'</td>'+
+        '<td class='r' style='white-space:nowrap'>'+pinBtn+
+          '<a href="/antibot-appsec-gateway/secured/vhost-policy?hostname='+encodeURIComponent(r.hostname)+'" class="btn-sm">Policy</a>'+
+        '</td>'+
+        '</tr>';
+    }).join('');
+    if(d.ts)document.getElementById('vhost-stats-ts').textContent='updated '+new Date(d.ts*1000).toLocaleTimeString();
+  }).catch(function(e){
+    document.getElementById('vhost-stats-tbody').innerHTML='<tr><td colspan="13" class="empty" style="color:var(--red)">Failed:'+escapeHtml(String(e))+'</td></tr>';
+  });
+}
+// Filter button wiring
+document.getElementById('vhost-status-filter').addEventListener('click',function(e){
+  var btn=e.target.closest('.vhost-filter-btn');
+  if(!btn)return;
+  _vhostFilter=btn.getAttribute('data-filter');
+  document.querySelectorAll('.vhost-filter-btn').forEach(function(b){
+    b.classList.toggle('active-filter',b===btn);
+    b.style.opacity=b===btn?'1':'0.5';
+  });
+  loadVhostStats();
+});
+
+// Pin toggle
+document.getElementById('vhost-stats-tbody').addEventListener('click',function(e){
+  var btn=e.target.closest('[data-pin-vhost]');
+  if(!btn)return;
+  var hostname=btn.getAttribute('data-pin-vhost');
+  if(_vhostPinned.has(hostname))_vhostPinned.delete(hostname);
+  else _vhostPinned.add(hostname);
+  _saveVhostPinned();
+  loadVhostStats();
+});
+
+// ── Threat sensor stat tiles ──────────────────────────────────────────
+function loadThreatTiles(){
+  var p1=fetch('/antibot-appsec-gateway/secured/metrics',{credentials:'include'}).then(function(r){return r.json();});
+  var p2=fetch('/antibot-appsec-gateway/secured/detector-stats',{credentials:'include'}).then(function(r){return r.json();});
+  Promise.all([p1,p2]).then(function(res){
+    var m=res[0];var ds=res[1];
+    var dh=m.detector_hits||{};
+    var honeypot=(dh.honeypot||0)+(dh.bot_trap||0);
+    var canary=dh.canary_echo||0;
+    var ai=(dh.ai_probe||0)+(dh.ai_enumeration||0)+(dh.ai_no_assets||0);
+    var jschal=(ds.chal&&ds.chal.required)||dh.js_challenge||0;
+    document.getElementById('stat-honeypot').textContent=honeypot.toLocaleString();
+    document.getElementById('stat-canary').textContent=canary.toLocaleString();
+    document.getElementById('stat-aiprobe').textContent=ai.toLocaleString();
+    document.getElementById('stat-jschal').textContent=jschal.toLocaleString();
+  }).catch(function(){});
+}
+
+// ── Top Detection Signals (horizontal bar) ────────────────────────────
+function loadSignalsChart(){
+  fetch('/antibot-appsec-gateway/secured/detector-stats',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderSignalsChart(d.signals||[]);})
+    .catch(function(e){_showChartEmpty('signals-chart','signals-chart-empty','Failed: '+e.message);});
+}
+function _renderSignalsChart(signals){
+  if(!signals.length){_showChartEmpty('signals-chart','signals-chart-empty','No signal hits recorded yet.');return;}
+  var top=signals.slice().sort(function(a,b){return b.hits-a.hits;}).slice(0,10);
+  var labels=top.map(function(s){return s.reason;});
+  var data=top.map(function(s){return s.hits;});
+  var colors=top.map(function(s,i){var pal=['#f85149','#d29922','#bc8cff','#58a6ff','#3fb950','#f0883e','#79c0ff','#56d364','#ffa657','#ff7b72'];return pal[i%pal.length];});
+  document.getElementById('signals-chart-empty').style.display='none';
+  document.getElementById('signals-chart').style.display='block';
+  var ctx=document.getElementById('signals-chart').getContext('2d');
+  if(_signalsChart){_signalsChart.destroy();}
+  _signalsChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[{label:'Hits',data:data,
+      backgroundColor:colors.map(function(c){return _hexRgba(c,0.70);}),
+      borderColor:colors,borderWidth:1,borderRadius:3}]},
+    options:{
+      indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8}},
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{precision:0}},
+        y:{grid:{display:false},ticks:{font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Attack Category Breakdown (doughnut) ──────────────────────────────
+var _CAT_GROUPS={
+  'AI / Header':['ai_probe','ai_enumeration','ai_no_assets','header_completeness'],
+  'UA Filter':['ua_filter','ua_platform_check'],
+  'Path / Recon':['suspicious_path','upstream_404'],
+  'Trap / Canary':['honeypot','bot_trap','canary_echo'],
+  'Rate / Behavior':['rate_limit_ip','rate_limit_session','session_flood','behavioral_check'],
+  'Integration':['abuseipdb','crowdsec','asn_hosting'],
+  'Challenge':['js_challenge','ja4_banned'],
+  'Other':['host_not_allowed','missed_medium_risk']
+};
+var _CAT_COLORS=['#58a6ff','#d29922','#f85149','#bc8cff','#3fb950','#f0883e','#79c0ff','#8b949e'];
+function loadAttackCatChart(){
+  fetch('/antibot-appsec-gateway/secured/metrics',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderAttackCatChart(d.detector_hits||{});})
+    .catch(function(e){_showChartEmpty('attack-cat-chart','attack-cat-chart-empty','Failed: '+e.message);});
+}
+function _renderAttackCatChart(dh){
+  var labels=[],data=[],colors=[];
+  var keys=Object.keys(_CAT_GROUPS);
+  keys.forEach(function(cat,i){
+    var sum=_CAT_GROUPS[cat].reduce(function(acc,k){return acc+(dh[k]||0);},0);
+    if(sum>0){labels.push(cat);data.push(sum);colors.push(_CAT_COLORS[i%_CAT_COLORS.length]);}
+  });
+  if(!data.length){_showChartEmpty('attack-cat-chart','attack-cat-chart-empty','No detector hits yet.');return;}
+  document.getElementById('attack-cat-chart-empty').style.display='none';
+  document.getElementById('attack-cat-chart').style.display='block';
+  var ctx=document.getElementById('attack-cat-chart').getContext('2d');
+  if(_attackCatChart){_attackCatChart.destroy();}
+  _attackCatChart=new Chart(ctx,{
+    type:'doughnut',
+    data:{labels:labels,datasets:[{data:data,backgroundColor:colors,borderColor:'#161b22',borderWidth:2,hoverBorderColor:'#30363d'}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,cutout:'60%',
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:10,padding:8,color:'#8b949e',font:{size:10}}},
+        tooltip:{
+          callbacks:{label:function(ctx){
+            var total=ctx.dataset.data.reduce(function(a,b){return a+b;},0);
+            var pct=total>0?(ctx.raw/total*100).toFixed(1)+'%':'0%';
+            return ' '+ctx.label+': '+ctx.raw+' ('+pct+')';
+          }},
+          backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8
+        }
+      }
+    }
+  });
+}
+
+// ── Block Reasons Over Time (stacked bar timeline) ────────────────────
+var _REASON_COLORS={
+  'banned':'#f85149','rate-limit':'#d29922','ua-blocked':'#bc8cff',
+  'honeypot':'#ff7b72','canary-echo':'#ffa657','js-challenge':'#58a6ff',
+  'too-many-bans':'#e05c57','behavioral':'#d2a8ff','unknown':'#8b949e'
+};
+function _reasonColor(r,i){return _REASON_COLORS[r]||_PALETTE[i%_PALETTE.length];}
+function loadBlockReasonChart(){
+  fetch('/antibot-appsec-gateway/secured/block-reasons-timeline?range=120&bucket=300',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderBlockReasonChart(d);})
+    .catch(function(e){_showChartEmpty('blockreason-chart','blockreason-chart-empty','Failed: '+e.message);});
+}
+function _renderBlockReasonChart(d){
+  if(!d.datasets||!d.datasets.length||!d.labels||!d.labels.length){
+    _showChartEmpty('blockreason-chart','blockreason-chart-empty','No blocked requests yet.');return;
+  }
+  var emptyEl=document.getElementById('blockreason-chart-empty');
+  var canvas=document.getElementById('blockreason-chart');
+  emptyEl.style.display='none';
+  canvas.style.display='block';
+  var labels=d.labels.map(function(ts){
+    var dt=new Date(ts*1000);
+    return dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0');
+  });
+  var datasets=d.datasets.map(function(ds,i){
+    var col=_reasonColor(ds.reason,i);
+    var lbl=ds.reason.length>16?ds.reason.slice(0,14)+'…':ds.reason;
+    return{label:lbl,data:ds.data,
+      backgroundColor:_hexRgba(col,0.80),borderColor:col,borderWidth:0,borderRadius:2};
+  });
+  var ctx=canvas.getContext('2d');
+  if(_blockReasonChart){_blockReasonChart.destroy();}
+  _blockReasonChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:datasets},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:10,padding:10,color:'#8b949e',font:{size:10}}},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+                 titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8}
+      },
+      scales:{
+        x:{grid:{color:'#21262d'},stacked:true,ticks:{maxTicksLimit:12,maxRotation:0}},
+        y:{grid:{color:'#21262d'},stacked:true,beginAtZero:true,ticks:{precision:0}}
+      }
+    }
+  });
+}
+
+// ── Geo — Blocked Traffic Top 10 (horizontal bar) ─────────────────────
+function loadGeoChart(){
+  fetch('/antibot-appsec-gateway/secured/geo-data',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderGeoChart(d);})
+    .catch(function(e){_showChartEmpty('geo-chart','geo-chart-empty','Failed: '+e.message);});
+}
+function _renderGeoChart(d){
+  if(!d.configured){_showChartEmpty('geo-chart','geo-chart-empty','GeoLite2-City.mmdb not loaded — drop into /data and restart.');return;}
+  var countries=(d.countries||[]).filter(function(c){return c.blocked>0;});
+  countries.sort(function(a,b){return b.blocked-a.blocked;});
+  countries=countries.slice(0,10);
+  if(!countries.length){_showChartEmpty('geo-chart','geo-chart-empty','No blocked geo events yet.');return;}
+  var labels=countries.map(function(c){return c.country||'??';});
+  var blocked=countries.map(function(c){return c.blocked;});
+  var clean=countries.map(function(c){return c.clean;});
+  document.getElementById('geo-chart-empty').style.display='none';
+  document.getElementById('geo-chart').style.display='block';
+  var ctx=document.getElementById('geo-chart').getContext('2d');
+  if(_geoChart){_geoChart.destroy();}
+  _geoChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[
+      {label:'Blocked',data:blocked,backgroundColor:_hexRgba('#f85149',0.70),borderColor:'#f85149',borderWidth:1,borderRadius:3},
+      {label:'Clean',data:clean,backgroundColor:_hexRgba('#3fb950',0.50),borderColor:'#3fb950',borderWidth:1,borderRadius:3}
+    ]},
+    options:{
+      indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:10,padding:10,color:'#8b949e',font:{size:10}}},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8}
+      },
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{precision:0},stacked:false},
+        y:{grid:{display:false},ticks:{font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Risk Score Distribution (histogram) ───────────────────────────────
+function loadRiskScoreChart(){
+  fetch('/antibot-appsec-gateway/secured/metrics',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderRiskScoreChart(d.clients||[]);})
+    .catch(function(e){_showChartEmpty('riskscore-chart','riskscore-chart-empty','Failed: '+e.message);});
+}
+function _renderRiskScoreChart(clients){
+  if(!clients.length){_showChartEmpty('riskscore-chart','riskscore-chart-empty','No client data.');return;}
+  var bins=[0,0,0,0,0,0,0,0,0,0];
+  clients.forEach(function(c){
+    var b=Math.min(9,Math.floor((c.risk_score||0)/10));
+    bins[b]++;
+  });
+  var labels=['0–9','10–19','20–29','30–39','40–49','50–59','60–69','70–79','80–89','90–100'];
+  var colors=bins.map(function(_,i){
+    var t=i/9;
+    if(t<0.4)return _hexRgba('#3fb950',0.70);
+    if(t<0.7)return _hexRgba('#d29922',0.70);
+    return _hexRgba('#f85149',0.70);
+  });
+  var borderColors=bins.map(function(_,i){
+    var t=i/9;
+    if(t<0.4)return '#3fb950';
+    if(t<0.7)return '#d29922';
+    return '#f85149';
+  });
+  document.getElementById('riskscore-chart-empty').style.display='none';
+  document.getElementById('riskscore-chart').style.display='block';
+  var ctx=document.getElementById('riskscore-chart').getContext('2d');
+  if(_riskScoreChart){_riskScoreChart.destroy();}
+  _riskScoreChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[{label:'Clients',data:bins,
+      backgroundColor:colors,borderColor:borderColors,borderWidth:1,borderRadius:3}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8}},
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{font:{size:10}}},
+        y:{grid:{color:'#21262d'},ticks:{precision:0},beginAtZero:true}
+      }
+    }
+  });
+}
+
+// ── JS Challenge Funnel (bar) ─────────────────────────────────────────
+function loadJsChalChart(){
+  fetch('/antibot-appsec-gateway/secured/detector-stats',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderJsChalChart(d);})
+    .catch(function(e){_showChartEmpty('jschal-chart','jschal-chart-empty','Failed: '+e.message);});
+}
+function _renderJsChalChart(d){
+  var chal=d.chal||{};
+  var required=chal.required||0;
+  var minted=chal.minted||0;
+  var mintRate=chal.mint_rate||0;
+  if(required===0&&minted===0){_showChartEmpty('jschal-chart','jschal-chart-empty','No JS challenge activity yet.');return;}
+  var failed=Math.max(0,required-minted);
+  var labels=['Required','Minted (solved)','Failed / Timeout'];
+  var data=[required,minted,failed];
+  var colors=[_hexRgba('#d29922',0.70),_hexRgba('#3fb950',0.70),_hexRgba('#f85149',0.70)];
+  var borders=['#d29922','#3fb950','#f85149'];
+  document.getElementById('jschal-chart-empty').style.display='none';
+  document.getElementById('jschal-chart').style.display='block';
+  var ctx=document.getElementById('jschal-chart').getContext('2d');
+  if(_jsChalChart){_jsChalChart.destroy();}
+  _jsChalChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[{label:'Count',data:data,
+      backgroundColor:colors,borderColor:borders,borderWidth:1,borderRadius:4}]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{
+        legend:{display:false},
+        tooltip:{
+          callbacks:{label:function(ctx){
+            var extra=ctx.dataIndex===1&&mintRate>0?' (mint rate: '+(mintRate*100).toFixed(0)+'%)':'';
+            return ' '+ctx.raw+extra;
+          }},
+          backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8
+        }
+      },
+      scales:{
+        x:{grid:{display:false},ticks:{font:{size:11}}},
+        y:{grid:{color:'#21262d'},ticks:{precision:0},beginAtZero:true}
+      }
+    }
+  });
+}
+
+// ── Top Attacked Paths — blocked traffic only (horizontal bar) ────────
+function loadTopPathsChart(){
+  fetch('/antibot-appsec-gateway/secured/top-attacked-paths?range=1440&limit=10',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderTopPathsChart(d.paths||[]);})
+    .catch(function(e){_showChartEmpty('toppaths-chart','toppaths-chart-empty','Failed: '+e.message);});
+}
+function _renderTopPathsChart(paths){
+  if(!paths.length){_showChartEmpty('toppaths-chart','toppaths-chart-empty','No blocked requests recorded.');return;}
+  paths=paths.filter(function(p){return p.path&&p.path.indexOf('/antibot-appsec-gateway/')<0;});
+  if(!paths.length){_showChartEmpty('toppaths-chart','toppaths-chart-empty','No external attack paths recorded.');return;}
+  var labels=paths.map(function(p){var s=p.path||'/';return s.length>38?s.slice(0,35)+'…':s;});
+  var data=paths.map(function(p){return p.count;});
+  document.getElementById('toppaths-chart-empty').style.display='none';
+  document.getElementById('toppaths-chart').style.display='block';
+  var ctx=document.getElementById('toppaths-chart').getContext('2d');
+  if(_topPathsChart){_topPathsChart.destroy();}
+  _topPathsChart=new Chart(ctx,{
+    type:'bar',
+    data:{labels:labels,datasets:[{label:'Blocked requests',data:data,
+      backgroundColor:_hexRgba('#f85149',0.70),borderColor:'#f85149',borderWidth:1,borderRadius:3}]},
+    options:{
+      indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{legend:{display:false},
+        tooltip:{
+          callbacks:{label:function(c){return ' '+c.raw.toLocaleString()+' blocked';}},
+          backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8
+        }},
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{precision:0}},
+        y:{grid:{display:false},ticks:{font:{size:10}}}
+      }
+    }
+  });
+}
+
+// ── Bot vs Human Traffic (stacked area — agents-timeline) ─────────────
+function loadBlockTimelineChart(){
+  fetch('/antibot-appsec-gateway/secured/agents-timeline?range=120&bucket=300',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderBlockTimelineChart(d.timeline||[]);})
+    .catch(function(e){_showChartEmpty('blocktimeline-chart','blocktimeline-chart-empty','Failed: '+e.message);});
+}
+function _renderBlockTimelineChart(tl){
+  var nonzero=tl.filter(function(b){return(b.detected||0)+(b.missed||0)+(b.clean_allowed||0)>0;});
+  if(!nonzero.length){_showChartEmpty('blocktimeline-chart','blocktimeline-chart-empty','No traffic data yet.');return;}
+  var labels=tl.map(function(b){
+    var dt=new Date(b.t*1000);
+    return dt.getHours().toString().padStart(2,'0')+':'+dt.getMinutes().toString().padStart(2,'0');
+  });
+  document.getElementById('blocktimeline-chart-empty').style.display='none';
+  document.getElementById('blocktimeline-chart').style.display='block';
+  var ctx=document.getElementById('blocktimeline-chart').getContext('2d');
+  if(_blockTimelineChart){_blockTimelineChart.destroy();}
+  _blockTimelineChart=new Chart(ctx,{
+    type:'line',
+    data:{labels:labels,datasets:[
+      {label:'Clean traffic',data:tl.map(function(b){return b.clean_allowed||0;}),
+       borderColor:'#3fb950',backgroundColor:_hexRgba('#3fb950',0.30),
+       fill:'origin',tension:.35,borderWidth:1.5,pointRadius:0,pointHoverRadius:3,yAxisID:'yClean'},
+      {label:'Detected bots',data:tl.map(function(b){return b.detected||0;}),
+       borderColor:'#f85149',backgroundColor:_hexRgba('#f85149',0.40),
+       fill:'origin',tension:.35,borderWidth:1.5,pointRadius:0,pointHoverRadius:3,yAxisID:'yBot'},
+      {label:'Likely bots (missed)',data:tl.map(function(b){return b.missed||0;}),
+       borderColor:'#d29922',backgroundColor:_hexRgba('#d29922',0.35),
+       fill:'origin',tension:.35,borderWidth:1.5,pointRadius:0,pointHoverRadius:3,yAxisID:'yBot'}
+    ]},
+    options:{
+      responsive:true,maintainAspectRatio:false,
+      interaction:{mode:'index',intersect:false},
+      plugins:{
+        legend:{position:'bottom',labels:{boxWidth:10,padding:12,color:'#8b949e',font:{size:10}}},
+        tooltip:{backgroundColor:'#161b22',borderColor:'#30363d',borderWidth:1,
+                 titleColor:'#c9d1d9',bodyColor:'#8b949e',padding:8}
+      },
+      scales:{
+        x:{grid:{color:'#21262d'},ticks:{maxTicksLimit:12,maxRotation:0,color:'#8b949e',font:{size:9}}},
+        yClean:{position:'right',grid:{color:'#21262d'},beginAtZero:true,ticks:{precision:0,color:'#3fb950',font:{size:9}},title:{display:true,text:'clean',color:'#3fb950',font:{size:9}}},
+        yBot:{position:'left',grid:{display:false},beginAtZero:true,ticks:{precision:0,color:'#f85149',font:{size:9}},title:{display:true,text:'bots',color:'#f85149',font:{size:9}}}
+      }
+    }
+  });
+}
+
+// ── Attack Heatmap — hour × day grid ─────────────────────────────────
+var _DAYS=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+function loadAttackHeatmap(){
+  fetch('/antibot-appsec-gateway/secured/attack-heatmap?range=10080',{credentials:'include'})
+    .then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.json();})
+    .then(function(d){_renderAttackHeatmap(d);})
+    .catch(function(e){
+      var el=document.getElementById('heatmap-empty');
+      if(el){el.style.display='block';el.textContent='Failed: '+e.message;}
+    });
+}
+function _renderAttackHeatmap(d){
+  var gridEl=document.getElementById('heatmap-grid');
+  var emptyEl=document.getElementById('heatmap-empty');
+  if(!gridEl)return;
+  var cells=d.cells||[];
+  var maxVal=d.max||0;
+  if(!cells.length||maxVal===0){
+    gridEl.innerHTML='';
+    if(emptyEl)emptyEl.style.display='block';
+    return;
+  }
+  if(emptyEl)emptyEl.style.display='none';
+  // Build lookup: {dow: {hour: count}}
+  var lookup={};
+  cells.forEach(function(c){
+    var dow=c[0],hour=c[1],n=c[2];
+    if(!lookup[dow])lookup[dow]={};
+    lookup[dow][hour]=n;
+  });
+  var html='';
+  // Hour column headers
+  html+='<div class="heatmap-label"></div>';
+  for(var h=0;h<24;h++){
+    html+='<div class="heatmap-hour-label">'+(h%6===0?h:'')+'</div>';
+  }
+  // Rows: Sun=0 .. Sat=6
+  for(var dow=0;dow<7;dow++){
+    html+='<div class="heatmap-label">'+escapeHtml(_DAYS[dow])+'</div>';
+    for(var hour=0;hour<24;hour++){
+      var n=(lookup[dow]&&lookup[dow][hour])||0;
+      var intensity=maxVal>0?n/maxVal:0;
+      var alpha=intensity<0.05?0.05:intensity;
+      var bg=n===0?'#21262d':'rgba(248,81,73,'+alpha.toFixed(2)+')';
+      var title=escapeHtml(_DAYS[dow])+' '+hour+':00 UTC — '+n.toLocaleString()+' blocks';
+      html+='<div class="heatmap-cell" style="background:'+bg+'" title="'+title+'"></div>';
+    }
+  }
+  gridEl.innerHTML=html;
+  document.getElementById('heatmap-ts').textContent='updated '+new Date().toLocaleTimeString();
+}
+
+// ── Load all threat-section charts ────────────────────────────────────
+function _loadThreatSection(){
+  loadThreatTiles();
+  loadSignalsChart();
+  loadAttackCatChart();
+  loadBlockReasonChart();
+  loadRiskScoreChart();
+  loadTopPathsChart();
+  loadBlockTimelineChart();
+  loadJsChalChart();
+  loadGeoChart();
+  loadAttackHeatmap();
+}
+
+document.addEventListener('DOMContentLoaded',function(){
+  loadVhostStats();
+  loadTrafficChart();
+  _loadThreatSection();
+  _timers.push(setInterval(loadVhostStats,30000));
+  _timers.push(setInterval(loadTrafficChart,60000));
+  _timers.push(setInterval(_loadThreatSection,30000));
+});
+window.addEventListener('beforeunload',function(){_timers.forEach(clearInterval);});
+
+// ── Account modal ─────────────────────────────────────────────────────
+(function(){
+  var _userRole='admin',_username='';
+  fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(!d)return;
+    _userRole=(d.user&&d.user.role)||'admin';
+    _username=d.username||'';
+    var ns=document.getElementById('nav-settings');
+    if(ns&&_userRole!=='admin')ns.style.display='none';
+  }).catch(function(e){var _err={_error:true,msg:String(e)};void _err;});
+  function _dp(h){var d=document.createElement('div');d.innerHTML=h;return d.innerHTML;}
+  function _openAcctModal(){document.getElementById('acct-modal').style.display='flex';_acctLoadBody();}
+  function _acctLoadBody(){
+    var b=document.getElementById('acct-body');
+    b.innerHTML='<div style="color:var(--dim)">Loading…</div>';
+    fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
+      var u=d.user||{};
+      b.innerHTML=_dp('<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
+        '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
+        '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
+        '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
+        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
+      var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
+      _acctLoadSessions();
+    }).catch(function(){document.getElementById('acct-body').innerHTML='<div style="color:var(--red)">Failed to load.</div>';});
+  }
+  function _acctChangePw(){
+    var curPw=(document.getElementById('acct-pw-cur')||{}).value||'';
+    var pw=(document.getElementById('acct-pw-new')||{}).value||'';
+    var msg=document.getElementById('acct-pw-msg');
+    if(!curPw){if(msg)msg.textContent='Current password required';return;}
+    if(pw.length<8){if(msg)msg.textContent='Min 8 chars';return;}
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username),{method:'PATCH',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:curPw,password:pw})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(msg)msg.textContent=d.error?'Error: '+d.error:'✓ Password updated';
+        if(!d.error){var ic=document.getElementById('acct-pw-cur');if(ic)ic.value='';var i=document.getElementById('acct-pw-new');if(i)i.value='';}
+      }).catch(function(){if(msg)msg.textContent='Request failed';});
+  }
+  function _acctLoadSessions(){
+    var el=document.getElementById('acct-sessions');if(!el)return;
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username)+'/sessions',{credentials:'include'})
+      .then(function(r){return r.json();}).then(function(d){
+        var sessions=(d.sessions||[]).filter(function(s){return s.status==='active';});
+        var curSid=d.current_sid||'';
+        if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
+        el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
+          return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+        }).join('')+'</table>');
+        el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
+      }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
+  }
+  function _acctRevokeSession(sid){
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username)+'/sessions/'+encodeURIComponent(sid)+'/revoke',{method:'POST',credentials:'include'})
+      .then(function(r){return r.json();}).then(function(d){if(d.self_revoke){window.location='/antibot-appsec-gateway/login';return;}_acctLoadSessions();}).catch(function(e){var el=document.getElementById('acct-sessions');if(el)el.textContent='Revoke failed: '+String(e);});
+  }
+  window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
+})();
+</script>
+</div><!-- /page-content -->
+</div><!-- /main-area -->
+</body></html>

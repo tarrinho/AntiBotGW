@@ -1,19 +1,46 @@
+<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW_1.7.11 · Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppSecGW_1.8.1 · Live Feed</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
-     background:var(--bg);color:var(--fg);padding:14px}
-h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
-h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
+     background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
-.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;
-        padding:6px 0;border-bottom:1px solid var(--line)}
-.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px;transition:color .1s}
-.topnav a:hover{color:var(--fg);background:#1f2730}
-.topnav a.active{color:var(--fg);background:#1f2730}
+/* ── Sidebar ── */
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
+#sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
+#sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;
+  font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
+#sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
+#sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
+#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;
+  padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
+#sidebar-footer button.signout:hover{background:#1f2730}
+/* ── Main area ── */
+#main-area{flex:1;min-width:0;display:flex;flex-direction:column}
+/* ── Compact topbar ── */
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
+#topbar-right{display:flex;align-items:center;gap:8px}
+#vhost-select{background:#161b22;border:1px solid var(--line);color:var(--fg);
+  border-radius:5px;padding:4px 10px;font-size:12px;font-family:inherit;cursor:pointer;
+  display:none;max-width:260px}
+#vhost-select:focus{outline:none;border-color:var(--blue)}
+/* ── Page content ── */
+#page-content{flex:1;padding:14px}
 .btn-unban{background:var(--yellow);color:#000;border:none;padding:3px 9px;
   border-radius:4px;cursor:pointer;font-size:11px;font-weight:600}
 .btn-unban:hover{background:#e6ad29}
@@ -113,6 +140,24 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
 .ctrl-now:hover{background:#1c3d5a}
 @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:600px){
+  #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
+  #sidebar.mob-open{transform:translateX(0)}
+  #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:199}
+  #mob-overlay.mob-open{display:block}
+  #mob-menu{display:flex!important}
+  #main-area{margin-left:0}
+}
+@media(min-width:601px){#mob-menu{display:none!important}}
+@media(max-width:480px){
+  .card{padding:12px 10px}
+  .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+  .btn{min-height:36px;padding:8px 12px}
+  .btn-sm{min-height:32px;padding:6px 10px}
+}
+#page-content.data-stale{opacity:.4;pointer-events:none;transition:opacity .3s}
+#stale-banner{display:none;position:sticky;top:0;z-index:50;background:#3d1a1a;border-bottom:1px solid var(--red);color:#ffb4b4;padding:6px 14px;font-size:12px;text-align:center}
+#stale-banner.show{display:block}
 
 /* 1.5.4 — clickable cells (identity / risk drill-downs) */
 .cell-click{cursor:pointer;border-bottom:1px dotted var(--blue);position:relative}
@@ -200,8 +245,53 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:#0a1628}
 </style></head>
 <body>
-<h1>AppSecGW_1.7.11 &middot; Dashboard <span class="pill" id="live">● LIVE</span></h1>
-
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<div id="sidebar">
+  <div id="sidebar-brand">
+    <div id="sidebar-brand-name">AppSecGW</div>
+    <div id="sidebar-brand-ver">1.8.1</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="active">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
+    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+  </nav>
+  <div id="sidebar-footer">
+    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
+    <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+    </form>
+  </div>
+</div>
+<div id="main-area">
+<div id="stale-banner">⚠ Data may be stale — last fetch failed. Retrying…</div>
+  <div id="topbar">
+    <div id="topbar-title">Live Feed <span class="pill" id="live">● LIVE</span></div>
+    <div id="topbar-right">
+      <select id="vhost-select">
+        <option value="">All vhosts</option>
+      </select>
+      <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+        <label for="gw-loglvl">log</label>
+        <select id="gw-loglvl">
+          <option value="debug">debug</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+          <option value="critical">critical</option>
+        </select>
+      </div>
+      <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+    </div>
+  </div>
+  <div id="page-content">
 <!-- 1.7.7 — category filter bar + path search -->
 <div id="cat-filter">
   <span id="cat-filter-label">Show:</span>
@@ -226,25 +316,14 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </span>
 </div>
 
-<!-- column-header tooltip -->
+<!-- column-header tooltip (hidden) -->
 <div id="col-tip-pop"></div>
-
-<!-- 1.5.4 — reason drill-down modal -->
+<!-- 1.5.4 — reason drill-down modal (hidden) -->
 <div class="modal-back" id="modal-back"></div>
 <div class="modal" id="modal">
   <h3 id="modal-title">Drill-down <span class="x" id="modal-close">×</span></h3>
   <div id="modal-body"></div>
 </div>
-<nav class="topnav" id="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard" class="active">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-  <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
-  <form method="post" action="/antibot-appsec-gateway/logout" style="display:inline;margin:0"><button type="submit" onclick="return confirm('Sign out and return to the login page?');" style="background:none;border:none;cursor:pointer;color:var(--red);padding:0;font:inherit">Sign out</button></form></nav>
 
 <div class="grid">
 
@@ -428,6 +507,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
       <thead><tr>
         <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
         <th data-col-tip="Last IP|Most recently observed source IP address for this identity.">Last IP<span class="col-tip-i">ℹ</span></th>
+        <th data-col-tip="Domain|Virtual host this identity was last seen accessing.">Domain<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="requests" data-col-tip="Total|Total requests seen from this identity (allowed + blocked).">Total<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="allowed" data-col-tip="Allowed|Requests that passed all controls and were proxied to the upstream application.">Allowed<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="blocked" data-col-tip="Blocked|Requests caught by a detector and silently served a decoy response instead of the real upstream.">Blocked<span class="col-tip-i">ℹ</span></th>
@@ -468,7 +548,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <div class="row" style="grid-template-columns:1fr">
     <div class="card">
       <h2>Top paths<span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
-      <table id="paths-tbl"><thead><tr><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
+      <table id="paths-tbl"><thead><tr><th>Domain</th><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 
@@ -518,13 +598,86 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 
 </div>
 
+<!-- ── 1.8.0 — Per-vhost traffic breakdown ──────────────────────── -->
+<div class="grid" style="margin-top:14px">
+  <div class="card" id="card-vhost-breakdown">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Traffic by virtual host <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">stacked requests/bucket · matches main window</span></h2>
+      <span id="vhost-breakdown-status" style="font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,monospace"></span>
+    </div>
+    <div style="position:relative;height:180px"><canvas id="vhost-breakdown-chart"></canvas></div>
+  </div>
+</div>
+
 <div class="foot">refreshes every 2s · <code id="ts"></code></div>
 
+<script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
 <script>
+const _dp = (h) => {
+  if (typeof DOMPurify === "undefined") return h;
+  if (/^<t[rhd]/i.test((h||'').trimStart())) {
+    const _s = DOMPurify.sanitize('<table><tbody>' + h + '</tbody></table>');
+    const _e = document.createElement('div'); _e.innerHTML = _s;
+    return (_e.querySelector('tbody') || _e).innerHTML;
+  }
+  return DOMPurify.sanitize(h);
+};
 let lastTotal = 0, lastTime = Date.now();
 let chart = null;
 let costChart = null;
+
+// ── Vhost selector (1.8.0) ───────────────────────────────────────────────────
+window._vhostParam = function() {
+  var v = sessionStorage.getItem('gw_vhost') || '';
+  return v ? '&vhost=' + encodeURIComponent(v) : '';
+};
+function _syncVhostSelect() {
+  var sel = document.getElementById('vhost-select');
+  if (!sel) return;
+  var cur = sel.value || sessionStorage.getItem('gw_vhost') || '';
+  Promise.all([
+    fetch('/antibot-appsec-gateway/secured/vhosts', {credentials:'include'}).then(function(r){return r.ok?r.json():{vhosts:[]};}).catch(function(){return {vhosts:[]};}),
+    fetch('/antibot-appsec-gateway/secured/vhost-stats', {credentials:'include'}).then(function(r){return r.ok?r.json():{stats:[]};}).catch(function(){return {stats:[]};})
+  ]).then(function(results) {
+    var vd=results[0], sd=results[1];
+    var cfgMap={};
+    (vd.vhosts||[]).forEach(function(v){cfgMap[v.hostname]=v;});
+    var _now=Date.now()/1000;
+    var _pinned=new Set();try{_pinned=new Set(JSON.parse(localStorage.getItem('vhost_pinned')||'[]'));}catch(e){}
+    var statsMap={};(sd.stats||[]).forEach(function(r){if(r.hostname)statsMap[r.hostname]=r.last_seen_ts||0;});
+    var allHosts=[];
+    var seen=new Set();
+    (vd.vhosts||[]).forEach(function(v){if(v.hostname&&!seen.has(v.hostname)){var age=statsMap[v.hostname]>0?(_now-statsMap[v.hostname]):Infinity;if(age<300||_pinned.has(v.hostname)){allHosts.push(v.hostname);seen.add(v.hostname);}}});
+    Object.keys(statsMap).forEach(function(h){if(!seen.has(h)&&_pinned.has(h)){allHosts.push(h);seen.add(h);}});
+    var existing=new Set([].slice.call(sel.options).filter(function(o){return o.value;}).map(function(o){return o.value;}));
+    allHosts.forEach(function(h){
+      if(!existing.has(h)){
+        var opt=document.createElement('option');
+        opt.value=h; opt.textContent=h;
+        var cfg=cfgMap[h];
+        opt.title=cfg&&cfg.UPSTREAM?h+' → '+cfg.UPSTREAM:h;
+        sel.appendChild(opt);
+      }
+    });
+    var fresh=new Set(allHosts);
+    [].slice.call(sel.options).forEach(function(o){if(o.value&&!fresh.has(o.value))o.remove();});
+    if(cur) sel.value=cur;
+    sel.style.display='block';
+  });
+}
+document.addEventListener('DOMContentLoaded', function() {
+  var sel = document.getElementById('vhost-select');
+  if (!sel) return;
+  var cur = sessionStorage.getItem('gw_vhost') || '';
+  sel.value = cur;
+  sel.addEventListener('change', function() {
+    sessionStorage.setItem('gw_vhost', sel.value);
+    tick();
+  });
+  _syncVhostSelect();
+  _timers.push(setInterval(_syncVhostSelect, 30000));
+});
 
 
 // 1.7.6 — category filter state
@@ -636,7 +789,7 @@ function _renderClientsTable(list) {
   const cntEl = document.getElementById('clients-count');
   if (cntEl) cntEl.textContent = `(${list.length})`;
 
-  tbody.innerHTML = list.slice(0, 100).map((c, i) => {
+  tbody.innerHTML = _dp(list.slice(0, 100).map((c, i) => {
     const _bsec = c.banned_secs || 0;
     const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
                  : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
@@ -664,6 +817,7 @@ function _renderClientsTable(list) {
     return `<tr>
       <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
       <td class="dim">${escapeHtml(lastIp)}</td>
+      <td class="dim" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(c.vhost||'')}">${escapeHtml(c.vhost||'—')}</td>
       <td>${c.requests}</td>
       <td style="color:var(--green)">${c.allowed}</td>
       <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
@@ -679,7 +833,7 @@ function _renderClientsTable(list) {
       <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
       <td>${switchHtml}</td>
     </tr>`;
-  }).join('') || '<tr><td colspan=12 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
+  }).join('')) || '<tr><td colspan=13 class=dim style="text-align:center;padding:14px">no clients yet</td></tr>';
   _updateCliSortHeaders();
   _wireBanCtrls(tbody);
   tbody.querySelectorAll('.cell-click').forEach(el => {
@@ -723,7 +877,7 @@ async function _fetchPathEvents(pathQ) {
       if (reason === 'bypass-path') return 'var(--blue)';
       return 'var(--red)';
     };
-    body.innerHTML = rows.map(e => {
+    body.innerHTML = _dp(rows.map(e => {
       const ts = e.ts ? new Date(e.ts * 1000).toLocaleString() : '—';
       const reason = e.reason || 'OK';
       return `<tr style="border-top:1px solid var(--line)">
@@ -734,7 +888,7 @@ async function _fetchPathEvents(pathQ) {
         <td style="padding:4px 8px;font-size:11px;color:${reasonColor(reason)}">${escapeHtml(reason)}</td>
         <td style="padding:4px 8px;font-size:10px;color:var(--dim);max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.ua||'')}">${escapeHtml((e.ua||'').slice(0,60))}</td>
       </tr>`;
-    }).join('');
+    }).join(''));
   } catch(err) {
     body.innerHTML = `<tr><td colspan="6" style="padding:12px;color:var(--red)">Error: ${escapeHtml(String(err))}</td></tr>`;
   }
@@ -759,7 +913,7 @@ function _renderEvents(events) {
     cntEl.textContent = label;
   }
   const eEl = document.getElementById('events');
-  eEl.innerHTML = filtered.map(e => {
+  eEl.innerHTML = _dp(filtered.map(e => {
     const time = new Date(e.ts*1000).toTimeString().split(' ')[0];
     const isGwMgmt = (e.path || '').startsWith('/antibot-appsec-gateway/');
     const isOk = (e.reason === 'OK' || e.reason === '');
@@ -800,12 +954,13 @@ function _renderEvents(events) {
       <span class="dim">${escapeHtml(time)}</span>
       <span>${tagHtml}</span>
       <span>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</span>
+      <span class="dim" style="font-size:10.5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.vhost||'')}">${escapeHtml(e.vhost||'')}</span>
       <span style="color:${statusColor};font-weight:600">${e.status||'?'}</span>
       <span style="color:${scoreColor};font-weight:600">${score > 0 ? score : '<span class="dim">—</span>'}</span>
       <span class="dim" title="${escapeHtml(e.path||'')}">${escapeHtml((e.path||'').slice(0,50))}</span>
       <span>${banCtrl}</span>
     </div>`;
-  }).join('') || '<span class="dim">no events yet</span>';
+  }).join('')) || '<span class="dim">no events yet</span>';
   eEl.querySelectorAll('.reason-drill').forEach(el => {
     el.onclick = ev => { ev.preventDefault(); openReasonDrill(el.dataset.reason); };
   });
@@ -947,7 +1102,7 @@ function ensureCostChart() {
                               items
                             )}} },
       scales: {
-        x: { ticks: { color:'#8b949e', font:{size:10}, maxRotation:0, autoSkipPadding:18 }, grid: { color:'#21262d' } },
+        x: { ticks: { color:'#8b949e', font:{size:10}, maxRotation:45, autoSkip:true, autoSkipPadding:14 }, grid: { color:'#21262d' } },
         y: { beginAtZero: true,
              ticks: { color:'#8b949e', font:{size:10}, callback: v => v + ' ms' },
              grid: { color:'#21262d' } },
@@ -1024,7 +1179,7 @@ function ensureChart() {
         },
       },
       scales: {
-        x: { ticks: { color: '#8b949e', font: { size: 10 }, maxRotation: 0, autoSkipPadding: 18 },
+        x: { ticks: { color: '#8b949e', font: { size: 10 }, maxRotation: 45, autoSkip: true, autoSkipPadding: 14 },
              grid: { color: '#21262d' } },
         y: { beginAtZero: true, ticks: { color: '#8b949e', font: { size: 10 }, precision: 0 },
              grid: { color: '#21262d' } },
@@ -1136,6 +1291,9 @@ function refreshControls() {
 refreshControls();
 
 async function tick() {
+  // M2 — show fetching state so user knows the page is live
+  const _liveElPre = document.getElementById('live');
+  if (_liveElPre) { _liveElPre.textContent = '↻ …'; _liveElPre.style.background = 'var(--dim)'; }
   try {
     const params = new URLSearchParams({
       range:  getRangeMin().toString(),
@@ -1146,12 +1304,14 @@ async function tick() {
     if (_pathQ) params.set('path', _pathQ);
     const _activeCats = Array.from(window._activeFilters).filter(c => ['allowed','ban','missed','authbots','gwmgmt'].includes(c));
     if (_activeCats.length && _activeCats.length < 5) params.set('cats', _activeCats.join(','));
-    const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString(), {cache: 'no-store', credentials: 'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString() + window._vhostParam(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
     const _liveEl = document.getElementById('live');
     _liveEl.style.background='var(--green)';
     _liveEl.textContent='● LIVE';
     _liveEl.title='Gateway reachable · metrics OK · updated ' + new Date().toLocaleTimeString();
+    document.getElementById('page-content').classList.remove('data-stale');
+    document.getElementById('stale-banner').classList.remove('show');
 
     document.getElementById('total').textContent = d.total.toLocaleString();
     document.getElementById('allowed').textContent = d.allowed.toLocaleString();
@@ -1187,8 +1347,8 @@ async function tick() {
     if (Object.keys(reasons).length === 0) {
       rEl.innerHTML = '<span class="dim">no blocks yet</span>';
     } else {
-      rEl.innerHTML = reasonOrder.filter(k => reasons[k])
-        .map(k => `<span class="lbl"><a href="#" class="reason-drill" data-reason="${escapeHtml(k)}" title="click to see offending identities"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></a></span><span class="val">${reasons[k]|0}</span>`).join('');
+      rEl.innerHTML = _dp(reasonOrder.filter(k => reasons[k])
+        .map(k => `<span class="lbl"><a href="#" class="reason-drill" data-reason="${escapeHtml(k)}" title="click to see offending identities"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></a></span><span class="val">${reasons[k]|0}</span>`).join(''));
       rEl.querySelectorAll('.reason-drill').forEach(el => {
         el.onclick = e => { e.preventDefault(); openReasonDrill(el.dataset.reason); };
       });
@@ -1208,15 +1368,16 @@ async function tick() {
 
     // Top paths — 1.5.5: click any row to see who hit that path
     const pBody = document.querySelector('#paths-tbl tbody');
-    pBody.innerHTML = (d.top_paths || []).map(p => {
+    pBody.innerHTML = _dp((d.top_paths || []).map(p => {
       const isGw = p.path.startsWith('/antibot-appsec-gateway/');
       const rowColor = isGw ? '#e4f0ff' : 'var(--blue)';
       const rowTip = isGw ? 'click to see requestors' : 'click to see offender IPs / identities';
       return `<tr class="path-row" data-path="${escapeHtml(p.path)}" style="cursor:pointer" title="${rowTip}">
+        <td style="color:var(--dim);font-size:11px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(p.vhost||'')}">${escapeHtml(p.vhost||'—')}</td>
         <td><b class="cell-click" style="border-bottom:1px dotted ${rowColor};color:${rowColor}">${escapeHtml(p.path)}</b></td>
         <td style="text-align:right;font-weight:600">${p.count}</td>
       </tr>`;
-    }).join('') || '<tr><td colspan=2 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
+    }).join('')) || '<tr><td colspan=3 class=dim style="text-align:center;padding:14px">no traffic yet</td></tr>';
     pBody.querySelectorAll('.path-row').forEach(tr => {
       tr.onclick = () => openPathDrill(tr.dataset.path);
     });
@@ -1248,6 +1409,11 @@ async function tick() {
       _applyChartFilters(c);
       c.update('none');
       if (typeof window._paintBlockRate === 'function') window._paintBlockRate();
+    } else if (chart) {
+      // M1 — API returned empty timeline: clear chart so stale data doesn't linger
+      chart.data.labels = [];
+      chart.data.datasets.forEach(ds => { ds.data = []; });
+      chart.update('none');
     }
 
     // 1.5.4 — render services + detector hits cards
@@ -1282,10 +1448,10 @@ async function tick() {
       const dEl = document.getElementById('detector-hits');
       const sorted = Object.entries(dh).sort((a,b)=>b[1]-a[1]);
       dEl.innerHTML = sorted.length
-        ? sorted.map(([k,v]) =>
+        ? _dp(sorted.map(([k,v]) =>
             `<span class="lbl det-drill" data-reason="${escapeHtml(k)}" title="click for details + offending identities"
                    style="cursor:pointer;border-bottom:1px dotted var(--blue)">${escapeHtml(k)}</span>` +
-            `<span class="val" style="color:${v>0?'var(--red)':'var(--dim)'}">${v|0}</span>`).join('')
+            `<span class="val" style="color:${v>0?'var(--red)':'var(--dim)'}">${v|0}</span>`).join(''))
         : '<span class="dim">no hits yet</span>';
       dEl.querySelectorAll('.det-drill').forEach(el => {
         el.onclick = () => openReasonDrill(el.dataset.reason);
@@ -1328,6 +1494,8 @@ async function tick() {
     _errEl.style.background='var(--red)';
     _errEl.textContent='○ ERR';
     _errEl.title='Error fetching metrics: ' + (err && err.message ? err.message : String(err));
+    document.getElementById('page-content').classList.add('data-stale');
+    document.getElementById('stale-banner').classList.add('show');
   }
 }
 function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
@@ -1373,7 +1541,13 @@ function fmtAgo(secs){
   return (n/86400).toFixed(1) + 'd ago';                     //  ≥ 48h    → days
 }
 function safeClass(s){return (s||'').replace(/[^a-zA-Z0-9_-]/g,'')}
-document.getElementById('range').addEventListener('change', () => { document.getElementById('bucket').value = pickBucketForRange(getRangeMin()); refreshControls(); tick(); });
+document.getElementById('range').addEventListener('change', () => {
+  document.getElementById('bucket').value = pickBucketForRange(getRangeMin());
+  // M3 — clear prior chart state so stale data from a different range doesn't persist
+  if (chart) { chart.data.labels = []; chart.data.datasets.forEach(ds => { ds.data = []; }); chart.update('none'); }
+  window._tlAllowed = window._tlBlocks = window._tlMissed = window._tlAuthBots = window._tlGwMgmt = [];
+  refreshControls(); tick();
+});
 document.getElementById('bucket').addEventListener('change', tick);
 tick();
 // 1.5.5 — skip auto-refresh while the user is typing in any input /
@@ -1406,7 +1580,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
     if (!div) return;
     if (!methods.length){ div.innerHTML = '<div class="dim">no detector hits yet</div>'; return; }
     const max = Math.max(...methods.map(m => m.hits));
-    div.innerHTML = methods.map(m => {
+    div.innerHTML = _dp(methods.map(m => {
       const pct = max ? (m.hits / max) * 100 : 0;
       return `<div style="display:grid;grid-template-columns:80px 1fr 50px;gap:8px;align-items:center;margin-bottom:4px">
         <span style="color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(m.method)}</span>
@@ -1415,18 +1589,18 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
         </span>
         <span style="text-align:right;color:#fff;font-weight:600">${m.hits}</span>
       </div>`;
-    }).join('');
+    }).join(''));
   }
   function paintTopMethods(methods){
     const tbody = document.querySelector('#top-methods-tbl tbody');
     if (!tbody) return;
     if (!methods.length){ tbody.innerHTML = '<tr><td colspan="3" class="dim" style="padding:8px">no hits</td></tr>'; return; }
-    tbody.innerHTML = methods.slice(0, 8).map(m => `
+    tbody.innerHTML = _dp(methods.slice(0, 8).map(m => `
       <tr style="border-bottom:1px solid var(--line)">
         <td style="padding:4px 6px;color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10.5px">${escapeHtml(m.method)}</td>
         <td style="padding:4px 6px;text-align:right;font-weight:600">${m.hits}</td>
         <td style="padding:4px 6px;text-align:right;font-family:ui-monospace,monospace;color:var(--dim)">${m.p99_ms}</td>
-      </tr>`).join('');
+      </tr>`).join(''));
   }
   async function loadDetectorStats(){
     if (_userIsTyping()) return;
@@ -1696,12 +1870,12 @@ window._gwIdentityPopover = (function(){
     document.getElementById('modal-title').innerHTML =
       `${title} <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
-    document.getElementById('modal-body').innerHTML = body;
+    document.getElementById('modal-body').innerHTML = _dp(body);
     back.classList.add('show'); modal.classList.add('show');
     if (kind === 'id-main' && d.ip) {
       window.fetchIpIntel(d.ip).then(html => {
         const node = document.getElementById('ip-intel-section');
-        if (node) node.innerHTML = html;
+        if (node) node.innerHTML = _dp(html);
       }).catch(() => {});
     }
   };
@@ -1944,7 +2118,7 @@ window._gwIdentityPopover = (function(){
       `Path drill-down · <code style="color:${pathColor}">${escapeHtml(path.length>50?path.slice(0,50)+'…':path)}</code> <span class="x" id="modal-close">×</span>`;
     document.getElementById('modal-close').onclick = close;
     const modalBody = document.getElementById('modal-body');
-    modalBody.innerHTML = body;
+    modalBody.innerHTML = _dp(body);
 
     // Wire path category toggle buttons
     const _togglePathKnob = async (knob, getList, setList, labelFn, btnEl) => {
@@ -2117,7 +2291,7 @@ window._gwIdentityPopover = (function(){
          <span class="x" id="modal-close">×</span>`;
       document.getElementById('modal-close').onclick = close;
       const modalBody = document.getElementById('modal-body');
-      modalBody.innerHTML = (_fetchErr ? `<div class="empty" style="color:var(--red);margin-bottom:10px">Fetch error: ${escapeHtml(_fetchErr)}</div>` : '') + body;
+      modalBody.innerHTML = _dp((_fetchErr ? `<div class="empty" style="color:var(--red);margin-bottom:10px">Fetch error: ${escapeHtml(_fetchErr)}</div>` : '') + body);
       modalBody.querySelectorAll('.act-btns').forEach(span => {
         const ip = _extractIp(span);
         span.querySelector('.ban').onclick = async e => {
@@ -2189,7 +2363,7 @@ window._gwIdentityPopover = (function(){
     // Synthetic reasons (not in RISK_WEIGHTS — emitted by middleware directly)
     "banned-silent":         {tier:"info", weight:0,  text:"Identity is currently in the hostile pool (24-h ban after risk crossed threshold OR honeypot/AI-flagged hit). Every request returns the upstream's homepage so the bot can't tell it was caught."},
     "chal-required":         {tier:"info", weight:0,  text:"Cookie gate (`JS_CHALLENGE=1`) requires a valid `chal` cookie and this request didn't carry one. Browser solves Turnstile / heuristic auto-mint to get the cookie; pure-HTTP bots get silent-decoyed."},
-    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/antibot-appsec-gateway/secured/metrics`, `/antibot-appsec-gateway/secured/dashboard`, etc. is never confirmed to outsiders."},
+    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/antibot-appsec-gateway/secured/metrics`, `/antibot-appsec-gateway/secured/live-feed`, etc. is never confirmed to outsiders."},
     "admin-ip-blocked":      {tier:"info", weight:0,  text:"`ADMIN_ALLOWED_IPS` is configured and the source IP is not on the list. Admin endpoints return upstream-404 (mirrors a real not-found, no leak)."},
     "pow-required":          {tier:"info", weight:0,  text:"`POW_REQUIRED_PATHS` includes this path and the request didn't carry a valid `X-PoW-Token`/`X-PoW-Solution`. Returns 402 with a fresh challenge."},
     "OK":                    {tier:"info", weight:0,  text:"Request was forwarded to the upstream. No detector fired."},
@@ -2274,7 +2448,7 @@ window._gwIdentityPopover = (function(){
           <span style="color:var(--red)">●</span> banned — risk score crossed RISK_BAN_THRESHOLD; in hostile pool for HOSTILE_BAN_SECS (default 24h)
         </div>`;
     }
-    document.getElementById('modal-body').innerHTML = body;
+    document.getElementById('modal-body').innerHTML = _dp(body);
     back.classList.add('show'); modal.classList.add('show');
   };
 })();
@@ -2427,14 +2601,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
 <style>
-#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+#gw-status-pill{
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
-  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  padding:5px 10px;border-radius:14px;cursor:pointer;user-select:none;white-space:nowrap;
   background:#161b22;color:#fff;border:1px solid #30363d;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s;flex-shrink:0}
 #gw-status-pill:hover{transform:scale(1.04)}
-#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
-  display:flex;align-items:center;gap:5px;
+#gw-loglvl-wrap{display:flex;align-items:center;gap:5px;flex-shrink:0;
   background:#161b22;border:1px solid #30363d;border-radius:14px;
   padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
   font-size:10.5px;color:#8b949e;
@@ -2463,18 +2636,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
-<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
-<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
-  <label for="gw-loglvl">log</label>
-  <select id="gw-loglvl">
-    <option value="debug">debug</option>
-    <option value="info">info</option>
-    <option value="warn">warn</option>
-    <option value="error">error</option>
-    <option value="critical">critical</option>
-  </select>
-</div>
-<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<!-- 1.6.5 — server-LOG_LEVEL combo + health pill moved into #topbar-right -->
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
@@ -2526,9 +2688,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         <span class="det">${escapeHtml(r.detail||'')}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
       </div>`).join('');
-    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
       Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
-    </div>`;
+    </div>`);
     modal.classList.add('show');
   };
   document.addEventListener('keydown', e => {
@@ -2565,10 +2727,124 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
 
+<!-- ── 1.8.0 — Vhost breakdown chart ─────────────────────────── -->
+<script>
+(function(){
+  var _vhChart = null;
+  var _PALETTE = [
+    '#58a6ff','#3fb950','#f85149','#d29922','#bc8cff',
+    '#56d364','#ff7b3a','#a371f7','#79c0ff','#ffb3c8',
+  ];
+
+  function _vhColor(i){ return _PALETTE[i % _PALETTE.length]; }
+
+  function _rangeVal(){ return parseInt((document.getElementById('range')||{}).value||720,10); }
+  function _bucketVal(){ return parseInt((document.getElementById('bucket')||{}).value||300,10); }
+
+  function loadVhostBreakdown(){
+    var range = _rangeVal(), bucket = _bucketVal();
+    var url = '/antibot-appsec-gateway/secured/vhost-breakdown?range='+range+'&bucket='+bucket+'&end='+Math.floor(Date.now()/1000);
+    var statusEl = document.getElementById('vhost-breakdown-status');
+    fetch(url,{credentials:'include',cache:'no-store'})
+      .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+      .then(function(d){
+        var datasets = d.datasets||[];
+        var labels   = (d.labels||[]).map(function(ts){ return new Date(ts*1000); });
+        var card = document.getElementById('card-vhost-breakdown');
+        if(!datasets.length){
+          if(card) card.style.display='none';
+          return;
+        }
+        if(card) card.style.display='';
+        if(statusEl) statusEl.textContent = 'updated '+new Date().toLocaleTimeString();
+
+        var chartDatasets = datasets.map(function(ds,i){
+          return {
+            label: ds.vhost,
+            data: ds.data,
+            borderColor: _vhColor(i),
+            backgroundColor: _vhColor(i).replace(')',', 0.25)').replace('rgb','rgba').replace('#','rgba('+parseInt(ds.vhost.length||1,10)),
+            fill: true,
+            borderWidth: 1.5,
+            pointRadius: 0,
+            tension: 0.3,
+          };
+        });
+        /* rebuild backgroundColor properly */
+        chartDatasets.forEach(function(ds,i){
+          var hex = _PALETTE[i % _PALETTE.length];
+          var r=parseInt(hex.slice(1,3),16), g=parseInt(hex.slice(3,5),16), b=parseInt(hex.slice(5,7),16);
+          ds.backgroundColor = 'rgba('+r+','+g+','+b+',0.22)';
+          ds.borderColor     = hex;
+        });
+
+        var ctx = document.getElementById('vhost-breakdown-chart');
+        if(!ctx) return;
+        if(_vhChart){
+          _vhChart.data.labels   = labels;
+          _vhChart.data.datasets = chartDatasets;
+          _vhChart.update('none');
+        } else {
+          _vhChart = new Chart(ctx, {
+            type:'line',
+            data:{ labels: labels, datasets: chartDatasets },
+            options:{
+              responsive:true, maintainAspectRatio:false,
+              animation:{duration:0},
+              interaction:{mode:'index',intersect:false},
+              scales:{
+                x:{
+                  type:'time',
+                  time:{unit:'minute',tooltipFormat:'HH:mm',displayFormats:{minute:'HH:mm',hour:'HH:mm'}},
+                  ticks:{color:'#8b949e',maxTicksLimit:8,maxRotation:0},
+                  grid:{color:'rgba(48,54,61,.5)'}
+                },
+                y:{
+                  stacked:true,
+                  beginAtZero:true,
+                  ticks:{color:'#8b949e',maxTicksLimit:5},
+                  grid:{color:'rgba(48,54,61,.5)'}
+                }
+              },
+              plugins:{
+                legend:{
+                  display:true,
+                  position:'top',
+                  labels:{color:'#c9d1d9',boxWidth:12,font:{size:11}}
+                },
+                tooltip:{
+                  callbacks:{
+                    title:function(items){ return items.length ? items[0].label : ''; }
+                  }
+                }
+              }
+            }
+          });
+        }
+      })
+      .catch(function(e){
+        if(statusEl) statusEl.textContent = 'error: '+e.message;
+      });
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    loadVhostBreakdown();
+    _timers.push(setInterval(loadVhostBreakdown, 30000));
+    /* sync when main range/bucket selectors change */
+    var rangeEl = document.getElementById('range');
+    var bucketEl = document.getElementById('bucket');
+    if(rangeEl)  rangeEl.addEventListener('change',  function(){ loadVhostBreakdown(); });
+    if(bucketEl) bucketEl.addEventListener('change', function(){ loadVhostBreakdown(); });
+  });
+  window._loadVhostBreakdown = loadVhostBreakdown;
+})();
+</script>
+<!-- /Vhost breakdown chart -->
+
 
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
-  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:360px;max-width:480px;max-height:80vh;overflow-y:auto">
+  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <b>My Account</b>
       <button onclick="document.getElementById('acct-modal').style.display='none'" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&#x2715;</button>
@@ -2593,13 +2869,14 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     b.innerHTML='<div style="color:var(--dim)">Loading…</div>';
     fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
       var u=d.user||{};
-      b.innerHTML='<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
+      b.innerHTML=_dp('<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button onclick="window._acct.changePw()" style="font-size:12px;padding:5px 12px;background:#388bfd;color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
-        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>';
+        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
+      var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
       _acctLoadSessions();
     }).catch(function(){document.getElementById('acct-body').innerHTML='<div style="color:var(--red)">Failed to load.</div>';});
   }
@@ -2622,10 +2899,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         var sessions=(d.sessions||[]).filter(function(s){return s.status==='active';});
         var curSid=d.current_sid||'';
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
-        el.innerHTML='<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
+        el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button onclick="window._acct.revokeSession('+JSON.stringify(s.sid)+')" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
-        }).join('')+'</table>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+        }).join('')+'</table>');
+        el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
   }
   function _acctRevokeSession(sid){
@@ -2635,4 +2913,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
 })();
 </script>
+</div><!-- /page-content -->
+</div><!-- /main-area -->
 </body></html>

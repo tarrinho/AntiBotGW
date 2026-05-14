@@ -58,6 +58,7 @@ COPY helpers.py    /app/helpers.py
 COPY identity.py   /app/identity.py
 COPY rate_limit.py /app/rate_limit.py
 COPY scoring.py    /app/scoring.py
+COPY vhost.py      /app/vhost.py
 COPY admin        /app/admin
 COPY challenge    /app/challenge
 COPY core         /app/core

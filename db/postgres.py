@@ -223,6 +223,11 @@ def _pg_mirror_kv(op: str, args: tuple) -> bool:
                     cur.execute(
                         "UPDATE admin_ips SET description = %s "
                         "WHERE cidr = %s", args)
+                elif op == "gw_audit_add":
+                    # args = (ts, action, gw_id, actor, details)
+                    cur.execute(
+                        "INSERT INTO gw_audit (ts, action, gw_id, actor, details) "
+                        "VALUES (%s, %s, %s, %s, %s)", args)
                 else:
                     return False
         return True

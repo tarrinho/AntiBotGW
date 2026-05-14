@@ -1,20 +1,52 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
-<title>AppSecGW · Controls</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppSecGW_1.8.1 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
-*{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--fg);font:13.5px/1.45 -apple-system,'SF Pro',ui-sans-serif,sans-serif}
-*{box-sizing:border-box}
-body{padding:14px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 a{color:var(--blue);text-decoration:none}
-h1.page-title{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;margin:0}
-h1.page-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700}
-.topnav{display:flex;gap:14px;font-size:12.5px;margin:6px 0 12px 0;padding:6px 0;border-bottom:1px solid var(--line)}
-.topnav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px;transition:color .1s}
-.topnav a:hover{color:var(--fg);background:#1f2730}
-.topnav a.active{color:var(--fg);background:#1f2730}
+/* ── Sidebar ── */
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
+#sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
+#sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
+#sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
+#sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
+#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
+#sidebar-footer button.signout:hover{background:#1f2730}
+/* ── Main area ── */
+#main-area{flex:1;min-width:0;display:flex;flex-direction:column}
+/* ── Topbar ── */
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
+#topbar-right{display:flex;align-items:center;gap:8px}
+#page-content{flex:1;padding:14px}
+@media(max-width:600px){
+  #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
+  #sidebar.mob-open{transform:translateX(0)}
+  #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:199}
+  #mob-overlay.mob-open{display:block}
+  #mob-menu{display:flex!important}
+  #main-area{margin-left:0}
+}
+@media(min-width:601px){#mob-menu{display:none!important}}
+@media(max-width:480px){
+  .card{padding:12px 10px}
+  .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+  .btn{min-height:36px;padding:8px 12px}
+  .btn-sm{min-height:32px;padding:6px 10px}
+}
 main{padding:0;max-width:1300px;margin:0 auto}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:780px){.row{grid-template-columns:1fr}}
@@ -65,6 +97,11 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .toast.show{opacity:1;pointer-events:auto}
 .toast.ok{border-color:var(--green)}
 .toast.err{border-color:var(--red)}
+#vhost-scope-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 12px;background:var(--card);border:1px solid var(--line);border-radius:6px;font-size:12.5px}
+#vhost-sel{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:4px 8px;border-radius:4px;font-size:12px;cursor:pointer;max-width:240px}
+.ctrl.vhost-ov{border-left:2px solid var(--blue);padding-left:6px}
+.ctrl.vhost-ov>.label>.name::after{content:'vhost';font-size:9px;color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-weight:700;margin-left:6px;background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.3);padding:1px 5px;border-radius:3px;vertical-align:middle}
+tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .thr-row{display:grid;grid-template-columns:200px 110px 1fr 90px 90px;gap:14px;align-items:center;
          padding:10px 0;border-bottom:1px solid #1f2730;font-size:12px}
 .thr-row:last-child{border-bottom:none}
@@ -368,18 +405,48 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="order:2"].active{background:rgba(210,153,34,.15);border-color:rgba(210,153,34,.4);color:#d29922}
 .sf-chip[data-filter="order:3"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.35);color:#f85149}
 </style></head><body>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
 
-<h1 class="page-title">AppSecGW_1.7.11 &middot; Controls <span class="pill">LIVE</span></h1>
-<nav class="topnav" id="topnav">
-  <a href="/antibot-appsec-gateway/secured/dashboard">Dashboard</a>
-  <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
-  <a href="/antibot-appsec-gateway/secured/service">Service</a>
-  <a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a>
-  <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-  <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
-  <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-  <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
-  <form method="post" action="/antibot-appsec-gateway/logout" style="display:inline;margin:0"><button type="submit" onclick="return confirm('Sign out and return to the login page?');" style="background:none;border:none;cursor:pointer;color:var(--red);padding:0;font:inherit">Sign out</button></form></nav>
+<div id="sidebar">
+  <div id="sidebar-brand">
+    <div id="sidebar-brand-name">AppSecGW</div>
+    <div id="sidebar-brand-ver">1.8.1</div>
+  </div>
+  <nav id="sidebar-nav">
+    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
+    <a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+  </nav>
+  <div id="sidebar-footer">
+    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
+    <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+    </form>
+  </div>
+</div>
+<div id="main-area">
+<div id="topbar">
+  <div id="topbar-title">Controls</div>
+  <div id="topbar-right"></div>
+</div>
+<div id="page-content">
+
+<div id="vhost-scope-bar">
+  <span style="color:var(--dim);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Scope</span>
+  <select id="vhost-sel">
+    <option value="">Global (all vhosts)</option>
+  </select>
+  <span id="vhost-ov-badge" style="display:none;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.3);color:var(--blue);padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600"></span>
+  <a id="vhost-policy-lnk" href="#" style="display:none;font-size:11px;color:var(--blue)">Edit overrides →</a>
+  <span id="vhost-scope-hint" style="color:var(--dim);font-size:11px;margin-left:auto">Global: controls affect all vhosts without per-vhost override</span>
+</div>
 
 <main>
   <div id="bypass-bar">
@@ -669,8 +736,18 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 
 <div class="toast" id="toast"></div>
 
+<script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script>
 const url = p => p;   // identity — kept for the ~30 fetch call-sites throughout this file
+const _dp = (h) => {
+  if (typeof DOMPurify === "undefined") return h;
+  if (/^<t[rhd]/i.test((h||'').trimStart())) {
+    const _s = DOMPurify.sanitize('<table><tbody>' + h + '</tbody></table>');
+    const _e = document.createElement('div'); _e.innerHTML = _s;
+    return (_e.querySelector('tbody') || _e).innerHTML;
+  }
+  return DOMPurify.sanitize(h);
+};
 function _gwAlert(msg){var d=document.createElement('div');d.textContent=msg;d.style.cssText='position:fixed;top:16px;right:16px;z-index:99999;background:var(--card,#161b22);border:1px solid var(--red,#f85149);color:var(--fg,#c9d1d9);padding:10px 16px;border-radius:6px;font-size:13px;max-width:360px;word-break:break-word';document.body.appendChild(d);setTimeout(()=>d.remove(),7000);}
 
 // Async confirm dialog — non-blocking modal replacement.
@@ -679,11 +756,18 @@ function _asyncConfirm(msg) {
     showSimpleModal(
       `<p style="margin:0 0 16px;white-space:pre-wrap">${escapeHtml(msg)}</p>`
       + `<div style="display:flex;gap:8px;justify-content:flex-end">`
-      + `<button onclick="closeSimpleModal();window._acfResolve(false)" class="btn" style="background:var(--panel,#161b22)">Cancel</button>`
-      + `<button onclick="closeSimpleModal();window._acfResolve(true)" class="btn" style="background:var(--red,#f85149)">Confirm</button>`
+      + `<button data-acf="cancel" class="btn" style="background:var(--panel,#161b22)">Cancel</button>`
+      + `<button data-acf="confirm" class="btn" style="background:var(--red,#f85149)">Confirm</button>`
       + `</div>`
     );
     window._acfResolve = (v) => { window._acfResolve = () => {}; resolve(v); };
+    const _acfM = document.getElementById('simple-modal');
+    if (_acfM) {
+      const _bc = _acfM.querySelector('[data-acf="cancel"]');
+      const _bk = _acfM.querySelector('[data-acf="confirm"]');
+      if (_bc) _bc.addEventListener('click', () => { closeSimpleModal(); window._acfResolve(false); });
+      if (_bk) _bk.addEventListener('click', () => { closeSimpleModal(); window._acfResolve(true); });
+    }
   });
 }
 
@@ -698,10 +782,10 @@ function showSimpleModal(innerHtml){
     m.onclick = (e) => { if (e.target === m) closeSimpleModal(); };
     document.body.appendChild(m);
   }
-  m.innerHTML = `<div style="background:var(--card);border:1px solid var(--line);
+  m.innerHTML = _dp(`<div style="background:var(--card);border:1px solid var(--line);
     border-radius:8px;padding:20px 24px;max-width:560px;width:100%;
     box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:-apple-system,'SF Pro',ui-sans-serif">
-    ${innerHtml}</div>`;
+    ${innerHtml}</div>`);
   m.style.display = 'flex';
 }
 function closeSimpleModal(){
@@ -829,6 +913,7 @@ const META = {
 
 let serverState = {};
 let dirty = {};
+let overriddenKnobs = new Set();
 
 function $(id){ return document.getElementById(id); }
 function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
@@ -1072,8 +1157,8 @@ function renderControl(name, meta, value){
         '(no countries blocked)</div>';
     }
   }
-  label.innerHTML = `<div class="name">${escapeHtml(name)}</div>
-                     <div class="desc">${m.desc||''}</div>` + inlineHtml;
+  label.innerHTML = _dp(`<div class="name">${escapeHtml(name)}</div>
+                     <div class="desc">${m.desc||''}</div>` + inlineHtml);
   const input = document.createElement('div');
   input.className = 'input';
 
@@ -1160,10 +1245,10 @@ function showToast(msg, kind, onUndo){
   if (typeof t._undoTimer === 'number') clearTimeout(t._undoTimer);
   t.className = 'toast show ' + (kind || 'ok');
   if (onUndo) {
-    t.innerHTML = escapeHtml(String(msg)) +
+    t.innerHTML = _dp(escapeHtml(String(msg)) +
       '<button id="toast-undo-btn" style="margin-left:10px;background:rgba(255,255,255,.18);' +
       'border:1px solid rgba(255,255,255,.3);color:#fff;padding:2px 8px;border-radius:3px;' +
-      'cursor:pointer;font-size:11px;font-weight:600;vertical-align:middle">Undo</button>';
+      'cursor:pointer;font-size:11px;font-weight:600;vertical-align:middle">Undo</button>');
     const btn = document.getElementById('toast-undo-btn');
     if (btn) btn.onclick = (ev) => {
       ev.stopPropagation();
@@ -1180,8 +1265,10 @@ function showToast(msg, kind, onUndo){
 
 // Shared helper: optimistic-toggle already applied by caller; push to server + wire undo.
 async function _applyBool(sw, knob, newVal) {
+  const _vhostSelB = document.getElementById('vhost-sel');
+  const _vhostQB = (_vhostSelB && _vhostSelB.value) ? '?vhost=' + encodeURIComponent(_vhostSelB.value) : '';
   try {
-    const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+    const r = await fetch(url('/antibot-appsec-gateway/secured/config') + _vhostQB,
       {method:'POST', headers:{'Content-Type':'application/json'},
        body: JSON.stringify({[knob]: newVal})});
     const body = await r.json();
@@ -1190,7 +1277,7 @@ async function _applyBool(sw, knob, newVal) {
       showToast(knob + ' = ' + newVal, 'ok', async () => {
         sw.classList.toggle('on', !newVal);
         try {
-          const r2 = await fetch(url('/antibot-appsec-gateway/secured/config'),
+          const r2 = await fetch(url('/antibot-appsec-gateway/secured/config') + _vhostQB,
             {method:'POST', headers:{'Content-Type':'application/json'},
              body: JSON.stringify({[knob]: !newVal})});
           const b2 = await r2.json();
@@ -1218,10 +1305,42 @@ async function _applyBool(sw, knob, newVal) {
 }
 
 async function load(){
-  const r = await fetch(url('/antibot-appsec-gateway/secured/config'));
+  const _vhostSel = document.getElementById('vhost-sel');
+  const _vhostVal = (_vhostSel && _vhostSel.value) || '';
+  const _cfgUrl = url('/antibot-appsec-gateway/secured/config') + (_vhostVal ? '?vhost=' + encodeURIComponent(_vhostVal) : '');
+  const r = await fetch(_cfgUrl);
   if (!r.ok) { showToast('Failed to load /antibot-appsec-gateway/secured/config (' + r.status + ')', 'err'); return; }
   const body = await r.json();
   serverState = body.state || {};
+  // Sync vhost selector: add new, remove stale, preserve selection
+  if (_vhostSel && Array.isArray(body.vhosts)) {
+    const known = new Set([..._vhostSel.options].map(o => o.value));
+    const fresh = new Set(body.vhosts);
+    body.vhosts.forEach(h => {
+      if (!known.has(h)) {
+        const o = document.createElement('option');
+        o.value = h; o.textContent = h;
+        _vhostSel.appendChild(o);
+      }
+    });
+    // remove options no longer in server list (keep '' = global)
+    [..._vhostSel.options].forEach(o => { if (o.value && !fresh.has(o.value)) o.remove(); });
+    if (_vhostVal) _vhostSel.value = _vhostVal;
+  }
+  // Update overridden-knobs set and scope-bar widgets
+  overriddenKnobs = new Set(body.overridden || []);
+  const _badge = document.getElementById('vhost-ov-badge');
+  const _lnk   = document.getElementById('vhost-policy-lnk');
+  const _hint   = document.getElementById('vhost-scope-hint');
+  if (_vhostVal) {
+    if (_badge) { _badge.style.display = overriddenKnobs.size ? '' : 'none'; _badge.textContent = overriddenKnobs.size + ' override' + (overriddenKnobs.size !== 1 ? 's' : ''); }
+    if (_lnk)   { _lnk.style.display = ''; _lnk.href = url('/antibot-appsec-gateway/secured/vhost-policy?hostname=' + encodeURIComponent(_vhostVal)); }
+    if (_hint)  _hint.textContent = 'Editing overrides for ' + _vhostVal + ' — changes apply to this vhost only. Highlighted knobs currently differ from global.';
+  } else {
+    if (_badge) _badge.style.display = 'none';
+    if (_lnk)   _lnk.style.display = 'none';
+    if (_hint)  _hint.textContent = 'Global: controls affect all vhosts without per-vhost override';
+  }
   // Group + render. Booleans (toggles) are now rendered inside the merged
   // "Defenses & scoring" table (see loadScoring), so skip them here.
   ['thresholds','ext-misc','external-log','bypass','bypass-paths'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
@@ -1245,6 +1364,11 @@ async function load(){
   // Refresh scoring table now that serverState is fresh — toggles inside it
   // need the latest knob values to render correctly.
   if (typeof loadScoring === 'function') loadScoring();
+  // Apply vhost-override CSS marker to all rendered ctrl elements
+  document.querySelectorAll('.ctrl.vhost-ov').forEach(el => el.classList.remove('vhost-ov'));
+  overriddenKnobs.forEach(k => {
+    document.querySelectorAll(`.ctrl[data-name="${k}"]`).forEach(el => el.classList.add('vhost-ov'));
+  });
   clearDirty();
 }
 
@@ -1267,7 +1391,9 @@ async function apply(){
         payload[k] = Array.isArray(v) ? v : [];
       else payload[k] = v;
     }
-    const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
+    const _vhostSelA = document.getElementById('vhost-sel');
+    const _vhostQA = (_vhostSelA && _vhostSelA.value) ? '?vhost=' + encodeURIComponent(_vhostSelA.value) : '';
+    const r = await fetch(url('/antibot-appsec-gateway/secured/config') + _vhostQA,
       {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
     const body = await r.json();
     const appliedN  = body.applied  ? Object.keys(body.applied).length  : 0;
@@ -1301,7 +1427,7 @@ async function loadBans(){
     }
     // 1.5.4 — stash for click-to-popover lookup
     window._bannedList = banned;
-    tbody.innerHTML = banned.map((c, i) => {
+    tbody.innerHTML = _dp(banned.map((c, i) => {
       const id = c.id || c.ip || '';
       return `<tr data-i="${i}" class="ban-row" style="border-bottom:1px solid #1f2730;cursor:pointer" title="click for full details">
         <td style="padding:6px 8px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;border-bottom:1px dotted var(--blue)"
@@ -1318,7 +1444,7 @@ async function loadBans(){
           </button>
         </td>
       </tr>`;
-    }).join('');
+    }).join(''));
     // Click row to open the details popover (1.5.4)
     tbody.querySelectorAll('tr.ban-row').forEach(tr => {
       tr.onclick = (ev) => {
@@ -1394,9 +1520,46 @@ async function unban(scope, value){
   }
 }
 
+async function refreshVhosts() {
+  const sel = document.getElementById('vhost-sel');
+  if (!sel) return;
+  try {
+    const [vr, sr] = await Promise.all([
+      fetch(url('/antibot-appsec-gateway/secured/vhosts'), {credentials:'include'}),
+      fetch(url('/antibot-appsec-gateway/secured/vhost-stats'), {credentials:'include'}).catch(()=>null)
+    ]);
+    if (!vr.ok) return;
+    const body = await vr.json();
+    const sd = (sr && sr.ok) ? await sr.json() : {stats:[]};
+    const _now = Date.now()/1000;
+    const _pinned = new Set(JSON.parse(localStorage.getItem('vhost_pinned')||'[]'));
+    const statsMap = {};
+    (sd.stats||[]).forEach(s => { if(s.hostname) statsMap[s.hostname] = s.last_seen_ts||0; });
+    const list = (body.vhosts || []).map(v => v.hostname || v).filter(h => {
+      const age = statsMap[h] > 0 ? (_now - statsMap[h]) : Infinity;
+      return age < 300 || _pinned.has(h);
+    });
+    const known = new Set([...sel.options].map(o => o.value));
+    list.forEach(h => {
+      if (!known.has(h)) {
+        const o = document.createElement('option');
+        o.value = h; o.textContent = h;
+        sel.appendChild(o);
+      }
+    });
+    const fresh = new Set(list);
+    [...sel.options].forEach(o => {
+      if (o.value && !fresh.has(o.value)) o.remove();
+    });
+  } catch (_) {}
+}
+
 document.addEventListener('DOMContentLoaded', () => {
   $('apply').onclick = apply;
   $('reset').onclick = () => { dirty = {}; load().then(() => loadScoring()); };
+  // Vhost selector: reload config with effective overrides when scope changes
+  const _vhostSelEl = document.getElementById('vhost-sel');
+  if (_vhostSelEl) _vhostSelEl.addEventListener('change', () => { clearDirty(); load(); });
   $('unban-go').onclick = () => {
     const v = $('unban-target').value.trim();
     if (!v) { $('unban-msg').textContent = 'enter a track-key or IP'; return; }
@@ -1439,7 +1602,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const r = await fetch(url('/antibot-appsec-gateway/secured/admin-ips'), {credentials:'include'});
       const d = await r.json();
       const tb = document.querySelector('#aip-tbl tbody');
-      tb.innerHTML = (d.entries||[]).map(e => {
+      tb.innerHTML = _dp((d.entries||[]).map(e => {
         const when = e.added_ts ? new Date(e.added_ts*1000).toISOString().replace('T',' ').slice(0,19) : '—';
         const desc = escapeHtml(e.description || e.note || '');
         const tag = e.source==='env'
@@ -1455,7 +1618,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="padding:5px 8px;text-align:right">
             <button data-cidr="${e.cidr}" class="aip-del danger" style="font-size:11px;padding:4px 10px">Remove</button>
           </td></tr>`;
-      }).join('') || '<tr><td colspan="5" style="padding:10px;color:var(--dim);text-align:center">No entries — anyone with the admin key can reach <code>/__*</code></td></tr>';
+      }).join('') || '<tr><td colspan="5" style="padding:10px;color:var(--dim);text-align:center">No entries — anyone with the admin key can reach <code>/__*</code></td></tr>');
 
       // Wire delete buttons
       tb.querySelectorAll('button.aip-del').forEach(b => {
@@ -1537,7 +1700,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (!r.ok) return;
       const d = await r.json();
       const box = $('thresholds-rich');
-      box.innerHTML = (d.thresholds||[]).map(t => {
+      box.innerHTML = _dp((d.thresholds||[]).map(t => {
         const lowerStricter = t.impact_direction === 'lower-is-stricter';
         // Marker colour = whether current value is on the "good" side of midpoint
         const goodSide = lowerStricter ? t.position < 0.5 : t.position > 0.5;
@@ -1554,7 +1717,7 @@ document.addEventListener('DOMContentLoaded', () => {
           <div class="thr-minmax"><span class="lbl">max</span><b>${t.max}</b></div>
           <div class="thr-desc">${escapeHtml(t.description)}</div>
         </div>`;
-      }).join('');
+      }).join(''));
 
       // click-to-edit on current value
       box.querySelectorAll('.thr-cur').forEach(cell => {
@@ -1726,7 +1889,7 @@ document.addEventListener('DOMContentLoaded', () => {
           : 'Cannot enable — set ' + (item.envs_needed||[]).join(' AND ') + ' in container env first';
         return `<div class="switch${cls}" data-knob="${knob}" ${disabledAttr} title="${escapeHtml(title)}"></div>`;
       };
-      box.innerHTML = renderDbCard() + (d.integrations||[]).filter(i => !DB_TARGET[i.name]).map(item => {
+      box.innerHTML = _dp(renderDbCard() + (d.integrations||[]).filter(i => !DB_TARGET[i.name]).map(item => {
         const tel = item.telemetry || {};
         let extra = '';
         if (item.name === 'AbuseIPDB' && item.enabled) {
@@ -1820,7 +1983,7 @@ document.addEventListener('DOMContentLoaded', () => {
           </div>
           ${extra}
         </div>`;
-      }).join('');
+      }).join(''));
 
       // 1.5.4 — Wire integration-card click → details modal
       box.querySelectorAll('.integration-card').forEach(card => {
@@ -1922,16 +2085,16 @@ document.addEventListener('DOMContentLoaded', () => {
                   const db   = p.db_name  ? ` · db <code>${escapeHtml(p.db_name)}</code>` : '';
                   const ms   = p.round_trip_ms != null ? ` · ${escapeHtml(String(p.round_trip_ms))} ms` : '';
                   const rows = p.events_rows  != null ? ` · ${escapeHtml(String(p.events_rows))} events` : '';
-                  resultEl.innerHTML = `<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`;
+                  resultEl.innerHTML = _dp(`<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`);
                   okBtn.disabled = false;
                   okBtn.title = '';
                 } else {
                   const reason = j.reason || (j.probe && j.probe.reason) || 'unreachable';
-                  resultEl.innerHTML = `<span style="color:var(--red)">✗ ${escapeHtml(reason)}</span>`;
+                  resultEl.innerHTML = _dp(`<span style="color:var(--red)">✗ ${escapeHtml(reason)}</span>`);
                   okBtn.disabled = true;
                 }
               } catch (e) {
-                resultEl.innerHTML = `<span style="color:var(--red)">✗ Network error: ${escapeHtml(e.message)}</span>`;
+                resultEl.innerHTML = _dp(`<span style="color:var(--red)">✗ Network error: ${escapeHtml(e.message)}</span>`);
                 okBtn.disabled = true;
               } finally {
                 testBtn.disabled = false;
@@ -2293,7 +2456,15 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(m.description)}</td>
         </tr>`;
       }).join('');
-      tb.innerHTML = weightRows + modHeader + modRows;
+      tb.innerHTML = _dp(weightRows + modHeader + modRows);
+
+      // Mark scoring rows whose toggle knob is a vhost override
+      if (overriddenKnobs.size) {
+        tb.querySelectorAll('[data-filter-signal]').forEach(row => {
+          const sw = row.querySelector('[data-knob-scoring]');
+          if (sw && overriddenKnobs.has(sw.dataset.knobScoring)) row.classList.add('scoring-row-ov');
+        });
+      }
 
       // Filter bar logic
       const applyFilters = () => {
@@ -2384,11 +2555,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const cur = parseInt(badge.dataset.order || '1', 10);
             _pop = document.createElement('div');
             _pop.className = 'order-pop';
-            _pop.innerHTML = `<div class="order-pop-title">Change activation order</div>
+            _pop.innerHTML = _dp(`<div class="order-pop-title">Change activation order</div>
               <div class="order-pop-btns">
                 ${[1,2,3].map(n => `<div class="order-pop-btn o${n}${cur===n?' active':''}" data-n="${n}">
                   ${n===1?'①':n===2?'②':'③'} ${n===1?'1st':n===2?'2nd':'3rd'}</div>`).join('')}
-              </div>`;
+              </div>`);
             const rect = badge.getBoundingClientRect();
             _pop.style.cssText = `top:${rect.bottom+4}px;left:${Math.max(4,rect.left-40)}px`;
             document.body.appendChild(_pop);
@@ -2422,13 +2593,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const MAX = 100;
         let S2 = 15, S3 = 30, dragging = null;
 
-        sliderEl.innerHTML = `
+        sliderEl.innerHTML = _dp(`
           <div class="ord-track" id="ord-track"></div>
           <div class="ord-scale"><span>0</span><span>25</span><span>50</span><span>75</span><span>${MAX}</span></div>
           <div class="ord-knob s2" id="ord-knob-s2" title="2nd order threshold (SECOND_ORDER_THRESHOLD) — drag to change">②</div>
           <div class="ord-knob s3" id="ord-knob-s3" title="3rd order threshold (ESCALATION_THRESHOLD) — drag to change">③</div>
           <div class="ord-knob-val s2" id="ord-knob-s2-val">—</div>
-          <div class="ord-knob-val s3" id="ord-knob-s3-val">—</div>`;
+          <div class="ord-knob-val s3" id="ord-knob-s3-val">—</div>`);
 
         const knobS2    = document.getElementById('ord-knob-s2');
         const knobS3    = document.getElementById('ord-knob-s3');
@@ -2728,7 +2899,7 @@ document.addEventListener('DOMContentLoaded', () => {
       };
 
       const openTip = (el) => {
-        _tip.innerHTML = buildTipHTML(el);
+        _tip.innerHTML = _dp(buildTipHTML(el));
         wireListEditors();
         _tip.style.display = 'block';
         const r = el.getBoundingClientRect();
@@ -2769,7 +2940,7 @@ document.addEventListener('DOMContentLoaded', () => {
           } else {
             sections.forEach(r => r.style.display = '');
             // Re-render to restore original order
-            tb.innerHTML = weightRows + modHeader + modRows;
+            tb.innerHTML = _dp(weightRows + modHeader + modRows);
             // Re-wire after re-render
             tb.querySelectorAll('.switch[data-knob-scoring]').forEach(sw => {
               sw.onclick = async () => {
@@ -2824,6 +2995,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadAdminIps(),
     loadExternal(),
     loadThresholds(),
+    refreshVhosts(),
   ]);
 
   // 1.6.5 — active rules + lists snapshot + endpoint policies
@@ -2848,7 +3020,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const total = sigs.reduce((a,b) => a + b.hits, 0);
         const tb = document.querySelector('#active-rules-tbl tbody');
         if (tb){
-          tb.innerHTML = sigs.length ? sigs.slice(0, 25).map(s => {
+          tb.innerHTML = _dp(sigs.length ? sigs.slice(0, 25).map(s => {
             const pct = total ? (s.hits/total*100).toFixed(1) : 0;
             return `<tr style="border-bottom:1px solid #1f2730">
               <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(s.reason)}</code></td>
@@ -2858,11 +3030,11 @@ document.addEventListener('DOMContentLoaded', () => {
               <td style="padding:5px 8px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
             </tr>`;
           }).join('')
-            : '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>';
+            : '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>');
         }
         const ch = d.chal || {};
         document.getElementById('chal-rate').innerHTML =
-          `<b>${escapeHtml(String(ch.minted||0))}</b> chal-cookie mints / <b>${escapeHtml(String(ch.required||0))}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${escapeHtml(String(ch.mint_rate||0))}%</b>`;
+          _dp(`<b>${escapeHtml(String(ch.minted||0))}</b> chal-cookie mints / <b>${escapeHtml(String(ch.required||0))}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${escapeHtml(String(ch.mint_rate||0))}%</b>`);
       } catch(e){ showToast('Active rules load failed: ' + e.message, 'err'); }
     }
     async function loadLists(){
@@ -2883,19 +3055,19 @@ document.addEventListener('DOMContentLoaded', () => {
           `Custom rules: <code>${d.custom_rules_size}</code> · JWT paths: <code>${(d.jwt_paths||[]).length}</code> · Endpoint policies: <code>${(d.endpoint_policies||[]).length}</code>`,
           `Webhook event filter: <code>${(d.webhook_event_filter||[]).length || 'all'}</code> · Admin IP allowlist: <code>${d.admin_ip_count}</code>`,
         ];
-        div.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+        div.innerHTML = _dp(lines.map(l => `<div>${l}</div>`).join(''));
 
         const eptb = document.querySelector('#ep-policies-tbl tbody');
         if (eptb){
           const eps = d.endpoint_policies || [];
-          eptb.innerHTML = eps.length ? eps.map(p => `
+          eptb.innerHTML = _dp(eps.length ? eps.map(p => `
             <tr style="border-bottom:1px solid #1f2730">
               <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(p.path||'')}</code></td>
               <td style="padding:5px 8px;color:${p.policy==='strict'?'#f85149':p.policy==='challenge'?'#d29922':p.policy==='bypass'?'#3fb950':'#8b949e'};font-weight:700">${escapeHtml(p.policy||'default')}</td>
               <td style="padding:5px 8px;text-align:right">${p.rps == null ? '<span class="dim">—</span>' : p.rps}</td>
               <td style="padding:5px 8px;text-align:right">${p.burst == null ? '<span class="dim">—</span>' : p.burst}</td>
             </tr>`).join('')
-            : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>';
+            : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>');
         }
       } catch(e){ showToast('Lists load failed: ' + e.message, 'err'); }
     }
@@ -2916,6 +3088,8 @@ document.addEventListener('DOMContentLoaded', () => {
   _timers.push(setInterval(() => { if (!_typing()) loadAdminIps();   }, 8000));
   _timers.push(setInterval(() => { if (!_typing()) loadExternal();   }, 6000));
   _timers.push(setInterval(() => { if (!_typing()) loadThresholds(); }, 10000));
+  _timers.push(setInterval(refreshVhosts, 5000));
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshVhosts(); });
 });
 
 // 1.5.4 — integration-card details modal + banned-identity tooltip
@@ -2985,7 +3159,7 @@ function openPgDetails(it){
       </div>
     </div>`;
 
-  __MODAL.innerHTML = `
+  __MODAL.innerHTML = _dp(`
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px">
       <div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -3039,7 +3213,7 @@ function openPgDetails(it){
         <span style="color:var(--yellow)">${it.cost_typical_ms||0} ms</span> typical ·
         <span style="color:var(--red)">${it.cost_p99_ms||0} ms</span> p99
       </div>
-    </div>`;
+    </div>`);
 
   document.getElementById('ext-modal-close').onclick = __closeModal;
 
@@ -3147,7 +3321,7 @@ function openSecretEditor(name, anchor){
   pop.style.cssText = 'position:fixed;z-index:100;background:var(--card);border:1px solid var(--blue);'
     + 'border-radius:8px;padding:14px 16px;box-shadow:0 8px 24px rgba(0,0,0,.5);'
     + 'min-width:340px;font-size:12px;color:var(--fg)';
-  pop.innerHTML = `
+  pop.innerHTML = _dp(`
     <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
       <code style="color:var(--blue);font-weight:700">${escapeHtml(name)}</code>
       <span style="cursor:pointer;color:var(--dim);font-size:16px;line-height:1" data-close>×</span>
@@ -3179,7 +3353,7 @@ function openSecretEditor(name, anchor){
       <span class="hint" data-msg style="margin-right:auto;color:var(--dim);font-size:11px"></span>
       <button class="secondary" data-clear style="font-size:11.5px;padding:5px 10px">Clear</button>
       <button data-save style="font-size:11.5px;padding:5px 12px">Save</button>
-    </div>`;
+    </div>`);
   document.body.appendChild(pop);
 
   // Position next to the anchor; clamp inside viewport.
@@ -3338,7 +3512,7 @@ function openIntegrationDetails(it){
   if (tel.cache_secs != null)    usageLines.push(row('cache TTL', `<b>${tel.cache_secs}s</b>`));
   if (tel.cache_hours != null)   usageLines.push(row('cache TTL', `<b>${tel.cache_hours}h</b>`));
 
-  __MODAL.innerHTML = `
+  __MODAL.innerHTML = _dp(`
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px">
       <div style="flex:1">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -3379,7 +3553,7 @@ function openIntegrationDetails(it){
       ${row('latency', `<b style="color:var(--green)">${it.cost_cached_ms} ms</b> cached · <b style="color:var(--yellow)">${it.cost_typical_ms} ms</b> typical · <b style="color:var(--red)">${it.cost_p99_ms} ms</b> p99`)}
       ${row('data egress', escapeHtml(it.data_egress||'—'))}
       ${row('free tier', escapeHtml(it.free_tier||'—'))}`)}
-  `;
+  `);
 
   document.getElementById('ext-modal-close').onclick = __closeModal;
 
@@ -3415,7 +3589,7 @@ function openBanDetails(b){
     : _cbs > 0
     ? `<span style="color:#d29922;font-weight:600">Banned · ~${fmtSecs(_cbs)} remaining</span>`
     : `<span style="color:var(--green)">cleared</span>`;
-  __MODAL.innerHTML = `
+  __MODAL.innerHTML = _dp(`
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
       <div style="font-weight:700;font-size:16px">Banned identity</div>
       <span style="cursor:pointer;color:var(--dim);font-size:18px" id="ext-modal-close">×</span>
@@ -3431,7 +3605,7 @@ function openBanDetails(b){
       ${tx('last seen',   fmtSecs(b.last_seen_secs_ago))}
       ${tx('requests',    `${b.requests||'—'} (${b.allowed||0} ok / ${b.blocked||0} blocked)`)}
       ${tx('risk score',  `<b>${(b.risk_score||0).toFixed(1)}</b>`)}
-    </table>`;
+    </table>`);
   document.getElementById('ext-modal-close').onclick = __closeModal;
   __MODAL_BACK.style.display='block'; __MODAL.style.display='block';
 }
@@ -3675,9 +3849,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         <span class="det">${escapeHtml(r.detail||'')}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
       </div>`).join('');
-    modalBody.innerHTML = rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
       Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
-    </div>`;
+    </div>`);
     modal.classList.add('show');
   };
   document.addEventListener('keydown', e => {
@@ -3717,7 +3891,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
-  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:360px;max-width:480px;max-height:80vh;overflow-y:auto">
+  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
       <b>My Account</b>
       <button onclick="document.getElementById('acct-modal').style.display='none'" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&#x2715;</button>
@@ -3742,13 +3916,14 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     b.innerHTML='<div style="color:var(--dim)">Loading…</div>';
     fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
       var u=d.user||{};
-      b.innerHTML='<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
+      b.innerHTML=_dp('<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button onclick="window._acct.changePw()" style="font-size:12px;padding:5px 12px;background:#388bfd;color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
-        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>';
+        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
+      var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
       _acctLoadSessions();
     }).catch(function(){document.getElementById('acct-body').innerHTML='<div style="color:var(--red)">Failed to load.</div>';});
   }
@@ -3771,10 +3946,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         var sessions=(d.sessions||[]).filter(function(s){return s.status==='active';});
         var curSid=d.current_sid||'';
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
-        el.innerHTML='<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
+        el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button onclick="window._acct.revokeSession('+JSON.stringify(s.sid)+')" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
-        }).join('')+'</table>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+        }).join('')+'</table>');
+        el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
   }
   function _acctRevokeSession(sid){
@@ -3784,4 +3960,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
 })();
 </script>
+</div><!-- /page-content -->
+</div><!-- /main-area -->
 </body></html>

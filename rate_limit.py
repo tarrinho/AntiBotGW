@@ -28,6 +28,7 @@ from state import (
     _asn_path_clusters,
 )
 from helpers import slog, now
+from vhost import vc as _vc_rl
 
 # ── Socket-IP bucket constants ─────────────────────────────────────────────
 # H4: socket-IP secondary bucket — runs BEFORE per-identity bucket so an
@@ -81,14 +82,16 @@ async def take_token(ip: str) -> tuple:
         s = ip_state[ip]
         n = now()
         elapsed = n - s.last_refill
-        s.tokens = min(RATE_LIMIT_BURST, s.tokens + elapsed * RATE_LIMIT_REFILL)
+        _rl_burst = _vc_rl('RATE_LIMIT_BURST')
+        _rl_refill = _vc_rl('RATE_LIMIT_REFILL')
+        s.tokens = min(_rl_burst, s.tokens + elapsed * _rl_refill)
         s.last_refill = n
         s.request_count += 1
         s.request_times.append(n)
         if s.tokens >= 1.0:
             s.tokens -= 1.0
             return True, 0.0, int(s.tokens)
-        retry = (1.0 - s.tokens) / RATE_LIMIT_REFILL
+        retry = (1.0 - s.tokens) / _rl_refill
         return False, retry, 0
 
 

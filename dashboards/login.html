@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AppSecGW · Sign in</title>
 <meta name="robots" content="noindex,nofollow">
 <style>
@@ -78,7 +79,7 @@ function safeNext(raw) {
   try { const u = new URL(raw, location.origin); return u.origin === location.origin ? u.pathname + u.search + u.hash : null; }
   catch { return null; }
 }
-const next = safeNext(new URLSearchParams(location.search).get("next")) || "/antibot-appsec-gateway/secured/dashboard";
+const next = safeNext(new URLSearchParams(location.search).get("next")) || "/antibot-appsec-gateway/secured/live-feed";
 
 document.getElementById("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();

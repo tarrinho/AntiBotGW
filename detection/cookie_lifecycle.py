@@ -74,8 +74,9 @@ async def cookie_ghost_check(track_key: str, request: web.Request) -> tuple[bool
                 if s.cookie_ghost_misses >= COOKIE_GHOST_MISS_THRESHOLD:
                     return True, f"cookie-ghost: 0/{s.gateway_cookies_set} cookies returned"
 
-        # lifecycle-miss — higher threshold, non-HTML requests only
-        if (COOKIE_LIFECYCLE_ENABLED
+        # lifecycle-miss — higher threshold, non-HTML requests only.
+        # elif: prevents double-increment when both signals fire on the same request.
+        elif (COOKIE_LIFECYCLE_ENABLED
                 and s.html_loads > 0
                 and LIFECYCLE_COOKIE not in request.cookies
                 and req_count >= COOKIE_GHOST_MIN_REQUESTS):

@@ -784,3 +784,136 @@ chmod +x cloudflared
 ./cloudflared tunnel --url http://localhost:8080
 ```
 Produces a `*.trycloudflare.com` URL valid for the tunnel session.
+
+---
+
+## Live Demo Checklist
+
+When asked for a **live demo** (any phrasing: "show me", "demo link", "give me access", "spin up the demo"):
+
+### Step 1 — Verify latest version is running
+
+```bash
+docker ps --format "{{.Names}}\t{{.Status}}" | grep antibot
+```
+
+The container name must match the current release version (e.g. `appsec-antibot-gw1.8.1`).
+Status must be `Up … (healthy)`. If not running or unhealthy — **start it before continuing**.
+
+### Step 2 — Detect or start a tunnel
+
+Check which tunnel tool is already running (prefer in this order):
+
+```bash
+pgrep -a cloudflared   # Option A: trycloudflare
+pgrep -a ngrok         # Option B: ngrok
+pgrep -a ssh           # Option C: localhost.run / serveo.net
+pgrep -a bore          # Option D: bore
+```
+
+Extract the live public URL from whichever is active:
+
+| Tool | How to get the URL |
+|------|--------------------|
+| **trycloudflare** | `grep -o 'https://[^"]*trycloudflare[^"]*' /tmp/cf-tunnel1.log \| tail -1` |
+| **ngrok** | `curl -s http://localhost:4040/api/tunnels \| python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tunnels'][0]['public_url'])"` |
+| **localhost.run** | Extract from the ssh process output / log: look for `*.lhr.life` URL |
+| **serveo.net** | Extract from the ssh process output / log: look for `*.serveo.net` URL |
+| **bore** | Extract from bore process output / log: look for the public address |
+
+If **no tunnel is running**, start one using whichever tool is available on the system:
+
+**Option A — trycloudflare (no account needed)**
+```bash
+cloudflared tunnel --url http://localhost:8443 --logfile /tmp/cf-tunnel1.log &
+sleep 8
+grep -o 'https://[^"]*trycloudflare[^"]*' /tmp/cf-tunnel1.log | tail -1
+```
+
+**Option B — ngrok**
+```bash
+ngrok http 8443 --log /tmp/ngrok.log &
+sleep 5
+curl -s http://localhost:4040/api/tunnels | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['tunnels'][0]['public_url'])"
+```
+
+**Option C — localhost.run (no account)**
+```bash
+ssh -o StrictHostKeyChecking=no -R 80:localhost:8443 nokey@localhost.run 2>&1 | tee /tmp/lhr.log &
+sleep 8
+grep -o 'https://[^ ]*\.lhr\.life' /tmp/lhr.log | tail -1
+```
+
+**Option D — serveo.net (no account)**
+```bash
+ssh -o StrictHostKeyChecking=no -R 80:localhost:8443 serveo.net 2>&1 | tee /tmp/serveo.log &
+sleep 8
+grep -o 'https://[^ ]*\.serveo\.net' /tmp/serveo.log | tail -1
+```
+
+**Option E — bore**
+```bash
+bore local 8443 --to bore.pub 2>&1 | tee /tmp/bore.log &
+sleep 5
+grep -o 'bore.pub:[0-9]*' /tmp/bore.log | tail -1
+# bore gives a TCP address — wrap it: https://bore.pub:<port>
+```
+
+### Step 3 — Verify 2 vhosts are configured and reachable
+
+```bash
+cat "/media/share/shared with kali-claude-code/anti-bot-proxy/data/vhosts.json"
+```
+
+There must be **exactly 2 vhost entries**. Each vhost hostname is a tunnel domain
+(from one of the tools above) pointing to a demo service upstream.
+The vhost hostnames are dynamic — they change whenever a new tunnel session starts.
+
+For each existing vhost, verify the upstream is still reachable **directly** (not through the gateway,
+to avoid triggering bot detection on curl):
+
+```bash
+curl -sk -o /dev/null -w "%{http_code}\n" <upstream-url>
+```
+
+Expected: `200` or `301/302` = upstream alive. Any `5xx` or connection refused = upstream is down.
+
+**Do NOT remove or replace a vhost that is currently working** (upstream responds).
+Only remove a vhost if its upstream is unreachable OR its hostname belongs to a tunnel
+that is no longer running. Stale hostnames (tunnel gone, hostname no longer resolves
+to this gateway) are safe to replace — working ones must be left intact.
+
+If fewer than 2 vhosts exist, or a stale one was removed — **register the missing ones** via the API:
+
+```bash
+ADMIN_KEY=$(cat "/media/share/shared with kali-claude-code/anti-bot-proxy/data/.admin_key")
+curl -s -X POST http://localhost:8443/antibot-appsec-gateway/secured/vhosts \
+  -H "X-Admin-Key: $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"hostname":"<vhost-hostname>","UPSTREAM":"<upstream-url>"}'
+```
+
+### Step 4 — Read the admin key
+
+```bash
+cat "/media/share/shared with kali-claude-code/anti-bot-proxy/data/.admin_key"
+```
+
+### Step 5 — Share everything in a single message
+
+Provide all of the following:
+
+```
+Gateway admin login:
+  URL:  https://<main-tunnel-hostname>/antibot-appsec-gateway/login
+  Key:  <admin_key>
+
+Demo service 1 (via gateway):
+  URL:  https://<vhost-1-hostname>/
+
+Demo service 2 (via gateway):
+  URL:  https://<vhost-2-hostname>/
+```
+
+**Do not ask the user to do any of the above steps themselves.**
+Run all checks silently and only share the final URLs + key.
