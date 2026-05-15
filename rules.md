@@ -797,7 +797,7 @@ When asked for a **live demo** (any phrasing: "show me", "demo link", "give me a
 docker ps --format "{{.Names}}\t{{.Status}}" | grep antibot
 ```
 
-The container name must match the current release version (e.g. `appsec-antibot-gw1.8.1`).
+The container name must match the current release version (e.g. `appsec-antibot-gw1.8.4`).
 Status must be `Up … (healthy)`. If not running or unhealthy — **start it before continuing**.
 
 ### Step 2 — Detect or start a tunnel

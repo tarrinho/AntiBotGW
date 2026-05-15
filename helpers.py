@@ -81,7 +81,7 @@ def _peer_is_trusted_proxy(remote: str) -> bool:
     proxy in front), an attacker can set X-Forwarded-For to any value and
     impersonate any IP for ban-tracking / risk / admin-allowlist purposes."""
     if not TRUSTED_PROXIES_NETS:
-        return True   # back-compat: no allowlist configured
+        return False  # fail-closed: require explicit TRUSTED_PROXIES env var
     if not remote:
         return False
     try:

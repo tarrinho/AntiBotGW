@@ -629,7 +629,7 @@ _DATA_PATH = os.environ.get("DB_PATH", "/data/antibot.db")
 WAL_CHECKPOINT_EVERY_SECS = float(os.environ.get("WAL_CHECKPOINT_EVERY_SECS", "60"))
 
 # ── TRUST_XFF / TRUSTED_PROXIES ──────────────────────────────────────────
-TRUST_XFF = os.environ.get("TRUST_XFF", "first").lower()  # first | last | none
+TRUST_XFF = os.environ.get("TRUST_XFF", "none").lower()   # first | last | none
 _trusted_proxies_raw = os.environ.get("TRUSTED_PROXIES", "").strip()
 TRUSTED_PROXIES_NETS: list = []
 if _trusted_proxies_raw:

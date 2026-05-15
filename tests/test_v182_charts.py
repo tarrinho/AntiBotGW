@@ -453,9 +453,19 @@ def test_s28_render_signal_perf_uses_horizontal_bars():
 def test_s29_load_signal_perf_in_domcontentloaded():
     src = _src()
     dcl = _extract_dcl_body(src)
-    assert "loadSignalPerf()" in dcl, (
-        "control_center.html: loadSignalPerf() not called in DOMContentLoaded. "
-        "Signal performance matrix must load on page open."
+    # loadSignalPerf() is invoked by _loadThreatSection() which IS called in DCL.
+    # A direct call in DCL would be a duplicate (caught by test_v184_uiux.py::TestP2BDuplicateFetch).
+    assert "_loadThreatSection()" in dcl, (
+        "control_center.html: _loadThreatSection() not called in DOMContentLoaded — "
+        "it is the entry point for loadSignalPerf(); signal performance matrix will not load on page open."
+    )
+    # Also verify loadSignalPerf is actually called within _loadThreatSection
+    fn_start = src.find("function _loadThreatSection(")
+    assert fn_start != -1, "control_center.html: _loadThreatSection() function missing"
+    fn_end = src.find("\nfunction ", fn_start + 1)
+    fn_body = src[fn_start: fn_end if fn_end != -1 else fn_start + 2000]
+    assert "loadSignalPerf" in fn_body, (
+        "control_center.html: _loadThreatSection() must call loadSignalPerf() internally"
     )
 
 
@@ -590,9 +600,19 @@ def test_s39_threat_donut_uses_doughnut_type():
 def test_s40_load_threat_donut_in_domcontentloaded():
     src = _src()
     dcl = _extract_dcl_body(src)
-    assert "loadThreatDonut()" in dcl, (
-        "control_center.html: loadThreatDonut() not called in DOMContentLoaded. "
-        "The threat category donut must load on page open."
+    # loadThreatDonut() is invoked by _loadThreatSection() which IS called in DCL.
+    # A direct call in DCL would be a duplicate (caught by test_v184_uiux.py::TestP2BDuplicateFetch).
+    assert "_loadThreatSection()" in dcl, (
+        "control_center.html: _loadThreatSection() not called in DOMContentLoaded — "
+        "it is the entry point for loadThreatDonut(); threat category donut will not load on page open."
+    )
+    # Also verify loadThreatDonut is actually called within _loadThreatSection
+    fn_start = src.find("function _loadThreatSection(")
+    assert fn_start != -1, "control_center.html: _loadThreatSection() function missing"
+    fn_end = src.find("\nfunction ", fn_start + 1)
+    fn_body = src[fn_start: fn_end if fn_end != -1 else fn_start + 2000]
+    assert "loadThreatDonut" in fn_body, (
+        "control_center.html: _loadThreatSection() must call loadThreatDonut() internally"
     )
 
 

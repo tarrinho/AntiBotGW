@@ -6,6 +6,36 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.4] — 2026-05-15
+
+### Added
+- **Traffic by Virtual Host — click-to-inspect bucket detail**: Clicking any point on the vhost stacked-area chart pins a detail panel below the canvas showing a sortable table of all vhosts for that bucket (requests count + inline share bar + %). Click the same bucket again to dismiss. Auto-refreshes when data polls (pinned index clamped to new data length). Tooltip footer hint: "Click to pin bucket detail ↓". State stored in `_vhRawData` + `_vhSelectedIdx`.
+- **M-SEC-1 — unconditional upstream address scrub**: Every proxied response now strips `scheme://netloc` and bare `netloc` of the upstream from response headers and text bodies before forwarding to the client. Known rewrite headers (`Location`, `Content-Location`, `Link`, `Refresh`, `Access-Control-Allow-Origin`) have `upstream` replaced with gateway origin. Identity-leaking headers (`Via`, `Server`, `X-Powered-By`, `X-Backend`, `X-Upstream`, `X-Origin`, `X-Real-Server`, `X-Forwarded-Server`) are dropped if they contain the upstream address. Text bodies (`text/*`, `application/json`, `application/xml`, `application/javascript`, etc.) have the upstream address replaced with the gateway origin. Binary bodies are untouched.
+
+### Fixed
+- **Live Feed "Detection methods" / "Top Methods" panels always empty**: `loadDetectorStats()` called `url('/antibot-appsec-gateway/secured/detector-stats')` where `url` is not a function at that scope — silent `TypeError` silently caught. Fix: bare string path.
+- **Log-level combo box always stale**: `loadLogLevel()` had the same `url(path)` call bug. Fix: bare string path.
+- **Traffic by Virtual Host chart crash** ("This method is not implemented: Check that a complete date adapter is provided"): `type:'time'` axis requires a registered Chart.js date adapter; none is bundled. Fix: switched to `type:'category'` with pre-formatted `fmtTime()` string labels — identical to the main traffic chart.
+- **`_loadThreatSection()` DCL deduplication**: `loadSignalPerf()` and `loadThreatDonut()` were called directly in `DOMContentLoaded` AND inside `_loadThreatSection()` (duplicate fetch on page load). Removed the direct calls; `_loadThreatSection()` is the single entry point. Updated `test_s29` / `test_s40` in `test_v182_charts.py` to assert `_loadThreatSection()` presence instead of the now-removed bare calls.
+
+### Security
+- **STRICT_VHOST default ON** (`STRICT_VHOST=1`): When at least one virtual host is registered, inbound requests for unregistered hosts are rejected with `502`. Has no effect when `VHOSTS` is empty (single-site deployment). Guard condition: `if STRICT_VHOST and VHOSTS and not vhost_is_configured()`. Set `STRICT_VHOST=0` to fall back to global UPSTREAM for unknown hosts.
+
+### Tests
+- **`tests/test_livefeed_detector_stats.py`** (10 new): S1–S4 static checks for `url()` wrapper removal; D1–D6 dynamic HTTP contract for `/secured/detector-stats` (200, required keys, lists, chal fields, shape after hit, `Cache-Control: no-store`).
+- **`tests/test_upstream_no_leak.py`** (24 new): S1–S9 static checks for M-SEC-1 scrub block; D1–D15 dynamic tests (HTML/JSON/XML/plain/JS body scrub, binary passthrough, Location/Content-Location/Link/Via/X-Backend/unknown header handling, fires without UPSTREAM_REWRITE_BASE).
+- **`tests/test_pure.py`** (+2): `test_strict_vhost_default_is_on`, `test_strict_vhost_guard_requires_vhosts_non_empty`.
+- **`tests/test_dashboard_charts.py`** (+11): 3 tests for date-adapter fix (`test_vhost_chart_does_not_use_time_axis`, `test_vhost_chart_uses_category_axis`, `test_vhost_chart_labels_use_fmtTime`); 8 tests for click-to-inspect (`_vhRawData`, `onClick`, panel HTML, tbody, label, `_showVhostBucketDetail`, toggle, share column).
+- **Full suite**: 2398 passed, 1 skipped, 0 failed (+93 new tests vs 1.8.3 baseline).
+
+### Validation
+- **Bandit**: 0 H / 0 C / 0 M
+- **Semgrep**: 0 findings (151 rules, 10 files)
+- **Trivy (arm64)**: 0 C / 0 H / 0 M — `sha256:d82eb333fff3`
+- **Trivy (armv7)**: 0 C / 0 H / 0 M — `sha256:a5df980d5e49`
+
+---
+
 ## [1.8.3] — 2026-05-15
 
 ### Added

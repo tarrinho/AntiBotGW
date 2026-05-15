@@ -316,3 +316,85 @@ def test_vhost_chart_labels_use_fmtTime():
         "main.html: loadVhostBreakdown() still maps labels to Date objects. "
         "Switch to fmtTime(ts, bucket, range) string labels."
     )
+
+
+# ── vhost breakdown chart: click-to-inspect bucket detail ─────────────────
+# Clicking a chart point pins a detail panel below the chart showing a table
+# of all vhosts with their request count + share for that bucket.
+
+def test_vhost_chart_stores_raw_data():
+    """_vhRawData must be set from the API response so the detail panel can read it."""
+    src = _read("main.html")
+    assert "_vhRawData" in src, (
+        "main.html: _vhRawData variable missing — "
+        "click-to-inspect detail panel needs the raw API data."
+    )
+
+
+def test_vhost_chart_has_onclick_handler():
+    """Chart options must include onClick handler for bucket-detail pinning."""
+    src = _read("main.html")
+    new_chart_pos = src.find("_vhChart = new Chart(ctx,")
+    assert new_chart_pos != -1, "_vhChart = new Chart(ctx, ...) not found"
+    # onClick sits after the plugins block inside options — scan 2400 chars
+    block = src[new_chart_pos: new_chart_pos + 2400]
+    assert "onClick" in block, (
+        "main.html: vhost-breakdown chart missing onClick handler — "
+        "clicking a bucket must pin the detail table."
+    )
+
+
+def test_vhost_bucket_detail_panel_exists():
+    """vhost-bucket-detail div must be present below the canvas."""
+    src = _read("main.html")
+    assert 'id="vhost-bucket-detail"' in src, (
+        "main.html: #vhost-bucket-detail panel missing — "
+        "this is the detail table shown when a bucket is clicked."
+    )
+
+
+def test_vhost_bucket_detail_has_tbody():
+    """vhost-bucket-tbody must exist for row injection."""
+    src = _read("main.html")
+    assert 'id="vhost-bucket-tbody"' in src, (
+        "main.html: #vhost-bucket-tbody missing inside the bucket-detail panel."
+    )
+
+
+def test_vhost_bucket_detail_has_label():
+    """vhost-bucket-label span must exist to display the bucket time range."""
+    src = _read("main.html")
+    assert 'id="vhost-bucket-label"' in src, (
+        "main.html: #vhost-bucket-label span missing — "
+        "it shows the bucket time range header in the detail panel."
+    )
+
+
+def test_show_vhost_bucket_detail_function_exists():
+    """_showVhostBucketDetail() helper must be defined."""
+    src = _read("main.html")
+    assert "_showVhostBucketDetail" in src, (
+        "main.html: _showVhostBucketDetail() function missing — "
+        "it populates the bucket detail table on chart click."
+    )
+
+
+def test_vhost_chart_onclick_toggles_on_same_bucket():
+    """onClick must toggle the panel off when the same bucket index is clicked twice."""
+    src = _read("main.html")
+    assert "_vhSelectedIdx === idx" in src, (
+        "main.html: onClick handler missing same-bucket toggle check. "
+        "Clicking the same bucket twice must dismiss the detail panel."
+    )
+
+
+def test_vhost_detail_shows_share_column():
+    """The detail table must include a share/percentage column."""
+    src = _read("main.html")
+    # Find the function DEFINITION (not the earlier call-site)
+    detail_pos = src.find("function _showVhostBucketDetail(")
+    assert detail_pos != -1, "function _showVhostBucketDetail() definition not found"
+    block = src[detail_pos: detail_pos + 1500]
+    assert "%" in block, (
+        "main.html: _showVhostBucketDetail() missing share/percentage column in the detail table."
+    )

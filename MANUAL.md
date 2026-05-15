@@ -1,6 +1,6 @@
 # AppSecGW — Operational Runbook
 
-**Version**: 1.7.3  
+**Version**: 1.8.4  
 **Author**: Pedro Tarrinho
 
 ---
@@ -21,8 +21,9 @@
 12. [Virtual Hosts (v1.8.0)](#12-virtual-hosts-v180)
 13. [Control Center & dashboard navigation (v1.8.1)](#13-control-center--dashboard-navigation-v181)
 14. [Analytics & Control Center charts (v1.8.2)](#14-analytics--control-center-charts-v182)
-15. [Tear down](#15-tear-down)
-16. [Environment variable reference](#16-environment-variable-reference)
+15. [SIEM Security Event Center (v1.8.4)](#15-siem-security-event-center-v184)
+16. [Tear down](#16-tear-down)
+17. [Environment variable reference](#17-environment-variable-reference)
 
 ---
 
@@ -425,7 +426,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.8.2
+  appsec-antibot-gw:1.8.4
 ```
 
 ### Manage at runtime (Settings UI)
@@ -679,7 +680,88 @@ All four endpoints return `Cache-Control: no-store` and respond with `applicatio
 
 ---
 
-## 15. Tear down  <!-- was §14 -->
+## 15. SIEM Security Event Center (v1.8.4)
+
+The SIEM Security Event Center provides a single-pane view of all security events collected by the gateway. It is auth-gated and served from a dedicated dashboard.
+
+### Access
+
+| Route | Method | Auth | Response |
+|---|---|---|---|
+| `/antibot-appsec-gateway/secured/siem` | GET | session cookie | HTML dashboard |
+| `/antibot-appsec-gateway/secured/siem-data` | GET | session cookie | JSON |
+
+Both endpoints require a valid `agw_session` cookie. Unauthenticated requests receive HTTP 404 (silent decoy). The HTML page is served with `X-Frame-Options: DENY`, `Cache-Control: no-store`, and a restrictive CSP.
+
+### Dashboard panels
+
+| Panel | Description |
+|---|---|
+| Threat Index | 0–100 composite score (`block% × 0.5 + crit×5 + high×2`, capped at 100) |
+| KPI bar | Total events, blocked, allowed, active bans, bypasses |
+| Event Timeline | Stacked-area chart (blocked / allowed) from `state.timeline` |
+| Threat Category Donut | Distribution across threat categories (`body`, `path`, `agent`, `rate`, `fingerprint`, etc.) |
+| Event Table | Last 100 events, newest first — IP, path, reason, severity, score, JA4, rid |
+| Top IPs | Top 25 identities by risk score — request count, block count, ban status, top reason |
+| By Reason | Top 30 non-OK signal reasons with request count |
+
+### Query parameters (`/secured/siem-data`)
+
+| Parameter | Default | Clamp | Description |
+|---|---|---|---|
+| `mins` | `60` | 1–1440 | Time window in minutes |
+| `vhost` | `""` | — | Filter events to a single virtual host (exact match, case-insensitive) |
+
+Non-integer or out-of-range `mins` values are silently clamped; `"nan"`/`"inf"` are rejected by `int()` and fall back to the default.
+
+### Response schema (`/secured/siem-data`)
+
+```json
+{
+  "ts":           1747350000,
+  "threat_index": 23,
+  "stats": {
+    "total":    412,
+    "blocked":  87,
+    "allowed":  325,
+    "bans":     4,
+    "bypasses": 2
+  },
+  "events": [
+    {
+      "ts": 1747349900, "ip": "1.2.3.4", "path": "/login",
+      "method": "POST", "status": 429, "reason": "rate-limit",
+      "score": 75, "ja4": "t13d1516h2_...", "rid": "abc123",
+      "ua": "curl/7.x", "sev": "high", "admin": false,
+      "track_key": "1.2.3.4|shop.example.com"
+    }
+  ],
+  "timeline":    [{"t": 1747348800, "total": 50, "blocked": 12, "allowed": 38, "missed": 0}],
+  "by_reason":   [{"reason": "rate-limit", "count": 45}],
+  "threat_cats": [{"cat": "rate", "count": 45}],
+  "top_ips":     [{"ip": "1.2.3.4", "requests": 130, "blocked": 87, "risk_score": 75.0, "banned": true, "ban_expires": 3540.0, "top_reason": "rate-limit"}],
+  "vhosts":      ["api.example.com", "shop.example.com"],
+  "mins":        60
+}
+```
+
+Severity levels: `"critical"` · `"high"` · `"medium"` · `"low"` · `"info"`. Events are capped at 100; top IPs capped at 25; by_reason capped at 30.
+
+### Example usage
+
+```bash
+# Fetch SIEM data — last 2 hours
+curl -b /tmp/session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/siem-data?mins=120"
+
+# Filter to a specific vhost
+curl -b /tmp/session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/siem-data?mins=60&vhost=api.example.com"
+```
+
+---
+
+## 16. Tear down  <!-- was §15 -->
 
 ```bash
 # Stop and remove container; preserve data volume
@@ -698,7 +780,7 @@ docker compose down -v  # also removes named volumes
 
 ---
 
-## 16. Environment variable reference
+## 17. Environment variable reference
 
 ### Required
 
@@ -720,6 +802,12 @@ docker compose down -v  # also removes named volumes
 | `LISTEN_PORT` | `8080` | Port the gateway listens on |
 | `TRUST_XFF` | `""` | `"last"` — trust the last `X-Forwarded-For` hop from `TRUSTED_PROXIES` |
 | `TRUSTED_PROXIES` | `""` | CIDR list of trusted reverse proxies (e.g. `10.0.0.0/8,172.16.0.0/12`) |
+
+### Virtual hosts — v1.8.4
+
+| Variable | Default | Description |
+|---|---|---|
+| `STRICT_VHOST` | `1` | When enabled (`1`) and at least one vhost is registered, requests whose `Host` header does not match any configured vhost receive a 404 decoy. Set to `0` to allow unknown hosts to fall through to the global `UPSTREAM`. |
 
 ### Detection — v1.7.3
 
