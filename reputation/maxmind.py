@@ -92,36 +92,67 @@ def _maxmind_seed_from_image():
             slog("maxmind_seed_failed", level="warn", dest=dest, error=str(e))
 
 
-def _maxmind_auto_fetch():
-    """First-boot convenience. When MAXMIND_LICENSE_KEY is set AND a target
-    mmdb is missing, download it directly from MaxMind into /data/<edition>.mmdb.
-    Lets operators just `docker run -e MAXMIND_LICENSE_KEY=…` and skip the
-    host-side maxmind-refresh.sh entirely."""
-    key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
-    if not key:
-        return
-    targets = [
-        ("GeoLite2-ASN",  MAXMIND_ASN_DB_PATH),
-        ("GeoLite2-City", MAXMIND_CITY_DB_PATH),
-    ]
+def _etag_path(mmdb_path: str) -> str:
+    return mmdb_path + ".etag"
+
+
+def _read_etag(mmdb_path: str) -> str:
+    try:
+        return open(_etag_path(mmdb_path)).read().strip()
+    except OSError:
+        return ""
+
+
+def _write_etag(mmdb_path: str, etag: str) -> None:
+    try:
+        with open(_etag_path(mmdb_path), "w") as f:
+            f.write(etag)
+    except OSError:
+        pass
+
+
+def _maxmind_fetch_edition(edition: str, dest: str, key: str,
+                           force: bool = False) -> str:
+    """Download one MaxMind edition with ETag-based conditional HTTP.
+
+    Returns: 'downloaded' | 'not_modified' | 'skipped' | 'error'
+
+    Uses `If-None-Match` with the stored ETag so MaxMind returns 304 Not
+    Modified when the database hasn't changed — 304 responses don't count
+    toward the daily download limit (2000/day for GeoLite2).
+
+    force=True: always attempt (used by refresh loop for stale files).
+    force=False: skip if dest already exists (auto_fetch first-boot path).
+    """
     import urllib.request, urllib.error, tarfile, tempfile
-    for edition, dest in targets:
-        if os.path.exists(dest):
-            continue   # already there (mounted volume from previous run)
-        try:
-            url = (f"https://download.maxmind.com/app/geoip_download"
-                   f"?edition_id={edition}&license_key={key}&suffix=tar.gz")
-            slog("maxmind_downloading", level="info", edition=edition, dest=dest)
+    if not force and os.path.exists(dest):
+        return "skipped"
+    etag = _read_etag(dest)
+    url = (f"https://download.maxmind.com/app/geoip_download"
+           f"?edition_id={edition}&license_key={key}&suffix=tar.gz")
+    req = urllib.request.Request(url)  # nosec B310 — hardcoded HTTPS to MaxMind
+    if etag:
+        req.add_header("If-None-Match", etag)
+    try:
+        slog("maxmind_checking", level="info", edition=edition,
+             conditional=bool(etag))
+        with urllib.request.urlopen(req, timeout=60) as r:
+            if r.status == 304:
+                # Database unchanged — touch mtime so staleness clock resets.
+                if os.path.exists(dest):
+                    os.utime(dest, None)
+                slog("maxmind_not_modified", level="info", edition=edition)
+                return "not_modified"
+            if r.status != 200:
+                slog("maxmind_download_http_err", level="warn",
+                     edition=edition, status=r.status)
+                return "error"
+            new_etag = r.headers.get("ETag", "")
             with tempfile.TemporaryDirectory() as td:
                 tgz = os.path.join(td, f"{edition}.tar.gz")
-                with urllib.request.urlopen(url, timeout=60) as r:  # nosec B310 — hardcoded HTTPS to MaxMind; no user-controlled scheme
-                    if r.status != 200:
-                        slog("maxmind_download_http_err", level="warn",
-                             edition=edition, status=r.status)
-                        continue
-                    with open(tgz, "wb") as f:
-                        while chunk := r.read(64 * 1024):
-                            f.write(chunk)
+                with open(tgz, "wb") as f:
+                    while chunk := r.read(64 * 1024):
+                        f.write(chunk)
                 with tarfile.open(tgz) as tar:
                     member = next(
                         (m for m in tar.getmembers()
@@ -129,28 +160,59 @@ def _maxmind_auto_fetch():
                         None,
                     )
                     if member is None:
-                        slog("maxmind_not_in_archive", level="warn", edition=edition)
-                        continue
+                        slog("maxmind_not_in_archive", level="warn",
+                             edition=edition)
+                        return "error"
                     fobj = tar.extractfile(member)
                     if fobj is None:
-                        continue
+                        return "error"
                     os.makedirs(os.path.dirname(dest) or "/data", exist_ok=True)
                     with open(dest, "wb") as out:
                         while chunk := fobj.read(64 * 1024):
                             out.write(chunk)
-            size_mb = os.path.getsize(dest) / (1024 * 1024)
-            slog("maxmind_downloaded", level="info",
-                 edition=edition, dest=dest, mb=round(size_mb, 1))
-        except (urllib.error.URLError, OSError, tarfile.TarError) as e:
-            slog("maxmind_fetch_failed", level="warn", edition=edition, error=str(e))
+            if new_etag:
+                _write_etag(dest, new_etag)
+        size_mb = os.path.getsize(dest) / (1024 * 1024)
+        slog("maxmind_downloaded", level="info",
+             edition=edition, dest=dest, mb=round(size_mb, 1))
+        return "downloaded"
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            if os.path.exists(dest):
+                os.utime(dest, None)
+            slog("maxmind_not_modified", level="info", edition=edition)
+            return "not_modified"
+        slog("maxmind_fetch_failed", level="warn", edition=edition,
+             error=str(e))
+        return "error"
+    except (urllib.error.URLError, OSError, tarfile.TarError) as e:
+        slog("maxmind_fetch_failed", level="warn", edition=edition, error=str(e))
+        return "error"
+
+
+def _maxmind_auto_fetch():
+    """First-boot convenience. When MAXMIND_LICENSE_KEY is set AND a target
+    mmdb is missing, download it directly from MaxMind into /data/<edition>.mmdb.
+    Uses ETag-based conditional HTTP — 304 Not Modified skips the download
+    and doesn't count toward MaxMind's daily limit."""
+    key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
+    if not key:
+        return
+    targets = [
+        ("GeoLite2-ASN",  MAXMIND_ASN_DB_PATH),
+        ("GeoLite2-City", MAXMIND_CITY_DB_PATH),
+    ]
+    for edition, dest in targets:
+        _maxmind_fetch_edition(edition, dest, key, force=False)
 
 
 async def _maxmind_refresh_loop():
     """Every 30 days, re-fetch any mmdb older than that AND reload the
-    in-memory readers. Means an operator who only sets MAXMIND_LICENSE_KEY
-    never has to babysit the dbs (no host-side cron needed)."""
+    in-memory readers. Uses ETag-based conditional HTTP so unchanged databases
+    return 304 Not Modified without counting toward MaxMind's daily limit."""
     global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
-    if not os.environ.get("MAXMIND_LICENSE_KEY", "").strip():
+    key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
+    if not key:
         return  # nothing to refresh — operator hasn't opted in
     THIRTY_DAYS = 30 * 86400
     while True:
@@ -163,10 +225,14 @@ async def _maxmind_refresh_loop():
             if not stale:
                 continue
             slog("maxmind_refreshing_stale", level="info", stale_count=len(stale))
-            for p in stale:
-                try: os.remove(p)
-                except OSError: pass  # nosec B110 — stale DB file may already be removed; race is harmless
-            _maxmind_auto_fetch()
+            reloaded = False
+            for path in stale:
+                edition = "GeoLite2-ASN" if "ASN" in path else "GeoLite2-City"
+                result = _maxmind_fetch_edition(edition, path, key, force=True)
+                if result in ("downloaded", "not_modified"):
+                    reloaded = True
+            if not reloaded:
+                continue
             try:
                 import maxminddb
                 if os.path.exists(MAXMIND_ASN_DB_PATH):

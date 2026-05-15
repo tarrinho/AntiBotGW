@@ -21,6 +21,14 @@ os.environ.setdefault("DB_PATH", "/tmp/pytest_antibot.db")
 if os.path.exists("/tmp/pytest_antibot.db"):
     os.remove("/tmp/pytest_antibot.db")
 
+# Ensure project root is in sys.path so proxy.py's subpackage imports
+# (admin.oidc, etc.) resolve correctly at collection time — conftest.py
+# also does this, but exec_module below runs at import time and we need
+# this to be set before the call, independent of conftest load ordering.
+_PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ_ROOT not in sys.path:
+    sys.path.insert(0, _PROJ_ROOT)
+
 # Load proxy.py as module
 PROXY_PATH = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
 spec = importlib.util.spec_from_file_location("proxy", PROXY_PATH)

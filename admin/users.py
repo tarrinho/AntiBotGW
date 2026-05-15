@@ -218,6 +218,7 @@ def _session_create(username: str, ip: str, user_agent: str) -> str:
             pass
     _SESSION_CACHE[sid] = {
         "username": username, "expires_ts": expires_ts, "revoked": False,
+        "source_ip": ip or "",
     }
     return _session_sign(username, sid=sid)
 
