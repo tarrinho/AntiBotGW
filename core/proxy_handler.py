@@ -919,6 +919,14 @@ async def proxy(request: web.Request):
                         _gw_origin_b = _gw_origin.encode()
                         if _up_origin_b in resp_body:
                             resp_body = resp_body.replace(_up_origin_b, _gw_origin_b)
+                            # Joomla (and some CMS) generate absolute URLs as
+                            # scheme://host//path (origin with trailing slash + path
+                            # starting with slash).  After the replace above that
+                            # becomes gw_origin//path; collapse to gw_origin/path.
+                            _gw_double = _gw_origin_b + b"//"
+                            if _gw_double in resp_body:
+                                resp_body = resp_body.replace(_gw_double,
+                                                              _gw_origin_b + b"/")
                         if _up_netloc_b in resp_body:
                             resp_body = resp_body.replace(_up_netloc_b,
                                                           client_host.encode())
