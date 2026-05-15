@@ -705,6 +705,11 @@ _SECRET_KEYS = {
     "CROWDSEC_LAPI_URL":   ("CROWDSEC_LAPI_URL",   "CROWDSEC_LAPI_URL"),
     "CROWDSEC_LAPI_KEY":   ("CROWDSEC_API_KEY",    "CROWDSEC_LAPI_KEY"),
     "MAXMIND_LICENSE_KEY": ("MAXMIND_LICENSE_KEY", "MAXMIND_LICENSE_KEY"),
+    "OIDC_ISSUER":        ("OIDC_ISSUER",        "OIDC_ISSUER"),
+    "OIDC_CLIENT_ID":     ("OIDC_CLIENT_ID",      "OIDC_CLIENT_ID"),
+    "OIDC_CLIENT_SECRET": ("OIDC_CLIENT_SECRET",  "OIDC_CLIENT_SECRET"),
+    "OIDC_DEFAULT_ROLE":  ("OIDC_DEFAULT_ROLE",   "OIDC_DEFAULT_ROLE"),
+    "OIDC_SCOPES":        ("OIDC_SCOPES",         "OIDC_SCOPES"),
 }
 
 
@@ -727,6 +732,9 @@ def _refresh_integration_state(proxy_globals: dict) -> None:
         g["TURNSTILE_ENABLED"] = True
     g["ABUSEIPDB_ENABLED"] = bool(g.get("ABUSEIPDB_KEY"))
     g["CROWDSEC_ENABLED"]  = bool(g.get("CROWDSEC_LAPI_URL") and g.get("CROWDSEC_API_KEY"))
+    g["OIDC_ENABLED"] = bool(
+        g.get("OIDC_ISSUER") and g.get("OIDC_CLIENT_ID") and g.get("OIDC_CLIENT_SECRET")
+    )
     # Propagate secrets AND derived flags to all loaded modules so that:
     #   • db_load_config validators (which read proxy_handler globals) see the
     #     real credential values before validating ABUSEIPDB_ENABLED et al.
@@ -742,6 +750,12 @@ def _refresh_integration_state(proxy_globals: dict) -> None:
         "CROWDSEC_LAPI_URL":   g.get("CROWDSEC_LAPI_URL", ""),
         "CROWDSEC_API_KEY":    g.get("CROWDSEC_API_KEY", ""),
         "CROWDSEC_ENABLED":    g["CROWDSEC_ENABLED"],
+        "OIDC_ISSUER":        g.get("OIDC_ISSUER", ""),
+        "OIDC_CLIENT_ID":     g.get("OIDC_CLIENT_ID", ""),
+        "OIDC_CLIENT_SECRET": g.get("OIDC_CLIENT_SECRET", ""),
+        "OIDC_DEFAULT_ROLE":  g.get("OIDC_DEFAULT_ROLE", "viewer"),
+        "OIDC_SCOPES":        g.get("OIDC_SCOPES", "openid profile email"),
+        "OIDC_ENABLED":       g["OIDC_ENABLED"],
     }
     for _rs_m in list(_sys_rs.modules.values()):
         if _rs_m is None or _rs_m is _sys_rs.modules.get("db.sqlite"):

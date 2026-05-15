@@ -176,12 +176,12 @@ button.danger{background:var(--red)}
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/service">Service</a>
     <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
     <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings" class="active">Settings</a>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -677,6 +677,66 @@ document.addEventListener('DOMContentLoaded', function(){
         <button class="secondary" id="audit-next">next ›</button>
       </span>
     </div>
+  </div>
+</div>
+
+<!-- ── 1.8.5 — SSO / OIDC configuration ─────────────────────── -->
+<div class="card" id="card-sso" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:14px">
+    <div>
+      <h2 style="margin-bottom:4px">SSO / OIDC</h2>
+      <p class="desc" style="margin:0">
+        Configure Keycloak (or any OIDC provider) for single sign-on. When
+        all three required fields are set the SSO button appears on the login
+        page. Changes take effect immediately — no restart needed.
+      </p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="sso-status-badge" class="pill" style="font-size:11px">checking…</span>
+      <button class="secondary" id="sso-refresh">↻ Refresh</button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px" id="sso-form">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Issuer URL <span style="color:var(--red);display:inline">*</span>
+      <input id="sso-issuer" type="url" placeholder="https://auth.example.com/realms/myrealm"
+             style="margin:0">
+      <span class="foot">Keycloak realm base URL (no trailing slash)</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Client ID <span style="color:var(--red);display:inline">*</span>
+      <input id="sso-client-id" type="text" placeholder="appsecgw" style="margin:0">
+      <span class="foot">Confidential client registered in Keycloak</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Client Secret <span style="color:var(--red);display:inline">*</span>
+      <input id="sso-client-secret" type="password" placeholder="••••••••" style="margin:0"
+             autocomplete="new-password">
+      <span class="foot">Leave blank to keep existing secret</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Default Role
+      <select id="sso-default-role" style="margin:0;background:#0d1117;color:var(--fg);
+              border:1px solid var(--line);border-radius:5px;padding:7px 10px;font:inherit">
+        <option value="viewer">viewer</option>
+        <option value="maintainer">maintainer</option>
+        <option value="admin">admin</option>
+      </select>
+      <span class="foot">Role assigned to auto-provisioned SSO users</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim);grid-column:1/-1">
+      Scopes
+      <input id="sso-scopes" type="text" placeholder="openid profile email" style="margin:0">
+      <span class="foot">Space-separated OIDC scopes</span>
+    </label>
+  </div>
+
+  <div class="row-controls" style="margin-top:14px">
+    <button id="sso-save">Save</button>
+    <button class="secondary" id="sso-clear" style="color:var(--red)">Disable SSO</button>
+    <span class="foot" id="sso-msg"></span>
   </div>
 </div>
 
@@ -2351,6 +2411,85 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       .then(function(r){return r.json();}).then(function(d){if(d.self_revoke){window.location='/antibot-appsec-gateway/login';return;}_acctLoadSessions();}).catch(function(){});
   }
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
+})();
+
+// ── SSO / OIDC ──────────────────────────────────────────────────────────────
+(function() {
+  const NS = '/antibot-appsec-gateway';
+  const badge  = document.getElementById('sso-status-badge');
+  const msgEl  = document.getElementById('sso-msg');
+  const issuer = document.getElementById('sso-issuer');
+  const cid    = document.getElementById('sso-client-id');
+  const csec   = document.getElementById('sso-client-secret');
+  const role   = document.getElementById('sso-default-role');
+  const scopes = document.getElementById('sso-scopes');
+
+  function setBadge(enabled) {
+    badge.textContent = enabled ? '● Enabled' : '○ Disabled';
+    badge.style.background = enabled ? 'var(--green,#238636)' : 'var(--line)';
+    badge.style.color = enabled ? '#fff' : 'var(--dim)';
+  }
+
+  async function loadSso() {
+    try {
+      const r = await fetch(NS + '/secured/secrets', {credentials:'include'});
+      const j = await r.json();
+      const s = j.secrets || {};
+      const state = j.integration_state || {};
+      setBadge(!!state.OIDC_ENABLED);
+      if (s.OIDC_ISSUER)    issuer.placeholder = s.OIDC_ISSUER.configured ? '(configured)' : issuer.placeholder;
+      if (s.OIDC_CLIENT_ID) cid.placeholder    = s.OIDC_CLIENT_ID.configured ? '(configured)' : cid.placeholder;
+    } catch(e) { badge.textContent = 'error'; }
+  }
+
+  document.getElementById('sso-refresh').addEventListener('click', loadSso);
+
+  document.getElementById('sso-save').addEventListener('click', async () => {
+    const body = {};
+    if (issuer.value.trim()) body.OIDC_ISSUER = issuer.value.trim();
+    if (cid.value.trim())    body.OIDC_CLIENT_ID = cid.value.trim();
+    if (csec.value.trim())   body.OIDC_CLIENT_SECRET = csec.value.trim();
+    body.OIDC_DEFAULT_ROLE = role.value;
+    if (scopes.value.trim()) body.OIDC_SCOPES = scopes.value.trim();
+    if (!Object.keys(body).filter(k => k !== 'OIDC_DEFAULT_ROLE').length) {
+      msgEl.textContent = 'Fill in at least Issuer, Client ID or Client Secret.';
+      return;
+    }
+    try {
+      const csrf = document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
+      const r = await fetch(NS + '/secured/secrets', {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf},
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        msgEl.textContent = 'Saved.';
+        issuer.value = ''; cid.value = ''; csec.value = '';
+        await loadSso();
+      } else {
+        msgEl.textContent = j.error || 'Save failed';
+      }
+    } catch(e) { msgEl.textContent = String(e); }
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  });
+
+  document.getElementById('sso-clear').addEventListener('click', async () => {
+    if (!confirm('Disable SSO? This will remove all OIDC credentials and hide the SSO login button.')) return;
+    const csrf = document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
+    const keys = ['OIDC_ISSUER','OIDC_CLIENT_ID','OIDC_CLIENT_SECRET','OIDC_DEFAULT_ROLE','OIDC_SCOPES'];
+    for (const k of keys) {
+      await fetch(NS + '/secured/secrets?name=' + k, {
+        method: 'DELETE', credentials: 'include',
+        headers: {'X-CSRF-Token': csrf},
+      }).catch(() => {});
+    }
+    msgEl.textContent = 'SSO disabled.';
+    await loadSso();
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  });
+
+  loadSso();
 })();
 </script>
 </div><!-- /page-content -->
