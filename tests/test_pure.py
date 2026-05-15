@@ -5837,3 +5837,68 @@ def test_strict_vhost_guard_requires_vhosts_non_empty():
         "STRICT_VHOST guard must check 'VHOSTS' (non-empty) before rejecting — "
         "single-upstream deployments with no vhosts must not be broken by STRICT_VHOST=1"
     )
+
+
+# ── MaxMind ETag conditional download ─────────────────────────────────────
+
+def test_maxmind_fetch_edition_exists():
+    """_maxmind_fetch_edition must be defined in reputation/maxmind.py."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    assert "_maxmind_fetch_edition" in src, \
+        "reputation/maxmind.py: _maxmind_fetch_edition not found"
+
+
+def test_maxmind_etag_helpers_exist():
+    """_etag_path, _read_etag, _write_etag must be defined."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    for fn in ("_etag_path", "_read_etag", "_write_etag"):
+        assert f"def {fn}" in src, \
+            f"reputation/maxmind.py: {fn} not found"
+
+
+def test_maxmind_fetch_sends_if_none_match():
+    """_maxmind_fetch_edition must include If-None-Match when an ETag is stored."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    assert "If-None-Match" in src, \
+        "reputation/maxmind.py: If-None-Match header not sent — conditional download not implemented"
+
+
+def test_maxmind_fetch_handles_304():
+    """_maxmind_fetch_edition must handle HTTP 304 Not Modified."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    assert "304" in src, \
+        "reputation/maxmind.py: 304 Not Modified not handled — downloads will count against daily limit even when database is unchanged"
+    assert "not_modified" in src, \
+        "reputation/maxmind.py: 'not_modified' return value not found"
+
+
+def test_maxmind_refresh_loop_uses_fetch_edition():
+    """_maxmind_refresh_loop must delegate to _maxmind_fetch_edition (not inline download)."""
+    import pathlib, re
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    loop_start = src.find("async def _maxmind_refresh_loop")
+    assert loop_start >= 0, "reputation/maxmind.py: _maxmind_refresh_loop not found"
+    loop_body = src[loop_start:loop_start + 2000]
+    assert "_maxmind_fetch_edition" in loop_body, \
+        "_maxmind_refresh_loop must call _maxmind_fetch_edition for ETag-based conditional download"
+
+
+def test_maxmind_auto_fetch_uses_fetch_edition():
+    """_maxmind_auto_fetch must delegate to _maxmind_fetch_edition."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    auto_start = src.find("def _maxmind_auto_fetch")
+    assert auto_start >= 0
+    auto_body = src[auto_start:auto_start + 500]
+    assert "_maxmind_fetch_edition" in auto_body, \
+        "_maxmind_auto_fetch must call _maxmind_fetch_edition for ETag support"

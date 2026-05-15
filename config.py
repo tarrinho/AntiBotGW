@@ -1604,3 +1604,7 @@ METRICS_ALLOWED_IPS_RAW  = os.environ.get("METRICS_ALLOWED_IPS", "")
 
 MAX_ADMIN_SESSIONS  = int(os.environ.get("MAX_ADMIN_SESSIONS", "5"))
 SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
+
+# ── Session IP binding (Task J) ───────────────────────────────────────────────
+# Default OFF — too disruptive for users behind NAT/VPN
+BIND_SESSION_TO_IP = os.environ.get("BIND_SESSION_TO_IP", "0") in ("1", "true", "yes")

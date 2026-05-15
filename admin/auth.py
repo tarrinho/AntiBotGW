@@ -145,6 +145,18 @@ def _internal_authed(request) -> bool:
             if _t.time() - last_touch > SESSION_IDLE_TIMEOUT:
                 _session_revoke(sid, by_username="system")
                 return False
+    # 1.8.5 Week 4 — Task J: session IP binding check
+    from config import BIND_SESSION_TO_IP  # noqa: F401
+    if BIND_SESSION_TO_IP and sid:
+        _cached_for_ip = _SESSION_CACHE.get(sid)
+        if _cached_for_ip:
+            stored_ip = _cached_for_ip.get("source_ip", "")
+            req_ip = get_ip(request)
+            if stored_ip and req_ip and stored_ip != req_ip:
+                slog("session_ip_mismatch", level="warn",
+                     sid=sid[:8], stored_ip=stored_ip, request_ip=req_ip)
+                _session_revoke(sid, by_username="system")
+                return False
     try:
         request["_session_user"] = u
         request["_session_sid"]  = sid
