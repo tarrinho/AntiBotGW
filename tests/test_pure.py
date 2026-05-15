@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.3"
+_EXPECTED_VERSION = "AppSecGW_1.8.4"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.3\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.4\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -5537,7 +5537,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.3" in src, "vhost_policy.html: version string missing or stale"
+    assert "AppSecGW_1.8.4" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():

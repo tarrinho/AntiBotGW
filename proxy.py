@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.3 — entry point only.
+Anti-bot reverse proxy v1.8.4 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -463,6 +463,9 @@ def make_app() -> web.Application:
         ("risk-percentiles",         "GET",    risk_percentiles_endpoint,             True),
         ("ban-events",               "GET",    ban_events_endpoint,                   True),
         ("top-attackers",            "GET",    top_attackers_endpoint,                True),
+        # ── 1.8.4 — SIEM Security Event Center ──────────────────────────
+        ("siem",                     "GET",    siem_dashboard_endpoint,               True),
+        ("siem-data",                "GET",    siem_data_endpoint,                    True),
     ]
 
     _METHOD_MAP = {
