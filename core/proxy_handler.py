@@ -857,12 +857,79 @@ async def proxy(request: web.Request):
                         if hv and hk.lower() not in {k.lower() for k in response_headers}:
                             response_headers[hk] = hv
 
+                # ── Unconditional upstream-address scrub (M-SEC-1) ───────────
+                # The upstream origin (scheme://netloc and bare netloc) must
+                # NEVER appear in any response delivered to the client.  This
+                # is enforced here regardless of UPSTREAM_REWRITE_BASE so that
+                # the protection is always active, not opt-in.
+                #
+                # Headers: any header value that contains the upstream netloc
+                #   is dropped entirely (safe-to-drop list) or has the netloc
+                #   replaced with the gateway's inbound host.
+                # Body: scheme://netloc is replaced byte-for-byte with the
+                #   gateway origin for all text-type responses.  Binary types
+                #   (image/*, application/octet-stream, etc.) are skipped to
+                #   avoid corrupting non-text payloads.
+                _up_netloc   = up_parsed.netloc          # e.g. "backend.int:8080"
+                _up_origin   = f"{up_parsed.scheme}://{_up_netloc}"  # "http://backend.int:8080"
+                _gw_origin   = f"{client_scheme}://{client_host}"
+                if _up_netloc:
+                    # --- Headers ---
+                    # Headers whose value may validly contain an internal URL and
+                    # should be rewritten to the gateway origin.
+                    _REWRITE_HEADERS = {"location", "content-location", "link",
+                                        "refresh", "access-control-allow-origin"}
+                    # Headers that expose backend identity and should be dropped
+                    # if they contain the upstream netloc.
+                    _DROP_IF_LEAKS = {"via", "server", "x-powered-by",
+                                      "x-backend", "x-upstream", "x-origin",
+                                      "x-real-server", "x-forwarded-server"}
+                    _to_drop: list = []
+                    for _hk in list(response_headers.keys()):
+                        _hkl = _hk.lower()
+                        _hv  = response_headers[_hk]
+                        if _up_netloc not in _hv:
+                            continue
+                        if _hkl in _REWRITE_HEADERS:
+                            _rewritten_hv = _hv.replace(_up_origin, _gw_origin)
+                            _rewritten_hv = _rewritten_hv.replace(_up_netloc, client_host)
+                            response_headers[_hk] = _rewritten_hv
+                        elif _hkl in _DROP_IF_LEAKS:
+                            _to_drop.append(_hk)
+                        else:
+                            # Unknown header — drop it; never leak the upstream.
+                            _to_drop.append(_hk)
+                    for _hk in _to_drop:
+                        try:
+                            del response_headers[_hk]
+                        except KeyError:
+                            pass
+
+                    # --- Body ---
+                    # Only scrub text-type responses (HTML, JSON, XML, plain text,
+                    # JavaScript).  Binary payloads are left untouched.
+                    _text_ctype = any(ctype.startswith(p) for p in (
+                        "text/", "application/json", "application/xml",
+                        "application/xhtml", "application/javascript",
+                        "application/ld+json", "application/manifest+json",
+                    ))
+                    if _text_ctype:
+                        _up_origin_b = _up_origin.encode()
+                        _up_netloc_b = _up_netloc.encode()
+                        _gw_origin_b = _gw_origin.encode()
+                        if _up_origin_b in resp_body:
+                            resp_body = resp_body.replace(_up_origin_b, _gw_origin_b)
+                        if _up_netloc_b in resp_body:
+                            resp_body = resp_body.replace(_up_netloc_b,
+                                                          client_host.encode())
+
                 # Rewrite absolute upstream URLs so the internal upstream origin is
                 # never exposed to the browser — in response headers (Location,
                 # Content-Location, Link) and in HTML/JSON/XML response bodies.
-                # Only active when UPSTREAM_REWRITE_BASE is set (global or per-vhost).
+                # UPSTREAM_REWRITE_BASE allows operators to specify an alternate
+                # base URL (e.g. an alias hostname) beyond the current upstream netloc.
                 _rewrite_base = (vc("UPSTREAM_REWRITE_BASE") or "").rstrip("/")
-                if _rewrite_base:
+                if _rewrite_base and _rewrite_base != _up_origin:
                     _rb_bytes = _rewrite_base.encode()
                     _rb_str   = _rewrite_base
                     # Scrub from forwarded response headers; skip if stripping

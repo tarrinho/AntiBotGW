@@ -459,6 +459,10 @@ def make_app() -> web.Application:
         ("vhost-heatmap",            "GET",    vhost_heatmap_endpoint,                True),
         ("signal-performance",       "GET",    signal_performance_endpoint,           True),
         ("security-incidents",       "GET",    security_incidents_endpoint,           True),
+        # ── 1.8.3 — threat intelligence analytics ──────────────────────
+        ("risk-percentiles",         "GET",    risk_percentiles_endpoint,             True),
+        ("ban-events",               "GET",    ban_events_endpoint,                   True),
+        ("top-attackers",            "GET",    top_attackers_endpoint,                True),
     ]
 
     _METHOD_MAP = {
