@@ -100,3 +100,13 @@ def _wipe_config_kv_between_tests():
         _p.BYPASS_MODE = False              # must be False or detection tests are skipped
     except Exception:
         pass
+    # Clear VHOSTS after every test. VHOSTS is a module-level dict in vhost.py
+    # (shared singleton across all proxy imports in the session). A test that
+    # registers a vhost would otherwise make VHOSTS non-empty for subsequent
+    # tests, causing STRICT_VHOST=1 (now the default) to reject all unregistered
+    # inbound hosts in those tests with 502.
+    try:
+        import vhost as _vh
+        _vh.VHOSTS.clear()
+    except Exception:
+        pass

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.1 · Controls</title>
+<title>AppSecGW_1.8.3 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -411,7 +411,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.1</div>
+    <div id="sidebar-brand-ver">1.8.3</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -493,6 +493,16 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       </div>
       <div id="bypass-paths"></div>
     </div>
+  </section>
+
+  <section class="card" id="card-infrastructure" style="margin-top:20px">
+    <h2>⚙️ Infrastructure <span style="font-size:11px;color:var(--dim);font-weight:400">(host networking, vhost routing, response rewriting)</span></h2>
+    <div class="hint" style="margin-bottom:10px">
+      Knobs that affect how the gateway binds to upstreams and rewrites responses.
+      Changes marked <span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px">REQUIRES RESTART</span>
+      take effect only after the container is restarted.
+    </div>
+    <div id="infrastructure"></div>
   </section>
 
   <div class="actions">
@@ -866,10 +876,11 @@ const META = {
   AUTHORIZED_BOT_UAS:      {kind:'botlist', card:'bypass', desc:'Structured monitoring-bot pass-through rules. Each entry: UA substring + path (+ optional source IPs). Matched requests are recorded blue and passed through.'},
   BYPASS_PATHS:            {kind:'pathlist', card:'bypass-paths', desc:'Path prefixes that bypass ALL bot detection and are proxied directly. Use for static asset directories (/static/, /assets/, /media/) where bot signals are meaningless. Prefix match: any request path starting with an entry is exempt from all detectors, scoring, and rate limiting.'},
   WEBHOOK_EVENT_FILTER:    {kind:'list', card:'ext-misc', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
-  ALLOW_PRIVATE_UPSTREAM:  {kind:'bool', desc:'Allow upstream URLs that resolve to RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x). Disables the SSRF guard — only enable in trusted internal deployments. CHANGE REQUIRES RESTART.'},
-  STRICT_VHOST:            {kind:'bool', desc:'Return 502 for any inbound Host not explicitly registered as a vhost. Prevents the global UPSTREAM from acting as a catch-all for unknown hostnames. CHANGE REQUIRES RESTART.'},
+  ALLOW_PRIVATE_UPSTREAM:  {kind:'bool', card:'infrastructure', restart:true, desc:'Allow upstream URLs that resolve to RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x). Disables the SSRF guard — only enable in trusted internal deployments.'},
+  STRICT_VHOST:            {kind:'bool', card:'infrastructure', restart:true, desc:'Return 502 for any inbound Host not explicitly registered as a vhost. Prevents the global UPSTREAM from acting as a catch-all for unknown hostnames.'},
+  UPSTREAM_REWRITE_BASE:   {kind:'text', card:'infrastructure', ph:'e.g. http://host.docker.internal:8093', desc:'Strip this base URL from response bodies and Location/Link headers, turning absolute upstream URLs into relative paths. Fixes CSP violations when the upstream embeds its own hostname. Per-vhost override supported. Hot-reloadable.'},
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
-  DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). CHANGE REQUIRES RESTART — does not migrate data.'},
+  DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], restart:true, desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). Does not migrate data.'},
   POSTGRES_DSN:            {kind:'text', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
   // 1.6.5 — escalation tier + tarpit
   SECOND_ORDER_THRESHOLD:  {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which 2nd-order behavioral detectors run (ai-enumeration, ai-no-assets, locale-geo-mismatch, tls-fingerprint, ja4-required-missing). Default 15 = any single soft-tier hit activates them. 0 = always run (no gate).', card:'thresholds'},
@@ -1159,7 +1170,10 @@ function renderControl(name, meta, value){
         '(no countries blocked)</div>';
     }
   }
-  label.innerHTML = _dp(`<div class="name">${escapeHtml(name)}</div>
+  const restartBadge = m.restart
+    ? ' <span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px;vertical-align:middle;white-space:nowrap">REQUIRES RESTART</span>'
+    : '';
+  label.innerHTML = _dp(`<div class="name">${escapeHtml(name)}${restartBadge}</div>
                      <div class="desc">${m.desc||''}</div>` + inlineHtml);
   const input = document.createElement('div');
   input.className = 'input';
@@ -1179,6 +1193,14 @@ function renderControl(name, meta, value){
       // Warn: DLP_REDACT enabled without DLP_ENABLED
       if (name === 'DLP_REDACT' && newVal && !serverState.DLP_ENABLED)
         showToast('⚠ DLP_REDACT requires DLP_ENABLED — enable DLP first', 'err');
+      // Warn: STRICT_VHOST on without any vhosts configured
+      if (name === 'STRICT_VHOST' && newVal) {
+        const vhosts = serverState.VHOSTS || {};
+        if (!Object.keys(vhosts).length)
+          showToast('⚠ STRICT_VHOST on but no vhosts registered — all requests will 502 until vhosts are configured', 'err');
+        else
+          showToast('STRICT_VHOST on — hosts not in VHOSTS config will receive 502. Restart required to take effect.', 'warn');
+      }
       sw.classList.toggle('on', newVal);
       await _applyBool(sw, name, newVal);
     };
@@ -1211,9 +1233,10 @@ function renderControl(name, meta, value){
     const it = document.createElement('input');
     it.type = 'text';
     it.className = 'num';
-    it.style.width = '260px';
+    it.style.width = '300px';
     it.style.textAlign = 'left';
     it.value = String(value || '');
+    if (m.ph) it.placeholder = m.ph;
     it.oninput = () => mark(name, it.value);
     input.appendChild(it);
   }
@@ -1345,7 +1368,7 @@ async function load(){
   }
   // Group + render. Booleans (toggles) are now rendered inside the merged
   // "Defenses & scoring" table (see loadScoring), so skip them here.
-  ['thresholds','ext-misc','external-log','bypass','bypass-paths'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  ['thresholds','ext-misc','external-log','bypass','bypass-paths','infrastructure'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
   // Always render BYPASS_PATHS pathlist into its dedicated slot so the add
   // button is available even when the server hasn't persisted any paths yet.
   const _bpSlot = $('bypass-paths');
@@ -1356,7 +1379,7 @@ async function load(){
   const map = {num:'thresholds'};
   for (const [name, meta] of Object.entries(META)){
     if (!(name in serverState)) continue;
-    if (meta.kind === 'bool') continue;        // moved to scoring table
+    if (meta.kind === 'bool' && !meta.card) continue; // detection bools live in scoring table
     if (name === 'BYPASS_PATHS') continue;     // already rendered above
     const card = meta.card || map[meta.kind];
     if (!card || !$(card)) continue;
@@ -3621,9 +3644,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const bar = document.getElementById('bypass-bar');
 
   function _boolKnobs(){
-    // All META bool knobs that exist in serverState
+    // Detection bool knobs (excludes infrastructure bools that require restart)
     return Object.entries(META)
-      .filter(([,m]) => m.kind === 'bool')
+      .filter(([,m]) => m.kind === 'bool' && !m.restart)
       .map(([n]) => n)
       .filter(n => n in serverState);
   }

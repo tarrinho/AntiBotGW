@@ -6,6 +6,91 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.3] — 2026-05-15
+
+### Added
+- **Security Incidents card** (`#card-incidents`) on Control Center — severity-bucketed alert feed showing Critical / High / Medium events from the last 24 h; red border when threats present; auto-normalises to grey border when no incidents; dismissible via "Dismiss all" button (localStorage-persisted); 30 s auto-refresh.
+- **`/secured/security-incidents`** (`dashboards/analytics.py:security_incidents_endpoint`) — queries `events` table for rows whose `reason` is in `_INCIDENT_ALL`, enriches each row with in-memory risk score from `ip_state`; returns `{incidents:[{ts,ip,ua,path,method,status,reason,vhost,severity,risk_score}], counts:{critical,high,medium}, since, limit}`. Params: `?limit=` (1–500, default 100), `?since=` (epoch, default last 24 h).
+- **`_INCIDENT_CRITICAL` / `_INCIDENT_HIGH` / `_INCIDENT_MEDIUM` / `_INCIDENT_ALL`** — four module-level frozensets in `dashboards/analytics.py` classifying every detector reason into a severity tier.
+- **`_incident_severity(reason)`** — pure helper mapping reason → `"critical"|"high"|"medium"`.
+- **`banIp(ip, secs, reason)`** — JS helper in `control_center.html` for inline IP banning from any card; calls `POST /secured/ban?ip=&secs=&reason=` and shows a toast on success/failure.
+- Inline **[Ban 1h]** button on every incident row, wired to `banIp()`.
+- Severity CSS classes: `.sev-badge`, `.sev-critical`, `.sev-high`, `.sev-medium`, `.inc-count-box`, `#card-incidents` red-border rule, `.inc-clear` normalise class.
+
+### Changed
+- **`proxy.py` route table** — added `("security-incidents", "GET", security_incidents_endpoint, True)`.
+- **`tests/test_pure.py`** — `stale_re` updated from `1.8.2` to `1.8.3`; `_EXPECTED_VERSION` updated.
+- **All test files with hardcoded `AppSecGW_1.8.2`** — version strings updated to `1.8.3` (`test_geo_dashboard.py`, `test_v180_v181_gaps.py`, `test_settings_config_functional.py`, `test_endpoints_dynamic.py`).
+
+### Tests
+- **`tests/test_v183_incidents.py`** — 38 new tests (30 static S01–S30 + 8 dynamic D01–D08):
+  - **S01–S25** — HTML checks: `#card-incidents` card present, inc-counts / inc-tbody / inc-table / inc-empty / inc-dismiss-bar / inc-ts elements present, `loadSecurityIncidents` fetches `/security-incidents`, DCL call + 30 s `_timers` interval, `_renderIncidents` function with severity badges + risk_score column + Ban button, `banIp` function calls `/secured/ban?ip=` + `toast()`, `_incDismiss` with localStorage, `_incDismissedAt` + IIFE init, all CSS classes defined, `#card-incidents` red border, `inc-clear` toggle.
+  - **S26–S30** — analytics.py checks: `_INCIDENT_CRITICAL` frozenset members, `_INCIDENT_HIGH` frozenset members, `_INCIDENT_MEDIUM` frozenset members, `_INCIDENT_ALL` union expression, `_incident_severity` correctness (exec-based unit test).
+  - **D01–D08** — `GET /security-incidents`: 200 status, full schema, counts keys, `Cache-Control: no-store`, auth deflect, `?limit=` respected + capped at 500, `?since=` filtering, seeded `canary-echo` event appears as `severity=critical`.
+- **Full suite**: 2181 passed, 1 skipped, 0 failed (+43 new tests across `test_v183_incidents.py` + 38 incident tests).
+
+### Validation
+- **Bandit**: 0 High / 0 Critical / 0 Medium
+- **Semgrep**: 0 findings (151 rules on 10 files)
+- **Trivy arm64**: 0 CRITICAL / 0 HIGH — all python packages 0 findings
+- **Trivy armv7**: 0 CRITICAL / 0 HIGH — all python packages 0 findings
+- **Pentest**: 4 endpoint probes (no-auth 404, auth schema, limit cap, since filter) + 6 OWASP §8 probes (XSS→suspicious-path, subsequent→banned-silent, no unescaped XSS in responses) — 0 bypasses
+
+---
+
+## [1.8.2] — 2026-05-15
+
+### Fixed
+- **Service metrics history capped at ~12h** — `service_metrics_data_endpoint` read only the in-memory deque (`SERVICE_METRICS_HISTORY`, maxlen=8640 × 5s = 12h). SQLite `svc_metrics` table already received every sample and pruned at 30 days (`SVC_DB_RETENTION_HOURS=720`), but the read path never consulted it. Requests whose window start precedes the in-memory buffer's oldest timestamp now fall through to `_svc_db_history()`, which aggregates the SQLite table in SQL (`GROUP BY CAST(ts/bucket AS INTEGER)`) and returns zero-filled buckets for gaps — up to 30 days of history.
+- **Sidebar version badge stale across 10 dashboard files** — `bump-version.sh` updates `AppSecGW_X.Y.Z` patterns in `config.py` and `<title>` tags but does not touch `<div id="sidebar-brand-ver">`. All 9 dashboard HTML files plus `center_control.html` and `header-designs.html` still showed `1.8.1`. Fixed to `1.8.2`.
+- **`docker-compose.yml` container_name frozen at `1.7.10`** — `container_name` field was never updated by the bump script; fixed to `appsec-antibot-gw1.8.2`.
+- **`MANUAL.md` stale image tag** — example `docker run` command on line 425 referenced `appsec-antibot-gw:1.8.1`; updated to `1.8.2`.
+
+### Added
+- **`_svc_db_history(start_b, end_b, bucket_secs, avg_keys, max_keys, sum_keys)`** — module-level helper in `dashboards/service_metrics.py`; opens SQLite via `sqlite3.connect(_DATA_PATH)`, runs a single `SELECT … GROUP BY` query using `AVG(COALESCE(k,0))` / `MAX(COALESCE(k,0))` aggregations, and fills missing buckets with zeros. O(buckets) output regardless of raw sample density.
+- **Traffic Pipeline chart** (`id="traffic-pipeline-chart"`, `loadTrafficChart()`) — stacked-area Chart.js chart showing allowed / challenged / blocked / bypassed request counts over time; driven by new `/secured/traffic-pipeline` endpoint; 60 s auto-refresh; supports `range` + `bucket` + `end` query params for time-window + pause-replay.
+- **Bot Score Distribution histogram** (`id="score-dist-chart"`, `loadScoreDist()`) — 8-bin histogram of active client risk scores (0–100 in 12.5-pt buckets); driven by new `/secured/score-distribution` endpoint; threshold markers at `threshold_soft` and `threshold_ban`; 30 s auto-refresh.
+- **Vhost Block Rate Heatmap** (`id="vhost-heatmap-body"`, `loadVhostHeatmap()`) — HTML `<table>` grid of block-rate cells coloured red→yellow→green per vhost × time-bucket; driven by new `/secured/vhost-heatmap` endpoint; `SILENT` badge for vhosts with no recent traffic; time-window params supported; included in `_loadTimeCharts()` for range/bucket change events.
+- **Signal Performance Matrix** (`id="signal-perf-chart"`, `loadSignalPerf()`) — horizontal bar chart with two datasets (Hits / Blocks) per detector signal; driven by new `/secured/signal-performance` endpoint; block-rate coloured labels; `indexAxis:'y'`; 60 s auto-refresh.
+- **Geo Top Countries bar** (`id="geo-country-chart"`, `loadGeoCountryChart()`) — horizontal bar chart of top countries by request count; hidden by CSS until Threat section active; driven by existing `/secured/geo-data`.
+- **Threat Category Donut** (`id="threat-donut-chart"`, `loadThreatDonut()`) — doughnut chart grouping `detector_hits` into named categories with an `'Other'` bucket for long tails; driven by `/secured/detector-stats`; 30 s auto-refresh.
+- **`/secured/score-distribution`** (`dashboards/analytics.py:score_distribution_endpoint`) — scans `ip_state.values()` for `risk_score`, bins into 8 buckets of width 12.5, returns `{bins:[{label,count}], threshold_soft, threshold_ban, total_ips}`.
+- **`/secured/traffic-pipeline`** (`dashboards/analytics.py:traffic_pipeline_endpoint`) — reads `timeline` dict (in-memory) with SQLite fallback for buckets older than memory window; returns `{timeline:[{t,allowed,challenged,blocked,bypassed}], totals, range_min, bucket_secs}`.
+- **`/secured/vhost-heatmap`** (`dashboards/analytics.py:vhost_heatmap_endpoint`) — SQLite `GROUP BY vhost, CAST(ts/bucket AS INTEGER)` query; returns `{vhosts, buckets, cells}` sparse matrix for HTML table rendering.
+- **`/secured/signal-performance`** (`dashboards/analytics.py:signal_performance_endpoint`) — imports `_detector_hits`, `_detector_latency`, `_reason_method` from `proxy_handler`; computes p50/p95/p99 via `_percentile()`; returns `{signals:[{reason,method,hits,blocks,p50_ms,p95_ms,p99_ms,block_rate}], method_totals}`.
+- **`_percentile(sorted_samples, p)`** — pure-Python percentile helper in `dashboards/analytics.py`; linear interpolation; O(1) on pre-sorted input.
+
+### Changed
+- **`state.py` timeline schema** — `"challenged"` key added to the per-bucket dict initialised in `_TIMELINE_TEMPLATE`; existing buckets without the key are back-filled with `0` on read.
+- **`core/proxy_handler.py` challenged counter** — `timeline[bucket]["challenged"]` incremented at both challenge-issue sites (JS challenge + soft-block redirect) so the Traffic Pipeline chart accurately reflects challenged volume.
+- **`dashboards/__init__.py`** — `from dashboards.analytics import *` added so the four new endpoints are exported from the package and registered by `proxy.py`.
+- **`proxy.py` route table** — four new `GET` admin routes registered: `score-distribution`, `traffic-pipeline`, `vhost-heatmap`, `signal-performance` (all `auth=True`).
+
+### Tests
+- **`tests/test_v182_svc_metrics_db.py`** — 17 new tests across 3 groups:
+  - **A (a1–a9)** — static source checks: `_svc_db_history` defined, endpoint uses `_mem_raw`, DB path called when `start_b < _buf_oldest`, COALESCE present, GROUP BY present, 720h default.
+  - **B (b1–b4)** — unit tests with real SQLite temp DBs: empty DB → zero-filled buckets; single sample → correct bucket; missing buckets → zeros; result has all required keys.
+  - **C (c1–c4)** — endpoint routing: DB branch wired, in-memory loop uses `_mem_raw`, `current` always from memory, prune still fires.
+- **`tests/test_v182_charts.py`** — 66 new tests (43 static S01–S43 + 23 dynamic D01–D23) covering all 6 new Control Center charts and 4 new analytics endpoints:
+  - **S01–S09** — Traffic Pipeline: card present, canvas, `loadTrafficChart` fetches `/traffic-pipeline`, URLSearchParams, 4 datasets, `fill:'stack'`, `destroy()`, DCL call, 60 s interval.
+  - **S10–S16** — Score Distribution: card, canvas, `loadScoreDist` fetches `/score-distribution`, 8 bins, threshold refs, `destroy()`, DCL + 30 s interval.
+  - **S17–S23** — Vhost Heatmap: card, `#vhost-heatmap-body`, fetch `/vhost-heatmap`, URLSearchParams, HTML table generation, SILENT badge, `_loadTimeCharts()` inclusion, DCL call.
+  - **S24–S30** — Signal Performance: card, canvas, `/signal-performance`, 2 datasets (Hits/Blocks), `destroy()`, `indexAxis:'y'`, DCL + 60 s interval.
+  - **S31–S34** — Geo Country: canvas, `_geoCountryChart` var, `destroy()`, CSS hidden.
+  - **S35–S41** — Threat Donut: card, canvas, legend, `loadThreatDonut` → `/detector-stats`, 'Other' grouping, `destroy()`, `type:'doughnut'`, DCL + 30 s interval.
+  - **S42–S43** — 4 new chart vars declared; new canvases hidden by CSS.
+  - **D01–D20** — 4 endpoints × 5 tests each: 200 status + schema, field validation, cache-control no-store, unauthenticated 302 deflection, plus endpoint-specific: bins count (score-dist), timeline items (traffic-pipeline), range/bucket params, seeded-event counts (signal-performance).
+
+### Validation
+- **Full suite**: 2138 passed, 1 skipped, 0 failed (+133 new tests across both 1.8.2 test files)
+- **Bandit**: 0 High / 0 Critical / 0 Medium
+- **Semgrep**: 0 findings (p/python, 151 rules, 10 files scanned)
+- **Trivy (arm64)**: 0 Critical / 0 High / 0 Medium CVEs
+- **Trivy (armv7)**: 0 Critical / 0 High / 0 Medium CVEs
+- **Images**: arm64 `appsec-antibot-gw:1.8.2-arm64` · armv7 `appsec-antibot-gw:1.8.2-armv7`
+
+---
+
 ## [1.8.1] — 2026-05-14
 
 ### Added

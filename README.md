@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.8.1` (~ 79 MB) |
+| Image | `appsec-antibot-gw:1.8.3` (~ 79 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -17,7 +17,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/antibot-appsec-gateway/secured/{dashboard, agents, service, controls, geo, logs, settings}` (DB-backed, click-to-drill) |
 
-## Architecture (1.6.10)
+## Architecture (1.8.3)
 
 ```
                                 ┌─────────────────────┐
@@ -28,8 +28,9 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
                                 │   2. session cookie │
                                 │   3. protect():     │
                                 │      L0  TLS / JA4 fingerprint deny-list
+                                │      L0.4 custom rules engine (allow/block/challenge/tag)
                                 │      L1  rate-limit: socket-IP + per-identity tokens
-                                │      L1.5 host-not-allowed gate
+                                │      L1.5 host-not-allowed gate (multi-vhost)
                                 │      L2  honeypot paths (silent decoy)
                                 │      L2.5 suspicious-path / SQLi / XSS / LFI markers
                                 │      L3  AI probe + AI-headers + AI-enumeration
@@ -42,9 +43,10 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
                                 │      L7  cookie gate: JS_CHALLENGE / Turnstile / Anubis-mode PoW
                                 │      L8  risk-score model (decay + NAT threshold + soft-tier)
                                 │      ↓
-                                │      decision = deny | soft-challenge | allow
+                                │      decision = deny | challenged | soft-challenge | allow
                                 │   4. forward to UPSTREAM if allowed
                                 │   5. record() → SQLite (events, timeline, clients, bans)
+                                │      └─ timeline[bucket]["challenged"] incremented at issue
                                 └─────────────┬───────┘
                                               │
                           ┌───────────────────┼─────────────────────┐
@@ -58,13 +60,18 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
                   │   .session_… │                         │ (offline)       │
                   │   .admin_key │                         └─────────────────┘
                   │   GeoLite2-* │
+                  │   vhosts.json│  ← per-vhost config overrides (1.8.0)
                   └──────────────┘
 
-  operator browser ──▶  /__dashboard  ─┐
-                        /__agents      │  hot-tunable knobs via /__config (POST JSON);
-                        /__service     │  click reasons → drill-down identities;
-                        /__controls    │  click identity / risk → popover details;
-                        /__geo  ───────┘  threshold sliders rewire risk model live.
+  operator browser ──▶  /antibot-appsec-gateway/secured/control-center   ─┐
+                        /antibot-appsec-gateway/secured/live-feed          │  9 dashboards;
+                        /antibot-appsec-gateway/secured/agents             │  hot-tunable knobs
+                        /antibot-appsec-gateway/secured/service            │  via /secured/config;
+                        /antibot-appsec-gateway/secured/controls           │  click reasons →
+                        /antibot-appsec-gateway/secured/geo                │  drill-down;
+                        /antibot-appsec-gateway/secured/logs               │  threshold sliders
+                        /antibot-appsec-gateway/secured/settings           │  rewire risk model
+                        /antibot-appsec-gateway/secured/vhost-policy  ─────┘  live.
 ```
 
 The gateway is a single Python process. Persistent state (event log,
@@ -144,15 +151,15 @@ container start →  _maxmind_seed_from_image()  ──▶ if /data empty → co
                           ▼
                   _maxmind_refresh_loop() — every 24h, re-fetch if mmdb >30d old
                           │
-                          └─── operator pushes "Fix now" on /__geo  ─┐
-                                                                     ▼
-                                                           POST /__maxmind-fetch
+                          └─── operator pushes "Fix now" on /secured/geo  ─┐
+                                                                        ▼
+                                                       POST /secured/maxmind-fetch
                                                                      │
                                                        runs seed + auto_fetch then
                                                        reopens reader handles
 ```
 
-The image always ships seed mmdbs so a brand-new deploy works offline; `MAXMIND_LICENSE_KEY` enables fresh downloads + monthly self-refresh; the `/__maxmind-fetch` endpoint and the GeoMap "Fix now" button are operator-on-demand triggers.
+The image always ships seed mmdbs so a brand-new deploy works offline; `MAXMIND_LICENSE_KEY` enables fresh downloads + monthly self-refresh; the `/secured/maxmind-fetch` endpoint and the GeoMap "Fix now" button are operator-on-demand triggers.
 
 ### Risk-score lifecycle
 
@@ -180,7 +187,7 @@ detectors fire ─▶ risk_score += RISK_WEIGHTS[reason]
                   (continuously decayed)
                   score *= 0.5 every RISK_DECAY_HALFLIFE_SECS (1h)
                   per-reason contributions decay in lockstep so the
-                  /__agents popover always shows the live breakdown.
+                  /secured/agents popover always shows the live breakdown.
 
 NAT awareness:  if ≥ NAT_IDENTITIES_THRESHOLD (default 3) "legitimate-
 looking" identities (≥1 static fetch AND ≥3 allowed reqs) are seen on
@@ -188,7 +195,7 @@ the same IP within 1h, the BAN threshold doubles (50 → 100) so a
 shared-NAT office isn't carpet-banned by one bad apple.
 ```
 
-The thresholds (`SOFT_CHALLENGE_SCORE`, `RISK_BAN_THRESHOLD`, `RISK_BAN_THRESHOLD_NAT`, `RISK_DECAY_HALFLIFE_SECS`, `HOSTILE_BAN_SECS`, `TURNSTILE_RISK_THRESHOLD`) are all hot-reloadable via `/__config` and live-tunable on `/__dashboard` (defense-thresholds slider) and `/__controls`.
+The thresholds (`SOFT_CHALLENGE_SCORE`, `RISK_BAN_THRESHOLD`, `RISK_BAN_THRESHOLD_NAT`, `RISK_DECAY_HALFLIFE_SECS`, `HOSTILE_BAN_SECS`, `TURNSTILE_RISK_THRESHOLD`) are all hot-reloadable via `/secured/config` and live-tunable on `/secured/live-feed` (defense-thresholds slider) and `/secured/controls`.
 
 ---
 
@@ -218,7 +225,7 @@ docker run -d --name appsec-antibot-gw1.7.6 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.8.1 \
+  appsec-antibot-gw:1.8.3 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -236,8 +243,8 @@ recommended way to run AppSecGW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.8.1` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
-| `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/__controls` | none (internal only) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.8.3` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/secured/controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
 
@@ -361,7 +368,7 @@ The gateway ships with SQLite as the default backend (zero-deps, works on first
 boot). Switch to TimescaleDB at any time without migration — events accumulate
 fresh in the new backend:
 
-1. Open `/__controls` → Backend pill toggle → click **postgres**.
+1. Open `/antibot-appsec-gateway/secured/controls` → Backend pill toggle → click **postgres**.
 2. The gateway restarts itself within ~2 s.
 3. Confirm: `docker compose logs appsec-antibot-gw | grep "db_backend=postgres"`.
 
@@ -455,46 +462,52 @@ Plus protocol-level support:
 
 ## Screenshots
 
-### Main dashboard — `/__dashboard`
-Real-time overview with live counters, the timeline (total / allowed / blocked), block-reason breakdown and the live event log.
+### Control Center — `/secured/control-center`
+Post-login landing page: Vhost Traffic Summary, active ban overview, gateway health stats, and 6 analytics charts (Traffic Pipeline, Bot Score Distribution, Vhost Block Rate Heatmap, Signal Performance Matrix, Geo Top Countries, Threat Category Donut).
 
 ![Main dashboard](img/dashboard.png)
 
-### Stealth Agent Hunter — `/__agents`
+### Stealth Agent Hunter — `/secured/agents`
 Identities that passed every block but exhibit stealth signals. Per-identity stealth score 0–100 with component bars, plus the detection-vs-miss timeline.
 
 ![Stealth Agent Hunter](img/agents.png)
 
 ## Operator dashboards
 
-Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
+Login at `/antibot-appsec-gateway/login` — session cookie (`agw_session`) required for all `/secured/` endpoints. Reachable from any IP in `ADMIN_ALLOWED_IPS`.
 
-| URL | Purpose |
+| URL (all under `/antibot-appsec-gateway/`) | Purpose |
 |---|---|
-| `/__live` | Unauthenticated liveness probe (returns `ok`) |
-| `/__dashboard?key=…` | Main dashboard: timeline (total/allowed/blocked/**missed**), defense-threshold sliders, **cost-per-request graph**, **services panel**, **per-detector hits**, click-reason drill-down |
-| `/__agents?key=…` | **Stealth Agent Hunter** — click identity for IP/UA/session popover; click risk score for per-signal breakdown; arrow-and-slider threshold widget |
-| `/__service?key=…` | **Service Metrics** — CPU / memory / disk / processes / FDs / network / SQLite size with 12 h windowed history |
-| `/__controls?key=…` | All hot-reload knobs (toggles, thresholds, lists) — Defenses & scoring merged table, Anubis toggle, admin-IP allowlist with click-to-edit description |
-| `/__geo?key=…` | **Geo map** — world-map of accesses (green=clean / orange=missed / red=blocked, size ∝ hits) over a configurable time window; needs `GeoLite2-City.mmdb` |
-| `/__service-data?key=…` | Service-metrics JSON feed (windowed) |
-| `/__metrics?key=…` | JSON feed (now includes `services{}` + `detector_hits{}` + `missed`) |
-| `/__cost-timeline?key=…` | Avg / max middleware wall-time per minute bucket |
-| `/__geo-data?key=…` | Aggregated lat/lng/clean/missed/blocked points |
-| `/__agents-data?key=…` | Per-identity stealth-score JSON (now includes `risk_breakdown` + `blocks_breakdown`) |
-| `/__agents-timeline?key=…` | Detected-vs-missed timeline JSON |
-| `/__scoring?key=…` | Per-signal weights + tier + cost (driven the scoring card) |
-| `/__thresholds?key=…` | Min/max/current/impact-direction for every numeric knob |
-| `/__external?key=…` | External-integration health (Turnstile / AbuseIPDB / CrowdSec / MaxMind) |
-| `/__admin-ips?key=…` | Admin IP allowlist CRUD (GET/POST/PATCH/DELETE) |
-| `/__config?key=…` | Read or update hot-reload knobs (POST JSON body) |
-| `/__rotate-keys?key=…` | Rotate `SESSION_KEY` and/or `POW_HMAC_KEY` |
-| `/__pow?key=…` | Mint a PoW challenge bound to (method, path) — reflects effective Anubis difficulty |
-| `/__solver?key=…` | Browser-side PoW solver |
-| `/__status?key=…` | Per-identity bucket state |
-| `/__ban?key=…&id=…` | Manually ban an identity for `HOSTILE_BAN_SECS` |
-| `/__unban?key=…&id=… \| ip=… \| all=1` | Clear ban + risk for an identity / IP / all |
-| `/__challenge` | Cookie-mint endpoint (Turnstile siteverify / Anubis-mode PoW) |
+| `live` | Unauthenticated liveness probe (returns `ok`) |
+| `login` | Multi-user login form (POST → `agw_session` cookie) |
+| `secured/control-center` | **Control Center** — post-login landing; Vhost Traffic Summary; 6 analytics charts (Traffic Pipeline · Score Distribution · Vhost Heatmap · Signal Performance · Geo Countries · Threat Donut) |
+| `secured/live-feed` | **Live Feed** — real-time traffic timeline, defense-threshold sliders, cost-per-request graph, services panel, per-detector hits, click-reason drill-down |
+| `secured/agents` | **Stealth Agent Hunter** — click identity for IP/UA/session/JA4/timing popover; click risk score for per-signal breakdown |
+| `secured/service` | **Service Metrics** — CPU / memory / disk / network / SQLite with 30-day windowed history (in-memory + SQLite fallback) |
+| `secured/controls` | **Controls** — all hot-reload knobs (toggles, thresholds, lists); Defenses & scoring merged table; Anubis toggle; admin-IP allowlist |
+| `secured/geo` | **Geo map** — Leaflet world-map (green=clean / orange=missed / red=blocked); animated 24-bucket time scrubber; Tor/DC overlay toggles |
+| `secured/logs` | **Structured logs** — filterable event log with category pills + CSV export |
+| `secured/settings` | **Settings** — config export/import (ZIP XML), user management, session ledger, Storage card (vacuum), GW Registry |
+| `secured/vhost-policy` | **Vhost Policy** — per-vhost knob override inspector |
+| `secured/metrics` | JSON feed: `clients`, `top_paths`, `timeline`, `by_reason`, `detector_hits`, `jschal_*`, `services` |
+| `secured/agents-data` | Per-identity stealth-score JSON (`risk_breakdown`, `blocks_breakdown`) |
+| `secured/agents-timeline` | Detected-vs-missed timeline JSON |
+| `secured/detector-stats` | p50/p99 per signal + per-method-bucket aggregation + chal-cookie mint rate |
+| `secured/score-distribution` | 8-bin histogram of active client risk scores (1.8.2) |
+| `secured/traffic-pipeline` | Allowed / challenged / blocked / bypassed timeline (SQLite fallback, 1.8.2) |
+| `secured/vhost-heatmap` | Block-rate cells per vhost × time-bucket sparse matrix (1.8.2) |
+| `secured/signal-performance` | Per-detector hits / blocks / p50/p95/p99 latency (1.8.2) |
+| `secured/security-incidents` | Recent high-severity events bucketed by severity tier, enriched with live risk score (1.8.3) |
+| `secured/config` | Read or update hot-reload knobs (GET/POST JSON) |
+| `secured/admin-ips` | Admin IP allowlist CRUD (GET/POST/PATCH/DELETE) |
+| `secured/rotate-keys` | Rotate `SESSION_KEY` and/or `POW_HMAC_KEY` |
+| `secured/vhosts` | Virtual-host CRUD (GET/POST/DELETE) |
+| `secured/ban` / `secured/unban` | Manually ban or unban an identity / IP |
+| `secured/geo-data` · `secured/geo-drill` | Aggregated lat/lng points; per-cell IP drill-down modal |
+| `secured/logs-data` · `secured/logs-export` | Structured event log JSON + CSV export |
+| `secured/health-score` | Per-pillar gateway health (disk / memory / db / integrations / bans / block_rate) |
+| `secured/vhost-stats` · `secured/vhost-breakdown` | Per-vhost counters and traffic stacked-area data |
+| `secured/block-reasons-timeline` · `secured/top-attacked-paths` | Block-reason time series + top-10 paths |
 
 ---
 
@@ -511,13 +524,13 @@ Reachable from any IP in `ADMIN_ALLOWED_IPS` with the admin key:
 | Variable | Default | Description |
 |---|---|---|
 | `ALLOWED_HOSTS` | _(empty)_ | Comma-separated public hostnames the gateway accepts as Host header |
-| `ADMIN_ALLOWED_IPS` | _(empty)_ | Comma-separated IPs/CIDRs allowed on `/__*` |
+| `ADMIN_ALLOWED_IPS` | _(empty)_ | Comma-separated IPs/CIDRs allowed on `/antibot-appsec-gateway/secured/*` |
 | `ADMIN_KEY` | auto-generated | Always mirrored to `/data/.admin_key` |
 | `TRUST_XFF` | `first` | `first` / `last` / `none` — see XFF section below |
 | `TRUSTED_PROXIES` | _(empty)_ | **Set in production.** CIDRs of upstream proxies allowed to set XFF (1.5.4) |
 | `JS_CHALLENGE` | `0` | Cookie gate on every non-static path (Turnstile-backed when configured) |
 | `JS_CHAL_OPEN_PATHS` | _(empty)_ | Path prefixes that bypass the cookie gate (SPA data layer / webhooks / S2S) |
-| `SOFT_CHALLENGE_SCORE` | `4` | Risk-score threshold (orange band start) — hot-reloadable via `/__config` |
+| `SOFT_CHALLENGE_SCORE` | `4` | Risk-score threshold (orange band start) — hot-reloadable via `/secured/config` |
 | `RISK_BAN_THRESHOLD` | `50` | Risk-score threshold (red band / ban) — hot-reloadable |
 | `TURNSTILE_RISK_THRESHOLD` | `0` (auto = mid-orange) | Show Turnstile only when identity's risk crosses this. Below it, fresh clients fall through to cookie auto-mint — most users never see Turnstile, only suspected bots do (1.5.4) |
 
@@ -578,7 +591,7 @@ source IP for ban-tracking and admin-allowlist purposes.
 | `MAXMIND_CITY_DB_PATH` | `/data/GeoLite2-City.mmdb` |
 
 Drop a `GeoLite2-City.mmdb` (~65 MB) into the named volume to populate the
-`/__geo` (GeoMap) dashboard. The bundled `maxmind-refresh.sh` cron script
+`/secured/geo` (GeoMap) dashboard. The bundled `maxmind-refresh.sh` cron script
 downloads both `GeoLite2-ASN.mmdb` and `GeoLite2-City.mmdb` monthly using
 `MAXMIND_LICENSE_KEY`. Map tiles are served from CARTO Dark Matter (no key,
 no Referer requirement).
@@ -596,13 +609,13 @@ no Referer requirement).
 
 Each integration is best-effort — any one of them may be absent and the
 gate degrades gracefully. Live status / cost / telemetry visible at
-`/__external` (or click any card on the Controls dashboard for full
+`/secured/external` (or click any card on the Controls dashboard for full
 vendor docs + trigger criteria + data-egress info, 1.5.4).
 
-### Hot-reloadable knobs (POST `/__config`)
+### Hot-reloadable knobs (POST `/secured/config`)
 
 All listed values can be changed at runtime without restart. The
-`/__controls` dashboard exposes them as toggles / inputs / sliders / lists.
+`/secured/controls` dashboard exposes them as toggles / inputs / sliders / lists.
 
 **Toggles (booleans):**
 `JS_CHALLENGE`, `BOT_TRAP_FORMS`, `BODY_PATTERN_MATCH`, `CANARY_ECHO_DETECTION`,
@@ -667,7 +680,7 @@ Each sample includes: CPU %, load average (1/5/15), memory total/used/available,
 | `JA4_TRUSTED_PEERS` | _(empty)_ | Comma-separated IPs/CIDRs allowed to inject the JA4 header (the TLS terminator). Empty = trust all (assumes firewall blocks direct port access). |
 | `STRICT_ORIGIN` | `0` | When `1`, POST/PUT/PATCH/DELETE requires `Origin` header host to match `ALLOWED_HOSTS` |
 | `OPEN_ORIGIN_PATHS` | _(empty)_ | Path prefixes that bypass the Origin check (e.g. `/api/webhook`) |
-| `REQUIRED_HEADERS` | _(empty)_ | Comma-separated header names that must be present on every non-`/__/` non-static request |
+| `REQUIRED_HEADERS` | _(empty)_ | Comma-separated header names that must be present on every non-admin, non-static request |
 
 ### v1.4 controls (all opt-in / safe defaults)
 
@@ -678,9 +691,9 @@ Each sample includes: CPU %, load average (1/5/15), memory total/used/available,
 | `JS_CHAL_OPEN_PATHS` | _(empty)_ | Comma-separated path prefixes that bypass the cookie gate. Use for legit non-browser clients (S2S, mobile apps, webhooks, e.g. `/webhook/,/s2s/`). |
 | `JS_CHAL_STRICT_STATIC` | `1` | When ON, the static-asset bypass refuses paths containing API hints (`/api/`, `/graphql`, `/v1/`, ...). Closes `/api/v1/users.css` style probes against permissive backends. |
 | `TURNSTILE_SITEKEY` | _(empty)_ | Cloudflare Turnstile public site key. Required to enable the gate. |
-| `TURNSTILE_SECRET` | _(empty)_ | Cloudflare Turnstile secret. Used by `/__challenge` to call `siteverify`. |
+| `TURNSTILE_SECRET` | _(empty)_ | Cloudflare Turnstile secret. Used by `/antibot-appsec-gateway/challenge` to call `siteverify`. |
 | `JS_CHAL_BIND_JA4` | `1` | Bind the chal cookie to the JA4 fingerprint (opaque hash, never the raw value) when one is injected by a trusted peer. Cookie replay across TLS stacks fails. Opportunistic — clients with no JA4 still work. |
-| `JS_CHAL_REQUIRE_JA4` | `0` | Hard requirement: `/__challenge` rejects (`403`) any submission without a JA4 from a trusted peer. Use only behind a JA4-injecting terminator (cloudflared / nginx-JA4). |
+| `JS_CHAL_REQUIRE_JA4` | `0` | Hard requirement: `/antibot-appsec-gateway/challenge` rejects (`403`) any submission without a JA4 from a trusted peer. Use only behind a JA4-injecting terminator (cloudflared / nginx-JA4). |
 | `CANARY_ECHO_DETECTION` | `1` | **R7 (1.4.3)** — plant unique `agw-c-<16hex>` tokens in every HTML response (HTML comment + `X-Trace-Id` header). Any subsequent request from any identity that quotes one of those tokens back is silent-decoyed and ban-pooled. Targets LLM agents that summarise the page into the model's context and re-emit fragments in the next prompt. Near-zero false-positive on browser traffic. |
 | `CANARY_TTL_S` | `600` | How long an issued canary stays valid for echo detection (sliding window). |
 | `HOSTILE_BAN_SECS` | `86400` | **R8 (1.4.3)** — duration to keep AI-agent-flagged identities (canary-echo, honeypot, suspicious-path, ai-probe) silent-decoyed. Generic bans still use the shorter `RISK_BAN_DURATION_SECS`. |
@@ -700,7 +713,7 @@ Each sample includes: CPU %, load average (1/5/15), memory total/used/available,
 
 | Variable | Default |
 |---|---|
-| `DEBUG` | `0` (set `1` to expose `/__xff`) |
+| `DEBUG` | `0` (set `1` to expose `/secured/xff`) |
 
 ---
 
@@ -843,7 +856,7 @@ deny-list, one webhook channel.
 | `appsecgw:ja4-bans:<ja4>` counter — drives auto-deny | per-identity rate-limit token buckets |
 | `appsecgw:ja4-denylist` set — refreshed on each instance every 30 s | risk score, behavioural windowing, header-completeness scores |
 | `appsecgw:wh:<reason>:<key>` — webhook dedup (5 min TTL) | service-metrics samples (CPU/mem/disk/proc/FDs) |
-| `REDIS_NS` knob — namespace per environment (`prod`, `staging`, `ctf-2026`) | chal cookie HMAC (rotate via `/__rotate-keys` per instance, or fleet-wide via the loop below) |
+| `REDIS_NS` knob — namespace per environment (`prod`, `staging`, `ctf-2026`) | chal cookie HMAC (rotate via `/secured/rotate-keys` per instance, or fleet-wide via the loop below) |
 
 `REDIS_NS` decides whether two clusters share or isolate state. Same value
 across N instances → fleet-wide shared bans. Different values (`gw-prod`
@@ -851,14 +864,24 @@ vs `gw-staging`) → fully isolated.
 
 ### Operating the fleet
 
+> **Note (v1.6.7+)**: Bearer-key auth (`?key=`) was removed. All `/secured/` endpoints require an `agw_session` cookie. Authenticate once per gateway before running the loops below:
+> ```bash
+> for port in 9001 9002 9003; do
+>   curl -s -c /tmp/gw-${port}.cookie \
+>     -X POST "http://localhost:${port}/antibot-appsec-gateway/login" \
+>     -d "username=admin&password=${ADMIN_PASSWORD}"
+> done
+> ```
+
 **Hot-reload one knob across every gateway** (controls dashboard works
 per instance; for fleet-wide changes use a small loop):
 
 ```bash
 APPLY='{"BODY_PATTERN_MATCH": true, "RISK_BAN_THRESHOLD": 60}'
 for port in 9001 9002 9003; do
-  curl -s -X POST "http://localhost:${port}/__config?key=${ADMIN_KEY}" \
-       -H 'Content-Type: application/json' -d "$APPLY"
+  curl -s -b /tmp/gw-${port}.cookie \
+    -X POST "http://localhost:${port}/antibot-appsec-gateway/secured/config" \
+    -H 'Content-Type: application/json' -d "$APPLY"
 done
 ```
 
@@ -866,8 +889,9 @@ done
 
 ```bash
 for port in 9001 9002 9003; do
-  curl -s -X POST "http://localhost:${port}/__config?key=${ADMIN_KEY}" \
-       -H 'Content-Type: application/json' -d '{"GLOBAL_RPS_LIMIT": 50}'
+  curl -s -b /tmp/gw-${port}.cookie \
+    -X POST "http://localhost:${port}/antibot-appsec-gateway/secured/config" \
+    -H 'Content-Type: application/json' -d '{"GLOBAL_RPS_LIMIT": 50}'
 done
 ```
 
@@ -875,7 +899,8 @@ done
 
 ```bash
 for port in 9001 9002 9003; do
-  curl -s -X POST "http://localhost:${port}/__rotate-keys?key=${ADMIN_KEY}&scope=all"
+  curl -s -b /tmp/gw-${port}.cookie \
+    -X POST "http://localhost:${port}/antibot-appsec-gateway/secured/rotate-keys?scope=all"
 done
 # every chal/session cookie issued before this point fails on every gateway
 ```
@@ -884,14 +909,16 @@ done
 Redis, so any gateway in the namespace will start silent-decoying):
 
 ```bash
-curl "http://localhost:9001/__ban?key=${ADMIN_KEY}&id=<track-key>&secs=86400&reason=manual"
+curl -b /tmp/gw-9001.cookie \
+  "http://localhost:9001/antibot-appsec-gateway/secured/ban?id=<track-key>&secs=86400&reason=manual"
 # subsequent traffic on 9002 + 9003 to that track-key → silent decoy
 ```
 
 **Unban everywhere:**
 
 ```bash
-curl "http://localhost:9001/__unban?key=${ADMIN_KEY}&id=<track-key>"
+curl -b /tmp/gw-9001.cookie \
+  "http://localhost:9001/antibot-appsec-gateway/secured/unban?id=<track-key>"
 # Note: shared-store entries TTL out at the original ban duration. To
 # force-clear cross-fleet *now*, also delete the Redis key:
 docker exec antibot-redis redis-cli DEL "appsecgw-ctf-pwn1-shared:ban:<track-key>"
@@ -940,7 +967,7 @@ Useful queries (LogQL / KQL / etc.):
 {event="request", reason="canary-echo"}                — every R7 hit, fleet-wide
 {event="ban"}                                          — every ban, all instances
 {event="manual_ban"} | rid="<request-id>"              — single-request forensics
-{event="config_changed"}                               — full audit of `/__config` POSTs
+{event="config_changed"}                               — full audit of `/secured/config` POSTs
 {event="session_churn"} | json | count > 5             — agent rotating sessions
 ```
 
@@ -973,10 +1000,10 @@ body using `WEBHOOK_SECRET`. Receiver verifies before acting.
 | Symptom | Action | Where |
 |---|---|---|
 | Slack ping: `canary-echo` from `track-key=…`, `ja4=t13d_…python` | nothing — already silent-decoyed for 24 h fleet-wide | shared store auto-handled |
-| Recurring `session_churn` from same `/24` | tighten `SESSION_CHURN_MAX` from 6 → 4 across fleet | controls dashboard or `/__config` loop |
-| Legitimate user accidentally banned | unban via main dashboard or `/__unban?id=…`; consider raising `RISK_BAN_THRESHOLD` | per instance + delete Redis key |
-| New SPA endpoint added to one challenge | append prefix to that gateway's `JS_CHAL_OPEN_PATHS` via `/__config` | per-site, hot-reload |
-| Major bypass disclosed | rotate keys fleet-wide | `for-loop POST /__rotate-keys?scope=all` |
+| Recurring `session_churn` from same `/24` | tighten `SESSION_CHURN_MAX` from 6 → 4 across fleet | controls dashboard or `/secured/config` loop |
+| Legitimate user accidentally banned | unban via main dashboard or `/secured/unban?id=…`; consider raising `RISK_BAN_THRESHOLD` | per instance + delete Redis key |
+| New SPA endpoint added to one challenge | append prefix to that gateway's `JS_CHAL_OPEN_PATHS` via `/secured/config` | per-site, hot-reload |
+| Major bypass disclosed | rotate keys fleet-wide | `for-loop POST /secured/rotate-keys?scope=all` |
 | Switching from heuristic mode to Turnstile | set `TURNSTILE_*` envs and restart that container; existing Redis state preserved | per instance |
 
 ---
@@ -1037,34 +1064,119 @@ All owned by UID 65532 (`nonroot`).
 
 ```
 .
-├── proxy.py                                    main reverse proxy (single file)
-├── Dockerfile                                  multi-stage Wolfi distroless build
-├── docker-compose.yml                          example compose deployment
-├── myip.sh                                     auto-detect-IP launcher
-├── maxmind-refresh.sh                          monthly cron — refreshes ASN+City mmdbs
-├── README.md                                   this file
-├── tests/
-│   └── test_critical.py                        pytest unit suite (11 tests, all green)
-├── sbom/
-│   ├── sbom-1.5.4.cdx.json                     CycloneDX SBOM 1.5.4 (53 KB, generated by Trivy)
-│   └── sbom-1.5.5.cdx.json                     CycloneDX SBOM 1.5.5 (53 KB, generated by Trivy)
+├── proxy.py                         aiohttp reverse proxy entrypoint + route registration
+├── config.py                        env/key loading, all constants, hot-reload knob table
+├── state.py                         mutable shared globals (ip_state, timeline, bans, …)
+├── helpers.py                       utility functions (escape, truncate, HMAC, …)
+├── identity.py                      session signing + JA4/fingerprint helpers
+├── vhost.py                         per-vhost config CRUD + RFC-1123 hostname validator
+├── scoring.py                       risk-score model (weights, decay, NAT threshold, tier)
+├── rate_limit.py                    token-bucket rate limiting (global + per-identity)
+│
+├── core/                            main request path
+│   ├── middleware.py                cost_meter + session cookie finalizer
+│   ├── metrics.py                   record(), timeline, event log, top-paths
+│   └── proxy_handler.py             protect() middleware chain + all dashboard handlers
+│
+├── detection/                       in-process detectors (L2–L5)
+│   ├── ua.py                        UA blocklist + bot-signal groups
+│   ├── paths.py                     honeypot paths + suspicious-path regex
+│   ├── headers.py                   header anomaly (completeness, Accept:*/*, Origin)
+│   ├── behavioral.py                behavioural heuristics (no-static-fetch, churn, 404 burst)
+│   ├── canary.py                    honey-link injection + canary token tracking
+│   ├── automation.py                browser-automation probe (webdriver/CDP, 1.7.1)
+│   ├── cookie_lifecycle.py          cookie-age + session-replay detection (1.7.2)
+│   ├── referer_chain.py             referer-ghost + referer-loop signals (1.7.2)
+│   ├── impossible_travel.py         geo impossible-travel detection (1.7.2)
+│   ├── fp_enrichment.py             canvas/WebGL fingerprint collection (1.7.2)
+│   ├── path_sweep.py                post-challenge content-discovery detector (1.7.3)
+│   ├── honey_cred.py                P1 — semantic honeypot credential injection (1.7.3)
+│   ├── redirect_maze.py             P2 — risk-gated HMAC redirect maze (1.7.3)
+│   └── llm_heuristic.py             P3 — LLM no-subresource heuristic (1.7.3)
+│
+├── reputation/                      external intel (L6, best-effort)
+│   ├── abuseipdb.py
+│   ├── crowdsec.py
+│   ├── maxmind.py                   GeoLite2 ASN/City lookup + auto-refresh
+│   └── tor.py                       Tor exit-node list fetch + O(1) set lookup
+│
+├── challenge/                       cookie-gate implementation (L7)
+│   ├── pow.py                       PoW generation + verification
+│   ├── js_challenge.py              JS / Turnstile challenge flow
+│   └── tarpit.py                    AI Labyrinth tarpit + slow-drain handler
+│
+├── integrations/                    optional external adapters
+│   ├── redis.py                     fleet-mode state sync
+│   ├── webhook.py                   outbound ban/DLP events
+│   ├── ja4.py                       JA4 TLS fingerprint
+│   ├── jwt.py                       JWT/Bearer signature validation
+│   └── endpoint_policy.py           per-endpoint policy rules engine
+│
+├── admin/                           operator API
+│   ├── auth.py                      admin-IP allowlist + session cookie auth
+│   ├── users.py                     multi-user accounts + session ledger
+│   ├── mesh.py                      gateway mesh / P2P secret sync
+│   └── settings.py                  hot-reload settings API
+│
+├── db/                              persistence layer
+│   ├── sqlite.py                    SQLite WAL writer loop + schema migrations
+│   └── postgres.py                  TimescaleDB/PostgreSQL mirror
+│
+├── dashboards/                      server-rendered operator UIs
+│   ├── __init__.py                  package exports (including analytics.py, 1.8.2)
+│   ├── analytics.py                 4 analytics endpoints: score-dist, traffic-pipeline,
+│   │                                  vhost-heatmap, signal-performance (1.8.2)
+│   ├── agents.py                    agents dashboard handlers
+│   ├── controls.py                  controls dashboard handlers
+│   ├── service_metrics.py           service metrics + 30-day DB read path (1.8.2)
+│   ├── main.html                    /secured/live-feed — real-time traffic
+│   ├── agents.html                  /secured/agents — stealth-agent hunter
+│   ├── service.html                 /secured/service — service metrics
+│   ├── controls.html                /secured/controls — hot-reload knobs
+│   ├── geo.html                     /secured/geo — world map + time scrubber
+│   ├── logs.html                    /secured/logs — structured event log
+│   ├── settings.html                /secured/settings — config import/export, users
+│   ├── control_center.html          /secured/control-center — post-login landing (1.8.1/1.8.2)
+│   ├── vhost_policy.html            /secured/vhost-policy — per-vhost override inspector
+│   ├── login.html                   /login — multi-user login form
+│   └── assets/
+│       ├── chart.umd.min.js         Chart.js 4.4.4 local bundle
+│       ├── botd.bundle.js           FingerprintJS BotD bundle
+│       ├── purify.min.js            DOMPurify innerHTML sanitiser
+│       └── escalate.svg             escalate-icon SVG
+│
+├── tests/                           pytest suite (2143 passing, 1 skipped)
+│   ├── test_critical.py             core unit tests
+│   ├── test_pure.py                 pure-function unit tests
+│   ├── test_async.py                async unit tests
+│   ├── test_functional.py           aiohttp integration tier
+│   ├── test_integration.py          end-to-end integration tests
+│   ├── test_endpoints_dynamic.py    live TestServer endpoint suite (137 tests)
+│   ├── test_control_center.py       Control Center QA (1.8.1)
+│   ├── test_v182_charts.py          6 new analytics charts QA (66 tests, 1.8.2)
+│   ├── test_v182_svc_metrics_db.py  30-day service metrics DB path (32 tests, 1.8.2)
+│   └── … (26 more test files)
+│
+├── validation/                      per-release audit trail (one .md per version)
+│   ├── TEMPLATE.md                  17-step validation template
+│   └── 1.8.2.md                     latest validation record
+│
+├── Dockerfile                       multi-stage Wolfi distroless arm64 build
+├── Dockerfile.armv7                 armv7 variant (libpq + psycopg-c)
+├── docker-compose.yml               bundles gateway + Redis + CrowdSec + TimescaleDB
+├── requirements.txt                 pinned Python deps (== exact versions)
+├── bump-version.sh                  atomic version-string updater
+├── .env.example                     turnkey env template
 ├── _seed/
-│   ├── GeoLite2-ASN.mmdb                       mmdbs baked into image at build time
-│   └── GeoLite2-City.mmdb                       (1.5.5 — for offline-ready GeoMap)
-├── .env.example                                turnkey env template (cp → .env, edit, compose up)
-├── dashboards/                                 server-rendered operator UIs
-│   ├── main.html                               /__dashboard
-│   ├── agents.html                             /__agents
-│   ├── service.html                            /__service
-│   ├── controls.html                           /__controls
-│   └── geo.html                                /__geo (1.5.4)
-├── manual/manual-report-1.3.html               implementation report (HTML source)
-├── AppSecGW-1.3-Report.pdf                     implementation report (PDF)
+│   ├── GeoLite2-ASN.mmdb            mmdbs baked into image (offline-bootable)
+│   └── GeoLite2-City.mmdb
+├── sbom/
+│   └── sbom-1.5.5.cdx.json          CycloneDX SBOM (Trivy-generated)
 ├── img/
-│   ├── dashboard.png                           main dashboard screenshot
-│   └── agents.png                              stealth-agent hunter screenshot
-├── .dockerignore
-└── .trivyignore                                kept for fallback / documentation
+│   ├── dashboard.png
+│   └── agents.png
+├── README.md · CHANGELOG.md · MANUAL.md · CONTROLS.md · rules.md · threatmodel.md
+└── .dockerignore · .trivyignore · .gitignore
 ```
 
 ---
@@ -1081,6 +1193,8 @@ Pedro Tarrinho
 
 | Version | Highlights |
 |---|---|
+| **1.8.3** | **Security Incidents card on Control Center.** New `#card-incidents` card on `control_center.html` — severity-bucketed alert feed for the last 24 h; Critical (canary-echo, honey-cred, redirect-maze-bot, canary-probe-miss) / High (honeypot, body-rce, body-ssrf, body-sqli, tor-exit, …) / Medium (body-lfi, body-xss, rate-burst, …); red border when threats present; auto-normalises to grey border when no incidents; dismissible ("Dismiss all" button with localStorage persistence); 30 s auto-refresh. Inline **[Ban 1h]** button per row calls new `banIp()` helper → `POST /secured/ban?ip=`. New `GET /secured/security-incidents` analytics endpoint (auth-gated) — queries `events` table for high-severity rows, enriches with in-memory risk score from `ip_state`, returns `{incidents, counts:{critical,high,medium}, since, limit}`. New `_INCIDENT_CRITICAL / _HIGH / _MEDIUM / _ALL` frozensets + `_incident_severity()` in `dashboards/analytics.py`. No new env vars or hot-reload knobs. **Tests**: `test_v183_incidents.py` — 38 tests (30 static S01–S30 + 8 dynamic D01–D08). **Full suite**: 2181/2181 pass, 1 skip. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings (151 rules). **Trivy (arm64/armv7)**: 0 C / 0 H. Images: `appsec-antibot-gw:1.8.3-arm64` (`sha256:51d21756`) · `appsec-antibot-gw:1.8.3-armv7` (`sha256:f2bc68a7`). |
+| **1.8.2** | **6 new Control Center analytics charts + 30-day service metrics history.** Six new Chart.js charts added to `control_center.html`: Traffic Pipeline (stacked-area, `fill:'stack'`), Bot Score Distribution (8-bin histogram), Vhost Block Rate Heatmap (HTML table, SILENT badge for idle vhosts), Signal Performance Matrix (`indexAxis:'y'` horizontal bar, p50/p95/p99 per detector), Geo Top Countries bar, Threat Category Donut (`type:'doughnut'`, 'Other' bucket). Four new auth-gated analytics endpoints in `dashboards/analytics.py`: `/secured/score-distribution`, `/secured/traffic-pipeline` (SQLite fallback for windows >12h), `/secured/vhost-heatmap` (GROUP BY vhost × time-bucket), `/secured/signal-performance` (latency percentiles via `_percentile()`). `state.py` timeline schema gains `"challenged"` key; `core/proxy_handler.py` increments it at both challenge-issue sites. **Also**: `service_metrics_data_endpoint` 30-day DB read path via `_svc_db_history()` (GROUP BY CAST(ts/bucket)). **Housekeeping**: sidebar `<div id="sidebar-brand-ver">` fixed across 10 dashboard files (bump script gap); `docker-compose.yml` `container_name` updated from frozen `1.7.10`; `MANUAL.md` stale image tag corrected. **Tests**: 2143/2143 pass, 1 skip (+138 new: `test_v182_charts.py` — 43 static + 23 dynamic; `test_v182_svc_metrics_db.py` — 32 tests). **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings (151 rules). **Trivy (arm64/armv7)**: 0 C / 0 H / 0 M. Images: arm64 `appsec-antibot-gw:1.8.2-arm64` · armv7 `appsec-antibot-gw:1.8.2-armv7`. |
 | **1.8.1** | **Control Center landing page + Live Feed rename + vhost filtering + design hardening + Control Center charts.** New `control_center.html` served at `/secured/control-center` as the post-login landing page; hosts Vhost Traffic Summary (moved from Settings), ban overview, and gateway stats. Route rename: `dashboard` → `live-feed`, `center-control` → `control-center`; login redirect updated accordingly. `_validate_vhost_hostname()` RFC-1123 validator in `vhost.py`. `metrics_endpoint` and `logs_data_endpoint` accept `?vhost=` filter (bound SQL param). Design: `<!doctype html>` added to 5 pages; `#388bfd` → `var(--blue)` across all 9 pages; `agents.html` title/topbar corrected; `service.html` vhost-pill CSS fixed; `logs.html` missed-pill variants added; `vhost_policy.html` account modal + portal footer added. **Control Center charts (rebuild)**: Chart.js 4.4.4 stacked-area traffic chart (`/vhost-breakdown`, 60s auto-refresh, `fill:'stack'`), horizontal block-rate bar chart and traffic-share doughnut (driven by `/vhost-stats`), per-vhost RPS gauges, inline SVG sparklines in the vhost-stats table. All three canvas elements hidden until data arrives. 11-column thead with Trend 1h sparkline column. `_hexRgba()` palette helper, `_vhostColor()` stable colour mapping, `_makeSpark()` with length<2 guard. `tests/test_control_center.py`: 22 static + 8 dynamic QA tests — 30/30 pass. **Tests**: 748 unit + 32 functional + 23 integration + 152 regression + 30 control-center — 985/985 pass. **Bandit**: 0 H / 0 C. **Trivy (arm64)**: 0 C / 0 H / 0 M. **Pentest**: 5 probes, 0 bypasses. Harbor: arm64 `sha256:0d255dd5` (updated) · armv7 `sha256:90c93530` · amd64 ✗ (pre-existing — no QEMU x86_64 binfmt). |
 | **1.8.0** | **Virtual Hosts management UI + multi-vhost CRUD API.** New "Virtual Hosts" card on the Settings dashboard: lists all configured vhosts, add (hostname + upstream + overrides) and delete via `GET`/`POST`/`DELETE /antibot-appsec-gateway/secured/vhosts`. `vhost.py` gains `vhost_set()`, `vhost_delete()`, `vhost_list()` with atomic `/data/vhosts.json` persistence and full `_VHOST_COERCE` validation. SSRF guard (`_assert_upstream_public`) retained on all operator-controlled inputs. `core/proxy_handler.py`: cross-domain `Location` header rewrite for multi-vhost redirect transparency. DOMContentLoaded fix eliminates `ReferenceError` on Settings page. **Tests**: 526 unit + 32 functional + 23 integration + 152 regression — 1306/1306 pass (1 pre-existing skip). **Bandit**: 0 H / 0 C / 0 M. **Semgrep**: 0 findings. **Trivy (arm64)**: 0 C / 0 H / 0 M. **Pentest**: 13 probes, 0 bypasses. Harbor: amd64 `sha256:ab9f8afc` · arm64 `sha256:eaca8648` · armv7 `sha256:5d28b156` · manifest (pending push). |
 | **1.7.10** | **Shared identity popover renderer (`window._gwIdentityPopover`).** Single IIFE (identical in `main.html` and `agents.html`) exposes `normalizeId()`, `buildIdHtml()`, `buildRiskHtml()`. `normalizeId()` maps both data shapes to canonical fields — handles `s.ip`/`c.last_ip`, `blocks_breakdown` array or `blocks_by_reason` object. `buildIdHtml()` uses agents-style `.kv` grid with all best-of-both fields (admin lock, JA4, stealth, tokens, visual bars). `buildRiskHtml()` shows `+N` bars from `risk_breakdown` or `N×` from `blocks_breakdown` fallback. `openPopover` / `openClientPopover` reduced to thin wrappers. `main.html` gains `.kv`/`.rsn` modal CSS. 26 new tests including byte-identical drift guard. **Tests**: 495 unit + 32 functional + 23 integration + 152 regression — all passing. **Bandit**: 0 H / 0 C. **Semgrep**: 0 findings. **Trivy**: 0 C / 0 H / 0 M (all arches). Harbor: amd64 `sha256:30ade761` · arm64 `sha256:af4b88c9` · armv7 `sha256:bbac2cf5` · manifest `sha256:166d673a`. |

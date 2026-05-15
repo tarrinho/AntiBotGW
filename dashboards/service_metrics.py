@@ -284,6 +284,66 @@ async def _sample_service_metrics_loop():
             print(f"[svc-metrics] sample error: {e}", flush=True)
 
 
+# ── DB-backed history (ranges beyond the in-memory buffer) ──────────────
+def _svc_db_history(start_b: int, end_b: int, bucket_secs: int,
+                    avg_keys: tuple, max_keys: tuple, sum_keys: tuple) -> list:
+    """Query svc_metrics from SQLite, bucket-aggregated in SQL.
+
+    Called only when the requested window extends beyond SERVICE_METRICS_HISTORY.
+    Returns the same list-of-dicts structure as the in-memory bucketing path so
+    the rest of the endpoint is unchanged.
+
+    Aggregation rules (mirror the in-memory path):
+      avg_keys  → AVG   (pcts, loads, ratios)
+      max_keys  → MAX   (counters, gauges, sizes)
+      sum_keys  → AVG   (net bps — sampled per-second, so AVG = correct mean rate)
+
+    bucket_secs is validated by the caller to be in {5,30,60,300,900,3600}, so
+    embedding it in the SQL string is safe (no user-controlled data in the SQL).
+    """
+    import sqlite3 as _sq3
+    b = bucket_secs
+    avg_sel = ", ".join(
+        f"ROUND(AVG(COALESCE({k},0)),2) AS {k}" for k in avg_keys)
+    max_sel = ", ".join(
+        f"MAX(COALESCE({k},0)) AS {k}"           for k in max_keys)
+    sum_sel = ", ".join(
+        f"ROUND(AVG(COALESCE({k},0))) AS {k}"    for k in sum_keys)
+    sql = (
+        f"SELECT (CAST(ts/{b} AS INTEGER)*{b}) AS ts, "
+        f"{avg_sel}, {max_sel}, {sum_sel} "
+        f"FROM svc_metrics WHERE ts>=? AND ts<=? "
+        f"GROUP BY CAST(ts/{b} AS INTEGER) ORDER BY ts"
+    )
+    db_buckets: dict = {}
+    try:
+        conn = _sq3.connect(_DATA_PATH)
+        conn.row_factory = _sq3.Row
+        for row in conn.execute(sql, (start_b, end_b + b)).fetchall():
+            bt = int(row["ts"])
+            db_buckets[bt] = row
+        conn.close()
+    except Exception as _ex:
+        print(f"[svc-metrics] db history error: {_ex}", flush=True)
+
+    zero = {k: 0 for k in avg_keys + max_keys + sum_keys}
+    history: list = []
+    for bt in range(start_b, end_b + 1, b):
+        row = db_buckets.get(bt)
+        if row is None:
+            history.append({"ts": bt, **zero})
+        else:
+            out: dict = {"ts": bt}
+            for k in avg_keys:
+                out[k] = round(float(row[k] or 0), 2)
+            for k in max_keys:
+                out[k] = int(row[k] or 0)
+            for k in sum_keys:
+                out[k] = int(row[k] or 0)
+            history.append(out)
+    return history
+
+
 # ── Service-metrics dashboard endpoints (admin-gated) ───────────────────
 async def service_metrics_data_endpoint(request: web.Request):
     """JSON: latest sample + a windowed view of the retention buffer.
@@ -295,8 +355,8 @@ async def service_metrics_data_endpoint(request: web.Request):
     Samples within each bucket are averaged for cpu/mem/disk pct, max'd for
     counters (procs/fds/db_size), summed for net throughput."""
     _vhost = request.query.get("vhost", "").strip().lower()
-    raw = list(SERVICE_METRICS_HISTORY)
-    current = raw[-1] if raw else {}
+    _mem_raw = list(SERVICE_METRICS_HISTORY)
+    current = _mem_raw[-1] if _mem_raw else {}
 
     try:
         # 1.6.5 — range cap raised from 720 → 43200 (30 d) so the
@@ -340,49 +400,57 @@ async def service_metrics_data_endpoint(request: web.Request):
                  "pg_tx_total")
     SUM_KEYS  = ("net_rx_bps", "net_tx_bps")
 
-    buckets = {}
-    for s in raw:
-        ts = int(s.get("ts", 0))
-        if ts < start_b or ts > end_b + bucket_secs:
-            continue
-        b = (ts // bucket_secs) * bucket_secs
-        slot = buckets.setdefault(b, {"_n": 0, "ts": b})
-        slot["_n"] += 1
-        for k in AVG_KEYS + MAX_KEYS + SUM_KEYS:
-            # 1.6.5 — None handling: pg_db_bytes / pg_events_rows can be
-            # None on samples taken before the standby PG was probed.
-            # Coerce to 0 for arithmetic (max / sum) — the carry-forward
-            # logic in _sample_service_metrics_loop populates the value
-            # on every subsequent tick once the first probe lands.
-            v = s.get(k)
-            if v is None:
-                v = 0
-            if k in MAX_KEYS:
-                cur = slot.get(k, 0)
-                if cur is None:
-                    cur = 0
-                slot[k] = max(cur, v)
-            else:
-                cur = slot.get(k, 0)
-                if cur is None:
-                    cur = 0
-                slot[k] = cur + v
+    # When the requested window extends beyond what the in-memory deque holds,
+    # delegate to SQLite (which retains SVC_DB_RETENTION_HOURS, default 30 d).
+    # The DB path aggregates in SQL so we never load O(500k) raw rows into Python.
+    _buf_oldest = _mem_raw[0].get("ts", float("inf")) if _mem_raw else float("inf")
+    if start_b < _buf_oldest:
+        history = _svc_db_history(start_b, end_b, bucket_secs,
+                                  AVG_KEYS, MAX_KEYS, SUM_KEYS)
+    else:
+        buckets: dict = {}
+        for s in _mem_raw:
+            ts = int(s.get("ts", 0))
+            if ts < start_b or ts > end_b + bucket_secs:
+                continue
+            b = (ts // bucket_secs) * bucket_secs
+            slot = buckets.setdefault(b, {"_n": 0, "ts": b})
+            slot["_n"] += 1
+            for k in AVG_KEYS + MAX_KEYS + SUM_KEYS:
+                # 1.6.5 — None handling: pg_db_bytes / pg_events_rows can be
+                # None on samples taken before the standby PG was probed.
+                # Coerce to 0 for arithmetic (max / sum) — the carry-forward
+                # logic in _sample_service_metrics_loop populates the value
+                # on every subsequent tick once the first probe lands.
+                v = s.get(k)
+                if v is None:
+                    v = 0
+                if k in MAX_KEYS:
+                    cur = slot.get(k, 0)
+                    if cur is None:
+                        cur = 0
+                    slot[k] = max(cur, v)
+                else:
+                    cur = slot.get(k, 0)
+                    if cur is None:
+                        cur = 0
+                    slot[k] = cur + v
 
-    history = []
-    for b in range(start_b, end_b + 1, bucket_secs):
-        slot = buckets.get(b)
-        if not slot:
-            history.append({"ts": b, **{k: 0 for k in AVG_KEYS + MAX_KEYS + SUM_KEYS}})
-            continue
-        n = slot.pop("_n") or 1
-        out = {"ts": b}
-        for k in AVG_KEYS:
-            out[k] = round(slot.get(k, 0) / n, 2)
-        for k in MAX_KEYS:
-            out[k] = slot.get(k, 0)
-        for k in SUM_KEYS:
-            out[k] = round(slot.get(k, 0) / n)   # avg per second within bucket
-        history.append(out)
+        history = []
+        for b in range(start_b, end_b + 1, bucket_secs):
+            slot = buckets.get(b)
+            if not slot:
+                history.append({"ts": b, **{k: 0 for k in AVG_KEYS + MAX_KEYS + SUM_KEYS}})
+                continue
+            n = slot.pop("_n") or 1
+            out = {"ts": b}
+            for k in AVG_KEYS:
+                out[k] = round(slot.get(k, 0) / n, 2)
+            for k in MAX_KEYS:
+                out[k] = slot.get(k, 0)
+            for k in SUM_KEYS:
+                out[k] = round(slot.get(k, 0) / n)   # avg per second within bucket
+            history.append(out)
 
     async with state_lock:
         identities = len(ip_state)
@@ -431,8 +499,8 @@ async def service_metrics_data_endpoint(request: web.Request):
         "bucket_secs":      bucket_secs,
         "end_epoch":        end_b,
         "is_live":          end_epoch >= _t.time() - 30,
-        "samples_in_buffer": len(raw),
-        "buffer_oldest_ts": raw[0]["ts"] if raw else 0,
+        "samples_in_buffer": len(_mem_raw),
+        "buffer_oldest_ts": _mem_raw[0]["ts"] if _mem_raw else 0,
         # 1.6.8 — TimescaleDB stats availability flag. Used by the
         # Service dashboard to hide the TimescaleDB section when no
         # POSTGRES_DSN is configured (or psycopg never loaded).

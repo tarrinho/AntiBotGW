@@ -18,8 +18,11 @@
 9. [DLP redaction](#9-dlp-redaction)
 10. [GeoIP refresh](#10-geoip-refresh)
 11. [Multi-instance (Redis fleet)](#11-multi-instance-redis-fleet)
-12. [Tear down](#12-tear-down)
-13. [Environment variable reference](#13-environment-variable-reference)
+12. [Virtual Hosts (v1.8.0)](#12-virtual-hosts-v180)
+13. [Control Center & dashboard navigation (v1.8.1)](#13-control-center--dashboard-navigation-v181)
+14. [Analytics & Control Center charts (v1.8.2)](#14-analytics--control-center-charts-v182)
+15. [Tear down](#15-tear-down)
+16. [Environment variable reference](#16-environment-variable-reference)
 
 ---
 
@@ -422,7 +425,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.8.1
+  appsec-antibot-gw:1.8.2
 ```
 
 ### Manage at runtime (Settings UI)
@@ -525,7 +528,158 @@ The `vhost` value is validated through `_validate_vhost_hostname()` (RFC-1123: m
 
 ---
 
-## 14. Tear down
+## 14. Analytics & Control Center charts (v1.8.2)
+
+The Control Center landing page (`/antibot-appsec-gateway/secured/control-center`) ships six analytics charts driven by four new backend endpoints. All endpoints require a valid `agw_session` cookie (unauthenticated requests are redirected to `/login`).
+
+### Charts at a glance
+
+| Chart | Canvas / DOM ID | Endpoint | Refresh |
+|---|---|---|---|
+| Traffic Pipeline | `#traffic-pipeline-chart` | `/secured/traffic-pipeline` | 60 s |
+| Bot Score Distribution | `#score-dist-chart` | `/secured/score-distribution` | 30 s |
+| Vhost Block Rate Heatmap | `#vhost-heatmap-body` | `/secured/vhost-heatmap` | via range/bucket change |
+| Signal Performance Matrix | `#signal-perf-chart` | `/secured/signal-performance` | 60 s |
+| Geo Top Countries | `#geo-country-chart` | `/secured/geo-data` | on Threat section open |
+| Threat Category Donut | `#threat-donut-chart` | `/secured/detector-stats` | 30 s |
+
+### Time-window controls
+
+The Traffic Pipeline, Vhost Heatmap, and all other time-windowed charts accept three query parameters:
+
+```
+GET /antibot-appsec-gateway/secured/traffic-pipeline?range=120&bucket=300&end=1747350000
+```
+
+| Parameter | Description | Default |
+|---|---|---|
+| `range` | Window length in minutes | 120 |
+| `bucket` | Bucket width in seconds | 300 |
+| `end` | End epoch (UNIX seconds); omit or `0` = live mode | live |
+
+When `end` is set, charts pause at that point in time (replay mode). The frontend time-range `<select>` and bucket `<select>` controls in the sidebar trigger `_loadTimeCharts()`, which rebuilds all time-windowed charts simultaneously.
+
+### Endpoint reference
+
+#### `GET /secured/score-distribution`
+
+Returns an 8-bin histogram of all active client risk scores (scores decay — clients with expired TTL are excluded).
+
+```json
+{
+  "bins": [
+    {"label": "0–12", "count": 1240},
+    {"label": "13–25", "count": 87},
+    …
+    {"label": "88–100", "count": 3}
+  ],
+  "threshold_soft": 25,
+  "threshold_ban": 50,
+  "total_ips": 1330
+}
+```
+
+`threshold_soft` and `threshold_ban` are drawn as vertical reference lines on the histogram.
+
+#### `GET /secured/traffic-pipeline`
+
+Returns per-bucket request counts across four categories for the requested time window.
+
+```json
+{
+  "timeline": [
+    {"t": 1747348800, "allowed": 542, "challenged": 12, "blocked": 38, "bypassed": 0},
+    …
+  ],
+  "totals": {"allowed": 9840, "challenged": 201, "blocked": 672, "bypassed": 0},
+  "range_min": 120,
+  "bucket_secs": 300
+}
+```
+
+For windows exceeding ~12h the endpoint automatically falls back to SQLite aggregation (same `GROUP BY CAST(ts/bucket AS INTEGER)` pattern as `_svc_db_history`).
+
+#### `GET /secured/vhost-heatmap`
+
+Returns a sparse matrix of block-rate cells for the heatmap table.
+
+```json
+{
+  "vhosts": ["api.example.com", "shop.example.com"],
+  "buckets": [1747348800, 1747349100, …],
+  "cells": {
+    "api.example.com:1747348800": {"requests": 120, "blocked": 4, "block_rate": 0.033}
+  }
+}
+```
+
+Vhosts with no traffic in the selected window are flagged with a **SILENT** badge in the table header row.
+
+#### `GET /secured/signal-performance`
+
+Returns per-detector latency percentiles and block rates.
+
+```json
+{
+  "signals": [
+    {
+      "reason": "suspicious-path",
+      "method": "regex",
+      "hits": 432,
+      "blocks": 432,
+      "p50_ms": 0.1,
+      "p95_ms": 0.3,
+      "p99_ms": 0.8,
+      "block_rate": 1.0
+    },
+    …
+  ],
+  "method_totals": {"regex": 1240, "network": 87, …}
+}
+```
+
+`p50/p95/p99` are computed from rolling 200-sample per-reason deques using linear interpolation. The Signal Performance Matrix chart plots `hits` and `blocks` as two horizontal bar series.
+
+### Reading the heatmap
+
+| Cell colour | Meaning |
+|---|---|
+| Red | ≥ 50% block rate |
+| Orange | 20–49% block rate |
+| Yellow | 5–19% block rate |
+| Green | < 5% block rate |
+| Grey / **SILENT** | No requests in the selected window |
+
+### Querying the endpoints via curl
+
+```bash
+# Authenticate and save the session cookie
+curl -c /tmp/session.cookie -X POST \
+  -d "username=admin&password=<password>" \
+  https://gw.example.com/antibot-appsec-gateway/login
+
+# Fetch Traffic Pipeline for the last 2 hours, 5-min buckets
+curl -b /tmp/session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/traffic-pipeline?range=120&bucket=300"
+
+# Fetch Bot Score Distribution
+curl -b /tmp/session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/score-distribution"
+
+# Signal Performance
+curl -b /tmp/session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/signal-performance"
+
+# Vhost Heatmap (last 6 hours, 15-min buckets)
+curl -b /tmp/session.cookie \
+  "https://gw.example.com/antibot-appsec-gateway/secured/vhost-heatmap?range=360&bucket=900"
+```
+
+All four endpoints return `Cache-Control: no-store` and respond with `application/json`.
+
+---
+
+## 15. Tear down  <!-- was §14 -->
 
 ```bash
 # Stop and remove container; preserve data volume
@@ -544,7 +698,7 @@ docker compose down -v  # also removes named volumes
 
 ---
 
-## 15. Environment variable reference
+## 16. Environment variable reference
 
 ### Required
 

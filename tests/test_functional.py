@@ -614,6 +614,47 @@ async def test_bypass_mode_not_written_to_db(gw_client):
     )
 
 
+# ── F11b — BOT_DETECTION_ENABLED per-vhost toggle ────────────────────────────
+# BOT_DETECTION_ENABLED=False skips all heuristic detectors but still enforces
+# existing bans. Bans are applied earlier in protect() so the gate only bypasses
+# the scoring pipeline.
+
+@pytest.mark.asyncio
+async def test_bot_detection_disabled_skips_ua_detection(gw_client):
+    """BOT_DETECTION_ENABLED=False must suppress UA detection for that vhost."""
+    import core.proxy_handler as _cph
+    orig = _cph.BOT_DETECTION_ENABLED
+    _cph.BOT_DETECTION_ENABLED = False
+    try:
+        proxy.ip_state.clear()
+        proxy.metrics["by_reason"].clear()
+        await gw_client.get("/", headers={"User-Agent": "curl/8.0.1"})
+        assert not (_has_block_reason(proxy, "ua-too-short")
+                    or _has_block_reason(proxy, "ua-blocked")), (
+            "BOT_DETECTION_ENABLED=False must suppress UA detection; "
+            f"by_reason={dict(proxy.metrics['by_reason'])}"
+        )
+    finally:
+        _cph.BOT_DETECTION_ENABLED = orig
+
+
+@pytest.mark.asyncio
+async def test_bot_detection_enabled_blocks_bot_ua(gw_client):
+    """Sanity: BOT_DETECTION_ENABLED=True (default) must still block bot UAs."""
+    import core.proxy_handler as _cph
+    _cph.BOT_DETECTION_ENABLED = True
+    try:
+        proxy.ip_state.clear()
+        proxy.metrics["by_reason"].clear()
+        await gw_client.get("/", headers={"User-Agent": "curl/8.0.1"})
+        assert (
+            _has_block_reason(proxy, "ua-too-short")
+            or _has_block_reason(proxy, "ua-blocked")
+        ), "BOT_DETECTION_ENABLED=True must still block bot UAs"
+    finally:
+        pass  # True is the default; no restore needed
+
+
 # ── F12 — BYPASS_PATHS QA (1.7.8) ────────────────────────────────────────────
 # protect() reads BYPASS_PATHS from core.proxy_handler globals — patch there.
 
@@ -823,3 +864,133 @@ async def test_events_path_filter_narrows_live_events(gw_client):
         "path filter with no match must return empty list — "
         f"got: {[e.get('path') for e in none_]}"
     )
+
+
+# ── F11c — BOT_DETECTION_ENABLED dynamic QA ──────────────────────────────
+# Additional dynamic tests exercising ban-still-enforced, record action
+# correctness, and cross-detector suppression.
+
+@pytest.mark.asyncio
+async def test_bot_detection_disabled_ban_still_enforced(gw_client):
+    """With BOT_DETECTION_ENABLED=False, pre-existing identity bans must still block traffic."""
+    import core.proxy_handler as _cph
+    from scoring import ip_state, now, state_lock
+    orig = _cph.BOT_DETECTION_ENABLED
+    try:
+        proxy.ip_state.clear()
+        proxy.metrics["by_reason"].clear()
+        proxy.events.clear()
+        # Step 1: fire one request (detection on) to register the identity/track_key
+        _cph.BOT_DETECTION_ENABLED = True
+        await gw_client.get(
+            "/",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        await asyncio.sleep(0.05)
+        # Step 2: extract the track_key from the recorded event
+        assert proxy.events, "No events recorded after initial request"
+        track_key = proxy.events[-1].get("track_key", "")
+        assert track_key, "track_key must be non-empty in the event record"
+        # Step 3: inject a live ban for that identity
+        async with state_lock:
+            ip_state[track_key].banned_until = now() + 3600.0
+        # Step 4: disable detection and verify the ban is still enforced
+        _cph.BOT_DETECTION_ENABLED = False
+        proxy.metrics["by_reason"].clear()
+        await gw_client.get(
+            "/",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        assert _has_block_reason(proxy, "banned-silent"), (
+            "BOT_DETECTION_ENABLED=False must NOT bypass an active identity ban — "
+            "ban checks run before the detection gate. "
+            f"by_reason={dict(proxy.metrics['by_reason'])}"
+        )
+    finally:
+        _cph.BOT_DETECTION_ENABLED = orig
+        proxy.ip_state.clear()
+
+
+@pytest.mark.asyncio
+async def test_bot_detection_disabled_records_operator_passthrough(gw_client):
+    """With BOT_DETECTION_ENABLED=False, allowed traffic must be recorded as 'operator-passthrough'."""
+    import core.proxy_handler as _cph
+    orig = _cph.BOT_DETECTION_ENABLED
+    _cph.BOT_DETECTION_ENABLED = False
+    try:
+        proxy.ip_state.clear()
+        proxy.events.clear()
+        await gw_client.get(
+            "/",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        await asyncio.sleep(0.05)   # let record() drain
+        reasons = {(e.get("reason") or "") for e in proxy.events}
+        assert "operator-passthrough" in reasons, (
+            "BOT_DETECTION_ENABLED=False: allowed request must be recorded with "
+            "reason='operator-passthrough' so it appears correctly in dashboards. "
+            f"Got reasons: {reasons}"
+        )
+    finally:
+        _cph.BOT_DETECTION_ENABLED = orig
+
+
+@pytest.mark.asyncio
+async def test_bot_detection_disabled_suppresses_honeypot(gw_client):
+    """With BOT_DETECTION_ENABLED=False, honeypot-path hit must NOT trigger honeypot-silent."""
+    import core.proxy_handler as _cph
+    orig = _cph.BOT_DETECTION_ENABLED
+    _cph.BOT_DETECTION_ENABLED = False
+    try:
+        proxy.ip_state.clear()
+        proxy.metrics["by_reason"].clear()
+        # /.env is in the default HONEYPOT_PATHS
+        await gw_client.get(
+            "/.env",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        assert not _has_block_reason(proxy, "honeypot-silent"), (
+            "BOT_DETECTION_ENABLED=False must suppress honeypot detection — "
+            "no 'honeypot-silent' must be recorded when the detection pipeline is off. "
+            f"by_reason={dict(proxy.metrics['by_reason'])}"
+        )
+    finally:
+        _cph.BOT_DETECTION_ENABLED = orig
+
+
+@pytest.mark.asyncio
+async def test_bot_detection_disabled_suppresses_suspicious_path(gw_client):
+    """With BOT_DETECTION_ENABLED=False, suspicious-path recon must NOT be flagged."""
+    import core.proxy_handler as _cph
+    orig = _cph.BOT_DETECTION_ENABLED
+    _cph.BOT_DETECTION_ENABLED = False
+    try:
+        proxy.ip_state.clear()
+        proxy.metrics["by_reason"].clear()
+        # /flag.txt matches the suspicious-path pattern
+        await gw_client.get(
+            "/flag.txt",
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
+                "Accept": "text/html",
+            },
+        )
+        assert not _has_block_reason(proxy, "suspicious-path"), (
+            "BOT_DETECTION_ENABLED=False must suppress suspicious-path detection — "
+            "no 'suspicious-path' must be recorded when the detection pipeline is off. "
+            f"by_reason={dict(proxy.metrics['by_reason'])}"
+        )
+    finally:
+        _cph.BOT_DETECTION_ENABLED = orig

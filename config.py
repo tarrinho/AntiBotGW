@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.1"
+GW_VERSION = "AppSecGW_1.8.3"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -51,9 +51,12 @@ UPSTREAM        = _upstream_raw.rstrip("/")
 # RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x).
 # Only enable in trusted internal deployments — disables the SSRF guard.
 ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() == "1"
-# Set STRICT_VHOST=1 to return 502 for any inbound host not explicitly registered
-# as a vhost. Prevents the global UPSTREAM from acting as a catch-all fallback.
-STRICT_VHOST = os.environ.get("STRICT_VHOST", "0").strip() == "1"
+# STRICT_VHOST: when at least one vhost is registered, reject inbound hosts that
+# are not in the vhost table (502). Default ON. Has no effect when VHOSTS is empty
+# (single-upstream mode — global UPSTREAM is the catch-all).
+# Set STRICT_VHOST=0 to allow unknown hosts to fall through to global UPSTREAM even
+# when other vhosts are configured.
+STRICT_VHOST = os.environ.get("STRICT_VHOST", "1").strip() == "1"
 LISTEN_HOST     = os.environ.get("LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8443"))
 
@@ -781,6 +784,12 @@ BOTD_ENABLED = os.environ.get("BOTD_ENABLED", "0") in ("1", "true", "yes")
 # Set only via the Controls dashboard bypass toggle, never via env var.
 BYPASS_MODE: bool = False
 
+# Per-vhost master switch for the heuristic bot detection pipeline.
+# When False for a vhost, all detector scoring is skipped; existing bans and
+# rate limits still apply. Useful for trusted internal vhosts or staging hosts
+# where bot detection false-positives would block legitimate automation.
+BOT_DETECTION_ENABLED: bool = True
+
 # ── 1.7.1 — Browser automation probe (self-hosted, no external bundle) ─────────
 AUTOMATION_PROBE_ENABLED     = os.environ.get("AUTOMATION_PROBE_ENABLED",   "1") in ("1", "true", "yes")
 # 1.7.1 — Coordinated ASN attack clustering
@@ -943,6 +952,11 @@ SECURITY_HEADERS: dict = {
     "Cross-Origin-Opener-Policy":   os.environ.get("SEC_COOP", "same-origin"),
     "Cross-Origin-Resource-Policy": os.environ.get("SEC_CORP", "same-site"),
 }
+
+# Base URL to strip from HTML response bodies (turns absolute upstream URLs into
+# relative paths so images/links load through the proxy and satisfy the CSP).
+# Example: UPSTREAM_REWRITE_BASE=http://host.docker.internal:8093
+UPSTREAM_REWRITE_BASE: str = os.environ.get("UPSTREAM_REWRITE_BASE", "").rstrip("/")
 
 BODY_TIMEOUT           = float(os.environ.get("BODY_TIMEOUT",           "30"))
 SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S",   "120"))
