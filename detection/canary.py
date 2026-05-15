@@ -164,6 +164,12 @@ async def botd_report_endpoint(request: web.Request):
     detected=true. Idempotent per (track_key, ts) — we don't re-bump
     on duplicate posts (browser may retry).
     """
+    # Task J — probe rate limiter
+    from core.proxy_handler import _probe_rate_limit_ok
+    from helpers import get_ip as _get_ip
+    if not _probe_rate_limit_ok(_get_ip(request)):
+        return web.Response(status=429, text="rate limit",
+                            headers={"Retry-After": "10"})
     if not BOTD_ENABLED:
         return web.json_response({"ok": False, "reason": "disabled"},
                                   status=400)
@@ -344,6 +350,12 @@ async def canary_probe_endpoint(request: web.Request):
     """GET /antibot-appsec-gateway/canary-probe/{token}
     Called automatically by browsers via preload hint. Records browser
     confirmation for the identity. Returns 204 No Content."""
+    # Task J — probe rate limiter
+    from core.proxy_handler import _probe_rate_limit_ok
+    from helpers import get_ip as _get_ip
+    if not _probe_rate_limit_ok(_get_ip(request)):
+        return web.Response(status=429, text="rate limit",
+                            headers={"Retry-After": "10"})
     token = request.match_info.get("token", "")
     # Reject tokens that are obviously malformed to avoid hash-cost DoS
     if token and len(token) <= 48:

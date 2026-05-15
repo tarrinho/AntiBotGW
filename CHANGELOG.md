@@ -6,6 +6,28 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.5] — 2026-05-15
+
+### Security
+- **SEC-05 — session cookie `Secure` flag driven by `SESSION_SECURE` config** (`admin/users.py`): Login response now uses `SESSION_SECURE` (the env-driven boolean from config) instead of an inline `bool(int(os.environ.get("TLS_ENABLED","0")))` read. Consistent with how all other TLS-gated behaviour is controlled.
+- **SEC-01 — fail-closed XFF default** (`config.py`, `helpers.py`, `proxy.py`): `TRUST_XFF` default changed from `"first"` to `"none"`. `helpers._peer_is_trusted_proxy` changed from fail-open (`return True` when `TRUSTED_PROXIES_NETS` is empty) to fail-closed (`return False`). Same fail-closed logic applied to the inline `_trusted()` closure inside the `proxy.py` `get_ip` wrapper. Operators who rely on XFF must now explicitly set `TRUST_XFF=first` and `TRUSTED_PROXIES`. Existing deployments already setting those env vars are unaffected.
+- **SEC-08 — scrypt work factor raised to N=2^17** (`admin/users.py`): `_SCRYPT_N` raised from `2**14` to `2**17` (8× harder to brute-force). `maxmem` raised from 64 MB to 256 MB in both `_password_hash` and `_password_verify` to satisfy the increased memory requirement.
+- **SEC-07 — SSRF guard on `WEBHOOK_URL`** (`integrations/webhook.py`): `_webhook_url_safe()` validates the configured webhook URL before each POST. Rejects non-HTTP(S) schemes, empty hosts, and bare IP addresses that resolve to private/loopback/link-local/reserved ranges (CWE-918). Public hostnames are allowed; DNS resolution is deferred to the OS so no additional dependencies are introduced.
+
+### Fixed
+- **CODE-19 — deterministic `unique_paths` cap** (`core/proxy_handler.py`): Changed `set.pop()` (non-deterministic eviction) to a `len < 400` guard before `add`. Prevents unbounded growth while avoiding silently dropping arbitrary paths.
+- **CODE-13 — SQLite reconnect after `db_writer_loop` exception** (`db/sqlite.py`): Connection is now closed and re-opened after any exception in the writer loop. Prevents a permanently broken connection from silently dropping all subsequent DB writes.
+- **CODE-05 — `_fp_session_creations` TTL prune** (`rate_limit.py`): Added step 11 to `_prune_state_loop`: evicts fingerprint entries whose most-recent timestamp is older than `SESSION_CHURN_WINDOW_S`. Prevents UA-rotating attackers from inflating memory indefinitely.
+- **UI-12 — SIEM "Missed" label** (`dashboards/siem.html`): Chart dataset label corrected from `'Bypassed'` to `'Missed'` to match the metric definition (detections that scored below the ban threshold, not bypassed traffic).
+
+### Tests
+- **`tests/test_code_review_fixes.py`** (39 tests): Fixed cross-test contamination in C2/V2/D1 test classes. `_propagate` helper and manual propagation loops now also directly patch `core.proxy_handler.get_ip.__globals__` to handle the case where `test_functional.py` loads an orphaned proxy module via importlib at collection time, causing `get_ip.__globals__` to point to a dict not reachable via `sys.modules`.
+- **`tests/test_pure.py`** (+8): S45–S49 static QA tests for `BOT_DETECTION_ENABLED` gate (operator-passthrough action, post-ban-check ordering, endpoint rate-limit ordering, dashboard switch data attributes, render function call chain).
+- **`tests/test_functional.py`** (+4): F11c dynamic QA tests for `BOT_DETECTION_ENABLED` (ban still enforced when disabled, operator-passthrough reason recorded, honeypot suppressed, suspicious-path suppressed).
+- **Full suite**: 555 passed, 0 failed across `test_functional.py`, `test_code_review_fixes.py`, and `test_pure.py`.
+
+---
+
 ## [1.8.4] — 2026-05-15
 
 ### Added
@@ -17,6 +39,13 @@ Author: Pedro Tarrinho
 - **Log-level combo box always stale**: `loadLogLevel()` had the same `url(path)` call bug. Fix: bare string path.
 - **Traffic by Virtual Host chart crash** ("This method is not implemented: Check that a complete date adapter is provided"): `type:'time'` axis requires a registered Chart.js date adapter; none is bundled. Fix: switched to `type:'category'` with pre-formatted `fmtTime()` string labels — identical to the main traffic chart.
 - **`_loadThreatSection()` DCL deduplication**: `loadSignalPerf()` and `loadThreatDonut()` were called directly in `DOMContentLoaded` AND inside `_loadThreatSection()` (duplicate fetch on page load). Removed the direct calls; `_loadThreatSection()` is the single entry point. Updated `test_s29` / `test_s40` in `test_v182_charts.py` to assert `_loadThreatSection()` presence instead of the now-removed bare calls.
+- **Dead nav links in `center_control.html`**: sidebar link for "Center Control" pointed to `/secured/center-control` (non-existent route; correct route is `/secured/control-center`) and "Dashboard" pointed to `/secured/dashboard` (route removed in 1.7.x). Fixed: "Center Control" → `/secured/control-center` (self-link), "Dashboard" replaced by "Live Feed" → `/secured/live-feed`.
+- **Silent catch in `_attackerBan` / `_attackerUnban`** (`main.html`): both action handlers had `.catch(function(){})` — errors swallowed silently with no user feedback. Replaced with `.catch(function(e){ _gwAlert('Ban/Unban failed: ' + (e && e.message ? e.message : 'network error')); })`.
+- **Duplicate API calls on Control Center page load** (`control_center.html`): `loadSignalPerf()` and `loadThreatDonut()` were called directly in `DOMContentLoaded` in addition to being called inside `_loadThreatSection()` — two concurrent fetches to the same endpoints on every page load. Removed the redundant direct calls; `_loadThreatSection()` remains the single entry point for both.
+
+### UI/UX
+- **Sidebar nav sub-items** (all 11 dashboard pages): Live Feed, Agents, and SIEM now appear as indented sub-items under Control Center in the left sidebar. Applied `class="sub"` (with `padding-left:20px; font-size:11.5px`) and moved SIEM from end-of-nav to immediately after Agents. Active page retains combined `class="sub active"`.
+- **ARIA-live toast notifications** (all dashboard pages with a `<div id="toast">`): added `role="status" aria-live="polite" aria-atomic="true"` to toast element for screen-reader announcement on every action (ban, unban, config save, etc.).
 
 ### Security
 - **STRICT_VHOST default ON** (`STRICT_VHOST=1`): When at least one virtual host is registered, inbound requests for unregistered hosts are rejected with `502`. Has no effect when `VHOSTS` is empty (single-site deployment). Guard condition: `if STRICT_VHOST and VHOSTS and not vhost_is_configured()`. Set `STRICT_VHOST=0` to fall back to global UPSTREAM for unknown hosts.
@@ -26,7 +55,8 @@ Author: Pedro Tarrinho
 - **`tests/test_upstream_no_leak.py`** (24 new): S1–S9 static checks for M-SEC-1 scrub block; D1–D15 dynamic tests (HTML/JSON/XML/plain/JS body scrub, binary passthrough, Location/Content-Location/Link/Via/X-Backend/unknown header handling, fires without UPSTREAM_REWRITE_BASE).
 - **`tests/test_pure.py`** (+2): `test_strict_vhost_default_is_on`, `test_strict_vhost_guard_requires_vhosts_non_empty`.
 - **`tests/test_dashboard_charts.py`** (+11): 3 tests for date-adapter fix (`test_vhost_chart_does_not_use_time_axis`, `test_vhost_chart_uses_category_axis`, `test_vhost_chart_labels_use_fmtTime`); 8 tests for click-to-inspect (`_vhRawData`, `onClick`, panel HTML, tbody, label, `_showVhostBucketDetail`, toggle, share column).
-- **Full suite**: 2398 passed, 1 skipped, 0 failed (+93 new tests vs 1.8.3 baseline).
+- **`tests/test_v184_uiux.py`** (101 new — 85 static + 16 dynamic): Dead nav link verification (center_control.html routes correct); duplicate DCL call absence in control_center.html; silent-catch fix in main.html `_attackerBan` / `_attackerUnban`; ARIA-live attributes on all toast divs; nav sub-item order and `class="sub"` on all 11 pages; dynamic TestClient tests (unauthenticated redirect, authenticated control-center 200, ban endpoint auth gate, CSRF origin rejection, X-Frame-Options, CSP header presence, ban action with session, unban action with session, toast ARIA on control-center page, duplicate-call absence via content check).
+- **Full suite**: 2499 passed, 1 skipped, 6 failed (all pre-existing flaky — `test_code_review_fixes.py` shared-state contamination in async suite, pass in isolation), 0 new failures (+101 new tests vs prior 1.8.4 baseline).
 
 ### Validation
 - **Bandit**: 0 H / 0 C / 0 M

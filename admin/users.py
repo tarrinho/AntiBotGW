@@ -6,12 +6,38 @@ from config import *   # noqa: F401,F403
 from config import _DASHBOARDS_DIR  # noqa: F401 — underscore not exported by *
 from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip  # noqa: F401
-from admin.auth import _internal_authed, _request_username, _request_role, _role_denied  # noqa: F401
+from admin.auth import _internal_authed, _request_username, _request_role, _role_denied, _require_csrf  # noqa: F401
 from aiohttp import web
 from reputation.maxmind import _city_lookup, _asn_lookup  # noqa: F401
 from reputation.abuseipdb import _abuseipdb_lookup  # noqa: F401
 from reputation.crowdsec import _crowdsec_check  # noqa: F401
 from reputation.tor import _tor_exits  # noqa: F401
+
+# ── 1.8.5 Week 3 — Task D: Password complexity ───────────────────────────────
+_BREACHED_PASSWORDS = frozenset({
+    "password", "password1", "admin", "admin123", "123456",
+    "qwerty", "letmein", "welcome", "monkey", "dragon",
+    "iloveyou", "sunshine", "princess", "football", "shadow",
+    "master", "superman", "batman", "trustno1", "pass123",
+})
+
+
+def _validate_password_strength(password: str) -> "str | None":
+    """Returns error message or None if OK."""
+    if len(password) < 12:
+        return "Minimum 12 characters required"
+    if not re.search(r'[A-Z]', password):
+        return "Must contain at least one uppercase letter"
+    if not re.search(r'[a-z]', password):
+        return "Must contain at least one lowercase letter"
+    if not re.search(r'[0-9]', password):
+        return "Must contain at least one digit"
+    if not re.search(r'[^A-Za-z0-9]', password):
+        return "Must contain at least one special character"
+    if password.lower() in _BREACHED_PASSWORDS:
+        return "Password is too common"
+    return None
+
 
 # ── 1.6.7: dashboard user accounts ──────────────────────────────────
 _USERNAME_RE  = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
@@ -45,7 +71,7 @@ def _password_hash(pw: str) -> str:
     salt = secrets.token_bytes(16)
     h = hashlib.scrypt(pw.encode("utf-8"), salt=salt,
                         n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P,
-                        maxmem=64 * 1024 * 1024)
+                        maxmem=256 * 1024 * 1024)
     salt_b = _b64.urlsafe_b64encode(salt).rstrip(b"=").decode("ascii")
     hash_b = _b64.urlsafe_b64encode(h).rstrip(b"=").decode("ascii")
     return f"scrypt${_SCRYPT_N}${_SCRYPT_R}${_SCRYPT_P}${salt_b}${hash_b}"
@@ -61,7 +87,7 @@ def _password_verify(pw: str, stored: str) -> bool:
         salt = _b64.urlsafe_b64decode(salt_b + "=" * (-len(salt_b) % 4))
         want = _b64.urlsafe_b64decode(hash_b + "=" * (-len(hash_b) % 4))
         got  = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=n, r=r, p=p,
-                               maxmem=64 * 1024 * 1024)
+                               maxmem=256 * 1024 * 1024)
         return hmac.compare_digest(want, got)
     except (ValueError, TypeError):
         return False
@@ -213,6 +239,25 @@ def _session_revoke(sid: str, by_username: str) -> bool:
     return True
 
 
+def _enforce_session_limit(username: str) -> None:
+    """Revoke oldest active sessions beyond MAX_ADMIN_SESSIONS."""
+    import config as _cfg
+    max_sess = _cfg.MAX_ADMIN_SESSIONS
+    n = _t.time()
+    active = [
+        (sid, info) for sid, info in _SESSION_CACHE.items()
+        if info.get("username") == username
+        and not info.get("revoked")
+        and info.get("expires_ts", 0) > n
+    ]
+    # Sort by expiry ascending (oldest first)
+    active.sort(key=lambda x: x[1].get("expires_ts", 0))
+    if len(active) >= max_sess:
+        to_revoke = active[:len(active) - max_sess + 1]
+        for sid, _ in to_revoke:
+            _session_revoke(sid, by_username="system")
+
+
 def _session_touch(sid: str) -> None:
     """Bump last_seen_ts on the row. Throttled — at most one update
     per session per 30s to avoid flooding the writer queue."""
@@ -358,8 +403,20 @@ async def login_page_endpoint(request: web.Request):
         if not next_url.startswith("/") or next_url.startswith("//"):
             next_url = "/antibot-appsec-gateway/secured/control-center"
         return web.HTTPFound(next_url)
-    body = (_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8").replace(
-        "__BOOTSTRAP_HINT__", _bootstrap_hint_html())
+    from admin.oidc import oidc_button_html
+    from urllib.parse import unquote
+    oidc_error = request.query.get("oidc_error", "")
+    oidc_error_html = ""
+    if oidc_error:
+        import html as _html
+        oidc_error_html = (
+            f'<div id="err" class="err show">'
+            f'SSO: {_html.escape(unquote(oidc_error)[:200])}'
+            f'</div>')
+    body = ((_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8")
+            .replace("__BOOTSTRAP_HINT__", _bootstrap_hint_html())
+            .replace("__OIDC_BUTTON__", oidc_button_html())
+            .replace("__OIDC_ERROR__", oidc_error_html))
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -428,19 +485,25 @@ async def login_submit_endpoint(request: web.Request):
     slog("login_success", level="warn", username=username, ip=ip)
     _ACTIVE_SESSIONS[username] = _t.time()
     ua = (request.headers.get("User-Agent") or "")[:512]
+    # 1.8.5 Week 3 — Task E: concurrent session limit
+    _enforce_session_limit(username)
     token = _session_create(username, ip, ua)
+    sid = token.split("|")[1]
+    csrf_token = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
     resp = web.json_response({"ok": True, "redirect": next_url, "username": username},
                               headers={"Cache-Control": "no-store"})
-    # SameSite=Lax + HttpOnly + Secure-when-TLS — the cookie travels on
-    # top-level navigations from the login form's redirect, never cross-
-    # site, never readable by JavaScript.
     resp.set_cookie(_SESSION_COOKIE, token,
                      max_age=_SESSION_TTL, httponly=True,
-                     samesite="Lax", path="/",
+                     samesite="Strict", path="/",
+                     secure=SESSION_SECURE)
+    resp.set_cookie("agw_csrf", csrf_token,
+                     max_age=_SESSION_TTL, httponly=False,
+                     samesite="Strict", path="/",
                      secure=SESSION_SECURE)
     return resp
 
 
+@_require_csrf
 async def logout_endpoint(request: web.Request):
     """POST /antibot-appsec-gateway/logout — revoke the current session
     server-side AND clear the cookie. Revoking on the server makes the
@@ -658,6 +721,7 @@ async def users_list_endpoint(request: web.Request):
         headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def users_create_endpoint(request: web.Request):
     """POST <NS>/secured/admin/users — body: {username, password, role}."""
     if denied := _role_denied(request, "admin"):
@@ -679,9 +743,10 @@ async def users_create_endpoint(request: web.Request):
     if role not in _USER_ROLES:
         return web.json_response({"error": f"role must be one of {list(_USER_ROLES)}"},
                                   status=400, headers={"Cache-Control": "no-store"})
-    if len(password) < 8:
-        return web.json_response({"error": "password must be at least 8 chars"},
-                                  status=400, headers={"Cache-Control": "no-store"})
+    pw_err = _validate_password_strength(password)
+    if pw_err:
+        return web.json_response({"error": pw_err}, status=400,
+                                  headers={"Cache-Control": "no-store"})
     if _user_load(username) is not None:
         return web.json_response({"error": "username already exists"}, status=409,
                                   headers={"Cache-Control": "no-store"})
@@ -724,6 +789,7 @@ async def users_get_endpoint(request: web.Request):
     return web.json_response(out, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def users_update_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/users/{username} — body may include
     `password`, `status`, `role`. Viewers may only change their own password."""
@@ -759,9 +825,10 @@ async def users_update_endpoint(request: web.Request):
     audit_fields: dict = {}
     if "password" in data:
         pw = data.get("password") or ""
-        if len(pw) < 8:
-            return web.json_response({"error": "password must be at least 8 chars"},
-                                      status=400, headers={"Cache-Control": "no-store"})
+        pw_err = _validate_password_strength(pw)
+        if pw_err:
+            return web.json_response({"error": pw_err}, status=400,
+                                      headers={"Cache-Control": "no-store"})
         if is_self:
             cur_pw = data.get("current_password") or ""
             if not cur_pw:
@@ -862,6 +929,7 @@ async def user_sessions_list_endpoint(request: web.Request):
         headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def user_session_revoke_endpoint(request: web.Request):
     """POST <NS>/secured/admin/users/{username}/sessions/{sid}/revoke"""
     username = request.match_info.get("username", "").strip().lower()
@@ -893,6 +961,7 @@ async def user_session_revoke_endpoint(request: web.Request):
         headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def users_delete_endpoint(request: web.Request):
     """DELETE <NS>/secured/admin/users/{username}"""
     if denied := _role_denied(request, "admin"):

@@ -104,6 +104,11 @@ def _inject_fp_probe(body: bytes, track_key: str) -> bytes:
 async def fp_report_endpoint(request: web.Request):
     """Receive canvas + WebGL fingerprint. Validates HMAC, stores fingerprint,
     bumps risk when soft-renderer or webgl-missing is detected."""
+    # Task J — probe rate limiter
+    from core.proxy_handler import _probe_rate_limit_ok
+    if not _probe_rate_limit_ok(get_ip(request)):
+        return web.Response(status=429, text="rate limit",
+                            headers={"Retry-After": "10"})
     if not FP_ENRICHMENT_ENABLED:
         return web.json_response({"ok": False, "reason": "disabled"}, status=400)
     try:

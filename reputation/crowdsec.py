@@ -112,3 +112,67 @@ async def _crowdsec_check(ip: str):
             _crowdsec_stats["p99_latency_ms"] = round(
                 _s[max(0, int(len(_s) * 0.99) - 1)], 1)
         _crowdsec_stats["lookups_api"] += 1
+
+
+# ── LAPI health probe ──────────────────────────────────────────────────────
+# Called by /__integrations (Controls page) — NOT per-request.
+# Cached for _CROWDSEC_HEALTH_TTL seconds so repeated page loads don't
+# hammer LAPI.
+
+_CROWDSEC_HEALTH_TTL = 30.0
+_crowdsec_health_cache: dict = {}   # {"result": dict, "expires": float}
+
+
+async def _crowdsec_lapi_health() -> dict:
+    """Probe CrowdSec LAPI via GET /v1/heartbeat.
+
+    Returns a dict with:
+      reachable (bool | None) — True = up, False = down, None = not configured
+      ping_ms   (float | None) — round-trip in ms
+      version   (str | None)  — LAPI version string if returned
+      error     (str | None)  — error description when not reachable
+
+    Result is cached for _CROWDSEC_HEALTH_TTL seconds.
+    """
+    if not CROWDSEC_ENABLED:
+        return {"reachable": None, "ping_ms": None, "version": None,
+                "error": "not configured"}
+    n = _t.time()
+    cached = _crowdsec_health_cache.get("result")
+    if cached and _crowdsec_health_cache.get("expires", 0.0) > n:
+        return cached
+
+    result: dict = {"reachable": False, "ping_ms": None, "version": None, "error": None}
+    t0 = _t.time()
+    try:
+        timeout = ClientTimeout(total=3.0)
+        async with _get_session().get(
+                f"{CROWDSEC_LAPI_URL}/v1/heartbeat",
+                headers={"X-Api-Key": CROWDSEC_API_KEY,
+                         "Accept": "application/json"},
+                timeout=timeout) as resp:
+            result["ping_ms"] = round((_t.time() - t0) * 1000.0, 1)
+            if resp.status == 200:
+                result["reachable"] = True
+                try:
+                    data = await resp.json(content_type=None)
+                    if isinstance(data, dict):
+                        result["version"] = data.get("version") or None
+                except Exception:
+                    pass
+            elif resp.status == 404:
+                # Older LAPI — heartbeat endpoint absent, but service is up.
+                result["reachable"] = True
+                result["version"] = "unknown (heartbeat not supported)"
+            else:
+                result["error"] = f"HTTP {resp.status}"
+    except asyncio.TimeoutError:
+        result["error"] = "timeout"
+        result["ping_ms"] = round((_t.time() - t0) * 1000.0, 1)
+    except aiohttp.ClientError as e:
+        result["error"] = f"{type(e).__name__}: {str(e)[:80]}"
+        result["ping_ms"] = round((_t.time() - t0) * 1000.0, 1)
+
+    _crowdsec_health_cache["result"] = result
+    _crowdsec_health_cache["expires"] = n + _CROWDSEC_HEALTH_TTL
+    return result

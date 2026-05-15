@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.4"
+GW_VERSION = "AppSecGW_1.8.5"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -669,7 +669,8 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/maze",
     "/canary-probe/",
 )
-_ADMIN_LOGIN_SUBPATHS = ("/login", "/logout")
+_ADMIN_LOGIN_SUBPATHS = ("/login", "/logout",
+                         "/auth/oidc/login", "/auth/oidc/callback")
 
 # High-frequency read-only polling endpoints that must not flood the events
 # buffer — recording them every 2–15 s displaces real traffic events.
@@ -771,6 +772,23 @@ RISK_WEIGHTS = {
     "redirect-maze-bot":     55,   # P2: maze completed too fast
     "llm-no-subresources":   40,   # P3: HTML fetched without CSS/JS/images
     "canary-probe-miss":     35,   # P4: preload probe never fetched
+    # 1.8.5 — new signals
+    "body-critical-injection": 80,
+    "method-override-attempt": 35,
+    "smuggling-dual-header":   90,
+    "smuggling-invalid-te":    90,
+    "smuggling-obfuscated-te": 90,
+    "smuggling-duplicate-cl":  90,
+    # 1.8.5 Week 3/4 — new detection signals
+    "body-xxe":                80,
+    "body-proto-pollution":    50,
+    "header-ssti":             50,
+    "host-header-injection":   40,
+    "gql-introspection":       20,
+    "gql-batch-abuse":         40,
+    "gql-depth-exceeded":      30,
+    "upload-dangerous-ext":    60,
+    "upload-dangerous-magic":  70,
 }
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
@@ -973,6 +991,14 @@ JWT_HMAC_SECRET      = os.environ.get("JWT_HMAC_SECRET", "")
 JWT_REQUIRED_ISSUER  = os.environ.get("JWT_REQUIRED_ISSUER", "").strip()
 JWT_REQUIRED_AUDIENCE = os.environ.get("JWT_REQUIRED_AUDIENCE", "").strip()
 JWT_LEEWAY_SECS      = int(os.environ.get("JWT_LEEWAY_SECS", "30"))
+
+# ── 1.8.5 — OIDC / Keycloak SSO ─────────────────────────────────────────────
+OIDC_ISSUER        = os.environ.get("OIDC_ISSUER", "").rstrip("/")
+OIDC_CLIENT_ID     = os.environ.get("OIDC_CLIENT_ID", "").strip()
+OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
+OIDC_DEFAULT_ROLE  = os.environ.get("OIDC_DEFAULT_ROLE", "viewer").strip()
+OIDC_SCOPES        = os.environ.get("OIDC_SCOPES", "openid profile email").strip()
+OIDC_ENABLED       = bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
 
 # ── Turnstile (Cloudflare JS challenge backend) ───────────────────────────────
 TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "").strip()
@@ -1192,6 +1218,81 @@ def match_body_group(body: bytes, ctype: str):
                 return grp
     return None
 
+# 1.8.5 — ungated critical patterns: fire regardless of escalation score.
+_BODY_ALWAYS_RE = (
+    re.compile(rb"(?i)\bunion[ +/*]+(all[ +/*]+)?select\b"),
+    re.compile(rb"(?i)\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)"),
+    re.compile(rb"\$\{[\$:{}]*j[\$:{}]*n[\$:{}]*d[\$:{}]*i\s*:"),
+    re.compile(rb"169\.254\.169\.254"),
+    re.compile(rb"100\.100\.100\.200"),
+    re.compile(rb"(?i)metadata\.google\.internal"),
+    re.compile(rb"(?i)/computeMetadata/v1\b|/latest/meta-data\b"),
+    re.compile(rb"(?i)/etc/(passwd|shadow|group|sudoers)\b"),
+    re.compile(rb"(?i)/proc/self/(environ|cmdline|exe)\b"),
+    re.compile(rb"(?i)[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id)\b"),
+    re.compile(rb"(?i)\b(/bin/sh|/bin/bash|/usr/bin/python)\b"),
+    # 1.8.5 Week 3 — XXE patterns (any content-type)
+    re.compile(rb"(?i)<!ENTITY\b"),
+    re.compile(rb"(?i)<!DOCTYPE[^>]*\["),
+    re.compile(rb"(?i)SYSTEM\s+[\"'](file|http|ftp|php|expect|data)://"),
+    re.compile(rb"(?i)%[a-zA-Z_][a-zA-Z0-9_]*;"),
+)
+
+
+def check_always_body(body: bytes, ctype: str) -> bool:
+    """Check body against ungated high-confidence patterns. Returns True if matched."""
+    if not body:
+        return False
+    cl = ctype.lower()
+    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
+                                  "text/plain", "text/xml", "application/xml")):
+        return False
+    sample = body[:65536]
+    if "x-www-form-urlencoded" in cl:
+        from urllib.parse import unquote_to_bytes
+        sample = unquote_to_bytes(sample)
+    return any(p.search(sample) for p in _BODY_ALWAYS_RE)
+
+
+_VERB_OVERRIDE_HEADERS = frozenset([
+    "x-http-method-override",
+    "x-method-override",
+    "x-http-method",
+    "_method",
+])
+
+
+def check_verb_override(request) -> bool:
+    """Return True if request carries a verb-override header/param."""
+    for h in _VERB_OVERRIDE_HEADERS:
+        if h in request.headers:
+            return True
+    if "_method" in request.query:
+        return True
+    return False
+
+
+def check_smuggling(request) -> "str | None":
+    """Detect HTTP request smuggling signals. Returns signal name or None."""
+    headers = request.headers
+    has_cl = "content-length" in headers
+    has_te = "transfer-encoding" in headers
+    if has_cl and has_te:
+        return "smuggling-dual-header"
+    if has_te:
+        te_val = headers.get("transfer-encoding", "").lower().strip()
+        valid_te = {"chunked", "identity", "gzip", "compress", "deflate", "trailers"}
+        if te_val not in valid_te and te_val != "":
+            if re.search(r'chunk|xchunk', te_val, re.I) and te_val != "chunked":
+                return "smuggling-obfuscated-te"
+            elif te_val not in valid_te:
+                return "smuggling-invalid-te"
+    all_cls = headers.getall("content-length", []) if hasattr(headers, 'getall') else []
+    if len(all_cls) > 1:
+        return "smuggling-duplicate-cl"
+    return None
+
+
 # ── 1.6.2: Tier C — Outbound DLP (response-side leak detection) ─────────────
 # Scans upstream response bodies for sensitive data before forwarding to
 # the client. Off by default. Bounded by DLP_MAX_BYTES.
@@ -1301,3 +1402,205 @@ def dlp_redact(body: bytes, hits) -> bytes:
         seen.add((grp, raw))
         out = out.replace(raw, f"[REDACTED-{grp}]".encode())
     return out
+
+
+# ── 1.8.5 (Week 3) — New detection signals ───────────────────────────────────
+
+# ── Task A: XXE Detection (2.2) ───────────────────────────────────────────────
+
+_XXE_RE = (
+    re.compile(rb"(?i)<!ENTITY\b"),
+    re.compile(rb"(?i)<!DOCTYPE[^>]*\["),
+    re.compile(rb"(?i)SYSTEM\s+[\"'](file|http|ftp|php|expect|data)://"),
+    re.compile(rb"(?i)%[a-zA-Z_][a-zA-Z0-9_]*;"),
+)
+
+
+def check_xxe_body(body: bytes, ctype: str) -> bool:
+    """Check for XML External Entity injection. Gates on XML content type."""
+    if not body:
+        return False
+    cl = ctype.lower()
+    is_xml = any(t in cl for t in ("xml", "text/html")) or body[:5] in (b"<?xml", b"<!DOC")
+    if not is_xml:
+        return False
+    sample = body[:65536]
+    return any(p.search(sample) for p in _XXE_RE)
+
+
+# ── Task B: Prototype Pollution Detection (2.8) ───────────────────────────────
+
+_PROTO_POLLUTION_RE = re.compile(
+    rb'(?:"|\')(?:__proto__|constructor|prototype)(?:"|\')[\s]*:'
+)
+
+
+def _has_pollution_keys(obj, depth: int = 0) -> bool:
+    if depth > 5:
+        return False
+    if isinstance(obj, dict):
+        for k in obj:
+            if k in ("__proto__", "constructor", "prototype"):
+                return True
+            if _has_pollution_keys(obj[k], depth + 1):
+                return True
+    elif isinstance(obj, list):
+        return any(_has_pollution_keys(item, depth + 1) for item in obj)
+    return False
+
+
+def check_proto_pollution(body: bytes, ctype: str) -> bool:
+    """Detect prototype pollution in JSON bodies (or via regex fallback)."""
+    if not body:
+        return False
+    sample = body[:65536]
+    cl = ctype.lower()
+    # Try JSON parse for application/json
+    if "application/json" in cl:
+        try:
+            import json as _json
+            obj = _json.loads(sample)
+            return _has_pollution_keys(obj)
+        except Exception:
+            pass  # fall through to regex
+    # Regex fallback for all content types
+    return bool(_PROTO_POLLUTION_RE.search(sample))
+
+
+# ── Task C: SSTI in Request Headers (2.9) ─────────────────────────────────────
+
+_HEADER_INJECTION_HEADERS = frozenset({
+    "user-agent", "referer", "x-forwarded-for",
+    "cookie", "x-real-ip", "via", "x-custom-ip-authorization",
+    "x-originating-ip", "x-remote-addr",
+})
+
+_HEADER_SSTI_RE = re.compile(
+    rb'(?:'
+    rb'\{\{.{0,40}\}\}'        # Jinja2/Twig: {{...}}
+    rb'|\$\{.{0,40}\}'         # EL/Log4Shell: ${...}
+    rb'|#\{.{0,40}\}'          # Ruby/Thymeleaf: #{...}
+    rb'|<%=.{0,40}%>'          # ERB/JSP: <%=...%>
+    rb'|<#.{0,40}>'            # FreeMarker: <#...>
+    rb')'
+)
+
+
+def check_header_ssti(request) -> bool:
+    """Return True if any attacker-controlled header contains SSTI payload."""
+    for name, val in request.headers.items():
+        if name.lower() in _HEADER_INJECTION_HEADERS:
+            if _HEADER_SSTI_RE.search(val.encode("utf-8", errors="replace")[:512]):
+                return True
+    return False
+
+
+# ── Task G: Host Header Injection (2.10) ─────────────────────────────────────
+
+HOST_HEADER_VALIDATE = os.environ.get("HOST_HEADER_VALIDATE", "1") in ("1", "true", "yes")
+
+import re as _re_hhi
+_HOST_INJECT_RE = _re_hhi.compile(r'[/\\?#@<>"\']')
+
+
+def check_host_header_injection(request) -> bool:
+    """Detect Host header injection: IP in host, path chars, or suspicious format."""
+    if not HOST_HEADER_VALIDATE:
+        return False
+    host = (request.headers.get("Host") or "").lower().split(":")[0]
+    if not host:
+        return False
+    # Reject if host contains path/query characters
+    if _HOST_INJECT_RE.search(host):
+        return True
+    # Reject if host is a raw non-loopback IP (potential SSRF/password-reset poison)
+    # Allow loopback addresses (127.x.x.x, ::1) — legitimate for internal/test use
+    import ipaddress as _ipa
+    try:
+        ip_obj = _ipa.ip_address(host)
+        if ip_obj.is_loopback:
+            return False  # loopback is fine
+        return True  # raw non-loopback IP in Host header
+    except ValueError:
+        pass  # hostname — OK
+    return False
+
+
+# ── Task H: GraphQL Protection (2.4) ─────────────────────────────────────────
+
+GQL_ENABLED              = os.environ.get("GQL_ENABLED", "1") in ("1", "true", "yes")
+GQL_ALLOW_INTROSPECTION  = os.environ.get("GQL_ALLOW_INTROSPECTION", "0") in ("1", "true", "yes")
+GQL_BATCH_LIMIT          = int(os.environ.get("GQL_BATCH_LIMIT", "10"))
+GQL_MAX_DEPTH            = int(os.environ.get("GQL_MAX_DEPTH", "10"))
+GQL_PATHS                = set(p.strip() for p in os.environ.get("GQL_PATHS", "/graphql,/api/graphql").split(",") if p.strip())
+
+# ── Task I: File Upload Content Validation (2.5) ──────────────────────────────
+
+UPLOAD_SCAN_ENABLED = os.environ.get("UPLOAD_SCAN_ENABLED", "1") in ("1", "true", "yes")
+
+_DANGEROUS_EXTENSIONS = frozenset({
+    ".php", ".php3", ".php4", ".php5", ".phtml",
+    ".asp", ".aspx", ".jsp", ".jspx",
+    ".cgi", ".pl", ".py", ".rb", ".sh", ".bash",
+    ".htaccess", ".htpasswd",
+    ".exe", ".dll", ".so", ".elf",
+})
+_DANGEROUS_MAGIC = (
+    (b"<?php",      "upload-dangerous-magic"),
+    (b"<html",      "upload-dangerous-magic"),
+    (b"<!DOCTY",    "upload-dangerous-magic"),
+    (b"<script",    "upload-dangerous-magic"),
+    (b"\x7fELF",    "upload-dangerous-magic"),
+    (b"MZ\x90",     "upload-dangerous-magic"),
+    (b"PK\x03\x04", "upload-dangerous-magic"),
+    (b"#!/",        "upload-dangerous-magic"),
+)
+
+
+def check_file_upload(body: bytes, content_type: str) -> "str | None":
+    """Scan multipart/form-data uploads for dangerous extensions and magic bytes.
+    Returns a signal name or None."""
+    if not UPLOAD_SCAN_ENABLED or not body:
+        return None
+    cl = content_type.lower()
+    if "multipart/form-data" not in cl:
+        return None
+    # Extract boundary from Content-Type header (not from body)
+    import re as _re2
+    m = _re2.search(r'boundary=([^\s;]+)', content_type, _re2.I)
+    if not m:
+        return None
+    boundary = b"--" + m.group(1).strip('"').encode("ascii", errors="replace")
+    parts = body.split(boundary)
+    for part in parts[1:]:  # skip preamble
+        # Find Content-Disposition for filename
+        hdrs_end = part.find(b"\r\n\r\n")
+        if hdrs_end < 0:
+            continue
+        hdr_block = part[:hdrs_end].decode("utf-8", errors="replace").lower()
+        data = part[hdrs_end + 4:]
+        # Check filename extension
+        fm = _re2.search(r'filename\s*=\s*["\']?([^"\'\r\n;]+)', hdr_block)
+        if fm:
+            import os as _os
+            fname = fm.group(1).strip()
+            ext = _os.path.splitext(fname)[1].lower()
+            if ext in _DANGEROUS_EXTENSIONS:
+                return "upload-dangerous-ext"
+        # Check magic bytes (first 8 KB)
+        snippet = data[:8192]
+        for magic, sig in _DANGEROUS_MAGIC:
+            if snippet.startswith(magic) or snippet.lstrip(b"\r\n").startswith(magic):
+                return sig
+    return None
+
+
+# ── Metrics auth config (Task L) ──────────────────────────────────────────────
+
+METRICS_TOKEN            = os.environ.get("METRICS_TOKEN", "")
+METRICS_ALLOWED_IPS_RAW  = os.environ.get("METRICS_ALLOWED_IPS", "")
+
+# ── Session limits (Task E, F) ────────────────────────────────────────────────
+
+MAX_ADMIN_SESSIONS  = int(os.environ.get("MAX_ADMIN_SESSIONS", "5"))
+SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
