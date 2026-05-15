@@ -2783,9 +2783,8 @@ async def protect(request: web.Request, handler):
     async with state_lock:
         _s_early = ip_state[identity]
         _s_early.request_times.append(now())
-        _s_early.unique_paths.add(request.path)
-        if len(_s_early.unique_paths) > 400:
-            _s_early.unique_paths.pop()
+        if len(_s_early.unique_paths) < 400:
+            _s_early.unique_paths.add(request.path)
         _early_unique_n = len(_s_early.unique_paths)
         _s_early.path_sequence.append(request.path)  # 1.7.1: journey tracking
         # 1.7.3 — path-sweep window record (non-static, non-admin paths only;

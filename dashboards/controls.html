@@ -415,15 +415,15 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
-    <a href="/antibot-appsec-gateway/secured/live-feed">Live Feed</a>
-    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
     <a href="/antibot-appsec-gateway/secured/service">Service</a>
     <a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
     <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
     <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-    <a href="/antibot-appsec-gateway/secured/siem">SIEM</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -745,7 +745,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   </section>
 </main>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script>

@@ -660,6 +660,14 @@ async def db_writer_loop():
             break
         except Exception as e:
             slog("db_loop_error", level="error", error=str(e))
+            await asyncio.sleep(1)
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA synchronous=NORMAL")
 
 
 # ── 1.5.5 — runtime integration-secret store ──────────────────────────────

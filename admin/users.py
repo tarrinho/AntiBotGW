@@ -19,7 +19,7 @@ _USER_ROLES   = ("admin", "maintainer", "viewer")
 _USER_STATUS  = ("active", "disabled")
 _SESSION_COOKIE = "agw_session"
 _SESSION_TTL  = 12 * 3600              # 12h sliding session
-_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**14, 8, 1   # ~70 ms on a single core
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**17, 8, 1   # OWASP recommended; ~500 ms on a single core
 _LOGIN_BUCKET: dict = {}               # ip → (window_start, count)
 _LOGIN_BUCKET_LOCK = asyncio.Lock()
 # 1.6.7 — last-seen-ts per signed-in user. Bumped on every cookie-
@@ -437,7 +437,7 @@ async def login_submit_endpoint(request: web.Request):
     resp.set_cookie(_SESSION_COOKIE, token,
                      max_age=_SESSION_TTL, httponly=True,
                      samesite="Lax", path="/",
-                     secure=bool(int(os.environ.get("TLS_ENABLED", "0"))))
+                     secure=SESSION_SECURE)
     return resp
 
 

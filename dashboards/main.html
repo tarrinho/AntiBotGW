@@ -254,15 +254,15 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
-    <a href="/antibot-appsec-gateway/secured/live-feed" class="active">Live Feed</a>
-    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub active">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
     <a href="/antibot-appsec-gateway/secured/service">Service</a>
     <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
     <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
     <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-    <a href="/antibot-appsec-gateway/secured/siem">SIEM</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -607,6 +607,20 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
       <span id="vhost-breakdown-status" style="font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,monospace"></span>
     </div>
     <div style="position:relative;height:180px"><canvas id="vhost-breakdown-chart"></canvas></div>
+    <div id="vhost-bucket-detail" style="display:none;margin-top:10px;border-top:1px solid var(--line,#30363d);padding-top:8px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <span id="vhost-bucket-label" style="font-size:11px;font-weight:700;color:var(--fg,#c9d1d9);font-family:ui-monospace,Menlo,monospace"></span>
+        <button onclick="document.getElementById('vhost-bucket-detail').style.display='none'" style="background:none;border:none;color:var(--dim,#8b949e);cursor:pointer;font-size:13px;padding:0 4px">✕</button>
+      </div>
+      <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+        <thead><tr>
+          <th style="text-align:left;color:var(--dim,#8b949e);padding:3px 6px;border-bottom:1px solid var(--line,#30363d);font-weight:600">Virtual Host</th>
+          <th style="text-align:right;color:var(--dim,#8b949e);padding:3px 6px;border-bottom:1px solid var(--line,#30363d);font-weight:600">Requests</th>
+          <th style="text-align:right;color:var(--dim,#8b949e);padding:3px 6px;border-bottom:1px solid var(--line,#30363d);font-weight:600">Share</th>
+        </tr></thead>
+        <tbody id="vhost-bucket-tbody"></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -2835,6 +2849,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <script>
 (function(){
   var _vhChart = null;
+  var _vhRawData = null;   // {labels, datasets} from last API response
+  var _vhSelectedIdx = -1; // currently pinned bucket index (-1 = none)
   var _PALETTE = [
     '#58a6ff','#3fb950','#f85149','#d29922','#bc8cff',
     '#56d364','#ff7b3a','#a371f7','#79c0ff','#ffb3c8',
@@ -2864,6 +2880,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if(card) card.style.display='';
         if(statusEl) statusEl.textContent = 'updated '+new Date().toLocaleTimeString();
 
+        // Store raw data for click-to-inspect detail panel
+        var _prevSelected = _vhSelectedIdx;
+        _vhRawData = {labels: d.labels||[], datasets: datasets};
+        _vhSelectedIdx = -1;
+        document.getElementById('vhost-bucket-detail').style.display = 'none';
+
         var chartDatasets = datasets.map(function(ds,i){
           return {
             label: ds.vhost,
@@ -2890,6 +2912,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           _vhChart.data.labels   = labels;
           _vhChart.data.datasets = chartDatasets;
           _vhChart.update('none');
+          // Re-pin detail if a bucket was selected; clamp to new length
+          if(_prevSelected >= 0 && _prevSelected < labels.length){
+            _vhSelectedIdx = _prevSelected;
+            _showVhostBucketDetail(_vhSelectedIdx);
+          }
         } else {
           // Destroy any chart left on this canvas by a prior IIFE execution
           // or SPA-style navigation so Chart.js doesn't throw
@@ -2924,9 +2951,24 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
                 },
                 tooltip:{
                   callbacks:{
-                    title:function(items){ return items.length ? items[0].label : ''; }
-                  }
+                    title:function(items){ return items.length ? items[0].label : ''; },
+                    footer:function(){ return 'Click to pin bucket detail ↓'; }
+                  },
+                  footerColor:'#8b949e',
+                  footerFont:{size:10}
                 }
+              },
+              onClick: function(evt, elements){
+                if(!elements || !elements.length || !_vhRawData) return;
+                var idx = elements[0].index;
+                // toggle off if same bucket clicked again
+                if(_vhSelectedIdx === idx){
+                  _vhSelectedIdx = -1;
+                  document.getElementById('vhost-bucket-detail').style.display = 'none';
+                  return;
+                }
+                _vhSelectedIdx = idx;
+                _showVhostBucketDetail(idx);
               }
             }
           });
@@ -2935,6 +2977,39 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       .catch(function(e){
         if(statusEl) statusEl.textContent = 'error: '+e.message;
       });
+  }
+
+  function _showVhostBucketDetail(idx){
+    if(!_vhRawData) return;
+    var bucket   = _bucketVal();
+    var range    = _rangeVal();
+    var ts       = _vhRawData.labels[idx];
+    var labelStr = ts ? fmtTime(ts, bucket, range) : ('bucket #' + idx);
+    var tsEnd    = ts ? fmtTime(ts + bucket, bucket, range) : '';
+    document.getElementById('vhost-bucket-label').textContent =
+      tsEnd ? (labelStr + ' – ' + tsEnd) : labelStr;
+
+    var rows = _vhRawData.datasets.map(function(ds, i){
+      return {vhost: ds.vhost, count: ds.data[idx] || 0, color: _vhColor(i)};
+    }).filter(function(r){ return r.count > 0; })
+      .sort(function(a,b){ return b.count - a.count; });
+
+    var total = rows.reduce(function(s,r){ return s + r.count; }, 0);
+    var tbody = document.getElementById('vhost-bucket-tbody');
+    if(!rows.length){
+      tbody.innerHTML = '<tr><td colspan="3" style="padding:6px;color:var(--dim,#8b949e);text-align:center">no requests in this bucket</td></tr>';
+    } else {
+      tbody.innerHTML = _dp(rows.map(function(r){
+        var pct = total > 0 ? Math.round(r.count / total * 100) : 0;
+        var bar = '<span style="display:inline-block;width:'+pct+'%;max-width:60px;height:6px;border-radius:2px;background:'+r.color+';opacity:.7;vertical-align:middle"></span>';
+        return '<tr style="border-bottom:1px solid var(--line,#30363d)">'
+          + '<td style="padding:4px 6px;color:var(--fg,#c9d1d9);font-family:ui-monospace,Menlo,monospace;font-size:11px">'+escapeHtml(r.vhost)+'</td>'
+          + '<td style="padding:4px 6px;text-align:right;font-weight:600">'+r.count.toLocaleString()+'</td>'
+          + '<td style="padding:4px 6px;text-align:right;color:var(--dim,#8b949e)">'+bar+' '+pct+'%</td>'
+          + '</tr>';
+      }).join(''));
+    }
+    document.getElementById('vhost-bucket-detail').style.display = '';
   }
 
   document.addEventListener('DOMContentLoaded', function(){
@@ -3297,13 +3372,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       body: JSON.stringify({ip: ip, secs: secs})
     }).then(function(r){ return r.json(); })
       .then(function(d){ loadTopAttackers(); })
-      .catch(function(){});
+      .catch(function(e){ _gwAlert('Ban failed: ' + (e && e.message ? e.message : 'network error')); });
   };
 
   window._attackerUnban = function(ip) {
     fetch('/antibot-appsec-gateway/secured/unban?ip=' + encodeURIComponent(ip), {
       method:'POST', credentials:'include'
-    }).then(function(){ loadTopAttackers(); }).catch(function(){});
+    }).then(function(){ loadTopAttackers(); }).catch(function(e){ _gwAlert('Unban failed: ' + (e && e.message ? e.message : 'network error')); });
   };
 
   window._attackerChallenge = function(ip) {

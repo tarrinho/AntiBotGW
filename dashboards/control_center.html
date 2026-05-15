@@ -166,15 +166,15 @@ canvas#score-dist-chart,canvas#signal-perf-chart,canvas#geo-country-chart,canvas
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center" class="active">Control Center</a>
-    <a href="/antibot-appsec-gateway/secured/live-feed">Live Feed</a>
-    <a href="/antibot-appsec-gateway/secured/agents">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
     <a href="/antibot-appsec-gateway/secured/service">Service</a>
     <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
     <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
     <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-    <a href="/antibot-appsec-gateway/secured/siem">SIEM</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -574,7 +574,7 @@ canvas#score-dist-chart,canvas#signal-perf-chart,canvas#geo-country-chart,canvas
 
 </main>
 
-<div id="toast" class="toast"></div>
+<div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <!-- ── Account modal ───────────────────────────────────────────────── -->
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
@@ -1891,8 +1891,6 @@ document.addEventListener('DOMContentLoaded',function(){
   loadDonutChart();
   loadScoreDist();
   loadVhostHeatmap();
-  loadSignalPerf();
-  loadThreatDonut();
   _loadThreatSection();
   loadSecurityIncidents();
   _timers.push(setInterval(loadVhostStats,30000));
