@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.1"
+_EXPECTED_VERSION = "AppSecGW_1.8.3"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.1\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.3\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -5537,7 +5537,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.1" in src, "vhost_policy.html: version string missing or stale"
+    assert "AppSecGW_1.8.3" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():
@@ -5634,4 +5634,206 @@ def test_vhost_coerce_expanded():
     count = len(vhost_mod._VHOST_COERCE)
     assert count >= 100, (
         f"_VHOST_COERCE has only {count} entries — expected ≥100 after 1.8.1 expansion"
+    )
+
+
+def test_bot_detection_enabled_in_vhost_coerce():
+    """BOT_DETECTION_ENABLED must be in _VHOST_COERCE as a bool knob."""
+    import os, importlib
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    vhost_mod = importlib.import_module("vhost")
+    assert "BOT_DETECTION_ENABLED" in vhost_mod._VHOST_COERCE, (
+        "BOT_DETECTION_ENABLED not in _VHOST_COERCE — per-vhost bot detection "
+        "toggle cannot be applied via the vhost override system."
+    )
+    assert vhost_mod._VHOST_COERCE["BOT_DETECTION_ENABLED"] is bool, (
+        "_VHOST_COERCE['BOT_DETECTION_ENABLED'] must be bool coercer."
+    )
+
+
+def test_bot_detection_enabled_default_true():
+    """BOT_DETECTION_ENABLED global default must be True."""
+    import os, importlib
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    cfg = importlib.import_module("config")
+    assert getattr(cfg, "BOT_DETECTION_ENABLED", None) is True, (
+        "config.BOT_DETECTION_ENABLED default is not True — "
+        "bot detection must be on by default globally."
+    )
+
+
+def test_vhost_policy_html_has_bot_detection_card():
+    """vhost_policy.html must have the Bot Detection quick-toggle card."""
+    src = _dash("vhost_policy.html")
+    assert 'id="card-bot-detection"' in src, (
+        "vhost_policy.html: #card-bot-detection card missing — "
+        "Bot Detection quick-toggle must be present on the policy page."
+    )
+    assert 'id="bot-detection-switch"' in src, (
+        "vhost_policy.html: #bot-detection-switch element missing."
+    )
+    assert "BOT_DETECTION_ENABLED" in src, (
+        "vhost_policy.html: BOT_DETECTION_ENABLED knob reference missing."
+    )
+
+
+def test_vhost_policy_html_bot_detection_in_knob_meta():
+    """vhost_policy.html KNOB_META must include BOT_DETECTION_ENABLED."""
+    src = _dash("vhost_policy.html")
+    assert "BOT_DETECTION_ENABLED" in src, (
+        "vhost_policy.html: BOT_DETECTION_ENABLED missing from KNOB_META — "
+        "knob must be registered so it appears in the override picker."
+    )
+
+
+def test_proxy_handler_bot_detection_gate_present():
+    """proxy_handler.py must gate on BOT_DETECTION_ENABLED before first detector."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'core', 'proxy_handler.py'),
+               encoding='utf-8').read()
+    gate_call = "vc('BOT_DETECTION_ENABLED')"
+    assert gate_call in src or 'vc("BOT_DETECTION_ENABLED")' in src, (
+        "core/proxy_handler.py: BOT_DETECTION_ENABLED gate not found — "
+        "vc('BOT_DETECTION_ENABLED') must be checked in protect() before detector calls."
+    )
+    # Gate (vc() call) must appear BEFORE the first detector vc() call
+    gate_idx = src.find(gate_call)
+    honeypot_vc_idx = src.find("vc('HONEYPOT_ENABLED')")
+    assert gate_idx != -1 and honeypot_vc_idx != -1, (
+        "Could not locate vc('BOT_DETECTION_ENABLED') or vc('HONEYPOT_ENABLED') in proxy_handler.py"
+    )
+    assert gate_idx < honeypot_vc_idx, (
+        "proxy_handler.py: vc('BOT_DETECTION_ENABLED') gate must appear BEFORE "
+        "vc('HONEYPOT_ENABLED') (the first detector call) in protect()."
+    )
+
+
+# ── S45-S49: BOT_DETECTION_ENABLED static QA ─────────────────────────────
+# These tests verify code-level correctness of the per-vhost bot-detection
+# toggle without executing the server. They complement the 5 tests above
+# with additional structural invariants.
+
+def test_bot_detection_gate_uses_operator_passthrough_action():
+    """Gate must call record() with 'operator-passthrough' — not 'ok' or 'bypass-mode'."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'core', 'proxy_handler.py'),
+               encoding='utf-8').read()
+    # Locate the gate block
+    gate_idx = src.find("vc('BOT_DETECTION_ENABLED')")
+    assert gate_idx != -1, "vc('BOT_DETECTION_ENABLED') not found in proxy_handler.py"
+    # The record() call must follow within 500 chars of the gate
+    gate_block = src[gate_idx:gate_idx + 500]
+    assert "operator-passthrough" in gate_block, (
+        "proxy_handler.py: BOT_DETECTION_ENABLED gate must call record() with "
+        "'operator-passthrough' so traffic is still accounted for in dashboards."
+    )
+
+
+def test_bot_detection_gate_after_ban_checks():
+    """Ban checks (is_banned) must appear BEFORE the BOT_DETECTION_ENABLED gate."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'core', 'proxy_handler.py'),
+               encoding='utf-8').read()
+    gate_idx = src.find("vc('BOT_DETECTION_ENABLED')")
+    ban_idx = src.find("await is_banned(track_key)")
+    fp_ban_idx = src.find("await is_banned(fp_hash_key)")
+    assert gate_idx != -1, "BOT_DETECTION_ENABLED gate not found"
+    assert ban_idx != -1, "await is_banned(track_key) not found — ban check removed?"
+    assert fp_ban_idx != -1, "await is_banned(fp_hash_key) not found — fp ban check removed?"
+    assert ban_idx < gate_idx, (
+        "proxy_handler.py: is_banned(track_key) must appear BEFORE the "
+        "BOT_DETECTION_ENABLED gate — bans must be enforced even when detection is off."
+    )
+    assert fp_ban_idx < gate_idx, (
+        "proxy_handler.py: is_banned(fp_hash_key) must appear BEFORE the "
+        "BOT_DETECTION_ENABLED gate — fp bans must be enforced even when detection is off."
+    )
+
+
+def test_bot_detection_gate_after_endpoint_rate_limit():
+    """Endpoint rate limit check must appear BEFORE the BOT_DETECTION_ENABLED gate."""
+    import os
+    src = open(os.path.join(os.path.dirname(__file__), '..', 'core', 'proxy_handler.py'),
+               encoding='utf-8').read()
+    gate_idx = src.find("vc('BOT_DETECTION_ENABLED')")
+    rate_idx = src.find("_endpoint_rate_consume")
+    assert gate_idx != -1, "BOT_DETECTION_ENABLED gate not found"
+    assert rate_idx != -1, "_endpoint_rate_consume not found — endpoint rate limit removed?"
+    assert rate_idx < gate_idx, (
+        "proxy_handler.py: endpoint rate limit (_endpoint_rate_consume) must appear "
+        "BEFORE the BOT_DETECTION_ENABLED gate — rate limits apply even when detection is off."
+    )
+
+
+def test_bot_detection_switch_data_attributes():
+    """vhost_policy.html: bot-detection-switch must have correct data-knob attribute."""
+    src = _dash("vhost_policy.html")
+    # Find the switch element
+    import re
+    switch_m = re.search(r'id=["\']bot-detection-switch["\'][^>]*>', src)
+    assert switch_m, "vhost_policy.html: #bot-detection-switch element not found"
+    switch_tag = switch_m.group(0)
+    assert 'data-knob="BOT_DETECTION_ENABLED"' in switch_tag or \
+           "data-knob='BOT_DETECTION_ENABLED'" in switch_tag, (
+        "vhost_policy.html: #bot-detection-switch must have data-knob='BOT_DETECTION_ENABLED' "
+        "so the JS click handler can identify which knob to mutate."
+    )
+
+
+def test_bot_detection_card_render_fn_called_from_render_overrides():
+    """_renderBotDetectionCard() must be called from within _renderOverrides()."""
+    src = _dash("vhost_policy.html")
+    import re
+    # Extract _renderOverrides body
+    m = re.search(r'function _renderOverrides\s*\([^)]*\)\s*\{', src)
+    assert m, "vhost_policy.html: _renderOverrides() function not found"
+    start = m.end()
+    # Walk braces to find function end
+    depth = 1
+    pos = start
+    while pos < len(src) and depth:
+        if src[pos] == '{':
+            depth += 1
+        elif src[pos] == '}':
+            depth -= 1
+        pos += 1
+    fn_body = src[start:pos]
+    assert "_renderBotDetectionCard" in fn_body, (
+        "vhost_policy.html: _renderBotDetectionCard() must be called from inside "
+        "_renderOverrides() so the card re-renders whenever overrides are reloaded."
+    )
+
+
+# ── STRICT_VHOST default ──────────────────────────────────────────────────
+
+def test_strict_vhost_default_is_on():
+    """STRICT_VHOST must default to '1' (on) in config.py."""
+    import re
+    src = open(
+        __import__("pathlib").Path(__file__).resolve().parent.parent / "config.py",
+        encoding="utf-8",
+    ).read()
+    m = re.search(r'os\.environ\.get\("STRICT_VHOST",\s*"([^"]+)"\)', src)
+    assert m, "config.py: STRICT_VHOST os.environ.get() not found"
+    assert m.group(1) == "1", (
+        f"STRICT_VHOST default must be '1', got {m.group(1)!r}"
+    )
+
+
+def test_strict_vhost_guard_requires_vhosts_non_empty():
+    """The STRICT_VHOST check in proxy_handler.py must only fire when VHOSTS
+    is non-empty (single-upstream mode with no vhosts configured must pass through)."""
+    src = open(
+        __import__("pathlib").Path(__file__).resolve().parent.parent
+        / "core" / "proxy_handler.py",
+        encoding="utf-8",
+    ).read()
+    # Find the STRICT_VHOST guard line
+    import re
+    m = re.search(r'if STRICT_VHOST.*?vhost_is_configured\(\)', src)
+    assert m, "core/proxy_handler.py: STRICT_VHOST guard line not found"
+    guard = m.group(0)
+    assert "VHOSTS" in guard, (
+        "STRICT_VHOST guard must check 'VHOSTS' (non-empty) before rejecting — "
+        "single-upstream deployments with no vhosts must not be broken by STRICT_VHOST=1"
     )

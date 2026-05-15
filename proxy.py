@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.1 — entry point only.
+Anti-bot reverse proxy v1.8.3 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -453,6 +453,12 @@ def make_app() -> web.Application:
         ("top-attacked-paths",       "GET",    top_attacked_paths_endpoint,           True),
         ("attack-heatmap",           "GET",    attack_heatmap_endpoint,               True),
         ("xff",                      "GET",    debug_xff,                             True),
+        # ── Phase 9+: new analytics endpoints ──────────────────────────
+        ("score-distribution",       "GET",    score_distribution_endpoint,           True),
+        ("traffic-pipeline",         "GET",    traffic_pipeline_endpoint,             True),
+        ("vhost-heatmap",            "GET",    vhost_heatmap_endpoint,                True),
+        ("signal-performance",       "GET",    signal_performance_endpoint,           True),
+        ("security-incidents",       "GET",    security_incidents_endpoint,           True),
     ]
 
     _METHOD_MAP = {

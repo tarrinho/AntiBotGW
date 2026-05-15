@@ -1082,6 +1082,9 @@ def test_165_every_knob_persists_round_trip():
         "BYPASS_PATHS": ["/static/", "/assets/"],
         "BYPASS_MODE": False,
         "UPSTREAM": "https://test-upstream.example.com",
+        "ALLOW_PRIVATE_UPSTREAM": True,
+        "STRICT_VHOST": True,
+        "UPSTREAM_REWRITE_BASE": "http://host.docker.internal:8080",
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

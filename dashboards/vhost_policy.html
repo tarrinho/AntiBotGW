@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.1 · Vhost Policy</title>
+<title>AppSecGW_1.8.3 · Vhost Policy</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -106,7 +106,7 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.1</div>
+    <div id="sidebar-brand-ver">1.8.3</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -148,6 +148,17 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
   <span id="unsaved-msg">Unsaved changes</span>
   <button id="btn-apply">Apply changes</button>
   <button class="secondary" id="btn-reset">Reset</button>
+</div>
+
+<div class="card" id="card-bot-detection" style="display:none">
+  <h2>Bot Detection</h2>
+  <div style="display:flex;align-items:center;gap:14px;padding:4px 0">
+    <div id="bot-detection-switch" class="switch on" data-knob="BOT_DETECTION_ENABLED" data-type="bool" style="flex-shrink:0"></div>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--fg)" id="bot-detection-label">Enabled</div>
+      <div style="font-size:11px;color:var(--dim);margin-top:2px">When disabled, all heuristic detectors are skipped for this vhost. Existing bans and rate limits still apply.</div>
+    </div>
+  </div>
 </div>
 
 <div class="card" id="card-overrides">
@@ -252,6 +263,7 @@ var KNOB_META = {
   CANARY_TTL_S:                  {g:'Ban Durations',     t:'int'},
   SESSION_CHURN_WINDOW_S:        {g:'Ban Durations',     t:'int'},
   SESSION_CHURN_MAX:             {g:'Ban Durations',     t:'int'},
+  BOT_DETECTION_ENABLED:         {g:'Bypass',            t:'bool'},
   BYPASS_MODE:                   {g:'Bypass',            t:'bool'},
   BYPASS_PATHS:                  {g:'Bypass',            t:'list'},
   COUNTRY_BLOCK_ENABLED:         {g:'Geo / Network',     t:'bool'},
@@ -365,7 +377,23 @@ function _readWidget(el){
   return el.value.trim();
 }
 
+function _renderBotDetectionCard(){
+  var card=document.getElementById('card-bot-detection');
+  if(!_hostname){card.style.display='none';return;}
+  card.style.display='';
+  // Effective value: pending overrides > vhost overrides > global default (true)
+  var eff=_pending.hasOwnProperty('BOT_DETECTION_ENABLED')?_pending['BOT_DETECTION_ENABLED']
+        :_overrides.hasOwnProperty('BOT_DETECTION_ENABLED')?_overrides['BOT_DETECTION_ENABLED']
+        :(_globalVals['BOT_DETECTION_ENABLED']!==false);
+  var sw=document.getElementById('bot-detection-switch');
+  var lbl=document.getElementById('bot-detection-label');
+  sw.classList.toggle('on',!!eff);
+  lbl.textContent=eff?'Enabled':'Disabled';
+  lbl.style.color=eff?'var(--green)':'var(--yellow)';
+}
+
 function _renderOverrides(){
+  _renderBotDetectionCard();
   var container=document.getElementById('overrides-container');
   var active=Object.assign({},_overrides,_pending);
   var keys=Object.keys(active).sort();
@@ -551,6 +579,15 @@ document.getElementById('picker-modal').addEventListener('click',function(e){ if
 document.getElementById('picker-search').addEventListener('input',function(){ _buildPicker(this.value); });
 document.getElementById('btn-apply').addEventListener('click',_applyChanges);
 document.getElementById('btn-reset').addEventListener('click',_resetChanges);
+document.getElementById('bot-detection-switch').addEventListener('click',function(){
+  if(!_hostname) return;
+  this.classList.toggle('on');
+  var enabled=this.classList.contains('on');
+  _pending['BOT_DETECTION_ENABLED']=enabled;
+  document.getElementById('bot-detection-label').textContent=enabled?'Enabled':'Disabled';
+  document.getElementById('bot-detection-label').style.color=enabled?'var(--green)':'var(--yellow)';
+  _updateUnsavedBar();
+});
 
 document.getElementById('vhost-select').addEventListener('change',function(){
   _hostname=this.value; _pending={}; _setParam('hostname',_hostname);

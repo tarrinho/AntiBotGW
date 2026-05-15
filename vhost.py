@@ -224,6 +224,7 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Bypass ────────────────────────────────────────────────────────────────
     "BYPASS_MODE":                   bool,
     "BYPASS_PATHS":                  _to_path_list,
+    "BOT_DETECTION_ENABLED":         bool,
     # ── Geo / network ─────────────────────────────────────────────────────────
     "COUNTRY_BLOCK_ENABLED":         bool,
     "COUNTRY_DENYLIST":              lambda v: frozenset(
@@ -284,6 +285,7 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Origin / headers ─────────────────────────────────────────────────────
     "STRICT_ORIGIN":                 bool,
     "INJECT_SECURITY_HEADERS":       bool,
+    "UPSTREAM_REWRITE_BASE":         str,
     "ALLOWED_METHODS":               _to_str_set,
     # ── Upstream limits ───────────────────────────────────────────────────────
     "UPSTREAM_MAX_BODY":             int,

@@ -428,6 +428,17 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
     if reason == "chal-required":
         global _chal_required_count
         _chal_required_count += 1
+        # Increment challenged counter in the current timeline bucket
+        try:
+            from core.metrics import _bucket_now as _bn
+            _cb = _bn()
+            if _cb in timeline:
+                _tb = timeline[_cb]
+                if "challenged" not in _tb:
+                    _tb["challenged"] = 0
+                _tb["challenged"] += 1
+        except Exception:
+            pass
     headers = {
         "Content-Type": _decoy_ctype,
         "Cache-Control": "no-store",
@@ -845,6 +856,26 @@ async def proxy(request: web.Request):
                     for hk, hv in SECURITY_HEADERS.items():
                         if hv and hk.lower() not in {k.lower() for k in response_headers}:
                             response_headers[hk] = hv
+
+                # Rewrite absolute upstream URLs so the internal upstream origin is
+                # never exposed to the browser — in response headers (Location,
+                # Content-Location, Link) and in HTML/JSON/XML response bodies.
+                # Only active when UPSTREAM_REWRITE_BASE is set (global or per-vhost).
+                _rewrite_base = (vc("UPSTREAM_REWRITE_BASE") or "").rstrip("/")
+                if _rewrite_base:
+                    _rb_bytes = _rewrite_base.encode()
+                    _rb_str   = _rewrite_base
+                    # Scrub from forwarded response headers; skip if stripping
+                    # would produce an empty value (invalid redirect / broken link).
+                    for _hk in ("location", "content-location", "link"):
+                        _hv = response_headers.get(_hk, "")
+                        if _rb_str in _hv:
+                            _rewritten = _hv.replace(_rb_str, "")
+                            if _rewritten:
+                                response_headers[_hk] = _rewritten
+                    # Scrub from response body (HTML, JSON, XML, plain text)
+                    if _rb_bytes in resp_body:
+                        resp_body = resp_body.replace(_rb_bytes, b"")
 
                 # Augment upstream CSP to allow Cloudflare Turnstile.  Upstream
                 # sites that embed Turnstile widgets may have a script-src that
@@ -1896,8 +1927,9 @@ _HOT_RELOAD_KNOBS = {
     # this value at runtime updates the displayed setting (useful for
     # operators staging a migration) but won't switch live connections
     # until the container restarts.
-    "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
-    "STRICT_VHOST":           (_to_bool, None),
+    "ALLOW_PRIVATE_UPSTREAM":  (_to_bool, None),
+    "STRICT_VHOST":            (_to_bool, None),
+    "UPSTREAM_REWRITE_BASE":   (str, lambda v: len(v) <= 2048 and (v == "" or v.startswith(("http://", "https://")))),
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
     "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
     # 1.6.5 — escalation threshold (cost gate for expensive / 3rd-order detectors)
@@ -2000,6 +2032,8 @@ if "ALLOW_PRIVATE_UPSTREAM" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"ALLOW_PRIVATE_UPSTREAM"}
 if "STRICT_VHOST" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"STRICT_VHOST"}
+if "UPSTREAM_REWRITE_BASE" in os.environ:
+    _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"UPSTREAM_REWRITE_BASE"}
 
 
 def _json_safe(v):
@@ -2575,6 +2609,17 @@ async def protect(request: web.Request, handler):
                 if _s_pow and _s_pow.risk_score >= POW_CHAL_THRESHOLD:
                     _pow_chal_str = make_pow_challenge("*", "*",
                                                        risk_score=int(_s_pow.risk_score))
+            # Increment challenged counter in the current timeline bucket
+            try:
+                from core.metrics import _bucket_now as _bn_jsc
+                _cb_jsc = _bn_jsc()
+                if _cb_jsc in timeline:
+                    _tb_jsc = timeline[_cb_jsc]
+                    if "challenged" not in _tb_jsc:
+                        _tb_jsc["challenged"] = 0
+                    _tb_jsc["challenged"] += 1
+            except Exception:
+                pass
             return _serve_js_challenge(request, pow_challenge=_pow_chal_str)
         # 1.4.4: heuristic auto-mint mode (no Turnstile). HTML GETs are
         # allowed through; the response gets the cookie set after the
@@ -2642,7 +2687,10 @@ async def protect(request: web.Request, handler):
         return await _serve_mirrored_404()
 
     # STRICT_VHOST: reject unconfigured inbound hosts before any proxy logic.
-    if STRICT_VHOST and not vhost_is_configured():
+    # Only enforced when at least one vhost is registered — if VHOSTS is empty
+    # the operator hasn't configured multi-vhost mode and the global UPSTREAM
+    # acts as the single upstream (single-site deployment).
+    if STRICT_VHOST and VHOSTS and not vhost_is_configured():
         return web.Response(status=502, text="no upstream configured for this host\n",
                             headers={"Cache-Control": "no-store", "X-Frame-Options": "DENY"})
 
@@ -2874,6 +2922,17 @@ async def protect(request: web.Request, handler):
             return await _silent_decoy_response(
                 ip, ua, path, "rate-limit-endpoint",
                 track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid)
+
+    # BOT_DETECTION_ENABLED=false (per-vhost): skip all heuristic detectors.
+    # Existing bans and rate limits above still apply — this gate only bypasses
+    # the scoring/detection pipeline. Intended for trusted internal vhosts or
+    # staging hosts where bot-detection false-positives block legitimate traffic.
+    if not vc('BOT_DETECTION_ENABLED'):
+        resp = await handler(request)
+        await record(ip, ua, path, resp.status, "operator-passthrough",
+                     track_key=track_key, sid=sid, fp=fp, ja4=ja4,
+                     request_id=rid, method=request.method)
+        return resp
 
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
     #    Threshold-based: at NAT-like IPs, requires accumulated badness.

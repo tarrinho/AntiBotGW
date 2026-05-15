@@ -60,15 +60,16 @@ def _timeline_bump(reason: str, missed: bool = False, path: str = ""):
     b = _bucket_now()
     if b not in timeline:
         timeline[b] = {"total": 0, "blocked": 0, "allowed": 0, "missed": 0,
-                       "gwmgmt": 0, "by_reason": defaultdict(int)}
+                       "gwmgmt": 0, "challenged": 0, "by_reason": defaultdict(int)}
         # cleanup buckets older than retention
         cutoff = b - TIMELINE_RETAIN_SECS
         for k in [k for k in timeline if k < cutoff]:
             del timeline[k]
     bucket = timeline[b]
     # Backfill fields on buckets restored from older snapshots that lacked them
-    if "missed"  not in bucket: bucket["missed"]  = 0
-    if "gwmgmt"  not in bucket: bucket["gwmgmt"]  = 0
+    if "missed"      not in bucket: bucket["missed"]      = 0
+    if "gwmgmt"      not in bucket: bucket["gwmgmt"]      = 0
+    if "challenged"  not in bucket: bucket["challenged"]  = 0
     bucket["total"] += 1
     if path and path.startswith(ADMIN_NS):
         bucket["gwmgmt"] += 1
