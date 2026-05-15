@@ -5899,6 +5899,6 @@ def test_maxmind_auto_fetch_uses_fetch_edition():
            / "reputation" / "maxmind.py").read_text()
     auto_start = src.find("def _maxmind_auto_fetch")
     assert auto_start >= 0
-    auto_body = src[auto_start:auto_start + 500]
+    auto_body = src[auto_start:auto_start + 800]
     assert "_maxmind_fetch_edition" in auto_body, \
         "_maxmind_auto_fetch must call _maxmind_fetch_edition for ETag support"

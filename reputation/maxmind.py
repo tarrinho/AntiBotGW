@@ -136,7 +136,7 @@ def _maxmind_fetch_edition(edition: str, dest: str, key: str,
     try:
         slog("maxmind_checking", level="info", edition=edition,
              conditional=bool(etag))
-        with urllib.request.urlopen(req, timeout=60) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:  # nosec B310 — hardcoded HTTPS to MaxMind
             if r.status == 304:
                 # Database unchanged — touch mtime so staleness clock resets.
                 if os.path.exists(dest):

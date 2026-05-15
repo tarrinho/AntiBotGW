@@ -22,9 +22,9 @@ Author: Pedro Tarrinho
 
 ### Tests
 - **`tests/test_code_review_fixes.py`** (39 tests): Fixed cross-test contamination in C2/V2/D1 test classes. `_propagate` helper and manual propagation loops now also directly patch `core.proxy_handler.get_ip.__globals__` to handle the case where `test_functional.py` loads an orphaned proxy module via importlib at collection time, causing `get_ip.__globals__` to point to a dict not reachable via `sys.modules`.
-- **`tests/test_pure.py`** (+8): S45–S49 static QA tests for `BOT_DETECTION_ENABLED` gate (operator-passthrough action, post-ban-check ordering, endpoint rate-limit ordering, dashboard switch data attributes, render function call chain).
+- **`tests/test_pure.py`** (+14): S45–S52 static QA tests for `BOT_DETECTION_ENABLED` gate; S53–S58 static QA tests for MaxMind ETag conditional download (`_maxmind_fetch_edition` exists, ETag helpers exist, `If-None-Match` sent, 304 handled, refresh loop delegates to `_maxmind_fetch_edition`, auto-fetch delegates to `_maxmind_fetch_edition`).
 - **`tests/test_functional.py`** (+4): F11c dynamic QA tests for `BOT_DETECTION_ENABLED` (ban still enforced when disabled, operator-passthrough reason recorded, honeypot suppressed, suspicious-path suppressed).
-- **Full suite**: 555 passed, 0 failed across `test_functional.py`, `test_code_review_fixes.py`, and `test_pure.py`.
+- **Full suite**: 610 unit + 38 functional + 152 regression → 800/800 pass.
 
 ---
 

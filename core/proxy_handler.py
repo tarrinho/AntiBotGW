@@ -1881,7 +1881,9 @@ async def secrets_endpoint(request: web.Request):
       POST  /__secrets?key=...   body: JSON object with any subset of:
                                 {TURNSTILE_SITEKEY, TURNSTILE_SECRET,
                                  ABUSEIPDB_KEY, CROWDSEC_LAPI_URL,
-                                 CROWDSEC_LAPI_KEY, MAXMIND_LICENSE_KEY}
+                                 CROWDSEC_LAPI_KEY, MAXMIND_LICENSE_KEY,
+                                 OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET,
+                                 OIDC_DEFAULT_ROLE, OIDC_SCOPES}
       DELETE /__secrets?key=...&name=KEY  -> clear one secret + revert to
                                  env (which may also be empty).
 
@@ -1914,6 +1916,7 @@ async def secrets_endpoint(request: web.Request):
                  "CROWDSEC_ENABLED":      CROWDSEC_ENABLED,
                  "MAXMIND_ENABLED":       MAXMIND_ENABLED,
                  "MAXMIND_CITY_ENABLED":  MAXMIND_CITY_ENABLED,
+                 "OIDC_ENABLED":          g.get("OIDC_ENABLED", False),
              }},
             headers={"Cache-Control": "no-store"})
 
