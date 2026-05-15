@@ -1708,7 +1708,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
   async function loadDetectorStats(){
     if (_userIsTyping()) return;
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/detector-stats', {credentials:'include'});
       const d = await r.json();
       paintMethodBars(d.methods || []);
       paintTopMethods(d.methods || []);
@@ -2805,7 +2805,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   // 1.6.5 — log-level combo box: read current value, push on change, persist.
   async function loadLogLevel(){
     try {
-      const r = await fetch(url('/antibot-appsec-gateway/secured/config'), {credentials:'include'});
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
       const d = await r.json();
       const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
       lvlSelect.value = cur;
@@ -2888,6 +2888,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           _vhChart.data.datasets = chartDatasets;
           _vhChart.update('none');
         } else {
+          // Destroy any chart left on this canvas by a prior IIFE execution
+          // or SPA-style navigation so Chart.js doesn't throw
+          // "Canvas is already in use" when new Chart() is called.
+          var _orphan = (typeof Chart !== 'undefined' && Chart.getChart) ? Chart.getChart(ctx) : null;
+          if(_orphan){ _orphan.destroy(); }
           _vhChart = new Chart(ctx, {
             type:'line',
             data:{ labels: labels, datasets: chartDatasets },
