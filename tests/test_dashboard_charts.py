@@ -264,3 +264,55 @@ def test_vhost_chart_orphan_guard_precedes_new_chart():
         "main.html: Chart.getChart orphan check must appear BEFORE "
         "the new Chart(ctx, ...) call for vhost-breakdown-chart"
     )
+
+
+# ── vhost breakdown chart: date-adapter fix ───────────────────────────────
+# Chart.js 3+ type:'time' requires a registered date adapter (date-fns, luxon,
+# etc.).  Without one it throws "This method is not implemented: Check that a
+# complete date adapter is provided." — silently caught by .catch() so the
+# status bar shows the error string instead of a working chart.
+#
+# Fix: use type:'category' with pre-formatted string labels (fmtTime) — no
+# adapter needed, same axis behaviour as the main traffic chart.
+
+def test_vhost_chart_does_not_use_time_axis():
+    """vhost-breakdown chart must NOT use type:'time' (no date adapter bundled)."""
+    src = _read("main.html")
+    new_chart_pos = src.find("_vhChart = new Chart(ctx,")
+    assert new_chart_pos != -1, "_vhChart = new Chart(ctx, ...) not found"
+    # Inspect the 600 chars after new Chart() — that covers the options block
+    block = src[new_chart_pos: new_chart_pos + 600]
+    assert "type:'time'" not in block and 'type: "time"' not in block, (
+        "main.html: vhost-breakdown chart uses type:'time' without a bundled "
+        "date adapter — Chart.js raises 'This method is not implemented'. "
+        "Use type:'category' with pre-formatted string labels instead."
+    )
+
+
+def test_vhost_chart_uses_category_axis():
+    """vhost-breakdown chart must use type:'category' for its x-axis."""
+    src = _read("main.html")
+    new_chart_pos = src.find("_vhChart = new Chart(ctx,")
+    assert new_chart_pos != -1, "_vhChart = new Chart(ctx, ...) not found"
+    block = src[new_chart_pos: new_chart_pos + 600]
+    assert "type:'category'" in block or "type: 'category'" in block, (
+        "main.html: vhost-breakdown chart x-axis is not type:'category'. "
+        "Without a date adapter, type:'time' will crash."
+    )
+
+
+def test_vhost_chart_labels_use_fmtTime():
+    """vhost-breakdown must format timestamp labels with fmtTime(), not new Date()."""
+    src = _read("main.html")
+    # The labels map expression inside loadVhostBreakdown
+    load_pos = src.find("function loadVhostBreakdown")
+    assert load_pos != -1, "loadVhostBreakdown not found in main.html"
+    block = src[load_pos: load_pos + 800]
+    assert "fmtTime(" in block, (
+        "main.html: loadVhostBreakdown() must use fmtTime() to produce string "
+        "labels for the category axis — raw Date objects require type:'time'."
+    )
+    assert "new Date(ts*1000)" not in block, (
+        "main.html: loadVhostBreakdown() still maps labels to Date objects. "
+        "Switch to fmtTime(ts, bucket, range) string labels."
+    )

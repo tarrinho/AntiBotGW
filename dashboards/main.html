@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.3 · Live Feed</title>
+<title>AppSecGW_1.8.4 · Live Feed</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -262,6 +262,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
     <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
     <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+    <a href="/antibot-appsec-gateway/secured/siem">SIEM</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -2852,7 +2853,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       .then(function(r){ if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
       .then(function(d){
         var datasets = d.datasets||[];
-        var labels   = (d.labels||[]).map(function(ts){ return new Date(ts*1000); });
+        var range    = _rangeVal();
+        var bucket   = _bucketVal();
+        var labels   = (d.labels||[]).map(function(ts){ return fmtTime(ts, bucket, range); });
         var card = document.getElementById('card-vhost-breakdown');
         if(!datasets.length){
           if(card) card.style.display='none';
@@ -2902,9 +2905,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
               interaction:{mode:'index',intersect:false},
               scales:{
                 x:{
-                  type:'time',
-                  time:{unit:'minute',tooltipFormat:'HH:mm',displayFormats:{minute:'HH:mm',hour:'HH:mm'}},
-                  ticks:{color:'#8b949e',maxTicksLimit:8,maxRotation:0},
+                  type:'category',
+                  ticks:{color:'#8b949e',maxTicksLimit:8,maxRotation:0,autoSkip:true},
                   grid:{color:'rgba(48,54,61,.5)'}
                 },
                 y:{
