@@ -609,6 +609,109 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
 </div>
 
+<!-- ── 1.8.3 Feature 7: AI Risk Score Percentile Ribbon ─────────────── -->
+<div class="row" style="grid-template-columns:1fr 1fr;gap:14px;margin-top:14px">
+  <div class="card" id="card-risk-ribbon">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px">
+      <h2 style="margin:0">AI Risk Score Distribution <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">P25–P75 IQR · P75–P95 amber · P95–P99 red · live poll</span></h2>
+      <span id="risk-ribbon-status" class="dim" style="font-size:10px;font-family:ui-monospace,Menlo,monospace"></span>
+    </div>
+    <!-- KPI row -->
+    <div id="risk-kpi-row" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:8px">
+      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Median P50</div>
+        <div id="kpi-p50" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--fg)">—</div>
+      </div>
+      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">P95</div>
+        <div id="kpi-p95" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--yellow)">—</div>
+      </div>
+      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">% ≥ Block</div>
+        <div id="kpi-pct-ban" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--red)">—</div>
+      </div>
+      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">% ≥ Soft</div>
+        <div id="kpi-pct-soft" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--yellow)">—</div>
+      </div>
+      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+        <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Trend</div>
+        <div id="kpi-trend" style="font:700 20px ui-monospace,Menlo,monospace;color:var(--fg)">—</div>
+      </div>
+    </div>
+    <div style="position:relative;height:140px"><canvas id="risk-ribbon-chart"></canvas></div>
+  </div>
+
+  <div class="card" id="card-risk-histogram">
+    <h2 style="margin:0 0 8px 0">Risk Score Histogram <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">current snapshot · drag threshold to adjust block score live</span></h2>
+    <div style="position:relative;height:160px"><canvas id="risk-hist-chart"></canvas></div>
+    <div id="risk-hist-legend" style="margin-top:6px;font-size:10px;color:var(--dim);display:flex;gap:12px;flex-wrap:wrap">
+      <span><span style="color:var(--green)">█</span> clean</span>
+      <span><span style="color:var(--yellow)">█</span> soft-challenge</span>
+      <span><span style="color:var(--red)">█</span> ban zone</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── 1.8.3 Feature 8: Ban Events & CAPTCHA Funnel ──────────────── -->
+<div class="row" style="grid-template-columns:2fr 1fr;gap:14px;margin-top:14px">
+  <div class="card" id="card-ban-timeline">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Ban Events Timeline <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">IP bans · session bans · challenge issued · bypass</span></h2>
+      <select id="ban-range-select" style="background:#161b22;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit">
+        <option value="60">Last 1h</option>
+        <option value="120" selected>Last 2h</option>
+        <option value="360">Last 6h</option>
+        <option value="1440">Last 24h</option>
+      </select>
+    </div>
+    <div style="position:relative;height:160px"><canvas id="ban-timeline-chart"></canvas></div>
+  </div>
+  <div class="card" id="card-captcha-funnel">
+    <h2 style="margin:0 0 10px 0">Challenge Funnel <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">since boot</span></h2>
+    <div id="captcha-funnel-bars" style="display:flex;flex-direction:column;gap:8px"></div>
+    <div id="captcha-solve-rate" style="margin-top:10px;font-size:11px;color:var(--dim)"></div>
+  </div>
+</div>
+
+<!-- ── 1.8.3 Feature 9: Top Attackers Leaderboard ────────────────── -->
+<div class="grid" style="margin-top:14px">
+  <div class="card" id="card-top-attackers">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+      <h2 style="margin:0">Top Attackers <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">sorted by risk score · enriched with ASN / AbuseIPDB / ban state</span></h2>
+      <div style="display:flex;gap:8px;align-items:center">
+        <select id="attackers-sort" style="background:#161b22;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit">
+          <option value="risk_score" selected>Sort: Risk Score</option>
+          <option value="request_count">Sort: Requests</option>
+          <option value="blocked_count">Sort: Blocks</option>
+        </select>
+        <span id="attackers-count" class="dim" style="font-size:10.5px;font-family:ui-monospace,Menlo,monospace"></span>
+      </div>
+    </div>
+    <div style="overflow-x:auto">
+    <table id="top-attackers-tbl" style="width:100%;border-collapse:collapse;font-size:11.5px">
+      <thead>
+        <tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px">
+          <th style="padding:5px 6px;white-space:nowrap">IP</th>
+          <th style="padding:5px 6px;white-space:nowrap">ASN / Org</th>
+          <th style="padding:5px 6px">Country</th>
+          <th style="padding:5px 6px;text-align:right">Reqs</th>
+          <th style="padding:5px 6px;text-align:right">Blocks</th>
+          <th style="padding:5px 6px;text-align:right">Bot</th>
+          <th style="padding:5px 6px;text-align:right">Risk</th>
+          <th style="padding:5px 6px;text-align:right">Abuse</th>
+          <th style="padding:5px 6px">JA4</th>
+          <th style="padding:5px 6px">Ban</th>
+          <th style="padding:5px 6px">24h</th>
+          <th style="padding:5px 6px">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="attackers-tbody"></tbody>
+    </table>
+    </div>
+  </div>
+</div>
+
 <div class="foot">refreshes every 2s · <code id="ts"></code></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
@@ -2841,6 +2944,378 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 <!-- /Vhost breakdown chart -->
 
+<!-- ── 1.8.3: Feature 7 — AI Risk Score Percentile Ribbon ───────────────── -->
+<script>
+(function(){
+  var NS = '/antibot-appsec-gateway/secured/';
+  var ribbonChart = null, histChart = null;
+
+  function _colourForScore(sc, soft, ban) {
+    if (sc >= ban)  return 'rgba(248,81,73,';
+    if (sc >= soft) return 'rgba(210,153,34,';
+    return 'rgba(63,185,80,';
+  }
+
+  function _sparkColour(v, mx) {
+    var r = mx > 0 ? v / mx : 0;
+    if (r > 0.6) return '#f85149';
+    if (r > 0.3) return '#d29922';
+    return '#3fb950';
+  }
+
+  function _renderRibbonChart(history, soft, ban) {
+    var ctx = document.getElementById('risk-ribbon-chart');
+    if (!ctx) return;
+    if (ribbonChart) ribbonChart.destroy();
+
+    var labels = history.map(function(h) {
+      return new Date(h.ts * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    });
+
+    function _band(key, alpha) {
+      return history.map(function(h){ return h[key]; }).map(function(v){ return parseFloat(v)||0; });
+    }
+
+    var p5  = _band('p5');
+    var p25 = _band('p25');
+    var p50 = _band('p50');
+    var p75 = _band('p75');
+    var p95 = _band('p95');
+    var p99 = _band('p99');
+
+    ribbonChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [
+          { label:'P99', data: p99, borderColor:'rgba(248,81,73,0.7)',  backgroundColor:'rgba(248,81,73,0.30)', fill:'-1', tension:0.3, pointRadius:0, borderWidth:1.5 },
+          { label:'P95', data: p95, borderColor:'rgba(248,81,73,0.9)',  backgroundColor:'rgba(210,153,34,0.30)', fill:'-1', tension:0.3, pointRadius:0, borderWidth:2 },
+          { label:'P75', data: p75, borderColor:'rgba(210,153,34,0.8)', backgroundColor:'rgba(63,185,80,0.30)', fill:'-1', tension:0.3, pointRadius:0, borderWidth:1.5 },
+          { label:'P50', data: p50, borderColor:'rgba(88,166,255,0.9)', backgroundColor:'transparent',           fill:false, tension:0.3, pointRadius:0, borderWidth:2 },
+          { label:'P25', data: p25, borderColor:'rgba(63,185,80,0.6)', backgroundColor:'transparent',            fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
+          { label:'P5',  data: p5,  borderColor:'rgba(63,185,80,0.3)', backgroundColor:'transparent',            fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, animation: false,
+        scales: {
+          x: { ticks:{ color:'#8b949e', maxTicksLimit:6, font:{size:9} }, grid:{ color:'rgba(48,54,61,0.5)' } },
+          y: { min:0, max:100, ticks:{ color:'#8b949e', font:{size:9} }, grid:{ color:'rgba(48,54,61,0.5)' },
+               afterDataLimits: function(axis){
+                 axis.max = Math.max(axis.max, ban + 5);
+               }
+             }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: { mode:'index', intersect:false,
+            callbacks:{ label: function(ctx){ return ctx.dataset.label+': '+ctx.parsed.y.toFixed(1); } }
+          }
+        }
+      }
+    });
+  }
+
+  function _renderHistogram(bins, soft, ban) {
+    var ctx = document.getElementById('risk-hist-chart');
+    if (!ctx) return;
+    if (histChart) histChart.destroy();
+    var labels = bins.map(function(b){ return b.bin; });
+    var counts  = bins.map(function(b){ return b.count; });
+    var colours = bins.map(function(b){
+      if (b.bin >= ban)  return 'rgba(248,81,73,0.85)';
+      if (b.bin >= soft) return 'rgba(210,153,34,0.85)';
+      return 'rgba(63,185,80,0.75)';
+    });
+    histChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [{ label:'IPs', data: counts, backgroundColor: colours, borderWidth:0, borderRadius:2 }]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false, animation:false,
+        scales: {
+          x: { ticks:{ color:'#8b949e', font:{size:8}, maxRotation:0 },
+               grid:{ display:false },
+               title:{ display:true, text:'Score', color:'#8b949e', font:{size:9} } },
+          y: { ticks:{ color:'#8b949e', font:{size:9} }, grid:{ color:'rgba(48,54,61,0.4)' } }
+        },
+        plugins:{ legend:{ display:false }, tooltip:{ callbacks:{ title: function(items){ return 'Score '+items[0].label+'–'+(parseInt(items[0].label)+4); } } } }
+      }
+    });
+  }
+
+  function _trendArrow(trend) {
+    if (trend === 'up')   return { icon:'↑', color:'var(--red)' };
+    if (trend === 'down') return { icon:'↓', color:'var(--green)' };
+    return { icon:'→', color:'var(--dim)' };
+  }
+
+  function _updateKPIs(kpis) {
+    var t = _trendArrow(kpis.trend);
+    var el;
+    el = document.getElementById('kpi-p50');     if(el) el.textContent = kpis.p50.toFixed(1);
+    el = document.getElementById('kpi-p95');     if(el) el.textContent = kpis.p95.toFixed(1);
+    el = document.getElementById('kpi-pct-ban'); if(el) el.textContent = kpis.pct_ban + '%';
+    el = document.getElementById('kpi-pct-soft');if(el) el.textContent = kpis.pct_soft + '%';
+    el = document.getElementById('kpi-trend');
+    if(el){ el.textContent = t.icon; el.style.color = t.color; }
+  }
+
+  function loadRiskPercentiles() {
+    fetch(NS + 'risk-percentiles', {credentials:'include'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d || d.error) return;
+        var statusEl = document.getElementById('risk-ribbon-status');
+        if (statusEl) statusEl.textContent = d.total_ips + ' IPs · ' + new Date().toLocaleTimeString();
+        _updateKPIs(d.kpis);
+        var h = d.history;
+        if (h && h.length > 1) _renderRibbonChart(h, d.threshold_soft, d.threshold_ban);
+        if (d.histogram && d.histogram.length) _renderHistogram(d.histogram, d.threshold_soft, d.threshold_ban);
+      })
+      .catch(function(){});
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    loadRiskPercentiles();
+    _timers.push(setInterval(loadRiskPercentiles, 4000));
+  });
+  window._loadRiskPercentiles = loadRiskPercentiles;
+})();
+</script>
+
+<!-- ── 1.8.3: Feature 8 — Ban Events Timeline + CAPTCHA Funnel ──────────── -->
+<script>
+(function(){
+  var NS = '/antibot-appsec-gateway/secured/';
+  var banTimelineChart = null;
+
+  function _renderBanTimeline(series, bucket_secs) {
+    var ctx = document.getElementById('ban-timeline-chart');
+    if (!ctx) return;
+    if (banTimelineChart) banTimelineChart.destroy();
+
+    var labels = series.map(function(s){
+      return new Date(s.t * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    });
+
+    banTimelineChart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: labels,
+        datasets: [
+          { label:'IP bans',      data: series.map(function(s){ return s.ip_ban;  }), backgroundColor:'rgba(248,81,73,0.8)',   stack:'s' },
+          { label:'Session bans', data: series.map(function(s){ return s.ses_ban; }), backgroundColor:'rgba(188,140,255,0.8)', stack:'s' },
+          { label:'Challenges',   data: series.map(function(s){ return s.chal;    }), backgroundColor:'rgba(210,153,34,0.8)',  stack:'s' },
+          { label:'Bypass',       data: series.map(function(s){ return s.bypass;  }), backgroundColor:'rgba(63,185,80,0.5)',   stack:'s' },
+        ]
+      },
+      options: {
+        responsive:true, maintainAspectRatio:false, animation:false,
+        scales: {
+          x: { stacked:true, ticks:{ color:'#8b949e', maxTicksLimit:8, font:{size:9} }, grid:{ display:false } },
+          y: { stacked:true, ticks:{ color:'#8b949e', font:{size:9} }, grid:{ color:'rgba(48,54,61,0.5)' } }
+        },
+        plugins: {
+          legend: { position:'top', labels:{ color:'#8b949e', font:{size:10}, boxWidth:10, padding:8 } },
+          tooltip: { mode:'index', intersect:false }
+        }
+      }
+    });
+  }
+
+  function _renderCaptchaFunnel(f) {
+    var el = document.getElementById('captcha-funnel-bars');
+    if (!el) return;
+    var mx = Math.max(f.issued, f.ips_challenged, f.ips_passed, 1);
+    var items = [
+      { label:'Challenges issued',    val: f.issued,        color:'var(--yellow)' },
+      { label:'Unique IPs challenged', val: f.ips_challenged, color:'#58a6ff' },
+      { label:'IPs that passed',      val: f.ips_passed,    color:'var(--green)' },
+      { label:'Still banned',         val: f.ips_banned,    color:'var(--red)' },
+    ];
+    // nosemgrep: tests.array-join-to-innerHTML — labels are hardcoded strings; val is numeric; color is from hardcoded array
+    el.innerHTML = items.map(function(it){
+      var pct = Math.round(it.val / mx * 100);
+      return '<div><div style="display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim);margin-bottom:2px">'
+        + '<span>' + escapeHtml(it.label) + '</span><b style="color:var(--fg)">' + it.val + '</b></div>'
+        + '<div style="height:8px;border-radius:4px;background:var(--line);position:relative">'
+        + '<div style="position:absolute;left:0;top:0;bottom:0;border-radius:4px;background:' + it.color + ';width:' + pct + '%"></div>'
+        + '</div></div>';
+    }).join('');
+    var rateEl = document.getElementById('captcha-solve-rate');
+    if (rateEl) {
+      var rate = f.solve_rate;
+      var rateColor = rate > 80 ? 'var(--green)' : rate > 50 ? 'var(--yellow)' : 'var(--red)';
+      rateEl.innerHTML = 'Solve rate: <b style="color:' + rateColor + '">' + rate.toFixed(1) + '%</b>'
+        + (rate < 60 ? ' <span style="color:var(--yellow)">⚠ Too aggressive?</span>' : '')
+        + (rate > 95 && f.ips_challenged > 20 ? ' <span style="color:var(--red)">⚠ Farm attack?</span>' : '');
+    }
+  }
+
+  function loadBanEvents() {
+    var range = (document.getElementById('ban-range-select') || {}).value || '120';
+    fetch(NS + 'ban-events?range=' + range, {credentials:'include'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d || d.error) return;
+        _renderBanTimeline(d.timeline, d.bucket_secs);
+        _renderCaptchaFunnel(d.captcha_funnel);
+      })
+      .catch(function(){});
+  }
+
+  document.addEventListener('DOMContentLoaded', function(){
+    loadBanEvents();
+    _timers.push(setInterval(loadBanEvents, 8000));
+    var sel = document.getElementById('ban-range-select');
+    if (sel) sel.addEventListener('change', function(){ loadBanEvents(); });
+  });
+  window._loadBanEvents = loadBanEvents;
+})();
+</script>
+
+<!-- ── 1.8.3: Feature 9 — Top Attackers Leaderboard ────────────────────── -->
+<script>
+(function(){
+  var NS = '/antibot-appsec-gateway/secured/';
+
+  function _miniSparkline(data) {
+    var mx = Math.max.apply(null, data.concat([1]));
+    var w = 60, h = 18;
+    var bw = Math.floor(w / data.length);
+    var rects = data.map(function(v, i){
+      var bh = Math.max(1, Math.round(v / mx * h));
+      var col = v === 0 ? '#30363d' : (v / mx > 0.6 ? '#f85149' : v / mx > 0.3 ? '#d29922' : '#3fb950');
+      return '<rect x="' + (i * bw) + '" y="' + (h - bh) + '" width="' + Math.max(1, bw-1) + '" height="' + bh + '" fill="' + col + '"/>';
+    }).join('');
+    return '<svg width="' + w + '" height="' + h + '" viewBox="0 0 ' + w + ' ' + h + '" style="display:block">' + rects + '</svg>';
+  }
+
+  function _banBadge(rec) {
+    if (!rec.is_banned) return '<span style="color:var(--dim);font-size:10px">—</span>';
+    var expiry = rec.ban_until ? new Date(rec.ban_until * 1000).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '∞';
+    return '<span style="color:var(--red);font-size:10px;white-space:nowrap">🔴 until ' + escapeHtml(expiry) + '</span>';
+  }
+
+  function _abuseBadge(score) {
+    if (score < 0) return '<span style="color:var(--dim);font-size:10px">—</span>';
+    var col = score >= 80 ? 'var(--red)' : score >= 50 ? 'var(--yellow)' : 'var(--dim)';
+    return '<span style="color:' + col + ';font:600 11px ui-monospace;white-space:nowrap">' + score + '%</span>';
+  }
+
+  function _riskBadge(score) {
+    var col = score >= 50 ? 'var(--red)' : score >= 4 ? 'var(--yellow)' : 'var(--green)';
+    return '<span style="color:' + col + ';font:700 12px ui-monospace">' + score.toFixed(0) + '</span>';
+  }
+
+  function _botBadge(score) {
+    var col = score >= 70 ? 'var(--red)' : score >= 30 ? 'var(--yellow)' : 'var(--dim)';
+    return '<span style="color:' + col + ';font:600 11px ui-monospace">' + score + '</span>';
+  }
+
+  function _quickActions(rec) {
+    var ip = rec.ip;
+    var btns = '';
+    if (!rec.is_banned) {
+      btns += '<button onclick="_attackerBan(' + JSON.stringify(ip) + ',86400)" title="IP ban 24h" '
+        + 'style="font-size:9px;padding:2px 5px;background:rgba(248,81,73,0.15);color:var(--red);border:1px solid var(--red);border-radius:3px;cursor:pointer;white-space:nowrap">Ban</button> ';
+    } else {
+      btns += '<button onclick="_attackerUnban(' + JSON.stringify(ip) + ')" title="Unban" '
+        + 'style="font-size:9px;padding:2px 5px;background:rgba(63,185,80,0.15);color:var(--green);border:1px solid var(--green);border-radius:3px;cursor:pointer;white-space:nowrap">Unban</button> ';
+    }
+    btns += '<button onclick="_attackerChallenge(' + JSON.stringify(ip) + ')" title="Force challenge" '
+      + 'style="font-size:9px;padding:2px 5px;background:rgba(210,153,34,0.15);color:var(--yellow);border:1px solid var(--yellow);border-radius:3px;cursor:pointer;white-space:nowrap">Chal</button> ';
+    return btns;
+  }
+
+  function _renderLeaderboard(attackers, total) {
+    var tbody = document.getElementById('attackers-tbody');
+    if (!tbody) return;
+    var countEl = document.getElementById('attackers-count');
+    if (countEl) countEl.textContent = attackers.length + ' of ' + total + ' tracked';
+
+    if (!attackers.length) {
+      tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:20px;color:var(--dim)">No tracked IPs</td></tr>';
+      return;
+    }
+
+    var rows = attackers.map(function(rec) {
+      var orgDisplay = rec.org ? (rec.asn ? 'AS' + rec.asn + ' · ' + rec.org : rec.org) : (rec.asn ? 'AS' + rec.asn : '—');
+      orgDisplay = orgDisplay.substring(0, 40);
+      var hostingBadge = rec.is_hosting ? ' <span style="color:var(--red);font-size:9px">[DC]</span>' : '';
+      var ja4Short = rec.ja4 ? rec.ja4.substring(0, 12) + (rec.ja4.length > 12 ? '…' : '') : '—';
+      var flag = rec.flag || '';
+
+      return '<tr style="border-bottom:1px solid var(--line)">'
+        + '<td style="padding:4px 6px;white-space:nowrap"><span style="font:700 11px ui-monospace,Menlo,monospace;cursor:pointer" title="Click to copy" onclick="navigator.clipboard&&navigator.clipboard.writeText(' + JSON.stringify(rec.ip) + ')">'
+        + escapeHtml(rec.ip) + '</span></td>'
+        + '<td style="padding:4px 6px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(orgDisplay) + '">'
+        + escapeHtml(orgDisplay) + hostingBadge + '</td>'
+        + '<td style="padding:4px 6px;white-space:nowrap">' + (flag ? flag + ' ' : '') + escapeHtml(rec.country || '—') + '</td>'
+        + '<td style="padding:4px 6px;text-align:right;font-family:ui-monospace">' + rec.request_count + '</td>'
+        + '<td style="padding:4px 6px;text-align:right;font-family:ui-monospace">' + rec.blocked_count + '</td>'
+        + '<td style="padding:4px 6px;text-align:right">' + _botBadge(rec.bot_score) + '</td>'
+        + '<td style="padding:4px 6px;text-align:right">' + _riskBadge(rec.risk_score) + '</td>'
+        + '<td style="padding:4px 6px;text-align:right">' + _abuseBadge(rec.abuse_score) + '</td>'
+        + '<td style="padding:4px 6px" title="' + escapeHtml(rec.ja4 || '') + '">'
+        + '<span style="font:11px ui-monospace;color:var(--dim)">' + escapeHtml(ja4Short) + '</span></td>'
+        + '<td style="padding:4px 6px">' + _banBadge(rec) + '</td>'
+        + '<td style="padding:4px 6px">' + _miniSparkline(rec.sparkline) + '</td>'
+        + '<td style="padding:4px 6px;white-space:nowrap">' + _quickActions(rec) + '</td>'
+        + '</tr>';
+    }).join('');
+    tbody.innerHTML = _dp(rows);
+  }
+
+  function loadTopAttackers() {
+    var sortEl = document.getElementById('attackers-sort');
+    var sort = sortEl ? sortEl.value : 'risk_score';
+    fetch(NS + 'top-attackers?limit=50&sort=' + encodeURIComponent(sort), {credentials:'include'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d) {
+        if (!d || d.error) return;
+        _renderLeaderboard(d.attackers, d.total_tracked);
+      })
+      .catch(function(){});
+  }
+
+  window._attackerBan = function(ip, secs) {
+    if (!confirm('Ban ' + ip + ' for ' + (secs/3600) + 'h?')) return;
+    fetch('/antibot-appsec-gateway/secured/ban', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ip: ip, secs: secs})
+    }).then(function(r){ return r.json(); })
+      .then(function(d){ loadTopAttackers(); })
+      .catch(function(){});
+  };
+
+  window._attackerUnban = function(ip) {
+    fetch('/antibot-appsec-gateway/secured/unban?ip=' + encodeURIComponent(ip), {
+      method:'POST', credentials:'include'
+    }).then(function(){ loadTopAttackers(); }).catch(function(){});
+  };
+
+  window._attackerChallenge = function(ip) {
+    fetch('/antibot-appsec-gateway/secured/config', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({FORCE_CHALLENGE_IP: ip})
+    }).then(function(){ }).catch(function(){});
+  };
+
+  document.addEventListener('DOMContentLoaded', function(){
+    loadTopAttackers();
+    _timers.push(setInterval(loadTopAttackers, 10000));
+    var sel = document.getElementById('attackers-sort');
+    if (sel) sel.addEventListener('change', function(){ loadTopAttackers(); });
+  });
+  window._loadTopAttackers = loadTopAttackers;
+})();
+</script>
 
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
