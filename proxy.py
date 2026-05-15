@@ -39,6 +39,7 @@ from reputation import *    # noqa: F401,F403 — AbuseIPDB, CrowdSec, MaxMind, 
 from challenge import *     # noqa: F401,F403 — PoW, JS challenge, tarpit
 from integrations import *  # noqa: F401,F403 — Redis, webhook, JA4, JWT, endpoint policy
 from admin import *         # noqa: F401,F403 — auth, users, mesh, settings
+from admin.oidc import oidc_login_endpoint, oidc_callback_endpoint  # noqa: F401
 from dashboards import *    # noqa: F401,F403 — agents, service metrics, controls
 from core import *          # noqa: F401,F403 — metrics, middleware, proxy handler
 
@@ -242,6 +243,16 @@ async def on_startup(app):
             except (AttributeError, TypeError):
                 pass
     db_writer_task = asyncio.create_task(db_writer_loop())
+    # 1.8.5 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
+    from db.sqlite import _rehydrate_bans
+    _rehydrate_bans()
+    # 1.8.5 — start ip_state LRU eviction loop.
+    from state import _ip_state_evict_loop as _evict_loop
+    import state as _state_mod
+    _state_mod._ip_state_eviction_task = asyncio.create_task(_evict_loop())
+    # 1.8.5 — start webhook worker with retry + circuit breaker.
+    from integrations.webhook import start_webhook_worker
+    await start_webhook_worker()
     db_load_admin_ips()
     print(f"[admin-ips] {len(ADMIN_ALLOWED_ENTRIES)} entries loaded "
           f"({sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='env')} env, "
@@ -296,6 +307,9 @@ async def on_startup(app):
     asyncio.create_task(_periodic_404_refresh_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
     service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
+    # 1.8.5 Week 4 — Task K: alerting thresholds background task
+    from core.alerting import _alerting_loop
+    asyncio.create_task(_alerting_loop())
     # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
     # MAXMIND_LICENSE_KEY is set; checks daily, refreshes when >30d old).
     asyncio.create_task(_maxmind_refresh_loop())
@@ -501,6 +515,9 @@ def make_app() -> web.Application:
     app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
     app.router.add_post (PUBLIC + "/logout", logout_endpoint)
+    # 1.8.5 — OIDC/Keycloak SSO (both public — no session cookie before login)
+    app.router.add_get  (PUBLIC + "/auth/oidc/login",    oidc_login_endpoint)
+    app.router.add_get  (PUBLIC + "/auth/oidc/callback", oidc_callback_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
     app.router.add_get  (SEC    + "/ip-intel/{ip}", ip_intel_endpoint)
     USERS = SEC + "/admin/users"
@@ -582,7 +599,7 @@ def get_ip(request) -> str:
     xff = request.headers.get("X-Forwarded-For")
     def _trusted(remote):
         if not _nets:
-            return True
+            return False  # fail-closed: require explicit TRUSTED_PROXIES
         if not remote:
             return False
         try:

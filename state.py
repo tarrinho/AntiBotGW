@@ -7,13 +7,14 @@ Dependency rule: imports from config.py only (no other project imports).
 
 import asyncio
 import time
-from collections import defaultdict, deque
+from collections import defaultdict, deque, OrderedDict
 from dataclasses import dataclass, field
 from typing import Dict
 
 from config import (
     RATE_LIMIT_BURST,
     SERVICE_METRICS_RETENTION,
+    MAX_IDENTITIES,
 )
 
 # ── IpState dataclass ──────────────────────────────────────────────────────
@@ -70,8 +71,98 @@ class IpState:
 
 
 # ── Primary identity state ─────────────────────────────────────────────────
-ip_state: Dict[str, IpState] = defaultdict(IpState)
+_IP_STATE_MAX = MAX_IDENTITIES
+
+
+class _BoundedIpStateDict:
+    """LRU-capped dict of IpState objects. Thread-safe via state_lock.
+    Evicts oldest entries when capacity is reached. Allows defaultdict-like
+    access: missing keys auto-create a fresh IpState."""
+
+    def __init__(self, maxsize: int = 50000):
+        self._data: OrderedDict = OrderedDict()
+        self._maxsize = maxsize
+
+    def __getitem__(self, key: str) -> "IpState":
+        if key not in self._data:
+            self._data[key] = IpState()
+            self._data.move_to_end(key)
+            if len(self._data) > self._maxsize:
+                self._data.popitem(last=False)
+        else:
+            self._data.move_to_end(key)
+        return self._data[key]
+
+    def __setitem__(self, key: str, value: "IpState"):
+        self._data[key] = value
+        self._data.move_to_end(key)
+        if len(self._data) > self._maxsize:
+            self._data.popitem(last=False)
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._data
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def get(self, key: str, default=None):
+        if key in self._data:
+            self._data.move_to_end(key)
+            return self._data[key]
+        return default
+
+    def values(self):
+        return self._data.values()
+
+    def items(self):
+        return self._data.items()
+
+    def keys(self):
+        return self._data.keys()
+
+    def __delitem__(self, key: str):
+        del self._data[key]
+
+    def setdefault(self, key: str, default: "IpState | None" = None) -> "IpState":
+        if key not in self._data:
+            val = default if default is not None else IpState()
+            self[key] = val
+        return self._data[key]
+
+    def pop(self, key: str, *args):
+        return self._data.pop(key, *args)
+
+    def clear(self):
+        self._data.clear()
+
+    def evict_expired(self, ttl_secs: float = 3600.0):
+        """Remove entries not seen within ttl_secs. Call from background task."""
+        import time as _time
+        cutoff = _time.monotonic() - ttl_secs
+        stale = [k for k, v in self._data.items() if v.last_seen < cutoff]
+        for k in stale:
+            del self._data[k]
+        return len(stale)
+
+
+ip_state: _BoundedIpStateDict = _BoundedIpStateDict(maxsize=_IP_STATE_MAX)
 state_lock = asyncio.Lock()
+
+_ip_state_eviction_task = None
+
+
+async def _ip_state_evict_loop(ttl_secs: float = 3600.0, interval_secs: float = 300.0):
+    """Background task: evict IpState entries not seen in ttl_secs."""
+    from helpers import slog
+    while True:
+        await asyncio.sleep(interval_secs)
+        try:
+            evicted = ip_state.evict_expired(ttl_secs)
+            if evicted:
+                slog("ip_state_evicted", level="info", count=evicted,
+                     remaining=len(ip_state))
+        except Exception:
+            pass
 
 # Inverted index: ip → set of track_keys whose last_ip == ip.
 # Maintained at every last_ip write site; allows O(1) NAT-detection lookup

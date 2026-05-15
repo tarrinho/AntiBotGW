@@ -189,7 +189,15 @@ class TestC2AuthorizedBotBanMonotonic:
 
     def _propagate(self, proxy_module, key, value):
         import sys
+        import core.proxy_handler as _cph
         setattr(proxy_module, key, value)
+        # Also patch get_ip.__globals__ directly: it may point to an orphaned proxy module
+        # loaded by test_functional.py via importlib (not in sys.modules), so the
+        # sys.modules loop below would miss it.
+        try:
+            _cph.get_ip.__globals__[key] = value
+        except (AttributeError, TypeError):
+            pass
         for mod in list(sys.modules.values()):
             if mod is None or mod is proxy_module:
                 continue
@@ -233,8 +241,14 @@ class TestC2AuthorizedBotBanMonotonic:
                 "action": "ban",
                 "enabled": True,
             }]
+            import ipaddress as _ipa
             old_bots = proxy_module.AUTHORIZED_BOT_UAS
+            old_xff = proxy_module.TRUST_XFF
+            old_nets = proxy_module.TRUSTED_PROXIES_NETS
             self._propagate(proxy_module, "AUTHORIZED_BOT_UAS", bot_rule)
+            self._propagate(proxy_module, "TRUST_XFF", "first")
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS",
+                            [_ipa.ip_network("127.0.0.1/32")])
 
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -246,6 +260,8 @@ class TestC2AuthorizedBotBanMonotonic:
                     )
 
             self._propagate(proxy_module, "AUTHORIZED_BOT_UAS", old_bots)
+            self._propagate(proxy_module, "TRUST_XFF", old_xff)
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS", old_nets)
 
             s = _st.ip_state.get(ip)
             assert s is not None, "ip_state entry must exist after bot ban"
@@ -672,7 +688,15 @@ class TestV2CustomAllowRuleCallsRecord:
 
     def _propagate(self, proxy_module, key, value):
         import sys
+        import core.proxy_handler as _cph
         setattr(proxy_module, key, value)
+        # Also patch get_ip.__globals__ directly: it may point to an orphaned proxy module
+        # loaded by test_functional.py via importlib (not in sys.modules), so the
+        # sys.modules loop below would miss it.
+        try:
+            _cph.get_ip.__globals__[key] = value
+        except (AttributeError, TypeError):
+            pass
         for mod in list(sys.modules.values()):
             if mod is None or mod is proxy_module:
                 continue
@@ -690,14 +714,18 @@ class TestV2CustomAllowRuleCallsRecord:
             _st.ip_state.pop(ip, None)
             _st.events.clear()
 
+            import ipaddress as _ipa
             rule = [{"if": {"path": "/allowed-path*"}, "then": "allow", "tag": "test"}]
             parsed = proxy_module._to_custom_rules(rule)
             old_rules = proxy_module.CUSTOM_RULES
-            # Also set BYPASS_PATHS so the request is not blocked by UA filter
-            # before reaching the CUSTOM_RULES check
             old_bypass = proxy_module.BYPASS_PATHS
+            old_xff = proxy_module.TRUST_XFF
+            old_nets = proxy_module.TRUSTED_PROXIES_NETS
             self._propagate(proxy_module, "CUSTOM_RULES", parsed)
             self._propagate(proxy_module, "BYPASS_PATHS", ["/allowed-path"])
+            self._propagate(proxy_module, "TRUST_XFF", "first")
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS",
+                            [_ipa.ip_network("127.0.0.1/32")])
 
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -708,6 +736,8 @@ class TestV2CustomAllowRuleCallsRecord:
 
             self._propagate(proxy_module, "CUSTOM_RULES", old_rules)
             self._propagate(proxy_module, "BYPASS_PATHS", old_bypass)
+            self._propagate(proxy_module, "TRUST_XFF", old_xff)
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS", old_nets)
 
             matched = [e for e in _st.events if e.get("ip") == ip]
             assert matched, (
@@ -723,12 +753,18 @@ class TestV2CustomAllowRuleCallsRecord:
             ip = "4.4.4.4"
             _st.ip_state.pop(ip, None)
 
+            import ipaddress as _ipa
             rule = [{"if": {"path": "/tracked-allow*"}, "then": "allow", "tag": "test"}]
             parsed = proxy_module._to_custom_rules(rule)
             old_rules = proxy_module.CUSTOM_RULES
             old_bypass = proxy_module.BYPASS_PATHS
+            old_xff = proxy_module.TRUST_XFF
+            old_nets = proxy_module.TRUSTED_PROXIES_NETS
             self._propagate(proxy_module, "CUSTOM_RULES", parsed)
             self._propagate(proxy_module, "BYPASS_PATHS", ["/tracked-allow"])
+            self._propagate(proxy_module, "TRUST_XFF", "first")
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS",
+                            [_ipa.ip_network("127.0.0.1/32")])
 
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -739,6 +775,8 @@ class TestV2CustomAllowRuleCallsRecord:
 
             self._propagate(proxy_module, "CUSTOM_RULES", old_rules)
             self._propagate(proxy_module, "BYPASS_PATHS", old_bypass)
+            self._propagate(proxy_module, "TRUST_XFF", old_xff)
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS", old_nets)
 
             s = _st.ip_state.get(ip)
             assert s is not None, "ip_state entry must exist after allow-rule request"
@@ -755,12 +793,18 @@ class TestV2CustomAllowRuleCallsRecord:
             ip = "6.6.6.6"
             _st.ip_state.pop(ip, None)
 
+            import ipaddress as _ipa
             rule = [{"if": {"path": "/vhost-allow*"}, "then": "allow", "tag": "test"}]
             parsed = proxy_module._to_custom_rules(rule)
             old_rules = proxy_module.CUSTOM_RULES
             old_bypass = proxy_module.BYPASS_PATHS
+            old_xff = proxy_module.TRUST_XFF
+            old_nets = proxy_module.TRUSTED_PROXIES_NETS
             self._propagate(proxy_module, "CUSTOM_RULES", parsed)
             self._propagate(proxy_module, "BYPASS_PATHS", ["/vhost-allow"])
+            self._propagate(proxy_module, "TRUST_XFF", "first")
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS",
+                            [_ipa.ip_network("127.0.0.1/32")])
 
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -771,6 +815,8 @@ class TestV2CustomAllowRuleCallsRecord:
 
             self._propagate(proxy_module, "CUSTOM_RULES", old_rules)
             self._propagate(proxy_module, "BYPASS_PATHS", old_bypass)
+            self._propagate(proxy_module, "TRUST_XFF", old_xff)
+            self._propagate(proxy_module, "TRUSTED_PROXIES_NETS", old_nets)
 
             s = _st.ip_state.get(ip)
             assert s is not None
@@ -925,13 +971,17 @@ class TestD1RecordMethodField:
         (not the early-exit ua-blocked path which doesn't receive method yet)."""
         async def go():
             import sys
+            import core.proxy_handler as _cph
             import state as _st
             _st.events.clear()
 
+            import ipaddress as _ipa
             ip = "77.77.77.77"
             _st.ip_state.pop(ip, None)
 
             old_bypass = proxy_module.BYPASS_PATHS
+            old_xff = proxy_module.TRUST_XFF
+            old_nets = proxy_module.TRUSTED_PROXIES_NETS
             new_bypass = ["/method-test-"]
             for mod in [proxy_module] + [m for m in sys.modules.values()
                                           if m and hasattr(m, "BYPASS_PATHS")]:
@@ -939,6 +989,21 @@ class TestD1RecordMethodField:
                     setattr(mod, "BYPASS_PATHS", new_bypass)
                 except (AttributeError, TypeError):
                     pass
+            _cph.get_ip.__globals__["BYPASS_PATHS"] = new_bypass
+            for mod in [proxy_module] + [m for m in sys.modules.values()
+                                          if m and hasattr(m, "TRUST_XFF")]:
+                try:
+                    setattr(mod, "TRUST_XFF", "first")
+                except (AttributeError, TypeError):
+                    pass
+            for mod in [proxy_module] + [m for m in sys.modules.values()
+                                          if m and hasattr(m, "TRUSTED_PROXIES_NETS")]:
+                try:
+                    setattr(mod, "TRUSTED_PROXIES_NETS", [_ipa.ip_network("127.0.0.1/32")])
+                except (AttributeError, TypeError):
+                    pass
+            _cph.get_ip.__globals__["TRUST_XFF"] = "first"
+            _cph.get_ip.__globals__["TRUSTED_PROXIES_NETS"] = [_ipa.ip_network("127.0.0.1/32")]
 
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -954,6 +1019,21 @@ class TestD1RecordMethodField:
                     setattr(mod, "BYPASS_PATHS", old_bypass)
                 except (AttributeError, TypeError):
                     pass
+            _cph.get_ip.__globals__["BYPASS_PATHS"] = old_bypass
+            for mod in [proxy_module] + [m for m in sys.modules.values()
+                                          if m and hasattr(m, "TRUST_XFF")]:
+                try:
+                    setattr(mod, "TRUST_XFF", old_xff)
+                except (AttributeError, TypeError):
+                    pass
+            for mod in [proxy_module] + [m for m in sys.modules.values()
+                                          if m and hasattr(m, "TRUSTED_PROXIES_NETS")]:
+                try:
+                    setattr(mod, "TRUSTED_PROXIES_NETS", old_nets)
+                except (AttributeError, TypeError):
+                    pass
+            _cph.get_ip.__globals__["TRUST_XFF"] = old_xff
+            _cph.get_ip.__globals__["TRUSTED_PROXIES_NETS"] = old_nets
 
             ip_events = [e for e in _st.events if e.get("ip") == ip]
             assert len(ip_events) >= 2, \
@@ -968,13 +1048,17 @@ class TestD1RecordMethodField:
         """The method column in the events DB table must be populated for bypass-path traffic."""
         async def go():
             import sys
+            import core.proxy_handler as _cph
 
+            import ipaddress as _ipa
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     _wipe_events(proxy_module)
                     ip = "88.88.88.88"
 
                     old_bypass = proxy_module.BYPASS_PATHS
+                    old_xff = proxy_module.TRUST_XFF
+                    old_nets = proxy_module.TRUSTED_PROXIES_NETS
                     new_bypass = ["/db-method-test"]
                     for mod in [proxy_module] + [m for m in sys.modules.values()
                                                   if m and hasattr(m, "BYPASS_PATHS")]:
@@ -982,6 +1066,24 @@ class TestD1RecordMethodField:
                             setattr(mod, "BYPASS_PATHS", new_bypass)
                         except (AttributeError, TypeError):
                             pass
+                    for mod in [proxy_module] + [m for m in sys.modules.values()
+                                                  if m and hasattr(m, "TRUST_XFF")]:
+                        try:
+                            setattr(mod, "TRUST_XFF", "first")
+                        except (AttributeError, TypeError):
+                            pass
+                    for mod in [proxy_module] + [m for m in sys.modules.values()
+                                                  if m and hasattr(m, "TRUSTED_PROXIES_NETS")]:
+                        try:
+                            setattr(mod, "TRUSTED_PROXIES_NETS",
+                                    [_ipa.ip_network("127.0.0.1/32")])
+                        except (AttributeError, TypeError):
+                            pass
+                    # Also patch get_ip.__globals__ directly: it may point to an orphaned
+                    # proxy module not in sys.modules (loaded by test_functional.py).
+                    _cph.get_ip.__globals__["BYPASS_PATHS"] = new_bypass
+                    _cph.get_ip.__globals__["TRUST_XFF"] = "first"
+                    _cph.get_ip.__globals__["TRUSTED_PROXIES_NETS"] = [_ipa.ip_network("127.0.0.1/32")]
 
                     await c.get("/db-method-test/resource",
                                 headers={"X-Forwarded-For": ip, "Host": "db.test"})
@@ -993,6 +1095,21 @@ class TestD1RecordMethodField:
                             setattr(mod, "BYPASS_PATHS", old_bypass)
                         except (AttributeError, TypeError):
                             pass
+                    for mod in [proxy_module] + [m for m in sys.modules.values()
+                                                  if m and hasattr(m, "TRUST_XFF")]:
+                        try:
+                            setattr(mod, "TRUST_XFF", old_xff)
+                        except (AttributeError, TypeError):
+                            pass
+                    for mod in [proxy_module] + [m for m in sys.modules.values()
+                                                  if m and hasattr(m, "TRUSTED_PROXIES_NETS")]:
+                        try:
+                            setattr(mod, "TRUSTED_PROXIES_NETS", old_nets)
+                        except (AttributeError, TypeError):
+                            pass
+                    _cph.get_ip.__globals__["BYPASS_PATHS"] = old_bypass
+                    _cph.get_ip.__globals__["TRUST_XFF"] = old_xff
+                    _cph.get_ip.__globals__["TRUSTED_PROXIES_NETS"] = old_nets
 
             conn = sqlite3.connect(proxy_module.DB_PATH)
             rows = conn.execute(

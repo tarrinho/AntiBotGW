@@ -1,11 +1,87 @@
 # admin/auth.py — Phase 8: admin IP allowlist + internal-auth helpers
 # Extracted from proxy.py lines 167–360
+import asyncio
+import functools
+import hashlib
+import hmac
 import time as _t  # noqa: F401
+from collections import deque
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
 from helpers import slog, get_ip, _is_admin_path  # noqa: F401
 from aiohttp import web
 import ipaddress as _ipaddress
+
+_CSRF_COOKIE = "agw_csrf"
+
+_ADMIN_RL_LOCK = asyncio.Lock()
+_ADMIN_RL_BUCKETS: dict = {}
+
+
+def _csrf_token_valid(request) -> bool:
+    """Validate the X-CSRF-Token header against the HMAC of the session sid."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return True
+    from admin.users import _SESSION_COOKIE, _session_parse
+    cookies = getattr(request, "cookies", None)
+    cookie = cookies.get(_SESSION_COOKIE, "") if cookies else ""
+    if not cookie:
+        return False
+    parsed = _session_parse(cookie)
+    if not parsed:
+        return False
+    _, sid, _ = parsed
+    expected = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    provided = request.headers.get("X-CSRF-Token", "")
+    if not provided:
+        return False
+    try:
+        return hmac.compare_digest(expected, provided)
+    except Exception:
+        return False
+
+
+def _require_csrf(handler):
+    """Decorator: reject non-safe methods with missing/wrong CSRF token."""
+    @functools.wraps(handler)
+    async def _wrapped(request):
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            if not _csrf_token_valid(request):
+                return web.json_response({"error": "CSRF token invalid"}, status=403,
+                                          headers={"Cache-Control": "no-store"})
+        return await handler(request)
+    return _wrapped
+
+
+async def _admin_rate_limit_check(request) -> bool:
+    """60 req per 10s per session. Returns False when exceeded."""
+    import time as _time
+    sid = request.get("_session_sid") if hasattr(request, "get") else None
+    key = sid or get_ip(request)
+    n = _time.time()
+    cutoff = n - 10.0
+    async with _ADMIN_RL_LOCK:
+        bucket = _ADMIN_RL_BUCKETS.setdefault(key, deque())
+        while bucket and bucket[0] < cutoff:
+            bucket.popleft()
+        if len(bucket) >= 60:
+            return False
+        bucket.append(n)
+        stale = [k for k, v in _ADMIN_RL_BUCKETS.items() if not v or v[-1] < n - 30]
+        for k in stale:
+            del _ADMIN_RL_BUCKETS[k]
+    return True
+
+
+async def _admin_rl_response(request) -> "web.Response | None":
+    """Return 429 if rate limit exceeded, else None."""
+    if not await _admin_rate_limit_check(request):
+        sid = request.get("_session_sid") if hasattr(request, "get") else None
+        slog("admin_rate_limit", level="warn", sid=sid, ip=get_ip(request))
+        return web.json_response({"error": "rate limit exceeded"}, status=429,
+                                  headers={"Cache-Control": "no-store",
+                                           "Retry-After": "10"})
+    return None
 
 # ── Admin IP allowlist ─────────────────────────────────────────────────────
 # Comma-separated list of source IPs / CIDRs allowed to reach /__* endpoints
@@ -44,7 +120,9 @@ def _internal_authed(request) -> bool:
     Cookies are an aiohttp-only surface; fake-request unit tests pass
     objects that only expose .headers/.query, so the access is guarded."""
     # Import here to avoid circular: admin.users defines _session_verify etc.
-    from admin.users import _SESSION_COOKIE, _session_verify, _session_parse, _session_touch  # noqa: F401
+    from admin.users import (_SESSION_COOKIE, _session_verify, _session_parse,  # noqa: F401
+                             _session_touch, _SESSION_CACHE, _session_revoke,   # noqa: F401
+                             _SESSION_TTL)                                       # noqa: F401
     from state import _ACTIVE_SESSIONS  # noqa: F401
     cookies = getattr(request, "cookies", None)
     cookie = cookies.get(_SESSION_COOKIE, "") if cookies else ""
@@ -57,6 +135,16 @@ def _internal_authed(request) -> bool:
     # current-session indicator in the sessions modal.
     parsed = _session_parse(cookie)
     sid = parsed[1] if parsed else ""
+    # 1.8.5 Week 3 — Task F: idle timeout check (before touch)
+    from config import SESSION_IDLE_TIMEOUT  # noqa: F401
+    from admin.users import _SESSION_TTL  # noqa: F401 — _SESSION_TTL lives in users.py
+    if sid and SESSION_IDLE_TIMEOUT > 0:
+        cached = _SESSION_CACHE.get(sid)
+        if cached:
+            last_touch = cached.get("_last_touch", cached.get("expires_ts", _t.time()) - _SESSION_TTL)
+            if _t.time() - last_touch > SESSION_IDLE_TIMEOUT:
+                _session_revoke(sid, by_username="system")
+                return False
     try:
         request["_session_user"] = u
         request["_session_sid"]  = sid

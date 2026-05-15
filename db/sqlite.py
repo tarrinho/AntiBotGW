@@ -325,6 +325,22 @@ def db_init():
         PRIMARY KEY (gw_id, signal)
     );
     CREATE INDEX IF NOT EXISTS idx_signal_orders_gw ON signal_orders(gw_id);
+
+    -- 1.8.5: structured audit log for admin operations.
+    CREATE TABLE IF NOT EXISTS audit_events (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts          REAL NOT NULL,
+        event_type  TEXT NOT NULL,
+        actor       TEXT,
+        target      TEXT,
+        ip          TEXT,
+        detail      TEXT,
+        session_id  TEXT,
+        severity    TEXT NOT NULL DEFAULT 'info'
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_ts         ON audit_events(ts);
+    CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events(event_type);
+    CREATE INDEX IF NOT EXISTS idx_audit_actor      ON audit_events(actor);
     """)
     # 1.6.7+ — additive column upgrades driven by the central registry.
     # See `_SCHEMA_MIGRATIONS` above; new releases append entries there.
@@ -632,6 +648,14 @@ async def db_writer_loop():
                             "UPDATE gw_sync_pending "
                             "SET status = ?, confirmed_ts = ? WHERE id = ?",
                             (args[1], args[2], args[0]))
+                    # 1.8.5 — admin audit log ─────────────────────────
+                    elif op == "audit_log":
+                        ts, event_type, actor, target, ip, detail_json, session_id, severity = args
+                        conn.execute(
+                            "INSERT INTO audit_events "
+                            "(ts, event_type, actor, target, ip, detail, session_id, severity) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            (ts, event_type, actor, target, ip, detail_json, session_id, severity))
                 except Exception as e:
                     slog("db_write_failed", level="error", error=str(e), op=op)
             try:
@@ -969,3 +993,26 @@ def db_load_state() -> None:
     slog("db_state_loaded", level="info",
          clients=len(rows), timeline_buckets=len(timeline),
          total_requests=metrics["total_requests"], svc_metrics=svc_loaded)
+
+
+def _rehydrate_bans() -> int:
+    """Load active bans from the `bans` table into ip_state at startup.
+    Returns number of bans rehydrated."""
+    from state import ip_state
+    n = time.time()
+    count = 0
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT ip, banned_until, reason FROM bans WHERE banned_until > ?",
+            (n,)).fetchall()
+        conn.close()
+        for row in rows:
+            st = ip_state[row["ip"]]
+            st.banned_until = float(row["banned_until"])
+            count += 1
+        slog("bans_rehydrated", level="info", count=count)
+    except Exception as e:
+        slog("bans_rehydrate_failed", level="warn", err=str(e)[:200])
+    return count

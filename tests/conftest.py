@@ -87,6 +87,12 @@ def _wipe_config_kv_between_tests():
             # don't see seeded rows from prior tests (events table is not
             # cleared by db_load_state, so cross-test contamination accumulates).
             conn.execute("DELETE FROM events")
+            # 1.8.5 — wipe bans so _rehydrate_bans() on the next gateway
+            # startup does not import bans written by prior tests.
+            try:
+                conn.execute("DELETE FROM bans")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
             conn.close()
         except sqlite3.OperationalError:

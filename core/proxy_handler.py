@@ -71,7 +71,7 @@ from integrations.redis import _shared_ban_set  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
 from reputation.abuseipdb import _abuseipdb_lookup, _abuseipdb_stats  # noqa: F401
 from reputation.maxmind import _asn_lookup, _city_lookup, _asn_stats, _city_reader, _asn_reader  # noqa: F401
-from reputation.crowdsec import _crowdsec_check, _crowdsec_stats  # noqa: F401
+from reputation.crowdsec import _crowdsec_check, _crowdsec_stats, _crowdsec_lapi_health  # noqa: F401
 from reputation.tor import _tor_exits, _tor_feed_stats  # noqa: F401
 from challenge.js_challenge import (  # noqa: F401
     _js_challenge_applicable, _js_challenge_required,
@@ -102,6 +102,9 @@ from detection.fp_enrichment import _inject_fp_probe, fp_report_endpoint  # noqa
 from challenge.js_challenge import sw_js_endpoint  # noqa: F401
 from state import _fp_canvas_store  # noqa: F401
 from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
+from config import check_always_body, check_verb_override, check_smuggling  # noqa: F401
+from config import (check_xxe_body, check_proto_pollution, check_header_ssti,  # noqa: F401
+                    check_host_header_injection, check_file_upload)  # noqa: F401
 from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING, events_by_cat, by_path_by_cat  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
 from admin.mesh import _gw_local_id  # noqa: F401
@@ -118,6 +121,57 @@ from reputation.maxmind import (  # noqa: F401
 from scoring import _save_signal_order, _should_run_signal, _signal_runtime_order  # noqa: F401
 from challenge.js_challenge import _ip_tier  # noqa: F401
 from db.sqlite import _refresh_integration_state  # noqa: F401
+
+
+# ── Task J: Probe endpoint rate limiter ───────────────────────────────────────
+_PROBE_RL: dict = {}   # ip → [window_start, count]
+PROBE_RL_LIMIT  = 20
+PROBE_RL_WINDOW = 10.0
+
+
+def _probe_rate_limit_ok(ip: str) -> bool:
+    import time as _time
+    n = _time.monotonic()
+    entry = _PROBE_RL.get(ip)
+    if entry is None or n - entry[0] > PROBE_RL_WINDOW:
+        _PROBE_RL[ip] = [n, 1]
+        return True
+    if entry[1] >= PROBE_RL_LIMIT:
+        return False
+    entry[1] += 1
+    return True
+
+
+# ── Task M: Upstream circuit breaker ─────────────────────────────────────────
+_UPSTREAM_CB = {
+    "fail_count": 0,
+    "open_until": 0.0,
+    "half_open_attempts": 0,
+}
+CIRCUIT_FAIL_THRESHOLD = int(os.environ.get("CIRCUIT_FAIL_THRESHOLD", "10"))
+CIRCUIT_OPEN_SECS      = int(os.environ.get("CIRCUIT_OPEN_SECS", "30"))
+CIRCUIT_HALF_OPEN_MAX  = int(os.environ.get("CIRCUIT_HALF_OPEN_MAX", "3"))
+
+
+def _circuit_is_open() -> bool:
+    import time as _t
+    return _t.monotonic() < _UPSTREAM_CB["open_until"]
+
+
+def _circuit_record_failure() -> None:
+    import time as _t
+    _UPSTREAM_CB["fail_count"] += 1
+    if _UPSTREAM_CB["fail_count"] >= CIRCUIT_FAIL_THRESHOLD:
+        _UPSTREAM_CB["open_until"] = _t.monotonic() + CIRCUIT_OPEN_SECS
+        _UPSTREAM_CB["half_open_attempts"] = 0
+        slog("upstream_circuit_open", level="warn",
+             fails=_UPSTREAM_CB["fail_count"], open_secs=CIRCUIT_OPEN_SECS)
+
+
+def _circuit_record_success() -> None:
+    _UPSTREAM_CB["fail_count"] = 0
+    _UPSTREAM_CB["open_until"] = 0.0
+    _UPSTREAM_CB["half_open_attempts"] = 0
 
 
 STRICT_ORIGIN = os.environ.get("STRICT_ORIGIN", "0") in ("1", "true", "yes")
@@ -569,6 +623,55 @@ async def proxy(request: web.Request):
     if request.method not in ALLOWED_METHODS:
         return web.Response(status=405, text="method not allowed\n")
 
+    # 1.8.5 — HTTP smuggling signal detection
+    _smuggling_signal = check_smuggling(request)
+    if _smuggling_signal:
+        await update_risk_and_maybe_ban(
+            request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+            _smuggling_signal, get_ip(request))
+        return await _silent_decoy_response(
+            get_ip(request), request.headers.get("User-Agent", ""),
+            request.path, _smuggling_signal,
+            track_key=request.get("_track_key"),
+            sid=request.get("_sid", ""),
+            fp=request.get("_fp", ""))
+
+    # 1.8.5 — verb override detection
+    if check_verb_override(request):
+        await update_risk_and_maybe_ban(
+            request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+            "method-override-attempt", get_ip(request))
+        return await _silent_decoy_response(
+            get_ip(request), request.headers.get("User-Agent", ""),
+            request.path, "method-override-attempt",
+            track_key=request.get("_track_key"),
+            sid=request.get("_sid", ""),
+            fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 3 — Task C: SSTI in attacker-controlled headers
+    if check_header_ssti(request):
+        await update_risk_and_maybe_ban(
+            request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+            "header-ssti", get_ip(request))
+        return await _silent_decoy_response(
+            get_ip(request), request.headers.get("User-Agent", ""),
+            request.path, "header-ssti",
+            track_key=request.get("_track_key"),
+            sid=request.get("_sid", ""),
+            fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 4 — Task G: Host header injection
+    if check_host_header_injection(request):
+        await update_risk_and_maybe_ban(
+            request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+            "host-header-injection", get_ip(request))
+        return await _silent_decoy_response(
+            get_ip(request), request.headers.get("User-Agent", ""),
+            request.path, "host-header-injection",
+            track_key=request.get("_track_key"),
+            sid=request.get("_sid", ""),
+            fp=request.get("_fp", ""))
+
     _vc_upstream = vc('UPSTREAM'); target = _vc_upstream + _strip_admin_key_from_qs(request.path_qs)
 
     # C3 + H5: build forwarded headers from an allowlist-by-exclusion list.
@@ -671,6 +774,79 @@ async def proxy(request: web.Request):
         except Exception:
             return web.Response(status=400, text="bad request\n")
 
+    # 1.8.5 — ungated first-touch check: high-confidence patterns that bypass
+    # the escalation threshold. Catches first-request injections (Log4Shell, SQLi).
+    if body is not None:
+        client_ctype = request.headers.get("Content-Type", "")
+        if check_always_body(body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                "body-critical-injection", get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "body-critical-injection",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 3 — Task A: XXE detection (ungated, XML-gated)
+    if body is not None:
+        client_ctype = request.headers.get("Content-Type", "")
+        if check_xxe_body(body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                "body-xxe", get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "body-xxe",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 3 — Task B: Prototype pollution detection
+    if body is not None:
+        client_ctype = request.headers.get("Content-Type", "")
+        if check_proto_pollution(body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                "body-proto-pollution", get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, "body-proto-pollution",
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 4 — Task H: GraphQL protection
+    if body is not None:
+        client_ctype = request.headers.get("Content-Type", "")
+        from detection.graphql import check_graphql
+        for _gql_sig in check_graphql(request.path, body, client_ctype):
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                _gql_sig, get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, _gql_sig,
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 4 — Task I: File upload content validation
+    if body is not None:
+        client_ctype = request.headers.get("Content-Type", "")
+        _upload_sig = check_file_upload(body, client_ctype)
+        if _upload_sig:
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                _upload_sig, get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, _upload_sig,
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
+
     # v1.4 #4 — body pattern matching (extends Layer 3 to bodies).
     # 1.6.1 — managed groups fire FIRST (per-group reason); the legacy
     # blanket `suspicious-body` is the catch-all for anything not covered
@@ -738,6 +914,14 @@ async def proxy(request: web.Request):
                 track_key=request.get("_track_key"),
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
+
+    # 1.8.5 Week 4 — Task M: Circuit breaker: bail early if upstream is known-failing
+    if _circuit_is_open():
+        _UPSTREAM_CB["half_open_attempts"] += 1
+        if _UPSTREAM_CB["half_open_attempts"] > CIRCUIT_HALF_OPEN_MAX:
+            return web.Response(status=503, text="upstream circuit open\n",
+                                headers={"Retry-After": str(CIRCUIT_OPEN_SECS)})
+        # Half-open: allow this probe through
 
     try:
         async with ClientSession(timeout=ClientTimeout(total=30)) as session:
@@ -1033,10 +1217,17 @@ async def proxy(request: web.Request):
                     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
                         pass
 
+                # 1.8.5 Week 4 — Task M: circuit breaker tracking
+                if resp.status >= 500:
+                    _circuit_record_failure()
+                else:
+                    _circuit_record_success()
                 return web.Response(status=resp.status, body=resp_body, headers=response_headers)
     except aiohttp.ClientError:
+        _circuit_record_failure()
         return web.Response(status=502, text="upstream error\n")
     except asyncio.TimeoutError:
+        _circuit_record_failure()
         return web.Response(status=504, text="upstream timeout\n")
 
 
@@ -1198,6 +1389,7 @@ async def external_endpoint(request: web.Request):
     })
 
     # 3. CrowdSec
+    _cs_health = await _crowdsec_lapi_health()
     integrations.append({
         "name":         "CrowdSec",
         "purpose":      "Community blocklist — IP listed in CrowdSec LAPI hits +70 risk (one-shot ban for normal IPs).",
@@ -1214,6 +1406,7 @@ async def external_endpoint(request: web.Request):
         "cost_typical_ms":  5.0,
         "cost_p99_ms":      20.0,
         "cost_cached_ms":   0.2,
+        "lapi_health":  _cs_health,
         "telemetry": dict(_crowdsec_stats, **{
             "cache_hit_rate": (
                 round(100.0 * _crowdsec_stats["lookups_cached"] /
@@ -4098,8 +4291,51 @@ async def health_score_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+async def _metrics_auth_ok(request) -> bool:
+    """Return True if the request is allowed to access /__metrics."""
+    from config import METRICS_TOKEN, METRICS_ALLOWED_IPS_RAW
+    import ipaddress
+    client_ip = get_ip(request)
+    # Always allow localhost
+    try:
+        ip_obj = ipaddress.ip_address(client_ip)
+        if ip_obj.is_loopback:
+            return True
+    except ValueError:
+        pass
+    # IP allowlist (if configured)
+    if METRICS_ALLOWED_IPS_RAW:
+        allowed = False
+        for cidr in METRICS_ALLOWED_IPS_RAW.split(","):
+            cidr = cidr.strip()
+            if not cidr:
+                continue
+            try:
+                net = ipaddress.ip_network(cidr, strict=False)
+                if ip_obj in net:
+                    allowed = True
+                    break
+            except ValueError:
+                continue
+        if not allowed:
+            return False
+    # Bearer token check
+    if METRICS_TOKEN:
+        auth = request.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            return False
+        import hmac as _hmac
+        if not _hmac.compare_digest(auth[7:], METRICS_TOKEN):
+            return False
+    return True
+
+
 async def metrics_endpoint(request: web.Request):
     """JSON metrics dump consumed by the dashboard."""
+    # 1.8.5 Week 4 — Task L: authenticate /__metrics
+    if not await _metrics_auth_ok(request):
+        return web.Response(status=401,
+                            headers={"WWW-Authenticate": 'Bearer realm="metrics"'})
     _vhost_pre = request.query.get("vhost", "").strip().lower()
     async with state_lock:
         n = now()

@@ -221,6 +221,19 @@ async def _prune_state_loop():
                              if _ck[2] < _now_min - 10]
                 for _ck in _stale_ck:
                     _asn_path_clusters.pop(_ck, None)
+                # 11. _fp_session_creations: fingerprint → deque[timestamps].
+                # Never pruned elsewhere; evict stale fingerprints (all timestamps
+                # older than SESSION_CHURN_WINDOW_S) to prevent UA-rotating attackers
+                # from inflating memory indefinitely.
+                try:
+                    from identity import _fp_session_creations, SESSION_CHURN_WINDOW_S
+                    _fp_cutoff = _time.time() - SESSION_CHURN_WINDOW_S
+                    _stale_fp = [_fp for _fp, _dq in list(_fp_session_creations.items())
+                                 if not _dq or _dq[-1] < _fp_cutoff]
+                    for _fp in _stale_fp:
+                        _fp_session_creations.pop(_fp, None)
+                except ImportError:
+                    pass
         except asyncio.CancelledError:
             break
         except Exception as e:

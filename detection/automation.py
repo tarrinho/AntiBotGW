@@ -77,6 +77,12 @@ async def automation_report_endpoint(request: web.Request):
     Validates the HMAC token (bound to the requester's track_key so an
     attacker cannot forge a clean report for someone else) and bumps risk
     by webdriver-detected when flags >= 2."""
+    # Task J — probe rate limiter
+    from core.proxy_handler import _probe_rate_limit_ok
+    from helpers import get_ip as _get_ip
+    if not _probe_rate_limit_ok(_get_ip(request)):
+        return web.Response(status=429, text="rate limit",
+                            headers={"Retry-After": "10"})
     if not AUTOMATION_PROBE_ENABLED:
         return web.json_response({"ok": False, "reason": "disabled"}, status=400)
     try:
