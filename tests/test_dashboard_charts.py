@@ -218,3 +218,49 @@ def test_main_modal_css_has_max_height():
         "main.html: .modal CSS must include overflow:auto so content inside "
         "the identity modal is scrollable when it exceeds max-height."
     )
+
+
+# ── vhost breakdown chart: canvas reuse guard ─────────────────────────────
+# Chart.js raises "Canvas is already in use" when new Chart() is called on a
+# canvas that already has a chart registered in its internal registry.  This
+# happens when the IIFE re-runs (navigation / script re-injection) and resets
+# _vhChart to null while the old chart instance still occupies the canvas.
+# The fix: call Chart.getChart(ctx) before new Chart() and destroy any
+# orphaned instance that is not our own _vhChart reference.
+
+def test_vhost_chart_orphan_guard_uses_chart_get_chart():
+    """main.html must call Chart.getChart before creating the vhost chart."""
+    src = _read("main.html")
+    assert "Chart.getChart" in src, (
+        "main.html: Chart.getChart() orphan-guard missing from vhost-breakdown "
+        "chart — adding a new Chart() on a canvas that already has one registered "
+        "will raise 'Canvas is already in use'."
+    )
+
+
+def test_vhost_chart_orphan_guard_destroys_orphan():
+    """main.html must call destroy() on the orphaned chart before new Chart()."""
+    src = _read("main.html")
+    # The guard is in the JS section — locate it by the new-chart assignment
+    # which immediately follows the guard, not the canvas HTML element.
+    new_chart_pos = src.find("_vhChart = new Chart(ctx,")
+    assert new_chart_pos != -1, "main.html: _vhChart = new Chart(ctx, ...) not found"
+    # Scan the 400 chars before new Chart() for the orphan guard
+    block = src[max(0, new_chart_pos - 400): new_chart_pos]
+    assert "_orphan" in block and "destroy" in block, (
+        "main.html: orphaned chart must be destroyed before new Chart() "
+        "on vhost-breakdown-chart — pattern: if(_orphan){ _orphan.destroy(); }"
+    )
+
+
+def test_vhost_chart_orphan_guard_precedes_new_chart():
+    """The orphan-destroy guard must appear before new Chart() in source order."""
+    src = _read("main.html")
+    orphan_pos = src.find("Chart.getChart")
+    new_chart_pos = src.find("_vhChart = new Chart(ctx,")
+    assert orphan_pos != -1, "main.html: Chart.getChart orphan check not found"
+    assert new_chart_pos != -1, "main.html: _vhChart = new Chart(ctx, ...) not found"
+    assert orphan_pos < new_chart_pos, (
+        "main.html: Chart.getChart orphan check must appear BEFORE "
+        "the new Chart(ctx, ...) call for vhost-breakdown-chart"
+    )

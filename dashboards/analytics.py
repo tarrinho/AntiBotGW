@@ -468,8 +468,11 @@ async def risk_percentiles_endpoint(request: web.Request):
     """
     try:
         try:
-            min_score = float(request.query.get("min_score", "0"))
-        except (ValueError, TypeError):
+            _raw = request.query.get("min_score", "0")
+            if _raw.strip().lower() in ("nan", "inf", "-inf", "infinity", "-infinity"):
+                raise ValueError("non-finite score")
+            min_score = max(0.0, min(100.0, float(_raw)))
+        except (ValueError, TypeError, OverflowError):
             min_score = 0.0
 
         async with state_lock:

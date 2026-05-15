@@ -16,25 +16,37 @@ Author: Pedro Tarrinho
 - **`banIp(ip, secs, reason)`** — JS helper in `control_center.html` for inline IP banning from any card; calls `POST /secured/ban?ip=&secs=&reason=` and shows a toast on success/failure.
 - Inline **[Ban 1h]** button on every incident row, wired to `banIp()`.
 - Severity CSS classes: `.sev-badge`, `.sev-critical`, `.sev-high`, `.sev-medium`, `.inc-count-box`, `#card-incidents` red-border rule, `.inc-clear` normalise class.
+- **AI Risk Score Percentile Ribbon** (`#card-risk-ribbon` + `#card-risk-histogram`) on main dashboard — two-column layout: left card shows P5/P25/P50/P75/P95/P99 ribbon chart (Chart.js line with `fill:'-1'` between adjacent bands) + KPI row (Median P50, P95, %≥Block, %≥Soft, Trend); right card shows 21-bin histogram of active risk scores. 4 s auto-refresh.
+- **`/secured/risk-percentiles`** (`dashboards/analytics.py:risk_percentiles_endpoint`) — scans `ip_state`, computes P5/P25/P50/P75/P95/P99, appends snapshot to `_RISK_PCT_HISTORY` deque (maxlen=120, no DB table), returns `{history[], current{ts,p5..p99,n}, histogram[{bin,count}×21], threshold_soft, threshold_ban, total_ips, kpis{p50,p95,pct_ban,pct_soft,trend}}`. Trend compares p50 vs hist[−10] snapshot. 4 s polling.
+- **`_RISK_PCT_HISTORY: deque = deque(maxlen=120)`** — module-level ring buffer in `dashboards/analytics.py`; stores time-series snapshots for the ribbon chart without any DB schema change.
+- **Ban Events & CAPTCHA Funnel** (`#card-ban-timeline` + `#card-captcha-funnel`) on main dashboard — two-column layout (2/3 + 1/3): left card shows stacked bar timeline of IP bans / session bans / bypass / challenges with 1h/2h/6h/24h range selector; right card shows CAPTCHA funnel (Issued → IPs Challenged → IPs Passed → IPs Banned) with inline bar visualisation and solve-rate readout. 8 s auto-refresh.
+- **`/secured/ban-events`** (`dashboards/analytics.py:ban_events_endpoint`) — returns `{timeline[{t,ip_ban,ses_ban,bypass,chal}], totals, captcha_funnel{issued,ips_challenged,ips_passed,ips_banned,solve_rate}}`. Reads in-memory `timeline.by_reason` with DB fallback. Query params: `range` (default 120 min), `bucket` (default 300 s), `end` (default now).
+- **`_IP_BAN_REASONS` / `_SES_BAN_REASONS` / `_BYPASS_REASONS` / `_CHAL_REASONS` / `_ALL_BAN_EVENT_REASONS`** — five module-level frozensets in `dashboards/analytics.py` for ban-event categorisation.
+- **Top Attackers Leaderboard** (`#card-top-attackers`) on main dashboard — full-width sortable table: IP, ASN/Org (from MaxMind ASN), Country + flag emoji, Requests, Blocks, Bot Score, AI Risk, AbuseIPDB confidence, JA4 fingerprint, Active Ban / expiry, 24 h sparkline (inline SVG), and per-row quick actions (Block 24h / Challenge / Whitelist). Sortable by risk_score / request_count / blocked_count; vhost filter. 10 s auto-refresh.
+- **`/secured/top-attackers`** (`dashboards/analytics.py:top_attackers_endpoint`) — aggregates `ip_state` by IP (merges multiple track keys: max risk_score, summed counts), enriches with `_asn_lookup()` (ASN/org/is_hosting) + `_city_lookup()` (country/flag), batch-queries `abuseipdb_cache` and `bans` table, fetches 24 h sparkline per IP (single `ip IN (…)` query). Returns `{attackers[{ip,asn,org,is_hosting,country,flag,request_count,allowed_count,blocked_count,bot_score,risk_score,ja4,last_ua,last_path,last_vhost,last_seen,is_banned,ban_until,ban_reason,abuse_score,sparkline[24],top_reason}], total_tracked}`. Params: `?limit=` (default 50, max 200), `?sort=`, `?vhost=`.
+
+### Fixed
+- **NaN injection in `min_score` query param** (`dashboards/analytics.py:471`) — `float(request.query.get("min_score","0"))` accepted `"nan"` as a valid float, silently breaking all score comparisons (NaN > x = False for all x). Fix: pre-check string against `("nan","inf","-inf","infinity","-infinity")` before casting; clamp result to `[0.0, 100.0]` via `max/min`. Resolves Semgrep `python.django.security.nan-injection.nan-injection` finding.
 
 ### Changed
-- **`proxy.py` route table** — added `("security-incidents", "GET", security_incidents_endpoint, True)`.
+- **`proxy.py` route table** — added `("security-incidents", "GET", security_incidents_endpoint, True)`, `("risk-percentiles", "GET", risk_percentiles_endpoint, True)`, `("ban-events", "GET", ban_events_endpoint, True)`, `("top-attackers", "GET", top_attackers_endpoint, True)`.
 - **`tests/test_pure.py`** — `stale_re` updated from `1.8.2` to `1.8.3`; `_EXPECTED_VERSION` updated.
 - **All test files with hardcoded `AppSecGW_1.8.2`** — version strings updated to `1.8.3` (`test_geo_dashboard.py`, `test_v180_v181_gaps.py`, `test_settings_config_functional.py`, `test_endpoints_dynamic.py`).
 
 ### Tests
-- **`tests/test_v183_incidents.py`** — 38 new tests (30 static S01–S30 + 8 dynamic D01–D08):
+- **`tests/test_v183_incidents.py`** — 50 tests (35 static S01–S35 + 15 dynamic D01–D15):
   - **S01–S25** — HTML checks: `#card-incidents` card present, inc-counts / inc-tbody / inc-table / inc-empty / inc-dismiss-bar / inc-ts elements present, `loadSecurityIncidents` fetches `/security-incidents`, DCL call + 30 s `_timers` interval, `_renderIncidents` function with severity badges + risk_score column + Ban button, `banIp` function calls `/secured/ban?ip=` + `toast()`, `_incDismiss` with localStorage, `_incDismissedAt` + IIFE init, all CSS classes defined, `#card-incidents` red border, `inc-clear` toggle.
-  - **S26–S30** — analytics.py checks: `_INCIDENT_CRITICAL` frozenset members, `_INCIDENT_HIGH` frozenset members, `_INCIDENT_MEDIUM` frozenset members, `_INCIDENT_ALL` union expression, `_incident_severity` correctness (exec-based unit test).
-  - **D01–D08** — `GET /security-incidents`: 200 status, full schema, counts keys, `Cache-Control: no-store`, auth deflect, `?limit=` respected + capped at 500, `?since=` filtering, seeded `canary-echo` event appears as `severity=critical`.
-- **Full suite**: 2181 passed, 1 skipped, 0 failed (+43 new tests across `test_v183_incidents.py` + 38 incident tests).
+  - **S26–S35** — analytics.py + route checks: `_INCIDENT_CRITICAL` frozenset members, `_INCIDENT_HIGH` frozenset members, `_INCIDENT_MEDIUM` frozenset members, `_INCIDENT_ALL` union expression, `_incident_severity` correctness, route registered in proxy.py, `fetch` credentials included, `banIp` POST method, `_incDismiss` sets `_incDismissedAt`, `_renderIncidents` uses `escapeHtml`.
+  - **D01–D15** — `GET /security-incidents`: 200 status, full schema, counts keys, `Cache-Control: no-store`, auth deflect, `?limit=` respected + capped at 500, `?since=` filtering, seeded `canary-echo` → `severity=critical`, high/medium classification, non-incident reason excluded, `X-Content-Type-Options: nosniff`, non-numeric limit defaults to 100, newest-first ordering, UA/path truncation.
+- **Full suite**: 2218 passed, 1 skipped, 0 failed (+37 new tests vs 1.8.2 baseline).
 
 ### Validation
 - **Bandit**: 0 High / 0 Critical / 0 Medium
-- **Semgrep**: 0 findings (151 rules on 10 files)
-- **Trivy arm64**: 0 CRITICAL / 0 HIGH — all python packages 0 findings
-- **Trivy armv7**: 0 CRITICAL / 0 HIGH — all python packages 0 findings
-- **Pentest**: 4 endpoint probes (no-auth 404, auth schema, limit cap, since filter) + 6 OWASP §8 probes (XSS→suspicious-path, subsequent→banned-silent, no unescaped XSS in responses) — 0 bypasses
+- **Semgrep p/python**: 0 findings after NaN fix (was 1 — `nan-injection` on `analytics.py:471`)
+- **Design flaw scan**: 0 fail, 3 pre-existing warns (classified FP — `settings.html:344,490` escapeHtml used; CSP audit 404 expected; `controls.html:881` example string)
+- **Trivy arm64**: 0 CRITICAL / 0 HIGH / 0 MEDIUM — all python packages 0 findings
+- **Cold start**: 2.2 s (< 5 s limit)
+- **Pentest**: 6 OWASP §8 probes (XSS→suspicious-path, subsequent→banned-silent) — 0 bypasses
 
 ---
 
