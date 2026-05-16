@@ -169,7 +169,7 @@ def _maxmind_fetch_edition(edition: str, dest: str, key: str,
     toward the daily download limit (2000/day for GeoLite2).
 
     force=True: always attempt (used by refresh loop for stale files).
-    force=False: skip if dest already exists (auto_fetch first-boot path).
+    force=False: skip if dest exists AND mtime < 24 h; ETag-fetch if stale or missing.
     """
     import urllib.request, urllib.error, tarfile, tempfile
     # INT4-03: validate dest before any write to prevent path traversal
@@ -179,7 +179,10 @@ def _maxmind_fetch_edition(edition: str, dest: str, key: str,
         slog("maxmind_path_traversal", level="error", dest=dest, err=str(_ve)[:200])
         return "error"
     if not force and os.path.exists(dest):
-        return "skipped"
+        age = _t.time() - os.path.getmtime(dest)
+        if age < _MAXMIND_MIN_INTERVAL:
+            return "skipped"
+        # File is stale (>24 h) — fall through to ETag conditional fetch.
     etag = _read_etag(dest)
     url = (f"https://download.maxmind.com/app/geoip_download"
            f"?edition_id={edition}&license_key={key}&suffix=tar.gz")

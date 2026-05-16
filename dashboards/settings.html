@@ -193,7 +193,19 @@ button.danger{background:var(--red)}
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Settings</div>
-  <div id="topbar-right"></div>
+  <div id="topbar-right">
+    <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+      <label for="gw-loglvl">log</label>
+      <select id="gw-loglvl">
+        <option value="debug">debug</option>
+        <option value="info">info</option>
+        <option value="warn">warn</option>
+        <option value="error">error</option>
+        <option value="critical">critical</option>
+      </select>
+    </div>
+    <div id="gw-status-pill" title="Gateway health score — refreshes every 15 s · click for breakdown">● —</div>
+  </div>
 </div>
 <div id="page-content">
 
