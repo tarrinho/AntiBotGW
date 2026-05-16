@@ -165,6 +165,35 @@ def _fp_hash(ua: str, ip_tier: str, ja4: str) -> str:
                     hashlib.sha256).hexdigest()[:24]
 
 
+def compute_ja4h(request) -> str:
+    """JA4H: HTTP request fingerprint.
+    Format: <method2><version><body><referer>_<hdr_count><ck_count>_<hdr_hash>_<ck_hash>
+    """
+    import hashlib as _hl
+    try:
+        method  = (request.method or "")[:2].lower().ljust(2, "_")
+        ver     = request.version
+        version = "20" if (hasattr(ver, "major") and ver.major == 2) else "11"
+        has_body = "y" if (getattr(request, "content_length", None) or 0) > 0 else "n"
+        hdrs    = dict(request.headers) if hasattr(request, "headers") else {}
+        has_ref = "r" if any(h.lower() == "referer" for h in hdrs) else "n"
+        # Header names (exclude cookie and host, lowercase, original order)
+        hdr_names = ",".join(
+            h.lower() for h in hdrs
+            if h.lower() not in ("cookie", "host")
+        )
+        # Cookie names
+        cookies = dict(request.cookies) if hasattr(request, "cookies") else {}
+        ck_names = ",".join(sorted(cookies.keys()))
+        hdr_count = min(len([h for h in hdrs if h.lower() not in ("cookie", "host")]), 99)
+        ck_count  = min(len(cookies), 99)
+        hdr_hash  = _hl.sha256(hdr_names.encode()).hexdigest()[:12]
+        ck_hash   = _hl.sha256(ck_names.encode()).hexdigest()[:12] if ck_names else "000000000000"
+        return f"{method}{version}{has_body}{has_ref}_{hdr_count:02d}{ck_count:02d}_{hdr_hash}_{ck_hash}"
+    except Exception:
+        return "error"
+
+
 async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
                               rid: str = "") -> bool:
     """Track a chal-cookie mint. Returns True if the fingerprint just

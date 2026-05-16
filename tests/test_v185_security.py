@@ -1,5 +1,5 @@
 """
-tests/test_v185_security.py — v1.8.5 security feature tests.
+tests/test_v185_security.py — v1.8.6 security feature tests.
 
 Covers:
   - CSRF cookie issuance and validation

@@ -13,7 +13,7 @@ from reputation.abuseipdb import _abuseipdb_lookup  # noqa: F401
 from reputation.crowdsec import _crowdsec_check  # noqa: F401
 from reputation.tor import _tor_exits  # noqa: F401
 
-# ── 1.8.5 Week 3 — Task D: Password complexity ───────────────────────────────
+# ── 1.8.6 Week 3 — Task D: Password complexity ───────────────────────────────
 _BREACHED_PASSWORDS = frozenset({
     "password", "password1", "admin", "admin123", "123456",
     "qwerty", "letmein", "welcome", "monkey", "dragon",
@@ -472,6 +472,23 @@ async def login_submit_endpoint(request: web.Request):
              reason="bad-password")
         return web.json_response({"error": "invalid credentials"}, status=401,
                                   headers={"Cache-Control": "no-store"})
+    # 1.8.6 — TOTP two-factor authentication: if user has 2FA enabled (or REQUIRE_2FA),
+    # issue a short-lived partial token and require the second factor before minting the session.
+    import config as _cfg_totp
+    if user.get("totp_enabled") or _cfg_totp.REQUIRE_2FA:
+        from state import _TOTP_PENDING
+        _totp_window = int(_t.time() // 300)
+        partial_token = hmac.new(
+            SESSION_KEY,
+            (username + "|" + str(_totp_window)).encode(),
+            hashlib.sha256
+        ).hexdigest()[:16]
+        # Store pending state so totp_verify_endpoint can locate the user
+        _TOTP_PENDING[username] = {"step": "totp_required", "ts": _t.time()}
+        slog("login_totp_required", level="warn", username=username, ip=ip)
+        return web.json_response(
+            {"step": "totp_required", "partial_token": partial_token},
+            headers={"Cache-Control": "no-store"})
     # 1.6.7 — mint a fresh per-session cookie (sid embedded). Captures
     # the source IP and User-Agent for the session ledger so the
     # operator can spot unfamiliar sessions and revoke them.
@@ -486,7 +503,7 @@ async def login_submit_endpoint(request: web.Request):
     slog("login_success", level="warn", username=username, ip=ip)
     _ACTIVE_SESSIONS[username] = _t.time()
     ua = (request.headers.get("User-Agent") or "")[:512]
-    # 1.8.5 Week 3 — Task E: concurrent session limit
+    # 1.8.6 Week 3 — Task E: concurrent session limit
     _enforce_session_limit(username)
     token = _session_create(username, ip, ua)
     sid = token.split("|")[1]
@@ -625,12 +642,17 @@ async def ip_intel_endpoint(request: web.Request):
     # for entries whose `last_ip` matches and take the maximum — multiple
     # identities can share an IP (NAT, shared device).
     risk_score = 0
+    risk_breakdown: list = []
     try:
         for s in ip_state.values():
             if getattr(s, "last_ip", "") == ip:
                 rs = int(s.risk_score or 0)
                 if rs > risk_score:
                     risk_score = rs
+                    risk_breakdown = sorted(
+                        ((r, round(v, 1)) for r, v in s.risk_by_reason.items() if v >= 0.5),
+                        key=lambda x: x[1], reverse=True,
+                    )
     except Exception:
         pass
 
@@ -641,6 +663,7 @@ async def ip_intel_endpoint(request: web.Request):
                                    if banned_until else None),
         "ban_reason": ban_reason,
         "risk_score": risk_score,
+        "risk_breakdown": risk_breakdown,
         "first_seen_ts": first_seen_ts,
         "last_seen_ts":  last_seen_ts,
         "requests_24h":  requests_24h,
@@ -960,6 +983,260 @@ async def user_session_revoke_endpoint(request: web.Request):
         {"username": username, "sid": sid, "revoked": True,
          "self_revoke": self_revoke},
         headers={"Cache-Control": "no-store"})
+
+
+# ── 1.8.6 — TOTP Two-Factor Authentication ──────────────────────────────────
+
+
+def _totp_generate_secret() -> str:
+    import pyotp
+    return pyotp.random_base32()
+
+
+def _totp_verify(secret: str, code: str) -> bool:
+    import pyotp
+    try:
+        return pyotp.TOTP(secret).verify(code.strip(), valid_window=1)
+    except Exception:
+        return False
+
+
+def _totp_provisioning_uri(secret: str, username: str) -> str:
+    import pyotp
+    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="AppSecGW")
+
+
+def _generate_backup_codes() -> list:
+    import secrets as _sec
+    return [_sec.token_hex(4).upper() for _ in range(8)]
+
+
+async def totp_verify_endpoint(request: web.Request):
+    """POST /antibot-appsec-gateway/login/totp — verify TOTP code after partial auth.
+    Body: {partial_token, code} (JSON)."""
+    try:
+        body_bytes = await asyncio.wait_for(request.content.read(4 * 1024), timeout=BODY_TIMEOUT)
+        data = json.loads(body_bytes.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    partial_token = (data.get("partial_token") or "").strip()
+    code = (data.get("code") or "").strip()
+    if not partial_token or not code:
+        return web.json_response({"error": "partial_token and code required"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    # Reconstruct the expected partial token for current and previous 5-min windows
+    # The partial_token was derived from: HMAC(username + "|" + window)[:16]
+    # We need to recover username from the token — it's stored in _TOTP_PENDING
+    from state import _TOTP_PENDING
+    ip = get_ip(request)
+    # Find which user this partial token belongs to
+    matched_username = None
+    _now_window = int(_t.time() // 300)
+    for _uname, _pending in list(_TOTP_PENDING.items()):
+        if _pending.get("step") != "totp_required":
+            continue
+        for _window in (_now_window, _now_window - 1):
+            _expected = hmac.new(
+                SESSION_KEY,
+                (_uname + "|" + str(_window)).encode(),
+                hashlib.sha256
+            ).hexdigest()[:16]
+            if hmac.compare_digest(partial_token, _expected):
+                matched_username = _uname
+                break
+        if matched_username:
+            break
+    if not matched_username:
+        slog("totp_verify_invalid_token", level="warn", ip=ip)
+        return web.json_response({"error": "invalid or expired token"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    user = _user_load(matched_username)
+    if user is None or user.get("status") != "active":
+        return web.json_response({"error": "invalid credentials"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    totp_secret = user.get("totp_secret") or ""
+    # Check TOTP code
+    totp_ok = totp_secret and _totp_verify(totp_secret, code)
+    # Check backup codes
+    backup_ok = False
+    if not totp_ok:
+        backup_raw = user.get("totp_backup_codes") or "[]"
+        try:
+            backup_codes = json.loads(backup_raw)
+        except (ValueError, TypeError):
+            backup_codes = []
+        code_upper = code.upper()
+        if code_upper in backup_codes:
+            backup_ok = True
+            backup_codes.remove(code_upper)
+            # Persist updated backup codes
+            if db_queue is not None:
+                try:
+                    db_queue.put_nowait(("user_update", (matched_username, {
+                        "totp_backup_codes": json.dumps(backup_codes),
+                        "updated_ts": _t.time(),
+                    })))
+                except asyncio.QueueFull:
+                    pass
+    if not (totp_ok or backup_ok):
+        slog("totp_verify_failed", level="warn", username=matched_username, ip=ip)
+        return web.json_response({"error": "invalid code"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    # Clear pending state
+    _TOTP_PENDING.pop(matched_username, None)
+    # Create full session
+    slog("totp_verify_success", level="warn", username=matched_username, ip=ip,
+         via="backup" if backup_ok else "totp")
+    _ACTIVE_SESSIONS[matched_username] = _t.time()
+    ua = (request.headers.get("User-Agent") or "")[:512]
+    _enforce_session_limit(matched_username)
+    token = _session_create(matched_username, ip, ua)
+    sid = token.split("|")[1]
+    csrf_token = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    resp = web.json_response({"ok": True, "username": matched_username},
+                              headers={"Cache-Control": "no-store"})
+    resp.set_cookie(_SESSION_COOKIE, token,
+                     max_age=_SESSION_TTL, httponly=True,
+                     samesite="Strict", path="/",
+                     secure=SESSION_SECURE)
+    resp.set_cookie("agw_csrf", csrf_token,
+                     max_age=_SESSION_TTL, httponly=False,
+                     samesite="Strict", path="/",
+                     secure=SESSION_SECURE)
+    return resp
+
+
+async def totp_setup_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/secured/2fa-setup — generate a new TOTP secret.
+    Stores it temporarily in _TOTP_PENDING[username] and returns the provisioning URI."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    username = _request_username(request)
+    if not username or username in ("admin-key", "unknown"):
+        return web.json_response({"error": "session required for 2FA setup"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
+    from state import _TOTP_PENDING
+    secret = _totp_generate_secret()
+    _TOTP_PENDING[username] = {"secret": secret, "ts": _t.time()}
+    uri = _totp_provisioning_uri(secret, username)
+    return web.json_response({"provisioning_uri": uri, "secret": secret},
+                              headers={"Cache-Control": "no-store"})
+
+
+@_require_csrf
+async def totp_confirm_endpoint(request: web.Request):
+    """POST /antibot-appsec-gateway/secured/2fa-confirm — verify code and enable TOTP.
+    Body: {code}."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    username = _request_username(request)
+    if not username or username in ("admin-key", "unknown"):
+        return web.json_response({"error": "session required for 2FA confirm"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
+    from state import _TOTP_PENDING
+    pending = _TOTP_PENDING.get(username)
+    if not pending or _t.time() - pending.get("ts", 0) > 600:
+        return web.json_response({"error": "no pending TOTP setup — call 2fa-setup first"},
+                                  status=400, headers={"Cache-Control": "no-store"})
+    try:
+        body_bytes = await asyncio.wait_for(request.content.read(4 * 1024), timeout=BODY_TIMEOUT)
+        data = json.loads(body_bytes.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    code = (data.get("code") or "").strip()
+    secret = pending["secret"]
+    if not _totp_verify(secret, code):
+        return web.json_response({"error": "invalid code"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    backup_codes = _generate_backup_codes()
+    fields = {
+        "totp_secret": secret,
+        "totp_enabled": 1,
+        "totp_backup_codes": json.dumps(backup_codes),
+        "updated_ts": _t.time(),
+    }
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("user_update", (username, fields)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    _TOTP_PENDING.pop(username, None)
+    slog("totp_enabled", level="warn", username=username, ip=get_ip(request))
+    return web.json_response({"ok": True, "backup_codes": backup_codes},
+                              headers={"Cache-Control": "no-store"})
+
+
+@_require_csrf
+async def totp_disable_endpoint(request: web.Request):
+    """POST /antibot-appsec-gateway/secured/2fa-disable — disable TOTP.
+    Body: {code} — current TOTP code or backup code required."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    username = _request_username(request)
+    if not username or username in ("admin-key", "unknown"):
+        return web.json_response({"error": "session required"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        body_bytes = await asyncio.wait_for(request.content.read(4 * 1024), timeout=BODY_TIMEOUT)
+        data = json.loads(body_bytes.decode("utf-8") or "{}")
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    code = (data.get("code") or "").strip()
+    user = _user_load(username)
+    if not user:
+        return web.json_response({"error": "user not found"}, status=404,
+                                  headers={"Cache-Control": "no-store"})
+    if not user.get("totp_enabled"):
+        return web.json_response({"error": "2FA is not enabled"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    totp_secret = user.get("totp_secret") or ""
+    totp_ok = totp_secret and _totp_verify(totp_secret, code)
+    backup_ok = False
+    if not totp_ok:
+        backup_raw = user.get("totp_backup_codes") or "[]"
+        try:
+            backup_codes = json.loads(backup_raw)
+        except (ValueError, TypeError):
+            backup_codes = []
+        if code.upper() in backup_codes:
+            backup_ok = True
+    if not (totp_ok or backup_ok):
+        return web.json_response({"error": "invalid code"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    fields = {
+        "totp_secret": None,
+        "totp_enabled": 0,
+        "totp_backup_codes": None,
+        "updated_ts": _t.time(),
+    }
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("user_update", (username, fields)))
+        except asyncio.QueueFull:
+            return web.json_response({"error": "db queue full"}, status=503,
+                                      headers={"Cache-Control": "no-store"})
+    slog("totp_disabled", level="warn", username=username, ip=get_ip(request))
+    return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+async def totp_status_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/secured/2fa-status — return current 2FA state."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    username = _request_username(request)
+    if not username or username in ("admin-key", "unknown"):
+        return web.json_response({"enabled": False}, headers={"Cache-Control": "no-store"})
+    user = _user_load(username)
+    enabled = bool(user and user.get("totp_enabled"))
+    return web.json_response({"enabled": enabled}, headers={"Cache-Control": "no-store"})
 
 
 @_require_csrf

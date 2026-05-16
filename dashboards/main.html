@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Live Feed</title>
+<title>AppSecGW_1.8.6 · Live Feed</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -250,7 +250,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div id="sidebar-brand-ver">1.8.6</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -1906,6 +1906,8 @@ window._gwIdentityPopover = (function(){
       tokens:           raw.tokens != null ? raw.tokens : null,
       blocks_breakdown: bbd,
       risk_breakdown:   raw.risk_breakdown || null,
+      components:       raw.components || {},
+      metrics:          raw.metrics    || {},
     };
   }
   function buildIdHtml(d){
@@ -1993,7 +1995,20 @@ window._gwIdentityPopover = (function(){
     if (kind === 'id-main' && d.ip) {
       window.fetchIpIntel(d.ip).then(html => {
         const node = document.getElementById('ip-intel-section');
-        if (node) node.innerHTML = _dp(html);
+        if (node) {
+          node.innerHTML = _dp(html);
+          // 1.8.6 — wire risk-breakdown triggers in the injected ip-intel HTML
+          node.querySelectorAll('.risk-breakdown-trigger').forEach(el => {
+            el.onclick = ev => {
+              ev.stopPropagation();
+              try {
+                const bd = JSON.parse(el.dataset.breakdown || '[]');
+                const rs = el.dataset.riskscore;
+                window.showRiskPop(bd, rs, el);
+              } catch(_){}
+            };
+          });
+        }
       }).catch(() => {});
     }
   };
@@ -2071,7 +2086,14 @@ window._gwIdentityPopover = (function(){
         <tr><td class="dim" style="text-align:right">AbuseIPDB</td>   <td>${fmtScore(ab.score)}/100 ${ab.country?('· '+escapeHtml(ab.country)):''} <span class="dim" style="font-size:10px">(${escapeHtml(ab.source||'?')})</span></td></tr>
         <tr><td class="dim" style="text-align:right">CrowdSec</td>    <td>${cs.decision?`<span style="color:var(--red);font-weight:600">${escapeHtml(cs.decision)}</span>`:'<span class="dim">clean</span>'} <span class="dim" style="font-size:10px">(${escapeHtml(cs.source||'?')})</span></td></tr>
         <tr><td class="dim" style="text-align:right">internal ban</td><td>${it.banned?`<span style="color:var(--red);font-weight:600">YES · ${it.banned_remaining_secs}s left</span> <span class="dim" style="font-size:10px">${escapeHtml(it.ban_reason||'')}</span>`:'<span class="dim">no</span>'}</td></tr>
-        <tr><td class="dim" style="text-align:right">risk</td>        <td>${fmtScore(it.risk_score)}/100</td></tr>
+        <tr><td class="dim" style="text-align:right">risk</td>        <td>${
+          (it.risk_score > 0 && (it.risk_breakdown||[]).length)
+            ? `<span class="risk-breakdown-trigger" style="color:var(--red);font-weight:600"
+                     data-breakdown="${escapeHtml(JSON.stringify(it.risk_breakdown))}"
+                     data-riskscore="${it.risk_score}"
+                     title="click for score breakdown">${fmtScore(it.risk_score)}/100 ↗</span>`
+            : `${fmtScore(it.risk_score)}/100`
+        }</td></tr>
         <tr><td class="dim" style="text-align:right">activity</td>    <td>${it.requests_24h||0} reqs (${it.allowed_24h||0} ok / ${it.blocked_24h||0} blocked)</td></tr>
       </table>
       <div style="margin-top:10px">
@@ -2354,7 +2376,14 @@ window._gwIdentityPopover = (function(){
         <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
         <td>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</td>
         <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
-        <td style="text-align:right">${e.risk_score}</td>
+        <td style="text-align:right">${
+          (e.risk_score > 0 && (e.risk_breakdown||[]).length)
+            ? `<span class="risk-breakdown-trigger" style="color:var(--red);font-weight:600"
+                     data-breakdown="${escapeHtml(JSON.stringify(e.risk_breakdown))}"
+                     data-riskscore="${e.risk_score}"
+                     title="click for score breakdown">${e.risk_score}</span>`
+            : e.risk_score
+        }</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
         <td>${_actionBtns(e.ip, e.id, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
@@ -2429,6 +2458,17 @@ window._gwIdentityPopover = (function(){
         };
         const abBtn = span.querySelector('.authbot');
         if (abBtn) _wireAuthBot(abBtn, ip, _moveEntry, _renderAndWire);
+      });
+      // 1.8.6 — wire risk-breakdown triggers inside this modal render
+      modalBody.querySelectorAll('.risk-breakdown-trigger').forEach(el => {
+        el.onclick = ev => {
+          ev.stopPropagation();
+          try {
+            const bd = JSON.parse(el.dataset.breakdown || '[]');
+            const rs = el.dataset.riskscore;
+            window.showRiskPop(bd, rs, el);
+          } catch(_){}
+        };
       });
     }
     _renderAndWire();
@@ -2753,6 +2793,26 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+/* 1.8.6 — risk-breakdown floating tooltip */
+#risk-pop{display:none;position:fixed;z-index:500;background:#0d1117;
+  border:1px solid var(--line);border-radius:6px;padding:12px 14px;
+  min-width:260px;max-width:340px;font-size:12px;box-shadow:0 4px 20px #0009;
+  font-family:ui-monospace,Menlo,monospace}
+#risk-pop.show{display:block}
+#risk-pop h3{font-size:10px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.6px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
+#risk-pop .x{cursor:pointer;color:var(--dim);font-size:15px;line-height:1;font-weight:400}
+#risk-pop .x:hover{color:var(--red)}
+#risk-pop .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:6px;
+  align-items:center;padding:4px 0;border-bottom:1px solid var(--line)}
+#risk-pop .rsn:last-child{border-bottom:0}
+#risk-pop .rsn-name{color:var(--fg);font-size:11px}
+#risk-pop .rsn-bar{height:7px;background:#0a0e13;border-radius:3px;overflow:hidden}
+#risk-pop .rsn-bar>div{height:100%;background:var(--red)}
+#risk-pop .rsn-val{color:var(--red);text-align:right;font-weight:600;font-size:11px}
+#risk-pop .empty{color:var(--dim);font-style:italic;text-align:center;padding:6px}
+#risk-pop .meta{color:var(--dim);font-size:10.5px;margin-bottom:8px}
+.risk-breakdown-trigger{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
 </style>
 <!-- 1.6.5 — server-LOG_LEVEL combo + health pill moved into #topbar-right -->
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
@@ -3472,4 +3532,43 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->
+<!-- 1.8.6 — floating risk-breakdown tooltip -->
+<div id="risk-pop">
+  <h3>Risk score breakdown <span class="x" id="risk-pop-x">×</span></h3>
+  <div id="risk-pop-body"></div>
+</div>
+<script>
+(function(){
+  const pop = document.getElementById('risk-pop');
+  const popBody = document.getElementById('risk-pop-body');
+  document.getElementById('risk-pop-x').onclick = () => pop.classList.remove('show');
+  document.addEventListener('click', e => {
+    if (!pop.contains(e.target) && !e.target.classList.contains('risk-breakdown-trigger'))
+      pop.classList.remove('show');
+  });
+
+  window.showRiskPop = function(breakdown, riskScore, anchorEl){
+    const rs = parseFloat(riskScore) || 0;
+    const total = breakdown.reduce((a, b) => a + b[1], 0) || 1;
+    const rows = breakdown.length
+      ? breakdown.map(([reason, val]) => {
+          const pct = (val / total * 100).toFixed(0);
+          return `<div class="rsn">
+            <span class="rsn-name">${escapeHtml(reason)}</span>
+            <div class="rsn-bar"><div style="width:${pct}%"></div></div>
+            <span class="rsn-val">+${val}</span></div>`;
+        }).join('')
+      : '<div class="empty">no active signals (may have decayed)</div>';
+    popBody.innerHTML =
+      `<div class="meta">Live: <b style="color:var(--red)">${rs.toFixed(1)}</b> · half-life 1h · ban ≥ 50 (≥100 NAT)</div>${rows}`;
+    const rect = anchorEl.getBoundingClientRect();
+    const left = Math.min(rect.left, window.innerWidth - 360);
+    const top  = rect.bottom + 6 + window.scrollY;
+    pop.style.left = left + 'px';
+    pop.style.top  = (rect.bottom + 6) + 'px';
+    pop.style.position = 'fixed';
+    pop.classList.add('show');
+  };
+})();
+</script>
 </body></html>

@@ -6,7 +6,7 @@ Includes HMAC-SHA-256 signature in X-AppSecGW-Signature when WEBHOOK_SECRET
 is set so the receiver can authenticate the gateway. Cross-instance dedup
 via Redis SETNX when available. Best-effort: failures never block traffic.
 
-1.8.5 — rewrote to use asyncio.Queue worker with exponential backoff and
+1.8.6 — rewrote to use asyncio.Queue worker with exponential backoff and
 circuit breaker instead of fire-and-forget to avoid silent delivery failures.
 
 Extracted from proxy.py as part of Phase 7 modular refactoring.

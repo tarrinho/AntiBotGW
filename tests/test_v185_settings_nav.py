@@ -1,5 +1,5 @@
 """
-tests/test_v185_settings_nav.py — 1.8.5 nav restructure + OIDC settings tests.
+tests/test_v185_settings_nav.py — 1.8.6 nav restructure + OIDC settings tests.
 
 Covers:
   - Service and Logs moved to sub-items under Settings in all 11 dashboard nav bars

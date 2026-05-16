@@ -5,29 +5,45 @@ from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from admin.auth import _internal_authed, _request_role  # noqa: F401
 from aiohttp import web
 
-CONTROLS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
-GEO_DASHBOARD_HTML      = (_DASHBOARDS_DIR / "geo.html").read_text(encoding="utf-8")
-LOGS_DASHBOARD_HTML     = (_DASHBOARDS_DIR / "logs.html").read_text(encoding="utf-8")
+CONTROLS_DASHBOARD_HTML  = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
+GEO_DASHBOARD_HTML       = (_DASHBOARDS_DIR / "geo.html").read_text(encoding="utf-8")
+LOGS_DASHBOARD_HTML      = (_DASHBOARDS_DIR / "logs.html").read_text(encoding="utf-8")
+CONTROLS_TEST_A_HTML     = (_DASHBOARDS_DIR / "controls_testA.html").read_text(encoding="utf-8")
+CONTROLS_TEST_B_HTML     = (_DASHBOARDS_DIR / "controls_testB.html").read_text(encoding="utf-8")
+
+
+_PROTO_HEADERS = {
+    "Cache-Control": "no-store",
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
+    ),
+}
+
+
+async def controls_test_a_endpoint(request: web.Request):
+    """Prototype A — split-pane controls layout (temporary, not in menus)."""
+    if _request_role(request) == "viewer":
+        return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
+    return web.Response(text=CONTROLS_TEST_A_HTML, content_type="text/html", headers=_PROTO_HEADERS)
+
+
+async def controls_test_b_endpoint(request: web.Request):
+    """Prototype B — modified-first controls layout (temporary, not in menus)."""
+    if _request_role(request) == "viewer":
+        return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
+    return web.Response(text=CONTROLS_TEST_B_HTML, content_type="text/html", headers=_PROTO_HEADERS)
 
 
 async def controls_dashboard_endpoint(request: web.Request):
     """Ops dashboard with on/off switches + thresholds for every hot-reloadable knob."""
     if _request_role(request) == "viewer":
         return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
-    body = CONTROLS_DASHBOARD_HTML
-    return web.Response(
-        text=body, content_type="text/html",
-        headers={
-            "Cache-Control": "no-store",
-            "X-Frame-Options": "DENY",
-            "X-Content-Type-Options": "nosniff",
-            "Referrer-Policy": "no-referrer",
-            "Content-Security-Policy": (
-                "default-src 'self'; "
-                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
-                "style-src 'self' 'unsafe-inline'; "
-                "img-src 'self' data:; "
-                "connect-src 'self'; "
-                "frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'"
-            ),
-        })
+    return web.Response(text=CONTROLS_DASHBOARD_HTML, content_type="text/html", headers=_PROTO_HEADERS)

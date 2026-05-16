@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.5"
+GW_VERSION = "AppSecGW_1.8.6"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -448,6 +448,10 @@ JA4_DENY_LIST: set = {
     e.strip() for e in os.environ.get("JA4_DENY_LIST", "").split(",")
     if e.strip()
 }
+# 1.8.6 — JA4H HTTP fingerprint deny-list
+JA4H_DENY_LIST: frozenset = frozenset(
+    s.strip() for s in os.environ.get("JA4H_DENY_LIST", "").split(",") if s.strip()
+)
 JA4_AUTODENY_THRESHOLD = int(os.environ.get("JA4_AUTODENY_THRESHOLD", "3"))
 JA4_AUTODENY_WINDOW_S  = int(os.environ.get("JA4_AUTODENY_WINDOW_S",  "86400"))
 _ja4_trusted_raw = os.environ.get("JA4_TRUSTED_PEERS", "").strip()
@@ -772,14 +776,14 @@ RISK_WEIGHTS = {
     "redirect-maze-bot":     55,   # P2: maze completed too fast
     "llm-no-subresources":   40,   # P3: HTML fetched without CSS/JS/images
     "canary-probe-miss":     35,   # P4: preload probe never fetched
-    # 1.8.5 — new signals
+    # 1.8.6 — new signals
     "body-critical-injection": 80,
     "method-override-attempt": 35,
     "smuggling-dual-header":   90,
     "smuggling-invalid-te":    90,
     "smuggling-obfuscated-te": 90,
     "smuggling-duplicate-cl":  90,
-    # 1.8.5 Week 3/4 — new detection signals
+    # 1.8.6 Week 3/4 — new detection signals
     "body-xxe":                80,
     "body-proto-pollution":    50,
     "header-ssti":             50,
@@ -789,7 +793,27 @@ RISK_WEIGHTS = {
     "gql-depth-exceeded":      30,
     "upload-dangerous-ext":    60,
     "upload-dangerous-magic":  70,
+    # 1.8.6 — credential stuffing + JA4H signals
+    "upstream-auth-fail":      40,
+    "ja4h-deny":               90,
+    # 1.8.6 — client-side interaction probe
+    "no-interaction":          20,
+    "bot-motion":              25,
+    "scripted-motion":         20,
+    "bot-scroll":              15,
+    "scripted-keys":           15,
+    "low-entropy-input":       15,
 }
+
+# ── 1.8.6 — Credential stuffing detection config ─────────────────────────────
+AUTH_PATHS: frozenset = frozenset(
+    p.strip() for p in
+    os.environ.get("AUTH_PATHS", "/login,/signin,/auth,/api/auth,/api/login").split(",")
+    if p.strip()
+)
+AUTH_FAIL_THRESHOLD: int  = int(os.environ.get("AUTH_FAIL_THRESHOLD", "5"))
+AUTH_FAIL_WINDOW_SECS: int = int(os.environ.get("AUTH_FAIL_WINDOW_SECS", "300"))
+CRED_STUFF_GLOBAL_RPS: float = float(os.environ.get("CRED_STUFF_GLOBAL_RPS", "5.0"))
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
 ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "30"))
@@ -872,6 +896,9 @@ CANARY_PROBE_SCORE      = float(os.environ.get("CANARY_PROBE_SCORE",      "20"))
 
 # ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
 FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")
+
+# ── 1.8.6 — client-side interaction probe (mouse/scroll/keystroke entropy) ───
+INTERACTION_PROBE_ENABLED = os.environ.get("INTERACTION_PROBE_ENABLED", "1") in ("1", "true", "yes")
 
 # ── 1.7.2 — service worker challenge ────────────────────────────────────────
 SW_CHALLENGE_ENABLED = os.environ.get("SW_CHALLENGE_ENABLED", "0") in ("1", "true", "yes")
@@ -992,7 +1019,7 @@ JWT_REQUIRED_ISSUER  = os.environ.get("JWT_REQUIRED_ISSUER", "").strip()
 JWT_REQUIRED_AUDIENCE = os.environ.get("JWT_REQUIRED_AUDIENCE", "").strip()
 JWT_LEEWAY_SECS      = int(os.environ.get("JWT_LEEWAY_SECS", "30"))
 
-# ── 1.8.5 — OIDC / Keycloak SSO ─────────────────────────────────────────────
+# ── 1.8.6 — OIDC / Keycloak SSO ─────────────────────────────────────────────
 OIDC_ISSUER        = os.environ.get("OIDC_ISSUER", "").rstrip("/")
 OIDC_CLIENT_ID     = os.environ.get("OIDC_CLIENT_ID", "").strip()
 OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
@@ -1218,7 +1245,7 @@ def match_body_group(body: bytes, ctype: str):
                 return grp
     return None
 
-# 1.8.5 — ungated critical patterns: fire regardless of escalation score.
+# 1.8.6 — ungated critical patterns: fire regardless of escalation score.
 _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)\bunion[ +/*]+(all[ +/*]+)?select\b"),
     re.compile(rb"(?i)\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)"),
@@ -1231,7 +1258,7 @@ _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)/proc/self/(environ|cmdline|exe)\b"),
     re.compile(rb"(?i)[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id)\b"),
     re.compile(rb"(?i)\b(/bin/sh|/bin/bash|/usr/bin/python)\b"),
-    # 1.8.5 Week 3 — XXE patterns (any content-type)
+    # 1.8.6 Week 3 — XXE patterns (any content-type)
     re.compile(rb"(?i)<!ENTITY\b"),
     re.compile(rb"(?i)<!DOCTYPE[^>]*\["),
     re.compile(rb"(?i)SYSTEM\s+[\"'](file|http|ftp|php|expect|data)://"),
@@ -1404,7 +1431,7 @@ def dlp_redact(body: bytes, hits) -> bytes:
     return out
 
 
-# ── 1.8.5 (Week 3) — New detection signals ───────────────────────────────────
+# ── 1.8.6 (Week 3) — New detection signals ───────────────────────────────────
 
 # ── Task A: XXE Detection (2.2) ───────────────────────────────────────────────
 
@@ -1604,6 +1631,9 @@ METRICS_ALLOWED_IPS_RAW  = os.environ.get("METRICS_ALLOWED_IPS", "")
 
 MAX_ADMIN_SESSIONS  = int(os.environ.get("MAX_ADMIN_SESSIONS", "5"))
 SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
+
+# ── 1.8.6 — TOTP two-factor authentication ───────────────────────────────────
+REQUIRE_2FA: bool = os.environ.get("REQUIRE_2FA", "0") not in ("", "0", "false", "False", "no")
 
 # ── Session IP binding (Task J) ───────────────────────────────────────────────
 # Default OFF — too disruptive for users behind NAT/VPN

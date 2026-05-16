@@ -1,5 +1,5 @@
 """
-tests/test_oidc.py — Static + dynamic QA tests for admin/oidc.py (1.8.5 SSO).
+tests/test_oidc.py — Static + dynamic QA tests for admin/oidc.py (1.8.6 SSO).
 
 Static (S01-S24): source-code assertions — config defaults, guard clauses,
     state-store TTL, redirect-URI build, username sanitization, HTML placeholders,
@@ -130,6 +130,49 @@ class TestS_OIDCStatic:
         fn_src = _SRC_OIDC[_SRC_OIDC.find("def oidc_button_html"):]
         assert 'return ""' in fn_src, \
             "oidc_button_html must return empty string when OIDC disabled"
+
+
+class TestS_OIDCStaticAdditional:
+
+    def test_s25_callback_path_uses_admin_ns(self):
+        """_CALLBACK_PATH must reference ADMIN_NS — not a raw string literal."""
+        m = re.search(r"_CALLBACK_PATH\s*=\s*ADMIN_NS\s*\+", _SRC_OIDC)
+        assert m, "_CALLBACK_PATH must be ADMIN_NS + '...' so it stays in sync with the admin namespace"
+        assert "oidc/callback" in _SRC_OIDC
+
+    def test_s26_scope_param_in_auth_params_dict(self):
+        """scope param must be included in the auth URL params dict with OIDC_SCOPES."""
+        login_src = _SRC_OIDC[_SRC_OIDC.find("async def oidc_login_endpoint"):]
+        params_block = login_src[:login_src.find("auth_url")]
+        assert ('"scope"' in params_block or "'scope'" in params_block), \
+            "scope must be a key in the auth params dict"
+        assert "OIDC_SCOPES" in params_block, \
+            "scope value must reference OIDC_SCOPES variable"
+
+    def test_s27_provision_failure_redirects_not_raises(self):
+        """sqlite error during provisioning → _redirect_error, not exception propagation."""
+        idx = _SRC_OIDC.find("oidc_provision_failed")
+        assert idx != -1, "Must slog oidc_provision_failed on DB error"
+        snippet = _SRC_OIDC[idx:idx + 300]
+        assert "_redirect_error(" in snippet, \
+            "Provision failure except block must call _redirect_error (no exception propagation)"
+
+    def test_s28_slog_login_success_present(self):
+        """oidc_login_success slog event must exist for audit trail on happy path."""
+        assert "oidc_login_success" in _SRC_OIDC, \
+            "Successful OIDC login must emit oidc_login_success slog event"
+
+    def test_s29_db_queue_audit_event_on_success(self):
+        """db_queue.put_nowait('user_login_recorded') called on success for audit."""
+        assert "user_login_recorded" in _SRC_OIDC, \
+            "OIDC success path must enqueue user_login_recorded for audit"
+        assert "put_nowait" in _SRC_OIDC, \
+            "Must use put_nowait (non-blocking) to avoid blocking the event loop"
+
+    def test_s30_issuer_rstripped_at_module_init(self):
+        """OIDC_ISSUER must strip trailing slash at init to prevent double-slash URLs."""
+        m = re.search(r'OIDC_ISSUER\s*=.*\.rstrip\(["\']/', _SRC_OIDC)
+        assert m, "OIDC_ISSUER = os.environ.get(...).rstrip('/') required to prevent URL double-slash"
 
 
 class TestS_OIDCStaticExtra:
@@ -802,3 +845,231 @@ async def test_d31_sequential_logins_produce_unique_states():
 def test_d32_valid_roles_set_exact():
     """_VALID_ROLES must be exactly {admin, maintainer, viewer} — no surprises."""
     assert _oidc_mod._VALID_ROLES == frozenset({"admin", "maintainer", "viewer"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RECOMMENDED EXTRA TESTS  (D33-D42)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── D33 — state param absent (code present) → redirect error ─────────────────
+
+@pytest.mark.asyncio
+async def test_d33_callback_rejects_missing_state_param():
+    """code present but state param absent → redirect error, not crash."""
+    async with _patched_oidc(OIDC_ENABLED=True,
+                              OIDC_ISSUER="https://kc.example.com/realms/test",
+                              OIDC_CLIENT_ID="x", OIDC_CLIENT_SECRET="y"):
+        req = _fake_request(query={"code": "abc123"})   # state key entirely absent
+        resp = await _oidc_mod.oidc_callback_endpoint(req)
+    assert resp.status in (301, 302)
+    assert "oidc_error" in resp.headers.get("Location", "")
+
+
+# ── D34 — aiohttp.ClientError during HTTP → redirect error (dynamic) ─────────
+
+@pytest.mark.asyncio
+async def test_d34_client_error_gives_redirect_error():
+    """aiohttp.ClientError raised during Keycloak HTTP → redirect error, not 500."""
+    import aiohttp as _aiohttp
+
+    async with _patched_oidc(OIDC_ENABLED=True,
+                              OIDC_ISSUER="http://kc.example.com/realms/test",
+                              OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+        state_tok = _valid_state()
+        req = _fake_request(query={"code": "abc", "state": state_tok})
+
+        async def _raise(*a, **kw):
+            raise _aiohttp.ClientConnectionError("connection refused")
+
+        mock_post_ctx = MagicMock()
+        mock_post_ctx.__aenter__ = _raise
+        mock_post_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        mock_http = MagicMock()
+        mock_http.post = MagicMock(return_value=mock_post_ctx)
+
+        mock_sess_ctx = MagicMock()
+        mock_sess_ctx.__aenter__ = AsyncMock(return_value=mock_http)
+        mock_sess_ctx.__aexit__ = AsyncMock(return_value=False)
+
+        with patch.object(_aiohttp, "ClientSession", return_value=mock_sess_ctx):
+            resp = await _oidc_mod.oidc_callback_endpoint(req)
+
+    assert resp.status in (301, 302)
+    assert "oidc_error" in resp.headers.get("Location", "")
+
+
+# ── D35 — token 200 but no access_token field → redirect error ───────────────
+
+@pytest.mark.asyncio
+async def test_d35_missing_access_token_redirect_error():
+    """Token endpoint 200 but body lacks access_token → redirect error, no cookie."""
+    async with _fake_keycloak(token_resp={"token_type": "Bearer"}) as issuer:
+        async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
+                                  OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+            state_tok = _valid_state()
+            req = _fake_request(query={"code": "authcode", "state": state_tok})
+            resp = await _oidc_mod.oidc_callback_endpoint(req)
+
+    assert resp.status in (301, 302)
+    assert "oidc_error" in resp.headers.get("Location", "")
+    assert "agw_session" not in resp.cookies
+
+
+# ── D36 — OIDC_DEFAULT_ROLE invalid → provisioned as "viewer" ────────────────
+
+@pytest.mark.asyncio
+async def test_d36_invalid_default_role_falls_back_to_viewer():
+    """OIDC_DEFAULT_ROLE='superadmin' (not in _VALID_ROLES) → new user gets 'viewer'."""
+    async with _fake_keycloak() as issuer:
+        async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
+                                  OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s",
+                                  OIDC_DEFAULT_ROLE="superadmin"):
+            state_tok = _valid_state()
+            req = _fake_request(query={"code": "authcode", "state": state_tok})
+
+            provisioned_role: list = []
+            mock_conn = MagicMock()
+
+            def _capture(sql, params=()):
+                if "INSERT OR IGNORE" in sql:
+                    provisioned_role.append(params[1])
+                return MagicMock()
+            mock_conn.execute = _capture
+
+            user_row = {"username": "alice", "role": "viewer", "status": "active"}
+            with patch("admin.oidc.sqlite3.connect", return_value=mock_conn), \
+                 patch("admin.users._user_load", side_effect=[None, user_row]), \
+                 patch("admin.users._session_create", return_value="tok"), \
+                 patch("admin.users._ACTIVE_SESSIONS", {}), \
+                 patch("admin.users._SESSION_COOKIE", "agw_session"), \
+                 patch("admin.users._SESSION_TTL", 3600):
+                resp = await _oidc_mod.oidc_callback_endpoint(req)
+
+    assert resp.status in (301, 302)
+    assert provisioned_role == ["viewer"], \
+        f"Expected ['viewer'] fallback but got {provisioned_role!r}"
+
+
+# ── D37 — state token entropy: ≥32 URL-safe chars ────────────────────────────
+
+@pytest.mark.asyncio
+async def test_d37_state_token_is_high_entropy():
+    """State token (secrets.token_urlsafe(24)) must be ≥32 URL-safe chars (144 bits)."""
+    async with _patched_oidc(OIDC_ENABLED=True,
+                              OIDC_ISSUER="https://kc.example.com/realms/test",
+                              OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+        await _oidc_mod.oidc_login_endpoint(_fake_request())
+        tok = list(_oidc_mod._OIDC_STATE.keys())[0]
+
+    assert len(tok) >= 32, \
+        f"State token {len(tok)} chars — must be ≥32 (secrets.token_urlsafe(24))"
+    assert re.match(r"^[A-Za-z0-9_-]+$", tok), \
+        "State token must contain only URL-safe characters"
+
+
+# ── D38 — email fallback when preferred_username is empty ────────────────────
+
+@pytest.mark.asyncio
+async def test_d38_email_fallback_when_preferred_username_empty():
+    """preferred_username='' in userinfo → email used as fallback for username mapping."""
+    async with _fake_keycloak(
+            userinfo_resp={"sub": "sub123", "preferred_username": "",
+                           "email": "bob@example.com"}) as issuer:
+        async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
+                                  OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+            state_tok = _valid_state()
+            req = _fake_request(query={"code": "code", "state": state_tok})
+
+            user_row = {"username": "bob.example.com", "role": "viewer", "status": "active"}
+            with patch("admin.users._user_load", return_value=user_row), \
+                 patch("admin.users._session_create", return_value="tok-email"), \
+                 patch("admin.users._ACTIVE_SESSIONS", {}), \
+                 patch("admin.users._SESSION_COOKIE", "agw_session"), \
+                 patch("admin.users._SESSION_TTL", 3600):
+                resp = await _oidc_mod.oidc_callback_endpoint(req)
+
+    assert resp.status in (301, 302)
+    assert "agw_session" in resp.cookies, \
+        "Session must be issued when email fallback produces a valid username"
+
+
+# ── D39 — sqlite error during provision → redirect error, no cookie ──────────
+
+@pytest.mark.asyncio
+async def test_d39_provision_failure_gives_redirect_error():
+    """sqlite3.OperationalError during INSERT → redirect error, no agw_session cookie."""
+    import sqlite3 as _sqlite3
+
+    async with _fake_keycloak() as issuer:
+        async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
+                                  OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+            state_tok = _valid_state()
+            req = _fake_request(query={"code": "code", "state": state_tok})
+
+            mock_conn = MagicMock()
+            mock_conn.execute.side_effect = _sqlite3.OperationalError("disk full")
+
+            with patch("admin.oidc.sqlite3.connect", return_value=mock_conn), \
+                 patch("admin.users._user_load", return_value=None), \
+                 patch("admin.users._SESSION_COOKIE", "agw_session"):
+                resp = await _oidc_mod.oidc_callback_endpoint(req)
+
+    assert resp.status in (301, 302)
+    assert "oidc_error" in resp.headers.get("Location", ""), \
+        "Provision failure must redirect to login with oidc_error"
+    assert "agw_session" not in resp.cookies, \
+        "No session cookie must be issued when provisioning fails"
+
+
+# ── D40 — login endpoint also purges expired states ──────────────────────────
+
+@pytest.mark.asyncio
+async def test_d40_login_endpoint_purges_expired_states():
+    """oidc_login_endpoint calls _purge_expired_states (not only the callback)."""
+    async with _patched_oidc(OIDC_ENABLED=True,
+                              OIDC_ISSUER="https://kc.example.com/realms/test",
+                              OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+        _oidc_mod._OIDC_STATE["stale"] = {"next_url": "/", "expires_ts": time.time() - 1}
+        await _oidc_mod.oidc_login_endpoint(_fake_request())
+        assert "stale" not in _oidc_mod._OIDC_STATE, \
+            "oidc_login_endpoint must evict expired state tokens on each /login call"
+
+
+# ── D41 — scope param in auth redirect URL ───────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_d41_scope_present_in_auth_redirect_url():
+    """Auth redirect Location must contain scope=openid (at minimum)."""
+    async with _patched_oidc(OIDC_ENABLED=True,
+                              OIDC_ISSUER="https://kc.example.com/realms/test",
+                              OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s",
+                              OIDC_SCOPES="openid profile email"):
+        resp = await _oidc_mod.oidc_login_endpoint(_fake_request())
+
+    loc = resp.headers.get("Location", "")
+    assert "scope=" in loc, "Auth redirect URL must contain scope= parameter"
+    assert "openid" in loc, "scope parameter must include 'openid'"
+
+
+# ── D42 — _safe_username additional edge cases ────────────────────────────────
+
+def test_d42_safe_username_edge_cases():
+    """_safe_username edge cases not covered by D08: leading dash, all-dots, digit-first."""
+    mod = _oidc_mod
+    # Leading hyphen: "-user" — hyphen is not replaced (it's in charset) but
+    # _USERNAME_RE requires [a-z0-9] at position 0 → None
+    assert mod._safe_username("-user") is None, \
+        "Leading hyphen must be rejected (regex requires [a-z0-9] start)"
+    # All-dots: "..." → re.sub collapses to "." → strip(".") → "" → None
+    assert mod._safe_username("...") is None, \
+        "All-dots input collapses to empty string after strip → None"
+    # Digit-first: "123abc" — valid, starts with digit
+    assert mod._safe_username("123abc") == "123abc", \
+        "Digit-first username must be accepted (regex allows [a-z0-9] start)"
+    # Exactly 2 chars (minimum valid length)
+    assert mod._safe_username("ab") == "ab", \
+        "Two-char username must be accepted (minimum valid length)"
+    # 64 chars — exactly one over the 63-char boundary (1 + 62 = 63 max)
+    assert mod._safe_username("a" * 64) is None, \
+        "64-char username must be rejected (max is 63 per regex {1,62})"

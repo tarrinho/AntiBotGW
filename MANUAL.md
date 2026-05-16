@@ -1,6 +1,6 @@
 # AppSecGW — Operational Runbook
 
-**Version**: 1.8.4  
+**Version**: 1.8.6  
 **Author**: Pedro Tarrinho
 
 ---
@@ -426,7 +426,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.8.4
+  appsec-antibot-gw:1.8.6
 ```
 
 ### Manage at runtime (Settings UI)
@@ -800,7 +800,7 @@ docker compose down -v  # also removes named volumes
 | Variable | Default | Description |
 |---|---|---|
 | `LISTEN_PORT` | `8080` | Port the gateway listens on |
-| `TRUST_XFF` | `""` | `"last"` — trust the last `X-Forwarded-For` hop from `TRUSTED_PROXIES` |
+| `TRUST_XFF` | `"none"` | `"none"` (default, fail-closed) · `"first"` · `"last"` — trust the named XFF hop; requires `TRUSTED_PROXIES` to be set or the proxy check fails closed |
 | `TRUSTED_PROXIES` | `""` | CIDR list of trusted reverse proxies (e.g. `10.0.0.0/8,172.16.0.0/12`) |
 
 ### Virtual hosts — v1.8.4
@@ -862,3 +862,8 @@ docker compose down -v  # also removes named volumes
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret |
 | `WEBHOOK_URL` | Outbound webhook for ban/DLP events |
 | `WEBHOOK_SECRET` | HMAC secret for webhook payloads |
+| `OIDC_ISSUER` | Keycloak realm base URL (e.g. `https://kc.example.com/realms/myrealm`) — enables SSO login button |
+| `OIDC_CLIENT_ID` | Keycloak client ID |
+| `OIDC_CLIENT_SECRET` | Keycloak client secret |
+| `OIDC_DEFAULT_ROLE` | Role assigned to new SSO users on first login (default `viewer`) |
+| `OIDC_SCOPES` | Space-separated OIDC scopes (default `openid profile email`) |

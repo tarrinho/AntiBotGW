@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.4 — entry point only.
+Anti-bot reverse proxy v1.8.6 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -72,6 +72,7 @@ from detection.automation import automation_report_endpoint  # noqa: F401
 from detection.fp_enrichment import (  # noqa: F401
     fp_report_endpoint, _fp_token_for, _is_soft_renderer, _inject_fp_probe,
 )
+from detection.interaction import interaction_report_endpoint  # noqa: F401
 from challenge.js_challenge import sw_js_endpoint  # noqa: F401
 from detection.cookie_lifecycle import (  # noqa: F401
     cookie_ghost_check, record_gateway_cookie_set, record_html_served,
@@ -243,14 +244,14 @@ async def on_startup(app):
             except (AttributeError, TypeError):
                 pass
     db_writer_task = asyncio.create_task(db_writer_loop())
-    # 1.8.5 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
+    # 1.8.6 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
     from db.sqlite import _rehydrate_bans
     _rehydrate_bans()
-    # 1.8.5 — start ip_state LRU eviction loop.
+    # 1.8.6 — start ip_state LRU eviction loop.
     from state import _ip_state_evict_loop as _evict_loop
     import state as _state_mod
     _state_mod._ip_state_eviction_task = asyncio.create_task(_evict_loop())
-    # 1.8.5 — start webhook worker with retry + circuit breaker.
+    # 1.8.6 — start webhook worker with retry + circuit breaker.
     from integrations.webhook import start_webhook_worker
     await start_webhook_worker()
     db_load_admin_ips()
@@ -307,7 +308,7 @@ async def on_startup(app):
     asyncio.create_task(_periodic_404_refresh_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
     service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
-    # 1.8.5 Week 4 — Task K: alerting thresholds background task
+    # 1.8.6 Week 4 — Task K: alerting thresholds background task
     from core.alerting import _alerting_loop
     asyncio.create_task(_alerting_loop())
     # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
@@ -341,6 +342,18 @@ async def on_startup(app):
     elif JS_CHALLENGE and TURNSTILE_ENABLED:
         print("[js-challenge] active (Turnstile-backed cookie gate)",
               flush=True)
+    # 1.8.6 — Populate detector health registry after all integrations are initialised
+    from state import set_detector_health
+    set_detector_health("maxmind_asn",  MAXMIND_ENABLED, None if MAXMIND_ENABLED else "GeoLite2-ASN not loaded")
+    set_detector_health("maxmind_city", MAXMIND_CITY_ENABLED, None if MAXMIND_CITY_ENABLED else "GeoLite2-City not loaded")
+    set_detector_health("abuseipdb",    ABUSEIPDB_ENABLED, None if ABUSEIPDB_ENABLED else "ABUSEIPDB_KEY not configured")
+    set_detector_health("crowdsec",     CROWDSEC_ENABLED, None if CROWDSEC_ENABLED else "CROWDSEC credentials not configured")
+    set_detector_health("tor_block",    TOR_BLOCK_ENABLED)
+    set_detector_health("impossible_travel", IMPOSSIBLE_TRAVEL_ENABLED)
+    set_detector_health("fp_enrichment", FP_ENRICHMENT_ENABLED)
+    set_detector_health("graphql",      GQL_ENABLED)
+    set_detector_health("upload_scan",  UPLOAD_SCAN_ENABLED)
+    set_detector_health("dlp",          DLP_ENABLED)
 
 
 async def on_cleanup(app):
@@ -395,6 +408,8 @@ def make_app() -> web.Application:
         ("automation-report",  "POST", automation_report_endpoint,    False),
         # 1.7.2 — canvas/WebGL fingerprint report + Service Worker
         ("fp-report",          "POST", fp_report_endpoint,            False),
+        # 1.8.6 — interaction probe (mouse/scroll/keystroke entropy)
+        ("interaction-report", "POST", interaction_report_endpoint,   False),
         ("sw.js",              "GET",  sw_js_endpoint,                False),
         # 1.6.9 — AI Labyrinth tarpit (public; HMAC-gated internally)
         ("tarpit/{token}",     "GET",  tarpit_endpoint,               False),
@@ -450,6 +465,8 @@ def make_app() -> web.Application:
         ("service",           "GET",    service_dashboard_endpoint,            True),
         ("service-data",      "GET",    service_metrics_data_endpoint,         True),
         ("controls",          "GET",    controls_dashboard_endpoint,           True),
+        ("controls-test-a",   "GET",    controls_test_a_endpoint,              True),
+        ("controls-test-b",   "GET",    controls_test_b_endpoint,              True),
         ("settings",          "GET",    settings_dashboard_endpoint,           True),
         ("settings-export",   "GET",    settings_export_endpoint,              True),
         ("settings-import",   "POST",   settings_import_endpoint,              True),
@@ -480,6 +497,14 @@ def make_app() -> web.Application:
         # ── 1.8.4 — SIEM Security Event Center ──────────────────────────
         ("siem",                     "GET",    siem_dashboard_endpoint,               True),
         ("siem-data",                "GET",    siem_data_endpoint,                    True),
+        # ── 1.8.6 — SIEM advanced features ──────────────────────────────
+        ("siem-stream",              "GET",    siem_stream_endpoint,                  True),
+        ("siem-alert-rules",         "GET",    siem_alert_rules_endpoint,             True),
+        ("siem-alert-rules",         "POST",   siem_alert_rules_endpoint,             True),
+        ("siem-alert-rules",         "DELETE", siem_alert_rules_endpoint,             True),
+        ("siem-alert-rules",         "PATCH",  siem_alert_rules_endpoint,             True),
+        ("siem-dossier",             "GET",    siem_dossier_endpoint,                 True),
+        ("siem-export",              "GET",    siem_export_endpoint,                  True),
     ]
 
     _METHOD_MAP = {
@@ -515,7 +540,17 @@ def make_app() -> web.Application:
     app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
     app.router.add_post (PUBLIC + "/logout", logout_endpoint)
-    # 1.8.5 — OIDC/Keycloak SSO (both public — no session cookie before login)
+    # 1.8.6 — TOTP two-factor authentication
+    app.router.add_post (PUBLIC + "/login/totp",    totp_verify_endpoint)
+    app.router.add_get  (SEC    + "/2fa-status",    totp_status_endpoint)
+    app.router.add_get  (SEC    + "/2fa-setup",     totp_setup_endpoint)
+    app.router.add_post (SEC    + "/2fa-confirm",   totp_confirm_endpoint)
+    app.router.add_post (SEC    + "/2fa-disable",   totp_disable_endpoint)
+    # 1.8.6 — DLP pattern CRUD
+    app.router.add_get   (SEC + "/dlp-patterns",  dlp_patterns_get)
+    app.router.add_post  (SEC + "/dlp-patterns",  dlp_patterns_post)
+    app.router.add_delete(SEC + "/dlp-patterns",  dlp_patterns_delete)
+    # 1.8.6 — OIDC/Keycloak SSO (both public — no session cookie before login)
     app.router.add_get  (PUBLIC + "/auth/oidc/login",    oidc_login_endpoint)
     app.router.add_get  (PUBLIC + "/auth/oidc/callback", oidc_callback_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)

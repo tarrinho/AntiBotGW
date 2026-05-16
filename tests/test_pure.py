@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.5"
+_EXPECTED_VERSION = "AppSecGW_1.8.6"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.5\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.6\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -2953,7 +2953,7 @@ def test_agents_bucket_endpoint_returns_authorized_robot_field():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     fn_start = src.find("async def agents_bucket_detail_endpoint")
     assert fn_start != -1, "proxy_handler.py must define agents_bucket_detail_endpoint"
-    fn_section = src[fn_start: fn_start + 7000]
+    fn_section = src[fn_start: fn_start + 8000]
     assert "reason='authorized-robot'" in fn_section, (
         "agents_bucket_detail_endpoint must query reason='authorized-robot' events"
     )
@@ -4485,16 +4485,17 @@ def test_logs_html_hard_ban_reasons_defined():
 # ── controls.html actions bar placement (1.7.7) ──────────────────────────────
 
 def test_controls_actions_bar_before_scoring():
-    """div.actions (Save/Reset) must appear before card-scoring in source order."""
+    """Apply/Reset buttons must appear in #topbar-right (split-pane layout, v1.8.6+).
+    The standalone div.actions was replaced by individual buttons in #topbar-right."""
     src = _dash("controls.html")
-    actions_pos = src.find('class="actions"')
+    topbar_right_pos = src.find('id="topbar-right"')
     scoring_pos = src.find('id="card-scoring"')
-    assert actions_pos != -1, "controls.html missing div.actions"
+    apply_pos = src.find('id="apply"')
+    assert topbar_right_pos != -1, "controls.html missing #topbar-right"
     assert scoring_pos != -1, "controls.html missing card-scoring"
-    assert actions_pos < scoring_pos, (
-        f"div.actions (pos {actions_pos}) must appear before card-scoring "
-        f"(pos {scoring_pos}) in controls.html source order"
-    )
+    assert apply_pos != -1, "controls.html missing #apply"
+    assert apply_pos > topbar_right_pos, "apply must be inside #topbar-right"
+    assert 'class="actions"' not in src, "controls.html must not have standalone div.actions (removed in v1.8.6)"
 
 
 # ── geo-map 30-day view (1.7.7 session 3) ────────────────────────────────────
@@ -5138,7 +5139,8 @@ def test_gw_identity_popover_core_logic_identical_in_both_files():
     def _extract_iife(src: str) -> str:
         start = src.find("function _fmt")
         assert start != -1
-        end = src.find("return { normalizeId, buildIdHtml, buildRiskHtml };", start)
+        # anchor on the common prefix — agents.html adds buildScoreHtml to the return
+        end = src.find("return { normalizeId, buildIdHtml, buildRiskHtml", start)
         assert end != -1
         return src[start: end].strip()
 
@@ -5537,7 +5539,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.5" in src, "vhost_policy.html: version string missing or stale"
+    assert "AppSecGW_1.8.6" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():
@@ -5902,3 +5904,256 @@ def test_maxmind_auto_fetch_uses_fetch_edition():
     auto_body = src[auto_start:auto_start + 800]
     assert "_maxmind_fetch_edition" in auto_body, \
         "_maxmind_auto_fetch must call _maxmind_fetch_edition for ETag support"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.8.6 — Score breakdown tooltip (agents.html click-to-popover)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _agents_src():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "dashboards" / "agents.html").read_text()
+
+
+class TestScoreBreakdownCss:
+    """CSS for .score-click must be present in agents.html."""
+
+    def test_score_click_class_defined(self):
+        src = _agents_src()
+        assert ".score-click" in src, \
+            "agents.html: .score-click CSS class must be defined"
+
+    def test_score_click_has_cursor_pointer(self):
+        src = _agents_src()
+        idx = src.find(".score-click")
+        block = src[idx:idx+200]
+        assert "cursor:pointer" in block, \
+            "agents.html: .score-click must set cursor:pointer"
+
+
+class TestScoreCellMarkup:
+    """Score badge in the suspects table must be wired for click-to-popover."""
+
+    def test_score_span_has_score_click_class(self):
+        src = _agents_src()
+        assert 'class="tag score-click' in src or "class='tag score-click" in src, \
+            "agents.html: score badge span must carry class 'tag score-click'"
+
+    def test_score_span_has_data_pop_score(self):
+        src = _agents_src()
+        assert 'data-pop="score"' in src or "data-pop='score'" in src, \
+            "agents.html: score badge must have data-pop='score'"
+
+    def test_score_span_has_data_i(self):
+        src = _agents_src()
+        # The score span row must carry data-i="${i}" for index lookup
+        score_idx = src.find('data-pop="score"')
+        if score_idx == -1:
+            score_idx = src.find("data-pop='score'")
+        assert score_idx != -1, "data-pop='score' not found"
+        nearby = src[score_idx - 100: score_idx + 200]
+        assert "data-i=" in nearby, \
+            "agents.html: score badge must carry data-i for suspect index lookup"
+
+    def test_score_span_has_title_click_hint(self):
+        src = _agents_src()
+        score_idx = src.find('data-pop="score"')
+        if score_idx == -1:
+            score_idx = src.find("data-pop='score'")
+        assert score_idx != -1
+        nearby = src[score_idx - 50: score_idx + 300]
+        assert "title=" in nearby, \
+            "agents.html: score badge must have a title tooltip hint"
+
+
+class TestScoreClickWiring:
+    """The click loop must include .score-click elements."""
+
+    def test_score_click_in_queryselectorall(self):
+        src = _agents_src()
+        assert ".score-click" in src, "agents.html: .score-click selector missing"
+        # The querySelectorAll that wires cell clicks must include score-click
+        qs_idx = src.find("querySelectorAll('.cell-click, .score-click')")
+        if qs_idx == -1:
+            qs_idx = src.find('querySelectorAll(".cell-click, .score-click")')
+        if qs_idx == -1:
+            # Accept any querySelectorAll that references score-click
+            qs_idx = src.find(".score-click")
+            qs2    = src.find("querySelectorAll", qs_idx - 500)
+            assert qs2 != -1 and qs2 < qs_idx + 100, \
+                "agents.html: querySelectorAll must select .score-click elements"
+        else:
+            assert qs_idx != -1, \
+                "agents.html: querySelectorAll must include both .cell-click and .score-click"
+
+
+class TestOpenPopoverScoreCase:
+    """openPopover must handle kind='score' and call buildScoreHtml."""
+
+    def test_open_popover_has_score_case(self):
+        src = _agents_src()
+        assert "'score'" in src or '"score"' in src, \
+            "agents.html: openPopover must handle kind='score'"
+
+    def test_open_popover_calls_build_score_html(self):
+        src = _agents_src()
+        assert "buildScoreHtml" in src, \
+            "agents.html: openPopover must call buildScoreHtml for kind='score'"
+
+    def test_open_popover_score_title(self):
+        src = _agents_src()
+        assert "Score breakdown" in src, \
+            "agents.html: openPopover score case must set title 'Score breakdown'"
+
+
+class TestBuildScoreHtmlFunction:
+    """buildScoreHtml standalone function must exist and cover all 6 components."""
+
+    def _fn_body(self):
+        src = _agents_src()
+        start = src.find("function buildScoreHtml(")
+        assert start != -1, "agents.html: buildScoreHtml function not found"
+        return src[start: start + 3000]
+
+    def test_function_exists(self):
+        body = self._fn_body()
+        assert "buildScoreHtml" in body
+
+    def test_all_six_components_present(self):
+        body = self._fn_body()
+        for comp in ("headers", "assets", "enum", "timing", "risk", "404s"):
+            assert f"'{comp}'" in body or f'"{comp}"' in body, \
+                f"agents.html buildScoreHtml must reference component '{comp}'"
+
+    def test_component_colors_match_comp_bar(self):
+        src = _agents_src()
+        body = src[src.find("function buildScoreHtml("): src.find("function buildScoreHtml(") + 3000]
+        # These are the exact colors used in the .bar .h/.a/.e/.t/.r/.f CSS
+        for color in ("#a78bfa", "#5fb3c0", "#3fb950", "#d29922", "#f85149", "#ff7b3a"):
+            assert color in body, \
+                f"agents.html buildScoreHtml must use component color {color}"
+
+    def test_uses_d_components(self):
+        body = self._fn_body()
+        assert "d.components" in body or "c = d.components" in body or \
+               "components" in body, \
+            "agents.html buildScoreHtml must read d.components"
+
+    def test_uses_d_metrics(self):
+        body = self._fn_body()
+        assert "d.metrics" in body or "m = d.metrics" in body or \
+               "metrics" in body, \
+            "agents.html buildScoreHtml must read d.metrics"
+
+    def test_renders_risk_breakdown_when_risk_nonzero(self):
+        body = self._fn_body()
+        assert "risk_breakdown" in body, \
+            "agents.html buildScoreHtml must conditionally render risk_breakdown signals"
+
+    def test_risk_section_gated_on_risk_component(self):
+        body = self._fn_body()
+        # Must check c.risk or components.risk before rendering risk sub-section
+        assert "c.risk" in body or "components.risk" in body, \
+            "agents.html buildScoreHtml risk section must be gated on c.risk > 0"
+
+    def test_stealth_score_in_output(self):
+        body = self._fn_body()
+        assert "stealth_score" in body, \
+            "agents.html buildScoreHtml must display the stealth_score total"
+
+    def test_bars_equal_pct_contribution(self):
+        body = self._fn_body()
+        # Bar width must use the component percentage value
+        assert "width:${pct}%" in body or "width:"+'"${pct}%"' in body or \
+               "pct}%" in body, \
+            "agents.html buildScoreHtml bars must be sized by component percentage"
+
+
+class TestNormalizeIdPassesComponentsMetrics:
+    """normalizeId in both files must pass through components and metrics."""
+
+    def _iife_src(self, filename):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "dashboards" / filename).read_text()
+        start = src.find("function normalizeId(raw)")
+        assert start != -1, f"{filename}: normalizeId not found"
+        return src[start: start + 1500]
+
+    def test_agents_normalizeId_has_components(self):
+        body = self._iife_src("agents.html")
+        assert "components" in body, \
+            "agents.html normalizeId must pass through components field"
+
+    def test_agents_normalizeId_has_metrics(self):
+        body = self._iife_src("agents.html")
+        assert "metrics" in body, \
+            "agents.html normalizeId must pass through metrics field"
+
+    def test_main_normalizeId_has_components(self):
+        body = self._iife_src("main.html")
+        assert "components" in body, \
+            "main.html normalizeId must pass through components field"
+
+    def test_main_normalizeId_has_metrics(self):
+        body = self._iife_src("main.html")
+        assert "metrics" in body, \
+            "main.html normalizeId must pass through metrics field"
+
+
+class TestIpIntelRiskBreakdown:
+    """ip_intel_endpoint must return risk_breakdown in internal section."""
+
+    def _fn_body(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "admin" / "users.py").read_text()
+        fn_start = src.find("async def ip_intel_endpoint")
+        assert fn_start != -1, "admin/users.py: ip_intel_endpoint not found"
+        return src[fn_start: fn_start + 6000]
+
+    def test_risk_breakdown_collected_in_ip_intel(self):
+        fn_body = self._fn_body()
+        assert "risk_breakdown" in fn_body, \
+            "ip_intel_endpoint must collect risk_breakdown from ip_state"
+
+    def test_risk_breakdown_in_internal_response(self):
+        fn_body = self._fn_body()
+        internal_start = fn_body.find('out["internal"]')
+        assert internal_start != -1, "ip_intel_endpoint must set out['internal']"
+        internal_block = fn_body[internal_start: internal_start + 600]
+        assert "risk_breakdown" in internal_block, \
+            "ip_intel_endpoint out['internal'] must include risk_breakdown key"
+
+    def test_risk_breakdown_sorted_descending(self):
+        fn_body = self._fn_body()
+        assert "reverse=True" in fn_body, \
+            "ip_intel_endpoint risk_breakdown must be sorted descending (reverse=True)"
+
+
+class TestMissedListRiskBreakdown:
+    """agents_bucket_detail_endpoint missed_list entries must include risk_breakdown."""
+
+    def _fn_body(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "core" / "proxy_handler.py").read_text()
+        fn_start = src.find("async def agents_bucket_detail_endpoint")
+        assert fn_start != -1
+        return src[fn_start: fn_start + 8000]
+
+    def test_risk_breakdown_in_missed_list_append(self):
+        body = self._fn_body()
+        missed_idx = body.find("missed_list.append(")
+        assert missed_idx != -1, "agents_bucket_detail_endpoint: missed_list.append not found"
+        append_block = body[missed_idx: missed_idx + 500]
+        assert "risk_breakdown" in append_block, \
+            "agents_bucket_detail_endpoint: missed_list entries must include risk_breakdown"
+
+    def test_risk_breakdown_sorted_descending(self):
+        body = self._fn_body()
+        missed_idx = body.find("missed_list.append(")
+        pre_block = body[max(0, missed_idx - 300): missed_idx + 100]
+        assert "reverse=True" in pre_block, \
+            "agents_bucket_detail_endpoint: risk_breakdown sort must use reverse=True"

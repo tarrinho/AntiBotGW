@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Controls</title>
+<title>AppSecGW_1.8.6 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -31,7 +31,7 @@ a{color:var(--blue);text-decoration:none}
 #topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
-#page-content{flex:1;padding:14px}
+#page-content{flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden}
 @media(max-width:600px){
   #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
   #sidebar.mob-open{transform:translateX(0)}
@@ -47,7 +47,21 @@ a{color:var(--blue);text-decoration:none}
   .btn{min-height:36px;padding:8px 12px}
   .btn-sm{min-height:32px;padding:6px 10px}
 }
-main{padding:0;max-width:1300px;margin:0 auto}
+main{padding:0;max-width:none;margin:0}
+/* ── Controls split-pane nav ── */
+#ctrl-split{display:flex;flex:1;min-height:0;overflow:hidden}
+#ctrl-nav{width:190px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);overflow-y:auto;padding:8px 0}
+#ctrl-panels{flex:1;overflow-y:auto;padding:14px;min-width:0}
+#ctrl-scope-strip{flex-shrink:0;padding:8px 14px 0;border-bottom:1px solid var(--line);background:#0a0f16}
+#ctrl-scope-strip #vhost-scope-bar{margin-bottom:8px}
+.ctrl-nav-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .1s,color .1s;user-select:none}
+.ctrl-nav-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
+.ctrl-nav-item.active{color:#fff;background:#1f2730;border-left-color:var(--blue)}
+.cni-icon{font-size:14px;width:20px;text-align:center;flex-shrink:0}
+.cni-label{flex:1}
+.cni-dirty{background:var(--yellow);color:#000;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:16px;text-align:center;display:none}
+#ctrl-nav-search{width:calc(100% - 16px);margin:0 8px 6px;background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:5px 8px;font-size:12px;outline:none}
+#ctrl-nav-search:focus{border-color:var(--blue)}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:780px){.row{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
@@ -411,7 +425,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div id="sidebar-brand-ver">1.8.6</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -435,11 +449,15 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Controls</div>
-  <div id="topbar-right"></div>
+  <div id="topbar-right" style="display:flex;align-items:center;gap:8px">
+    <span class="hint" id="hint" style="font-size:11px;color:var(--dim)">No pending changes.</span>
+    <button class="secondary" id="reset" disabled>Reset</button>
+    <button id="apply" disabled>Apply changes</button>
+  </div>
 </div>
 <div id="page-content">
-
-<div id="vhost-scope-bar">
+<div id="ctrl-scope-strip">
+<div id="vhost-scope-bar" style="margin-bottom:0;background:transparent;border:none;padding:0">
   <span style="color:var(--dim);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Scope</span>
   <select id="vhost-sel">
     <option value="">Global (all vhosts)</option>
@@ -448,8 +466,10 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <a id="vhost-policy-lnk" href="#" style="display:none;font-size:11px;color:var(--blue)">Edit overrides →</a>
   <span id="vhost-scope-hint" style="color:var(--dim);font-size:11px;margin-left:auto">Global: controls affect all vhosts without per-vhost override</span>
 </div>
-
-<main>
+</div><!-- /ctrl-scope-strip -->
+<div id="ctrl-split">
+<nav id="ctrl-nav"><input id="ctrl-nav-search" placeholder="Filter sections…" oninput="_ctrlNavFilter(this.value)"></nav>
+<div id="ctrl-panels">
   <div id="bypass-bar">
     <div class="bypass-sw" id="bypass-sw" title="Toggle pass-through bypass mode"></div>
     <span id="bypass-label">Bot Detection</span>
@@ -505,12 +525,6 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     </div>
     <div id="infrastructure"></div>
   </section>
-
-  <div class="actions">
-    <button id="apply" disabled>Apply changes</button>
-    <button class="secondary" id="reset" disabled>Reset</button>
-    <span class="hint" id="hint">No pending changes.</span>
-  </div>
 
   <section class="card" id="card-scoring">
     <h2>🛡️ Defenses &amp; scoring <span style="font-size:11px;color:var(--dim);font-weight:400">(toggle controls + per-signal weight in one place)</span></h2>
@@ -743,7 +757,9 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <h2>📜 Recent <code>config_changed</code> events</h2>
     <div class="audit" id="audit">loading…</div>
   </section>
-</main>
+</div><!-- /ctrl-panels -->
+</div><!-- /ctrl-split -->
+</div><!-- /page-content -->
 
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
@@ -1175,7 +1191,7 @@ function renderControl(name, meta, value){
     ? ' <span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px;vertical-align:middle;white-space:nowrap">REQUIRES RESTART</span>'
     : '';
   label.innerHTML = _dp(`<div class="name">${escapeHtml(name)}${restartBadge}</div>
-                     <div class="desc">${m.desc||''}</div>` + inlineHtml);
+                     <div class="desc">${escapeHtml(m.desc||'')}</div>` + inlineHtml);
   const input = document.createElement('div');
   input.className = 'input';
 
@@ -3984,6 +4000,124 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       .then(function(r){return r.json();}).then(function(d){if(d.self_revoke){window.location='/antibot-appsec-gateway/login';return;}_acctLoadSessions();}).catch(function(){});
   }
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
+})();
+</script>
+<script>
+// ── Controls split-pane navigation ───────────────────────────────────────────
+(function(){
+  const SECTIONS = [
+    {id:'detection',  label:'Detection',     icon:'🛡️'},
+    {id:'thresholds', label:'Thresholds',    icon:'📊'},
+    {id:'bypass',     label:'Bypass & Bots', icon:'🚦'},
+    {id:'infra',      label:'Infrastructure',icon:'⚙️'},
+    {id:'external',   label:'External',      icon:'🔌'},
+    {id:'monitoring', label:'Monitoring',    icon:'📋'},
+    {id:'admin',      label:'Admin',         icon:'🔧'},
+  ];
+
+  // Map card IDs → section ID
+  const CARD_SEC = {
+    'card-scoring':       'detection',
+    'card-thresholds':    'thresholds',
+    'card-bypass':        'bypass',
+    'card-infrastructure':'infra',
+    'card-external':      'external',
+    'card-active-rules':  'monitoring',
+    'card-lists-snap':    'monitoring',
+    'card-ep-policies':   'monitoring',
+    'card-unban':         'admin',
+    'card-admin-ip':      'admin',
+    'card-audit-log':     'admin',
+  };
+
+  // Map META key → section (for dirty badge counting)
+  function _knobSec(name, m) {
+    if (!m) return null;
+    if (name === 'DB_BACKEND' || name === 'POSTGRES_DSN') return 'infra';
+    if (m.card === 'bypass' || m.card === 'bypass-paths' || m.kind === 'botlist' || m.kind === 'pathlist') return 'bypass';
+    if (m.card === 'infrastructure') return 'infra';
+    if (m.card === 'ext-misc' || m.card === 'external-log') return 'external';
+    if (m.kind === 'num' || m.kind === 'select') return 'thresholds';
+    return 'detection'; // bool + list knobs in scoring
+  }
+
+  let _active = 'detection';
+  let _navFilter = '';
+
+  function _buildNav() {
+    const nav = document.getElementById('ctrl-nav');
+    if (!nav) return;
+    // keep the search input, rebuild items after it
+    const inp = document.getElementById('ctrl-nav-search');
+    // remove old items
+    nav.querySelectorAll('.ctrl-nav-item').forEach(el => el.remove());
+    const q = _navFilter.toLowerCase();
+    SECTIONS.forEach(sec => {
+      if (q && !sec.label.toLowerCase().includes(q)) return;
+      const el = document.createElement('div');
+      el.className = 'ctrl-nav-item' + (sec.id === _active ? ' active' : '');
+      el.dataset.sec = sec.id;
+      el.innerHTML = `<span class="cni-icon">${sec.icon}</span>
+        <span class="cni-label">${sec.label}</span>
+        <span class="cni-dirty" id="cni-dirty-${sec.id}"></span>`;
+      el.onclick = () => _switch(sec.id);
+      nav.appendChild(el);
+    });
+    _updateBadges();
+  }
+
+  function _switch(secId) {
+    _active = secId;
+    for (const [cardId, sec] of Object.entries(CARD_SEC)) {
+      const el = document.getElementById(cardId);
+      if (el) el.style.display = (sec === secId) ? '' : 'none';
+    }
+    document.querySelectorAll('.ctrl-nav-item').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.sec === secId);
+    });
+  }
+
+  function _updateBadges() {
+    // Count dirty knobs per section from the global `dirty` object and META
+    const counts = {};
+    if (typeof dirty !== 'undefined' && typeof META !== 'undefined') {
+      for (const [name, val] of Object.entries(dirty)) {
+        const sec = _knobSec(name, META[name]);
+        if (sec) counts[sec] = (counts[sec] || 0) + 1;
+      }
+    }
+    SECTIONS.forEach(sec => {
+      const el = document.getElementById('cni-dirty-' + sec.id);
+      if (!el) return;
+      const n = counts[sec.id] || 0;
+      el.textContent = n;
+      el.style.display = n > 0 ? '' : 'none';
+    });
+  }
+
+  window._ctrlNavFilter = function(val) { _navFilter = val; _buildNav(); };
+  window._ctrlNavUpdateBadges = _updateBadges;
+
+  document.addEventListener('DOMContentLoaded', function() {
+    _buildNav();
+    _switch('detection');
+
+    // Patch mark() and clearDirty() to also update badges
+    const _origMark = window.mark;
+    if (typeof _origMark === 'function') {
+      window.mark = function(name, newVal) {
+        _origMark(name, newVal);
+        _updateBadges();
+      };
+    }
+    const _origClear = window.clearDirty;
+    if (typeof _origClear === 'function') {
+      window.clearDirty = function() {
+        _origClear();
+        _updateBadges();
+      };
+    }
+  });
 })();
 </script>
 </div><!-- /page-content -->

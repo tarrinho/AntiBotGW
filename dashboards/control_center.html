@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Control Center</title>
+<title>AppSecGW_1.8.6 · Control Center</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -162,7 +162,7 @@ canvas#score-dist-chart,canvas#signal-perf-chart,canvas#geo-country-chart,canvas
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div id="sidebar-brand-ver">1.8.6</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center" class="active">Control Center</a>
@@ -569,6 +569,17 @@ canvas#score-dist-chart,canvas#signal-perf-chart,canvas#geo-country-chart,canvas
   </div>
   <div id="inc-dismiss-bar" style="display:none">
     <button class="btn-sm" onclick="_incDismiss()">Dismiss all</button>
+  </div>
+</div>
+
+<!-- ── 1.8.6 — Detector Status ──────────────────────────────── -->
+<div class="card" id="card-detector-health" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <h2 style="margin:0">Detector Status</h2>
+    <button class="secondary" id="dh-refresh" style="font-size:11px;padding:4px 10px">&#8635;</button>
+  </div>
+  <div id="dh-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:6px">
+    <div class="dim" style="grid-column:1/-1;padding:12px 0;text-align:center">Loading…</div>
   </div>
 </div>
 
@@ -1963,6 +1974,35 @@ window.addEventListener('beforeunload',function(){_timers.forEach(clearInterval)
       .then(function(r){return r.json();}).then(function(d){if(d.self_revoke){window.location='/antibot-appsec-gateway/login';return;}_acctLoadSessions();}).catch(function(e){var el=document.getElementById('acct-sessions');if(el)el.textContent='Revoke failed: '+String(e);});
   }
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
+})();
+
+// ── Detector health ──────────────────────────────────────────────────────────
+(function() {
+  const grid = document.getElementById('dh-grid');
+  if (!grid) return;
+  const STATUS_COLOR = {ok:'var(--green,#3fb950)', degraded:'var(--yellow,#d29922)', disabled:'var(--dim)'};
+  const STATUS_DOT   = {ok:'●', degraded:'▲', disabled:'○'};
+
+  async function loadDetectors() {
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/status', {credentials:'include'});
+      const j = await r.json();
+      const det = j.detectors || {};
+      const keys = Object.keys(det);
+      if (!keys.length) { grid.innerHTML = '<div class="dim" style="grid-column:1/-1;text-align:center;padding:10px">No detector data</div>'; return; }
+      grid.innerHTML = keys.map(name => {
+        const d = det[name];
+        const col = STATUS_COLOR[d.status] || 'var(--dim)';
+        const dot = STATUS_DOT[d.status]   || '?';
+        return '<div style="background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px">' +
+          '<div style="font-size:12px;font-weight:600;color:' + col + '">' + dot + ' ' + name.replace(/_/g,' ') + '</div>' +
+          (d.reason ? '<div style="font-size:10.5px;color:var(--dim);margin-top:3px">' + d.reason + '</div>' : '') +
+          '</div>';
+      }).join('');
+    } catch(e) { grid.innerHTML = '<div class="dim" style="grid-column:1/-1;text-align:center;padding:10px">Error loading detector status</div>'; }
+  }
+  document.getElementById('dh-refresh').addEventListener('click', loadDetectors);
+  loadDetectors();
 })();
 </script>
 </div><!-- /page-content -->

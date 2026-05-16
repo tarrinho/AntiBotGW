@@ -68,6 +68,11 @@ class IpState:
     path_sweep_times: deque = field(default_factory=lambda: deque(maxlen=500))
     # 1.8.0 — last vhost hostname this identity was seen on (empty = global upstream)
     last_vhost: str = ""
+    # 1.8.6 — JA4H HTTP request fingerprint (telemetry only)
+    last_ja4h: str = ""
+    # 1.8.6 — credential stuffing tracking
+    auth_failures: int = 0
+    auth_failure_window_start: float = field(default_factory=time.monotonic)
 
 
 # ── Primary identity state ─────────────────────────────────────────────────
@@ -260,3 +265,23 @@ _postgres = None     # the psycopg module reference
 
 # ── Redis client (lazy-initialized) ───────────────────────────────────────
 _redis = None  # lazy-initialised singleton; None if disabled or unavailable
+
+# ── 1.8.6: Global auth-failure deque for distributed credential stuffing ──────
+# (monotonic_ts,) tuples — maxlen 1000 keeps ~3 min at 5 rps before eviction
+_auth_fail_global: deque = deque(maxlen=1000)
+
+# ── 1.8.6: Detector health registry ──────────────────────────────────────────
+_DETECTOR_HEALTH: dict = {}   # name → {"status": "ok"|"degraded"|"disabled", "reason": str|None, "last_check_ts": float}
+
+
+def set_detector_health(name: str, ok: bool, reason: str = None, disabled: bool = False) -> None:
+    import time as _t
+    _DETECTOR_HEALTH[name] = {
+        "status": "disabled" if disabled else ("ok" if ok else "degraded"),
+        "reason": reason,
+        "last_check_ts": _t.time(),
+    }
+
+# ── 1.8.6: In-memory TOTP enrollment scratch space ────────────────────────────
+# username → {"secret": str, "ts": float}  — cleared on confirm or expiry
+_TOTP_PENDING: dict = {}

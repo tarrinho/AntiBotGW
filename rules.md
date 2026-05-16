@@ -102,12 +102,25 @@ info-level findings do not block release but should be noted.
 
 ## 10. Image CVE scan (Trivy + Aikido)
 
+Run Trivy against **all three** built images:
+
 ```
+# arm64
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
-  --quiet appsec-antibot-gw:<version>
+  --quiet appsec-antibot-gw:<version>-arm64
+
+# armv7
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
+  --quiet appsec-antibot-gw:<version>-armv7
+
+# amd64
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
+  --quiet appsec-antibot-gw:<version>-amd64
 ```
-**Pass criterion (Trivy):** 0 CRITICAL / 0 HIGH / 0 MEDIUM CVEs.
+**Pass criterion (Trivy):** 0 CRITICAL / 0 HIGH / 0 MEDIUM CVEs on **each** arch. All three must pass.
 
 Push the built image to Harbor and trigger an **Aikido Security** scan from the
 Aikido dashboard (or via the Aikido CLI / CI integration). Aikido scans the

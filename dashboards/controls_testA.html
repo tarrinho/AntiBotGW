@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Controls · Test A · Split pane</title>
+<style>
+:root{--bg:#0d1117;--fg:#c9d1d9;--card:#161b22;--line:#21262d;--blue:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2993a;--dim:#8b949e;--panel:#1c2128}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--fg);font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+
+/* Top bar */
+.topbar{background:var(--card);border-bottom:1px solid var(--line);padding:10px 18px;display:flex;align-items:center;gap:12px;flex-shrink:0;z-index:10}
+.topbar h1{font-size:14px;font-weight:600;color:var(--fg);margin-right:auto}
+.badge-label{font-size:11px;color:var(--dim);background:var(--panel);border:1px solid var(--line);padding:2px 8px;border-radius:4px}
+.btn{background:var(--panel);border:1px solid var(--line);color:var(--fg);padding:5px 14px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:500}
+.btn:hover{border-color:var(--blue);color:var(--blue)}
+.btn.primary{background:var(--blue);color:#000;border-color:var(--blue)}
+.btn.primary:hover{opacity:.9}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+#hint{font-size:11px;color:var(--dim)}
+
+/* Main layout: sidebar + content */
+.layout{display:flex;flex:1;overflow:hidden}
+
+/* Sidebar */
+.sidebar{width:220px;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;flex-shrink:0;overflow-y:auto}
+.sidebar-search{padding:10px 12px;border-bottom:1px solid var(--line)}
+.sidebar-search input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:5px;padding:5px 9px;font-size:12px;outline:none}
+.sidebar-search input:focus{border-color:var(--blue)}
+.sidebar-search input::placeholder{color:var(--dim)}
+nav{padding:6px 0}
+.sec-item{display:flex;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;border-radius:0;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .12s,color .12s}
+.sec-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
+.sec-item.active{background:rgba(88,166,255,.1);color:var(--blue);border-left-color:var(--blue)}
+.sec-item .sec-icon{font-size:14px;width:18px;text-align:center;flex-shrink:0}
+.sec-item .sec-label{flex:1}
+.sec-dirty{background:var(--yellow);color:#000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;display:none}
+.sec-count{color:var(--dim);font-size:10.5px}
+
+/* Content area */
+.content{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.content-header{padding:14px 20px 10px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:10px;flex-shrink:0}
+.content-header h2{font-size:14px;font-weight:600}
+.content-header .sec-desc{font-size:11px;color:var(--dim)}
+.knob-area{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:1px}
+
+/* Knob rows — same as controls.html */
+.ctrl{display:flex;align-items:flex-start;padding:8px 10px;gap:14px;border-radius:6px;transition:background .1s}
+.ctrl:hover{background:rgba(255,255,255,.03)}
+.ctrl.dirty{background:rgba(210,153,34,.06);outline:1px solid rgba(210,153,34,.25)}
+.ctrl .label{flex:1;min-width:0}
+.ctrl .name{font-size:12px;font-weight:600;font-family:ui-monospace,Menlo,monospace;color:var(--fg)}
+.ctrl .desc{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5}
+.ctrl .input{display:flex;align-items:center;flex-shrink:0;padding-top:2px}
+.switch{width:36px;height:20px;border-radius:10px;background:#30363d;cursor:pointer;position:relative;flex-shrink:0;transition:background .2s}
+.switch::after{content:'';position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .2s}
+.switch.on{background:var(--green)}
+.switch.on::after{transform:translateX(16px)}
+.num{background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:4px 7px;font-size:12px;width:90px;text-align:right;outline:none}
+.num:focus{border-color:var(--blue)}
+.text{background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:4px 7px;font-size:12px;width:300px;resize:vertical;min-height:28px;outline:none}
+.text:focus{border-color:var(--blue)}
+.restart-badge{font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px;vertical-align:middle;white-space:nowrap}
+
+/* Empty state */
+.empty{color:var(--dim);font-size:12px;padding:40px 0;text-align:center}
+
+/* Toast */
+.toast{position:fixed;bottom:20px;right:20px;background:var(--card);border:1px solid var(--line);padding:9px 16px;border-radius:6px;font-size:12.5px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:9999}
+.toast.show{opacity:1}
+.toast.ok{border-color:var(--green);color:var(--green)}
+.toast.err{border-color:var(--red);color:var(--red)}
+.toast.warn{border-color:var(--yellow);color:var(--yellow)}
+
+/* Complex type placeholder */
+.complex-placeholder{background:var(--panel);border:1px dashed var(--line);border-radius:6px;padding:10px 14px;color:var(--dim);font-size:11.5px;font-style:italic}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Controls · Split-pane prototype (Test A)</h1>
+  <span id="hint" class="badge-label">No pending changes.</span>
+  <button class="btn" id="reset" disabled>Reset</button>
+  <button class="btn primary" id="apply" disabled>Apply</button>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="sidebar-search">
+      <input type="text" id="search-inp" placeholder="Filter knobs…">
+    </div>
+    <nav id="sidebar-nav"></nav>
+  </aside>
+
+  <div class="content">
+    <div class="content-header">
+      <h2 id="section-title">—</h2>
+      <span class="sec-desc" id="section-desc"></span>
+    </div>
+    <div class="knob-area" id="knob-area">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>
+const _dp = h => {
+  if (typeof DOMPurify === 'undefined') return h;
+  if (/^<t[rhd]/i.test((h||'').trimStart())) {
+    const s = DOMPurify.sanitize('<table><tbody>'+h+'</tbody></table>');
+    const e = document.createElement('div'); e.innerHTML = s;
+    return (e.querySelector('tbody')||e).innerHTML;
+  }
+  return DOMPurify.sanitize(h);
+};
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+function $(id){return document.getElementById(id)}
+
+const META = {
+  JS_CHALLENGE:{kind:'bool',desc:'Cookie gate engages on every non-static path.'},
+  ANUBIS_ENABLED:{kind:'bool',desc:'Anubis-mode — strict PoW gate on every first request.'},
+  ANUBIS_DIFFICULTY_BOOST:{kind:'num',min:0,max:6,step:1,desc:'Extra leading hex zeros required when Anubis-mode is on.',card:'thresholds'},
+  BOT_TRAP_FORMS:{kind:'bool',desc:'Inject hidden honey field into every <form>. Filled = bot.'},
+  BODY_PATTERN_MATCH:{kind:'bool',desc:'Scan POST bodies for SQLi / XSS / SSTI / cmd-injection markers.'},
+  CANARY_ECHO_DETECTION:{kind:'bool',desc:'R7 — plant agw-c-* canary in HTML; ban any client that echoes it back.'},
+  STRICT_ORIGIN:{kind:'bool',desc:'On state-changing methods, require Origin to match ALLOWED_HOSTS.'},
+  INJECT_SECURITY_HEADERS:{kind:'bool',desc:'XFO, nosniff, HSTS, COOP, CORP, Permissions-Policy on HTML responses.'},
+  JS_CHAL_BIND_JA4:{kind:'bool',desc:'Bind chal cookie to TLS handshake hash.'},
+  JS_CHAL_REQUIRE_JA4:{kind:'bool',desc:'Hard-require JA4 from a trusted peer at /antibot-appsec-gateway/challenge.'},
+  JS_CHAL_STRICT_STATIC:{kind:'bool',desc:'Refuse static-asset bypass on paths containing API hints.'},
+  RISK_BAN_THRESHOLD:{kind:'num',min:1,max:1000,step:1,desc:'Score that triggers a ban.',card:'thresholds'},
+  RATE_LIMIT_BURST:{kind:'num',min:1,max:10000,step:1,desc:'Per-identity token-bucket capacity.',card:'thresholds'},
+  RATE_LIMIT_REFILL:{kind:'num',min:0.1,max:1000,step:0.1,desc:'Per-identity tokens added per second.',card:'thresholds'},
+  IP_BURST:{kind:'num',min:1,max:10000,step:1,desc:'Per-socket-IP token-bucket capacity.',card:'thresholds'},
+  IP_REFILL:{kind:'num',min:0.1,max:1000,step:0.1,desc:'Per-socket-IP tokens added per second.',card:'thresholds'},
+  HOSTILE_BAN_SECS:{kind:'num',min:60,max:2678400,step:60,desc:'Standard ban duration (default 86400 = 24 h).',card:'thresholds'},
+  REALLY_BAN_SECS:{kind:'num',min:3600,max:31536000,step:3600,desc:'Extended ban for definitive bot proof (default 30 days).',card:'thresholds'},
+  CANARY_TTL_S:{kind:'num',min:30,max:86400,step:30,desc:'Canary token validity window.',card:'thresholds'},
+  GLOBAL_RPS_LIMIT:{kind:'num',min:0,max:100000,step:10,desc:'Operator throttle: silent-decoy any request beyond N req/s globally. 0 = disabled.',card:'thresholds'},
+  SESSION_CHURN_WINDOW_S:{kind:'num',min:5,max:3600,step:1,desc:'Window for fresh-session-rate detector.',card:'thresholds'},
+  SESSION_CHURN_MAX:{kind:'num',min:1,max:1000,step:1,desc:'Max chal cookies a single fingerprint may mint per window.',card:'thresholds'},
+  JA4_AUTODENY_THRESHOLD:{kind:'num',min:1,max:100,step:1,desc:'Distinct bans on a JA4 before auto-adding it to the deny list.',card:'thresholds'},
+  JS_CHAL_OPEN_PATHS:{kind:'list',desc:'Path prefixes that bypass the cookie gate.'},
+  JA4_DENY_LIST:{kind:'list',desc:'TLS handshake fingerprints to silent-decoy at Layer 0.5.'},
+  COUNTRY_BLOCK_ENABLED:{kind:'bool',desc:'Country-level geofencing using GeoLite2-City.'},
+  COUNTRY_DENYLIST:{kind:'list',desc:'ISO-3166-1 alpha-2 codes to deny.'},
+  COUNTRY_ALLOWLIST:{kind:'list',desc:'ISO-3166-1 alpha-2 codes to allow exclusively. Empty → denylist mode.'},
+  TOR_BLOCK_ENABLED:{kind:'bool',desc:'Block Tor exit nodes — auto-fetches torbulkexitlist (weekly refresh).'},
+  DC_VPN_BLOCK_ENABLED:{kind:'bool',desc:'Block datacenter / commercial-VPN ASNs.'},
+  AI_UA_OPENAI_ENABLED:{kind:'bool',desc:'Block OpenAI / GPTBot / ChatGPT-User crawlers.'},
+  AI_UA_ANTHROPIC_ENABLED:{kind:'bool',desc:'Block ClaudeBot / Claude-Web / anthropic-ai.'},
+  AI_UA_GOOGLE_ENABLED:{kind:'bool',desc:'Block Google-Extended / Bard / Gemini.'},
+  AI_UA_PERPLEXITY_ENABLED:{kind:'bool',desc:'Block PerplexityBot.'},
+  AI_UA_META_ENABLED:{kind:'bool',desc:'Block Meta-ExternalAgent / FacebookBot.'},
+  AI_UA_OTHER_ENABLED:{kind:'bool',desc:'Block Bytespider / CCBot / Cohere / Mistral / generic AI crawlers.'},
+  ENDPOINT_POLICIES:{kind:'list',desc:'Per-endpoint policy + rate-limit JSON.'},
+  CUSTOM_RULES:{kind:'list',desc:'Custom IF/THEN JSON rules.'},
+  BODY_GROUP_SQLI_ENABLED:{kind:'bool',desc:'Body-pattern group: SQL injection.'},
+  BODY_GROUP_XSS_ENABLED:{kind:'bool',desc:'Body-pattern group: cross-site-scripting.'},
+  BODY_GROUP_LFI_ENABLED:{kind:'bool',desc:'Body-pattern group: local-file-inclusion / path traversal.'},
+  BODY_GROUP_RCE_ENABLED:{kind:'bool',desc:'Body-pattern group: remote-code-execution incl. Log4Shell.'},
+  BODY_GROUP_SSRF_ENABLED:{kind:'bool',desc:'Body-pattern group: server-side-request-forgery.'},
+  BODY_GROUP_CMD_ENABLED:{kind:'bool',desc:'Body-pattern group: OS-command-injection.'},
+  JWT_VALIDATE_PATHS:{kind:'list',desc:'fnmatch globs requiring a valid HS256 JWT.'},
+  JWT_REQUIRED_ISSUER:{kind:'text',desc:'Require the iss claim to equal this value.'},
+  JWT_REQUIRED_AUDIENCE:{kind:'text',desc:'Require the aud claim to contain this value.'},
+  DLP_ENABLED:{kind:'bool',desc:'Outbound DLP — scan upstream responses for PII / API keys.'},
+  DLP_REDACT:{kind:'bool',desc:'Replace matched bytes with [REDACTED-<group>] before forwarding.'},
+  DLP_MAX_BYTES:{kind:'num',min:1024,max:16777216,step:1024,desc:'Max bytes scanned per response. Default 256 KiB.',card:'thresholds'},
+  DLP_GROUP_CC_ENABLED:{kind:'bool',desc:'DLP: credit-card numbers (Luhn-validated).'},
+  DLP_GROUP_AWS_ENABLED:{kind:'bool',desc:'DLP: AWS access-key IDs.'},
+  DLP_GROUP_JWT_ENABLED:{kind:'bool',desc:'DLP: JWTs (eyJ…) leaking in upstream responses.'},
+  DLP_GROUP_PRIVATE_KEY_ENABLED:{kind:'bool',desc:'DLP: PEM private keys.'},
+  DLP_GROUP_API_KEY_ENABLED:{kind:'bool',desc:'DLP: API-key shapes (Slack, GitHub, OpenAI, etc.).'},
+  DLP_GROUP_PII_EMAIL_ENABLED:{kind:'bool',desc:'DLP: email addresses.'},
+  DLP_GROUP_PII_SSN_ENABLED:{kind:'bool',desc:'DLP: US SSNs.'},
+  AUTHORIZED_BOT_UAS:{kind:'botlist',card:'bypass',desc:'Monitoring-bot pass-through rules.'},
+  BYPASS_PATHS:{kind:'pathlist',card:'bypass-paths',desc:'Path prefixes that bypass ALL bot detection.'},
+  WEBHOOK_EVENT_FILTER:{kind:'list',card:'ext-misc',desc:'CSV of reasons the operator wants webhook calls for.'},
+  ALLOW_PRIVATE_UPSTREAM:{kind:'bool',card:'infrastructure',restart:true,desc:'Allow upstream URLs that resolve to RFC-1918 / loopback addresses.'},
+  STRICT_VHOST:{kind:'bool',card:'infrastructure',restart:true,desc:'Return 502 for any inbound Host not in VHOSTS.'},
+  UPSTREAM_REWRITE_BASE:{kind:'text',card:'infrastructure',ph:'e.g. http://host.docker.internal:8093',desc:'Strip this base URL from response bodies and Location headers.'},
+  DB_BACKEND:{kind:'select',options:['sqlite','postgres'],restart:true,desc:'Event-store backend. Change requires container restart.'},
+  POSTGRES_DSN:{kind:'text',desc:'Postgres connection string. Only used when DB_BACKEND=postgres.'},
+  SECOND_ORDER_THRESHOLD:{kind:'num',min:0,max:1000,step:0.5,desc:'Risk score threshold above which 2nd-order detectors run.',card:'thresholds'},
+  ESCALATION_THRESHOLD:{kind:'num',min:0,max:1000,step:0.5,desc:'Risk score threshold above which 3rd-order detectors run.',card:'thresholds'},
+  LABYRINTH_ENABLED:{kind:'bool',desc:'AI Labyrinth — trap bots in an infinite maze of AI-generated pages.'},
+  LABYRINTH_JITTER_ENABLED:{kind:'bool',desc:'Tarpit timing jitter — Gaussian-distributed random delay instead of fixed.'},
+  ACCEPT_FP_ENABLED:{kind:'bool',desc:'Accept header fingerprint — fires when browser-class UA lacks text/html on document navigation.'},
+  HEADER_CANARY_ENABLED:{kind:'bool',desc:'Header canary injection — plant signed canary in ETag and X-Request-Id.'},
+  HEADER_ORDER_FP_ENABLED:{kind:'bool',desc:'Header-order library fingerprint — fires on known bot library header sets.'},
+  AI_CRAWLER_VERIFY_ENABLED:{kind:'bool',desc:'AI crawler IP-range verification — verify source IP is in vendor CIDR.'},
+  JA4_FAIL_CLOSED:{kind:'bool',desc:'JA4 fail-closed — hard-deny requests without JA4 header when JA4_TRUSTED_NETS is set.'},
+  JSON_CANARY_ENABLED:{kind:'bool',desc:'JSON API canary poisoning — inject _ref canary into JSON object responses.'},
+  LOCALE_GEO_CHECK_ENABLED:{kind:'bool',desc:'Accept-Language / GeoIP locale consistency check.'},
+  ROBOTS_MONITOR_ENABLED:{kind:'bool',desc:'robots.txt compliance monitoring — fires on AI-crawler UAs.'},
+  H2_FP_ENABLED:{kind:'bool',desc:'HTTP/2 fingerprint fallback — fires on HTTP/1.1 requests with HTTPS UA.'},
+  TARPIT_ENABLED:{kind:'bool',desc:'Tarpit — delay silent-decoy responses for soft-band identities.'},
+  TARPIT_DELAY_MS:{kind:'num',min:0,max:30000,step:100,desc:'Delay in ms before serving the silent decoy.',card:'thresholds'},
+  SOFT_CHALLENGE_SCORE:{kind:'num',min:0,max:100000,step:0.5,desc:'Risk score at or above which JS challenge is shown.',card:'thresholds'},
+  TURNSTILE_RISK_THRESHOLD:{kind:'num',min:0,max:100000,step:0.5,desc:'Risk score at or above which Turnstile CAPTCHA is presented.',card:'thresholds'},
+  JS_CHALLENGE_TTL:{kind:'num',min:60,max:604800,step:60,desc:'Seconds a solved JS challenge cookie remains valid.',card:'thresholds'},
+  LABYRINTH_SLOW_MS:{kind:'num',min:0,max:30000,step:100,desc:'ms to stream each labyrinth page chunk.',card:'thresholds'},
+  LABYRINTH_MAX_DEPTH:{kind:'num',min:1,max:20,step:1,desc:'Maximum maze depth before looping back.',card:'thresholds'},
+  LABYRINTH_LINKS_PER_PAGE:{kind:'num',min:1,max:10,step:1,desc:'Signed links injected per labyrinth page.',card:'thresholds'},
+  POW_MIN_SOLVE_MS:{kind:'num',min:0,max:5000,step:50,desc:'Minimum ms the PoW solution must have taken.',card:'thresholds'},
+  BOTD_ENABLED:{kind:'bool',desc:'FingerprintJS BotD client-side detection.'},
+  LOG_LEVEL:{kind:'select',options:['debug','info','warn','error','critical'],card:'external-log',desc:'Filter for stdout structured log emission.'},
+  LOG_FORMAT:{kind:'select',options:['text','json'],card:'external-log',desc:'Log output format.'},
+  COOKIE_GHOST_ENABLED:{kind:'bool',desc:'Cookie-ghost detection — fires when gateway has set cookies but client never returns them.'},
+  COOKIE_LIFECYCLE_ENABLED:{kind:'bool',desc:'Lifecycle-miss detection — injects JS snippet to set agw_lc cookie; absence fires lifecycle-miss.'},
+  COOKIE_GHOST_MIN_REQUESTS:{kind:'num',min:1,max:100,step:1,desc:'Minimum requests before cookie-ghost can fire.',card:'thresholds'},
+  COOKIE_GHOST_MISS_THRESHOLD:{kind:'num',min:1,max:50,step:1,desc:'Cookie-miss requests before cookie-ghost fires. Default 3.',card:'thresholds'},
+  REFERER_CHAIN_ENABLED:{kind:'bool',desc:'Referer-ghost detection — fires when Referer claims our domain but path was never served.'},
+  IMPOSSIBLE_TRAVEL_ENABLED:{kind:'bool',desc:'Impossible-travel detection — fires when same identity appears from different country in window.'},
+  IMPOSSIBLE_TRAVEL_WINDOW_SECS:{kind:'num',min:60,max:604800,step:60,desc:'Window (seconds) in which same identity must not appear from two countries.',card:'thresholds'},
+  FP_ENRICHMENT_ENABLED:{kind:'bool',desc:'Canvas/WebGL fingerprint enrichment — fires on swiftshader/headless renderers.'},
+  SW_CHALLENGE_ENABLED:{kind:'bool',desc:'Service Worker challenge — fires when SW-registered client lacks X-SW-Active header.'},
+  POW_CHAL_THRESHOLD:{kind:'num',min:0,max:100000,step:1,desc:'Risk score at or above which JS challenge embeds a PoW puzzle.',card:'thresholds'},
+};
+
+const SECTION_DEFS = [
+  {id:'detection', label:'Detection', icon:'🛡️',
+   desc:'Feature toggles — enable or disable individual detection signals and security mechanisms'},
+  {id:'thresholds', label:'Thresholds', icon:'📊',
+   desc:'Numeric tuning parameters — scores, limits, timeouts, delays'},
+  {id:'bypass', label:'Bypass & Bots', icon:'🚦',
+   desc:'Authorized monitoring bots and path prefixes that bypass all inspection'},
+  {id:'dlp', label:'DLP', icon:'🔍',
+   desc:'Outbound Data Loss Prevention — scan and optionally redact PII / secrets in upstream responses'},
+  {id:'lists', label:'Lists & Rules', icon:'📝',
+   desc:'Text lists, JSON rules, JWT config, per-endpoint policies'},
+  {id:'infra', label:'Infrastructure', icon:'⚙️',
+   desc:'Backend, vhost, upstream rewrite, database settings — most require restart'},
+  {id:'external', label:'External', icon:'🔗',
+   desc:'Logging level/format, webhook event filter'},
+];
+
+function getSection(name, m) {
+  if (name.startsWith('DLP_GROUP_') || name === 'DLP_ENABLED' || name === 'DLP_REDACT' || name === 'DLP_MAX_BYTES') return 'dlp';
+  if (name === 'DB_BACKEND' || name === 'POSTGRES_DSN') return 'infra';
+  if (m.card === 'bypass' || m.card === 'bypass-paths' || m.kind === 'botlist' || m.kind === 'pathlist') return 'bypass';
+  if (m.card === 'infrastructure') return 'infra';
+  if (m.card === 'ext-misc' || m.card === 'external-log') return 'external';
+  if (m.kind === 'num' || m.kind === 'select') return 'thresholds';
+  if (m.kind === 'list' || m.kind === 'text') return 'lists';
+  return 'detection';
+}
+
+let serverState = {};
+let dirty = {};
+let _activeSection = 'detection';
+
+// ─── Render a single knob (simplified — botlist/pathlist show placeholder) ───
+function renderControl(name, value) {
+  const m = META[name];
+  if (!m) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'ctrl';
+  wrap.dataset.name = name;
+
+  const label = document.createElement('div');
+  label.className = 'label';
+  const restartBadge = m.restart ? ' <span class="restart-badge">REQUIRES RESTART</span>' : '';
+  label.innerHTML = _dp(`<div class="name">${escapeHtml(name)}${restartBadge}</div><div class="desc">${escapeHtml(m.desc||'')}</div>`);
+
+  const input = document.createElement('div');
+  input.className = 'input';
+
+  if (m.kind === 'botlist' || m.kind === 'pathlist') {
+    wrap.style.display = 'block';
+    wrap.appendChild(label);
+    const ph = document.createElement('div');
+    ph.className = 'complex-placeholder';
+    ph.textContent = `${m.kind === 'botlist' ? 'Authorized bot list' : 'Path list'} editor — open main controls.html for the full UI`;
+    wrap.appendChild(ph);
+    return wrap;
+  }
+
+  if (m.kind === 'bool') {
+    const sw = document.createElement('div');
+    sw.className = 'switch' + (value ? ' on' : '');
+    sw.onclick = () => { sw.classList.toggle('on'); mark(name, sw.classList.contains('on')); };
+    input.appendChild(sw);
+  } else if (m.kind === 'num') {
+    const inp = document.createElement('input');
+    inp.type = 'number'; inp.className = 'num';
+    inp.min = m.min; inp.max = m.max; inp.step = m.step; inp.value = value;
+    inp.oninput = () => mark(name, m.step % 1 === 0 ? parseInt(inp.value, 10) : parseFloat(inp.value));
+    input.appendChild(inp);
+  } else if (m.kind === 'select') {
+    const sel = document.createElement('select');
+    sel.className = 'num';
+    (m.options||[]).forEach(o => {
+      const opt = document.createElement('option'); opt.value = o; opt.textContent = o;
+      if (String(value).toLowerCase() === o) opt.selected = true;
+      sel.appendChild(opt);
+    });
+    sel.onchange = () => mark(name, sel.value);
+    input.appendChild(sel);
+  } else if (m.kind === 'list') {
+    const ta = document.createElement('textarea');
+    ta.className = 'text';
+    ta.value = Array.isArray(value) ? value.join(', ') : String(value||'');
+    ta.oninput = () => mark(name, ta.value);
+    input.appendChild(ta);
+  } else if (m.kind === 'text') {
+    const it = document.createElement('input');
+    it.type = 'text'; it.className = 'num'; it.style.width = '280px'; it.style.textAlign = 'left';
+    it.value = String(value||''); if (m.ph) it.placeholder = m.ph;
+    it.oninput = () => mark(name, it.value);
+    input.appendChild(it);
+  }
+
+  wrap.appendChild(label);
+  wrap.appendChild(input);
+  return wrap;
+}
+
+// ─── Dirty tracking ─────────────────────────────────────────────────────────
+function mark(name, newVal) {
+  const same = JSON.stringify(serverState[name]) === JSON.stringify(newVal);
+  if (same) delete dirty[name]; else dirty[name] = newVal;
+  document.querySelectorAll(`.ctrl[data-name="${name}"]`).forEach(el => el.classList.toggle('dirty', !same));
+  updateActionBar();
+  updateSidebar();
+}
+
+function clearDirty() {
+  dirty = {};
+  document.querySelectorAll('.ctrl.dirty').forEach(el => el.classList.remove('dirty'));
+  updateActionBar();
+  updateSidebar();
+}
+
+function updateActionBar() {
+  const n = Object.keys(dirty).length;
+  $('apply').disabled = n === 0;
+  $('reset').disabled = n === 0;
+  $('hint').textContent = n === 0 ? 'No pending changes.' : `${n} pending change${n > 1 ? 's' : ''} — click Apply to push.`;
+}
+
+// ─── Sidebar rendering ───────────────────────────────────────────────────────
+function updateSidebar() {
+  SECTION_DEFS.forEach(sec => {
+    const el = document.querySelector(`[data-sec="${sec.id}"]`);
+    if (!el) return;
+    const dirtyCount = Object.keys(dirty).filter(k => META[k] && getSection(k, META[k]) === sec.id).length;
+    const total = Object.entries(META).filter(([k, m]) => (k in serverState) && getSection(k, m) === sec.id).length;
+    el.querySelector('.sec-dirty').style.display = dirtyCount > 0 ? '' : 'none';
+    el.querySelector('.sec-dirty').textContent = dirtyCount;
+    el.querySelector('.sec-count').textContent = total;
+    el.classList.toggle('active', sec.id === _activeSection);
+  });
+}
+
+function buildSidebar() {
+  const nav = $('sidebar-nav');
+  nav.innerHTML = '';
+  SECTION_DEFS.forEach(sec => {
+    const el = document.createElement('div');
+    el.className = 'sec-item' + (sec.id === _activeSection ? ' active' : '');
+    el.dataset.sec = sec.id;
+    el.innerHTML = `<span class="sec-icon">${sec.icon}</span>
+      <span class="sec-label">${sec.label}</span>
+      <span class="sec-count">0</span>
+      <span class="sec-dirty"></span>`;
+    el.onclick = () => { _activeSection = sec.id; renderSection(); updateSidebar(); };
+    nav.appendChild(el);
+  });
+}
+
+// ─── Section rendering ───────────────────────────────────────────────────────
+function renderSection() {
+  const area = $('knob-area');
+  area.innerHTML = '';
+  const search = ($('search-inp').value || '').toLowerCase().trim();
+  const sec = SECTION_DEFS.find(s => s.id === _activeSection);
+  $('section-title').textContent = sec ? `${sec.icon} ${sec.label}` : '';
+  $('section-desc').textContent = sec ? sec.desc : '';
+
+  let count = 0;
+  for (const [name, m] of Object.entries(META)) {
+    if (!(name in serverState)) continue;
+    if (getSection(name, m) !== _activeSection) continue;
+    if (search && !name.toLowerCase().includes(search) && !(m.desc||'').toLowerCase().includes(search)) continue;
+    const el = renderControl(name, serverState[name]);
+    if (el) { area.appendChild(el); count++; }
+  }
+  if (count === 0) {
+    area.innerHTML = `<div class="empty">${search ? 'No knobs match "' + escapeHtml(search) + '"' : 'No knobs in this section yet'}</div>`;
+  }
+}
+
+// ─── Config load / apply ────────────────────────────────────────────────────
+async function load() {
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/config');
+    if (!r.ok) { showToast('Failed to load config (' + r.status + ')', 'err'); return; }
+    const body = await r.json();
+    serverState = body.state || {};
+    clearDirty();
+    buildSidebar();
+    updateSidebar();
+    renderSection();
+  } catch(e) { showToast('Network error: ' + e.message, 'err'); }
+}
+
+async function apply() {
+  $('apply').disabled = true;
+  try {
+    const payload = {};
+    for (const [k, v] of Object.entries(dirty)) {
+      const m = META[k];
+      if (m && m.kind === 'list') payload[k] = String(v).split(',').map(s => s.trim()).filter(Boolean);
+      else payload[k] = v;
+    }
+    const r = await fetch('/antibot-appsec-gateway/secured/config',
+      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+    const body = await r.json();
+    const n = body.applied ? Object.keys(body.applied).length : 0;
+    const rej = body.rejected ? Object.keys(body.rejected).length : 0;
+    if (r.ok && n) {
+      showToast(`Applied ${n} change(s)${rej ? ` (${rej} rejected)` : ''}`, 'ok');
+      serverState = body.state || serverState;
+      clearDirty();
+      renderSection();
+    } else {
+      const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v]) => `${k}: ${v}`).join('; ') : 'unknown';
+      showToast('Rejected — ' + reasons, 'err');
+    }
+  } catch(e) { showToast('Network error: ' + e.message, 'err'); }
+  $('apply').disabled = Object.keys(dirty).length === 0;
+}
+
+function showToast(msg, kind) {
+  const t = $('toast');
+  t.className = 'toast show ' + (kind||'ok');
+  t.textContent = msg;
+  clearTimeout(t._t);
+  t._t = setTimeout(() => t.classList.remove('show'), 2600);
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  buildSidebar();
+  $('apply').onclick = apply;
+  $('reset').onclick = () => load();
+  $('search-inp').oninput = () => renderSection();
+  load();
+});
+</script>
+</body>
+</html>

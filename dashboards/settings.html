@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Settings</title>
+<title>AppSecGW_1.8.6 · Settings</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -169,7 +169,7 @@ button.danger{background:var(--red)}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div id="sidebar-brand-ver">1.8.6</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -680,7 +680,7 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
-<!-- ── 1.8.5 — SSO / OIDC configuration ─────────────────────── -->
+<!-- ── 1.8.6 — SSO / OIDC configuration ─────────────────────── -->
 <div class="card" id="card-sso" style="margin-top:14px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;
               flex-wrap:wrap;gap:10px;margin-bottom:14px">
@@ -776,6 +776,40 @@ document.addEventListener('DOMContentLoaded', function(){
         <tr><td colspan="7" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
       </tbody>
     </table>
+  </div>
+</div>
+
+<!-- ── 1.8.6 — Two-Factor Authentication ─────────────────────────── -->
+<div class="card" id="card-2fa" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:14px">
+    <div>
+      <h2 style="margin-bottom:4px">Two-Factor Authentication</h2>
+      <p class="desc" style="margin:0">
+        Protect your account with a TOTP authenticator app (Google Authenticator,
+        Authy, 1Password). When enabled, a 6-digit code is required after password
+        login.
+      </p>
+    </div>
+    <span id="twofa-status-badge" class="pill" style="font-size:11px">checking…</span>
+  </div>
+  <div id="twofa-setup-area" style="display:none">
+    <p class="desc" style="margin-bottom:10px">Scan this QR code (or enter the secret manually) in your authenticator app, then enter the 6-digit code to confirm.</p>
+    <div id="twofa-qr-uri" style="font-size:11px;color:var(--dim);word-break:break-all;margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <input id="twofa-code" type="text" placeholder="6-digit code" maxlength="6"
+             style="width:140px;margin:0" autocomplete="one-time-code">
+      <button id="twofa-confirm">Confirm &amp; Enable</button>
+    </div>
+    <div id="twofa-backup-codes" style="display:none;margin-top:12px">
+      <p style="color:var(--yellow);font-size:12px;margin-bottom:6px">&#9888; Save these backup codes — each can be used once if you lose your authenticator:</p>
+      <pre id="twofa-codes-list" style="background:#0d1117;padding:10px;border-radius:5px;font-size:12px;color:var(--fg)"></pre>
+    </div>
+  </div>
+  <div class="row-controls" style="margin-top:10px">
+    <button id="twofa-enable-btn">Set up 2FA</button>
+    <button class="secondary" id="twofa-disable-btn" style="display:none;color:var(--red)">Disable 2FA</button>
+    <span class="foot" id="twofa-msg"></span>
   </div>
 </div>
 
@@ -2490,6 +2524,84 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   });
 
   loadSso();
+})();
+
+// ── Two-Factor Authentication ────────────────────────────────────────────────
+(function() {
+  const NS = '/antibot-appsec-gateway';
+  const badge     = document.getElementById('twofa-status-badge');
+  const setupArea = document.getElementById('twofa-setup-area');
+  const enableBtn = document.getElementById('twofa-enable-btn');
+  const disableBtn= document.getElementById('twofa-disable-btn');
+  const msgEl     = document.getElementById('twofa-msg');
+  const codeInput = document.getElementById('twofa-code');
+  const backupDiv = document.getElementById('twofa-backup-codes');
+  const codesList = document.getElementById('twofa-codes-list');
+  const qrUri     = document.getElementById('twofa-qr-uri');
+
+  function csrf() { return document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || ''; }
+
+  async function load2fa() {
+    try {
+      const r = await fetch(NS + '/secured/2fa-status', {credentials:'include'});
+      const j = await r.json();
+      const on = !!j.enabled;
+      badge.textContent = on ? '● Enabled' : '○ Disabled';
+      badge.style.background = on ? 'var(--green,#238636)' : 'var(--line)';
+      badge.style.color = on ? '#fff' : 'var(--dim)';
+      enableBtn.style.display  = on ? 'none' : '';
+      disableBtn.style.display = on ? '' : 'none';
+      if (!on) setupArea.style.display = 'none';
+    } catch(e) { badge.textContent = 'error'; }
+  }
+
+  enableBtn.addEventListener('click', async () => {
+    try {
+      const r = await fetch(NS + '/secured/2fa-setup', {credentials:'include'});
+      const j = await r.json();
+      qrUri.textContent = j.provisioning_uri || '';
+      setupArea.style.display = '';
+      enableBtn.style.display = 'none';
+    } catch(e) { msgEl.textContent = String(e); }
+  });
+
+  document.getElementById('twofa-confirm').addEventListener('click', async () => {
+    const code = codeInput.value.trim();
+    if (!code) { msgEl.textContent = 'Enter the 6-digit code from your app.'; return; }
+    try {
+      const r = await fetch(NS + '/secured/2fa-confirm', {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf()},
+        body: JSON.stringify({code}),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        codesList.textContent = (j.backup_codes || []).join('\n');
+        backupDiv.style.display = '';
+        msgEl.textContent = '2FA enabled.';
+        await load2fa();
+      } else { msgEl.textContent = j.error || 'Confirm failed'; }
+    } catch(e) { msgEl.textContent = String(e); }
+    setTimeout(() => { msgEl.textContent = ''; }, 5000);
+  });
+
+  disableBtn.addEventListener('click', async () => {
+    const code = prompt('Enter your current TOTP code or a backup code to disable 2FA:');
+    if (!code) return;
+    try {
+      const r = await fetch(NS + '/secured/2fa-disable', {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf()},
+        body: JSON.stringify({code: code.trim()}),
+      });
+      const j = await r.json();
+      if (r.ok) { msgEl.textContent = '2FA disabled.'; await load2fa(); }
+      else { msgEl.textContent = j.error || 'Disable failed'; }
+    } catch(e) { msgEl.textContent = String(e); }
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  });
+
+  load2fa();
 })();
 </script>
 </div><!-- /page-content -->

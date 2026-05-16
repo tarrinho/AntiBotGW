@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Service Metrics</title>
+<title>AppSecGW_1.8.6 · Service Metrics</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
@@ -117,7 +117,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div id="sidebar-brand-ver">1.8.6</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -375,6 +375,16 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
   <div class="card">
     <h2>Cost by detection bucket <span style="font-size:10px;font-weight:400;color:var(--dim);text-transform:none;letter-spacing:0;margin-left:4px">total cumulative ms across all hits</span></h2>
     <div id="svc-cost-bars" style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:6px">loading…</div>
+  </div>
+  <div class="card">
+    <h2 style="display:flex;align-items:center;gap:10px">
+      Traffic share by vhost
+      <span style="margin-left:auto;display:flex;gap:4px">
+        <button id="vhost-win-1h" onclick="setVhostWin('1h')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--blue);background:var(--blue);color:#fff;cursor:pointer">1h</button>
+        <button id="vhost-win-24h" onclick="setVhostWin('24h')" style="font-size:10px;padding:2px 8px;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--dim);cursor:pointer">24h</button>
+      </span>
+    </h2>
+    <div id="svc-vhost-share" style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:6px">loading…</div>
   </div>
 </div>
 
@@ -856,6 +866,54 @@ _timers.push(setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5
   loadStats();
   _timers.push(setInterval(loadStats, 5000));
 })();
+
+// ── Traffic share by vhost ────────────────────────────────────────────────────
+let _vhostWin = '1h';
+function setVhostWin(w) {
+  _vhostWin = w;
+  document.getElementById('vhost-win-1h').style.background  = w==='1h'  ? 'var(--blue)' : 'transparent';
+  document.getElementById('vhost-win-1h').style.color       = w==='1h'  ? '#fff'        : 'var(--dim)';
+  document.getElementById('vhost-win-1h').style.borderColor = w==='1h'  ? 'var(--blue)' : 'var(--line)';
+  document.getElementById('vhost-win-24h').style.background  = w==='24h' ? 'var(--blue)' : 'transparent';
+  document.getElementById('vhost-win-24h').style.color       = w==='24h' ? '#fff'        : 'var(--dim)';
+  document.getElementById('vhost-win-24h').style.borderColor = w==='24h' ? 'var(--blue)' : 'var(--line)';
+  loadVhostShare();
+}
+async function loadVhostShare() {
+  const el = document.getElementById('svc-vhost-share');
+  if (!el) return;
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/vhost-stats', {credentials:'include'});
+    if (!r.ok) { el.innerHTML='<span class="dim">no vhost data</span>'; return; }
+    const d = await r.json();
+    const rows = (d.stats || []).filter(v => !v.dismissed);
+    if (!rows.length) { el.innerHTML='<span class="dim">no vhosts registered</span>'; return; }
+    const key = _vhostWin === '24h' ? 'total_24h' : 'total_1h';
+    const blkKey = _vhostWin === '24h' ? 'blocked_24h' : 'blocked_1h';
+    const total = rows.reduce((s, v) => s + (v[key] || 0), 0);
+    if (!total) { el.innerHTML='<span class="dim">no traffic in window</span>'; return; }
+    const sorted = [...rows].sort((a, b) => (b[key]||0) - (a[key]||0));
+    el.innerHTML = _dp(sorted.map(v => {
+      const req   = v[key] || 0;
+      const blk   = v[blkKey] || 0;
+      const pct   = total ? (req / total * 100) : 0;
+      const blkPct = req  ? (blk / req  * 100) : 0;
+      const barW  = pct.toFixed(1);
+      const barColor = blkPct >= 50 ? 'var(--red)' : blkPct >= 20 ? 'var(--yellow)' : 'var(--blue)';
+      return `<div style="display:grid;grid-template-columns:minmax(80px,180px) 1fr 52px 52px;gap:8px;align-items:center;margin-bottom:5px">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#fff" title="${escapeHtml(v.hostname)}">${escapeHtml(v.hostname)}</span>
+        <span style="background:#21262d;border-radius:3px;height:12px;position:relative">
+          <span style="position:absolute;left:0;top:0;height:100%;width:${barW}%;background:${barColor};border-radius:3px;opacity:.75;transition:width .3s"></span>
+        </span>
+        <span style="text-align:right;color:#fff;font-weight:600">${req.toLocaleString()}</span>
+        <span style="text-align:right;color:var(--dim)">${pct.toFixed(1)}%</span>
+      </div>`;
+    }).join(''));
+  } catch(e) { el.innerHTML='<span class="dim">error loading vhost data</span>'; }
+}
+loadVhostShare();
+_timers.push(setInterval(loadVhostShare, 30000));
+
 window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 

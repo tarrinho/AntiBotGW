@@ -1,4 +1,4 @@
-"""Tests for Week 3+4 security improvements (v1.8.5+)."""
+"""Tests for Week 3+4 security improvements (v1.8.6+)."""
 import json
 import time
 import os

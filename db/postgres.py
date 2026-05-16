@@ -488,6 +488,30 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                       );
                       CREATE INDEX IF NOT EXISTS idx_signal_orders_gw
                           ON signal_orders(gw_id);
+
+                      -- 1.8.6: server-side SIEM alert rules and fire history.
+                      CREATE TABLE IF NOT EXISTS siem_alert_rules (
+                        id            BIGSERIAL PRIMARY KEY,
+                        metric        TEXT NOT NULL,
+                        op            TEXT NOT NULL
+                            CHECK(op IN ('>','>=','<','<=')),
+                        threshold     DOUBLE PRECISION NOT NULL,
+                        label         TEXT NOT NULL DEFAULT '',
+                        enabled       INTEGER NOT NULL DEFAULT 1,
+                        created_ts    DOUBLE PRECISION NOT NULL,
+                        created_by    TEXT,
+                        last_fired_ts DOUBLE PRECISION DEFAULT 0,
+                        cooldown_s    INTEGER NOT NULL DEFAULT 300
+                      );
+                      CREATE TABLE IF NOT EXISTS siem_alert_fired (
+                        id       BIGSERIAL PRIMARY KEY,
+                        rule_id  BIGINT NOT NULL
+                            REFERENCES siem_alert_rules(id) ON DELETE CASCADE,
+                        ts       DOUBLE PRECISION NOT NULL,
+                        value    DOUBLE PRECISION NOT NULL
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_siem_alert_fired_rule
+                          ON siem_alert_fired(rule_id, ts DESC);
                     """)
                     # 1.6.7+ — additive column upgrades from the central
                     # registry. Adds any missing column listed in
