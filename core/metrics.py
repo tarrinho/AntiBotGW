@@ -20,6 +20,7 @@ from state import *    # noqa: F401,F403
 from state import _postgres_available, events_by_cat, by_path_by_cat  # noqa: F401 — underscores/explicit not exported by *
 from helpers import now, slog  # noqa: F401
 from admin.auth import _is_admin_ip  # noqa: F401
+from db.postgres import pg_insert_event  # noqa: F401
 
 
 # ── Timeline: per-minute buckets ───────────────────────────────────────────

@@ -1791,7 +1791,7 @@ async def integration_check_endpoint(request: web.Request):
                 return {"ok": False, "detail": "City DB not loaded — set MAXMIND_LICENSE_KEY for auto-download"}
             if not IMPOSSIBLE_TRAVEL_ENABLED:
                 return {"ok": False, "detail": "DB loaded but IMPOSSIBLE_TRAVEL_ENABLED=0"}
-            return {"ok": True, "detail": f"City DB loaded · impossible-travel active"}
+            return {"ok": True, "detail": "City DB loaded · impossible-travel active"}
         return {"ok": None, "detail": f"no health-check defined for '{name}'"}
 
     t_start = _chk_time.monotonic()
@@ -3766,7 +3766,6 @@ async def pow_endpoint(request: web.Request):
     method = (request.query.get("method", "POST") or "POST").upper()
     path = request.query.get("path", "/") or "/"
     # 1.6.10 — pass caller's current risk_score for difficulty scaling
-    ip = request.remote or ""
     identity, _, _, _, _ = get_identity(request)
     async with state_lock:
         _risk = int(ip_state[identity].risk_score)
