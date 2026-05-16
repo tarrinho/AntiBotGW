@@ -244,14 +244,18 @@ async def agents_data_endpoint(request: web.Request):
             # it shows up in the table.  Order: live risk_score first
             # (most signal-rich), then blocked_count (bot was banned in
             # the past, decayed away but the receipts remain).
+            score_source = "stealth"
             if score == 0:
                 if s.risk_score > 0:
                     score = min(100, int(s.risk_score))
+                    score_source = "risk_score"
                 elif s.blocked_count > 0:
                     score = min(100, 30 + min(50, s.blocked_count * 2))
+                    score_source = "block_count"
             if score and not comps:
+                _r_pts = min(15, int(s.risk_score / 4)) if s.risk_score > 0 else 0
                 comps = {"headers":0,"assets":0,"enum":0,"timing":0,
-                         "risk":score,"404s":0}
+                         "risk":_r_pts,"404s":0}
             if score and not mets:
                 mets = {
                     "avg_header_score": 0, "html_loads": 0, "static_loads": 0,
@@ -259,6 +263,7 @@ async def agents_data_endpoint(request: web.Request):
                     "path_diversity": 0, "behavioral_cov": None,
                     "upstream_404_count": s.upstream_404_count,
                     "risk_score": round(s.risk_score, 1), "samples": 0,
+                    "blocked_count": s.blocked_count,
                 }
             # Determine authorized-bot status before the score gate so auth bots
             # are never silently dropped — they have stealth_score ≈ 0 by design.
@@ -311,6 +316,7 @@ async def agents_data_endpoint(request: web.Request):
                 "blocked": s.blocked_count,
                 "banned_secs": max(0, round(s.banned_until - n, 0)),
                 "stealth_score": score,
+                "score_source": score_source,
                 "components": comps,
                 "metrics": mets,
                 "recent_paths": list(s.last_allowed_paths),

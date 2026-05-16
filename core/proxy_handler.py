@@ -6225,7 +6225,7 @@ async def agents_bucket_detail_endpoint(request: web.Request):
         for key, s in ip_state.items():
             if s.allowed_count == 0:
                 continue
-            score, _, _ = _stealth_score(s)
+            score, _comps, _mets = _stealth_score(s)
             if score < min_score:
                 continue
             seen_epoch = _t.time() - (n_now - s.last_seen)
@@ -6240,6 +6240,8 @@ async def agents_bucket_detail_endpoint(request: web.Request):
                     "ua": s.last_user_agent, "stealth_score": score,
                     "risk_score": round(s.risk_score, 1),
                     "risk_breakdown": _rb,
+                    "components": _comps,
+                    "metrics": _mets,
                     "is_admin_ip": _is_admin_ip(_mip),
                     "allowed": s.allowed_count, "blocked": s.blocked_count,
                     "last_path": s.last_path,

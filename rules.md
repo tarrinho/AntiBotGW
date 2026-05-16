@@ -1,10 +1,40 @@
 # Rules of Engagement — AppSecGW build pipeline
 
 These rules are non-optional. After every Docker build of
-`appsec-antibot-gw:<version>`, run the full 17-step validation chain
+`appsec-antibot-gw:<version>`, run the full validation pipeline
 below **before announcing the build as done**. Every finding must be
 fixed (or explicitly classified as pre-existing in the report) before
 the version is considered released.
+
+**Pipeline overview:**
+
+| Step | Type | Gate |
+|------|------|------|
+| 1 | Unit tests | blocking |
+| 2 | Functional tests | blocking |
+| 3 | Integration tests | blocking |
+| 3a | Component tests | blocking |
+| 3b | Mutation testing | ≥ 80 % score |
+| 3c | Sanity tests (per-fix) | blocking |
+| 4 | Sufficient logs | blocking |
+| 5 | Regression tests | no new failures |
+| 6 | Performance (load/stress/spike/volume/scalability) | blocking |
+| 7 | Secret-leak scan | blocking |
+| 8 | Injection sanitisation | blocking |
+| 9 | Static hardening (Bandit + Semgrep + SonarQube) | 0 H / 0 C |
+| 10 | Image CVE scan (Trivy + Aikido) | 0 C / 0 H |
+| 11 | Automated code review (CodeRabbit) | no open H/C |
+| 11a | Secure code review (white-box) | blocking |
+| 12 | E2E / Black-box pentest | 0 bypasses |
+| 13 | Documentation | complete |
+| 14 | Multi-arch build + Harbor push | all 3 arches |
+| 14f | Build smoke test | blocking |
+| 15 | DAST (TLS, OWASP, rate, canary, fuzzing, IAST, config, chaos, contract, exploratory) | blocking |
+| 16 | Post-release bug watch | regression tests green |
+| 17 | Dashboard security standards | 0 violations |
+| 18 | Acceptance / UAT | operator sign-off |
+| 19 | Canary deployment gate | 0 new errors in 15 min |
+| 20 | Compliance attestation | all items confirmed |
 
 Author: Pedro Tarrinho · Last updated for: 1.7.5
 
@@ -30,6 +60,53 @@ pytest tests/test_integration.py -q
 **Pass criterion:** 100 % green. Flaky tests that pass in isolation
 should be flagged for investigation but do not block.
 
+## 3a. Component tests
+
+Test the gateway as a single deployable unit with its real internals wired but all external
+collaborators stubbed (AbuseIPDB, CrowdSec, MaxMind, upstream app). This is the layer between
+unit and full integration — it confirms that the detection pipeline, scoring engine, and admin
+API all work together correctly without requiring real network calls.
+
+```bash
+# Spin the harness with stubs for every external dependency
+pytest tests/test_component.py -q
+# Or manually: gateway + stub_upstream only, all reputation APIs mocked
+```
+
+**Pass criterion:** 100 % green. Component failures indicate wiring errors between modules —
+treat as blocking. The stub upstream must receive exactly the requests the gateway proxied,
+in the correct order, with the correct Host and X-Forwarded-For headers.
+
+## 3b. Mutation testing
+
+Verify the test suite itself actually catches bugs by deliberately introducing faults and
+confirming tests fail. Run `mutmut` (or equivalent) against `scoring.py`, `identity.py`,
+`core/proxy_handler.py` core logic blocks.
+
+```bash
+mutmut run --paths-to-mutate scoring.py,identity.py
+mutmut results
+```
+
+**Pass criterion:** Mutation score ≥ 80 % on core scoring logic. Surviving mutants must be
+individually triaged: confirmed-equivalent (no semantic change) → document; real gap → add
+a test before release. Never silence a surviving mutant without analysis.
+
+## 3c. Sanity tests
+
+After every individual bug fix or targeted code change, run a narrow smoke set that confirms
+the specific fix works and that the immediately adjacent paths did not regress. Do NOT
+substitute the full suite — sanity is fast and focused.
+
+```bash
+# Example: after fixing scoring.py risk accumulation
+pytest tests/test_critical.py -k "risk or score" -v
+```
+
+**Pass criterion:** Targeted set 100 % green within 30 s. If any targeted test fails, the fix
+is incomplete — do not proceed to the next step. Document the sanity command used in the
+validation record under the specific bug entry.
+
 ## 4. Sufficient logs
 - Every detector path must emit a structured `event=request` line with a
   request id (`rid`) and a non-empty `reason` field.
@@ -45,11 +122,64 @@ pytest tests/test_control_regressions.py tests/test_v14.py tests/test_v142.py te
 **Pass criterion:** Same set of pre-existing failures as last release
 (no new regressions). Diff the failure list against the previous build.
 
-## 6. Performance smoke
+## 6. Performance testing
+
+### 6a. Smoke baselines (run after every build)
 - Cold-start time (image launch → `[js-challenge] active`) **< 5 s**
 - `/__metrics?key=…` p99 latency **< 50 ms**
 - 1000-request burst against `/` does NOT trigger any false-positive ban
 - Memory after 1 h soak **< 200 MB RSS**
+
+### 6b. Load testing — expected peak traffic
+```bash
+# Sustained 500 req/s for 60 s from 50 concurrent clients
+ab -n 30000 -c 50 -t 60 http://127.0.0.1:18443/ 2>&1 | grep -E "Requests|Failed|Percentile"
+```
+**Pass criterion:** p50 < 10 ms, p99 < 100 ms, error rate < 0.1 %, no false-positive bans on clean IPs.
+
+### 6c. Stress testing — beyond rated limits
+```bash
+# Ramp from 500 to 5000 req/s until the gateway fails or starts rejecting
+wrk -t12 -c400 -d30s http://127.0.0.1:18443/
+```
+**Pass criterion:** Gateway degrades gracefully (returns 429/503, never crashes). No memory leak
+above 2× the idle RSS. Error log must not contain uncaught exceptions.
+
+### 6d. Spike testing — sudden sharp jump
+```bash
+# Idle for 10 s, then 1000 req in 2 s, then back to idle
+sleep 10
+ab -n 1000 -c 200 -t 2 http://127.0.0.1:18443/
+sleep 10
+curl -sk http://127.0.0.1:18443/ -w "%{http_code}\n" -o /dev/null
+```
+**Pass criterion:** Spike handled without crash; legitimate traffic after the spike returns 200 within
+5 s of the burst ending; RSS returns to within 20 % of pre-spike baseline.
+
+### 6e. Volume testing — large in-memory state
+```bash
+# Seed ip_state with 100 000 synthetic identities, then send 10 000 requests
+python3 tests/volume_seed.py --identities 100000
+ab -n 10000 -c 50 http://127.0.0.1:18443/
+```
+**Pass criterion:** p99 latency does not degrade by more than 2× vs empty-state baseline.
+No OOM-kill. `/__metrics` still responds within 200 ms.
+
+### 6f. Scalability testing — Redis-mesh multi-node
+When `REDIS_URL` is set, verify bans propagate across replicas within 5 s:
+```bash
+redis-cli FLUSHALL
+# Node A bans 1.2.3.4
+curl -sk -X POST http://nodeA:18443/antibot-appsec-gateway/secured/bans \
+  -H "X-Admin-Key: $KEY" -d '{"ip":"1.2.3.4","reason":"test","ttl":300}'
+sleep 2
+# Node B must reject 1.2.3.4
+curl -sk http://nodeB:18443/ -H "X-Forwarded-For: 1.2.3.4" -w "%{http_code}\n" -o /dev/null
+# Expected: 403
+```
+**Pass criterion:** Ban visible on all nodes within 5 s. `redis-cli KEYS "ban:*"` shows the key on
+every Redis shard. Adding a second gateway node does NOT double the memory footprint of ip_state
+(state is Redis-authoritative, not duplicated locally).
 
 ## 7. Secret-leak scan
 - `grep -nE '(BEGIN PRIVATE KEY|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{32}|ghp_[A-Za-z0-9]{36})' proxy.py dashboards/`
@@ -152,11 +282,20 @@ Read every line of code added or modified in this version. Check for:
 - New external dependencies (must justify)
 - New deps must be in `Dockerfile` AND `requirements.txt` if added
 
-## 12. Black-box pentest
+## 12. E2E / Black-box pentest
+
+**Testing layer:** This step serves as both the **end-to-end (E2E) test** — exercising the whole
+system from real network interface to upstream response — and the **black-box security assessment**
+(no prior knowledge of internals). Complementary to §11a (white-box code review) and §15 (DAST).
+
 Spin a fresh harness on port 18443 with a tiny upstream stub. Probe
 every NEW detector added in this version + the 6 generic OWASP probes
 listed in §8. Document each probe with: request, expected reason, actual
 reason, pass/fail. Tear the harness down when done.
+
+**Gray-box variant (optional):** After the blind black-box pass, repeat 3 targeted probes with
+internal knowledge (e.g. knowing the scoring weights) to verify there are no logic gaps between
+the documented behaviour and the actual enforcement. Record both passes in the validation record.
 
 ## 13. Documentation
 Each release MUST update:
@@ -350,6 +489,43 @@ docker image prune -f
 ```
 **Pass criterion:** Command exits 0. `docker images` shows no `<none>` entries for `appsec-antibot-gw`.
 
+### 14f. Build smoke test
+
+Run immediately after the image builds exit 0 and before any deeper testing. Verifies the
+container starts, the health endpoint responds, and catastrophic wiring errors are caught early.
+
+```bash
+VER=<version>
+
+# Start the freshly built armv7 image
+docker run -d --name smoke-test-armv7 \
+  --platform linux/arm/v7 \
+  -p 18444:8443 \
+  -e ADMIN_KEY=smoketest \
+  appsec-antibot-gw:${VER}-armv7
+
+# Wait for startup (max 10 s)
+for i in $(seq 1 10); do
+  STATUS=$(curl -sk -o /dev/null -w "%{http_code}" http://127.0.0.1:18444/)
+  [ "$STATUS" = "200" ] || [ "$STATUS" = "403" ] && break
+  sleep 1
+done
+
+# Health check
+curl -sk http://127.0.0.1:18444/antibot-appsec-gateway/health
+echo "Exit: $?"
+
+docker rm -f smoke-test-armv7
+```
+
+**Pass criterion:**
+- Container starts within 10 s (no crash loop, no missing-import error in `docker logs`).
+- Health endpoint returns `{"status":"ok"}` or equivalent.
+- `docker logs smoke-test-armv7` contains `[js-challenge] active` or `startup complete`.
+- No Python `ImportError`, `ModuleNotFoundError`, or `AttributeError` in startup logs.
+
+Repeat for `-arm64` and `-amd64` tags if built in this cycle.
+
 ---
 
 ## 15. Dynamic Security Testing
@@ -511,6 +687,177 @@ curl -sk "http://127.0.0.1:18443/antibot-appsec-gateway/bans" \
   `reason=canary-hit` in structured log and bans API.
 - Canary tokens must be unique per session (two fetches produce different tokens).
 - Canary tokens must NOT appear in any admin-visible key fields, metrics output, or error pages.
+
+### 15f. Fuzzing — malformed and random input
+
+Fixed injection payloads (§8) test known patterns. Fuzzing verifies the gateway handles
+arbitrary malformed input without crashing. Run against every input surface.
+
+```bash
+# HTTP request fuzzing via ffuf — random payloads in path, headers, body
+ffuf -u http://127.0.0.1:18443/FUZZ \
+  -w /usr/share/seclists/Fuzzing/special-chars.txt \
+  -mc all -fs 0 -t 20
+
+# Large body (body-size limit)
+python3 -c "import requests; requests.post('http://127.0.0.1:18443/', data='A'*10_000_000, timeout=5)"
+
+# Binary / null-byte in path
+curl -sk "http://127.0.0.1:18443/$(python3 -c "print('A'*4096)")" -o /dev/null -w "%{http_code}\n"
+
+# Invalid UTF-8 in User-Agent
+curl -sk http://127.0.0.1:18443/ -H $'User-Agent: \xff\xfe\x00' -w "%{http_code}\n"
+```
+
+**Pass criterion:** No 5xx response on any fuzz input. No Python traceback in `docker logs`.
+Gateway must return 400, 403, or 429 for invalid inputs — never 500. RSS does not grow
+unboundedly during a 5-minute fuzz run (< 50 MB growth).
+
+### 15g. IAST — instrumented analysis
+
+If the CI environment supports runtime instrumentation (e.g. Contrast Security agent, Pyrasp,
+or manual taint tracking), enable it during the §12 and §15b test runs to capture findings
+that static analysis misses.
+
+```bash
+# Example: run the §15b DAST probes with Python's trace hooks active
+PYTHONTRACEMALLOC=1 python3 -m pytest tests/test_functional.py -q 2>&1 | grep -E "WARN|ERROR|taint"
+```
+
+**Pass criterion:** No new taint-flow findings (data from untrusted input reaching a sink
+without sanitisation) not already captured by §9 SAST. Document any findings in the
+validation record with: sink, source, data flow, and whether it is exploitable.
+
+If no IAST tooling is available, mark this step as "N/A — tooling not installed" in the
+validation record and note it as a future improvement.
+
+### 15h. Configuration testing
+
+Verify that the gateway behaves correctly across the key deployment configurations — not just
+the default. At minimum, test the four combinations below.
+
+| Config variant | Key knobs | Expected outcome |
+|----------------|-----------|-----------------|
+| Strict mode | `BAN_THRESHOLD=30`, `SOFT_CHALLENGE_SCORE=10`, `JS_CHALLENGE_ENABLED=1` | Low-scoring requests challenged earlier |
+| Permissive mode | `BAN_THRESHOLD=100`, `JS_CHALLENGE_ENABLED=0` | Only extreme offenders banned; no JS challenge |
+| XFF trust off | `TRUST_XFF=none` | `X-Forwarded-For` ignored; client IP from TCP |
+| Redis mesh | `REDIS_URL=redis://127.0.0.1:6379` | Bans propagate; state reads from Redis |
+
+```bash
+# Example: test strict mode
+docker run -d --name cfg-strict -p 18445:8443 \
+  -e BAN_THRESHOLD=30 -e SOFT_CHALLENGE_SCORE=10 -e JS_CHALLENGE_ENABLED=1 \
+  appsec-antibot-gw:<version>-arm64
+curl -sk http://127.0.0.1:18445/ -H "User-Agent: python-requests/2.31" -w "%{http_code}\n"
+# Expected: 200 with JS challenge body, not 403
+docker rm -f cfg-strict
+```
+
+**Pass criterion:** Each variant produces the expected behaviour as documented in `MANUAL.md`.
+No configuration combination causes a startup crash or renders the admin API unreachable.
+
+### 15i. Reliability & availability testing
+
+Verify the gateway recovers correctly from common failure modes without operator intervention.
+
+```bash
+# 1. Graceful restart — send SIGTERM, confirm in-flight requests complete
+docker kill --signal=SIGTERM <container>
+# Monitor: last request before shutdown must complete (not 502)
+
+# 2. Health-check recovery — kill the upstream, verify health endpoint degrades correctly
+docker stop upstream-stub
+curl -sk http://127.0.0.1:18443/antibot-appsec-gateway/health
+# Expected: {"status":"degraded"} or similar — NOT 500
+
+# 3. Redis loss — stop Redis mid-flight
+docker stop redis
+sleep 2
+curl -sk http://127.0.0.1:18443/ -w "%{http_code}\n"
+# Expected: 200 (gateway must fall back to in-process state, not crash)
+docker start redis
+
+# 4. Container restart — confirm state survives SQLite persistence
+BAN_IP="10.0.0.99"
+# ... ban $BAN_IP via admin API ...
+docker restart <container>
+sleep 5
+curl -sk http://127.0.0.1:18443/ -H "X-Forwarded-For: $BAN_IP" -w "%{http_code}\n"
+# Expected: 403 — ban loaded from SQLite on startup
+```
+
+**Pass criterion:** All four scenarios produce the documented degraded/recovered behaviour with no
+crash (exit code non-zero), no data loss for persisted bans, and no hung goroutines or file handles.
+
+### 15j. Chaos / resilience testing
+
+Deliberately inject infrastructure failures to verify graceful degradation — not correctness.
+Run only on a dedicated chaos harness, never against a shared environment.
+
+```bash
+# 1. OOM pressure — restrict container memory to 64 MB and verify it doesn't crash silently
+docker run -d --memory=64m --memory-swap=64m \
+  -p 18446:8443 appsec-antibot-gw:<version>-arm64
+sleep 5
+docker inspect <id> --format "{{.State.Status}}"
+# Expected: "running" — NOT "exited"
+
+# 2. CPU starvation — limit to 0.1 CPU and verify latency degrades gracefully
+docker update --cpus=0.1 <container>
+ab -n 100 -c 10 http://127.0.0.1:18443/ | grep "Time per request"
+# Expected: latency increases but no 5xx
+
+# 3. Network partition — drop packets to reputation APIs
+iptables -A OUTPUT -d abuseipdb.com -j DROP
+curl -sk http://127.0.0.1:18443/ -H "User-Agent: Mozilla/5.0" -w "%{http_code}\n"
+# Expected: 200 — reputation fallback to cached/default, no crash
+iptables -D OUTPUT -d abuseipdb.com -j DROP
+```
+
+**Pass criterion:** Gateway continues to serve traffic (correct HTTP codes, no 5xx) under every
+injected failure. Structured log must contain `event=degraded` or equivalent when a dependency fails.
+
+### 15k. Contract testing — upstream HTTP contract
+
+The gateway proxies to an upstream over HTTP. Verify the upstream contract is honoured:
+correct Host header, correct X-Forwarded-For chain, no stripped hop-by-hop headers.
+
+```bash
+# Deploy an echo server as upstream and verify header forwarding
+docker run -d --name echo-upstream -p 18447:80 mendhak/http-https-echo
+# Route gateway to echo-upstream, then send a request
+curl -sk http://127.0.0.1:18443/ -H "X-Real-IP: 5.5.5.5" | python3 -m json.tool | grep -E "x-forwarded|host"
+```
+
+**Pass criterion:**
+- `Host` header set to the vhost hostname, not the gateway's own address.
+- `X-Forwarded-For` contains the correct client IP (not the gateway's internal IP).
+- `X-Real-IP` forwarded to upstream when configured.
+- No `X-Admin-Key`, `X-Session-Key`, or internal gateway headers leaked to upstream.
+- Admin API responses must not reach the upstream under any path.
+
+Also run the admin API contract check:
+```bash
+# Every documented admin endpoint returns the documented status code for valid + invalid auth
+pytest tests/test_admin_contract.py -q
+```
+
+### 15l. Exploratory testing session
+
+After all scripted tests pass, run a **30-minute unscripted manual session** against the live
+harness. The goal is finding what the test plan missed — unexpected interactions, edge cases,
+and usability issues that automated tests cannot anticipate.
+
+**Session structure:**
+1. Start with the happy path (legitimate browser traffic, admin console).
+2. Follow any unexpected response — probe it further before moving on.
+3. Try combinations: banned IP + new session cookie; auth bot + rate burst; canary + VPN IP.
+4. Check all dashboard pages for JS console errors during the above.
+5. Record every anomaly, even if it seems minor.
+
+**Pass criterion:** No new security-relevant finding left unclassified. Every anomaly is either:
+a) filed as a bug in §16a, or b) confirmed as expected behaviour with a one-line note.
+Duration: minimum 30 minutes. Document findings in `validation/<version>.md` under §15l.
 
 ---
 
@@ -764,10 +1111,134 @@ fills to origin.
 
 ---
 
+## 18. Acceptance / UAT
+
+Before marking the version as production-ready, confirm it solves the actual operational problem —
+not just that it passes technical tests.
+
+**Checklist (operator sign-off, not automated):**
+
+- [ ] Admin console loads in the target browser without JS errors.
+- [ ] IP intelligence popover, risk score breakdown, and score signals all render correctly.
+- [ ] Creating a ban, an allow-list entry, and an auth-bot entry all persist across a container restart.
+- [ ] Webhook fires correctly on a test ban (confirm payload arrives at webhook URL).
+- [ ] All new features described in `CHANGELOG.md` are demo-able end-to-end by the operator.
+- [ ] Operator can locate and clear a false-positive ban in under 60 s using the dashboard alone.
+- [ ] Demo links (§ Live Demo Checklist) work from an external network after Harbor push.
+
+**Pass criterion:** All checked items verified by a human operator, not a script.
+Record the operator name and timestamp in `validation/<version>.md`.
+
+## 19. Canary deployment gate
+
+Before promoting the multi-arch manifest to the `latest` tag in Harbor, perform a limited
+rollout to a non-critical gateway instance (e.g. staging or a single production node).
+
+```bash
+HARBOR=>harbor</antibotappsecgw/antibotappsecgw
+VER=<version>
+
+# 1. Deploy only to canary node (direct image tag, not manifest)
+ssh canary-node "docker pull ${HARBOR}:${VER}-arm64 && \
+  docker run -d --name gw-canary -p 8443:8443 ${HARBOR}:${VER}-arm64"
+
+# 2. Monitor for 15 minutes: error rate, latency, ban accuracy
+watch -n 30 "curl -sk http://canary-node:8443/antibot-appsec-gateway/metrics \
+  | python3 -m json.tool | grep -E 'error|ban|latency'"
+
+# 3. Confirm no new crash or regression pattern in logs
+ssh canary-node "docker logs gw-canary --since 15m | grep -c ERROR"
+```
+
+**Pass criterion:** Zero new ERRORs in canary logs. Error rate ≤ pre-canary baseline.
+No operator-reported false-positive spikes. After 15-minute soak, promote `latest`:
+
+```bash
+docker manifest create ${HARBOR}:latest \
+  --amend ${HARBOR}:${VER}-amd64 \
+  --amend ${HARBOR}:${VER}-arm64 \
+  --amend ${HARBOR}:${VER}-armv7
+docker manifest push ${HARBOR}:latest
+```
+
+## 20. Compliance attestation
+
+AppSecGW processes IP addresses, HTTP headers, and request payloads from end users. Confirm
+compliance with applicable standards before production deployment.
+
+### 20a. GDPR / data-minimisation
+
+- IP addresses are PII under GDPR. Confirm `LOG_RETENTION_DAYS` (or equivalent) is set and
+  that the SQLite `events` table is pruned on schedule.
+- No full request body is logged unless `DLP_ENABLED=1` and redaction is on.
+- `GET /antibot-appsec-gateway/secured/ip-intel/<ip>` must be access-logged (`event=admin_access`)
+  for audit purposes.
+- Confirm the privacy notice at `MANUAL.md § Privacy` covers IP-address processing.
+
+```bash
+# Verify retention job fires
+docker exec <container> python3 -c "from db.sqlite import prune_old_events; prune_old_events(); print('ok')"
+```
+
+### 20b. Security controls baseline (ISO 27001 / CIS)
+
+- All admin endpoints require `X-Admin-Key` — verified in §8.
+- TLS is terminated before the gateway or by the gateway (not plaintext on public interface).
+- Secrets (`ADMIN_KEY`, `SESSION_KEY`, `POW_HMAC_KEY`) are injected via env var / secret mount,
+  never baked into the image — confirmed by §7 secret-leak scan.
+- Image uses a minimal base (Chainguard distroless / Debian slim) — confirmed by §10 Trivy.
+- No SSH or remote-management daemon inside the container — verify: `docker exec <c> ss -tlnp`.
+
+### 20c. Pass criterion
+
+All items above confirmed. Record in `validation/<version>.md` under §20. Any gap must be
+classified: accepted-risk (with owner + review date) or remediated before release.
+
+---
+
 ## Findings policy
 **Fix before declaring the build done.** Pre-existing failures (e.g.
 the JS-challenge HTML tests broken since 1.5.4 risk-gating Turnstile)
 are classified at the top of the report — never silently inherited.
+
+## Test design techniques (reference)
+
+Apply these techniques when writing new tests anywhere in the pipeline.
+
+**Equivalence partitioning + boundary value analysis:** For every numeric knob (e.g. `BAN_THRESHOLD`),
+test the boundary values (threshold − 1, threshold, threshold + 1) and one representative value
+from each class (well below, at, just above). Most bugs live at boundaries.
+
+**Decision table testing:** For detectors with multiple conditions (e.g. ua-non-browser AND
+ai-headers-incomplete AND high-rate), enumerate the combinations that produce different outcomes.
+At minimum test each rule's triggering combination and the complementary safe case.
+
+**State transition testing:** The identity lifecycle has states (new → observed → soft-challenged →
+hard-challenged → banned → expired). Write tests for every valid and invalid transition, especially
+the expiry / recovery edge.
+
+**Property-based testing:** For pure functions in `scoring.py` and `identity.py`, assert invariants
+across generated inputs rather than fixed examples. Use `hypothesis`:
+```python
+from hypothesis import given, strategies as st
+
+@given(st.floats(min_value=0, max_value=200))
+def test_risk_score_never_negative(score):
+    assert decay(score, elapsed_secs=3600) >= 0
+```
+
+**Snapshot testing:** For admin API responses and dashboard HTML fragments that must not change
+accidentally, capture a reference snapshot and diff on every build:
+```bash
+curl -sk http://127.0.0.1:18443/antibot-appsec-gateway/health > tests/snapshots/health.json
+diff tests/snapshots/health.json tests/snapshots/health.json.ref
+```
+
+**Pairwise / combinatorial testing:** For configuration combinations (§15g), use pairwise
+tools (`allpairspy`, `pict`) to cover all 2-way interactions of the 4+ config knobs without
+a full Cartesian explosion.
+
+---
 
 ## Release announcement template
 ```

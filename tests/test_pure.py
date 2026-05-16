@@ -4800,7 +4800,7 @@ def _gw_popover_section(dashboard: str) -> str:
     src = (Path(__file__).resolve().parent.parent / "dashboards" / dashboard).read_text()
     idx = src.find("window._gwIdentityPopover")
     assert idx != -1, f"{dashboard} must define window._gwIdentityPopover"
-    return src[idx: idx + 5000]
+    return src[idx: idx + 6000]
 
 
 def test_gw_identity_popover_defined_in_agents_html():
@@ -6014,7 +6014,7 @@ class TestBuildScoreHtmlFunction:
         src = _agents_src()
         start = src.find("function buildScoreHtml(")
         assert start != -1, "agents.html: buildScoreHtml function not found"
-        return src[start: start + 3000]
+        return src[start: start + 10000]
 
     def test_function_exists(self):
         body = self._fn_body()
@@ -6051,11 +6051,11 @@ class TestBuildScoreHtmlFunction:
         assert "risk_breakdown" in body, \
             "agents.html buildScoreHtml must conditionally render risk_breakdown signals"
 
-    def test_risk_section_gated_on_risk_component(self):
+    def test_risk_section_gated_on_risk_score(self):
         body = self._fn_body()
-        # Must check c.risk or components.risk before rendering risk sub-section
-        assert "c.risk" in body or "components.risk" in body, \
-            "agents.html buildScoreHtml risk section must be gated on c.risk > 0"
+        # Must check rScore > 0 (not c.risk) so signals show even when pts round to 0
+        assert "rScore > 0" in body or "rScore>0" in body, \
+            "agents.html buildScoreHtml risk section must be gated on rScore > 0"
 
     def test_stealth_score_in_output(self):
         body = self._fn_body()
@@ -6068,6 +6068,41 @@ class TestBuildScoreHtmlFunction:
         assert "width:${pct}%" in body or "width:"+'"${pct}%"' in body or \
                "pct}%" in body, \
             "agents.html buildScoreHtml bars must be sized by component percentage"
+
+    def test_risk_weights_js_const_exists(self):
+        src = _agents_src()
+        assert "RISK_WEIGHTS_JS" in src, \
+            "agents.html must define RISK_WEIGHTS_JS const mirroring config.py RISK_WEIGHTS"
+
+    def test_risk_labels_js_const_exists(self):
+        src = _agents_src()
+        assert "RISK_LABELS_JS" in src, \
+            "agents.html must define RISK_LABELS_JS const for human-readable signal descriptions"
+
+    def test_risk_ban_threshold_const_exists(self):
+        src = _agents_src()
+        assert "RISK_BAN_THRESHOLD" in src, \
+            "agents.html must define RISK_BAN_THRESHOLD const"
+
+    def test_risk_signals_show_base_weight(self):
+        body = self._fn_body()
+        assert "RISK_WEIGHTS_JS" in body, \
+            "agents.html buildScoreHtml risk rows must look up base weight from RISK_WEIGHTS_JS"
+
+    def test_risk_signals_show_hit_count(self):
+        body = self._fn_body()
+        assert "hits" in body and "triggered" in body, \
+            "agents.html buildScoreHtml risk rows must show approximate hit count"
+
+    def test_risk_signals_show_label(self):
+        body = self._fn_body()
+        assert "RISK_LABELS_JS" in body, \
+            "agents.html buildScoreHtml risk rows must look up human label from RISK_LABELS_JS"
+
+    def test_ban_threshold_progress_bar(self):
+        body = self._fn_body()
+        assert "ban threshold" in body or "banPct" in body, \
+            "agents.html buildScoreHtml must render ban threshold progress bar"
 
 
 class TestNormalizeIdPassesComponentsMetrics:
@@ -6147,9 +6182,13 @@ class TestMissedListRiskBreakdown:
         body = self._fn_body()
         missed_idx = body.find("missed_list.append(")
         assert missed_idx != -1, "agents_bucket_detail_endpoint: missed_list.append not found"
-        append_block = body[missed_idx: missed_idx + 500]
+        append_block = body[missed_idx: missed_idx + 600]
         assert "risk_breakdown" in append_block, \
             "agents_bucket_detail_endpoint: missed_list entries must include risk_breakdown"
+        assert '"components"' in append_block or "'components'" in append_block, \
+            "agents_bucket_detail_endpoint: missed_list entries must include components"
+        assert '"metrics"' in append_block or "'metrics'" in append_block, \
+            "agents_bucket_detail_endpoint: missed_list entries must include metrics"
 
     def test_risk_breakdown_sorted_descending(self):
         body = self._fn_body()
