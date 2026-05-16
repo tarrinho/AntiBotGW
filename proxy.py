@@ -749,7 +749,6 @@ def _eval_custom_rules(request, ip: str):
     ua = (request.headers.get("User-Agent") or "")
     ua_lower = ua.lower()
     headers = request.headers
-    query = getattr(request, "query", {}) or {}
     for rule in rules:
         cond = rule.get("if") or {}
         ok = True
@@ -1044,7 +1043,7 @@ if __name__ == "__main__":
         key_line = "supplied via ADMIN_KEY env"
     else:
         key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
-    print(f"  ╔══════════════════════════════════════════════════════════╗")
+    print("  ╔══════════════════════════════════════════════════════════╗")
     print(f"  ║ {GW_VERSION:<10}     →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     _ns_line = f"Admin namespace: {ADMIN_NS}"
@@ -1059,7 +1058,7 @@ if __name__ == "__main__":
         nets = ", ".join(str(n) for n in ADMIN_ALLOWED_NETS)[:46]
         print(f"  ║ Admin IPs: {nets:<46}║")
     else:
-        print(f"  ║ Admin IPs: any (set ADMIN_ALLOWED_IPS to restrict)    ║")
-    print(f"  ╚══════════════════════════════════════════════════════════╝")
+        print("  ║ Admin IPs: any (set ADMIN_ALLOWED_IPS to restrict)    ║")
+    print("  ╚══════════════════════════════════════════════════════════╝")
     web.run_app(make_app(), host=LISTEN_HOST, port=LISTEN_PORT, print=None,
                 keepalive_timeout=HEADERS_TIMEOUT)

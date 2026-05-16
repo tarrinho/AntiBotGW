@@ -341,6 +341,20 @@ Each release MUST update:
    ```
    Author: Pedro Tarrinho. Reports must NOT reference any AI tooling.
 
+5. **`GW-Tests-Full.md`** — full test suite reference (one section per test file).
+   Any release that adds, removes, or materially changes a test file MUST update this document:
+   - **New file added:** add a section under the correct version heading; add the filename to the Table of Contents row for that version; increment the `Total test files` count in the header and footer.
+   - **Tests changed within a file:** update the affected class row (test count, description).
+   - **File removed or renamed:** remove or update its section and TOC entry; decrement the count.
+   - **Version header:** bump `**Version:**` field to match the release being documented.
+   - Run this to verify no test file is missing from the document after the update:
+     ```bash
+     comm -23 \
+       <(ls tests/test_*.py | xargs -I{} basename {} | sort) \
+       <(grep -o '`test_[a-z0-9_]*\.py`' GW-Tests-Full.md | tr -d '`' | sort -u)
+     ```
+     **Pass criterion:** zero lines of output (no undocumented test files).
+
 ### 13a. Architecture + version consistency review
 
 **Step 0 — automated version bump (run this first):**
@@ -366,6 +380,8 @@ Before declaring documentation complete, verify:
   add any new detection layer or admin endpoint introduced since last release.
 - `CHANGELOG.md` `[Unreleased]` section is empty (or absent) after the
   release entry is stamped — nothing left undocumented.
+- `GW-Tests-Full.md` version header matches the release; every new test file
+  has a section; `comm -23 <(ls tests/test_*.py | xargs -I{} basename {} | sort) <(grep -o '\`test_[a-z0-9_]*\.py\`' GW-Tests-Full.md | tr -d '\`' | sort -u)` outputs nothing.
 
 ### 13b. Full version-string sweep
 Run `./bump-version.sh PREV NEW` first (see §13a), then verify with the grep below.
@@ -405,6 +421,7 @@ grep -rn --include="*.py" --include="*.html" --include="*.yml" \
 | `CHANGELOG.md` | Latest `## [<version>]` section header stamped (not `[Unreleased]`) |
 | `MANUAL.md` | Any pinned image tags in example commands |
 | `copy-to-github.sh` | `VERSION=` line or equivalent constant |
+| `GW-Tests-Full.md` | `**Version:**` field in header; `Total test files` count; all new test files documented |
 
 **Pass criterion:** Zero stale-version hits from the grep AND every row in
 the checklist manually confirmed. Any mismatch must be corrected before step 14.

@@ -24,15 +24,11 @@ JS logic checks (J):
   J02  card-scoring → detection mapping present
   J03  card-thresholds → thresholds mapping present
   J04  card-bypass → bypass mapping present
-  J05  card-infrastructure → infra mapping present
-  J06  card-external → external mapping present
-  J07  card-active-rules → monitoring mapping present
-  J08  card-lists-snap → monitoring mapping present
-  J09  card-ep-policies → monitoring mapping present
-  J10  card-unban → admin mapping present
-  J11  card-admin-ip → admin mapping present
-  J12  card-audit-log → admin mapping present
-  J13  All 7 section IDs defined (detection/thresholds/bypass/infra/external/monitoring/admin)
+  J05  card-external → external mapping present  [card-infrastructure moved to Settings in v1.8.7]
+  J06  card-unban → admin mapping present
+  J07  card-admin-ip → admin mapping present
+       [card-active-rules/lists-snap/ep-policies/audit-log/infra/monitoring removed in v1.8.7]
+  J13  All 5 active section IDs defined (detection/thresholds/bypass/external/admin)
   J14  _switch() function defined
   J15  _buildNav() function defined
   J16  _updateBadges() function defined
@@ -240,14 +236,12 @@ class TestJSLogic:
         ("card-scoring",       "detection"),
         ("card-thresholds",    "thresholds"),
         ("card-bypass",        "bypass"),
-        ("card-infrastructure","infra"),
+        # card-infrastructure moved to Settings in v1.8.7
         ("card-external",      "external"),
-        ("card-active-rules",  "monitoring"),
-        ("card-lists-snap",    "monitoring"),
-        ("card-ep-policies",   "monitoring"),
+        # card-active-rules, card-lists-snap, card-ep-policies removed in v1.8.7
         ("card-unban",         "admin"),
         ("card-admin-ip",      "admin"),
-        ("card-audit-log",     "admin"),
+        # card-audit-log removed in v1.8.7
     ])
     def test_j02_card_sec_mapping(self, card, sec):
         """Each card ID must map to the correct section in CARD_SEC."""
@@ -262,10 +256,11 @@ class TestJSLogic:
         )
 
     @pytest.mark.parametrize("sec_id", [
-        "detection", "thresholds", "bypass", "infra", "external", "monitoring", "admin"
+        # infra and monitoring sections removed in v1.8.7 (moved to Settings / dropped)
+        "detection", "thresholds", "bypass", "external", "admin"
     ])
     def test_j03_all_section_ids_defined(self, sec_id):
-        """All 7 section IDs must appear in the SECTIONS array."""
+        """All active section IDs must appear in the SECTIONS array."""
         assert f"'{sec_id}'" in self.sp or f'"{sec_id}"' in self.sp, (
             f"controls.html split-pane script: section id '{sec_id}' not found in SECTIONS"
         )
@@ -354,14 +349,12 @@ class TestRegressions:
         "card-scoring",
         "card-thresholds",
         "card-bypass",
-        "card-infrastructure",
+        # card-infrastructure moved to Settings in v1.8.7
         "card-external",
         "card-unban",
         "card-admin-ip",
-        "card-active-rules",
-        "card-lists-snap",
-        "card-ep-policies",
-        "card-audit-log",
+        # card-active-rules, card-lists-snap, card-ep-policies removed in v1.8.7
+        # card-audit-log removed in v1.8.7
     ])
     def test_r01_card_ids_preserved(self, card_id):
         """All section card IDs must still be present in the HTML."""

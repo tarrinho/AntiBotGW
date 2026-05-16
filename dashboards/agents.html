@@ -1787,156 +1787,178 @@ function buildScoreHtml(d){
   const c = d.components, m = d.metrics;
   const src = d.score_source || 'stealth';
   const rScore = m.risk_score != null ? m.risk_score : 0;
-  const rPts   = c.risk || 0;
-  const riskDetail = src === 'block_count'
-    ? `synthetic — based on ${m.blocked_count != null ? m.blocked_count : d.blocked || '?'} blocks (no risk score)`
-    : src === 'risk_score'
-    ? `risk score ${rScore} ÷ 4 → ${rPts}/15 pts (see signals below)`
-    : `risk score ${rScore} ÷ 4 → ${rPts}/15 pts`;
-  const COMPS = [
-    {key:'headers', label:'headers', color:'#a78bfa', detail:`avg ${m.avg_header_score!=null?m.avg_header_score:'?'}/7 expected headers`},
-    {key:'assets',  label:'assets',  color:'#5fb3c0', detail:`${m.html_loads||0} html · ${m.static_loads||0} static fetches`},
-    {key:'enum',    label:'enum',    color:'#3fb950', detail:`${m.unique_paths||0} unique paths (div=${m.path_diversity!=null?m.path_diversity:'?'})`},
-    {key:'timing',  label:'timing',  color:'#d29922', detail:`cv=${m.behavioral_cov!=null?m.behavioral_cov:'n/a'}`},
-    {key:'risk',    label:'risk',    color:'#f85149', detail:riskDetail},
-    {key:'404s',    label:'404s',    color:'#ff7b3a', detail:`${m.upstream_404_count||0} upstream 404s`},
-  ];
-  const compRows = COMPS.map(({key,label,color,detail})=>{
-    const pct = Math.round(c[key]||0);
-    return `<div class="rsn">
-      <div><span class="rsn-name">${label}</span>
-        <div class="dim" style="font-size:10px;margin-top:1px">${detail}</div></div>
-      <div class="rsn-bar"><div style="width:${pct}%;background:${color}"></div></div>
-      <span class="rsn-val" style="color:${color}">${pct}%</span>
-    </div>`;
-  }).join('');
   const rb = d.risk_breakdown || [];
-  let riskSection = '';
+
+  // Score bar — always shown first
+  const scoreColor = score >= 70 ? '#f85149' : score >= 40 ? '#d29922' : '#3fb950';
+  const scoreLabel = score >= 70 ? 'HIGH' : score >= 40 ? 'ELEVATED' : 'LOW';
+  const scoreLabelBg = score >= 70 ? 'rgba(248,81,73,.15)' : score >= 40 ? 'rgba(210,153,34,.15)' : 'rgba(63,185,80,.12)';
+  const scoreHeader = `<div style="margin-bottom:14px">
+    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
+      <span style="font-size:28px;font-weight:800;color:${scoreColor};font-family:ui-monospace,Menlo,monospace;line-height:1">${score}</span>
+      <span style="font-size:12px;color:var(--dim);align-self:center">/ 100</span>
+      <span style="font-size:10px;font-weight:700;color:${scoreColor};background:${scoreLabelBg};padding:2px 7px;border-radius:10px;letter-spacing:.4px;align-self:center">${scoreLabel}</span>
+    </div>
+    <div style="height:6px;background:#1f2730;border-radius:3px;overflow:hidden">
+      <div style="width:${score}%;height:100%;background:${scoreColor};border-radius:3px"></div>
+    </div>
+  </div>`;
+
+  let body = '';
+
   if (src === 'block_count') {
+    // Score is synthetic — derived from block count, no active behavioral signals.
+    // Show: formula, then block reasons (the actual answer to "why was this blocked?").
     const nBlocks = m.blocked_count != null ? m.blocked_count : (d.blocked || 0);
     const synthScore = Math.min(100, 30 + Math.min(50, nBlocks * 2));
     const bd = d.blocks_breakdown || [];
     const totalBlocks = bd.reduce((a,b)=>a+b[1],0) || nBlocks || 1;
-    const bdRows = bd.slice(0,8).map(([reason,cnt])=>{
-      const label = BLOCK_LABELS_JS[reason] || RISK_LABELS_JS[reason] || reason;
-      const detail = BLOCK_DETAIL_JS[reason] || RISK_DETAIL_JS[reason] || (
-        reason.startsWith('dlp-')       ? `Data Loss Prevention signal: a ${reason.replace('dlp-','')} pattern was detected in the request. DLP signals flag potential sensitive data exfiltration or misuse.` :
-        reason.startsWith('smuggling-') ? `HTTP request smuggling attempt (${reason.replace('smuggling-','')} variant) — a server-level desynchronization attack vector.` :
-        reason.startsWith('ua-ai-')     ? `AI/LLM crawler detected: the User-Agent identifies this client as a ${reason.replace('ua-ai-','')} AI agent.` :
-        reason.startsWith('ua-')        ? `User-Agent anomaly (${reason.replace('ua-','')}): the User-Agent header does not match expected browser patterns.` :
-        reason.startsWith('rate-limit') ? `Rate limit exceeded (${reason}): request volume from this identity surpassed the configured threshold for this scope.` :
-        reason.startsWith('gql-')       ? `GraphQL abuse signal (${reason.replace('gql-','')}): API query pattern exceeded configured safety limits.` :
-        reason.startsWith('upload-')    ? `File upload security violation (${reason.replace('upload-','')}): uploaded content matched a dangerous file pattern.` :
-        reason.startsWith('body-')      ? `Attack payload detected in request body (${reason.replace('body-','')} pattern).` :
-        reason.startsWith('canary-')    ? `Canary token detection (${reason.replace('canary-','')}): the client processed and returned an injected tracking token, confirming automated HTTP processing.` :
-        `Request blocked with reason code "${reason}". No detailed description is registered for this signal — may be a custom rule, new detection, or a gateway-internal control action.`
-      );
-      const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
-      const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
-      const sharePct = Math.round(cnt / totalBlocks * 100);
-      return `<div class="risk-sig">
-        <div class="rs-head">
-          <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
-            <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
-            <span class="rs-name">${escapeHtml(reason)}</span>
+
+    body += `<div style="font-size:11px;color:var(--dim);margin-bottom:14px;padding:8px 10px;background:#0d1117;border-radius:4px;border-left:2px solid #30363d;line-height:1.6">
+      Score = <code style="color:var(--fg)">30 + min(50, ${nBlocks} blocks × 2) = ${synthScore}</code><br>
+      <span style="font-size:10px">No behavioral risk signals active — score derived from block history only.</span>
+    </div>`;
+
+    if (bd.length) {
+      body += `<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:8px;font-weight:700">Why requests were blocked</div>`;
+      body += bd.slice(0,8).map(([reason,cnt])=>{
+        const label = BLOCK_LABELS_JS[reason] || RISK_LABELS_JS[reason] || reason;
+        const detail = BLOCK_DETAIL_JS[reason] || RISK_DETAIL_JS[reason] || (
+          reason.startsWith('dlp-')       ? `Data Loss Prevention: a ${reason.replace('dlp-','')} pattern detected in the request.` :
+          reason.startsWith('smuggling-') ? `HTTP smuggling attempt (${reason.replace('smuggling-','')} variant).` :
+          reason.startsWith('ua-ai-')     ? `AI/LLM crawler: User-Agent identifies client as ${reason.replace('ua-ai-','')} agent.` :
+          reason.startsWith('ua-')        ? `User-Agent anomaly (${reason.replace('ua-','')}): does not match expected browser patterns.` :
+          reason.startsWith('rate-limit') ? `Rate limit exceeded: request volume surpassed threshold for this scope.` :
+          reason.startsWith('gql-')       ? `GraphQL abuse: query pattern exceeded safety limits.` :
+          reason.startsWith('upload-')    ? `File upload violation: uploaded content matched a dangerous file pattern.` :
+          reason.startsWith('body-')      ? `Attack payload in request body (${reason.replace('body-','')} pattern).` :
+          reason.startsWith('canary-')    ? `Canary token returned — confirms automated HTTP processing.` :
+          `No description registered for "${reason}" — may be a custom rule or gateway-internal action.`
+        );
+        const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
+        const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
+        const sharePct = Math.round(cnt / totalBlocks * 100);
+        return `<div class="risk-sig">
+          <div class="rs-head">
+            <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
+              <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
+              <span class="rs-name">${escapeHtml(reason)}</span>
+            </div>
+            <span class="rs-score" style="color:#d29922;flex-shrink:0">${cnt}×</span>
           </div>
-          <span class="rs-score" style="color:#d29922;flex-shrink:0">${cnt}×</span>
-        </div>
-        <div class="rs-desc" style="font-weight:600;font-size:11px;color:var(--fg);margin-bottom:4px">${escapeHtml(label)}</div>
-        <div class="rs-desc">${escapeHtml(detail)}</div>
-        <div class="rs-divider"></div>
-        <div class="rs-meta">
-          <span><b>blocks</b> ${cnt}×</span>
-          <span><b>share</b> ${sharePct}% of total</span>
-        </div>
-        <div class="rs-bar" style="margin-top:4px"><div style="width:${sharePct}%;background:#d29922"></div></div>
-      </div>`;
-    }).join('') || `<div class="dim" style="font-size:11px;padding:8px 0">No block reason detail available.</div>`;
-    riskSection = `<div style="margin-top:10px">
-      <div style="background:#161b22;border:1px solid var(--line);border-radius:5px;padding:10px 12px;margin-bottom:10px;font-size:11px">
-        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:6px">Synthetic score — no active risk signals</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-family:ui-monospace,Menlo,monospace">
-          <div><span style="color:var(--dim)">total blocks</span> <b>${nBlocks}</b></div>
-          <div><span style="color:var(--dim)">formula</span> <b>30 + min(50, ${nBlocks}×2)</b></div>
-          <div><span style="color:var(--dim)">calculated</span> <b>30 + ${Math.min(50,nBlocks*2)} = ${synthScore}</b></div>
-          <div><span style="color:var(--dim)">active risk score</span> <b style="color:var(--dim)">0 (none)</b></div>
-        </div>
-        <div style="margin-top:8px;font-size:10px;color:var(--dim);border-top:1px solid var(--line);padding-top:6px">
-          This identity has no active behavioral risk signals. The stealth score is synthetic — derived from block history so the IP remains visible in the agents table. The risk score would need to reach 50 pts to trigger a behaviorally-driven ban.
-        </div>
-      </div>
-      ${bdRows}</div>`;
-  } else if (rb.length && rScore > 0){
-    const rtot = rb.reduce((a,b)=>a+b[1],0)||1;
+          <div class="rs-desc" style="font-weight:600;font-size:11px;color:var(--fg);margin-bottom:4px">${escapeHtml(label)}</div>
+          <div class="rs-desc">${escapeHtml(detail)}</div>
+          <div class="rs-divider"></div>
+          <div class="rs-meta">
+            <span><b>blocks</b> ${cnt}×</span>
+            <span><b>share of total</b> ${sharePct}%</span>
+          </div>
+          <div class="rs-bar" style="margin-top:4px"><div style="width:${sharePct}%;background:#d29922"></div></div>
+        </div>`;
+      }).join('');
+    } else {
+      body += `<div class="dim" style="font-size:11px;padding:8px 0">No block reason detail available.</div>`;
+    }
+
+  } else if (rScore > 0 || rb.length) {
+    // Behavioral risk signals are active — show ban threshold + components + signals.
+    const rPts = c.risk || 0;
     const banPct = Math.min(100, Math.round(rScore / RISK_BAN_THRESHOLD * 100));
     const banColor = banPct >= 80 ? '#f85149' : banPct >= 40 ? '#d29922' : '#3fb950';
-    const rRows = rb.slice(0,10).map(([reason,val])=>{
-      const rpct = Math.round(val/rtot*100);
-      const w = RISK_WEIGHTS_JS[reason] || 0;
-      const hits = w > 0 ? Math.max(1, Math.round(val / w)) : '?';
-      const detail = RISK_DETAIL_JS[reason] || RISK_LABELS_JS[reason] || 'No description available.';
-      const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
-      const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
-      const action = RISK_ACTION_JS[cat] || 'Monitor this signal.';
-      const sev = w >= 70 ? ['CRITICAL','#f85149','#3d1212'] :
-                  w >= 40 ? ['HIGH',    '#d29922','#2e2010'] :
-                  w >= 15 ? ['MEDIUM',  '#e3b341','#2a2010'] :
-                            ['LOW',     '#8b949e','#1e2228'];
-      const [sevLabel, sevFg, sevBg] = sev;
-      const decayRatio = w > 0 ? val / w : 0;
-      const [decayLabel, decayColor] = decayRatio >= 0.8 ? ['FRESH','#f85149'] :
-                                        decayRatio >= 0.4 ? ['ACTIVE','#d29922'] :
-                                                            ['FADING','#8b949e'];
-      const remaining = Math.max(0, RISK_BAN_THRESHOLD - rScore);
-      const hitsToBan = w > 0 ? Math.ceil(remaining / w) : '∞';
-      return `<div class="risk-sig">
-        <div class="rs-head">
-          <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
-            <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
-            <span class="rs-name">${escapeHtml(reason)}</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
-            <span class="rs-sev" style="color:${sevFg};background:${sevBg}">${sevLabel}</span>
-            <span class="rs-score" style="color:#f85149">+${val}</span>
-          </div>
+
+    body += `<div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:3px">
+        <span style="color:var(--dim);white-space:nowrap">Ban threshold</span>
+        <div style="flex:1;height:5px;background:#30363d;border-radius:3px;overflow:hidden">
+          <div style="width:${banPct}%;height:100%;background:${banColor};border-radius:3px"></div>
         </div>
-        <div class="rs-desc">${escapeHtml(detail)}</div>
-        <div class="rs-divider"></div>
-        <div class="rs-meta">
-          <span><b>weight</b> ${w > 0 ? w+' pts/trigger' : 'n/a'}</span>
-          <span><b>triggered</b> ~${hits}×</span>
-          <span><b>decay</b> <span style="color:${decayColor}">${decayLabel}</span></span>
-        </div>
-        <div class="rs-meta" style="margin-top:2px">
-          <span><b>hits to ban</b> ${hitsToBan}× more</span>
-          <span><b>accumulated</b> ${val} pts</span>
-          <span><b>share</b> ${rpct}% of risk</span>
-        </div>
-        <div class="rs-bar" style="margin-top:6px"><div style="width:${rpct}%"></div></div>
-        <div class="rs-action"><b>Recommended:</b> ${escapeHtml(action)}</div>
-      </div>`;
-    }).join('');
-    riskSection = `<div style="margin-top:10px">
-      <div class="dim" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">
-        Risk signals — score ${rScore} ÷ 4 = ${rPts} pts in stealth (max 15)
+        <span style="color:${banColor};font-size:11px;font-family:ui-monospace,monospace;font-weight:700">${rScore} / ${RISK_BAN_THRESHOLD}</span>
       </div>
-      <div style="margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:8px;font-size:11px">
-          <span class="dim">ban threshold</span>
-          <div style="flex:1;height:5px;background:#30363d;border-radius:3px;overflow:hidden">
-            <div style="width:${banPct}%;height:100%;background:${banColor};border-radius:3px"></div>
+      <div style="font-size:10px;color:var(--dim)">Risk score — ban triggers at ≥ ${RISK_BAN_THRESHOLD} pts (NAT subnets: ≥ 100)</div>
+    </div>`;
+
+    // Behavioral components — only render non-zero ones
+    const COMPS = [
+      {key:'headers', label:'Headers',     color:'#a78bfa', detail:`avg ${m.avg_header_score!=null?m.avg_header_score:'?'}/7 expected headers`},
+      {key:'assets',  label:'Assets',      color:'#5fb3c0', detail:`${m.html_loads||0} html · ${m.static_loads||0} static fetches`},
+      {key:'enum',    label:'Enumeration', color:'#3fb950', detail:`${m.unique_paths||0} unique paths`},
+      {key:'timing',  label:'Timing',      color:'#d29922', detail:`cv=${m.behavioral_cov!=null?m.behavioral_cov:'n/a'}`},
+      {key:'risk',    label:'Risk pts',    color:'#f85149', detail:`${rScore} ÷ 4 → ${rPts}/15 pts`},
+      {key:'404s',    label:'404 rate',    color:'#ff7b3a', detail:`${m.upstream_404_count||0} upstream 404s`},
+    ];
+    const activeComps = COMPS.filter(({key}) => (c[key]||0) > 0);
+    if (activeComps.length) {
+      body += `<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:8px;font-weight:700">Behavioral signals (% share of score)</div>`;
+      body += activeComps.map(({key,label,color,detail}) => {
+        const pct = Math.round(c[key]||0);
+        return `<div class="rsn">
+          <div><span class="rsn-name">${label}</span>
+            <div class="dim" style="font-size:10px;margin-top:1px">${detail}</div></div>
+          <div class="rsn-bar"><div style="width:${pct}%;background:${color}"></div></div>
+          <span class="rsn-val" style="color:${color}">${pct}%</span>
+        </div>`;
+      }).join('');
+    }
+
+    // Active risk signals
+    if (rb.length) {
+      const rtot = rb.reduce((a,b)=>a+b[1],0)||1;
+      body += `<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:12px 0 8px;font-weight:700">Active risk signals</div>`;
+      body += rb.slice(0,10).map(([reason,val])=>{
+        const rpct = Math.round(val/rtot*100);
+        const w = RISK_WEIGHTS_JS[reason] || 0;
+        const hits = w > 0 ? Math.max(1, Math.round(val / w)) : '?';
+        const detail = RISK_DETAIL_JS[reason] || RISK_LABELS_JS[reason] || 'No description available.';
+        const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
+        const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
+        const action = RISK_ACTION_JS[cat] || 'Monitor this signal.';
+        const sev = w >= 70 ? ['CRITICAL','#f85149','#3d1212'] :
+                    w >= 40 ? ['HIGH',    '#d29922','#2e2010'] :
+                    w >= 15 ? ['MEDIUM',  '#e3b341','#2a2010'] :
+                              ['LOW',     '#8b949e','#1e2228'];
+        const [sevLabel, sevFg, sevBg] = sev;
+        const decayRatio = w > 0 ? val / w : 0;
+        const [decayLabel, decayColor] = decayRatio >= 0.8 ? ['FRESH','#f85149'] :
+                                          decayRatio >= 0.4 ? ['ACTIVE','#d29922'] :
+                                                              ['FADING','#8b949e'];
+        const remaining = Math.max(0, RISK_BAN_THRESHOLD - rScore);
+        const hitsToBan = w > 0 ? Math.ceil(remaining / w) : '∞';
+        return `<div class="risk-sig">
+          <div class="rs-head">
+            <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
+              <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
+              <span class="rs-name">${escapeHtml(reason)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
+              <span class="rs-sev" style="color:${sevFg};background:${sevBg}">${sevLabel}</span>
+              <span class="rs-score" style="color:#f85149">+${val}</span>
+            </div>
           </div>
-          <span style="color:${banColor};font-size:10px">${rScore}/${RISK_BAN_THRESHOLD}</span>
-        </div>
-      </div>
-      ${rRows}</div>`;
-  } else if (rScore === 0) {
-    riskSection = `<div style="margin-top:10px;font-size:11px" class="dim">No active risk signals.</div>`;
+          <div class="rs-desc">${escapeHtml(detail)}</div>
+          <div class="rs-divider"></div>
+          <div class="rs-meta">
+            <span><b>weight</b> ${w > 0 ? w+' pts/trigger' : 'n/a'}</span>
+            <span><b>triggered</b> ~${hits}×</span>
+            <span><b>decay</b> <span style="color:${decayColor}">${decayLabel}</span></span>
+          </div>
+          <div class="rs-meta" style="margin-top:2px">
+            <span><b>hits to ban</b> ${hitsToBan}× more</span>
+            <span><b>accumulated</b> ${val} pts</span>
+            <span><b>share</b> ${rpct}% of risk</span>
+          </div>
+          <div class="rs-bar" style="margin-top:6px"><div style="width:${rpct}%"></div></div>
+          <div class="rs-action"><b>Recommended:</b> ${escapeHtml(action)}</div>
+        </div>`;
+      }).join('');
+    } else {
+      body += `<div style="margin-top:10px;font-size:11px" class="dim">No active risk signals (may have decayed).</div>`;
+    }
+
+  } else {
+    body = `<div style="font-size:11px;color:var(--dim);padding:8px 0">No active risk or block signals.</div>`;
   }
-  return `<div class="dim" style="margin-bottom:8px">
-      Stealth score: <b style="color:var(--blue)">${score}/100</b>
-      · 6 behavioral components · bars = % contribution
-    </div>${compRows}${riskSection}`;
+
+  return scoreHeader + body;
 }
 
 function openPopover(kind, s, x, y){
@@ -1944,7 +1966,7 @@ function openPopover(kind, s, x, y){
   let title, body;
   if      (kind === 'id')    { title = 'Identity details';      body = window._gwIdentityPopover.buildIdHtml(d); }
   else if (kind === 'risk')  { title = 'Risk score breakdown';  body = window._gwIdentityPopover.buildRiskHtml(d); }
-  else if (kind === 'score') { title = 'Score breakdown';       body = buildScoreHtml(d); }
+  else if (kind === 'score') { title = 'Score breakdown';       body = buildScoreHtml(d); } // title shown in pop-title
   else { return; }
   document.getElementById('pop-title').innerHTML =
     `${title} <span class="x" id="pop-close">×</span>`;

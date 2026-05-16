@@ -289,7 +289,10 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
           <option value="critical">critical</option>
         </select>
       </div>
-      <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+        <div id="gw-status-pill" title="Gateway health score — click for breakdown">● —</div>
+        <span style="font-size:10px;color:#6e7681;white-space:nowrap;line-height:1.2">refreshes every 15 s</span>
+      </div>
     </div>
   </div>
   <div id="page-content">
@@ -2785,15 +2788,17 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 .gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
-.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+.gw-row{display:grid;grid-template-columns:130px 56px 1fr 44px 70px;gap:10px;
   padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
-.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .key{font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;font-weight:600;font-size:12px}
 .gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
 .gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
 .gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .penalty{font-family:ui-monospace,monospace;color:#f85149;font-weight:700;font-size:11px;text-align:right}
 .gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+.gw-ok-summary{padding:10px 4px;color:#6e7681;font-size:11px;border-top:1px solid #1f2730;margin-top:4px}
 /* 1.8.6 — risk-breakdown floating tooltip */
 #risk-pop{display:none;position:fixed;z-index:500;background:#0d1117;
   border:1px solid var(--line);border-radius:6px;padding:12px 14px;
@@ -2822,7 +2827,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
-    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+    <div style="height:5px;background:#1f2730;border-radius:3px;margin:6px 0 12px;overflow:hidden">
+      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
+    </div>
+    <div id="gw-modal-body" style="color:#8b949e">loading…</div>
   </div>
 </div>
 <script>
@@ -2831,7 +2839,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
+  const scoreBar  = document.getElementById('gw-score-bar');
   const lvlSelect = document.getElementById('gw-loglvl');
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
   function colorFor(score){
     if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
     if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
@@ -2849,7 +2863,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.style.background = c.bg;
       pill.style.color = c.fg;
       pill.style.borderColor = c.edge;
-      pill.textContent = `● GW ${s}/100`;
+      pill.textContent = `● Health ${s}/100`;
     } catch(e){
       pill.style.background = '#3d1a1a';
       pill.style.color = '#f85149';
@@ -2858,17 +2872,33 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
   pill.onclick = () => {
     if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    modalScore.textContent = lastData.score|0;
-    modalScore.style.color = colorFor(lastData.score).fg;
-    const rows = (lastData.reasons||[]).map(r => `
-      <div class="gw-row">
-        <span class="key">${escapeHtml(r.key)}</span>
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    scoreBar.style.width = s + '%';
+    scoreBar.style.background = c.fg;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd = (STATUS_ORD[a.status]||0) - (STATUS_ORD[b.status]||0);
+      return sd !== 0 ? sd : (b.weight||0) - (a.weight||0);
+    });
+    const badWarn = sorted.filter(r => r.status !== 'ok');
+    const okList  = sorted.filter(r => r.status === 'ok');
+    const rowsHtml = badWarn.map(r => {
+      const label = KEY_LABELS[r.key] || r.key;
+      return `<div class="gw-row">
+        <span class="key">${escapeHtml(label)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
         <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="penalty">${r.weight ? '−'+r.weight : ''}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`).join('');
-    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
-      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+      </div>`;
+    }).join('');
+    const okSummary = okList.length
+      ? `<div class="gw-ok-summary">✓ ${okList.length} check${okList.length>1?'s':''} passing — ${escapeHtml(okList.map(r=>KEY_LABELS[r.key]||r.key).join(', '))}</div>`
+      : '';
+    modalBody.innerHTML = _dp(rowsHtml + okSummary + `<div style="margin-top:12px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(penalty) of any <code>warn</code> or <code>bad</code> check.
     </div>`);
     modal.classList.add('show');
   };

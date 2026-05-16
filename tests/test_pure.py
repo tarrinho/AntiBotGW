@@ -6082,7 +6082,7 @@ class TestBuildScoreHtmlFunction:
         src = _agents_src()
         start = src.find("function buildScoreHtml(")
         assert start != -1, "agents.html: buildScoreHtml function not found"
-        return src[start: start + 10000]
+        return src[start: start + 15000]
 
     def test_function_exists(self):
         body = self._fn_body()
@@ -6095,8 +6095,7 @@ class TestBuildScoreHtmlFunction:
                 f"agents.html buildScoreHtml must reference component '{comp}'"
 
     def test_component_colors_match_comp_bar(self):
-        src = _agents_src()
-        body = src[src.find("function buildScoreHtml("): src.find("function buildScoreHtml(") + 3000]
+        body = self._fn_body()
         # These are the exact colors used in the .bar .h/.a/.e/.t/.r/.f CSS
         for color in ("#a78bfa", "#5fb3c0", "#3fb950", "#d29922", "#f85149", "#ff7b3a"):
             assert color in body, \
