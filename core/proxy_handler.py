@@ -1826,7 +1826,7 @@ async def signal_orders_endpoint(request: web.Request):
             return web.json_response({"ok": False, "error": "signal required"}, status=400)
         if order not in (1, 2, 3):
             return web.json_response({"ok": False, "error": "order must be 1, 2 or 3"}, status=400)
-        actor = request.headers.get("X-Admin-User", "dashboard")
+        actor = _request_username(request)  # PROXY4-09: use session-verified identity, not forgeable header
         _save_signal_order(sig, order, actor)
         return web.json_response(
             {"ok": True, "signal": sig, "order": order, "gw_id": gw_id},

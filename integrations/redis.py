@@ -23,6 +23,11 @@ from helpers import slog
 # ── Module-level Redis singleton ──────────────────────────────────────────
 _redis = None  # lazy-initialised singleton; None if disabled or unavailable
 
+# INT4-04: warn operators who forget to enable TLS for cross-host Redis traffic
+if REDIS_URL and not REDIS_URL.startswith("rediss://"):
+    slog("redis_no_tls", level="warn",
+         msg="REDIS_URL uses plaintext — use rediss:// in production to protect credentials")
+
 
 async def _shared_init():
     """Lazy-import redis.asyncio at startup if REDIS_URL is configured.

@@ -826,6 +826,10 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
   <div id="twofa-setup-area" style="display:none">
     <p class="desc" style="margin-bottom:10px">Scan this QR code (or enter the secret manually) in your authenticator app, then enter the 6-digit code to confirm.</p>
+    <div id="twofa-qr-wrap" style="margin-bottom:12px;display:none">
+      <img id="twofa-qr-img" src="" alt="TOTP QR code"
+           style="width:180px;height:180px;border:4px solid #fff;border-radius:4px;display:block">
+    </div>
     <div id="twofa-qr-uri" style="font-size:11px;color:var(--dim);word-break:break-all;margin-bottom:8px"></div>
     <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
       <input id="twofa-code" type="text" placeholder="6-digit code" maxlength="6"
@@ -2620,6 +2624,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const backupDiv = document.getElementById('twofa-backup-codes');
   const codesList = document.getElementById('twofa-codes-list');
   const qrUri     = document.getElementById('twofa-qr-uri');
+  const qrWrap    = document.getElementById('twofa-qr-wrap');
+  const qrImg     = document.getElementById('twofa-qr-img');
 
   function csrf() { return document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || ''; }
 
@@ -2633,7 +2639,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       badge.style.color = on ? '#fff' : 'var(--dim)';
       enableBtn.style.display  = on ? 'none' : '';
       disableBtn.style.display = on ? '' : 'none';
-      if (!on) setupArea.style.display = 'none';
+      if (!on) { setupArea.style.display = 'none'; qrWrap.style.display = 'none'; qrImg.src = ''; }
     } catch(e) { badge.textContent = 'error'; }
   }
 
@@ -2641,6 +2647,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     try {
       const r = await fetch(NS + '/secured/2fa-setup', {credentials:'include'});
       const j = await r.json();
+      if (j.qr_data_url) {
+        qrImg.src = j.qr_data_url;
+        qrWrap.style.display = '';
+      }
       qrUri.textContent = j.provisioning_uri || '';
       setupArea.style.display = '';
       enableBtn.style.display = 'none';

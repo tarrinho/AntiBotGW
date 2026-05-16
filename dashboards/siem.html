@@ -820,7 +820,7 @@ function _renderFeed(evts) {
     if (!_activeSevFilters[ev.sev]) continue;
     if (rfilt && ev.reason.toLowerCase().indexOf(rfilt) === -1) continue;
     shown++;
-    html += '<tr onclick="_openDossier(' + JSON.stringify(escapeHtml(ev.ip||'')) + ')">'
+    html += '<tr onclick="_openDossier(' + escapeHtml(JSON.stringify(ev.ip||'')) + ')">'
       + '<td class="mono" style="white-space:nowrap">' + escapeHtml(_fmtTime(ev.ts)) + '</td>'
       + '<td><span class="sev sev-' + escapeHtml(ev.sev) + '">' + escapeHtml(ev.sev) + '</span></td>'
       + '<td class="mono trunc" title="' + escapeHtml(ev.ip) + '">' + escapeHtml(ev.ip) + '</td>'
@@ -839,7 +839,7 @@ function _renderTopIps(ips) {
     var banHtml = row.banned
       ? '<span style="color:var(--red);font-weight:700">BANNED</span>'
       : '<span style="color:var(--green)">ok</span>';
-    html += '<tr onclick="_openDossier(' + JSON.stringify(escapeHtml(row.ip||'')) + ')">'
+    html += '<tr onclick="_openDossier(' + escapeHtml(JSON.stringify(row.ip||'')) + ')">'
       + '<td class="mono trunc" title="' + escapeHtml(row.ip) + '">' + escapeHtml(row.ip) + '</td>'
       + '<td class="mono" style="color:var(--orange)">' + escapeHtml(Math.round(row.risk_score)) + '</td>'
       + '<td class="mono">' + escapeHtml(row.requests) + '</td>'

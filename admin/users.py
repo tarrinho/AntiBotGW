@@ -13,6 +13,21 @@ from reputation.abuseipdb import _abuseipdb_lookup  # noqa: F401
 from reputation.crowdsec import _crowdsec_check  # noqa: F401
 from reputation.tor import _tor_exits  # noqa: F401
 
+# FE4-07: compile once; matches only paths within the gateway namespace
+_NEXT_URL_RE = re.compile(r"^/[A-Za-z0-9/._~:@!$&'()*+,;=%-]+$")
+
+
+def _next_url_safe(url: str) -> bool:
+    """True when url is a safe same-origin relative path within the gateway namespace."""
+    if not url:
+        return False
+    if not url.startswith(ADMIN_NS + "/") and url != ADMIN_NS:
+        return False
+    if url.startswith("//"):
+        return False
+    return bool(_NEXT_URL_RE.match(url))
+
+
 # ── 1.8.6 Week 3 — Task D: Password complexity ───────────────────────────────
 _BREACHED_PASSWORDS = frozenset({
     "password", "password1", "admin", "admin123", "123456",
@@ -401,23 +416,35 @@ async def login_page_endpoint(request: web.Request):
     if request.cookies.get(_SESSION_COOKIE) and _session_verify(
             request.cookies.get(_SESSION_COOKIE)):
         next_url = request.query.get("next") or "/antibot-appsec-gateway/secured/control-center"
-        if not next_url.startswith("/") or next_url.startswith("//"):
+        # FE4-07: only allow paths within the gateway namespace to prevent open redirects
+        if not _next_url_safe(next_url):
             next_url = "/antibot-appsec-gateway/secured/control-center"
         return web.HTTPFound(next_url)
-    from admin.oidc import oidc_button_html
-    from urllib.parse import unquote
-    oidc_error = request.query.get("oidc_error", "")
+    from admin.oidc import oidc_button_html, _ERROR_CODES
+    import html as _html
+    oidc_error_code = request.query.get("oidc_error", "").strip()
     oidc_error_html = ""
-    if oidc_error:
-        import html as _html
+    if oidc_error_code:
+        # AUTH4-13: resolve opaque code to safe message — never reflect raw URL value
+        safe_msg = _html.escape(_ERROR_CODES.get(oidc_error_code,
+                                                  _ERROR_CODES["err_generic"]))
         oidc_error_html = (
-            f'<div id="err" class="err show">'
-            f'SSO: {_html.escape(unquote(oidc_error)[:200])}'
-            f'</div>')
+            f'<div id="err" class="err show">SSO: {safe_msg}</div>')
     body = ((_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8")
             .replace("__BOOTSTRAP_HINT__", _bootstrap_hint_html())
             .replace("__OIDC_BUTTON__", oidc_button_html())
             .replace("__OIDC_ERROR__", oidc_error_html))
+    # FE4-06: strict CSP for the login page (no inline scripts needed)
+    csp = (
+        "default-src 'none'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "font-src 'self'; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "form-action 'self'; "
+        "frame-ancestors 'none'"
+    )
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -425,6 +452,7 @@ async def login_page_endpoint(request: web.Request):
             "X-Frame-Options": "DENY",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": csp,
         })
 
 
@@ -453,7 +481,8 @@ async def login_submit_endpoint(request: web.Request):
     username = (params.get("username", [""])[0] or "").strip().lower()
     password = params.get("password", [""])[0] or ""
     next_url = params.get("next", ["/antibot-appsec-gateway/secured/control-center"])[0]
-    if not next_url.startswith("/") or next_url.startswith("//"):
+    # FE4-07: only allow paths within the gateway namespace
+    if not _next_url_safe(next_url):
         next_url = "/antibot-appsec-gateway/secured/control-center"
     ok, msg = _user_validate_username(username)
     if not ok or not password:
@@ -1072,9 +1101,11 @@ async def totp_verify_endpoint(request: web.Request):
         except (ValueError, TypeError):
             backup_codes = []
         code_upper = code.upper()
-        if code_upper in backup_codes:
-            backup_ok = True
-            backup_codes.remove(code_upper)
+        # INT4-08: constant-time comparison for backup codes — iterate all, no early exit
+        backup_ok = any(hmac.compare_digest(_bc, code_upper) for _bc in backup_codes)
+        if backup_ok:
+            backup_codes = [_bc for _bc in backup_codes
+                            if not hmac.compare_digest(_bc, code_upper)]
             # Persist updated backup codes
             if db_queue is not None:
                 try:
@@ -1123,10 +1154,16 @@ async def totp_setup_endpoint(request: web.Request):
         return web.json_response({"error": "session required for 2FA setup"}, status=403,
                                   headers={"Cache-Control": "no-store"})
     from state import _TOTP_PENDING
+    import io as _io
+    import qrcode as _qrcode
     secret = _totp_generate_secret()
     _TOTP_PENDING[username] = {"secret": secret, "ts": _t.time()}
     uri = _totp_provisioning_uri(secret, username)
-    return web.json_response({"provisioning_uri": uri, "secret": secret},
+    qr = _qrcode.make(uri)
+    buf = _io.BytesIO()
+    qr.save(buf, format="PNG")
+    qr_data_url = "data:image/png;base64," + _b64.b64encode(buf.getvalue()).decode()
+    return web.json_response({"provisioning_uri": uri, "qr_data_url": qr_data_url},
                               headers={"Cache-Control": "no-store"})
 
 
@@ -1270,6 +1307,17 @@ async def users_delete_endpoint(request: web.Request):
         return web.json_response(
             {"error": "cannot delete your own account while signed in as it"},
             status=400, headers={"Cache-Control": "no-store"})
+    # AUTH4-02: revoke all active sessions for the deleted user BEFORE queuing the DB delete
+    import time as _del_t
+    _del_now = _del_t.time()
+    _active_sids = [
+        sid for sid, info in _SESSION_CACHE.items()
+        if info.get("username") == username
+        and not info.get("revoked")
+        and info.get("expires_ts", 0) > _del_now
+    ]
+    for _sid in _active_sids:
+        _session_revoke(_sid, by_username=_request_username(request))
     if db_queue is not None:
         try:
             db_queue.put_nowait(("user_delete", (username,)))

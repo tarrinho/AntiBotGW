@@ -962,7 +962,8 @@ document.getElementById('drill-modal').onclick = (e) => {
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') document.getElementById('drill-modal').classList.remove('show');
 });
-window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
+window.addEventListener('beforeunload', () => _timers.forEach(clearInterval));
+window.addEventListener('pagehide', () => _timers.forEach(clearInterval)); // FE4-09: pagehide fires where beforeunload doesn't (bfcache, mobile)
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->

@@ -475,6 +475,8 @@ async def gw_registry_auto_apply_endpoint(request: web.Request):
     this peer skip the pending queue and apply straight to the live
     integration. Only meaningful for non-local rows; rejected on the
     local row to keep the audit story clean."""
+    if denied := _role_denied(request, "admin"):  # AUTH4-03: admin-only write
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -580,6 +582,8 @@ async def gw_registry_delete_endpoint(request: web.Request):
 
 async def gw_registry_distribution_matrix_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/distribution/matrix"""
+    if denied := _role_denied(request, "admin", "maintainer"):  # AUTH4-03
+        return denied
     rows = _gw_load_all()
     pairs = _gw_load_distribution()
     by_pair = {(s, t): True for s, t in pairs}
@@ -598,6 +602,8 @@ async def gw_registry_distribution_rules_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/distribution/rules
     Body: {"rules": [{"source": "gw-a", "target": "gw-b"}, ...]}
     Replaces the entire rule set in one transaction (idempotent)."""
+    if denied := _role_denied(request, "admin", "maintainer"):  # AUTH4-03
+        return denied
     try:
         body = await asyncio.wait_for(request.content.read(64 * 1024),
                                        timeout=BODY_TIMEOUT)
@@ -643,6 +649,10 @@ async def gw_registry_audit_log_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/audit-log
     Query: ?limit=50&offset=0&action=...&gw_id=...&since=<epoch>&until=<epoch>
     """
+    # AUTH4-03: audit log is read-only but sensitive — restrict to admin/maintainer
+    from admin.auth import _role_denied
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     try:
         limit  = max(1,  min(int(request.query.get("limit",  "50")),  500))
         offset = max(0,  min(int(request.query.get("offset", "0")), 100000))
@@ -696,6 +706,10 @@ async def gw_registry_sync_status_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/{gw_id}/sync-status — synthetic
     health view: how recently the gateway was seen + active distribution
     pairs sourced from / targeted at it."""
+    # AUTH4-03: sync-status reveals topology — restrict to admin/maintainer
+    from admin.auth import _role_denied
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:

@@ -44,6 +44,30 @@ COUNTRY_ALLOWLIST = {
     if s.strip() and len(s.strip()) == 2
 }
 
+# ── Path validation ────────────────────────────────────────────────────────
+
+_MMDB_ALLOWED_PREFIX = "/data/"
+
+
+def _validate_mmdb_path(path: str, allowed_prefix: str = _MMDB_ALLOWED_PREFIX) -> str:
+    """INT4-03: Resolve symlinks and assert the real path stays under allowed_prefix.
+    Returns the validated real path; raises ValueError on traversal attempt."""
+    real = os.path.realpath(path)
+    if not real.startswith(allowed_prefix):
+        raise ValueError(
+            f"MMDB path traversal blocked: {path!r} resolves to {real!r} "
+            f"outside {allowed_prefix!r}")
+    return real
+
+
+# Validate env-supplied paths at import time so misconfiguration is caught early
+try:
+    _validate_mmdb_path(MAXMIND_ASN_DB_PATH)
+    _validate_mmdb_path(MAXMIND_CITY_DB_PATH)
+except ValueError as _e:
+    print(f"FATAL: {_e}", flush=True)
+    raise SystemExit(2)
+
 # ── Mutable module-level flags (set to True by _init_maxmind()) ────────────
 
 _asn_reader = None
@@ -105,9 +129,10 @@ def _read_etag(mmdb_path: str) -> str:
 
 def _write_etag(mmdb_path: str, etag: str) -> None:
     try:
+        _validate_mmdb_path(mmdb_path)  # INT4-03: guard against path traversal via etag path
         with open(_etag_path(mmdb_path), "w") as f:
             f.write(etag)
-    except OSError:
+    except (OSError, ValueError):
         pass
 
 
@@ -125,6 +150,12 @@ def _maxmind_fetch_edition(edition: str, dest: str, key: str,
     force=False: skip if dest already exists (auto_fetch first-boot path).
     """
     import urllib.request, urllib.error, tarfile, tempfile
+    # INT4-03: validate dest before any write to prevent path traversal
+    try:
+        dest = _validate_mmdb_path(dest)
+    except ValueError as _ve:
+        slog("maxmind_path_traversal", level="error", dest=dest, err=str(_ve)[:200])
+        return "error"
     if not force and os.path.exists(dest):
         return "skipped"
     etag = _read_etag(dest)

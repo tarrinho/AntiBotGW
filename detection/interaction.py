@@ -33,6 +33,8 @@ from helpers import get_ip
 from identity import get_identity
 
 _TOKEN_TTL = 300   # seconds — same as fp_enrichment
+# DET4-06: replay nonce store — token → first_seen_ts; pruned inline
+_interaction_seen: dict = {}
 _MAX_EVENTS = 300  # hard cap on client-submitted event count
 
 
@@ -247,7 +249,7 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
     if not INTERACTION_PROBE_ENABLED:
         return web.json_response({"ok": False, "reason": "disabled"}, status=400)
     try:
-        raw = await asyncio.wait_for(request.content.read(65536),
+        raw = await asyncio.wait_for(request.content.read(16384),  # DET4-07: 16 KB cap
                                      timeout=BODY_TIMEOUT)
         d = json.loads(raw.decode("utf-8") or "{}")
         if not isinstance(d, dict):
@@ -265,6 +267,15 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
     provided = str(d.get("token", ""))
     if not hmac.compare_digest(expected, provided):
         return web.json_response({"ok": False, "reason": "bad-token"}, status=403)
+    # DET4-06: reject replayed tokens; prune expired nonces inline
+    _now = _time.time()
+    _prune_cutoff = _now - _TOKEN_TTL
+    _stale = [_k for _k, _v in _interaction_seen.items() if _v < _prune_cutoff]
+    for _k in _stale:
+        _interaction_seen.pop(_k, None)
+    if provided in _interaction_seen:
+        return web.json_response({"ok": False, "reason": "replayed"}, status=400)
+    _interaction_seen[provided] = _now
     events = d.get("ev", [])
     if not isinstance(events, list):
         events = []
@@ -272,7 +283,11 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
         duration_ms = max(0, min(int(d.get("dur", 0)), _MAX_OFFSET_MS))
     except (ValueError, TypeError):
         duration_ms = 0
-    reason, detail = interaction_analyze(events, duration_ms)
+    # DET4-05: wrap analysis in try/except so malformed events never crash the endpoint
+    try:
+        reason, detail = interaction_analyze(events, duration_ms)
+    except Exception:
+        reason, detail = None, ""
     if reason:
         identity, _sid, _fp, _is_new, _id_mode = get_identity(request)
         from scoring import update_risk_and_maybe_ban
