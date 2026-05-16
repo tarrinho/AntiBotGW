@@ -188,6 +188,18 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
   #dossier-drawer{width:100%}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* ── JA4 pivot drawer ── */
+#ja4-drawer{position:fixed;top:0;right:0;height:100vh;width:440px;
+  background:var(--card);border-left:1px solid var(--line);
+  transform:translateX(100%);transition:transform .25s ease;
+  z-index:900;display:flex;flex-direction:column;overflow:hidden}
+#ja4-drawer.open{transform:translateX(0)}
+#ja4-drawer-header{display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;border-bottom:1px solid var(--line)}
+#ja4-drawer-header h3{font-size:13px;font-weight:600;color:#fff;font-family:ui-monospace}
+#ja4-drawer-close{background:none;border:none;color:var(--dim);cursor:pointer;font-size:16px;line-height:1}
+#ja4-drawer-close:hover{color:var(--red)}
+#ja4-drawer-body{padding:14px 16px;overflow-y:auto;flex:1;font-size:12px}
 </style>
 </head>
 <body>
@@ -454,6 +466,13 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 </div><!-- /main-area -->
 
 <!-- Attacker Dossier Drawer -->
+<div id="ja4-drawer">
+  <div id="ja4-drawer-header">
+    <h3 id="ja4-drawer-fp">—</h3>
+    <button id="ja4-drawer-close" onclick="_closeDrawer()">&#10005;</button>
+  </div>
+  <div id="ja4-drawer-body"></div>
+</div>
 <div id="dossier-drawer">
   <div id="dossier-header">
     <h3 id="dossier-ip">—</h3>
@@ -1057,6 +1076,18 @@ function tick() {
       var b=document.getElementById('err-banner');
       b.style.display='block'; b.textContent='Fetch error: '+e.message;
     });
+}
+
+// ── JA4 pivot drawer ──────────────────────────────────────────────────────────
+function _openDrawer(ja4) {
+  var d = document.getElementById('ja4-drawer');
+  var lbl = document.getElementById('ja4-drawer-fp');
+  if (lbl) lbl.textContent = ja4 || '—';
+  if (d) d.classList.add('open');
+}
+function _closeDrawer() {
+  var d = document.getElementById('ja4-drawer');
+  if (d) d.classList.remove('open');
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

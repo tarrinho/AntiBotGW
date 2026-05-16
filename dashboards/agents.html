@@ -139,6 +139,21 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .popover .rsn-bar>div{height:100%;background:var(--red)}
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
 .popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
+.risk-sig{background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px;margin-bottom:6px}
+.risk-sig:last-child{margin-bottom:0}
+.risk-sig .rs-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
+.risk-sig .rs-name{font-weight:600;font-size:12px;font-family:ui-monospace,Menlo,monospace;color:var(--fg)}
+.risk-sig .rs-score{font-weight:700;font-size:12px;font-family:ui-monospace,Menlo,monospace}
+.risk-sig .rs-desc{font-size:11px;color:var(--dim);margin-bottom:5px}
+.risk-sig .rs-meta{display:flex;gap:14px;font-size:10px;color:var(--dim);margin-bottom:6px;flex-wrap:wrap}
+.risk-sig .rs-meta span b{color:var(--fg)}
+.risk-sig .rs-bar{height:5px;background:#1a1f27;border-radius:3px;overflow:hidden}
+.risk-sig .rs-bar>div{height:100%;border-radius:3px;background:#f85149}
+.risk-sig .rs-sev{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px}
+.risk-sig .rs-cat{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px}
+.risk-sig .rs-divider{height:1px;background:var(--line);margin:6px 0}
+.risk-sig .rs-action{font-size:10px;color:var(--dim);margin-top:6px;padding-top:5px;border-top:1px solid var(--line)}
+.risk-sig .rs-action b{color:var(--fg)}
 .act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
 .act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
 
@@ -1326,6 +1341,7 @@ window._gwIdentityPopover = (function(){
       risk_breakdown:   raw.risk_breakdown || null,
       components:       raw.components || {},
       metrics:          raw.metrics    || {},
+      score_source:     raw.score_source || 'stealth',
     };
   }
   function buildIdHtml(d){
@@ -1390,16 +1406,386 @@ window._gwIdentityPopover = (function(){
   return { normalizeId, buildIdHtml, buildRiskHtml };
 })();
 
+// 1.8.6 — risk signal metadata (mirrors config.py RISK_WEIGHTS)
+const RISK_WEIGHTS_JS = {
+  "honeypot":50,"honeypot-silent":50,"suspicious-path":50,"ai-probe":40,
+  "ai-enumeration":30,"behavior":8,"ua-empty":30,"ua-blocked":20,
+  "ua-non-browser":25,"ai-headers-empty":20,"ua-too-short":15,
+  "ai-headers-incomplete":10,"upstream-404":6,"ai-no-assets":8,
+  "session-flood":10,"host-not-allowed":40,"suspicious-body":40,
+  "bot-trap":50,"canary-echo":80,"session-churn":75,"js-challenge":3,
+  "tls-fingerprint":40,"origin-mismatch":20,"missing-required-header":15,
+  "ua-platform-mismatch":30,"accept-wildcard-html":2,"accept-fp":3,
+  "ja4-required-missing":3,"headers-suspicious":2,"abuseipdb-high":50,
+  "abuseipdb-med":20,"crowdsec-banned":70,"asn-hosting":5,"country-blocked":50,
+  "tor-exit":40,"datacenter-vpn":25,"ua-ai-openai":25,"ua-ai-anthropic":25,
+  "ua-ai-google":25,"ua-ai-perplexity":25,"ua-ai-meta":25,"ua-ai-other":20,
+  "custom-rule-block":50,"body-sqli":50,"body-xss":50,"body-lfi":50,
+  "body-rce":50,"body-ssrf":50,"body-cmd":50,"auth-jwt-invalid":30,
+  "slow-client":10,"botd-detected":30,"tarpit-walk":100,"header-order-fp":8,
+  "ai-ua-ip-mismatch":30,"locale-geo-mismatch":10,"robots-violation":5,
+  "h2-fp":3,"webdriver-detected":30,"coordinated-probe":25,"direct-api-probe":15,
+  "cookie-ghost":20,"lifecycle-miss":12,"referer-ghost":10,"impossible-travel":35,
+  "soft-renderer":25,"webgl-missing":15,"honey-cred":90,"redirect-maze-bot":55,
+  "llm-no-subresources":40,"canary-probe-miss":35,"body-critical-injection":80,
+  "method-override-attempt":35,"smuggling-dual-header":90,"smuggling-invalid-te":90,
+  "smuggling-obfuscated-te":90,"smuggling-duplicate-cl":90,"body-xxe":80,
+  "body-proto-pollution":50,"header-ssti":50,"host-header-injection":40,
+  "gql-introspection":20,"gql-batch-abuse":40,"gql-depth-exceeded":30,
+  "upload-dangerous-ext":60,"upload-dangerous-magic":70,"upstream-auth-fail":40,
+  "ja4h-deny":90,"no-interaction":20,"bot-motion":25,"scripted-motion":20,
+  "bot-scroll":15,"scripted-keys":15,"low-entropy-input":15
+};
+const RISK_LABELS_JS = {
+  "honeypot":"Accessed honeypot endpoint","honeypot-silent":"Accessed silent honeypot",
+  "suspicious-path":"Requested known-bad path","ai-probe":"AI/LLM probing pattern",
+  "ai-enumeration":"Path enumeration (scraper)","behavior":"Anomalous behavior pattern",
+  "ua-empty":"No User-Agent header","ua-blocked":"Blocked User-Agent",
+  "ua-non-browser":"Non-browser User-Agent","ai-headers-empty":"Missing expected browser headers",
+  "ua-too-short":"User-Agent suspiciously short","ai-headers-incomplete":"Incomplete browser header set",
+  "upstream-404":"Probing non-existent paths","ai-no-assets":"HTML fetched, no static assets",
+  "session-flood":"Session creation flood","host-not-allowed":"Host header not in allowlist",
+  "suspicious-body":"Request body matched attack pattern","bot-trap":"Triggered bot-trap endpoint",
+  "canary-echo":"Echoed injected canary token","session-churn":"Rapid session cycling",
+  "js-challenge":"Failed JS challenge","tls-fingerprint":"TLS fingerprint matches known bot",
+  "origin-mismatch":"Origin/Referer mismatch","missing-required-header":"Required header absent",
+  "ua-platform-mismatch":"UA platform ≠ TLS/HTTP fingerprint",
+  "accept-wildcard-html":"Accept: */* on HTML request","accept-fp":"Accept header fingerprint mismatch",
+  "abuseipdb-high":"AbuseIPDB high-confidence abuse IP","abuseipdb-med":"AbuseIPDB medium-confidence abuse IP",
+  "crowdsec-banned":"CrowdSec community blocklist hit","asn-hosting":"Hosting/cloud provider ASN",
+  "country-blocked":"Country in blocklist","tor-exit":"Tor exit node",
+  "datacenter-vpn":"Datacenter or VPN IP","ua-ai-openai":"OpenAI crawler UA",
+  "ua-ai-anthropic":"Anthropic crawler UA","ua-ai-google":"Google AI crawler UA",
+  "ua-ai-perplexity":"Perplexity crawler UA","ua-ai-meta":"Meta AI crawler UA",
+  "ua-ai-other":"AI crawler UA (other)","custom-rule-block":"Matched custom rule",
+  "body-sqli":"SQL injection in body","body-xss":"XSS payload in body",
+  "body-lfi":"LFI/path traversal in body","body-rce":"RCE payload in body",
+  "body-ssrf":"SSRF payload in body","body-cmd":"Command injection in body",
+  "auth-jwt-invalid":"Invalid/forged JWT token","slow-client":"Abnormally slow client (Slowloris?)",
+  "botd-detected":"Bot detection library flagged","tarpit-walk":"Walked into tarpit",
+  "header-order-fp":"HTTP header order fingerprint mismatch",
+  "ai-ua-ip-mismatch":"AI UA but IP is residential","locale-geo-mismatch":"Accept-Language ≠ IP geolocation",
+  "robots-violation":"Accessed robots.txt-disallowed path","h2-fp":"HTTP/2 fingerprint mismatch",
+  "webdriver-detected":"WebDriver/automation detected","coordinated-probe":"Coordinated multi-IP probing",
+  "direct-api-probe":"Direct API probe (no browser flow)","cookie-ghost":"Cookie sent but never set by server",
+  "lifecycle-miss":"Request lifecycle anomaly","referer-ghost":"Referer to page never served",
+  "impossible-travel":"Impossible geographic travel speed","soft-renderer":"Software renderer (headless)",
+  "webgl-missing":"WebGL absent (headless indicator)","honey-cred":"Used injected fake credentials",
+  "redirect-maze-bot":"Solved redirect maze too fast","llm-no-subresources":"HTML fetched, no CSS/JS/images",
+  "canary-probe-miss":"Canary preload never fetched","body-critical-injection":"Critical injection in body",
+  "method-override-attempt":"HTTP method override attempt","smuggling-dual-header":"Request smuggling (dual header)",
+  "smuggling-invalid-te":"Request smuggling (invalid TE)","smuggling-obfuscated-te":"Request smuggling (obfuscated TE)",
+  "smuggling-duplicate-cl":"Request smuggling (duplicate CL)","body-xxe":"XXE injection in body",
+  "body-proto-pollution":"Prototype pollution in body","header-ssti":"SSTI payload in header",
+  "host-header-injection":"Host header injection attempt","gql-introspection":"GraphQL introspection query",
+  "gql-batch-abuse":"GraphQL batch query abuse","gql-depth-exceeded":"GraphQL query depth exceeded",
+  "upload-dangerous-ext":"Dangerous file extension uploaded","upload-dangerous-magic":"Dangerous file magic bytes",
+  "upstream-auth-fail":"Auth failure (credential stuffing)","ja4h-deny":"JA4H fingerprint in deny list",
+  "no-interaction":"No human interaction signals","bot-motion":"Bot-like mouse movement",
+  "scripted-motion":"Scripted/automated mouse movement","bot-scroll":"Bot-like scroll pattern",
+  "scripted-keys":"Scripted keystroke pattern","low-entropy-input":"Low-entropy keyboard input"
+};
+const RISK_BAN_THRESHOLD = 50;
+
+// Block reason labels and descriptions (block_count synthetic score)
+const BLOCK_LABELS_JS = {
+  "admin-ip-blocked":        "Admin endpoint — IP not in allowlist",
+  "ua-blocked":              "User-Agent explicitly blocked",
+  "ua-empty":                "No User-Agent header",
+  "ua-too-short":            "User-Agent suspiciously short",
+  "ua-non-browser":          "Non-browser User-Agent",
+  "banned":                  "Risk threshold exceeded — hard ban",
+  "banned-silent":           "Risk threshold exceeded — silent ban",
+  "honeypot":                "Honeypot endpoint accessed",
+  "honeypot-silent":         "Silent honeypot accessed",
+  "suspicious-path":         "Known-bad path requested",
+  "bot-trap":                "Bot trap triggered",
+  "canary-echo":             "Canary token echoed back",
+  "ai-probe":                "AI/LLM probing pattern",
+  "ai-enumeration":          "Path enumeration (scraper)",
+  "ai-no-assets":            "HTML-only fetch (no assets)",
+  "ai-headers-empty":        "Missing browser headers",
+  "ai-headers-incomplete":   "Incomplete browser headers",
+  "behavior":                "Anomalous behavior pattern",
+  "session-flood":           "Session creation flood",
+  "rate-limit-ip":           "IP rate limit exceeded",
+  "rate-limit":              "Global rate limit exceeded",
+  "host-not-allowed":        "Host header not in allowlist",
+  "js-challenge":            "JS challenge failed",
+  "tls-fingerprint":         "TLS fingerprint blocked",
+  "origin-mismatch":         "Origin/Referer mismatch",
+  "missing-required-header": "Required header absent",
+  "suspicious-body":         "Attack pattern in request body",
+  "body-sqli":               "SQL injection attempt",
+  "body-xss":                "XSS payload detected",
+  "body-rce":                "RCE payload detected",
+  "body-lfi":                "LFI/path traversal attempt",
+  "body-ssrf":               "SSRF payload detected",
+  "body-cmd":                "Command injection detected",
+  "ua-platform-mismatch":    "UA platform / TLS fingerprint mismatch",
+  "crowdsec-banned":         "CrowdSec community blocklist hit",
+  "abuseipdb-high":          "AbuseIPDB high-confidence abuse",
+  "country-blocked":         "Country in blocklist",
+  "tor-exit":                "Tor exit node",
+  "custom-rule-block":       "Custom operator rule matched",
+  "tarpit-walk":             "Tarpit chain followed",
+  "honey-cred":              "Honeypot credentials submitted",
+  "smuggling-dual-header":   "HTTP request smuggling attempt",
+  "upload-dangerous-ext":    "Dangerous file extension upload",
+  "upstream-auth-fail":      "Auth failure (credential stuffing)",
+  "ja4h-deny":               "JA4H fingerprint in deny list",
+  "no-interaction":          "No human interaction signals",
+  "webdriver-detected":      "WebDriver/automation detected",
+  "chal-required":           "JS challenge issued (interstitial)",
+  "fp-banned":               "Hard fingerprint ban (JA3/JA4 deny list)",
+  "rate-limit-endpoint":     "Per-endpoint rate limit exceeded",
+  "traffic-threshold":       "Traffic volume threshold exceeded",
+  "dlp-cc":                  "DLP: credit card number detected",
+  "dlp-aws":                 "DLP: AWS access key detected",
+  "dlp-jwt":                 "DLP: JWT token in unexpected location",
+  "dlp-private-key":         "DLP: private key pattern detected",
+  "dlp-api-key":             "DLP: API key pattern detected",
+  "dlp-pii-email":           "DLP: email address pattern detected",
+  "dlp-pii-ssn":             "DLP: SSN pattern detected",
+  "labyrinth-jitter":        "Labyrinth timing jitter — automated traversal",
+  "header-canary":           "Response header canary echoed back",
+  "json-canary":             "JSON body canary echoed back",
+  "bypass-path":             "Bypass rule applied",
+};
+const BLOCK_DETAIL_JS = {
+  "admin-ip-blocked": "This IP attempted to access gateway admin or management endpoints, but its address is not in the configured ADMIN_ALLOWED_IPS list. Admin paths require explicit IP-based access control — authentication credentials alone are insufficient. This is normal for scanners and crawlers that probe all paths, including management interfaces.",
+  "ua-blocked": "The User-Agent string matched an entry in the gateway's explicit blocklist. This is a hard block applied before any behavioral analysis — the UA string is associated with a known scanner, malicious tool, or explicitly banned client.",
+  "ua-empty": "The HTTP request arrived with no User-Agent header. The gateway is configured to reject header-less requests because every legitimate browser and API client sends this header unconditionally. This is typically a raw HTTP client, CLI tool, or severely misconfigured automation.",
+  "ua-too-short": "The User-Agent string is abnormally short — fewer characters than any real browser or common library would send. Often a placeholder ('bot', 'test', '-') or truncated value from automation that doesn't bother setting a realistic UA.",
+  "ua-non-browser": "The User-Agent does not match any known browser family. The gateway identified it as a non-browser tool (curl, Python requests, Go HTTP, Scrapy, etc.) and blocked based on policy. This identity was never attempting to browse — it was issuing raw HTTP requests.",
+  "banned": "The identity's accumulated risk score exceeded the ban threshold (50 pts for single IPs, 100 pts for NAT-detected IPs). This is a hard ban applied by the risk engine after multiple scored signals triggered within the decay window. All subsequent requests from this identity are blocked for the ban duration.",
+  "banned-silent": "Same as a hard ban — risk threshold exceeded — but the IP receives normal-looking responses rather than an explicit block page. The 'silent' treatment is used to avoid alerting sophisticated bots that they've been detected, allowing continued passive observation.",
+  "honeypot": "The IP accessed a honeypot endpoint — a fake URL designed to catch automated scanners. The link is present in the HTML but unreachable for legitimate users following normal navigation. This block is applied immediately on first access and is near-conclusive evidence of automation.",
+  "honeypot-silent": "Same as a honeypot block but the response mimics a legitimate page to prevent the scanner from detecting that it was caught. The block is still applied; only the response appearance differs.",
+  "suspicious-path": "A request was made to a path matching a known-bad pattern database (/.env, /wp-admin, /.git, /actuator, /phpinfo, etc.). These paths are never part of legitimate application navigation — their presence indicates an automated vulnerability scanner running through a known-exploit path list.",
+  "bot-trap": "A trap link hidden from human visitors (via CSS or aria attributes) was followed. Legitimate users scrolling and clicking normally never encounter these links. Only bots parsing raw HTML and following all hrefs regardless of visibility trigger this block.",
+  "ai-probe": "Traffic pattern matched AI/LLM scraping heuristics — rapid sequential requests, no asset loading, systematic path coverage, and timing statistics inconsistent with human browsing. The gateway blocked after accumulating enough signal to classify as a scraper.",
+  "ai-enumeration": "The ratio of unique paths to total requests exceeded the enumeration threshold. The client was systematically visiting many distinct URLs relative to its request count — a classic web scraper or sitemap walker signature.",
+  "behavior": "Cumulative behavioral anomaly score exceeded the block threshold. This represents multiple sub-threshold signals that individually wouldn't trigger a block but collectively indicate automation with high confidence.",
+  "session-flood": "New session creation rate from this IP exceeded the configured limit. This pattern is associated with automated account creation, credential stuffing across many accounts, or session token harvesting.",
+  "rate-limit-ip": "The per-IP request rate limit was exceeded. This IP sent too many requests in the configured time window. May be aggressive automation, a misconfigured client, or an intentional flood.",
+  "rate-limit": "The global request rate limit was exceeded. This is a catch-all rate limiter applied when request volume from this identity is too high regardless of IP-specific limits.",
+  "host-not-allowed": "The Host header in the request refers to a domain not in the gateway's allowlist. The gateway only proxies requests for configured domains; other Host values are rejected. This may indicate virtual host scanning or a misconfigured client.",
+  "js-challenge": "The JavaScript proof-of-work challenge was failed, timed out, or not attempted. The gateway issued a challenge page that requires executing JavaScript to generate a valid response token. Bots, headless browsers with JS disabled, and some automated clients fail this.",
+  "tls-fingerprint": "The TLS handshake fingerprint (JA3 hash) matched an entry in the block list. JA3 fingerprints are computed from TLS cipher suites, extensions, and elliptic curves — each TLS library/browser has a distinct fingerprint. This client's fingerprint is associated with a known bot or scanner.",
+  "suspicious-body": "The request body matched an attack heuristic pattern at a confidence level sufficient to block. This may be a partial injection payload, encoded attack string, or a pattern consistent with vulnerability scanning tools.",
+  "crowdsec-banned": "The CrowdSec community blocklist flagged this IP as a known malicious actor. CrowdSec aggregates real-time detections across thousands of deployments; inclusion in this list means the IP has been actively attacking other systems.",
+  "abuseipdb-high": "AbuseIPDB reports this IP with high confidence (score >= 90%) as a known abusive actor based on community reports of hacking attempts, scanning, brute-force attacks, and spam. The high confidence threshold means many independent reporters have flagged this IP.",
+  "country-blocked": "The source country is in the operator's geographic blocklist. This is a policy-level block applied before behavioral analysis.",
+  "tor-exit": "The IP is a known Tor exit node. Tor is frequently used to anonymize malicious activity. The gateway blocked this request based on Tor exit node detection.",
+  "custom-rule-block": "A custom operator-defined rule matched this request. See the Rules dashboard for the specific rule definition and trigger conditions.",
+  "tarpit-walk": "The client followed a chain of deliberately slow recursive redirect links into the gateway's tarpit. Only automated clients following all links mechanically trigger this — the chains are too obscure for human users to encounter.",
+  "honey-cred": "The client submitted credentials injected as a honeypot — fake username/password values embedded in the DOM that are invisible to humans but readable by form-filling automation. This is conclusive proof of automated form interaction.",
+  "webdriver-detected": "Browser automation via WebDriver was detected through JavaScript environment properties exposed by the automation framework (navigator.webdriver, modified chrome APIs, etc.).",
+  "no-interaction": "No human interaction signals (mouse movement, scrolling, keyboard events, focus changes) were detected during the session, and the absence triggered a policy block. Consistent with a headless browser.",
+  "upstream-auth-fail": "The upstream application returned authentication failures at a rate exceeding the credential stuffing threshold. The gateway blocked after detecting a brute-force or credential stuffing pattern.",
+  "ja4h-deny": "The JA4H HTTP fingerprint — derived from the HTTP header ordering, Accept-Language values, and header presence — matched a deny list entry. JA4H is more stable than JA3 across TLS versions and captures HTTP-layer bot signatures.",
+  "chal-required": "The gateway issued a JavaScript proof-of-work challenge to this identity. The block represents the challenge interstitial — the visitor must solve it before continuing. Repeated appearances indicate the challenge is being failed or retried.",
+  "fp-banned": "A hard fingerprint-based ban was applied. The IP's TLS (JA3/JA4) or HTTP fingerprint matched an entry in the deny list, triggering an immediate block without requiring accumulated risk score. More severe than a risk-score ban.",
+  "rate-limit-endpoint": "A per-endpoint rate limit was exceeded. This limit applies to a specific path or endpoint rather than global request rate, typically used to protect high-value endpoints like login, search, or API routes from excessive automated access.",
+  "traffic-threshold": "The total traffic volume from this IP exceeded the configured threshold. Unlike per-request rate limiting, this is a volume-based check across all endpoints within a time window.",
+  "dlp-cc": "A credit card number pattern was detected in the request. The Data Loss Prevention (DLP) engine flagged this to prevent card data exfiltration or testing of payment systems.",
+  "dlp-aws": "An AWS access key pattern was detected in the request body or headers. May indicate credential leakage, a misconfigured client sending keys in requests, or an attacker testing leaked credentials.",
+  "dlp-jwt": "A JWT token was detected being sent in an unexpected location — potentially a leaked or replayed credential being tested against the API.",
+  "dlp-private-key": "A PEM-encoded private key pattern was detected in the request. Possible credential leakage or deliberate exfiltration attempt.",
+  "dlp-api-key": "A generic API key pattern was detected in the request. May indicate credential testing, a misconfigured client, or an attacker using a leaked key.",
+  "dlp-pii-email": "An email address pattern was detected in a location inconsistent with normal application flow. May indicate scraping of user data or testing of enumeration endpoints.",
+  "dlp-pii-ssn": "A Social Security Number (SSN) pattern was detected in the request. Possible data exfiltration, form fuzzing with PII, or testing of identity verification endpoints.",
+  "labyrinth-jitter": "Timing jitter analysis on the client's navigation through the labyrinth (redirect maze) indicated automated traversal. The jitter pattern doesn't match human click latency distributions.",
+  "header-canary": "A canary token injected into a response header was echoed back in a subsequent request. This proves the client is reading and replaying response headers — a capability unique to scripted clients.",
+  "json-canary": "A canary token injected into a JSON response body was echoed back by the client. This confirms the client is parsing JSON responses and extracting values — not a passive HTTP client.",
+  "bypass-path": "The request matched a configured bypass rule that exempts this path from normal gateway inspection. This appears in block logs when the bypass interacts with other active rules.",
+};
+
+const RISK_CATEGORY_JS = {
+  "honeypot":"HONEYPOT","honeypot-silent":"HONEYPOT","bot-trap":"HONEYPOT",
+  "canary-echo":"HONEYPOT","honey-cred":"HONEYPOT","tarpit-walk":"HONEYPOT",
+  "suspicious-path":"SCANNING","upstream-404":"SCANNING","coordinated-probe":"SCANNING",
+  "direct-api-probe":"SCANNING","robots-violation":"SCANNING",
+  "ai-probe":"SCRAPER","ai-enumeration":"SCRAPER","ai-no-assets":"SCRAPER",
+  "llm-no-subresources":"SCRAPER","canary-probe-miss":"SCRAPER",
+  "body-sqli":"INJECTION","body-xss":"INJECTION","body-lfi":"INJECTION",
+  "body-rce":"INJECTION","body-ssrf":"INJECTION","body-cmd":"INJECTION",
+  "body-xxe":"INJECTION","body-proto-pollution":"INJECTION","header-ssti":"INJECTION",
+  "host-header-injection":"INJECTION","body-critical-injection":"INJECTION",
+  "suspicious-body":"INJECTION",
+  "smuggling-dual-header":"SMUGGLING","smuggling-invalid-te":"SMUGGLING",
+  "smuggling-obfuscated-te":"SMUGGLING","smuggling-duplicate-cl":"SMUGGLING",
+  "method-override-attempt":"EVASION","redirect-maze-bot":"EVASION","js-challenge":"EVASION",
+  "ua-empty":"BOT-UA","ua-blocked":"BOT-UA","ua-non-browser":"BOT-UA",
+  "ua-too-short":"BOT-UA","ua-platform-mismatch":"BOT-UA",
+  "ua-ai-openai":"BOT-UA","ua-ai-anthropic":"BOT-UA","ua-ai-google":"BOT-UA",
+  "ua-ai-perplexity":"BOT-UA","ua-ai-meta":"BOT-UA","ua-ai-other":"BOT-UA",
+  "ai-headers-empty":"HEADERS","ai-headers-incomplete":"HEADERS",
+  "missing-required-header":"HEADERS","accept-wildcard-html":"HEADERS",
+  "accept-fp":"HEADERS","origin-mismatch":"HEADERS","headers-suspicious":"HEADERS",
+  "tls-fingerprint":"FINGERPRINT","ja4h-deny":"FINGERPRINT","ja4-required-missing":"FINGERPRINT",
+  "header-order-fp":"FINGERPRINT","h2-fp":"FINGERPRINT","webdriver-detected":"FINGERPRINT",
+  "soft-renderer":"FINGERPRINT","webgl-missing":"FINGERPRINT",
+  "botd-detected":"FINGERPRINT","ai-ua-ip-mismatch":"FINGERPRINT",
+  "abuseipdb-high":"REPUTATION","abuseipdb-med":"REPUTATION","crowdsec-banned":"REPUTATION",
+  "asn-hosting":"NETWORK","tor-exit":"NETWORK","datacenter-vpn":"NETWORK",
+  "country-blocked":"GEO","locale-geo-mismatch":"GEO","impossible-travel":"GEO",
+  "behavior":"BEHAVIOR","session-flood":"BEHAVIOR","session-churn":"BEHAVIOR","slow-client":"BEHAVIOR",
+  "cookie-ghost":"SESSION","lifecycle-miss":"SESSION","referer-ghost":"SESSION",
+  "upstream-auth-fail":"CREDENTIAL","auth-jwt-invalid":"CREDENTIAL",
+  "gql-introspection":"GRAPHQL","gql-batch-abuse":"GRAPHQL","gql-depth-exceeded":"GRAPHQL",
+  "upload-dangerous-ext":"UPLOAD","upload-dangerous-magic":"UPLOAD",
+  "no-interaction":"INTERACTION","bot-motion":"INTERACTION","scripted-motion":"INTERACTION",
+  "bot-scroll":"INTERACTION","scripted-keys":"INTERACTION","low-entropy-input":"INTERACTION",
+  "custom-rule-block":"RULE","host-not-allowed":"CONFIG",
+};
+const RISK_CAT_COLORS = {
+  "HONEYPOT":   ["#f85149","#3d1212"],"INJECTION":  ["#f85149","#3d1212"],
+  "SMUGGLING":  ["#f85149","#3d1212"],"CREDENTIAL": ["#f85149","#3d1212"],
+  "REPUTATION": ["#f85149","#3d1212"],"UPLOAD":     ["#f85149","#3d1212"],
+  "EVASION":    ["#d29922","#2e2010"],"SCRAPER":    ["#d29922","#2e2010"],
+  "BEHAVIOR":   ["#d29922","#2e2010"],"SCANNING":   ["#d29922","#2e2010"],
+  "SESSION":    ["#d29922","#2e2010"],"GRAPHQL":    ["#d29922","#2e2010"],
+  "FINGERPRINT":["#a78bfa","#1e1430"],"BOT-UA":     ["#a78bfa","#1e1430"],
+  "HEADERS":    ["#5fb3c0","#0f1f22"],"NETWORK":    ["#58a6ff","#0d1b2a"],
+  "GEO":        ["#58a6ff","#0d1b2a"],"INTERACTION":["#3fb950","#0f2018"],
+  "RULE":       ["#8b949e","#1c2128"],"CONFIG":     ["#8b949e","#1c2128"],
+};
+const RISK_ACTION_JS = {
+  "HONEYPOT":   "Immediate ban recommended — honeypot/trap access is an unambiguous bot signal with no false-positive scenario.",
+  "INJECTION":  "Block and investigate — active exploit attempt in progress. Review upstream logs for impact.",
+  "SMUGGLING":  "Block immediately — HTTP request smuggling is a server-level attack that can poison shared caches or hijack other users' requests.",
+  "CREDENTIAL": "Rate-limit and alert — likely credential stuffing or brute-force. Check upstream auth failure logs.",
+  "SCRAPER":    "Challenge with JS proof-of-work or CAPTCHA — may be a commercial or AI scraper. Verify robots.txt compliance.",
+  "BOT-UA":     "Issue a JS challenge — UA anomaly alone is low-confidence; pair with other signals before hard-blocking.",
+  "FINGERPRINT":"Correlate with behavioral signals — TLS/HTTP fingerprint mismatch is a strong indicator of automation but not conclusive alone.",
+  "REPUTATION": "Trust the external intelligence — block or challenge per your policy. AbuseIPDB/CrowdSec data is community-validated.",
+  "NETWORK":    "Supporting evidence only — hosting/VPN/Tor IPs are commonly used by bots but also by legitimate privacy-conscious users.",
+  "BEHAVIOR":   "Monitor and challenge if multiple behavioral signals are present. Single behavioral anomalies can occur with legitimate clients.",
+  "SESSION":    "Investigate further — session manipulation may indicate automation, session hijacking, or a misconfigured client.",
+  "EVASION":    "Treat as adversarial — active evasion attempts indicate awareness of detection mechanisms and malicious intent.",
+  "GEO":        "Apply your geographic access policy — correlate with other signals before blocking individual IPs.",
+  "INTERACTION":"Issue CAPTCHA or interaction proof — absence of human interaction signals is consistent with headless browser automation.",
+  "GRAPHQL":    "Enable query depth/complexity limits — this may indicate API enumeration, schema extraction, or a DoS attempt.",
+  "UPLOAD":     "Block and review the uploaded file immediately. Check for webshell or malware.",
+  "SCANNING":   "Block if persistent — active enumeration of the attack surface indicates targeted reconnaissance.",
+  "RULE":       "See the Rules dashboard for operator-defined remediation guidance.",
+  "CONFIG":     "Verify gateway configuration — unexpected Host header may indicate virtual host scanning.",
+};
+const RISK_DETAIL_JS = {
+  "honeypot":"A fake URL planted deliberately to catch automated scanners. Legitimate human users never navigate to these endpoints — only bots following link graphs or fuzzing paths will trigger this signal. A single hit is a near-certain indicator of automation.",
+  "honeypot-silent":"Identical to a honeypot but the server responds 200 OK to avoid alerting the scanner that it was caught. The client receives a valid-looking response while the request is silently scored. A single hit is a near-certain indicator of non-human access.",
+  "bot-trap":"A deliberately disguised trap endpoint, rendered invisible to human visitors (CSS display:none, aria-hidden) but visible to scrapers parsing raw HTML. Bots that follow every link regardless of visibility trigger this.",
+  "canary-echo":"The client sent back a canary token injected in a previous response — a unique string embedded so it can only be found by reading and processing the response body. This proves the client is not a passive observer.",
+  "honey-cred":"The client submitted credentials injected as a honeypot in the DOM — fake username/password values that are invisible to humans but readable by form-filling automation. This is absolute proof of automated form interaction.",
+  "tarpit-walk":"The client followed a chain of recursive redirect links designed to trap and exhaust automated crawlers. Each link leads deeper into an intentionally slow URL space. Legitimate users never follow these chains.",
+  "suspicious-path":"The request path matches a known-bad pattern (e.g. /.env, /wp-admin, /actuator, /phpinfo.php) that legitimate application users never access. Common in mass vulnerability scanners and automated attack tools.",
+  "upstream-404":"The upstream server returned 404 for paths this client accessed. Repeated 404 responses indicate systematic probing of paths that do not exist — a hallmark of directory brute-forcing and sitemap enumeration.",
+  "coordinated-probe":"Multiple IPs from the same ASN or subnet are accessing similar paths in a coordinated temporal pattern, suggesting a distributed scanning operation sharing a common task list.",
+  "direct-api-probe":"API endpoints are being accessed directly without the browser navigation flow that normally precedes them (page load → auth → API call). Indicates scripted API access bypassing the frontend.",
+  "robots-violation":"The client accessed a path explicitly disallowed in robots.txt. All legitimate crawlers respect this file; malicious scrapers and vulnerability scanners routinely ignore it.",
+  "ai-probe":"Traffic pattern matches AI/LLM scraping behavior: rapid sequential requests with no static asset loading, systematic path coverage, and request timing inconsistent with human browsing. May be a training data crawler.",
+  "ai-enumeration":"The ratio of unique paths to total requests is abnormally high — the client is systematically visiting many distinct URLs rather than browsing naturally. Classic signature of a web scraper or sitemap walker.",
+  "ai-no-assets":"HTML pages were fetched but no referenced static assets (CSS, JS, images, fonts) were loaded. Every browser automatically fetches subresources; scrapers and LLMs typically do not.",
+  "llm-no-subresources":"An HTML document was fetched but none of its declared subresources (stylesheets, scripts, images) were subsequently requested. This is the standard pattern for LLM/AI content ingestion.",
+  "canary-probe-miss":"A canary resource (JS/CSS/image) was preloaded by the gateway and should always be fetched by a real browser. The client never requested it, indicating it is not executing full browser resource loading.",
+  "body-sqli":"A SQL injection pattern was detected in the request body. The client is attempting to manipulate backend database queries by injecting SQL syntax into input fields or API parameters.",
+  "body-xss":"A cross-site scripting payload was detected in the request body. The client is attempting to inject JavaScript that would execute in other users' browsers.",
+  "body-lfi":"A local file inclusion or path traversal pattern was detected. The client is attempting to read files outside the intended web root using ../.. sequences or absolute paths.",
+  "body-rce":"A remote code execution payload was detected in the request body. The client is attempting to inject system commands or code that would execute on the server.",
+  "body-ssrf":"A server-side request forgery payload was detected. The client is attempting to make the server issue requests to internal services or external resources on its behalf.",
+  "body-cmd":"An OS command injection pattern was detected in the request body — shell metacharacters or command syntax embedded in input fields.",
+  "body-xxe":"An XML External Entity injection payload was detected. The client is attempting to read local files, trigger SSRF, or cause denial-of-service via recursive entity expansion.",
+  "body-proto-pollution":"A prototype pollution payload was detected in the request body — attempting to inject properties into JavaScript object prototypes to alter application behavior.",
+  "header-ssti":"A Server-Side Template Injection payload was detected in a request header. The client is attempting to inject template expressions (e.g., {{7*7}}) to achieve RCE via the template engine.",
+  "host-header-injection":"The Host header contains injection characters or an unexpected value. This technique is used for cache poisoning, password reset link hijacking, or SSRF via the Host header.",
+  "body-critical-injection":"A high-severity multi-category injection payload was detected that bypassed lower-threshold rules. May combine SQLi, RCE, SSTI, or OS command patterns.",
+  "suspicious-body":"The request body matched an attack pattern heuristic at a sub-threshold confidence level. Not a confirmed exploit attempt but suspicious enough to score.",
+  "smuggling-dual-header":"Both Content-Length and Transfer-Encoding headers are present on the same request — the classic HTTP request smuggling setup that exploits CL/TE desynchronization between frontend and backend servers (RFC 9110 §6.3 violation).",
+  "smuggling-invalid-te":"The Transfer-Encoding header is present and syntactically invalid. Used in request smuggling to confuse request boundary parsing in proxies that handle invalid TE differently.",
+  "smuggling-obfuscated-te":"The Transfer-Encoding header is obfuscated (e.g. 'chunKed', tab-prefixed, or space-padded) to bypass WAF inspection while still being processed by the backend parser.",
+  "smuggling-duplicate-cl":"Duplicate Content-Length headers with different values — exploits servers that pick the first vs last CL value to desynchronize request body length parsing.",
+  "method-override-attempt":"The client attempted to override the HTTP method using X-HTTP-Method-Override, X-Method-Override, or _method parameters — a technique to bypass method-based access controls.",
+  "redirect-maze-bot":"The client navigated a series of obscure redirect chains (the 'maze') faster than any human could. These mazes are calibrated against human click-through speed; bots that follow them mechanically trip this signal.",
+  "js-challenge":"The client failed, timed out, or produced an incorrect response to the JavaScript proof-of-work challenge. May indicate a headless browser, JS-disabled scraper, or a bot that partially executes JS.",
+  "ua-empty":"The HTTP request arrived with no User-Agent header. Every modern browser and mobile OS sends this header unconditionally. Its absence strongly indicates a raw HTTP client, CLI tool, or misconfigured automation.",
+  "ua-blocked":"The User-Agent string matches an entry in the gateway's explicit blocklist — a known scanner signature, malicious tool, or explicitly banned client.",
+  "ua-non-browser":"The User-Agent string does not match any known browser family (Chrome, Firefox, Safari, Edge, mobile browsers). Typical of curl, Python requests, Scrapy, Go HTTP clients, and similar automation.",
+  "ua-too-short":"The User-Agent string is abnormally short — possibly a truncated, synthetic, or placeholder UA. Unsophisticated bots often send minimal or default UA strings.",
+  "ua-platform-mismatch":"The User-Agent claims one OS/platform but the TLS fingerprint or HTTP/2 settings indicate a different platform. Browsers and their TLS stacks are tightly coupled; this mismatch reveals UA spoofing.",
+  "ua-ai-openai":"The User-Agent is OpenAI's declared crawler (GPTBot, OAI-SearchBot, ChatGPT-User). This is a self-declared AI scraper — allow or block based on your content policy.",
+  "ua-ai-anthropic":"The User-Agent is Anthropic's declared crawler (ClaudeBot, anthropic-ai). This is a self-declared AI scraper — allow or block based on your content policy.",
+  "ua-ai-google":"The User-Agent is Google's AI crawler (Google-Extended, Googlebot-AI). This is a self-declared AI scraper — allow or block based on your content policy.",
+  "ua-ai-perplexity":"The User-Agent is Perplexity AI's crawler. Self-declared AI scrapers can be allowed or blocked independently of general web crawlers.",
+  "ua-ai-meta":"The User-Agent is Meta's AI crawler. Self-declared AI scrapers can be allowed or blocked independently of general web crawlers.",
+  "ua-ai-other":"The User-Agent matches a known AI/LLM crawler not covered by the major-platform categories.",
+  "ai-headers-empty":"The request is missing nearly all standard browser headers that any real browser consistently sends: Accept-Language, Accept-Encoding, sec-ch-ua, sec-fetch-* headers, etc. Consistent with a raw API client.",
+  "ai-headers-incomplete":"Some expected browser headers are present but the complete set is missing or malformed. Real browsers send a consistent, version-correlated header fingerprint; this client's header set doesn't match any known browser.",
+  "missing-required-header":"A header configured as mandatory by the operator's gateway policy is absent. Real browsers and legitimate API clients configured against this application always include this header.",
+  "accept-wildcard-html":"The Accept header on an HTML page request is Accept: */* with no quality values — typical of API clients and curl. Real browsers send structured Accept headers with explicit content-type preferences.",
+  "accept-fp":"The Accept header value doesn't match the expected pattern for the claimed browser. Each browser family has a characteristic Accept string that correlates tightly with its User-Agent version.",
+  "origin-mismatch":"The Origin or Referer header references a URL inconsistent with the observed navigation path — either a forged referrer or direct API access that bypasses the expected page flow.",
+  "headers-suspicious":"One or more headers contain values, ordering, or combinations that are statistically anomalous for any known legitimate client type.",
+  "tls-fingerprint":"The TLS handshake fingerprint (JA3 hash of cipher suites, extensions, and curves) matches a known bot framework, scanner, or automation tool rather than a real browser.",
+  "ja4h-deny":"The JA4H fingerprint — an HTTP header-based fingerprint encoding header names, order, and Accept-Language — matches an entry in the gateway's deny list.",
+  "ja4-required-missing":"The gateway requires a valid JA4 TLS fingerprint for access, but the client's TLS handshake does not produce one. Indicates a non-standard TLS stack.",
+  "header-order-fp":"HTTP headers arrive in an order inconsistent with any known browser. Each browser has a deterministic header insertion order; deviations reveal a non-browser client or intermediate proxy that reorders headers.",
+  "h2-fp":"The HTTP/2 SETTINGS frame values, WINDOW_UPDATE sizes, and pseudo-header order don't match any known browser's HTTP/2 implementation fingerprint.",
+  "webdriver-detected":"Browser automation via WebDriver protocol (Selenium, Playwright, Puppeteer) was detected through JavaScript environment properties: navigator.webdriver, chrome.runtime, or modified DOM APIs.",
+  "soft-renderer":"The browser's WebGL renderer string indicates a software rasterizer (Mesa LLVMpipe, Google SwiftShader, VMware SVGA) rather than real GPU hardware — strong indicator of a virtual/headless browser.",
+  "webgl-missing":"WebGL is absent or returns only software-mode values. All modern browsers on real hardware support WebGL. Its absence is a reliable indicator of a headless, stripped-down, or virtual browser.",
+  "botd-detected":"The integrated bot detection library (BotD or equivalent) independently flagged this client based on its own heuristic analysis of the JavaScript environment and browser behavior.",
+  "ai-ua-ip-mismatch":"The User-Agent claims to be an AI crawler but the IP resolves to a residential ASN — inconsistent, since AI crawlers operate from cloud/datacenter infrastructure. May indicate UA impersonation of a known crawler to appear legitimate.",
+  "abuseipdb-high":"AbuseIPDB reports this IP with high confidence (score >= 90) as a known malicious actor. The score is based on community reports of hacking attempts, scanning, brute-force, and spam from this IP.",
+  "abuseipdb-med":"AbuseIPDB reports this IP with medium confidence as an abusive actor. The score is elevated but below the high-confidence threshold — treat as a supporting signal.",
+  "crowdsec-banned":"This IP is in the CrowdSec community blocklist — a crowd-sourced, real-time threat intelligence feed based on detections across thousands of deployments worldwide.",
+  "asn-hosting":"The source IP belongs to a hosting provider or cloud ASN (AWS, GCP, Azure, DigitalOcean, Hetzner, etc.). Legitimate human users rarely browse from datacenter IPs; bots and scrapers commonly do.",
+  "tor-exit":"The source IP is a known Tor exit node. Tor is frequently used to anonymize automated attacks, credential stuffing, and scraping by routing traffic through volunteer relays.",
+  "datacenter-vpn":"The source IP belongs to a commercial VPN provider or datacenter range. May be used by privacy-conscious legitimate users but is also a common IP rotation technique for bots.",
+  "country-blocked":"The source IP's country is in the gateway operator's geographic blocklist. Access from this country is a policy violation regardless of other signals.",
+  "locale-geo-mismatch":"The Accept-Language header declares a locale inconsistent with the IP's geolocation. A French browser browsing from a Korean IP is a strong indicator of VPN, proxy, or spoofed headers.",
+  "impossible-travel":"The source IP's geolocation changed between requests at a speed physically impossible for a human traveler, indicating IP rotation, VPN switching, or a distributed botnet sharing the same identity.",
+  "behavior":"Request timing or sequencing is statistically anomalous for human browsing — may include machine-like inter-request intervals, constant-speed request patterns, or behavioral variability metrics outside normal human ranges.",
+  "session-flood":"Abnormally high rate of new session creation from this identity. May indicate automated account creation, credential stuffing across many accounts, or session token flooding.",
+  "session-churn":"The client is cycling through sessions at an abnormal rate. Legitimate browsers maintain sessions across navigation; rapid cycling suggests automated token rotation or brute-force across multiple credentials.",
+  "slow-client":"The client reads response data abnormally slowly — similar to Slowloris-style slow-read attacks designed to hold connections open and exhaust server resources.",
+  "cookie-ghost":"The client sent a cookie that the server never set in any response to this identity. The client is injecting or replaying cookies from an external source — a capability unique to scripted clients.",
+  "lifecycle-miss":"A request doesn't fit the expected browser lifecycle: accessing an API endpoint without having fetched the page that would trigger it, or submitting forms without loading them first.",
+  "referer-ghost":"The Referer header claims the client navigated from a page that the server never served to this identity. The client is forging the Referer header or copying requests from another context.",
+  "upstream-auth-fail":"The upstream application returned an authentication failure. Multiple failures from the same identity indicate credential stuffing (trying many username/password pairs) or brute-force attacks.",
+  "auth-jwt-invalid":"A JWT token in the request has an invalid signature, is expired, or has been tampered with. May indicate token replay from an expired session, stolen-token reuse, or active JWT forgery attempts.",
+  "gql-introspection":"A GraphQL introspection query was submitted, attempting to enumerate the full API schema — field names, types, arguments, and relationships. This is typically the first step in targeted API attack reconnaissance.",
+  "gql-batch-abuse":"GraphQL query batching is being abused to send many queries in a single HTTP request, effectively multiplying the request rate and bypassing per-request rate limits.",
+  "gql-depth-exceeded":"A GraphQL query exceeds the configured maximum nesting depth, which can trigger exponential server-side resolver execution — a denial-of-service vector via deeply nested queries.",
+  "upload-dangerous-ext":"A file with a potentially dangerous extension was uploaded (.php, .sh, .jsp, .exe, .aspx, etc.). This may be an attempt to upload a webshell or backdoor for later execution.",
+  "upload-dangerous-magic":"The uploaded file's magic bytes (binary file signature) indicate an executable or dangerous file type regardless of the reported file extension — a common filter bypass technique.",
+  "no-interaction":"No human interaction signals (mouse movement, scrolling, keyboard activity, focus events) were observed during the session. Consistent with a headless browser with interaction simulation disabled.",
+  "bot-motion":"Mouse movement events were observed but follow non-human patterns: perfectly linear paths, superhuman speed, or mechanically regular acceleration curves. Consistent with Playwright/Puppeteer mouse simulation.",
+  "scripted-motion":"Mouse movement follows programmatically generated curves (Bezier-like with constant parameters) rather than the random-walk, variable-speed patterns of human hand movement.",
+  "bot-scroll":"Scroll events were observed but are non-human: instantaneous jumps, perfectly uniform intervals, or fixed-pixel increments inconsistent with trackpad or mouse wheel physics.",
+  "scripted-keys":"Keyboard events were observed but inter-key timing is too regular — fixed millisecond delays between keystrokes indicate scripted input rather than human typing variability.",
+  "low-entropy-input":"Form input has very low Shannon entropy — short, highly predictable, or repetitive values that are statistically inconsistent with human-typed text.",
+};
+
 // 1.8.6 — stealth score breakdown (agents-only; uses escapeHtml global)
 function buildScoreHtml(d){
   const score = d.stealth_score != null ? d.stealth_score : 0;
   const c = d.components, m = d.metrics;
+  const src = d.score_source || 'stealth';
+  const rScore = m.risk_score != null ? m.risk_score : 0;
+  const rPts   = c.risk || 0;
+  const riskDetail = src === 'block_count'
+    ? `synthetic — based on ${m.blocked_count != null ? m.blocked_count : d.blocked || '?'} blocks (no risk score)`
+    : src === 'risk_score'
+    ? `risk score ${rScore} ÷ 4 → ${rPts}/15 pts (see signals below)`
+    : `risk score ${rScore} ÷ 4 → ${rPts}/15 pts`;
   const COMPS = [
     {key:'headers', label:'headers', color:'#a78bfa', detail:`avg ${m.avg_header_score!=null?m.avg_header_score:'?'}/7 expected headers`},
     {key:'assets',  label:'assets',  color:'#5fb3c0', detail:`${m.html_loads||0} html · ${m.static_loads||0} static fetches`},
     {key:'enum',    label:'enum',    color:'#3fb950', detail:`${m.unique_paths||0} unique paths (div=${m.path_diversity!=null?m.path_diversity:'?'})`},
     {key:'timing',  label:'timing',  color:'#d29922', detail:`cv=${m.behavioral_cov!=null?m.behavioral_cov:'n/a'}`},
-    {key:'risk',    label:'risk',    color:'#f85149', detail:`risk score=${m.risk_score!=null?m.risk_score:'?'}`},
+    {key:'risk',    label:'risk',    color:'#f85149', detail:riskDetail},
     {key:'404s',    label:'404s',    color:'#ff7b3a', detail:`${m.upstream_404_count||0} upstream 404s`},
   ];
   const compRows = COMPS.map(({key,label,color,detail})=>{
@@ -1413,17 +1799,126 @@ function buildScoreHtml(d){
   }).join('');
   const rb = d.risk_breakdown || [];
   let riskSection = '';
-  if (rb.length && (c.risk||0) > 0){
+  if (src === 'block_count') {
+    const nBlocks = m.blocked_count != null ? m.blocked_count : (d.blocked || 0);
+    const synthScore = Math.min(100, 30 + Math.min(50, nBlocks * 2));
+    const bd = d.blocks_breakdown || [];
+    const totalBlocks = bd.reduce((a,b)=>a+b[1],0) || nBlocks || 1;
+    const bdRows = bd.slice(0,8).map(([reason,cnt])=>{
+      const label = BLOCK_LABELS_JS[reason] || RISK_LABELS_JS[reason] || reason;
+      const detail = BLOCK_DETAIL_JS[reason] || RISK_DETAIL_JS[reason] || (
+        reason.startsWith('dlp-')       ? `Data Loss Prevention signal: a ${reason.replace('dlp-','')} pattern was detected in the request. DLP signals flag potential sensitive data exfiltration or misuse.` :
+        reason.startsWith('smuggling-') ? `HTTP request smuggling attempt (${reason.replace('smuggling-','')} variant) — a server-level desynchronization attack vector.` :
+        reason.startsWith('ua-ai-')     ? `AI/LLM crawler detected: the User-Agent identifies this client as a ${reason.replace('ua-ai-','')} AI agent.` :
+        reason.startsWith('ua-')        ? `User-Agent anomaly (${reason.replace('ua-','')}): the User-Agent header does not match expected browser patterns.` :
+        reason.startsWith('rate-limit') ? `Rate limit exceeded (${reason}): request volume from this identity surpassed the configured threshold for this scope.` :
+        reason.startsWith('gql-')       ? `GraphQL abuse signal (${reason.replace('gql-','')}): API query pattern exceeded configured safety limits.` :
+        reason.startsWith('upload-')    ? `File upload security violation (${reason.replace('upload-','')}): uploaded content matched a dangerous file pattern.` :
+        reason.startsWith('body-')      ? `Attack payload detected in request body (${reason.replace('body-','')} pattern).` :
+        reason.startsWith('canary-')    ? `Canary token detection (${reason.replace('canary-','')}): the client processed and returned an injected tracking token, confirming automated HTTP processing.` :
+        `Request blocked with reason code "${reason}". No detailed description is registered for this signal — may be a custom rule, new detection, or a gateway-internal control action.`
+      );
+      const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
+      const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
+      const sharePct = Math.round(cnt / totalBlocks * 100);
+      return `<div class="risk-sig">
+        <div class="rs-head">
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
+            <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
+            <span class="rs-name">${escapeHtml(reason)}</span>
+          </div>
+          <span class="rs-score" style="color:#d29922;flex-shrink:0">${cnt}×</span>
+        </div>
+        <div class="rs-desc" style="font-weight:600;font-size:11px;color:var(--fg);margin-bottom:4px">${escapeHtml(label)}</div>
+        <div class="rs-desc">${escapeHtml(detail)}</div>
+        <div class="rs-divider"></div>
+        <div class="rs-meta">
+          <span><b>blocks</b> ${cnt}×</span>
+          <span><b>share</b> ${sharePct}% of total</span>
+        </div>
+        <div class="rs-bar" style="margin-top:4px"><div style="width:${sharePct}%;background:#d29922"></div></div>
+      </div>`;
+    }).join('') || `<div class="dim" style="font-size:11px;padding:8px 0">No block reason detail available.</div>`;
+    riskSection = `<div style="margin-top:10px">
+      <div style="background:#161b22;border:1px solid var(--line);border-radius:5px;padding:10px 12px;margin-bottom:10px;font-size:11px">
+        <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:6px">Synthetic score — no active risk signals</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-family:ui-monospace,Menlo,monospace">
+          <div><span style="color:var(--dim)">total blocks</span> <b>${nBlocks}</b></div>
+          <div><span style="color:var(--dim)">formula</span> <b>30 + min(50, ${nBlocks}×2)</b></div>
+          <div><span style="color:var(--dim)">calculated</span> <b>30 + ${Math.min(50,nBlocks*2)} = ${synthScore}</b></div>
+          <div><span style="color:var(--dim)">active risk score</span> <b style="color:var(--dim)">0 (none)</b></div>
+        </div>
+        <div style="margin-top:8px;font-size:10px;color:var(--dim);border-top:1px solid var(--line);padding-top:6px">
+          This identity has no active behavioral risk signals. The stealth score is synthetic — derived from block history so the IP remains visible in the agents table. The risk score would need to reach 50 pts to trigger a behaviorally-driven ban.
+        </div>
+      </div>
+      ${bdRows}</div>`;
+  } else if (rb.length && rScore > 0){
     const rtot = rb.reduce((a,b)=>a+b[1],0)||1;
-    const rRows = rb.slice(0,8).map(([reason,val])=>{
-      const rpct = (val/rtot*100).toFixed(0);
-      return `<div class="rsn"><span class="rsn-name">${escapeHtml(reason)}</span>
-        <div class="rsn-bar"><div style="width:${rpct}%"></div></div>
-        <span class="rsn-val">+${val}</span></div>`;
+    const banPct = Math.min(100, Math.round(rScore / RISK_BAN_THRESHOLD * 100));
+    const banColor = banPct >= 80 ? '#f85149' : banPct >= 40 ? '#d29922' : '#3fb950';
+    const rRows = rb.slice(0,10).map(([reason,val])=>{
+      const rpct = Math.round(val/rtot*100);
+      const w = RISK_WEIGHTS_JS[reason] || 0;
+      const hits = w > 0 ? Math.max(1, Math.round(val / w)) : '?';
+      const detail = RISK_DETAIL_JS[reason] || RISK_LABELS_JS[reason] || 'No description available.';
+      const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
+      const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
+      const action = RISK_ACTION_JS[cat] || 'Monitor this signal.';
+      const sev = w >= 70 ? ['CRITICAL','#f85149','#3d1212'] :
+                  w >= 40 ? ['HIGH',    '#d29922','#2e2010'] :
+                  w >= 15 ? ['MEDIUM',  '#e3b341','#2a2010'] :
+                            ['LOW',     '#8b949e','#1e2228'];
+      const [sevLabel, sevFg, sevBg] = sev;
+      const decayRatio = w > 0 ? val / w : 0;
+      const [decayLabel, decayColor] = decayRatio >= 0.8 ? ['FRESH','#f85149'] :
+                                        decayRatio >= 0.4 ? ['ACTIVE','#d29922'] :
+                                                            ['FADING','#8b949e'];
+      const remaining = Math.max(0, RISK_BAN_THRESHOLD - rScore);
+      const hitsToBan = w > 0 ? Math.ceil(remaining / w) : '∞';
+      return `<div class="risk-sig">
+        <div class="rs-head">
+          <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
+            <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
+            <span class="rs-name">${escapeHtml(reason)}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
+            <span class="rs-sev" style="color:${sevFg};background:${sevBg}">${sevLabel}</span>
+            <span class="rs-score" style="color:#f85149">+${val}</span>
+          </div>
+        </div>
+        <div class="rs-desc">${escapeHtml(detail)}</div>
+        <div class="rs-divider"></div>
+        <div class="rs-meta">
+          <span><b>weight</b> ${w > 0 ? w+' pts/trigger' : 'n/a'}</span>
+          <span><b>triggered</b> ~${hits}×</span>
+          <span><b>decay</b> <span style="color:${decayColor}">${decayLabel}</span></span>
+        </div>
+        <div class="rs-meta" style="margin-top:2px">
+          <span><b>hits to ban</b> ${hitsToBan}× more</span>
+          <span><b>accumulated</b> ${val} pts</span>
+          <span><b>share</b> ${rpct}% of risk</span>
+        </div>
+        <div class="rs-bar" style="margin-top:6px"><div style="width:${rpct}%"></div></div>
+        <div class="rs-action"><b>Recommended:</b> ${escapeHtml(action)}</div>
+      </div>`;
     }).join('');
     riskSection = `<div style="margin-top:10px">
-      <div class="dim" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Risk signals → score ${m.risk_score}</div>
+      <div class="dim" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">
+        Risk signals — score ${rScore} ÷ 4 = ${rPts} pts in stealth (max 15)
+      </div>
+      <div style="margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px;font-size:11px">
+          <span class="dim">ban threshold</span>
+          <div style="flex:1;height:5px;background:#30363d;border-radius:3px;overflow:hidden">
+            <div style="width:${banPct}%;height:100%;background:${banColor};border-radius:3px"></div>
+          </div>
+          <span style="color:${banColor};font-size:10px">${rScore}/${RISK_BAN_THRESHOLD}</span>
+        </div>
+      </div>
       ${rRows}</div>`;
+  } else if (rScore === 0) {
+    riskSection = `<div style="margin-top:10px;font-size:11px" class="dim">No active risk signals.</div>`;
   }
   return `<div class="dim" style="margin-bottom:8px">
       Stealth score: <b style="color:var(--blue)">${score}/100</b>
