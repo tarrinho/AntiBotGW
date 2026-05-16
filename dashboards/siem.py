@@ -10,7 +10,7 @@ from config import _DASHBOARDS_DIR, DB_PATH  # noqa: F401 — leading-underscore
 from state import *    # noqa: F401,F403
 from state import _asn_path_clusters  # noqa: F401 — underscore not in *
 from helpers import slog, now  # noqa: F401
-from admin.auth import _internal_authed, _is_admin_ip  # noqa: F401
+from admin.auth import _internal_authed, _is_admin_ip, _require_csrf  # noqa: F401
 from aiohttp import web
 
 # ── Alert rule constants ──────────────────────────────────────────────────────
@@ -498,6 +498,7 @@ async def siem_stream_endpoint(request: web.Request) -> web.Response:
 
 
 # ── Server-side alert rules CRUD ──────────────────────────────────────────────
+@_require_csrf
 async def siem_alert_rules_endpoint(request: web.Request) -> web.Response:
     """GET/POST/DELETE/PATCH /…/siem-alert-rules"""
     global _rules_cache_ts

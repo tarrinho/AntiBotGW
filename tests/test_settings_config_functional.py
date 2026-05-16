@@ -96,6 +96,15 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -204,6 +213,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 75},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -224,6 +234,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"key": "RISK_BAN_THRESHOLD", "value": 75},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -246,6 +257,7 @@ class TestConfigPost:
                                          "RATE_LIMIT_BURST":    50,
                                          "HOSTILE_BAN_SECS":    3600,
                                      },
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -263,6 +275,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"NONEXISTENT_KNOB_XYZ": True},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -282,6 +295,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 99},
+                                 headers=_csrf_hdr(proxy_module, cookie),
                                  cookies={proxy_module._SESSION_COOKIE: cookie})
                     r = await c.get(NS + "/config",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
@@ -471,7 +485,8 @@ class TestSettingsImportRoundTrip:
                         "RATE_LIMIT_BURST":  orig["RATE_LIMIT_BURST"]  + 30,
                         "HOSTILE_BAN_SECS":  3600,
                     }
-                    mod_r = await c.post(NS + "/config", json=changes, cookies=ck)
+                    _csrf = _csrf_hdr(proxy_module, cookie)
+                    mod_r = await c.post(NS + "/config", json=changes, headers=_csrf, cookies=ck)
                     mod_d = await mod_r.json()
                     for k in changes:
                         assert k in mod_d.get("applied", {}), f"{k} not applied"
@@ -480,7 +495,7 @@ class TestSettingsImportRoundTrip:
                     imp_r = await c.post(
                         NS + "/settings-import?dry_run=0&overwrite_secrets=0",
                         data=raw_zip,
-                        headers={"Content-Type": "application/octet-stream"},
+                        headers={"Content-Type": "application/octet-stream", **_csrf},
                         cookies=ck,
                     )
                     assert imp_r.status == 200

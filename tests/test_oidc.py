@@ -109,7 +109,7 @@ class TestS_OIDCStatic:
         src = _SRC_OIDC
         assert "_session_create(" in src
         assert "httponly=True" in src
-        assert 'samesite="Lax"' in src
+        assert 'samesite="Strict"' in src
         assert "secure=SESSION_SECURE" in src
 
     def test_s12_default_role_falls_back_to_viewer(self):
@@ -524,33 +524,61 @@ async def test_d15_happy_path_existing_user():
     assert resp.cookies["agw_session"].value == "fake-session-tok"
 
 
-# ── D16 — Happy path: new user auto-provisioned ───────────────────────────────
+# ── D16 — First SSO login: user provisioned as pending, 404 returned ─────────
 
 @pytest.mark.asyncio
 async def test_d16_new_user_auto_provisioned():
-    """Unknown user: INSERT OR IGNORE executed, then session issued."""
+    """Unknown user: INSERT OR IGNORE executed with status='pending', 404 returned.
+    No session is issued until an admin authorises the account."""
     async with _fake_keycloak() as issuer:
         async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
                                   OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
             state_tok = _valid_state()
             req = _fake_request(query={"code": "authcode", "state": state_tok})
 
-            user_row = {"username": "alice", "role": "viewer", "status": "active"}
             mock_conn = MagicMock()
 
             with patch("admin.oidc.sqlite3.connect", return_value=mock_conn), \
-                 patch("admin.users._user_load", side_effect=[None, user_row]), \
-                 patch("admin.users._session_create", return_value="tok-new"), \
-                 patch("admin.users._ACTIVE_SESSIONS", {}), \
-                 patch("admin.users._SESSION_COOKIE", "agw_session"), \
-                 patch("admin.users._SESSION_TTL", 3600):
+                 patch("admin.users._user_load", return_value=None):
                 resp = await _oidc_mod.oidc_callback_endpoint(req)
 
-    assert resp.status in (301, 302)
-    assert "agw_session" in resp.cookies, "agw_session cookie must be set for new user"
+    assert resp.status == 404, \
+        f"New SSO user must receive 404 (pending approval), got {resp.status}"
+    assert "agw_session" not in resp.cookies, \
+        "No session cookie must be set for a pending user"
     mock_conn.execute.assert_called_once()
     mock_conn.commit.assert_called_once()
     mock_conn.close.assert_called_once()
+    # Verify the INSERT used status='pending' and sso_source='oidc' as SQL literals
+    call_args = mock_conn.execute.call_args
+    sql = call_args[0][0]
+    assert "'pending'" in sql, \
+        "INSERT must hardcode status='pending' for new SSO users"
+    assert "'oidc'" in sql, \
+        "INSERT must hardcode sso_source='oidc'"
+
+
+# ── D16b — Pending SSO user returns 404 on repeat login ──────────────────────
+
+@pytest.mark.asyncio
+async def test_d16b_pending_user_returns_404():
+    """User exists with status='pending': 404 returned, no session issued."""
+    async with _fake_keycloak() as issuer:
+        async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
+                                  OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s"):
+            state_tok = _valid_state()
+            req = _fake_request(query={"code": "authcode", "state": state_tok})
+
+            pending_row = {"username": "alice", "role": "viewer",
+                           "status": "pending", "sso_source": "oidc"}
+            with patch("admin.users._user_load", return_value=pending_row), \
+                 patch("admin.users._SESSION_COOKIE", "agw_session"):
+                resp = await _oidc_mod.oidc_callback_endpoint(req)
+
+    assert resp.status == 404, \
+        f"Pending SSO user must receive 404, got {resp.status}"
+    assert "agw_session" not in resp.cookies, \
+        "No session cookie must be set for a pending user"
 
 
 # ── D17 — Disabled user → redirect error, no cookie ──────────────────────────
@@ -920,7 +948,8 @@ async def test_d35_missing_access_token_redirect_error():
 
 @pytest.mark.asyncio
 async def test_d36_invalid_default_role_falls_back_to_viewer():
-    """OIDC_DEFAULT_ROLE='superadmin' (not in _VALID_ROLES) → new user gets 'viewer'."""
+    """OIDC_DEFAULT_ROLE='superadmin' (not in _VALID_ROLES) → new user gets 'viewer'
+    and receives 404 (pending approval — not an immediate session)."""
     async with _fake_keycloak() as issuer:
         async with _patched_oidc(OIDC_ENABLED=True, OIDC_ISSUER=issuer,
                                   OIDC_CLIENT_ID="c", OIDC_CLIENT_SECRET="s",
@@ -937,16 +966,12 @@ async def test_d36_invalid_default_role_falls_back_to_viewer():
                 return MagicMock()
             mock_conn.execute = _capture
 
-            user_row = {"username": "alice", "role": "viewer", "status": "active"}
             with patch("admin.oidc.sqlite3.connect", return_value=mock_conn), \
-                 patch("admin.users._user_load", side_effect=[None, user_row]), \
-                 patch("admin.users._session_create", return_value="tok"), \
-                 patch("admin.users._ACTIVE_SESSIONS", {}), \
-                 patch("admin.users._SESSION_COOKIE", "agw_session"), \
-                 patch("admin.users._SESSION_TTL", 3600):
+                 patch("admin.users._user_load", return_value=None):
                 resp = await _oidc_mod.oidc_callback_endpoint(req)
 
-    assert resp.status in (301, 302)
+    assert resp.status == 404, \
+        f"New SSO user must receive 404 (pending), got {resp.status}"
     assert provisioned_role == ["viewer"], \
         f"Expected ['viewer'] fallback but got {provisioned_role!r}"
 

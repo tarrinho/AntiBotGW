@@ -185,6 +185,15 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
     preferred = (userinfo.get("preferred_username")
                  or userinfo.get("email")
                  or "").strip()
+    # IdP subject claim — stable, opaque identifier for this user at this IdP.
+    # Bound on first SSO login; subsequent logins verify it matches to block
+    # username-collision attacks (e.g. attacker creates local user 'admin' and
+    # then logs in via SSO as preferred_username='admin' from a different sub).
+    oidc_sub = (userinfo.get("sub") or "").strip()
+    if not oidc_sub:
+        slog("oidc_missing_sub", level="warn", ip=ip)
+        return _redirect_error("Identity provider did not return a subject claim (sub)")
+
     username = _safe_username(preferred)
     if not username:
         slog("oidc_unmappable_username", level="warn",
@@ -204,23 +213,47 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
             # Direct synchronous write: _request_role() reads the users table on
             # every authenticated request, so the row must exist before the session
             # is issued — the async db_queue flush would be too late.
+            # New SSO users start as 'pending' — an admin must authorise them
+            # before they can access the dashboard.
             conn = sqlite3.connect(DB_PATH)
             conn.execute(
                 "INSERT OR IGNORE INTO users "
-                "(username, password_hash, role, status, created_ts, updated_ts) "
-                "VALUES (?, '', ?, 'active', ?, ?)",
-                (username, role, n, n))
+                "(username, password_hash, role, status, sso_source, oidc_sub, created_ts, updated_ts) "
+                "VALUES (?, '', ?, 'pending', 'oidc', ?, ?, ?)",
+                (username, role, oidc_sub, n, n))
             conn.commit()
             conn.close()
         except Exception as e:
             slog("oidc_provision_failed", level="error",
                  username=username, err=str(e)[:200])
             return _redirect_error("Account provisioning failed — contact an administrator")
-        slog("oidc_user_provisioned", level="warn",
+        slog("oidc_user_pending", level="warn",
              username=username, role=role, ip=ip)
-        user = _user_load(username)
+        return web.Response(status=404, text="Not found\n",
+                            headers={"Cache-Control": "no-store"})
 
-    elif user.get("status") != "active":
+    # ── Sub-claim collision guard ─────────────────────────────────────────────
+    # If the local user row has an oidc_sub already set, it must match the
+    # current IdP's sub. If not set yet (locally-created account first used
+    # via SSO), bind it now so future logins are pinned.
+    stored_sub = user.get("oidc_sub") or ""
+    if stored_sub and stored_sub != oidc_sub:
+        slog("oidc_sub_collision", level="error",
+             username=username, stored=stored_sub[:40], received=oidc_sub[:40], ip=ip)
+        return _redirect_error("Account identity mismatch — contact an administrator")
+    if not stored_sub and db_queue is not None:
+        try:
+            db_queue.put_nowait(("user_update", (username, {"oidc_sub": oidc_sub,
+                                                             "updated_ts": _t.time()})))
+        except asyncio.QueueFull:
+            pass  # non-fatal; will bind on next login
+
+    if user.get("status") == "pending":
+        slog("oidc_login_pending_user", level="info", username=username, ip=ip)
+        return web.Response(status=404, text="Not found\n",
+                            headers={"Cache-Control": "no-store"})
+
+    if user.get("status") != "active":
         slog("oidc_login_disabled_user", level="warn", username=username, ip=ip)
         return _redirect_error("Your account is disabled — contact an administrator")
 
@@ -240,7 +273,7 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
     resp = web.HTTPFound(next_url)
     resp.set_cookie(_SESSION_COOKIE, token,
                     max_age=_SESSION_TTL, httponly=True,
-                    samesite="Lax", path="/",
+                    samesite="Strict", path="/",
                     secure=SESSION_SECURE)
     return resp
 

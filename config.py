@@ -672,9 +672,14 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/probe",
     "/maze",
     "/canary-probe/",
+    # 1.8.5 — interaction-report must be public: bot-detection JS posts here
+    # before any session exists. Missing entry caused silent bot-detect failure.
+    "/interaction-report",
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout",
-                         "/auth/oidc/login", "/auth/oidc/callback")
+                         "/auth/oidc/login", "/auth/oidc/callback",
+                         # 1.8.5 — TOTP step: missing entry blocked 2FA entirely
+                         "/login/totp")
 
 # High-frequency read-only polling endpoints that must not flood the events
 # buffer — recording them every 2–15 s displaces real traffic events.

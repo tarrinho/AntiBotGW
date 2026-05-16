@@ -57,6 +57,16 @@ def _make_admin_session(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -365,6 +375,7 @@ class TestBanUnbanEndpoints:
                     cookie = _make_admin_session(proxy_module)
                     r = await c.post(
                         NS + "/ban?ip=1.2.3.4&secs=3600&reason=manual-ban",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -378,10 +389,12 @@ class TestBanUnbanEndpoints:
                     # ban first so unban has something to act on
                     await c.post(
                         NS + "/ban?ip=9.9.9.9&secs=3600&reason=test",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     r = await c.post(
                         NS + "/unban?ip=9.9.9.9",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -395,6 +408,7 @@ class TestBanUnbanEndpoints:
                     cookie = _make_admin_session(proxy_module)
                     r = await c.post(
                         NS + "/ban?ip=2.2.2.2&secs=2678400&reason=hard-ban",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -408,6 +422,7 @@ class TestBanUnbanEndpoints:
                     cookie = _make_admin_session(proxy_module)
                     r = await c.post(
                         NS + "/ban?id=testidentity123&secs=3600&reason=manual-ban",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -422,6 +437,7 @@ class TestBanUnbanEndpoints:
                     ip = "3.3.3.3"
                     r = await c.post(
                         NS + f"/ban?ip={ip}&secs=3600&reason=manual-ban",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200

@@ -779,6 +779,37 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
+<!-- ── SSO Access Requests ────────────────────────────────────────── -->
+<div class="card" id="card-sso-pending" style="margin-top:14px;display:none">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <div>
+      <h2 style="margin-bottom:4px">SSO Access Requests</h2>
+      <p class="desc" style="margin:0">
+        Users who signed in via SSO for the first time. They cannot access
+        the dashboard until an admin authorises them. Deny removes the account.
+      </p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span class="foot" id="sso-pending-count">—</span>
+      <button class="secondary" id="sso-pending-refresh">↻ Refresh</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="gw-tbl">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Role</th>
+          <th>First seen (UTC)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sso-pending-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
 <!-- ── 1.8.6 — Two-Factor Authentication ─────────────────────────── -->
 <div class="card" id="card-2fa" style="margin-top:14px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;
@@ -1862,6 +1893,30 @@ async function loadUsers() {
   } catch (e) { toast("Users load failed: " + e.message, "err"); }
 }
 
+// ── SSO Access Requests ───────────────────────────────────────────────────
+async function loadSsoPending() {
+  try {
+    const j = await api("GET", USERS_BASE);
+    const pending = (j.users || []).filter(u => u.status === "pending" && u.sso_source);
+    const card = $("card-sso-pending");
+    if (!card) return;
+    card.style.display = pending.length ? "" : "none";
+    $("sso-pending-count").textContent = pending.length + " pending";
+    const tb = $("sso-pending-tbody");
+    if (!pending.length) { tb.innerHTML = ""; return; }
+    tb.innerHTML = _dp(pending.map(u => `
+      <tr>
+        <td style="font-family:ui-monospace,monospace">${escapeHtml(u.username)}</td>
+        <td><span class="pill-status pill-active" style="background:rgba(88,166,255,.15);color:var(--blue)">${escapeHtml(u.role)}</span></td>
+        <td>${u.created_ts ? new Date(u.created_ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '—'}</td>
+        <td>
+          <button class="act-btn" data-pact="approve" data-user="${escapeHtml(u.username)}">Authorize</button>
+          <button class="act-btn danger" data-pact="deny" data-user="${escapeHtml(u.username)}">Deny</button>
+        </td>
+      </tr>`).join(""));
+  } catch (e) { toast("SSO pending load failed: " + e.message, "err"); }
+}
+
 $("users-refresh").addEventListener("click", loadUsers);
 $("users-add").addEventListener("click", () => openAddUserModal());
 $("users-tbody").addEventListener("click", (ev) => {
@@ -1874,6 +1929,32 @@ $("users-tbody").addEventListener("click", (ev) => {
   if (a === "password") return changeUserPassword(u);
   if (a === "status")   return toggleUserStatus(u, t.textContent.trim());
   if (a === "delete")   return deleteUser(u);
+});
+
+$("sso-pending-refresh").addEventListener("click", loadSsoPending);
+$("sso-pending-tbody").addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-pact]");
+  if (!t) return;
+  ev.preventDefault();
+  const username = t.dataset.user;
+  const action   = t.dataset.pact;
+  if (action === "approve") {
+    if (!confirm(`Authorize "${username}" to access the gateway dashboard?`)) return;
+    try {
+      await api("PATCH", `${USERS_BASE}/${encodeURIComponent(username)}`,
+                {status: "active"});
+      toast(`${username} authorized`, "ok");
+      loadUsers();
+      loadSsoPending();
+    } catch (e) { toast("Authorize failed: " + e.message, "err"); }
+  } else if (action === "deny") {
+    if (!confirm(`Deny and remove "${username}"? This will delete the account.`)) return;
+    try {
+      await api("DELETE", `${USERS_BASE}/${encodeURIComponent(username)}`);
+      toast(`${username} removed`, "ok");
+      loadSsoPending();
+    } catch (e) { toast("Deny failed: " + e.message, "err"); }
+  }
 });
 
 // ── 1.6.7 — Sessions tooltip / modal ──────────────────────────────
@@ -2231,6 +2312,7 @@ document.getElementById('btn-vacuum').addEventListener('click', async () => {
 // Initial load.
 loadList();
 loadUsers();
+loadSsoPending();
 loadMesh();
 loadStorage();
 window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
