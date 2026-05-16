@@ -5901,9 +5901,77 @@ def test_maxmind_auto_fetch_uses_fetch_edition():
            / "reputation" / "maxmind.py").read_text()
     auto_start = src.find("def _maxmind_auto_fetch")
     assert auto_start >= 0
-    auto_body = src[auto_start:auto_start + 800]
+    auto_body = src[auto_start:auto_start + 1100]
     assert "_maxmind_fetch_edition" in auto_body, \
         "_maxmind_auto_fetch must call _maxmind_fetch_edition for ETag support"
+
+
+def test_maxmind_fetch_edition_source_has_mtime_check():
+    """_maxmind_fetch_edition must call os.path.getmtime to check file age."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    fn_start = src.find("def _maxmind_fetch_edition")
+    assert fn_start >= 0
+    fn_body = src[fn_start: fn_start + 1200]
+    assert "getmtime" in fn_body, (
+        "_maxmind_fetch_edition must use os.path.getmtime to check "
+        "whether the existing file is fresh enough to skip the download"
+    )
+    assert "_MAXMIND_MIN_INTERVAL" in fn_body, (
+        "_maxmind_fetch_edition must compare file age against "
+        "_MAXMIND_MIN_INTERVAL (24 h) before deciding to skip"
+    )
+
+
+def test_maxmind_fetch_edition_skips_fresh_file(monkeypatch, tmp_path):
+    """force=False: return 'skipped' when file exists and mtime < 24 h."""
+    import time as _time
+    import importlib
+
+    dest = str(tmp_path / "GeoLite2-ASN.mmdb")
+    open(dest, "wb").close()
+
+    mm = importlib.import_module("reputation.maxmind")
+
+    real_exists = mm.os.path.exists
+    monkeypatch.setattr(mm.os.path, "exists",   lambda p: True if p == dest else real_exists(p))
+    monkeypatch.setattr(mm.os.path, "getmtime", lambda p: _time.time() - 3600)  # 1 h — fresh
+    monkeypatch.setattr(mm, "_validate_mmdb_path", lambda p, **kw: p)
+
+    result = mm._maxmind_fetch_edition("GeoLite2-ASN", dest, "fakekey", force=False)
+    assert result == "skipped", (
+        f"Expected 'skipped' for a file only 1 h old; got {result!r}"
+    )
+
+
+def test_maxmind_fetch_edition_fetches_stale_file(monkeypatch, tmp_path):
+    """force=False: attempt fetch when file exists but mtime >= 24 h (returns error, not skipped)."""
+    import time as _time
+    import importlib, urllib.error
+
+    dest = str(tmp_path / "GeoLite2-ASN.mmdb")
+    open(dest, "wb").close()
+
+    mm = importlib.import_module("reputation.maxmind")
+
+    real_exists = mm.os.path.exists
+    monkeypatch.setattr(mm.os.path, "exists",   lambda p: True if p == dest else real_exists(p))
+    monkeypatch.setattr(mm.os.path, "getmtime", lambda p: _time.time() - 90000)  # 25 h — stale
+    monkeypatch.setattr(mm, "_read_etag", lambda p: "")
+    monkeypatch.setattr(mm, "_validate_mmdb_path", lambda p, **kw: p)
+
+    # Simulate network failure so the function returns 'error' (not 'skipped').
+    import urllib.request as _ureq
+    def _fake_urlopen(req, timeout=None):
+        raise urllib.error.URLError("no network in test")
+    monkeypatch.setattr(_ureq, "urlopen", _fake_urlopen)
+
+    result = mm._maxmind_fetch_edition("GeoLite2-ASN", dest, "fakekey", force=False)
+    assert result != "skipped", (
+        "Stale file (25 h old) must not be skipped — "
+        f"_maxmind_fetch_edition returned {result!r} instead of 'error'/'downloaded'"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
