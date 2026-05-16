@@ -359,7 +359,7 @@ async def test_d07_callback_handles_idp_error_param():
         assert resp.status in (301, 302)
         loc = resp.headers.get("Location", "")
         assert "oidc_error" in loc
-        assert "access_denied" in loc
+        assert "err_idp_error" in loc  # AUTH4-13: opaque code, not reflected error string
 
 
 @pytest.mark.asyncio
@@ -808,16 +808,26 @@ async def test_d27_redirect_uri_uses_request_scheme_when_not_session_secure():
 
 @pytest.mark.asyncio
 async def test_d28_oidc_error_shown_in_login_page():
-    """?oidc_error= renders 'SSO:' error in the login page body."""
+    """?oidc_error= renders 'SSO:' error in the login page body.
+    AUTH4-13: opaque codes are resolved to safe messages; unknown codes show generic."""
     import admin.users as _users_mod
+    from admin.oidc import _ERROR_CODES
     req = MagicMock()
-    req.query = {"oidc_error": "Token exchange failed"}
+    # Valid opaque code → should show the mapped safe message
+    req.query = {"oidc_error": "err_token_exchange"}
     req.cookies = {}
     resp = await _users_mod.login_page_endpoint(req)
     text = resp.text
     assert "SSO:" in text, "Login page must show 'SSO:' prefix for OIDC errors"
-    assert "Token exchange failed" in text
+    assert _ERROR_CODES["err_token_exchange"] in text
     assert "__OIDC_ERROR__" not in text
+    # Unknown / attacker-supplied code → generic fallback, no reflection
+    req.query = {"oidc_error": "Token exchange failed"}
+    resp2 = await _users_mod.login_page_endpoint(req)
+    text2 = resp2.text
+    assert "SSO:" in text2
+    assert "Token exchange failed" not in text2, "Raw error strings must not be reflected"
+    assert _ERROR_CODES["err_generic"] in text2
 
 
 @pytest.mark.asyncio

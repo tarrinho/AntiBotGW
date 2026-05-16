@@ -6196,3 +6196,80 @@ class TestMissedListRiskBreakdown:
         pre_block = body[max(0, missed_idx - 300): missed_idx + 100]
         assert "reverse=True" in pre_block, \
             "agents_bucket_detail_endpoint: risk_breakdown sort must use reverse=True"
+
+
+# ── 1.8.6 — TOTP / 2FA QR code ───────────────────────────────────────────────
+
+class TestTotpSetupQrCode:
+    """totp_setup_endpoint returns qr_data_url (base64 PNG), not raw secret."""
+
+    def _setup_src(self):
+        import pathlib as _pl
+        return (_pl.Path(__file__).parent.parent / "admin" / "users.py").read_text()
+
+    def test_qr_data_url_in_response(self):
+        src = self._setup_src()
+        assert "qr_data_url" in src, \
+            "totp_setup_endpoint must include qr_data_url in json_response"
+
+    def test_qrcode_import(self):
+        src = self._setup_src()
+        assert "qrcode" in src, \
+            "totp_setup_endpoint must import qrcode to generate QR PNG"
+
+    def test_base64_encode_used(self):
+        src = self._setup_src()
+        assert "_b64.b64encode" in src or "base64.b64encode" in src, \
+            "QR PNG must be base64-encoded for data URL"
+
+    def test_data_url_prefix(self):
+        src = self._setup_src()
+        assert "data:image/png;base64," in src, \
+            "qr_data_url must use data:image/png;base64, prefix"
+
+    def test_raw_secret_not_in_response(self):
+        """INT4-11: raw secret must not appear in json_response body."""
+        src = self._setup_src()
+        setup_fn_start = src.find("async def totp_setup_endpoint")
+        assert setup_fn_start != -1
+        # Grab the function body (up to next async def)
+        next_fn = src.find("\nasync def ", setup_fn_start + 10)
+        fn_body = src[setup_fn_start:next_fn] if next_fn != -1 else src[setup_fn_start:]
+        json_resp_idx = fn_body.find("json_response(")
+        assert json_resp_idx != -1
+        resp_call = fn_body[json_resp_idx: json_resp_idx + 200]
+        assert '"secret"' not in resp_call and "'secret'" not in resp_call, \
+            "INT4-11: raw TOTP secret must not be returned in API response"
+
+
+class TestTotpSetupSettingsHtml:
+    """settings.html renders QR code image, not just raw URI text."""
+
+    def _html(self):
+        import pathlib as _pl
+        return (_pl.Path(__file__).parent.parent / "dashboards" / "settings.html").read_text()
+
+    def test_qr_img_element_exists(self):
+        html = self._html()
+        assert 'id="twofa-qr-img"' in html, \
+            "settings.html must have <img id='twofa-qr-img'> for QR display"
+
+    def test_qr_wrap_element_exists(self):
+        html = self._html()
+        assert 'id="twofa-qr-wrap"' in html, \
+            "settings.html must have #twofa-qr-wrap container for QR visibility toggle"
+
+    def test_qr_img_src_set_from_data_url(self):
+        html = self._html()
+        assert "qrImg.src" in html or "qr_data_url" in html, \
+            "settings.html JS must set qrImg.src from qr_data_url returned by backend"
+
+    def test_qr_wrap_shown_on_setup(self):
+        html = self._html()
+        assert "qrWrap.style.display" in html, \
+            "settings.html must show/hide #twofa-qr-wrap when setup area opens"
+
+    def test_qr_img_has_alt_text(self):
+        html = self._html()
+        assert 'alt="TOTP QR code"' in html or "alt='TOTP QR code'" in html, \
+            "QR <img> must have descriptive alt text for accessibility"

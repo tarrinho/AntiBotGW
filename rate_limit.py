@@ -26,6 +26,7 @@ from state import (
     _ACTIVE_SESSIONS,
     _signal_order_cache,
     _asn_path_clusters,
+    _TOTP_PENDING,
 )
 from helpers import slog, now
 from vhost import vc as _vc_rl
@@ -234,6 +235,27 @@ async def _prune_state_loop():
                         _fp_session_creations.pop(_fp, None)
                 except ImportError:
                     pass
+                # 12. PROXY4-07: _PROBE_RL — ip → [window_start, count].
+                # Entries are never evicted by the hot path; prune when the
+                # window_start is older than the rate-limit window so stale IPs
+                # do not accumulate indefinitely.
+                try:
+                    from core.proxy_handler import _PROBE_RL, PROBE_RL_WINDOW
+                    _probe_cutoff = _time.time() - PROBE_RL_WINDOW
+                    _stale_probe = [_ip for _ip, _e in list(_PROBE_RL.items())
+                                    if not _e or _e[0] < _probe_cutoff]
+                    for _ip in _stale_probe:
+                        _PROBE_RL.pop(_ip, None)
+                except ImportError:
+                    pass
+                # 13. PROXY4-10: _TOTP_PENDING — username → {ts, step/secret, …}.
+                # Scratch dict for the TOTP login / provisioning flow; prune entries
+                # older than 10 minutes to prevent unbounded growth from abandoned flows.
+                _totp_cutoff = _time.time() - 600
+                _stale_totp = [_u for _u, _p in list(_TOTP_PENDING.items())
+                               if isinstance(_p, dict) and _p.get("ts", 0) < _totp_cutoff]
+                for _u in _stale_totp:
+                    _TOTP_PENDING.pop(_u, None)
         except asyncio.CancelledError:
             break
         except Exception as e:

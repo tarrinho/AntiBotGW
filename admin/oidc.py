@@ -22,6 +22,9 @@ Flow:
 from __future__ import annotations
 
 import asyncio
+import base64
+import hmac
+import json
 import re
 import secrets
 import sqlite3
@@ -45,6 +48,11 @@ OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
 OIDC_DEFAULT_ROLE  = os.environ.get("OIDC_DEFAULT_ROLE", "viewer").strip()
 OIDC_SCOPES        = os.environ.get("OIDC_SCOPES", "openid profile email").strip()
 OIDC_ENABLED       = bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
+
+# AUTH4-12: OIDC issuer must use TLS — plaintext would expose tokens in transit
+if OIDC_ENABLED and not OIDC_ISSUER.startswith("https://"):
+    print(f"FATAL: OIDC_ISSUER must use https:// — got {OIDC_ISSUER!r}", flush=True)
+    raise SystemExit(2)
 
 _CALLBACK_PATH      = ADMIN_NS + "/auth/oidc/callback"
 _POST_LOGIN_PATH    = ADMIN_NS + "/secured/control-center"
@@ -87,13 +95,16 @@ async def oidc_login_endpoint(request: web.Request) -> web.Response:
         return web.Response(status=404, text="OIDC not configured\n",
                             headers={"Cache-Control": "no-store"})
 
+    from admin.users import _next_url_safe  # FE4-07: strict next URL validation
     next_url = request.query.get("next", "")
-    if not next_url.startswith("/") or next_url.startswith("//"):
+    if not _next_url_safe(next_url):
         next_url = _POST_LOGIN_PATH
 
     state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(16)  # AUTH4-07: nonce binds id_token to this session
     _purge_expired_states()
-    _OIDC_STATE[state] = {"next_url": next_url, "expires_ts": _t.time() + _STATE_TTL_S}
+    _OIDC_STATE[state] = {"next_url": next_url, "expires_ts": _t.time() + _STATE_TTL_S,
+                           "nonce": nonce}
 
     params = {
         "response_type": "code",
@@ -101,6 +112,7 @@ async def oidc_login_endpoint(request: web.Request) -> web.Response:
         "redirect_uri":  _redirect_uri(request),
         "scope":         OIDC_SCOPES,
         "state":         state,
+        "nonce":         nonce,  # AUTH4-07: IdP must embed nonce in id_token
     }
     auth_url = f"{OIDC_ISSUER}/protocol/openid-connect/auth?{urlencode(params)}"
     return web.HTTPFound(auth_url)
@@ -119,17 +131,17 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
     if error:
         slog("oidc_idp_error", level="warn", error=error,
              desc=(request.query.get("error_description") or "")[:200], ip=ip)
-        return _redirect_error(f"Identity provider error: {error}")
+        return _redirect_error("err_idp_error")
 
     code  = request.query.get("code", "")
     state = request.query.get("state", "")
     if not code or not state:
-        return _redirect_error("Missing code or state parameter")
+        return _redirect_error("err_missing_params")
 
     state_data = _OIDC_STATE.pop(state, None)
     if state_data is None or state_data["expires_ts"] < _t.time():
         slog("oidc_invalid_state", level="warn", ip=ip)
-        return _redirect_error("Login session expired — please try again")
+        return _redirect_error("err_state_expired")
 
     next_url = state_data["next_url"]
 
@@ -153,13 +165,31 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
                     body = (await resp.text())[:300]
                     slog("oidc_token_exchange_failed", level="warn",
                          status=resp.status, body=body, ip=ip)
-                    return _redirect_error("Token exchange failed — check Keycloak client config")
+                    return _redirect_error("err_token_exchange")
                 token_data = await resp.json(content_type=None)
 
             access_token = token_data.get("access_token")
             if not access_token:
                 slog("oidc_no_access_token", level="warn", ip=ip)
-                return _redirect_error("No access token in IdP response")
+                return _redirect_error("err_no_access_token")
+
+            # AUTH4-07: validate nonce from id_token payload to prevent token replay
+            stored_nonce = state_data.get("nonce", "")
+            id_token_raw = token_data.get("id_token", "")
+            id_token_payload: dict = {}
+            if stored_nonce and id_token_raw:
+                try:
+                    parts = id_token_raw.split(".")
+                    padded = parts[1] + "=" * (-len(parts[1]) % 4)
+                    id_token_payload = json.loads(base64.urlsafe_b64decode(padded))
+                    token_nonce = id_token_payload.get("nonce", "")
+                    if not hmac.compare_digest(stored_nonce, token_nonce):
+                        slog("oidc_nonce_mismatch", level="error", ip=ip)
+                        return _redirect_error("err_token_replay")
+                except Exception as _e:
+                    slog("oidc_nonce_decode_failed", level="warn",
+                         err=str(_e)[:120], ip=ip)
+                    return _redirect_error("err_token_replay")
 
             # Step 2: userinfo
             async with http.get(
@@ -170,16 +200,16 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
                 if resp.status != 200:
                     slog("oidc_userinfo_failed", level="warn",
                          status=resp.status, ip=ip)
-                    return _redirect_error("Userinfo fetch failed — check Keycloak scopes")
+                    return _redirect_error("err_userinfo_failed")
                 userinfo = await resp.json(content_type=None)
 
     except asyncio.TimeoutError:
         slog("oidc_timeout", level="warn", ip=ip)
-        return _redirect_error("Identity provider timed out — try again")
+        return _redirect_error("err_timeout")
     except aiohttp.ClientError as e:
         slog("oidc_network_error", level="warn",
              err=f"{type(e).__name__}: {str(e)[:120]}", ip=ip)
-        return _redirect_error("Could not reach identity provider — try again")
+        return _redirect_error("err_network")
 
     # ── Map IdP identity → gateway username ───────────────────────────────────
     preferred = (userinfo.get("preferred_username")
@@ -192,17 +222,24 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
     oidc_sub = (userinfo.get("sub") or "").strip()
     if not oidc_sub:
         slog("oidc_missing_sub", level="warn", ip=ip)
-        return _redirect_error("Identity provider did not return a subject claim (sub)")
+        return _redirect_error("err_missing_sub")
+
+    # INT4-10: assert id_token sub == userinfo sub (guards against IdP confusion)
+    if id_token_payload:
+        id_token_sub = (id_token_payload.get("sub") or "").strip()
+        if id_token_sub and oidc_sub and not hmac.compare_digest(id_token_sub, oidc_sub):
+            slog("oidc_sub_mismatch_idtoken_userinfo", level="error",
+                 ip=ip, it_sub=id_token_sub[:40], ui_sub=oidc_sub[:40])
+            return _redirect_error("err_identity_mismatch")
 
     username = _safe_username(preferred)
     if not username:
         slog("oidc_unmappable_username", level="warn",
              preferred=preferred[:80], ip=ip)
-        return _redirect_error(
-            f"Cannot map IdP identity {repr(preferred)[:60]} to a valid gateway username")
+        return _redirect_error("err_unmappable_user")
 
     # ── Provision user on first login ─────────────────────────────────────────
-    from admin.users import (_user_load, _session_create,
+    from admin.users import (_user_load, _session_create, _enforce_session_limit,
                              _ACTIVE_SESSIONS, _SESSION_COOKIE, _SESSION_TTL)
 
     user = _user_load(username)
@@ -226,7 +263,7 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
         except Exception as e:
             slog("oidc_provision_failed", level="error",
                  username=username, err=str(e)[:200])
-            return _redirect_error("Account provisioning failed — contact an administrator")
+            return _redirect_error("err_provision_failed")
         slog("oidc_user_pending", level="warn",
              username=username, role=role, ip=ip)
         return web.Response(status=404, text="Not found\n",
@@ -240,7 +277,7 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
     if stored_sub and stored_sub != oidc_sub:
         slog("oidc_sub_collision", level="error",
              username=username, stored=stored_sub[:40], received=oidc_sub[:40], ip=ip)
-        return _redirect_error("Account identity mismatch — contact an administrator")
+        return _redirect_error("err_identity_mismatch")
     if not stored_sub and db_queue is not None:
         try:
             db_queue.put_nowait(("user_update", (username, {"oidc_sub": oidc_sub,
@@ -255,10 +292,11 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
 
     if user.get("status") != "active":
         slog("oidc_login_disabled_user", level="warn", username=username, ip=ip)
-        return _redirect_error("Your account is disabled — contact an administrator")
+        return _redirect_error("err_account_disabled")
 
     # ── Mint session (same machinery as password login) ───────────────────────
     ua    = (request.headers.get("User-Agent") or "")[:512]
+    _enforce_session_limit(username)  # AUTH4-08: enforce per-user session cap before minting
     token = _session_create(username, ip, ua)
     _ACTIVE_SESSIONS[username] = _t.time()
 
@@ -280,9 +318,30 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _redirect_error(msg: str) -> web.Response:
-    """Redirect to /login with an error message surfaced in the query string."""
-    return web.HTTPFound(f"{ADMIN_NS}/login?oidc_error={quote(msg)}")
+# AUTH4-13: opaque error codes — never reflect IdP error strings into the URL
+_ERROR_CODES: dict[str, str] = {
+    "err_idp_error":         "Identity provider error.",
+    "err_missing_params":    "Missing login parameters.",
+    "err_state_expired":     "Login session expired — please try again.",
+    "err_token_exchange":    "Token exchange failed — check Keycloak configuration.",
+    "err_no_access_token":   "No access token in IdP response.",
+    "err_userinfo_failed":   "Userinfo fetch failed — check Keycloak scopes.",
+    "err_timeout":           "Identity provider timed out — try again.",
+    "err_network":           "Could not reach identity provider — try again.",
+    "err_missing_sub":       "Identity provider did not return a subject claim.",
+    "err_unmappable_user":   "Cannot map IdP identity to a gateway username.",
+    "err_provision_failed":  "Account provisioning failed — contact an administrator.",
+    "err_account_disabled":  "Your account is disabled — contact an administrator.",
+    "err_identity_mismatch": "Account identity mismatch — contact an administrator.",
+    "err_token_replay":      "Login replay detected — please try again.",
+    "err_generic":           "Authentication failed — please try again.",
+}
+
+
+def _redirect_error(code: str) -> web.Response:
+    """Redirect to /login with an opaque error code; message resolved server-side."""
+    safe = code if code in _ERROR_CODES else "err_generic"
+    return web.HTTPFound(f"{ADMIN_NS}/login?oidc_error={quote(safe)}")
 
 
 def oidc_button_html() -> str:

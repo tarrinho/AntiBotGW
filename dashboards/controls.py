@@ -2,7 +2,7 @@
 # Extracted from proxy.py lines 11281–11297
 from config import *   # noqa: F401,F403
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
-from admin.auth import _internal_authed, _request_role  # noqa: F401
+from admin.auth import _internal_authed, _request_role, _role_denied  # noqa: F401
 from aiohttp import web
 
 CONTROLS_DASHBOARD_HTML  = (_DASHBOARDS_DIR / "controls.html").read_text(encoding="utf-8")
@@ -30,15 +30,23 @@ _PROTO_HEADERS = {
 
 async def controls_test_a_endpoint(request: web.Request):
     """Prototype A — split-pane controls layout (temporary, not in menus)."""
-    if _request_role(request) == "viewer":
-        return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
+    # AUTH4-10/FE4-04: require full session auth + admin/maintainer role
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     return web.Response(text=CONTROLS_TEST_A_HTML, content_type="text/html", headers=_PROTO_HEADERS)
 
 
 async def controls_test_b_endpoint(request: web.Request):
     """Prototype B — modified-first controls layout (temporary, not in menus)."""
-    if _request_role(request) == "viewer":
-        return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
+    # AUTH4-10/FE4-04: require full session auth + admin/maintainer role
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     return web.Response(text=CONTROLS_TEST_B_HTML, content_type="text/html", headers=_PROTO_HEADERS)
 
 

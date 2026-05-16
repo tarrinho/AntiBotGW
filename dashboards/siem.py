@@ -13,6 +13,18 @@ from helpers import slog, now  # noqa: F401
 from admin.auth import _internal_authed, _is_admin_ip, _require_csrf  # noqa: F401
 from aiohttp import web
 
+_CSV_FORMULA_CHARS = frozenset("=+-@\t\r")
+
+
+def _csv_safe(v: object) -> object:
+    """FE4-05: prefix formula-triggering strings with a tab to prevent CSV injection."""
+    if not isinstance(v, str):
+        return v
+    if v and v[0] in _CSV_FORMULA_CHARS:
+        return "\t" + v
+    return v
+
+
 # ── Alert rule constants ──────────────────────────────────────────────────────
 _ALERT_COOLDOWN_S = 300
 _VALID_METRICS = frozenset({"block_pct", "blocked", "bans", "threat_index", "crit_count", "high_count"})
@@ -710,9 +722,10 @@ async def siem_export_endpoint(request: web.Request) -> web.Response:
     for ev in sorted(filtered, key=lambda e: e.get("ts", 0), reverse=True):
         rsn = ev.get("reason", "") or ""
         writer.writerow([
-            ev.get("ts", ""), ev.get("ip", ""), ev.get("path", ""),
-            ev.get("method", ""), ev.get("status", ""), rsn,
-            _severity(rsn), ev.get("score", ""), ev.get("ja4", ""), ev.get("ua", ""),
+            ev.get("ts", ""), _csv_safe(ev.get("ip", "")), _csv_safe(ev.get("path", "")),
+            ev.get("method", ""), ev.get("status", ""), _csv_safe(rsn),
+            _csv_safe(_severity(rsn)), ev.get("score", ""), _csv_safe(ev.get("ja4", "")),
+            _csv_safe(ev.get("ua", "")),
         ])
 
     return web.Response(

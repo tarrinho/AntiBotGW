@@ -64,9 +64,11 @@ def _webhook_event_allowed(event: dict) -> bool:
 
 
 def _webhook_url_safe(url: str) -> bool:
-    """Reject URLs that could SSRF to private/loopback addresses (CWE-918)."""
+    """Reject URLs that could SSRF to private/loopback addresses (CWE-918).
+    INT4-05: DNS-resolves hostnames so a private IP behind a public name is caught."""
     from urllib.parse import urlparse
     import ipaddress
+    import socket
     try:
         p = urlparse(url)
         if p.scheme not in ("http", "https"):
@@ -74,12 +76,25 @@ def _webhook_url_safe(url: str) -> bool:
         host = p.hostname or ""
         if not host:
             return False
+        # Check bare-IP literals first (fast path, no DNS needed)
         try:
-            ip = ipaddress.ip_address(host)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            ip_lit = ipaddress.ip_address(host)
+            if (ip_lit.is_private or ip_lit.is_loopback
+                    or ip_lit.is_link_local or ip_lit.is_reserved):
                 return False
+            return True
         except ValueError:
-            pass  # hostname, not a bare IP — allowed
+            pass  # not a bare IP — fall through to DNS resolution
+        # INT4-05: resolve hostname and check all returned addresses
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            for _fam, _type, _proto, _cname, sockaddr in infos:
+                resolved = ipaddress.ip_address(sockaddr[0])
+                if (resolved.is_private or resolved.is_loopback
+                        or resolved.is_link_local or resolved.is_reserved):
+                    return False
+        except OSError:
+            return False  # DNS failure → treat as unsafe
         return True
     except Exception:
         return False

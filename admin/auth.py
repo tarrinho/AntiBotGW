@@ -179,12 +179,19 @@ def _request_username(request) -> str:
 
 def _request_role(request) -> str:
     """Return the role of the session user, or 'admin' for key-only auth."""
-    from admin.users import _user_load  # lazy: avoid circular import at module load
+    from admin.users import _user_load, _session_revoke  # lazy: avoid circular import
     u = request.get("_session_user") if hasattr(request, "get") else None
     if not u:
-        return "admin"
+        return "admin"  # key-only (admin_key) auth — grants admin by design
     user = _user_load(u)
-    return (user or {}).get("role") or "admin"
+    if not user:
+        # User deleted after session was issued; revoke defensively (AUTH4-01)
+        sid = request.get("_session_sid") if hasattr(request, "get") else None
+        if sid:
+            _session_revoke(sid, by_username="system")
+        return "viewer"  # fail-closed: deleted user must not get admin
+    role = (user.get("role") or "").strip()
+    return role if role in ("admin", "maintainer", "viewer") else "viewer"
 
 
 def _role_denied(request, *allowed_roles: str):
