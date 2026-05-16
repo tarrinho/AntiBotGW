@@ -116,6 +116,28 @@ def _maxmind_seed_from_image():
             slog("maxmind_seed_failed", level="warn", dest=dest, error=str(e))
 
 
+_MAXMIND_CHECK_TS_PATH = "/data/.maxmind_last_check"
+_MAXMIND_MIN_INTERVAL  = 86400  # 24 hours
+
+
+def _read_last_check() -> float:
+    """Return unix timestamp of last MaxMind fetch attempt, or 0.0 if never."""
+    try:
+        with open(_MAXMIND_CHECK_TS_PATH) as f:
+            return float(f.read().strip())
+    except (OSError, ValueError):
+        return 0.0
+
+
+def _write_last_check() -> None:
+    """Record now as the last MaxMind fetch timestamp."""
+    try:
+        with open(_MAXMIND_CHECK_TS_PATH, "w") as f:
+            f.write(str(_t.time()))
+    except OSError:
+        pass
+
+
 def _etag_path(mmdb_path: str) -> str:
     return mmdb_path + ".etag"
 
@@ -222,43 +244,51 @@ def _maxmind_fetch_edition(edition: str, dest: str, key: str,
 
 
 def _maxmind_auto_fetch():
-    """First-boot convenience. When MAXMIND_LICENSE_KEY is set AND a target
-    mmdb is missing, download it directly from MaxMind into /data/<edition>.mmdb.
-    Uses ETag-based conditional HTTP — 304 Not Modified skips the download
-    and doesn't count toward MaxMind's daily limit."""
+    """First-boot convenience. Downloads any missing mmdb files when
+    MAXMIND_LICENSE_KEY is set. Skips entirely if a fetch was attempted
+    within the last 24 hours — prevents hammering MaxMind on rapid container
+    restarts. Uses ETag-based conditional HTTP; 304 Not Modified doesn't
+    count toward MaxMind's 2 000/day download quota."""
     key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
     if not key:
+        return
+    elapsed = _t.time() - _read_last_check()
+    if elapsed < _MAXMIND_MIN_INTERVAL:
+        slog("maxmind_fetch_skipped", level="info",
+             reason="checked_within_24h", elapsed_secs=int(elapsed))
         return
     targets = [
         ("GeoLite2-ASN",  MAXMIND_ASN_DB_PATH),
         ("GeoLite2-City", MAXMIND_CITY_DB_PATH),
     ]
+    _write_last_check()
     for edition, dest in targets:
         _maxmind_fetch_edition(edition, dest, key, force=False)
 
 
 async def _maxmind_refresh_loop():
-    """Every 30 days, re-fetch any mmdb older than that AND reload the
-    in-memory readers. Uses ETag-based conditional HTTP so unchanged databases
-    return 304 Not Modified without counting toward MaxMind's daily limit."""
+    """Wakes every hour; fetches both databases when the last check was
+    >24 h ago. The 24-h gate is shared with _maxmind_auto_fetch via the
+    same timestamp file so the two never fire within 24 h of each other.
+    Uses ETag-based conditional HTTP; 304 Not Modified doesn't count toward
+    MaxMind's daily limit. Reloads in-memory readers after any download."""
     global _asn_reader, _city_reader, MAXMIND_ENABLED, MAXMIND_CITY_ENABLED
     key = os.environ.get("MAXMIND_LICENSE_KEY", "").strip()
     if not key:
-        return  # nothing to refresh — operator hasn't opted in
-    THIRTY_DAYS = 30 * 86400
+        return
     while True:
-        await asyncio.sleep(86400)   # check daily, refresh monthly
+        await asyncio.sleep(3600)   # wake hourly, gate on shared 24-h timestamp
         try:
-            stale = []
-            for path in (MAXMIND_ASN_DB_PATH, MAXMIND_CITY_DB_PATH):
-                if os.path.exists(path) and (_t.time() - os.path.getmtime(path)) > THIRTY_DAYS:
-                    stale.append(path)
-            if not stale:
+            elapsed = _t.time() - _read_last_check()
+            if elapsed < _MAXMIND_MIN_INTERVAL:
                 continue
-            slog("maxmind_refreshing_stale", level="info", stale_count=len(stale))
+            _write_last_check()
+            slog("maxmind_refreshing", level="info", elapsed_h=round(elapsed / 3600, 1))
             reloaded = False
-            for path in stale:
-                edition = "GeoLite2-ASN" if "ASN" in path else "GeoLite2-City"
+            for edition, path in [
+                ("GeoLite2-ASN",  MAXMIND_ASN_DB_PATH),
+                ("GeoLite2-City", MAXMIND_CITY_DB_PATH),
+            ]:
                 result = _maxmind_fetch_edition(edition, path, key, force=True)
                 if result in ("downloaded", "not_modified"):
                     reloaded = True

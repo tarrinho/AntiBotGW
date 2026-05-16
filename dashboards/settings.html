@@ -1101,6 +1101,10 @@ const toast = (msg, kind) => {
 // ── Gateway identity strip ────────────────────────────────────────
 (async () => {
   try {
+    // Show hostname immediately — no fetch needed
+    const curHost = window.location.hostname.toLowerCase();
+    $("gw-vhost").textContent = curHost;
+
     const [hsr, vhr] = await Promise.all([
       fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' }),
       fetch("/antibot-appsec-gateway/secured/vhosts",       { credentials: 'include' }),
@@ -1116,11 +1120,7 @@ const toast = (msg, kind) => {
         $("gw-started").textContent = new Date(startEpoch * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
       }
 
-      // Vhost + upstream
-      const curHost = window.location.hostname.toLowerCase();
-      $("gw-vhost").innerHTML = escapeHtml(curHost);
-
-      // Try to find vhost-specific upstream from the vhosts list
+      // Vhost registration lookup
       let vhostUpstream = null;
       let isRegistered  = false;
       if (vhr.ok) {
@@ -1140,7 +1140,7 @@ const toast = (msg, kind) => {
       upEl.textContent = displayUpstream || "—";
       upEl.title       = displayUpstream || "";
 
-      // Badge: "registered" / "global" (unregistered host uses global upstream)
+      // Badge: vhost (own upstream) / global (inherits) / unregistered
       const badge = document.createElement("span");
       badge.style.cssText = "font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;font-family:-apple-system,sans-serif;white-space:nowrap;flex-shrink:0";
       if (isRegistered && vhostUpstream) {
@@ -1161,7 +1161,7 @@ const toast = (msg, kind) => {
       }
       $("gw-vhost").appendChild(badge);
     }
-  } catch (e) { /* leave dashes */ }
+  } catch (e) { console.error("[gw-identity]", e); }
 })();
 
 
@@ -2985,12 +2985,19 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     if (!confirm('Switching DB backend requires a container restart. Continue?')) return;
     this.disabled = true;
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/config',
-        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({DB_BACKEND:val})});
+      const body = {};
+      if (val === 'postgres') {
+        const host=$('pg-host').value.trim(), port=$('pg-port').value.trim()||'5432',
+              db=$('pg-db').value.trim(), user=$('pg-user').value.trim(), pass=$('pg-pass').value;
+        if (host && db && user && pass)
+          body.dsn = `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${encodeURIComponent(host)}:${port}/${encodeURIComponent(db)}`;
+      }
+      const r = await fetch('/antibot-appsec-gateway/secured/db-switch?target='+encodeURIComponent(val),
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(body)});
       const d = await r.json();
-      if (r.ok && d.applied && Object.keys(d.applied).length) {
-        toast('Backend set to '+val+' — restart container','ok'); _dbOrig=val; $('btn-db-apply').disabled=true;
-      } else { toast('Failed: '+JSON.stringify(d.rejected||d),'err'); this.disabled=false; }
+      if (r.ok && d.ok) {
+        toast((d.message||'Backend set to '+val)+' — restarting…','ok'); _dbOrig=val; $('btn-db-apply').disabled=true;
+      } else { toast('Failed: '+(d.reason||d.detail||JSON.stringify(d)),'err'); this.disabled=false; }
     } catch(e){ toast('Network error: '+e.message,'err'); this.disabled=false; }
   });
   $('pg-save-btn').addEventListener('click', async function(){

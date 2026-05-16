@@ -428,7 +428,7 @@ async def login_page_endpoint(request: web.Request):
         # AUTH4-13: resolve opaque code to safe message — never reflect raw URL value
         safe_msg = _html.escape(_ERROR_CODES.get(oidc_error_code,
                                                   _ERROR_CODES["err_generic"]))
-        oidc_error_html = (
+        oidc_error_html = (  # nosemgrep: python.django.security.injection.raw-html-format.raw-html-format — safe_msg is from static _ERROR_CODES dict, already html.escape()'d
             f'<div id="err" class="err show">SSO: {safe_msg}</div>')
     body = ((_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8")
             .replace("__BOOTSTRAP_HINT__", _bootstrap_hint_html())
