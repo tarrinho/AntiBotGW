@@ -83,6 +83,13 @@ _SCHEMA_MIGRATIONS: list[tuple[str, str, str | None, str | None]] = [
     ("users",       "totp_secret",     "TEXT",                          "TEXT"),
     ("users",       "totp_enabled",    "INTEGER DEFAULT 0",             "INTEGER DEFAULT 0"),
     ("users",       "totp_backup_codes", "TEXT",                        "TEXT"),
+    # 1.8.5 — SSO-provisioned users start in 'pending' status until an admin
+    # authorises them. sso_source records the identity provider (e.g. 'oidc').
+    ("users",       "sso_source",      "TEXT",                          "TEXT"),
+    # 1.8.5 — IdP subject claim (sub) bound on first SSO login. Used to
+    # detect username-collision attacks: an attacker cannot create a local
+    # account named 'admin' and then log in as that user via SSO.
+    ("users",       "oidc_sub",        "TEXT",                          "TEXT"),
 ]
 
 
@@ -626,10 +633,19 @@ async def db_writer_loop():
                         # args = (username, {col: val, ...})
                         username, fields = args
                         if fields:
+                            _USER_MUTABLE = frozenset({
+                                "password_hash", "role", "status",
+                                "totp_secret", "totp_enabled", "totp_backup_codes",
+                                "oidc_sub", "sso_source",
+                                "updated_ts",
+                            })
+                            bad = set(fields) - _USER_MUTABLE
+                            if bad:
+                                raise ValueError(f"user_update: unknown columns {bad}")
                             cols   = ", ".join(f"{k}=?" for k in fields)
                             params = list(fields.values()) + [username]
                             conn.execute(
-                                f"UPDATE users SET {cols} WHERE username=?",  # nosec B608
+                                f"UPDATE users SET {cols} WHERE username=?",  # nosec B608 — cols validated against _USER_MUTABLE
                                 params)
                     elif op == "user_delete":
                         # args = (username,)
@@ -759,6 +775,10 @@ async def db_writer_loop():
                     pass    # readers active, skip this cycle
                 last_vacuum = now_ts
         except asyncio.CancelledError:
+            try:
+                conn.close()
+            except Exception:
+                pass
             break
         except Exception as e:
             slog("db_loop_error", level="error", error=str(e))

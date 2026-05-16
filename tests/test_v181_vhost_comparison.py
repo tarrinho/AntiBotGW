@@ -109,6 +109,16 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _wipe_events(proxy_module):
     conn = sqlite3.connect(proxy_module.DB_PATH)
     conn.execute("DELETE FROM events")
@@ -1835,6 +1845,7 @@ class TestConfigVhostWrite:
                         r = await c.post(
                             NS + "/config?vhost=writevh.internal",
                             json={"UA_FILTER_ENABLED": False},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r.status == 200, f"POST /config?vhost: expected 200, got {r.status}"
@@ -1869,6 +1880,7 @@ class TestConfigVhostWrite:
                         r = await c.post(
                             NS + "/config?vhost=rej.internal",
                             json={"RISK_BAN_THRESHOLD_NAT": 90},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r.status == 200
@@ -1894,6 +1906,7 @@ class TestConfigVhostWrite:
                         r = await c.post(
                             NS + "/config?vhost=isolate.internal",
                             json={"RATE_LIMIT_BURST": 9999},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r.status == 200
@@ -1948,6 +1961,7 @@ class TestConfigVhostWrite:
                     r = await c.post(
                         NS + "/config",
                         json={"LOG_LEVEL": original},
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200

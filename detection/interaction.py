@@ -190,6 +190,8 @@ def _analyze_entropy(all_events: list) -> tuple[str | None, str]:
     return None, ""
 
 
+_MAX_OFFSET_MS = 60_000   # hard ceiling on any client-submitted timestamp offset
+
 def interaction_analyze(events: list, duration_ms: int) -> tuple[str | None, str]:
     """
     Analyse interaction event stream from the challenge page probe.
@@ -200,9 +202,20 @@ def interaction_analyze(events: list, duration_ms: int) -> tuple[str | None, str
     """
     if not INTERACTION_PROBE_ENABLED:
         return None, ""
-    # Clamp + type-validate events
-    valid = [e for e in events[:_MAX_EVENTS]
-             if isinstance(e, list) and len(e) >= 2 and e[0] in ('m', 's', 'k')]
+    # Server-side clamp: duration and per-event offset come from the client and
+    # must not be trusted at face value. Clamp to the max session window so a
+    # bot cannot inflate or invert timestamps to defeat timing analysis.
+    duration_ms = max(0, min(int(duration_ms), _MAX_OFFSET_MS))
+    # Clamp + type-validate events; pin each offset to [0, _MAX_OFFSET_MS].
+    valid = []
+    for e in events[:_MAX_EVENTS]:
+        if not (isinstance(e, list) and len(e) >= 2 and e[0] in ('m', 's', 'k')):
+            continue
+        try:
+            clamped = [e[0], max(0, min(int(e[1]), _MAX_OFFSET_MS))] + e[2:]
+        except (TypeError, ValueError):
+            continue
+        valid.append(clamped)
     # No events in a >=3 s window → bot loaded challenge page silently
     if duration_ms >= 3000 and not valid:
         return "no-interaction", "zero events in challenge window"
@@ -256,7 +269,7 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
     if not isinstance(events, list):
         events = []
     try:
-        duration_ms = int(d.get("dur", 0))
+        duration_ms = max(0, min(int(d.get("dur", 0)), _MAX_OFFSET_MS))
     except (ValueError, TypeError):
         duration_ms = 0
     reason, detail = interaction_analyze(events, duration_ms)

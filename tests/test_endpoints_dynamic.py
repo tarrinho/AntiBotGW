@@ -101,6 +101,15 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
 def _browser_headers(extra=None):
     h = {
         "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
@@ -445,6 +454,7 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 60},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -458,6 +468,7 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"TOTALLY_FAKE_KNOB_ZZZZZ": "value"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert r.status == 200
@@ -472,6 +483,7 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"ADMIN_KEY": "should-be-rejected"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert "ADMIN_KEY" in str(d.get("rejected", {}))
@@ -859,6 +871,7 @@ class TestBanUnbanLifecycle:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/ban?ip=10.10.10.10&secs=3600&reason=test",
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -873,6 +886,7 @@ class TestBanUnbanLifecycle:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/ban?secs=3600&reason=test",
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -884,6 +898,7 @@ class TestBanUnbanLifecycle:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/unban",
                                      json={"all": True},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -910,9 +925,11 @@ class TestBanUnbanLifecycle:
                     await c.get("/some-page", headers=_browser_headers(
                         {"X-Forwarded-For": "7.7.7.7"}))
                     await c.post(NS + "/ban?ip=7.7.7.7&secs=3600&reason=test",
+                                 headers=_csrf_hdr(proxy_module, cookie),
                                  cookies={proxy_module._SESSION_COOKIE: cookie})
                     r = await c.post(NS + "/unban",
                                      json={"ip": "7.7.7.7"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
         _run(go())

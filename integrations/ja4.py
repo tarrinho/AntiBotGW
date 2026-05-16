@@ -99,7 +99,7 @@ async def _refresh_ja4_denylist_loop():
 def _ja4_peer_trusted(request) -> bool:
     """True if the kernel-observed peer IP may inject the JA4 header."""
     if not JA4_TRUSTED_NETS:
-        return True   # operator did not pin — trust all (firewall assumed)
+        return False  # no pinned nets — deny by default; set JA4_TRUSTED_NETS to enable
     import ipaddress as _ipaddress
     try:
         ip = _ipaddress.ip_address(request.remote or "")

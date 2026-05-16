@@ -96,6 +96,19 @@ main{max-width:900px;margin:0 auto;padding:20px}
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script>
+// Inject X-CSRF-Token automatically for every state-mutating same-origin request.
+(function() {
+  const _orig = window.fetch;
+  window.fetch = function(resource, init) {
+    const m = ((init && init.method) || 'GET').toUpperCase();
+    if (m !== 'GET' && m !== 'HEAD') {
+      init = init || {};
+      init.headers = Object.assign({}, init.headers,
+        {'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''});
+    }
+    return _orig.call(this, resource, init);
+  };
+}());
 const _dp = h => {
   if (typeof DOMPurify === 'undefined') return h;
   if (/^<t[rhd]/i.test((h||'').trimStart())) {

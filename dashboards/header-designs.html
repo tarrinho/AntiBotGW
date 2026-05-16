@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>AppSecGW · Header Design Showcase</title>
+<style>
+:root{
+  --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+  --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;
+  --orange:#ff7b3a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;background:#080c10;color:var(--fg);padding:24px}
+
+/* ── showcase wrapper ── */
+.showcase-title{font-size:22px;font-weight:700;color:#fff;margin-bottom:6px}
+.showcase-sub{font-size:13px;color:var(--dim);margin-bottom:32px}
+.design-block{margin-bottom:48px}
+.design-label{font-size:11px;font-weight:700;letter-spacing:1.2px;text-transform:uppercase;
+  color:var(--dim);margin-bottom:10px;display:flex;align-items:center;gap:10px}
+.design-label span{background:#1f2730;border:1px solid var(--line);border-radius:4px;
+  padding:2px 8px;font-size:10px;letter-spacing:.6px}
+.design-frame{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+
+/* ── shared atoms ── */
+.pill-live{font-size:10px;background:var(--green);color:#000;padding:2px 8px;
+  border-radius:10px;font-weight:700}
+.pill-live-red{font-size:10px;background:var(--red);color:#fff;padding:2px 8px;
+  border-radius:10px;font-weight:700}
+button,select{cursor:pointer}
+
+/* ══════════════════════════════════════════
+   DESIGN 1 — Current (reference)
+══════════════════════════════════════════ */
+.d1-h1{font-size:18px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.d1-nav{display:flex;gap:14px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--line);margin-bottom:10px}
+.d1-nav a{color:var(--dim);text-decoration:none;padding:4px 8px;border-radius:4px}
+.d1-nav a.active{color:var(--fg);background:#1f2730}
+.d1-vhost{display:flex;gap:6px;margin-bottom:10px;align-items:center;flex-wrap:wrap}
+.d1-vhost-label{font-size:11px;color:var(--dim);margin-right:2px}
+.d1-vpill{padding:3px 13px;border-radius:14px;border:1.5px solid var(--blue);color:var(--blue);
+  background:transparent;font-size:12px;font-weight:600;line-height:1.6}
+.d1-vpill.active{background:var(--blue);color:#0a1628}
+.d1-filter{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.d1-filter-label{font-size:11px;color:var(--dim)}
+.d1-cpill{padding:3px 11px;border-radius:12px;border:1px solid var(--line);
+  color:var(--dim);background:transparent;font-size:11.5px;font-weight:600;line-height:1.6}
+.d1-cpill.active{border-color:#58a6ff33;color:var(--fg);background:#1a2332}
+.d1-path{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;
+  border-radius:12px;border:1px solid var(--line);background:transparent;margin-left:6px}
+.d1-path input{font-family:ui-monospace,monospace;font-size:11px;background:transparent;
+  border:none;color:var(--fg);width:130px;outline:none}
+
+/* ══════════════════════════════════════════
+   DESIGN 2 — Sidebar + compact top bar
+══════════════════════════════════════════ */
+.d2-wrap{display:flex;gap:0}
+.d2-sidebar{width:130px;flex-shrink:0;border-right:1px solid var(--line);padding-right:14px;margin-right:14px}
+.d2-logo{font-size:13px;font-weight:700;color:#fff;margin-bottom:16px;letter-spacing:.3px}
+.d2-logo span{color:var(--blue)}
+.d2-nav{display:flex;flex-direction:column;gap:2px}
+.d2-nav a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
+.d2-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+.d2-main{flex:1}
+.d2-topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px}
+.d2-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px}
+.d2-actions{display:flex;align-items:center;gap:8px;font-size:11.5px}
+.d2-vhost-select{background:#1f2730;border:1px solid var(--line);color:var(--fg);
+  border-radius:5px;padding:4px 8px;font-size:11.5px}
+.d2-filter{display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:8px;
+  padding-top:8px;border-top:1px solid var(--line)}
+.d2-cpill{padding:2px 9px;border-radius:10px;border:1px solid var(--line);
+  color:var(--dim);background:transparent;font-size:11px;font-weight:600}
+.d2-cpill.active{background:#1a2332;color:var(--fg);border-color:#2d3f55}
+.d2-path{background:transparent;border:1px solid var(--line);border-radius:5px;
+  color:var(--fg);font-size:11px;padding:3px 8px;font-family:ui-monospace,monospace;width:140px;outline:none}
+
+/* ══════════════════════════════════════════
+   DESIGN 3 — Full top bar, single row
+══════════════════════════════════════════ */
+.d3-bar{display:flex;align-items:center;gap:0;background:#161b22;border:1px solid var(--line);
+  border-radius:8px;padding:0 4px;margin-bottom:10px;overflow:hidden}
+.d3-brand{font-size:12px;font-weight:700;color:#fff;padding:8px 14px;
+  border-right:1px solid var(--line);white-space:nowrap;letter-spacing:.2px}
+.d3-brand span{color:var(--blue)}
+.d3-nav{display:flex;gap:0}
+.d3-nav a{color:var(--dim);text-decoration:none;padding:8px 12px;font-size:12px;
+  border-bottom:2px solid transparent;transition:all .1s}
+.d3-nav a.active{color:var(--fg);border-bottom-color:var(--blue)}
+.d3-spacer{flex:1}
+.d3-live{margin:0 10px}
+.d3-vsel{background:#1f2730;border:1px solid var(--line);color:var(--fg);
+  border-radius:5px;padding:4px 8px;font-size:11.5px;margin-right:8px}
+.d3-filter-row{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.d3-show-label{font-size:11px;color:var(--dim)}
+.d3-cpill{padding:2px 10px;border-radius:10px;border:1px solid transparent;
+  color:var(--dim);background:transparent;font-size:11px;font-weight:600}
+.d3-cpill.active.allowed{background:rgba(63,185,80,.15);color:var(--green);border-color:rgba(63,185,80,.3)}
+.d3-cpill.active.ban{background:rgba(248,81,73,.15);color:var(--red);border-color:rgba(248,81,73,.3)}
+.d3-cpill.active.missed{background:rgba(255,123,58,.15);color:var(--orange);border-color:rgba(255,123,58,.3)}
+.d3-cpill.active.auth{background:rgba(188,140,255,.15);color:var(--purple);border-color:rgba(188,140,255,.3)}
+.d3-cpill.active.gwm{background:rgba(88,166,255,.1);color:var(--blue);border-color:rgba(88,166,255,.2)}
+.d3-path{background:#1f2730;border:1px solid var(--line);border-radius:5px;
+  color:var(--fg);font-size:11px;padding:3px 8px;font-family:ui-monospace,monospace;width:130px;outline:none;margin-left:8px}
+
+/* ══════════════════════════════════════════
+   DESIGN 4 — Dark glass / frosted card
+══════════════════════════════════════════ */
+.d4-header{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.07);
+  border-radius:10px;padding:12px 16px;backdrop-filter:blur(6px);margin-bottom:10px}
+.d4-row1{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.d4-title{font-size:16px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}
+.d4-nav{display:flex;gap:2px}
+.d4-nav a{color:var(--dim);text-decoration:none;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:500}
+.d4-nav a.active{color:#fff;background:rgba(88,166,255,.15);border:1px solid rgba(88,166,255,.3)}
+.d4-row2{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding-top:10px;border-top:1px solid rgba(255,255,255,.06)}
+.d4-vhost-label{font-size:11px;color:var(--dim)}
+.d4-vpill{padding:3px 12px;border-radius:20px;border:1px solid rgba(88,166,255,.4);
+  color:var(--blue);background:transparent;font-size:11.5px;font-weight:600}
+.d4-vpill.active{background:rgba(88,166,255,.2);border-color:var(--blue)}
+.d4-divider{width:1px;height:18px;background:rgba(255,255,255,.08);margin:0 4px}
+.d4-show-label{font-size:11px;color:var(--dim)}
+.d4-cpill{padding:3px 10px;border-radius:20px;border:1px solid rgba(255,255,255,.08);
+  color:var(--dim);background:transparent;font-size:11.5px;font-weight:600}
+.d4-cpill.active{color:#fff;background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.15)}
+
+/* ══════════════════════════════════════════
+   DESIGN 5 — Tabbed + inline controls
+══════════════════════════════════════════ */
+.d5-top{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:0}
+.d5-left{display:flex;align-items:flex-end;gap:0}
+.d5-logo{font-size:16px;font-weight:700;color:#fff;padding:0 16px 12px 0;
+  border-right:1px solid var(--line)}
+.d5-tabs{display:flex;gap:0;padding-left:4px}
+.d5-tab{color:var(--dim);text-decoration:none;padding:10px 14px;font-size:12.5px;
+  border-bottom:2px solid transparent;display:block}
+.d5-tab.active{color:#fff;border-bottom-color:var(--blue);font-weight:600}
+.d5-right{display:flex;align-items:center;gap:8px;padding-bottom:10px}
+.d5-vsel{background:#1a2233;border:1px solid var(--line);color:var(--fg);
+  border-radius:6px;padding:4px 10px;font-size:12px}
+.d5-separator{border-top:1px solid var(--line);margin-bottom:10px}
+.d5-filter{display:flex;gap:6px;align-items:center;flex-wrap:wrap;padding-top:8px}
+.d5-label{font-size:11px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.d5-swatch{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:3px}
+.d5-cpill{padding:3px 10px;border-radius:6px;border:1px solid var(--line);
+  color:var(--dim);background:transparent;font-size:11.5px;font-weight:600;display:flex;align-items:center}
+.d5-cpill.active{background:#1e2a3a;color:var(--fg);border-color:#2d4060}
+.d5-path{background:#1a2233;border:1px solid var(--line);border-radius:6px;
+  color:var(--fg);font-size:11px;padding:4px 10px;font-family:ui-monospace,monospace;
+  width:150px;outline:none;margin-left:8px}
+
+/* ══════════════════════════════════════════
+   DESIGN 6 — Minimal / Ultra-compact
+══════════════════════════════════════════ */
+.d6-bar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:6px 0;
+  border-bottom:1px solid var(--line);margin-bottom:8px}
+.d6-brand{font-size:12px;font-weight:700;color:var(--blue);letter-spacing:.4px;text-transform:uppercase}
+.d6-nav{display:flex;gap:2px}
+.d6-nav a{color:var(--dim);text-decoration:none;padding:3px 7px;border-radius:3px;font-size:11.5px}
+.d6-nav a.active{color:var(--fg);background:#1f2730}
+.d6-sep{width:1px;height:14px;background:var(--line)}
+.d6-vsel{background:transparent;border:1px solid var(--line);color:var(--fg);
+  border-radius:4px;padding:2px 6px;font-size:11px}
+.d6-filter{display:flex;gap:4px;align-items:center}
+.d6-label{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+.d6-dot{width:7px;height:7px;border-radius:50%;display:inline-block;
+  border:1.5px solid currentColor;margin-right:2px;vertical-align:middle}
+.d6-cpill{padding:2px 7px;border-radius:8px;border:1px solid transparent;
+  color:var(--dim);background:transparent;font-size:11px;font-weight:600;display:inline-flex;align-items:center}
+.d6-cpill.active{background:#1a2332;color:var(--fg)}
+.d6-path{background:transparent;border:none;border-bottom:1px solid var(--line);
+  color:var(--fg);font-size:11px;padding:2px 4px;font-family:ui-monospace,monospace;
+  width:110px;outline:none}
+
+/* ══════════════════════════════════════════
+   DESIGN 7 — Two-tone header band
+══════════════════════════════════════════ */
+.d7-header{margin-bottom:10px;border-radius:8px;overflow:hidden;border:1px solid var(--line)}
+.d7-top-strip{background:#161b22;padding:8px 16px;
+  display:flex;align-items:center;justify-content:space-between}
+.d7-brand{font-size:14px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}
+.d7-brand-sub{font-size:10px;font-weight:400;color:var(--dim);text-transform:uppercase;letter-spacing:.8px}
+.d7-nav-strip{background:#0f1318;padding:0 12px;display:flex;align-items:center;gap:0;
+  border-top:1px solid var(--line)}
+.d7-nav a{color:var(--dim);text-decoration:none;padding:8px 12px;font-size:12px;
+  display:block;border-bottom:2px solid transparent}
+.d7-nav a.active{color:#fff;border-bottom-color:var(--blue)}
+.d7-filter-strip{background:#0d1117;padding:7px 16px;display:flex;align-items:center;
+  gap:8px;flex-wrap:wrap;border-top:1px solid rgba(48,54,61,.6)}
+.d7-vhost-label{font-size:10.5px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.d7-vpill{padding:2px 11px;border-radius:12px;border:1px solid rgba(88,166,255,.35);
+  color:var(--blue);background:transparent;font-size:11px;font-weight:600}
+.d7-vpill.active{background:rgba(88,166,255,.15)}
+.d7-divider{width:1px;height:16px;background:rgba(48,54,61,.8)}
+.d7-show-label{font-size:10.5px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+.d7-cpill{padding:2px 9px;border-radius:10px;border:1px solid transparent;
+  color:var(--dim);background:transparent;font-size:11px;font-weight:600}
+.d7-cpill.active{background:rgba(255,255,255,.07);color:var(--fg);border-color:rgba(255,255,255,.1)}
+
+/* ══════════════════════════════════════════
+   DESIGN 8 — Card header with icons
+══════════════════════════════════════════ */
+.d8-header{display:flex;align-items:stretch;gap:0;background:var(--card);
+  border:1px solid var(--line);border-radius:10px;margin-bottom:10px;overflow:hidden}
+.d8-brand-block{background:#101318;padding:14px 18px;display:flex;flex-direction:column;
+  justify-content:center;border-right:1px solid var(--line);min-width:110px}
+.d8-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+.d8-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
+.d8-center{flex:1;padding:10px 16px}
+.d8-nav{display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap}
+.d8-nav a{color:var(--dim);text-decoration:none;padding:4px 9px;border-radius:5px;font-size:12px;font-weight:500}
+.d8-nav a.active{color:#fff;background:#1f2730}
+.d8-filter{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+.d8-vhost-label{font-size:10.5px;color:var(--dim)}
+.d8-vpill{padding:2px 10px;border-radius:10px;border:1px solid rgba(88,166,255,.4);
+  color:var(--blue);background:transparent;font-size:11px;font-weight:600}
+.d8-vpill.active{background:rgba(88,166,255,.2)}
+.d8-div{width:1px;height:14px;background:var(--line)}
+.d8-show-label{font-size:10.5px;color:var(--dim)}
+.d8-cpill{padding:2px 8px;border-radius:9px;border:1px solid var(--line);
+  color:var(--dim);background:transparent;font-size:11px;font-weight:600}
+.d8-cpill.active{background:#1e2a3a;color:var(--fg);border-color:#2d4060}
+.d8-right{padding:14px 16px;display:flex;flex-direction:column;align-items:flex-end;
+  justify-content:space-between;border-left:1px solid var(--line)}
+.d8-status{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--dim)}
+.d8-dot{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.d8-acct{color:var(--dim);font-size:11px;text-decoration:none}
+
+/* ══════════════════════════════════════════
+   DESIGN 9 — Accent left border + grouped controls
+══════════════════════════════════════════ */
+.d9-wrap{margin-bottom:10px}
+.d9-title-row{display:flex;align-items:center;gap:12px;margin-bottom:10px}
+.d9-accent{width:4px;height:32px;background:var(--blue);border-radius:2px;flex-shrink:0}
+.d9-title{font-size:17px;font-weight:700;color:#fff}
+.d9-title sub{font-size:10px;color:var(--dim);font-weight:400;vertical-align:middle;margin-left:6px}
+.d9-nav-row{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}
+.d9-nav{display:flex;gap:2px;background:#161b22;border:1px solid var(--line);
+  border-radius:7px;padding:3px}
+.d9-nav a{color:var(--dim);text-decoration:none;padding:4px 11px;border-radius:5px;font-size:12px}
+.d9-nav a.active{color:#fff;background:#2d3748;font-weight:600}
+.d9-controls{display:flex;align-items:center;gap:6px}
+.d9-vsel{background:#161b22;border:1px solid var(--line);color:var(--fg);
+  border-radius:6px;padding:4px 8px;font-size:11.5px}
+.d9-filter-row{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:8px 0 2px;border-top:1px dashed rgba(48,54,61,.7);margin-top:8px}
+.d9-flabel{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.7px;font-weight:600}
+.d9-group{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.d9-cpill{padding:3px 10px;border-right:1px solid var(--line);
+  color:var(--dim);background:transparent;font-size:11.5px;font-weight:600;border-top:none;border-bottom:none;border-left:none}
+.d9-cpill:last-child{border-right:none}
+.d9-cpill.active{background:#1e2d40;color:var(--fg)}
+.d9-path{background:#161b22;border:1px solid var(--line);border-radius:6px;
+  color:var(--fg);font-size:11px;padding:4px 10px;font-family:ui-monospace,monospace;
+  width:140px;outline:none;margin-left:6px}
+
+/* ══════════════════════════════════════════
+   DESIGN 10 — Neon / high-contrast dark
+══════════════════════════════════════════ */
+.d10-header{border-bottom:1px solid #1e3a5f;margin-bottom:10px;padding-bottom:10px}
+.d10-row1{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.d10-brand{font-size:15px;font-weight:800;color:#fff;letter-spacing:.5px;text-transform:uppercase}
+.d10-brand span{color:#00d4ff;text-shadow:0 0 12px rgba(0,212,255,.5)}
+.d10-live{font-size:10px;font-weight:700;background:rgba(0,255,128,.1);color:#00ff80;
+  border:1px solid rgba(0,255,128,.3);padding:2px 8px;border-radius:4px;letter-spacing:.5px}
+.d10-nav{display:flex;gap:1px;background:#0a1520;border:1px solid #1e3a5f;border-radius:6px;padding:2px}
+.d10-nav a{color:#4a7fa0;text-decoration:none;padding:5px 12px;border-radius:4px;
+  font-size:12px;font-weight:600;letter-spacing:.2px}
+.d10-nav a.active{color:#00d4ff;background:rgba(0,212,255,.1);box-shadow:0 0 8px rgba(0,212,255,.15)}
+.d10-row2{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.d10-vhost-label{font-size:10px;color:#4a7fa0;text-transform:uppercase;letter-spacing:.8px;font-weight:700}
+.d10-vpill{padding:3px 12px;border-radius:4px;border:1px solid #1e3a5f;
+  color:#4a7fa0;background:transparent;font-size:11.5px;font-weight:700}
+.d10-vpill.active{background:rgba(0,212,255,.1);color:#00d4ff;border-color:rgba(0,212,255,.4)}
+.d10-sep{width:1px;height:16px;background:#1e3a5f}
+.d10-show-label{font-size:10px;color:#4a7fa0;text-transform:uppercase;letter-spacing:.8px;font-weight:700}
+.d10-cpill{padding:3px 10px;border-radius:4px;border:1px solid #1e3a5f;
+  color:#4a7fa0;background:transparent;font-size:11.5px;font-weight:700}
+.d10-cpill.active.allowed{background:rgba(0,255,128,.08);color:#00ff80;border-color:rgba(0,255,128,.3)}
+.d10-cpill.active.ban{background:rgba(255,60,60,.08);color:#ff4040;border-color:rgba(255,60,60,.3)}
+.d10-cpill.active.missed{background:rgba(255,160,0,.08);color:#ffa000;border-color:rgba(255,160,0,.3)}
+.d10-cpill.active.auth{background:rgba(180,100,255,.08);color:#c46fff;border-color:rgba(180,100,255,.3)}
+.d10-path{background:#0a1520;border:1px solid #1e3a5f;border-radius:4px;
+  color:#00d4ff;font-size:11px;padding:4px 10px;font-family:ui-monospace,monospace;
+  width:140px;outline:none;caret-color:#00d4ff}
+</style>
+</head>
+<body>
+
+<div class="showcase-title">Header Design Options — AppSecGW Dashboard</div>
+<div class="showcase-sub">10 design variants for the nav + vhost selector + show/filter area. Pick a number and say which one.</div>
+
+<!-- ═══ DESIGN 1 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 1 <span>Current design (reference)</span></div>
+  <div class="design-frame">
+    <h1 class="d1-h1">AppSecGW_1.8.6 · Dashboard <span class="pill-live">● LIVE</span></h1>
+    <nav class="d1-nav">
+      <a href="#" class="active">Dashboard</a>
+      <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+      <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+      <a href="#">My Account</a>
+      <span style="color:var(--red);font-size:12.5px;margin-left:auto">Sign out</span>
+    </nav>
+    <div class="d1-vhost" style="display:flex">
+      <span class="d1-vhost-label">Vhost:</span>
+      <button class="d1-vpill active">All</button>
+      <button class="d1-vpill">api.example.com</button>
+      <button class="d1-vpill">shop.example.com</button>
+    </div>
+    <div class="d1-filter">
+      <span class="d1-filter-label">Show:</span>
+      <button class="d1-cpill active">● Allowed</button>
+      <button class="d1-cpill active">● Ban</button>
+      <button class="d1-cpill active">● Really Ban</button>
+      <button class="d1-cpill active">● Missed</button>
+      <button class="d1-cpill active">● Auth Bots</button>
+      <button class="d1-cpill">● GW Mgmt</button>
+      <span class="d1-path"><input placeholder="path filter…"></span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 2 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 2 <span>Sidebar nav · compact topbar · dropdown vhost</span></div>
+  <div class="design-frame">
+    <div class="d2-wrap">
+      <div class="d2-sidebar">
+        <div class="d2-logo">Appsec<span>GW</span></div>
+        <nav class="d2-nav">
+          <a href="#" class="active">Dashboard</a>
+          <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+          <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+          <a href="#" style="margin-top:8px">My Account</a>
+          <a href="#" style="color:var(--red)">Sign out</a>
+        </nav>
+      </div>
+      <div class="d2-main">
+        <div class="d2-topbar">
+          <div class="d2-title">Dashboard <span class="pill-live">● LIVE</span></div>
+          <div class="d2-actions">
+            <span style="font-size:11px;color:var(--dim)">Vhost:</span>
+            <select class="d2-vhost-select">
+              <option>All vhosts</option>
+              <option>api.example.com</option>
+              <option>shop.example.com</option>
+            </select>
+          </div>
+        </div>
+        <div class="d2-filter">
+          <span style="font-size:11px;color:var(--dim)">Show:</span>
+          <button class="d2-cpill active">● Allowed</button>
+          <button class="d2-cpill active">● Ban</button>
+          <button class="d2-cpill active">● Really Ban</button>
+          <button class="d2-cpill active">● Missed</button>
+          <button class="d2-cpill active">● Auth Bots</button>
+          <button class="d2-cpill">● GW Mgmt</button>
+          <input class="d2-path" placeholder="path filter…">
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 3 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 3 <span>Single full-width nav bar · coloured filter pills</span></div>
+  <div class="design-frame">
+    <div class="d3-bar">
+      <div class="d3-brand">Appsec<span>GW</span></div>
+      <nav class="d3-nav">
+        <a href="#" class="active">Dashboard</a>
+        <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+        <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+      </nav>
+      <div class="d3-spacer"></div>
+      <span class="d3-live"><span class="pill-live">● LIVE</span></span>
+      <select class="d3-vsel">
+        <option>All vhosts</option>
+        <option>api.example.com</option>
+        <option>shop.example.com</option>
+      </select>
+    </div>
+    <div class="d3-filter-row">
+      <span class="d3-show-label">Show:</span>
+      <button class="d3-cpill active allowed">● Allowed</button>
+      <button class="d3-cpill active ban">● Ban</button>
+      <button class="d3-cpill active ban">● Really Ban</button>
+      <button class="d3-cpill active missed">● Missed</button>
+      <button class="d3-cpill active auth">● Auth Bots</button>
+      <button class="d3-cpill gwm">● GW Mgmt</button>
+      <input class="d3-path" placeholder="path filter…">
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 4 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 4 <span>Glass card header · pill nav · unified filter row</span></div>
+  <div class="design-frame">
+    <div class="d4-header">
+      <div class="d4-row1">
+        <div class="d4-title">
+          <span>AppSecGW · Dashboard</span>
+          <span class="pill-live">● LIVE</span>
+        </div>
+        <nav class="d4-nav">
+          <a href="#" class="active">Dashboard</a>
+          <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+          <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+          <a href="#" style="color:var(--dim)">My Account</a>
+          <a href="#" style="color:var(--red)">Sign out</a>
+        </nav>
+      </div>
+      <div class="d4-row2">
+        <span class="d4-vhost-label">Vhost:</span>
+        <button class="d4-vpill active">All</button>
+        <button class="d4-vpill">api.example.com</button>
+        <button class="d4-vpill">shop.example.com</button>
+        <div class="d4-divider"></div>
+        <span class="d4-show-label">Show:</span>
+        <button class="d4-cpill active">● Allowed</button>
+        <button class="d4-cpill active">● Ban</button>
+        <button class="d4-cpill active">● Really Ban</button>
+        <button class="d4-cpill active">● Missed</button>
+        <button class="d4-cpill active">● Auth Bots</button>
+        <button class="d4-cpill">● GW Mgmt</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 5 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 5 <span>Underline tabs · grouped show pills · right-side controls</span></div>
+  <div class="design-frame">
+    <div class="d5-top">
+      <div class="d5-left">
+        <div class="d5-logo">AppSecGW <span class="pill-live" style="font-size:9px">LIVE</span></div>
+        <nav class="d5-tabs">
+          <a href="#" class="d5-tab active">Dashboard</a>
+          <a href="#" class="d5-tab">Agents</a>
+          <a href="#" class="d5-tab">Service</a>
+          <a href="#" class="d5-tab">Controls</a>
+          <a href="#" class="d5-tab">GeoMap</a>
+          <a href="#" class="d5-tab">Logs</a>
+          <a href="#" class="d5-tab">Settings</a>
+        </nav>
+      </div>
+      <div class="d5-right">
+        <span style="font-size:11px;color:var(--dim)">Vhost:</span>
+        <select class="d5-vsel">
+          <option>All</option><option>api.example.com</option><option>shop.example.com</option>
+        </select>
+        <a href="#" style="font-size:11.5px;color:var(--dim);text-decoration:none">My Account</a>
+        <a href="#" style="font-size:11.5px;color:var(--red);text-decoration:none">Sign out</a>
+      </div>
+    </div>
+    <div class="d5-separator"></div>
+    <div class="d5-filter">
+      <span class="d5-label">Show:</span>
+      <button class="d5-cpill active"><span class="d5-swatch" style="background:var(--green)"></span>Allowed</button>
+      <button class="d5-cpill active"><span class="d5-swatch" style="background:var(--red)"></span>Ban</button>
+      <button class="d5-cpill active"><span class="d5-swatch" style="background:#ff3030"></span>Really Ban</button>
+      <button class="d5-cpill active"><span class="d5-swatch" style="background:var(--orange)"></span>Missed</button>
+      <button class="d5-cpill active"><span class="d5-swatch" style="background:var(--purple)"></span>Auth Bots</button>
+      <button class="d5-cpill"><span class="d5-swatch" style="background:var(--blue)"></span>GW Mgmt</button>
+      <input class="d5-path" placeholder="path filter…">
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 6 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 6 <span>Ultra-minimal · everything on one slim line</span></div>
+  <div class="design-frame">
+    <div class="d6-bar">
+      <span class="d6-brand">AppSecGW</span>
+      <div class="d6-sep"></div>
+      <nav class="d6-nav">
+        <a href="#" class="active">Dashboard</a>
+        <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+        <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+      </nav>
+      <div class="d6-sep"></div>
+      <select class="d6-vsel"><option>All vhosts</option><option>api.example.com</option></select>
+      <div class="d6-sep"></div>
+      <div class="d6-filter">
+        <span class="d6-label">Show:</span>
+        <button class="d6-cpill active"><span class="d6-dot" style="color:var(--green)"></span>Allowed</button>
+        <button class="d6-cpill active"><span class="d6-dot" style="color:var(--red)"></span>Ban</button>
+        <button class="d6-cpill active"><span class="d6-dot" style="color:#ff3030"></span>Really Ban</button>
+        <button class="d6-cpill active"><span class="d6-dot" style="color:var(--orange)"></span>Missed</button>
+        <button class="d6-cpill active"><span class="d6-dot" style="color:var(--purple)"></span>Auth Bots</button>
+        <button class="d6-cpill"><span class="d6-dot" style="color:var(--blue)"></span>GW Mgmt</button>
+      </div>
+      <div class="d6-sep"></div>
+      <input class="d6-path" placeholder="path…">
+      <div class="d6-sep" style="margin-left:auto"></div>
+      <span class="pill-live" style="font-size:9px">● LIVE</span>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 7 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 7 <span>Two-tone band · brand strip + nav strip + filter strip</span></div>
+  <div class="design-frame">
+    <div class="d7-header">
+      <div class="d7-top-strip">
+        <div class="d7-brand">
+          AppSecGW_1.8.6
+          <span class="d7-brand-sub">Anti-bot Gateway</span>
+        </div>
+        <span class="pill-live">● LIVE</span>
+      </div>
+      <div class="d7-nav-strip">
+        <nav class="d7-nav" style="display:flex">
+          <a href="#" class="active">Dashboard</a>
+          <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+          <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+          <a href="#" style="margin-left:auto;color:var(--dim)">My Account</a>
+          <a href="#" style="color:var(--red)">Sign out</a>
+        </nav>
+      </div>
+      <div class="d7-filter-strip">
+        <span class="d7-vhost-label">Vhost:</span>
+        <button class="d7-vpill active">All</button>
+        <button class="d7-vpill">api.example.com</button>
+        <button class="d7-vpill">shop.example.com</button>
+        <div class="d7-divider"></div>
+        <span class="d7-show-label">Show:</span>
+        <button class="d7-cpill active">● Allowed</button>
+        <button class="d7-cpill active">● Ban</button>
+        <button class="d7-cpill active">● Really Ban</button>
+        <button class="d7-cpill active">● Missed</button>
+        <button class="d7-cpill active">● Auth Bots</button>
+        <button class="d7-cpill">● GW Mgmt</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 8 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 8 <span>Integrated card header · brand block + nav + filter + status column</span></div>
+  <div class="design-frame">
+    <div class="d8-header">
+      <div class="d8-brand-block">
+        <div class="d8-brand-name">AppSecGW</div>
+        <div class="d8-brand-ver">v1.8.2 · arm64</div>
+      </div>
+      <div class="d8-center">
+        <nav class="d8-nav">
+          <a href="#" class="active">Dashboard</a>
+          <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+          <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+        </nav>
+        <div class="d8-filter">
+          <span class="d8-vhost-label">Vhost:</span>
+          <button class="d8-vpill active">All</button>
+          <button class="d8-vpill">api</button>
+          <button class="d8-vpill">shop</button>
+          <div class="d8-div"></div>
+          <span class="d8-show-label">Show:</span>
+          <button class="d8-cpill active">● Allowed</button>
+          <button class="d8-cpill active">● Ban</button>
+          <button class="d8-cpill active">● Really Ban</button>
+          <button class="d8-cpill active">● Missed</button>
+          <button class="d8-cpill active">● Auth Bots</button>
+          <button class="d8-cpill">● GW Mgmt</button>
+        </div>
+      </div>
+      <div class="d8-right">
+        <div class="d8-status"><span class="d8-dot"></span>Live</div>
+        <a href="#" class="d8-acct">My Account</a>
+        <a href="#" style="color:var(--red);font-size:11px;text-decoration:none">Sign out</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 9 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 9 <span>Accent stripe · pill group nav · segmented filter buttons</span></div>
+  <div class="design-frame">
+    <div class="d9-wrap">
+      <div class="d9-title-row">
+        <div class="d9-accent"></div>
+        <div class="d9-title">Dashboard <sub>AppSecGW_1.8.6 · <span class="pill-live" style="font-size:9px">● LIVE</span></sub></div>
+      </div>
+      <div class="d9-nav-row">
+        <nav class="d9-nav">
+          <a href="#" class="active">Dashboard</a>
+          <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+          <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+        </nav>
+        <div class="d9-controls">
+          <span style="font-size:11px;color:var(--dim)">Vhost:</span>
+          <select class="d9-vsel">
+            <option>All</option><option>api.example.com</option><option>shop.example.com</option>
+          </select>
+          <a href="#" style="font-size:11.5px;color:var(--dim);text-decoration:none">My Account</a>
+          <a href="#" style="font-size:11.5px;color:var(--red);text-decoration:none">Sign out</a>
+        </div>
+      </div>
+      <div class="d9-filter-row">
+        <span class="d9-flabel">Show:</span>
+        <div class="d9-group">
+          <button class="d9-cpill active">● Allowed</button>
+          <button class="d9-cpill active">● Ban</button>
+          <button class="d9-cpill active">● Really Ban</button>
+          <button class="d9-cpill active">● Missed</button>
+          <button class="d9-cpill active">● Auth Bots</button>
+          <button class="d9-cpill">● GW Mgmt</button>
+        </div>
+        <input class="d9-path" placeholder="path filter…">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ DESIGN 10 ═══════════════════════════════════════════════════════ -->
+<div class="design-block">
+  <div class="design-label">Option 10 <span>High-contrast neon · cyan accent · sharp edges</span></div>
+  <div class="design-frame" style="background:#080f18">
+    <div class="d10-header">
+      <div class="d10-row1">
+        <div class="d10-brand">APPSEC<span>GW</span> <span style="font-size:11px;color:#4a7fa0;font-weight:400">1.8.2</span></div>
+        <nav class="d10-nav">
+          <a href="#" class="active">Dashboard</a>
+          <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
+          <a href="#">GeoMap</a><a href="#">Logs</a><a href="#">Settings</a>
+          <a href="#" style="color:#4a7fa0;margin-left:8px">Account</a>
+          <a href="#" style="color:#ff4040">Sign out</a>
+        </nav>
+        <div class="d10-live">● LIVE</div>
+      </div>
+      <div class="d10-row2">
+        <span class="d10-vhost-label">Vhost:</span>
+        <button class="d10-vpill active">All</button>
+        <button class="d10-vpill">api.example.com</button>
+        <button class="d10-vpill">shop.example.com</button>
+        <div class="d10-sep"></div>
+        <span class="d10-show-label">Show:</span>
+        <button class="d10-cpill active allowed">● Allowed</button>
+        <button class="d10-cpill active ban">● Ban</button>
+        <button class="d10-cpill active ban">● Really Ban</button>
+        <button class="d10-cpill active missed">● Missed</button>
+        <button class="d10-cpill active auth">● Auth Bots</button>
+        <button class="d10-cpill">● GW Mgmt</button>
+        <input class="d10-path" placeholder="path filter…">
+      </div>
+    </div>
+  </div>
+</div>
+
+</body></html>

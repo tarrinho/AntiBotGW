@@ -1,0 +1,145 @@
+rules:
+
+  # ── HIGH: dataset attribute value written to innerHTML via join/index ──────
+  # Catches the real pattern: parts = el.dataset.x.split('|'); el.innerHTML = `<b>${parts[0]}</b>${parts.join('')}`
+  # Also catches: el.innerHTML = el2.dataset.attr (direct assignment)
+  - id: dataset-to-innerHTML-high
+    message: >
+      DOM dataset attribute written to innerHTML without escapeHtml(). Operators
+      who can control HTML attributes (stored XSS, server-template injection) can
+      inject arbitrary HTML. Replace with textContent or escapeHtml().
+    languages: [javascript]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = $OTHER.dataset.$ATTR
+          - pattern: $EL.innerHTML = $OTHER.getAttribute($A)
+    metadata:
+      cwe: CWE-79
+      owasp: A03:2021
+      category: security
+
+  # ── HIGH: .join() result written to innerHTML (string arrays, not numbers) ─
+  # Catches: `el.innerHTML = \`...${ arr.join('') }...\``
+  # Intended to catch `parts.slice(1).join('')` from dataset.colTip.split('|')
+  - id: array-join-to-innerHTML
+    message: >
+      Array.join() result written to innerHTML. If the array contains strings
+      derived from API responses, DOM attributes, or user input this is XSS.
+      Verify every element inside the map() is wrapped in escapeHtml(), or use
+      arr.map(escapeHtml).join('') for plain-text arrays.
+    languages: [javascript]
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = `...${ $ARR.join($SEP) }...`
+          - pattern: $EL.innerHTML = `...${ $ARR.slice($N).join($SEP) }...`
+          - pattern: $EL.innerHTML = $ARR.join($SEP)
+      # Safe: array was already fully escaped before join
+      - pattern-not: $EL.innerHTML = `...${ $ARR.map(escapeHtml).join($SEP) }...`
+      - pattern-not: $EL.innerHTML = `...${ $ARR.slice($N).map(escapeHtml).join($SEP) }...`
+    metadata:
+      cwe: CWE-79
+      owasp: A03:2021
+      category: security
+
+  # ── MEDIUM: error object message in innerHTML ─────────────────────────────
+  # Catches: `el.innerHTML = '<span>Error: ' + e.message + '</span>'`
+  # Error messages can contain HTML if a server error bubbles up unescaped
+  - id: error-message-to-innerHTML
+    message: >
+      JavaScript Error.message written to innerHTML without escapeHtml(). If
+      the error originates from a server response (e.g. res.statusText, API
+      error.message) it can contain attacker-controlled HTML. Use escapeHtml().
+    languages: [javascript]
+    severity: WARNING
+    patterns:
+      - pattern: $EL.innerHTML = $LEFT + $ERR.message + $RIGHT
+      - pattern-not: $EL.innerHTML = $LEFT + escapeHtml($ERR.message) + $RIGHT
+    metadata:
+      cwe: CWE-79
+      owasp: A03:2021
+      category: security
+
+  # ── MEDIUM: API response string field to innerHTML (not numeric) ───────────
+  # Catches: `el.innerHTML = data.hint` after fetch().json()
+  # Excludes safe numeric: data.count, data.length, data.total, data.score
+  - id: api-field-to-innerHTML
+    message: >
+      API response string field ($FIELD) written directly to innerHTML. API data
+      can contain attacker-controlled strings (User-Agent, hints, labels,
+      filenames). Use escapeHtml(data.$FIELD) or textContent.
+    languages: [javascript]
+    severity: WARNING
+    patterns:
+      - pattern: $EL.innerHTML = $RESP.json()
+      - pattern-not: $EL.innerHTML = escapeHtml(...)
+    metadata:
+      cwe: CWE-79
+      owasp: A03:2021
+      category: security
+
+  # ── MEDIUM: open redirect — location.href from URL parameter ─────────────
+  - id: open-redirect-url-param
+    message: >
+      location.href set from URL parameter without a same-origin validation
+      function. Attacker can redirect to an external phishing domain.
+      Validate with safeNext() or check the value starts with '/'.
+    languages: [javascript]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: location.href = new URLSearchParams(...).get($P)
+          - pattern: location.href = $PARAMS.get($P)
+          - pattern: location.replace($PARAMS.get($P))
+      - pattern-not: location.href = safeNext(...)
+      - pattern-not: location.replace(safeNext(...))
+    metadata:
+      cwe: CWE-601
+      owasp: A01:2021
+      category: security
+
+  # ── LOW/INFO: postMessage listener — manual origin-check review ───────────
+  - id: postmessage-listener
+    message: >
+      postMessage listener found — verify the handler checks event.origin before
+      processing the payload. Missing origin check lets any page inject data.
+    languages: [javascript]
+    severity: INFO
+    pattern: $W.addEventListener('message', $FN)
+    metadata:
+      cwe: CWE-346
+      category: security
+
+  # ── MEDIUM: eval() with non-literal argument ──────────────────────────────
+  - id: eval-non-literal
+    message: >
+      eval() or new Function() with a non-literal argument. If the value derives
+      from user input or API data this is code injection. Remove eval.
+    languages: [javascript]
+    severity: ERROR
+    patterns:
+      - pattern-either:
+          - pattern: eval($EXPR)
+          - pattern: new Function($EXPR)
+      - pattern-not: eval("...")
+      - pattern-not: new Function("...")
+    metadata:
+      cwe: CWE-95
+      owasp: A03:2021
+      category: security
+
+  # ── MEDIUM: storage value to innerHTML ───────────────────────────────────
+  - id: storage-to-innerHTML
+    message: >
+      localStorage/sessionStorage value written to innerHTML. Storage can be
+      poisoned by prior XSS on the same origin.
+    languages: [javascript]
+    severity: WARNING
+    patterns:
+      - pattern-either:
+          - pattern: $EL.innerHTML = localStorage.getItem($KEY)
+          - pattern: $EL.innerHTML = sessionStorage.getItem($KEY)
+    metadata:
+      cwe: CWE-79
+      category: security

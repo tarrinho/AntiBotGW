@@ -60,6 +60,16 @@ def _make_admin_session(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -329,7 +339,8 @@ class TestPathCategoryConfigToggle:
                     r = await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": ["/test-bypass/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -354,14 +365,16 @@ class TestPathCategoryConfigToggle:
                     await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": ["/to-remove/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     # Then clear
                     r = await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": []}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -383,7 +396,8 @@ class TestPathCategoryConfigToggle:
                     r = await c.post(
                         NS + "/config",
                         data=json.dumps({"JS_CHAL_OPEN_PATHS": ["/public-api/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -425,7 +439,8 @@ class TestPathCategoryConfigToggle:
                     await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": ["/reflected/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     r = await c.get(

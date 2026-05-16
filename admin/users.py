@@ -42,7 +42,7 @@ def _validate_password_strength(password: str) -> "str | None":
 # ── 1.6.7: dashboard user accounts ──────────────────────────────────
 _USERNAME_RE  = re.compile(r"^[a-z0-9][a-z0-9._-]{1,62}$")
 _USER_ROLES   = ("admin", "maintainer", "viewer")
-_USER_STATUS  = ("active", "disabled")
+_USER_STATUS  = ("active", "disabled", "pending")
 _SESSION_COOKIE = "agw_session"
 _SESSION_TTL  = 12 * 3600              # 12h sliding session
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**17, 8, 1   # OWASP recommended; ~500 ms on a single core
@@ -295,7 +295,7 @@ def _user_load_all() -> list[dict]:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT username, role, status, created_ts, updated_ts, "
-            "last_login_ts, last_login_ip FROM users ORDER BY username"
+            "last_login_ts, last_login_ip, sso_source, oidc_sub FROM users ORDER BY username"
         ).fetchall()
         conn.close()
     except Exception:
@@ -1014,6 +1014,12 @@ def _generate_backup_codes() -> list:
 async def totp_verify_endpoint(request: web.Request):
     """POST /antibot-appsec-gateway/login/totp — verify TOTP code after partial auth.
     Body: {partial_token, code} (JSON)."""
+    ip = get_ip(request)
+    if not await _login_rate_limit(ip):
+        return web.json_response({"error": "too many attempts; wait 60s"},
+                                  status=429,
+                                  headers={"Cache-Control": "no-store",
+                                           "Retry-After": "60"})
     try:
         body_bytes = await asyncio.wait_for(request.content.read(4 * 1024), timeout=BODY_TIMEOUT)
         data = json.loads(body_bytes.decode("utf-8") or "{}")
@@ -1029,7 +1035,6 @@ async def totp_verify_endpoint(request: web.Request):
     # The partial_token was derived from: HMAC(username + "|" + window)[:16]
     # We need to recover username from the token — it's stored in _TOTP_PENDING
     from state import _TOTP_PENDING
-    ip = get_ip(request)
     # Find which user this partial token belongs to
     matched_username = None
     _now_window = int(_t.time() // 300)

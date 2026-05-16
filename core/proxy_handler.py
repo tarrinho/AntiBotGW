@@ -65,7 +65,7 @@ from config import (  # noqa: F401 — more underscore config constants
 )
 from dashboards.agents import _stealth_score, AGENT_BLOCK_REASONS  # noqa: F401
 # Underscore-prefixed functions not exported by import * — explicit imports required
-from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied, _request_username  # noqa: F401
+from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied, _request_username, _require_csrf  # noqa: F401
 from integrations.ja4 import _request_ja4, _tls_fingerprint_blocked  # noqa: F401
 from integrations.redis import _shared_ban_set  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
@@ -1893,6 +1893,7 @@ async def admin_ips_endpoint(request: web.Request):
     return web.json_response({"error": "method not allowed"}, status=405)
 
 
+@_require_csrf
 async def ban_endpoint(request: web.Request):
     """Admin: ban a single identity (track-key) or all identities behind an
     IP for `secs` seconds. Mirror of /__unban so the controls/agents
@@ -2416,6 +2417,7 @@ def _read_hot_reload_state() -> dict:
     return out
 
 
+@_require_csrf
 async def config_endpoint(request: web.Request):
     """GET  /__config?key=...              -> current state of all hot-reloadable knobs.
     POST /__config?key=...  + JSON body -> apply updates, return {applied,rejected,state}.
@@ -4856,6 +4858,7 @@ async def control_center_endpoint(request: web.Request):
         },
     )
 
+@_require_csrf
 async def unban_endpoint(request: web.Request):
     """Admin: clear ban + risk score for an identity (or all). Useful when a
     false-positive pushed someone over threshold.

@@ -162,6 +162,14 @@ async def _post_webhook(event: dict) -> None:
 
 async def start_webhook_worker() -> None:
     """Start the background webhook worker. Call from on_startup()."""
-    global _WEBHOOK_WORKER_TASK
+    global _WEBHOOK_WORKER_TASK, _WEBHOOK_QUEUE
+    # Re-create the queue bound to the current event loop.  asyncio.Queue is a
+    # _LoopBoundMixin in Python 3.12+: it raises RuntimeError when accessed
+    # from a different event loop than the one it was first used in.  In tests
+    # (and any scenario where on_startup is called more than once in a process)
+    # the module-level queue created at import time is bound to the first loop;
+    # subsequent on_startup calls run in a different loop and must use a fresh
+    # queue or _webhook_worker spins in an infinite except-continue loop.
+    _WEBHOOK_QUEUE = asyncio.Queue(maxsize=500)
     if _WEBHOOK_WORKER_TASK is None or _WEBHOOK_WORKER_TASK.done():
         _WEBHOOK_WORKER_TASK = asyncio.create_task(_webhook_worker())

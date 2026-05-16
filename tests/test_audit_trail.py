@@ -113,6 +113,16 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _audit_rows(proxy_module, action=None):
     """Query gw_audit table directly; optionally filter by action."""
     conn = sqlite3.connect(proxy_module.DB_PATH)
@@ -390,7 +400,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 75},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie})
+                                     cookies={proxy_module._SESSION_COOKIE: cookie},
+                                     headers=_csrf_hdr(proxy_module, cookie))
                     assert r.status == 200
                     d = await r.json()
                     assert "RISK_BAN_THRESHOLD" in d.get("applied", {}), \
@@ -408,7 +419,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 30},
-                                 cookies={proxy_module._SESSION_COOKIE: cookie})
+                                 cookies={proxy_module._SESSION_COOKIE: cookie},
+                                 headers=_csrf_hdr(proxy_module, cookie))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
                     assert rows, "expected audit row"
@@ -423,7 +435,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 42},
-                                 cookies={proxy_module._SESSION_COOKIE: cookie})
+                                 cookies={proxy_module._SESSION_COOKIE: cookie},
+                                 headers=_csrf_hdr(proxy_module, cookie))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
                     assert rows, "expected at least one config_change audit row"
@@ -442,7 +455,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RATE_LIMIT_BURST": 25, "IP_BURST": 40},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie})
+                                     cookies={proxy_module._SESSION_COOKIE: cookie},
+                                     headers=_csrf_hdr(proxy_module, cookie))
                     n_applied = len((await r.json()).get("applied", {}))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
@@ -458,7 +472,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"TOTALLY_FAKE_KNOB_XYZ_999": True},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie})
+                                     cookies={proxy_module._SESSION_COOKIE: cookie},
+                                     headers=_csrf_hdr(proxy_module, cookie))
                     d = await r.json()
                     assert "TOTALLY_FAKE_KNOB_XYZ_999" in d.get("rejected", {}), \
                         "precondition: unknown knob must be rejected"
