@@ -40,9 +40,9 @@ _MAX_EVENTS = 300  # hard cap on client-submitted event count
 
 # ── Token ─────────────────────────────────────────────────────────────────────
 
-def _interaction_token(ip: str, ts: int) -> str:
-    """HMAC binding the probe submission to (IP, timestamp)."""
-    msg = f"interaction|{ip}|{ts}".encode()
+def _interaction_token(track_key: str, ts: int) -> str:
+    # DET4-03: bind to session identity, not IP, to prevent NAT/shared-IP relay attacks.
+    msg = f"interaction|{track_key}|{ts}".encode()
     return hmac.new(SESSION_KEY, msg, hashlib.sha256).hexdigest()[:32]
 
 
@@ -86,12 +86,12 @@ _PROBE_JS = """<script>(function(){{
 }})();</script>"""
 
 
-def _inject_interaction_probe(html: str, ip: str) -> str:
+def _inject_interaction_probe(html: str, track_key: str) -> str:
     """Inject interaction probe <script> before </body>. No-op when disabled."""
     if not INTERACTION_PROBE_ENABLED:
         return html
     ts = int(_time.time())
-    tok = _interaction_token(ip, ts)
+    tok = _interaction_token(track_key, ts)
     snippet = _PROBE_JS.format(tok=tok, ts=ts)
     lower = html.lower()
     for needle in ("</body>", "</html>"):
@@ -221,6 +221,12 @@ def interaction_analyze(events: list, duration_ms: int) -> tuple[str | None, str
     # No events in a >=3 s window → bot loaded challenge page silently
     if duration_ms >= 3000 and not valid:
         return "no-interaction", "zero events in challenge window"
+    # DET4-04: all-zero-span bypass — bot submits events all with the same
+    # offset_ms; clamping alone doesn't catch this.
+    if len(valid) >= 5:
+        ts_vals = [e[1] for e in valid]
+        if max(ts_vals) == min(ts_vals):
+            return "no-interaction", "all event timestamps identical — synthetic submission"
     mouse   = [e for e in valid if e[0] == 'm' and len(e) >= 4]
     scrolls = [e for e in valid if e[0] == 's' and len(e) >= 3]
     keys    = [e for e in valid if e[0] == 'k' and len(e) >= 3]
@@ -246,6 +252,9 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
     if not _probe_rate_limit_ok(ip):
         return web.Response(status=429, text="rate limit",
                             headers={"Retry-After": "10"})
+    # DET4-03: resolve session identity before HMAC validation so the token
+    # is bound to the session, not the IP (prevents NAT/shared-IP relay).
+    identity, _sid, _fp, _is_new, _id_mode = get_identity(request)
     if not INTERACTION_PROBE_ENABLED:
         return web.json_response({"ok": False, "reason": "disabled"}, status=400)
     try:
@@ -263,7 +272,7 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
     n = int(_time.time())
     if ts_in <= 0 or abs(n - ts_in) > _TOKEN_TTL:
         return web.json_response({"ok": False, "reason": "stale-token"}, status=400)
-    expected = _interaction_token(ip, ts_in)
+    expected = _interaction_token(identity, ts_in)
     provided = str(d.get("token", ""))
     if not hmac.compare_digest(expected, provided):
         return web.json_response({"ok": False, "reason": "bad-token"}, status=403)
@@ -289,7 +298,6 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
     except Exception:
         reason, detail = None, ""
     if reason:
-        identity, _sid, _fp, _is_new, _id_mode = get_identity(request)
         from scoring import update_risk_and_maybe_ban
         from core.metrics import record
         from integrations.ja4 import _request_ja4

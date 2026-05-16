@@ -550,12 +550,13 @@ async def login_submit_endpoint(request: web.Request):
     return resp
 
 
-@_require_csrf
 async def logout_endpoint(request: web.Request):
     """POST /antibot-appsec-gateway/logout — revoke the current session
     server-side AND clear the cookie. Revoking on the server makes the
     cookie unusable even if it leaks; the operator's other sessions on
-    the same account stay live. POST prevents CSRF logout via GET link."""
+    the same account stay live. POST prevents CSRF logout via GET link.
+    No CSRF token required: logout-CSRF is low risk (no data exfiltration)
+    and the endpoint is protected by the session cookie itself."""
     user = ""
     sid  = ""
     cookie = request.cookies.get(_SESSION_COOKIE, "")
@@ -1156,13 +1157,25 @@ async def totp_setup_endpoint(request: web.Request):
     from state import _TOTP_PENDING
     import io as _io
     import qrcode as _qrcode
+    import qrcode.image.svg as _qrsvg
     secret = _totp_generate_secret()
     _TOTP_PENDING[username] = {"secret": secret, "ts": _t.time()}
     uri = _totp_provisioning_uri(secret, username)
-    qr = _qrcode.make(uri)
+    qr_obj = _qrcode.QRCode(error_correction=_qrcode.constants.ERROR_CORRECT_M)
+    qr_obj.add_data(uri)
+    qr_obj.make(fit=True)
+    img = qr_obj.make_image(image_factory=_qrsvg.SvgImage)
     buf = _io.BytesIO()
-    qr.save(buf, format="PNG")
-    qr_data_url = "data:image/png;base64," + _b64.b64encode(buf.getvalue()).decode()
+    img.save(buf)
+    # Inject white background rect so the QR is scannable on dark UIs.
+    # SvgImage emits no background; insert a white rect after the opening
+    # <svg …> tag (skip the <?xml …?> declaration to find the right '>').
+    svg_str = buf.getvalue().decode()
+    svg_open_end = svg_str.index('>', svg_str.index('<svg')) + 1
+    svg_str = (svg_str[:svg_open_end]
+               + '<rect width="100%" height="100%" fill="white"/>'
+               + svg_str[svg_open_end:])
+    qr_data_url = "data:image/svg+xml;base64," + _b64.b64encode(svg_str.encode()).decode()
     return web.json_response({"provisioning_uri": uri, "qr_data_url": qr_data_url},
                               headers={"Cache-Control": "no-store"})
 

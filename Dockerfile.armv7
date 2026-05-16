@@ -26,7 +26,9 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
         'maxminddb==2.8.2' \
         'redis==5.3.1' \
         'psycopg[c]==3.3.4' \
-        'pyjwt==2.12.1'
+        'pyjwt==2.12.1' \
+        'pyotp>=2.9.0' \
+        'qrcode>=7.0'
 
 USER nobody
 

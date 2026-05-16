@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.6 · Vhost Policy</title>
+<title>AppSecGW_1.8.7 · Vhost Policy</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -106,7 +106,7 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.6</div>
+    <div id="sidebar-brand-ver">1.8.7</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -199,6 +199,7 @@ var _globalVals = {};
 var _overrides  = {};
 var _pending    = {};
 var _vhostKnobs = [];
+var _allVhostSummary = {};
 
 var KNOB_META = {
   UPSTREAM:                      {g:'Routing',           t:'str'},
@@ -405,7 +406,35 @@ function _renderOverrides(){
   else { badge.style.display='none'; }
   document.getElementById('card-title').textContent='Active overrides'+(_hostname?' — '+_hostname:'');
   if(!_hostname){
-    container.innerHTML='<div class="empty-state"><div class="icon">&#8598;</div><p>Select a vhost above to view and edit its policy overrides.</p><p style="font-size:11.5px">Only knobs that differ from global are shown. Everything else inherits the global value.</p></div>';
+    var _vhKeys=Object.keys(_allVhostSummary).sort();
+    var _vhActive=_vhKeys.filter(function(vh){return Object.keys(_allVhostSummary[vh]).length>0;});
+    if(!_vhKeys.length){
+      container.innerHTML='<div class="empty-state"><div class="icon">&#8598;</div><p>Select a vhost above to view and edit its policy overrides.</p><p style="font-size:11.5px">Only knobs that differ from global are shown. Everything else inherits the global value.</p></div>';
+      return;
+    }
+    if(!_vhActive.length){
+      container.innerHTML='<div class="empty-state"><div class="icon">&#10003;</div><p>No vhost-specific overrides configured.</p><p style="font-size:11.5px">All active vhosts inherit their settings from the global policy.</p></div>';
+      return;
+    }
+    var _html='';
+    _vhActive.forEach(function(vh){
+      var ovKeys=Object.keys(_allVhostSummary[vh]).sort();
+      _html+='<div style="margin-bottom:16px;padding-bottom:8px;border-bottom:1px solid var(--line)">'
+        +'<div style="font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:600;color:var(--blue);padding:6px 0 6px">'
+        +escapeHtml(vh)
+        +' <span style="font-size:10px;font-weight:400;color:var(--dim)">'+ovKeys.length+' override'+(ovKeys.length===1?'':'s')+'</span></div>';
+      ovKeys.forEach(function(knob){
+        var ovVal=_allVhostSummary[vh][knob];
+        var glVal=_globalVals[knob];
+        _html+='<div style="display:flex;align-items:baseline;gap:12px;padding:3px 0 3px 8px;font-size:11.5px">'
+          +'<span style="font-family:ui-monospace,Menlo,monospace;color:var(--fg);min-width:220px;flex:0 0 220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(knob)+'</span>'
+          +'<span style="color:var(--green);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escapeHtml(_formatGlobal(ovVal))+'">'+escapeHtml(_formatGlobal(ovVal).slice(0,40))+'</span>'
+          +'<span style="color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">global: '+escapeHtml(_formatGlobal(glVal).slice(0,40))+'</span>'
+          +'</div>';
+      });
+      _html+='</div>';
+    });
+    container.innerHTML=_html;
     return;
   }
   if(count===0){
@@ -534,9 +563,33 @@ function _loadData(hostname){
         if(vh===hostname) opt.selected=true;
         sel.appendChild(opt);
       });
-      _renderOverrides(); _updateUnsavedBar();
+      if(!hostname){
+        var _vis=[];
+        for(var _i=1;_i<sel.options.length;_i++) _vis.push(sel.options[_i].value);
+        _loadAllVhostSummary(_vis);
+      } else {
+        _renderOverrides();
+      }
+      _updateUnsavedBar();
     })
     .catch(function(e){ _gwAlert('Load failed: '+e.message,'var(--red)'); });
+}
+
+function _loadAllVhostSummary(vhosts){
+  var container=document.getElementById('overrides-container');
+  if(!vhosts||!vhosts.length){_renderOverrides();return;}
+  container.innerHTML='<div class="empty-state"><div style="color:var(--dim)">Loading vhost overrides…</div></div>';
+  var promises=vhosts.map(function(vh){
+    return fetch(ADMIN_NS+'/vhost-policy-data?hostname='+encodeURIComponent(vh),{credentials:'include'})
+      .then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  });
+  Promise.all(promises).then(function(results){
+    _allVhostSummary={};
+    vhosts.forEach(function(vh,i){
+      if(results[i]) _allVhostSummary[vh]=results[i].overrides||{};
+    });
+    _renderOverrides();
+  }).catch(function(e){_gwAlert('Failed to load vhost summary: '+e.message,'var(--red)');});
 }
 
 function _buildPicker(search){
@@ -595,7 +648,14 @@ document.getElementById('vhost-select').addEventListener('change',function(){
   _hostname=this.value; _pending={}; _setParam('hostname',_hostname);
   document.getElementById('btn-add-override').disabled=!_hostname;
   if(_hostname) _loadData(_hostname);
-  else { _overrides={}; _globalVals={}; _renderOverrides(); _updateUnsavedBar(); }
+  else {
+    _overrides={}; _pending={}; _allVhostSummary={};
+    var _s=document.getElementById('vhost-select');
+    var _vhs=[];
+    for(var _j=1;_j<_s.options.length;_j++) _vhs.push(_s.options[_j].value);
+    _loadAllVhostSummary(_vhs);
+    _updateUnsavedBar();
+  }
 });
 
 (function(){

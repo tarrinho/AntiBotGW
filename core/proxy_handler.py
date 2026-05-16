@@ -1066,7 +1066,14 @@ async def proxy(request: web.Request):
                 up_parsed = _urlparse(_vc_upstream)
                 client_scheme = (request.headers.get("X-Forwarded-Proto")
                                  or ("https" if request.secure else "http"))
-                client_host = request.host or up_parsed.netloc
+                # PROXY4-02: validate Host header against ALLOWED_HOSTS before
+                # using it in Location rewrites — prevents open-redirect via
+                # attacker-controlled Host header.
+                _req_host = (request.host or "").split(":")[0].lower()
+                if ALLOWED_HOSTS and _req_host not in ALLOWED_HOSTS:
+                    client_host = up_parsed.netloc
+                else:
+                    client_host = request.host or up_parsed.netloc
 
                 for k, v in resp.headers.items():
                     kl = k.lower()
@@ -2088,6 +2095,7 @@ async def secrets_endpoint(request: web.Request):
              rejected=list(rejected.keys()))
 
     return web.json_response({
+        "ok":       len(applied) > 0 and len(rejected) == 0,
         "applied":  applied, "rejected": rejected,
         "integration_state": {
             "_TURNSTILE_CONFIGURED": _TURNSTILE_CONFIGURED,
@@ -2176,6 +2184,24 @@ async def rotate_keys_endpoint(request: web.Request):
 def _to_bot_uas_list(v):
     """Convert AUTHORIZED_BOT_UAS — accepts list-of-dicts (JSON POST) or string."""
     return _parse_authorized_bot_uas(v)
+
+
+def _upstream_safe_to_reload(v: str) -> bool:
+    # PROXY4-01: hot-reload UPSTREAM must pass the same public-IP check as the
+    # startup validator — not just a scheme/length check.
+    if not v.startswith(("http://", "https://")) or len(v) > 2048:
+        return False
+    if globals().get("ALLOW_PRIVATE_UPSTREAM"):
+        return True
+    try:
+        import vhost as _vh
+        _vh._assert_upstream_public(v, key="UPSTREAM(hot-reload)")
+        return True
+    except SystemExit:
+        return False
+    except Exception:
+        return True
+
 
 # name -> (parser, optional validator returning bool)
 _HOT_RELOAD_KNOBS = {
@@ -2282,7 +2308,6 @@ _HOT_RELOAD_KNOBS = {
     # this value at runtime updates the displayed setting (useful for
     # operators staging a migration) but won't switch live connections
     # until the container restarts.
-    "ALLOW_PRIVATE_UPSTREAM":  (_to_bool, None),
     "STRICT_VHOST":            (_to_bool, None),
     "UPSTREAM_REWRITE_BASE":   (str, lambda v: len(v) <= 2048 and (v == "" or v.startswith(("http://", "https://")))),
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
@@ -2348,8 +2373,8 @@ _HOT_RELOAD_KNOBS = {
     "SW_CHALLENGE_ENABLED":         (_to_bool, None),
     "POW_CHAL_THRESHOLD":           (float, lambda v: 0.0 <= v <= 100000.0),
     # 1.7.9 — runtime upstream switch (always overrideable regardless of env pin)
-    "UPSTREAM": (lambda v: str(v).rstrip("/"),
-                 lambda v: v.startswith(("http://", "https://")) and len(v) <= 2048),
+    # PROXY4-01: validator now calls _assert_upstream_public to prevent SSRF.
+    "UPSTREAM": (lambda v: str(v).rstrip("/"), _upstream_safe_to_reload),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
