@@ -79,6 +79,10 @@ _SCHEMA_MIGRATIONS: list[tuple[str, str, str | None, str | None]] = [
     ("gw_registry", "auto_apply",      "INTEGER NOT NULL DEFAULT 0",    "INTEGER NOT NULL DEFAULT 0"),
     # 1.8.0 — per-event vhost hostname for multi-vhost dashboard filtering
     ("events",      "vhost",           "TEXT DEFAULT ''",               "TEXT DEFAULT ''"),
+    # 1.8.6 — TOTP two-factor authentication columns for users table
+    ("users",       "totp_secret",     "TEXT",                          "TEXT"),
+    ("users",       "totp_enabled",    "INTEGER DEFAULT 0",             "INTEGER DEFAULT 0"),
+    ("users",       "totp_backup_codes", "TEXT",                        "TEXT"),
 ]
 
 
@@ -326,7 +330,19 @@ def db_init():
     );
     CREATE INDEX IF NOT EXISTS idx_signal_orders_gw ON signal_orders(gw_id);
 
-    -- 1.8.5: structured audit log for admin operations.
+    -- 1.8.6: DLP pattern versioning — operator-managed regex library.
+    CREATE TABLE IF NOT EXISTS dlp_patterns (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        name      TEXT NOT NULL,
+        pattern   TEXT NOT NULL,
+        severity  TEXT NOT NULL DEFAULT 'high',
+        enabled   INTEGER NOT NULL DEFAULT 1,
+        added_ts  REAL,
+        added_by  TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_dlp_name ON dlp_patterns(name);
+
+    -- 1.8.6: structured audit log for admin operations.
     CREATE TABLE IF NOT EXISTS audit_events (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         ts          REAL NOT NULL,
@@ -341,6 +357,28 @@ def db_init():
     CREATE INDEX IF NOT EXISTS idx_audit_ts         ON audit_events(ts);
     CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events(event_type);
     CREATE INDEX IF NOT EXISTS idx_audit_actor      ON audit_events(actor);
+
+    -- 1.8.6: server-side SIEM alert rules and fire history.
+    CREATE TABLE IF NOT EXISTS siem_alert_rules (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        metric        TEXT NOT NULL,
+        op            TEXT NOT NULL CHECK(op IN ('>','>=','<','<=')),
+        threshold     REAL NOT NULL,
+        label         TEXT NOT NULL DEFAULT '',
+        enabled       INTEGER NOT NULL DEFAULT 1,
+        created_ts    REAL NOT NULL,
+        created_by    TEXT,
+        last_fired_ts REAL DEFAULT 0,
+        cooldown_s    INTEGER NOT NULL DEFAULT 300
+    );
+    CREATE TABLE IF NOT EXISTS siem_alert_fired (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_id  INTEGER NOT NULL REFERENCES siem_alert_rules(id) ON DELETE CASCADE,
+        ts       REAL NOT NULL,
+        value    REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_siem_alert_fired_rule
+        ON siem_alert_fired(rule_id, ts DESC);
     """)
     # 1.6.7+ — additive column upgrades driven by the central registry.
     # See `_SCHEMA_MIGRATIONS` above; new releases append entries there.
@@ -648,7 +686,23 @@ async def db_writer_loop():
                             "UPDATE gw_sync_pending "
                             "SET status = ?, confirmed_ts = ? WHERE id = ?",
                             (args[1], args[2], args[0]))
-                    # 1.8.5 — admin audit log ─────────────────────────
+                    # 1.8.6 — DLP pattern CRUD ───────────────────────
+                    elif op == "dlp_add":
+                        # args = (name, pattern, severity, added_ts, added_by)
+                        conn.execute(
+                            "INSERT OR IGNORE INTO dlp_patterns "
+                            "(name, pattern, severity, added_ts, added_by) "
+                            "VALUES (?, ?, ?, ?, ?)",
+                            args)
+                    elif op == "dlp_toggle":
+                        # args = (enabled, id)
+                        conn.execute(
+                            "UPDATE dlp_patterns SET enabled=? WHERE id=?",
+                            args)
+                    elif op == "dlp_delete":
+                        # args = (id,)
+                        conn.execute("DELETE FROM dlp_patterns WHERE id=?", args)
+                    # 1.8.6 — admin audit log ─────────────────────────
                     elif op == "audit_log":
                         ts, event_type, actor, target, ip, detail_json, session_id, severity = args
                         conn.execute(
@@ -656,6 +710,30 @@ async def db_writer_loop():
                             "(ts, event_type, actor, target, ip, detail, session_id, severity) "
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (ts, event_type, actor, target, ip, detail_json, session_id, severity))
+                    # 1.8.6 — SIEM server-side alert rules ────────────
+                    elif op == "siem_alert_rule_add":
+                        # args = (metric, op, threshold, label, created_ts, created_by, cooldown_s)
+                        conn.execute(
+                            "INSERT INTO siem_alert_rules "
+                            "(metric, op, threshold, label, created_ts, created_by, cooldown_s) "
+                            "VALUES (?,?,?,?,?,?,?)",
+                            args)
+                    elif op == "siem_alert_rule_del":
+                        # args = (id,)
+                        conn.execute("DELETE FROM siem_alert_rules WHERE id = ?", args)
+                    elif op == "siem_alert_fired":
+                        # args = (rule_id, ts, value)
+                        conn.execute(
+                            "INSERT INTO siem_alert_fired (rule_id, ts, value) VALUES (?,?,?)",
+                            args)
+                        conn.execute(
+                            "UPDATE siem_alert_rules SET last_fired_ts = ? WHERE id = ?",
+                            (args[1], args[0]))
+                    elif op == "siem_alert_toggle":
+                        # args = (enabled, id)
+                        conn.execute(
+                            "UPDATE siem_alert_rules SET enabled = ? WHERE id = ?",
+                            args)
                 except Exception as e:
                     slog("db_write_failed", level="error", error=str(e), op=op)
             try:

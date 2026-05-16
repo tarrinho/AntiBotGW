@@ -158,6 +158,89 @@ def _circuit_is_open() -> bool:
     return _t.monotonic() < _UPSTREAM_CB["open_until"]
 
 
+def _is_auth_path(path: str) -> bool:
+    """1.8.6 — True when path matches any configured AUTH_PATHS prefix."""
+    from config import AUTH_PATHS
+    return any(path == p or path.startswith(p + "/") for p in AUTH_PATHS)
+
+
+# ── 1.8.6 — DLP Pattern CRUD endpoints ────────────────────────────────────────
+
+async def dlp_patterns_get(request: web.Request):
+    """GET /secured/dlp-patterns — list all DLP patterns."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, name, pattern, severity, enabled, added_ts, added_by "
+            "FROM dlp_patterns ORDER BY id"
+        ).fetchall()
+        conn.close()
+        return web.json_response(
+            {"patterns": [dict(r) for r in rows]},
+            headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+
+
+async def dlp_patterns_post(request: web.Request):
+    """POST /secured/dlp-patterns — add a new DLP pattern."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    try:
+        body = await request.json()
+        name     = str(body.get("name", "")).strip()[:100]
+        pattern  = str(body.get("pattern", "")).strip()[:2000]
+        severity = str(body.get("severity", "high")).strip()
+        if not name or not pattern:
+            return web.json_response({"error": "name and pattern required"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        if severity not in ("critical", "high", "medium", "low"):
+            severity = "high"
+        import re as _re
+        try:
+            _re.compile(pattern)
+        except Exception as e:
+            return web.json_response({"error": f"invalid regex: {e}"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        actor = _request_username(request)
+        if db_queue is not None:
+            import time as _t_dlp
+            db_queue.put_nowait(("dlp_add", (name, pattern, severity, _t_dlp.time(), actor)))
+        return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+
+
+async def dlp_patterns_delete(request: web.Request):
+    """DELETE /secured/dlp-patterns?id=<id> — delete a DLP pattern."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    pid = request.query.get("id", "")
+    if not pid:
+        return web.json_response({"error": "id required"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return web.json_response({"error": "invalid id"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if db_queue is not None:
+        db_queue.put_nowait(("dlp_delete", (pid,)))
+    return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
 def _circuit_record_failure() -> None:
     import time as _t
     _UPSTREAM_CB["fail_count"] += 1
@@ -623,7 +706,7 @@ async def proxy(request: web.Request):
     if request.method not in ALLOWED_METHODS:
         return web.Response(status=405, text="method not allowed\n")
 
-    # 1.8.5 — HTTP smuggling signal detection
+    # 1.8.6 — HTTP smuggling signal detection
     _smuggling_signal = check_smuggling(request)
     if _smuggling_signal:
         await update_risk_and_maybe_ban(
@@ -636,7 +719,7 @@ async def proxy(request: web.Request):
             sid=request.get("_sid", ""),
             fp=request.get("_fp", ""))
 
-    # 1.8.5 — verb override detection
+    # 1.8.6 — verb override detection
     if check_verb_override(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
@@ -648,7 +731,7 @@ async def proxy(request: web.Request):
             sid=request.get("_sid", ""),
             fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 3 — Task C: SSTI in attacker-controlled headers
+    # 1.8.6 Week 3 — Task C: SSTI in attacker-controlled headers
     if check_header_ssti(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
@@ -660,7 +743,7 @@ async def proxy(request: web.Request):
             sid=request.get("_sid", ""),
             fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 4 — Task G: Host header injection
+    # 1.8.6 Week 4 — Task G: Host header injection
     if check_host_header_injection(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
@@ -774,7 +857,7 @@ async def proxy(request: web.Request):
         except Exception:
             return web.Response(status=400, text="bad request\n")
 
-    # 1.8.5 — ungated first-touch check: high-confidence patterns that bypass
+    # 1.8.6 — ungated first-touch check: high-confidence patterns that bypass
     # the escalation threshold. Catches first-request injections (Log4Shell, SQLi).
     if body is not None:
         client_ctype = request.headers.get("Content-Type", "")
@@ -789,7 +872,7 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 3 — Task A: XXE detection (ungated, XML-gated)
+    # 1.8.6 Week 3 — Task A: XXE detection (ungated, XML-gated)
     if body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_xxe_body(body, client_ctype):
@@ -803,7 +886,7 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 3 — Task B: Prototype pollution detection
+    # 1.8.6 Week 3 — Task B: Prototype pollution detection
     if body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_proto_pollution(body, client_ctype):
@@ -817,7 +900,7 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 4 — Task H: GraphQL protection
+    # 1.8.6 Week 4 — Task H: GraphQL protection
     if body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         from detection.graphql import check_graphql
@@ -832,7 +915,7 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 4 — Task I: File upload content validation
+    # 1.8.6 Week 4 — Task I: File upload content validation
     if body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         _upload_sig = check_file_upload(body, client_ctype)
@@ -915,7 +998,7 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 4 — Task M: Circuit breaker: bail early if upstream is known-failing
+    # 1.8.6 Week 4 — Task M: Circuit breaker: bail early if upstream is known-failing
     if _circuit_is_open():
         _UPSTREAM_CB["half_open_attempts"] += 1
         if _UPSTREAM_CB["half_open_attempts"] > CIRCUIT_HALF_OPEN_MAX:
@@ -1217,7 +1300,7 @@ async def proxy(request: web.Request):
                     except (json.JSONDecodeError, ValueError, UnicodeDecodeError):
                         pass
 
-                # 1.8.5 Week 4 — Task M: circuit breaker tracking
+                # 1.8.6 Week 4 — Task M: circuit breaker tracking
                 if resp.status >= 500:
                     _circuit_record_failure()
                 else:
@@ -2561,10 +2644,11 @@ async def status_endpoint(request: web.Request):
                 "banned_until": max(0, round(s.banned_until - n, 1)),
                 "first_seen_secs_ago": round(n - s.first_seen, 1),
             }
+    from state import _DETECTOR_HEALTH
     return web.json_response({"clients": out, "config": {
         "burst": RATE_LIMIT_BURST, "refill_per_sec": RATE_LIMIT_REFILL,
         "pow_difficulty": POW_DIFFICULTY, "honeypot_ban_secs": HONEYPOT_BAN_SECS,
-    }}, headers={"Cache-Control": "no-store"})
+    }, "detectors": _DETECTOR_HEALTH}, headers={"Cache-Control": "no-store"})
 @web.middleware
 async def protect(request: web.Request, handler):
     # 1.4.6 — request correlation. Honour an inbound X-Request-ID if it's
@@ -3135,6 +3219,17 @@ async def protect(request: web.Request, handler):
     # 'ip' is recorded as the last-seen IP for dashboard display only.
     track_key = identity
 
+    # 1.8.6 — JA4H: HTTP request fingerprint (compute once, store, check deny-list)
+    from identity import compute_ja4h as _compute_ja4h
+    ja4h = _compute_ja4h(request)
+    if ja4h and ja4h != "error":
+        async with state_lock:
+            ip_state[track_key].last_ja4h = ja4h
+        if ja4h in JA4H_DENY_LIST:
+            await update_risk_and_maybe_ban(track_key, "ja4h-deny", ip)
+            # Flag for inclusion in request_signals later (appended after request_signals is init'd)
+            request["_ja4h_deny"] = True
+
     # 1.7.3 P3 — LLM no-subresource heuristic: record every request
     if track_key:
         _llm_heuristic.observe(
@@ -3419,6 +3514,9 @@ async def protect(request: web.Request, handler):
         await update_risk_and_maybe_ban(track_key, "direct-api-probe", ip)
         request_signals.append("direct-api-probe")
 
+    # 1.8.6 — JA4H deny signal (computed above, before request_signals was initialized)
+    if request.get("_ja4h_deny"):
+        request_signals.append("ja4h-deny")
     # Stash request_signals for the response wrapper to log
     request["_signals"] = request_signals
 
@@ -3580,6 +3678,9 @@ async def protect(request: web.Request, handler):
                  track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid,
                  signals=request.get("_signals", []),
                  score=_score_now, method=request.method)
+    # 1.8.6 — JA4H telemetry appended to slog separately (record() predates ja4h)
+    if ja4h and ja4h != "error":
+        slog("request_ja4h", level="debug", rid=rid, ja4h=ja4h, ip=ip, path=path)
     # Stealth-agent telemetry (only on allowed traffic — feeds /__agents).
     async with state_lock:
         st = ip_state[track_key]
@@ -3600,6 +3701,30 @@ async def protect(request: web.Request, handler):
                                       ".svg", ".css", ".js", ".webp",
                                       ".woff", ".woff2", ".ttf", ".map")):
             await update_risk_and_maybe_ban(track_key, "upstream-404", ip)
+
+    # 1.8.6 — Credential stuffing: track upstream 401/403 on auth paths
+    if response.status in (401, 403) and _is_auth_path(request.path):
+        import time as _t_cs
+        from state import _auth_fail_global
+        from config import AUTH_FAIL_THRESHOLD, AUTH_FAIL_WINDOW_SECS, CRED_STUFF_GLOBAL_RPS
+        _cs_now = _t_cs.monotonic()
+        async with state_lock:
+            _cs_s = ip_state[track_key]
+            if _cs_now - _cs_s.auth_failure_window_start > AUTH_FAIL_WINDOW_SECS:
+                _cs_s.auth_failures = 0
+                _cs_s.auth_failure_window_start = _cs_now
+            _cs_s.auth_failures += 1
+            _cs_af = _cs_s.auth_failures
+        if _cs_af >= AUTH_FAIL_THRESHOLD:
+            await update_risk_and_maybe_ban(track_key, "upstream-auth-fail", ip)
+        # Global clustering: measure recent auth-fail rate
+        _auth_fail_global.append(_cs_now)
+        _cs_window_start = _cs_now - 30.0
+        _cs_recent = sum(1 for _ts in _auth_fail_global if _ts > _cs_window_start)
+        if _cs_recent / 30.0 >= CRED_STUFF_GLOBAL_RPS:
+            slog("credential_stuffing_wave", level="warn",
+                 rate=round(_cs_recent / 30.0, 2), window_recent=_cs_recent)
+
     # 1.4.6: stamp the response with the request id so the client can grep
     # logs from this side using the same id.
     if rid and _REQUEST_ID_HEADER not in response.headers:
@@ -4335,7 +4460,7 @@ async def _metrics_auth_ok(request) -> bool:
 
 async def metrics_endpoint(request: web.Request):
     """JSON metrics dump consumed by the dashboard."""
-    # 1.8.5 Week 4 — Task L: authenticate /__metrics
+    # 1.8.6 Week 4 — Task L: authenticate /__metrics
     if not await _metrics_auth_ok(request):
         return web.Response(status=401,
                             headers={"WWW-Authenticate": 'Bearer realm="metrics"'})
@@ -6106,10 +6231,15 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             seen_epoch = _t.time() - (n_now - s.last_seen)
             if t <= seen_epoch < end:
                 _mip = s.last_ip or key
+                _rb = sorted(
+                    ((r, round(v, 1)) for r, v in s.risk_by_reason.items() if v >= 0.5),
+                    key=lambda x: x[1], reverse=True,
+                )
                 missed_list.append({
                     "id": key, "ip": _mip,
                     "ua": s.last_user_agent, "stealth_score": score,
                     "risk_score": round(s.risk_score, 1),
+                    "risk_breakdown": _rb,
                     "is_admin_ip": _is_admin_ip(_mip),
                     "allowed": s.allowed_count, "blocked": s.blocked_count,
                     "last_path": s.last_path,

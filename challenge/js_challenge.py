@@ -376,6 +376,13 @@ def _serve_js_challenge(request: web.Request, pow_challenge: str = ""):
             .replace('"__TURNSTILE_KEY__"', ts_key_json)
             .replace('"__POW_CHALLENGE__"', pow_chal_json)
             .replace('__SW_ENABLED__',      sw_enabled_json))
+    # 1.8.6 — inject interaction probe (mouse/scroll/keystroke entropy)
+    from detection.interaction import _inject_interaction_probe
+    try:
+        _probe_ip = get_ip(request)
+    except Exception:
+        _probe_ip = ""
+    html = _inject_interaction_probe(html, _probe_ip)
     # R7: plant a canary on the challenge page too — the LLM summariser
     # reads the gateway's HTML before it ever reaches upstream content.
     headers = {

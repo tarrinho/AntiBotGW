@@ -135,7 +135,7 @@ def _internal_authed(request) -> bool:
     # current-session indicator in the sessions modal.
     parsed = _session_parse(cookie)
     sid = parsed[1] if parsed else ""
-    # 1.8.5 Week 3 — Task F: idle timeout check (before touch)
+    # 1.8.6 Week 3 — Task F: idle timeout check (before touch)
     from config import SESSION_IDLE_TIMEOUT  # noqa: F401
     from admin.users import _SESSION_TTL  # noqa: F401 — _SESSION_TTL lives in users.py
     if sid and SESSION_IDLE_TIMEOUT > 0:
@@ -145,7 +145,7 @@ def _internal_authed(request) -> bool:
             if _t.time() - last_touch > SESSION_IDLE_TIMEOUT:
                 _session_revoke(sid, by_username="system")
                 return False
-    # 1.8.5 Week 4 — Task J: session IP binding check
+    # 1.8.6 Week 4 — Task J: session IP binding check
     from config import BIND_SESSION_TO_IP  # noqa: F401
     if BIND_SESSION_TO_IP and sid:
         _cached_for_ip = _SESSION_CACHE.get(sid)

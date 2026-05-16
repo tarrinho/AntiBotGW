@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Agents</title>
+<title>AppSecGW_1.8.6 · Agents</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
@@ -107,6 +107,9 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 /* 1.5.4 — click-to-popover for identity details + risk breakdown */
 .cell-click{cursor:pointer;border-bottom:1px dotted var(--blue);position:relative;padding-right:14px}
 .cell-click:hover{color:var(--blue)}
+/* 1.8.6 — score badge click */
+.score-click{cursor:pointer;outline:1px dotted transparent;outline-offset:2px;transition:outline-color .12s}
+.score-click:hover{outline-color:var(--blue);filter:brightness(1.15)}
 /* Persistent ↗ link-icon — signals the value is clickable for a popover. */
 .cell-click::after{
   content:'';display:inline-block;width:10px;height:10px;margin-left:4px;
@@ -186,7 +189,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div id="sidebar-brand-ver">1.8.6</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -657,7 +660,7 @@ async function tick(){
           </div>`;
         return `
           <tr>
-            <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
+            <td><span class="tag score-click ${bandClass(s.stealth_score)}" data-pop="score" data-i="${i}" title="click for score breakdown">${s.stealth_score}</span>${compBar}</td>
             <td>${agBadge}</td>
             <td><b class="cell-click" data-pop="id" data-i="${i}" title="click for full identity details">${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim" style="font-size:10px">${fmtAge(s.first_seen_secs_ago)}</div></td>
             <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
@@ -768,8 +771,8 @@ async function tick(){
         const r = document.getElementById('d-'+el.dataset.i);
         r.style.display = (r.style.display==='none')?'table-row':'none';
       });
-      // 1.5.4 — click identity / risk to open popover
-      tbody.querySelectorAll('.cell-click').forEach(el=>{
+      // 1.5.4 — click identity / risk / score to open popover
+      tbody.querySelectorAll('.cell-click, .score-click').forEach(el=>{
         el.onclick = (ev)=>{
           const i = +el.dataset.i;
           const s = (window._suspectsList || d.suspects)[i]; if(!s) return;
@@ -1321,6 +1324,8 @@ window._gwIdentityPopover = (function(){
       tokens:           raw.tokens != null ? raw.tokens : null,
       blocks_breakdown: bbd,
       risk_breakdown:   raw.risk_breakdown || null,
+      components:       raw.components || {},
+      metrics:          raw.metrics    || {},
     };
   }
   function buildIdHtml(d){
@@ -1385,11 +1390,53 @@ window._gwIdentityPopover = (function(){
   return { normalizeId, buildIdHtml, buildRiskHtml };
 })();
 
+// 1.8.6 — stealth score breakdown (agents-only; uses escapeHtml global)
+function buildScoreHtml(d){
+  const score = d.stealth_score != null ? d.stealth_score : 0;
+  const c = d.components, m = d.metrics;
+  const COMPS = [
+    {key:'headers', label:'headers', color:'#a78bfa', detail:`avg ${m.avg_header_score!=null?m.avg_header_score:'?'}/7 expected headers`},
+    {key:'assets',  label:'assets',  color:'#5fb3c0', detail:`${m.html_loads||0} html · ${m.static_loads||0} static fetches`},
+    {key:'enum',    label:'enum',    color:'#3fb950', detail:`${m.unique_paths||0} unique paths (div=${m.path_diversity!=null?m.path_diversity:'?'})`},
+    {key:'timing',  label:'timing',  color:'#d29922', detail:`cv=${m.behavioral_cov!=null?m.behavioral_cov:'n/a'}`},
+    {key:'risk',    label:'risk',    color:'#f85149', detail:`risk score=${m.risk_score!=null?m.risk_score:'?'}`},
+    {key:'404s',    label:'404s',    color:'#ff7b3a', detail:`${m.upstream_404_count||0} upstream 404s`},
+  ];
+  const compRows = COMPS.map(({key,label,color,detail})=>{
+    const pct = Math.round(c[key]||0);
+    return `<div class="rsn">
+      <div><span class="rsn-name">${label}</span>
+        <div class="dim" style="font-size:10px;margin-top:1px">${detail}</div></div>
+      <div class="rsn-bar"><div style="width:${pct}%;background:${color}"></div></div>
+      <span class="rsn-val" style="color:${color}">${pct}%</span>
+    </div>`;
+  }).join('');
+  const rb = d.risk_breakdown || [];
+  let riskSection = '';
+  if (rb.length && (c.risk||0) > 0){
+    const rtot = rb.reduce((a,b)=>a+b[1],0)||1;
+    const rRows = rb.slice(0,8).map(([reason,val])=>{
+      const rpct = (val/rtot*100).toFixed(0);
+      return `<div class="rsn"><span class="rsn-name">${escapeHtml(reason)}</span>
+        <div class="rsn-bar"><div style="width:${rpct}%"></div></div>
+        <span class="rsn-val">+${val}</span></div>`;
+    }).join('');
+    riskSection = `<div style="margin-top:10px">
+      <div class="dim" style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Risk signals → score ${m.risk_score}</div>
+      ${rRows}</div>`;
+  }
+  return `<div class="dim" style="margin-bottom:8px">
+      Stealth score: <b style="color:var(--blue)">${score}/100</b>
+      · 6 behavioral components · bars = % contribution
+    </div>${compRows}${riskSection}`;
+}
+
 function openPopover(kind, s, x, y){
   const d = window._gwIdentityPopover.normalizeId(s);
   let title, body;
-  if      (kind === 'id')   { title = 'Identity details';     body = window._gwIdentityPopover.buildIdHtml(d); }
-  else if (kind === 'risk') { title = 'Risk score breakdown'; body = window._gwIdentityPopover.buildRiskHtml(d); }
+  if      (kind === 'id')    { title = 'Identity details';      body = window._gwIdentityPopover.buildIdHtml(d); }
+  else if (kind === 'risk')  { title = 'Risk score breakdown';  body = window._gwIdentityPopover.buildRiskHtml(d); }
+  else if (kind === 'score') { title = 'Score breakdown';       body = buildScoreHtml(d); }
   else { return; }
   document.getElementById('pop-title').innerHTML =
     `${title} <span class="x" id="pop-close">×</span>`;
@@ -1479,6 +1526,19 @@ async function fetchIpIntel(ip) {
                padding:2px 8px;border-radius:3px;font-size:11px;
                margin-right:5px;display:inline-block;margin-bottom:4px">
        ${escapeHtml(name)} ↗</a>`).join('');
+  const riskBreakdownHtml = (() => {
+    const bd = it.risk_breakdown || [];
+    if (!bd.length) return '';
+    const tot = bd.reduce((a, b) => a + b[1], 0) || 1;
+    const bars = bd.map(([r, v]) => {
+      const pct = (v / tot * 100).toFixed(0);
+      return `<div class="rsn"><span class="rsn-name">${escapeHtml(r)}</span><div class="rsn-bar"><div style="width:${pct}%"></div></div><span class="rsn-val">+${v}</span></div>`;
+    }).join('');
+    return `<div style="margin-top:10px">
+      <div class="dim" style="font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">Score breakdown · live signals</div>
+      ${bars}
+    </div>`;
+  })();
   return `
     <h3 style="margin:0 0 6px 0">IP intelligence
       <span style="background:${verdictColor};color:#000;font-weight:700;
@@ -1497,6 +1557,7 @@ async function fetchIpIntel(ip) {
       <span class="k">risk</span>        <span class="v">${fmtScore(it.risk_score)}/100</span>
       <span class="k">activity</span>    <span class="v">${it.requests_24h||0} reqs (${it.allowed_24h||0} ok / ${it.blocked_24h||0} blocked)</span>
     </div>
+    ${riskBreakdownHtml}
     <div style="margin-top:10px">
       <div class="dim" style="font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">External references · cross-check the score</div>
       ${refsHtml}

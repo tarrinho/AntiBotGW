@@ -25,3 +25,6 @@ maxminddb>=2.6,<3
 # `psycopg` (without [binary]) which builds the C extension on demand.
 # The marker below skips this line on armv7 / armv6 wheels-only installs.
 psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
+
+# 1.8.6 — TOTP two-factor authentication
+pyotp>=2.9.0

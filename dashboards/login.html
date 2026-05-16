@@ -77,6 +77,13 @@ body{flex-direction:column}
   <button type="submit" id="submit">Sign in</button>
   <div id="err" class="err"></div>
 
+  <div id="totp-step" style="display:none">
+    <div class="bootstrap-note">Your account has 2FA enabled. Enter the 6-digit code from your authenticator app.</div>
+    <input id="totp-code" type="text" name="totp_code" placeholder="6-digit code"
+           maxlength="8" autocomplete="one-time-code" style="margin-top:10px">
+    <button type="button" id="totp-submit" style="margin-top:8px;width:100%">Verify</button>
+  </div>
+
   __OIDC_ERROR__
   __BOOTSTRAP_HINT__
   __OIDC_BUTTON__
@@ -117,6 +124,27 @@ document.getElementById("login-form").addEventListener("submit", async (ev) => {
       errEl.textContent = j.error || ("Sign-in failed (HTTP " + r.status + ")");
       errEl.classList.add("show");
       btn.disabled = false;
+      return;
+    }
+    if (r.ok && j.step === 'totp_required') {
+      document.getElementById('totp-step').style.display = '';
+      document.querySelector('input[name="username"]').closest('label').style.display = 'none';
+      document.querySelector('input[name="password"]').closest('label').style.display = 'none';
+      document.getElementById('submit').style.display = 'none';
+      const _pt = j.partial_token;
+      document.getElementById('totp-submit').addEventListener('click', async () => {
+        const code = document.getElementById('totp-code').value.trim();
+        const r2 = await fetch('/antibot-appsec-gateway/login/totp', {
+          method: 'POST',
+          headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({partial_token: _pt, code}),
+          credentials: 'include',
+        });
+        let j2; try { j2 = await r2.json(); } catch { j2 = {_error: true}; }
+        if (j2._error) { errEl.textContent = 'Response parse error'; errEl.classList.add('show'); return; }
+        if (r2.ok) { window.location.href = next || '/antibot-appsec-gateway/secured/control-center'; }
+        else { errEl.textContent = j2.error || 'Invalid code'; errEl.classList.add('show'); }
+      });
       return;
     }
     location.href = safeNext(j.redirect) || next;
