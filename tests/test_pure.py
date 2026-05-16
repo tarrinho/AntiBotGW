@@ -504,7 +504,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.6"
+_EXPECTED_VERSION = "AppSecGW_1.8.7"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.6\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.7\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -5539,7 +5539,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.6" in src, "vhost_policy.html: version string missing or stale"
+    assert "AppSecGW_1.8.7" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():
@@ -6201,7 +6201,7 @@ class TestMissedListRiskBreakdown:
 # ── 1.8.6 — TOTP / 2FA QR code ───────────────────────────────────────────────
 
 class TestTotpSetupQrCode:
-    """totp_setup_endpoint returns qr_data_url (base64 PNG), not raw secret."""
+    """totp_setup_endpoint returns qr_data_url (base64 SVG), not raw secret."""
 
     def _setup_src(self):
         import pathlib as _pl
@@ -6215,17 +6215,17 @@ class TestTotpSetupQrCode:
     def test_qrcode_import(self):
         src = self._setup_src()
         assert "qrcode" in src, \
-            "totp_setup_endpoint must import qrcode to generate QR PNG"
+            "totp_setup_endpoint must import qrcode to generate QR code"
 
     def test_base64_encode_used(self):
         src = self._setup_src()
         assert "_b64.b64encode" in src or "base64.b64encode" in src, \
-            "QR PNG must be base64-encoded for data URL"
+            "QR code must be base64-encoded for data URL"
 
     def test_data_url_prefix(self):
         src = self._setup_src()
-        assert "data:image/png;base64," in src, \
-            "qr_data_url must use data:image/png;base64, prefix"
+        assert "data:image/svg+xml;base64," in src, \
+            "qr_data_url must use data:image/svg+xml;base64, prefix (SVG, no PIL needed)"
 
     def test_raw_secret_not_in_response(self):
         """INT4-11: raw secret must not appear in json_response body."""

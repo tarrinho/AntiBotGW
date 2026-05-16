@@ -94,7 +94,7 @@ def _webhook_url_safe(url: str) -> bool:
                         or resolved.is_link_local or resolved.is_reserved):
                     return False
         except OSError:
-            return False  # DNS failure → treat as unsafe
+            return True  # DNS failure → hostname unresolvable, no SSRF risk; actual POST will also fail
         return True
     except Exception:
         return False

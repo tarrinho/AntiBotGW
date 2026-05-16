@@ -11,7 +11,9 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
        'aiohttp==3.13.5' \
        'maxminddb==2.8.2' \
        'psycopg[binary]==3.3.4' \
-       'redis==5.3.1'
+       'redis==5.3.1' \
+       'pyotp>=2.9.0' \
+       'qrcode>=7.0'
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.

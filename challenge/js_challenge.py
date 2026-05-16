@@ -376,13 +376,17 @@ def _serve_js_challenge(request: web.Request, pow_challenge: str = ""):
             .replace('"__TURNSTILE_KEY__"', ts_key_json)
             .replace('"__POW_CHALLENGE__"', pow_chal_json)
             .replace('__SW_ENABLED__',      sw_enabled_json))
-    # 1.8.6 — inject interaction probe (mouse/scroll/keystroke entropy)
+    # DET4-03: bind probe token to session identity, not IP
     from detection.interaction import _inject_interaction_probe
+    from identity import get_identity as _get_id_for_probe
     try:
-        _probe_ip = get_ip(request)
+        _probe_id, *_ = _get_id_for_probe(request)
     except Exception:
-        _probe_ip = ""
-    html = _inject_interaction_probe(html, _probe_ip)
+        try:
+            _probe_id = get_ip(request)
+        except Exception:
+            _probe_id = ""
+    html = _inject_interaction_probe(html, _probe_id)
     # R7: plant a canary on the challenge page too — the LLM summariser
     # reads the gateway's HTML before it ever reaches upstream content.
     headers = {

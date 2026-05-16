@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.6 — entry point only.
+Anti-bot reverse proxy v1.8.7 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -159,12 +159,24 @@ from admin.mesh import (  # noqa: F401 — gateway registry private symbols
 import sys as _sys_proxy
 import types as _types_proxy
 
+# PROXY4-03: names that must never propagate to submodules.
+# Builtin names are excluded here as belt-and-suspenders; the builtins module
+# itself is already excluded by the "!= builtins" guard below.
+# NOTE: SESSION_KEY / ADMIN_KEY are intentionally NOT in this set — they must
+# propagate so that in-process key rotation reaches all submodules.
+_PROPAGATE_NEVER = frozenset({
+    "open", "exec", "eval", "__builtins__", "__import__",
+})
+
 class _ProxyModule(_types_proxy.ModuleType):
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
+        if name in _PROPAGATE_NEVER:
+            return
         for _m in list(_sys_proxy.modules.values()):
             if (_m is not None
                     and _m is not _sys_proxy.modules.get(__name__)
+                    and getattr(_m, "__name__", None) != "builtins"
                     and hasattr(_m, name)):
                 try:
                     setattr(_m, name, value)
@@ -213,7 +225,24 @@ async def on_startup(app):
     # the switch on the Controls dashboard without first running migrate
     # commands. Best-effort: a misconfigured DSN logs a warning but the
     # gateway boots fine.
-    if POSTGRES_DSN and _postgres_available:
+    #
+    # 1.8.6 fix: _postgres_available is initialised False in state.py and
+    # was never set to True at startup, so this block never ran and the UI
+    # always showed SQLite as the active backend even with DB_BACKEND=postgres.
+    # Resolve it here by calling _postgres_load_module() and propagating the
+    # result to every loaded module before the db_init_postgres() check.
+    if POSTGRES_DSN:
+        from db.postgres import _postgres_load_module as _pg_load_check
+        if _pg_load_check() is not None:
+            import state as _state_pg
+            _state_pg._postgres_available = True
+            import sys as _sys_pg
+            for _m_pg in list(_sys_pg.modules.values()):
+                if _m_pg is not None and hasattr(_m_pg, '_postgres_available'):
+                    try:
+                        setattr(_m_pg, '_postgres_available', True)
+                    except (AttributeError, TypeError):
+                        pass
         if db_init_postgres():
             print(f"[db-pg] event store ready (active={DB_BACKEND})",
                   flush=True)

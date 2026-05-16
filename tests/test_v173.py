@@ -86,12 +86,14 @@ class TestHoneyCred:
 # ── P2: Redirect maze ─────────────────────────────────────────────────────────
 
 class TestRedirectMaze:
+    _DEST = "/test-dest"
+
     def test_sign_and_verify_token(self):
         from detection.redirect_maze import _sign_maze_token, _verify_maze_token
         identity = "mazetest"
         ts_ms = int(time.time() * 1000)
-        token = _sign_maze_token(identity, 0, ts_ms)
-        ok, step, ts_out = _verify_maze_token(token, identity)
+        token = _sign_maze_token(identity, 0, ts_ms, self._DEST)
+        ok, step, ts_out = _verify_maze_token(token, identity, self._DEST)
         assert ok is True
         assert step == 0
         assert ts_out == ts_ms
@@ -99,29 +101,29 @@ class TestRedirectMaze:
     def test_verify_rejects_wrong_identity(self):
         from detection.redirect_maze import _sign_maze_token, _verify_maze_token
         ts_ms = int(time.time() * 1000)
-        token = _sign_maze_token("alice", 0, ts_ms)
-        ok, _, _ = _verify_maze_token(token, "eve")
+        token = _sign_maze_token("alice", 0, ts_ms, self._DEST)
+        ok, _, _ = _verify_maze_token(token, "eve", self._DEST)
         assert ok is False
 
     def test_verify_rejects_expired_token(self):
         from detection.redirect_maze import _sign_maze_token, _verify_maze_token
         old_ts = int((time.time() - 60) * 1000)  # 60 s ago → expired (TTL=30s)
-        token = _sign_maze_token("user", 0, old_ts)
-        ok, _, _ = _verify_maze_token(token, "user")
+        token = _sign_maze_token("user", 0, old_ts, self._DEST)
+        ok, _, _ = _verify_maze_token(token, "user", self._DEST)
         assert ok is False
 
     def test_verify_rejects_future_token(self):
         from detection.redirect_maze import _sign_maze_token, _verify_maze_token
         future_ts = int((time.time() + 30) * 1000)  # 30 s in future
-        token = _sign_maze_token("user", 0, future_ts)
-        ok, _, _ = _verify_maze_token(token, "user")
+        token = _sign_maze_token("user", 0, future_ts, self._DEST)
+        ok, _, _ = _verify_maze_token(token, "user", self._DEST)
         assert ok is False
 
     def test_verify_rejects_malformed_token(self):
         from detection.redirect_maze import _verify_maze_token
-        assert _verify_maze_token("notavalidtoken", "user") == (False, 0, 0)
-        assert _verify_maze_token("a.b", "user") == (False, 0, 0)
-        assert _verify_maze_token("", "user") == (False, 0, 0)
+        assert _verify_maze_token("notavalidtoken", "user", self._DEST) == (False, 0, 0)
+        assert _verify_maze_token("a.b", "user", self._DEST) == (False, 0, 0)
+        assert _verify_maze_token("", "user", self._DEST) == (False, 0, 0)
 
     def test_make_maze_entry_returns_correct_path(self):
         from detection.redirect_maze import make_maze_entry
@@ -135,8 +137,8 @@ class TestRedirectMaze:
         identity = "steptest"
         ts = int(time.time() * 1000)
         for step in range(4):
-            token = _sign_maze_token(identity, step, ts)
-            ok, out_step, _ = _verify_maze_token(token, identity)
+            token = _sign_maze_token(identity, step, ts, self._DEST)
+            ok, out_step, _ = _verify_maze_token(token, identity, self._DEST)
             assert ok
             assert out_step == step
 

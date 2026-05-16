@@ -518,6 +518,7 @@ def test_js_challenge_target_blocks_open_redirect(proxy_module):
             self.cookies = {}
             self.method = "GET"
             self.path = pq.split("?")[0]
+            self.remote = "1.2.3.4"
 
     try:
         # M1 protects against protocol-relative redirects (//host).

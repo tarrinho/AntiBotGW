@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.6 · Settings</title>
+<title>AppSecGW_1.8.7 · Settings</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -169,7 +169,7 @@ button.danger{background:var(--red)}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.6</div>
+    <div id="sidebar-brand-ver">1.8.7</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -198,7 +198,7 @@ button.danger{background:var(--red)}
 <div id="page-content">
 
 <main>
-<!-- ── 1.6.6 — Gateway identity strip ──────────────────────────── -->
+<!-- ── 1.8.7 — Gateway identity strip ──────────────────────────── -->
 <div class="card" style="display:flex;flex-wrap:wrap;gap:10px 32px;align-items:center;
                           padding:12px 16px;margin-bottom:14px">
   <div>
@@ -216,10 +216,22 @@ button.danger{background:var(--red)}
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
          id="gw-started">—</div>
   </div>
+  <div style="border-left:1px solid var(--line);padding-left:24px">
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Vhost</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);display:flex;align-items:center;gap:6px"
+         id="gw-vhost">—</div>
+  </div>
+  <div style="min-width:0;max-width:340px">
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Upstream</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--blue);
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+         id="gw-upstream" title="">—</div>
+  </div>
   <div style="margin-left:auto">
     <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Logged in as</div>
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--green);font-weight:600"
-         id="gw-whoami">—</div>  </div>
+         id="gw-whoami">—</div>
+  </div>
 </div>
 
 <!-- ── Virtual Hosts ─────────────────────────────────────────────── -->
@@ -889,6 +901,118 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
+<!-- ── Infrastructure ──────────────────────────────────────────────── -->
+<div class="card" id="card-infrastructure">
+  <h2>⚙️ Infrastructure</h2>
+  <p class="desc">
+    Networking and response-rewriting knobs.
+    Changes marked <span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px">REQUIRES RESTART</span>
+    take effect only after the container is restarted.
+  </p>
+  <div id="infra-body" style="font-size:12.5px">Loading…</div>
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-infra-apply" disabled>Apply changes</button>
+    <button class="secondary" id="btn-infra-reset" disabled>Reset</button>
+    <span id="infra-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── Database backend ────────────────────────────────────────────── -->
+<div class="card" id="card-db">
+  <h2>🗄️ Database backend <span style="font-size:11px;color:var(--yellow);font-weight:400">— requires container restart</span></h2>
+  <p class="desc">
+    <code>sqlite</code> (default) is single-file, zero-dependency.
+    <code>postgres</code> is the high-volume / multi-instance slot backed by PostgreSQL + TimescaleDB.
+    Switching does not migrate data.
+  </p>
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+    <span id="db-lbl-sqlite" style="font-size:12.5px;font-weight:600;cursor:pointer;transition:color .15s" onclick="dbSetTarget('sqlite')">SQLite</span>
+    <div id="db-track" style="flex-shrink:0;position:relative;width:60px;height:32px;background:#3fb950;border-radius:16px;cursor:pointer;transition:background .2s;box-shadow:inset 0 1px 3px rgba(0,0,0,.3)" onclick="dbToggle()">
+      <div id="db-thumb" style="position:absolute;top:4px;left:4px;width:24px;height:24px;background:#fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.4);transition:left .2s"></div>
+    </div>
+    <span id="db-lbl-pg" style="font-size:12.5px;font-weight:600;cursor:pointer;transition:color .15s" onclick="dbSetTarget('postgres')">PostgreSQL / TimescaleDB</span>
+  </div>
+  <div id="db-pg-fields" style="display:none">
+    <p class="desc" style="margin-bottom:10px">Connection details (saved as POSTGRES_DSN secret). All fields required.</p>
+    <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">Host</label>
+        <input id="pg-host" type="text" placeholder="postgres" style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">Port</label>
+        <input id="pg-port" type="text" value="5432" style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:2fr 2fr 1fr;gap:10px;margin-bottom:10px">
+      <div>
+        <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">Database</label>
+        <input id="pg-db" type="text" placeholder="appsecgw" style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">User</label>
+        <input id="pg-user" type="text" placeholder="appsecgw" style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">Password</label>
+        <input id="pg-pass" type="password" style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+      </div>
+    </div>
+    <div class="row-controls">
+      <button id="pg-save-btn">Save DSN</button>
+      <button class="secondary" id="pg-test-btn">Test connection</button>
+      <span id="pg-test-result" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+    </div>
+  </div>
+  <div class="row-controls" style="margin-top:10px">
+    <button id="btn-db-apply" disabled>Apply backend</button>
+    <span id="db-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── Storage ────────────────────────────────────────────────────── -->
+<div class="card" id="card-storage">
+  <h2>Storage</h2>
+  <p class="desc">
+    Disk usage for the <code>/data</code> volume. When disk fills, SQLite write errors
+    occur and endpoints return HTTP 500. Use <b>Vacuum DB</b> to shrink the database
+    file and truncate the WAL — safe to run at any time.
+  </p>
+  <div id="storage-body" style="font-size:13px;color:var(--dim)">Loading…</div>
+  <div class="row-controls" style="margin-top:12px">
+    <button id="btn-vacuum">Vacuum DB</button>
+    <span class="foot" id="vacuum-status"></span>
+  </div>
+</div>
+
+<!-- ── Integration credentials ─────────────────────────────────────── -->
+<div class="card" id="card-credentials">
+  <h2>🔑 Integration credentials</h2>
+  <p class="desc">
+    Runtime secrets — saved in the DB and applied immediately (no restart).
+    Leave a field blank to keep the existing value.
+    Click <b>Clear</b> to revert to the environment-variable fallback.
+    Note: <code>WEBHOOK_URL</code>, <code>WEBHOOK_SECRET</code>, and <code>JWT_HMAC_SECRET</code> are environment-variable only.
+  </p>
+  <div id="creds-body">Loading…</div>
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-creds-save">Save credentials</button>
+    <span id="creds-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── System logging ──────────────────────────────────────────────── -->
+<div class="card" id="card-logging">
+  <h2>📋 System logging &amp; webhook filter</h2>
+  <p class="desc">Log verbosity, output format, and which detection reasons trigger webhook calls.</p>
+  <div id="logging-body">Loading…</div>
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-logging-apply" disabled>Apply</button>
+    <button class="secondary" id="btn-logging-reset" disabled>Reset</button>
+    <span id="logging-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
 <div class="banner">
   Export and import the gateway's hot-reload configuration as a zipped XML file.
   Includes every knob from <code>/antibot-appsec-gateway/secured/config</code> plus the admin-IP allowlist.
@@ -897,22 +1021,6 @@ document.addEventListener('DOMContentLoaded', function(){
 </div>
 
 <div class="row">
-
-  <!-- ── Storage ─────────────────────────────────────────────── -->
-  <div class="card" id="card-storage">
-    <h2>Storage</h2>
-    <p class="desc">
-      Disk usage for the <code>/data</code> volume. When disk fills, SQLite write errors
-      occur and endpoints return HTTP 500. Use <b>Vacuum DB</b> to shrink the database
-      file and truncate the WAL — safe to run at any time.
-    </p>
-    <div id="storage-body" style="font-size:13px;color:var(--dim)">Loading…</div>
-    <div class="row-controls" style="margin-top:12px">
-      <button id="btn-vacuum">Vacuum DB</button>
-      <span class="foot" id="vacuum-status"></span>
-    </div>
-  </div>
-
   <!-- ── Export ───────────────────────────────────────────────── -->
   <div class="card">
     <h2>Export configuration</h2>
@@ -993,16 +1101,65 @@ const toast = (msg, kind) => {
 // ── Gateway identity strip ────────────────────────────────────────
 (async () => {
   try {
-    const r = await fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' });
-    if (!r.ok) return;
-    const j = await r.json();
-    if (j.version)          $("gw-version").textContent  = j.version;
-    if (j.db_backend)       $("gw-db").textContent       = j.db_backend;
-    if (j.uptime_secs != null) {
-      const up   = Number(j.uptime_secs) || 0;
-      const tNow = Date.now() / 1000;
-      const startEpoch = tNow - up;
-      $("gw-started").textContent = new Date(startEpoch * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+    const [hsr, vhr] = await Promise.all([
+      fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' }),
+      fetch("/antibot-appsec-gateway/secured/vhosts",       { credentials: 'include' }),
+    ]);
+
+    // Health / version / uptime
+    if (hsr.ok) {
+      const j = await hsr.json();
+      if (j.version)          $("gw-version").textContent  = j.version;
+      if (j.db_backend)       $("gw-db").textContent       = j.db_backend;
+      if (j.uptime_secs != null) {
+        const startEpoch = Date.now() / 1000 - (Number(j.uptime_secs) || 0);
+        $("gw-started").textContent = new Date(startEpoch * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+      }
+
+      // Vhost + upstream
+      const curHost = window.location.hostname.toLowerCase();
+      $("gw-vhost").innerHTML = escapeHtml(curHost);
+
+      // Try to find vhost-specific upstream from the vhosts list
+      let vhostUpstream = null;
+      let isRegistered  = false;
+      if (vhr.ok) {
+        try {
+          const vd = await vhr.json();
+          const entry = (vd.vhosts || []).find(v => (v.hostname || "").toLowerCase() === curHost);
+          if (entry) {
+            isRegistered  = true;
+            vhostUpstream = entry.UPSTREAM || null;  // null = inherits global
+          }
+        } catch (_) {}
+      }
+
+      const globalUpstream = j.upstream || "";
+      const displayUpstream = vhostUpstream || globalUpstream;
+      const upEl = $("gw-upstream");
+      upEl.textContent = displayUpstream || "—";
+      upEl.title       = displayUpstream || "";
+
+      // Badge: "registered" / "global" (unregistered host uses global upstream)
+      const badge = document.createElement("span");
+      badge.style.cssText = "font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;font-family:-apple-system,sans-serif;white-space:nowrap;flex-shrink:0";
+      if (isRegistered && vhostUpstream) {
+        badge.textContent = "vhost";
+        badge.style.background = "rgba(88,166,255,.15)";
+        badge.style.color      = "var(--blue)";
+        badge.title = "Upstream overridden by vhost entry";
+      } else if (isRegistered) {
+        badge.textContent = "global";
+        badge.style.background = "rgba(139,148,158,.12)";
+        badge.style.color      = "var(--dim)";
+        badge.title = "Vhost registered but uses global upstream";
+      } else {
+        badge.textContent = "unregistered";
+        badge.style.background = "rgba(210,153,34,.12)";
+        badge.style.color      = "var(--yellow)";
+        badge.title = "Host not in vhost table — using global upstream";
+      }
+      $("gw-vhost").appendChild(badge);
     }
   } catch (e) { /* leave dashes */ }
 })();
@@ -2694,6 +2851,327 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   });
 
   load2fa();
+})();
+</script>
+<script>
+// ── Infrastructure, DB backend, Credentials, Logging ────────────────
+(function(){
+  const _esc = (s) => String(s==null?'':s).replace(/[&<>"'`/]/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]));
+  const _u = (path) => path;
+  const $ = (id) => document.getElementById(id);
+
+  // ── Infrastructure ─────────────────────────────────────────────
+  const INFRA_KNOBS = [
+    {key:'ALLOW_PRIVATE_UPSTREAM', kind:'bool', restart:true,
+     desc:'Allow upstream URLs resolving to RFC-1918/loopback (e.g. host.docker.internal). Disables SSRF guard — only for trusted internal deployments.'},
+    {key:'STRICT_VHOST', kind:'bool', restart:true,
+     desc:'Return 502 for inbound Host not registered as a vhost. Prevents global UPSTREAM acting as catch-all for unknown hostnames.'},
+    {key:'UPSTREAM_REWRITE_BASE', kind:'text', restart:false,
+     ph:'e.g. http://host.docker.internal:8093',
+     desc:'Strip this base URL from response bodies and Location/Link headers. Fixes CSP violations when upstream embeds its own hostname. Hot-reloadable.'},
+  ];
+  let _infraState = {};
+  let _infraDirty = {};
+
+  async function loadInfra(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = d.state || d;
+      INFRA_KNOBS.forEach(k => { if (k.key in st) _infraState[k.key] = st[k.key]; });
+      renderInfra();
+    } catch(e) { const b = $('infra-body'); if(b) b.textContent = 'Load failed: '+e.message; }
+  }
+
+  function renderInfra(){
+    _infraDirty = {};
+    const box = $('infra-body');
+    if (!box) return;
+    box.innerHTML = _dp(INFRA_KNOBS.map(k => {
+      const val = k.key in _infraDirty ? _infraDirty[k.key] : _infraState[k.key];
+      const restart = k.restart
+        ? `<span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px;margin-left:6px">REQUIRES RESTART</span>`
+        : '';
+      if (k.kind === 'bool') {
+        const on = !!val;
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #1f2730">
+          <div style="flex:1;min-width:0">
+            <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)">${_esc(k.key)}${restart}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:3px">${_esc(k.desc)}</div>
+          </div>
+          <div data-ikey="${_esc(k.key)}" style="position:relative;width:42px;height:22px;background:${on?'var(--green)':'#30363d'};border-radius:11px;cursor:pointer;transition:background .15s;flex-shrink:0;margin-left:14px"
+               onclick="_infraToggle('${_esc(k.key)}',this)">
+            <span style="position:absolute;top:2px;left:${on?'22px':'2px'};width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;display:block"></span>
+          </div>
+        </div>`;
+      }
+      if (k.kind === 'text') {
+        return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <input type="text" value="${_esc(val||'')}" placeholder="${_esc(k.ph||'')}"
+                 style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+                 oninput="_infraChange('${_esc(k.key)}',this.value)">
+        </div>`;
+      }
+      return '';
+    }).join(''));
+    $('btn-infra-apply').disabled = true;
+    $('btn-infra-reset').disabled = true;
+  }
+
+  window._infraToggle = function(key, el){
+    const cur = key in _infraDirty ? _infraDirty[key] : !!_infraState[key];
+    const nv = !cur;
+    _infraDirty[key] = nv;
+    el.style.background = nv ? 'var(--green)' : '#30363d';
+    el.querySelector('span').style.left = nv ? '22px' : '2px';
+    $('btn-infra-apply').disabled = false;
+    $('btn-infra-reset').disabled = false;
+  };
+  window._infraChange = function(key, val){
+    const orig = _infraState[key] || '';
+    if (val === orig) delete _infraDirty[key]; else _infraDirty[key] = val;
+    const has = Object.keys(_infraDirty).length > 0;
+    $('btn-infra-apply').disabled = !has;
+    $('btn-infra-reset').disabled = !has;
+  };
+
+  $('btn-infra-apply').addEventListener('click', async function(){
+    if (!Object.keys(_infraDirty).length) return;
+    this.disabled = true;
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(_infraDirty)});
+      const d = await r.json();
+      const n = d.applied ? Object.keys(d.applied).length : 0;
+      if (r.ok && n) { toast('Applied '+n+' change(s)','ok'); await loadInfra(); }
+      else { toast('Rejected — '+JSON.stringify(d.rejected||{}),'err'); this.disabled=false; }
+    } catch(e) { toast('Network error: '+e.message,'err'); this.disabled=false; }
+  });
+  $('btn-infra-reset').addEventListener('click', () => loadInfra());
+
+  loadInfra();
+
+  // ── DB Backend ────────────────────────────────────────────────────
+  let _dbOrig = 'sqlite';
+  let _dbTarget = 'sqlite';
+  function dbSetTarget(val){
+    _dbTarget = val;
+    const isPg = val === 'postgres';
+    $('db-thumb').style.left = isPg ? '32px' : '4px';
+    $('db-lbl-sqlite').style.color = isPg ? 'var(--dim)' : 'var(--green)';
+    $('db-lbl-pg').style.color    = isPg ? 'var(--green)' : 'var(--dim)';
+    $('db-pg-fields').style.display = isPg ? '' : 'none';
+    $('btn-db-apply').disabled = val === _dbOrig;
+  }
+  function dbToggle(){ dbSetTarget(_dbTarget === 'sqlite' ? 'postgres' : 'sqlite'); }
+  async function loadDb(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config',{credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      _dbOrig = (d.state||d).DB_BACKEND || 'sqlite';
+      _dbTarget = _dbOrig;
+      dbSetTarget(_dbOrig);
+      $('btn-db-apply').disabled = true;
+    } catch(_){}
+  }
+  $('btn-db-apply').addEventListener('click', async function(){
+    const val = _dbTarget;
+    if (!val) return;
+    if (!confirm('Switching DB backend requires a container restart. Continue?')) return;
+    this.disabled = true;
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({DB_BACKEND:val})});
+      const d = await r.json();
+      if (r.ok && d.applied && Object.keys(d.applied).length) {
+        toast('Backend set to '+val+' — restart container','ok'); _dbOrig=val; $('btn-db-apply').disabled=true;
+      } else { toast('Failed: '+JSON.stringify(d.rejected||d),'err'); this.disabled=false; }
+    } catch(e){ toast('Network error: '+e.message,'err'); this.disabled=false; }
+  });
+  $('pg-save-btn').addEventListener('click', async function(){
+    const host=$('pg-host').value.trim(), port=$('pg-port').value.trim()||'5432',
+          db=$('pg-db').value.trim(), user=$('pg-user').value.trim(), pass=$('pg-pass').value;
+    if (!host||!db||!user||!pass){ toast('All Postgres fields required','err'); return; }
+    const dsn=`postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${encodeURIComponent(host)}:${port}/${encodeURIComponent(db)}`;
+    this.disabled=true;
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({POSTGRES_DSN:dsn})});
+      const d=await r.json();
+      if(r.ok&&d.ok) toast('DSN saved — restart to apply','ok');
+      else toast('Save failed: '+(d.error||d.detail||'?'),'err');
+    } catch(e){ toast('Network error: '+e.message,'err'); }
+    this.disabled=false;
+  });
+  $('pg-test-btn').addEventListener('click', async function(){
+    const host=$('pg-host').value.trim(), port=$('pg-port').value.trim()||'5432',
+          db=$('pg-db').value.trim(), user=$('pg-user').value.trim(), pass=$('pg-pass').value;
+    const res=$('pg-test-result');
+    this.disabled=true; res.style.color='var(--dim)'; res.textContent='checking…';
+    try {
+      let dsnParam='';
+      if(host&&db&&user&&pass){ dsnParam='&dsn='+encodeURIComponent(`postgresql://${encodeURIComponent(user)}:${encodeURIComponent(pass)}@${host}:${port}/${db}`); }
+      const r=await fetch('/antibot-appsec-gateway/secured/integration-check?name='+encodeURIComponent('PostgreSQL / TimescaleDB')+dsnParam,{credentials:'include'});
+      const d=await r.json();
+      res.style.color=d.ok?'var(--green)':'var(--red)';
+      res.textContent=(d.ok?'✓ reachable':'✗ unreachable')+(d.latency_ms?` · ${d.latency_ms} ms`:'')+(d.detail?` — ${d.detail}`:'');
+    } catch(e){ res.style.color='var(--red)'; res.textContent='✗ network error'; }
+    this.disabled=false;
+  });
+  loadDb();
+
+  // ── Integration credentials ────────────────────────────────────────
+  // Only keys that exist in _SECRET_KEYS on the server are manageable here.
+  // WEBHOOK_URL / WEBHOOK_SECRET / JWT_HMAC_SECRET are env-var only.
+  const CREDS = [
+    {key:'TURNSTILE_SITEKEY',   label:'Cloudflare Turnstile — Site key',  ph:'0x4AAAAAA…',           type:'text'},
+    {key:'TURNSTILE_SECRET',    label:'Cloudflare Turnstile — Secret key', ph:'0x4AAAAAA…',           type:'password'},
+    {key:'ABUSEIPDB_KEY',       label:'AbuseIPDB v2 API key',              ph:'API key',               type:'password'},
+    {key:'CROWDSEC_LAPI_URL',   label:'CrowdSec LAPI URL',                 ph:'http://crowdsec:8080',  type:'text'},
+    {key:'CROWDSEC_LAPI_KEY',   label:'CrowdSec bouncer key',              ph:'Bouncer key',           type:'password'},
+    {key:'MAXMIND_LICENSE_KEY', label:'MaxMind license key',               ph:'License key',           type:'password'},
+    {key:'POSTGRES_DSN',        label:'PostgreSQL DSN',                    ph:'postgresql://user:pass@host:5432/db', type:'text'},
+  ];
+
+  async function loadCreds(){
+    const box=$('creds-body'); if(!box) return;
+    box.textContent='Loading…';
+    let st={};
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets',{credentials:'include'});
+      if(r.ok){ const d=await r.json(); st=d.secrets||{}; }
+    } catch(_){}
+    // st[key] = {configured, source, length}
+    box.innerHTML=_dp(CREDS.map(c=>{
+      const s=st[c.key]||{}; const isSet=!!(s.configured);
+      const srcBadge=isSet
+        ?(s.source==='env'
+          ?'<span style="font-size:10px;color:var(--blue);background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);padding:1px 6px;border-radius:3px;margin-left:6px">env</span>'
+          :'<span style="font-size:10px;color:var(--green);background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);padding:1px 6px;border-radius:3px;margin-left:6px">saved</span>')
+        :'<span style="font-size:10px;color:var(--dim);background:#21262d;border:1px solid var(--line);padding:1px 6px;border-radius:3px;margin-left:6px">not set</span>';
+      const clrBtn=isSet?`<button class="secondary" style="font-size:11px;padding:5px 10px;white-space:nowrap" onclick="_clearCred('${_esc(c.key)}',this)">Clear</button>`:'';
+      return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
+        <div style="display:flex;align-items:center;margin-bottom:6px">
+          <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--fg)">${_esc(c.label)}</span>${srcBadge}
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="${c.type}" data-cred="${_esc(c.key)}" placeholder="${isSet?'••••••':_esc(c.ph)}"
+                 style="flex:1;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+          ${clrBtn}
+        </div>
+      </div>`;
+    }).join(''));
+  }
+
+  window._clearCred=async function(name,btn){
+    if(!confirm('Clear '+name+'? This reverts to the environment-variable fallback.')) return;
+    btn.disabled=true;
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets?name='+encodeURIComponent(name),
+        {method:'DELETE',credentials:'include'});
+      const d=await r.json();
+      if(r.ok&&d.ok){ toast(name+' cleared','ok'); loadCreds(); }
+      else{ toast('Clear failed: '+(d.error||'?'),'err'); btn.disabled=false; }
+    } catch(e){ toast('Network error: '+e.message,'err'); btn.disabled=false; }
+  };
+
+  $('btn-creds-save').addEventListener('click', async function(){
+    const fields=document.querySelectorAll('#creds-body input[data-cred]');
+    const payload={};
+    fields.forEach(f=>{ if(f.value.trim()) payload[f.dataset.cred]=f.value.trim(); });
+    if(!Object.keys(payload).length){ toast('No values entered','err'); return; }
+    this.disabled=true;
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});
+      const d=await r.json();
+      if(r.ok&&d.ok){ toast('Credentials saved','ok'); loadCreds(); }
+      else toast('Save failed: '+(d.error||d.detail||'?'),'err');
+    } catch(e){ toast('Network error: '+e.message,'err'); }
+    this.disabled=false;
+  });
+
+  loadCreds();
+
+  // ── System logging & webhook filter ────────────────────────────────
+  const LOG_KNOBS = [
+    {key:'LOG_LEVEL',  kind:'select', options:['debug','info','warn','error','critical'],
+     desc:'Filter for stdout structured log emission.'},
+    {key:'LOG_FORMAT', kind:'select', options:['text','json'],
+     desc:'Log output format. text = human-readable; json = structured JSON lines for Loki / Splunk / etc.'},
+    {key:'WEBHOOK_EVENT_FILTER', kind:'list', ph:'ban,canary-echo,honeypot (empty = all events)',
+     desc:'CSV of reasons (fnmatch globs OK) for which webhook calls fire. Empty = every event fires.'},
+  ];
+  let _logState={}, _logDirty={};
+
+  async function loadLogging(){
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/config',{credentials:'include'});
+      if(!r.ok) return;
+      const st=(await r.json()).state||{};
+      LOG_KNOBS.forEach(k=>{
+        if(k.key in st) _logState[k.key]=Array.isArray(st[k.key])?st[k.key].join(','):st[k.key];
+      });
+      renderLogging();
+    } catch(_){}
+  }
+
+  function renderLogging(){
+    _logDirty={};
+    const box=$('logging-body'); if(!box) return;
+    box.innerHTML=_dp(LOG_KNOBS.map(k=>{
+      const val=_logState[k.key]||'';
+      if(k.kind==='select'){
+        const opts=k.options.map(o=>`<option value="${_esc(o)}"${o===val?' selected':''}>${_esc(o)}</option>`).join('');
+        return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <select style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-size:12px"
+                  onchange="_logChange('${_esc(k.key)}',this.value)">${opts}</select>
+        </div>`;
+      }
+      return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
+        <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+        <input type="text" value="${_esc(val)}" placeholder="${_esc(k.ph||'')}"
+               style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+               oninput="_logChange('${_esc(k.key)}',this.value)">
+      </div>`;
+    }).join(''));
+    $('btn-logging-apply').disabled=true; $('btn-logging-reset').disabled=true;
+  }
+
+  window._logChange=function(key,val){
+    if(val===(_logState[key]||'')) delete _logDirty[key]; else _logDirty[key]=val;
+    const has=Object.keys(_logDirty).length>0;
+    $('btn-logging-apply').disabled=!has; $('btn-logging-reset').disabled=!has;
+  };
+
+  $('btn-logging-apply').addEventListener('click', async function(){
+    if(!Object.keys(_logDirty).length) return;
+    this.disabled=true;
+    const payload={};
+    for(const [k,v] of Object.entries(_logDirty)){
+      const knob=LOG_KNOBS.find(x=>x.key===k);
+      payload[k]=knob&&knob.kind==='list' ? v.split(',').map(s=>s.trim()).filter(Boolean) : v;
+    }
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});
+      const d=await r.json();
+      const n=d.applied?Object.keys(d.applied).length:0;
+      if(r.ok&&n){ toast('Applied '+n+' change(s)','ok'); await loadLogging(); }
+      else{ toast('Rejected — '+JSON.stringify(d.rejected||{}),'err'); this.disabled=false; }
+    } catch(e){ toast('Network error: '+e.message,'err'); this.disabled=false; }
+  });
+  $('btn-logging-reset').addEventListener('click', ()=>loadLogging());
+
+  loadLogging();
 })();
 </script>
 </div><!-- /page-content -->

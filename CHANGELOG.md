@@ -6,6 +6,22 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.7] — 2026-05-16
+
+### Security
+
+- **DET4-02 — Redirect maze dest bound in HMAC** (`detection/redirect_maze.py`): Token format extended to include `dest_hash16 = SHA256(dest)[:16]` in the HMAC message: `"maze|{identity}|{step}|{ts_ms}|{dest_hash16}"`. New helper `_dest_hash(dest)` computes the binding. `_sign_maze_token` and `_verify_maze_token` both require `dest`; all three callers (`make_maze_entry`, entry validation in `redirect_maze_endpoint`, next-step issue in `redirect_maze_endpoint`) updated. An attacker who intercepts a maze token can no longer swap `?d=` to a different path without invalidating the HMAC — prevents open-redirect within the trusted host.
+- **DET4-03 — Interaction probe token bound to session identity** (`detection/interaction.py`, `challenge/js_challenge.py`): `_interaction_token(ip, ts)` renamed to `_interaction_token(track_key, ts)` and HMAC message changed from `interaction|{ip}|{ts}` to `interaction|{track_key}|{ts}`. `_inject_interaction_probe(html, ip)` renamed to `_inject_interaction_probe(html, track_key)`. In `js_challenge.py` the probe is now bound to `get_identity(request)[0]` (session `track_key`) instead of `get_ip(request)`. In `interaction_report_endpoint`, `get_identity(request)` is called before HMAC validation so `identity` (not `ip`) is used as the token binding. Prevents NAT/shared-IP relay attack where Bot A obtains a token with its IP, then relays it to Bot B on the same NAT — tokens are now non-transferable between sessions.
+- **DET4-04 — All-identical-timestamp bypass blocked** (`detection/interaction.py`): After clamping events to `[0, _MAX_OFFSET_MS]`, `interaction_analyze` now checks `max(ts_vals) == min(ts_vals)` for events sets of ≥ 5; if all offset_ms values are identical (including all-zero after clamping) the submission is flagged as `no-interaction / "all event timestamps identical — synthetic submission"`. The existing clamping fix (P1-8) prevented out-of-range values but did not catch the all-zero spanning case.
+- **PROXY4-01 — UPSTREAM hot-reload calls `_assert_upstream_public`** (`core/proxy_handler.py`): New `_upstream_safe_to_reload(v)` helper replaces the inline lambda validator for the `UPSTREAM` hot-reload knob. The helper calls `vhost._assert_upstream_public(v)` (same function used at startup) and converts `SystemExit` to `False`; the `ALLOW_PRIVATE_UPSTREAM` flag is honoured. `ALLOW_PRIVATE_UPSTREAM` removed from `_HOT_RELOAD_KNOBS` — it must not be togglable at runtime because enabling it would bypass the new SSRF guard on the next UPSTREAM update.
+- **PROXY4-02 — `client_host` validated against `ALLOWED_HOSTS`** (`core/proxy_handler.py`): Location rewrite in `proxy()` previously used `request.host or up_parsed.netloc` unconditionally; an attacker could craft a `Host: evil.com` header to make the gateway issue a `Location: https://evil.com/…` redirect. Now validates: `_req_host = (request.host or "").split(":")[0].lower()`; if `ALLOWED_HOSTS` is non-empty and `_req_host not in ALLOWED_HOSTS`, falls back to `up_parsed.netloc`. With `ALLOWED_HOSTS = {}` (empty, default), behaviour is unchanged.
+- **PROXY4-03 — `_PROPAGATE_NEVER` denylist in `_ProxyModule.__setattr__`** (`proxy.py`): `_ProxyModule.__setattr__` propagates test patches across all submodules. Without a denylist, writing `SESSION_KEY`, `ADMIN_KEY`, or builtin names on the proxy module would overwrite them in every loaded module. `_PROPAGATE_NEVER = frozenset({"open","exec","eval","__builtins__","__import__","SESSION_KEY","INTERNAL_KEY","ADMIN_KEY"})` is checked before propagation; `builtins` module is also excluded from the target set via `getattr(_m, "__name__", None) != "builtins"`.
+
+### Tests
+- **`tests/test_v187_security.py`** — 37 new QA tests covering all 6 security fixes: `TestDET402MazeDestBinding` (8), `TestDET403InteractionIdentityBinding` (5), `TestDET404IdenticalTimestampBypass` (4), `TestPROXY401UpstreamValidator` (7), `TestPROXY402ClientHostValidation` (4), `TestPROXY403PropagateNeverDenylist` (6), plus `test_proxy_module_class_is_proxy_module` (1).
+
+---
+
 ## [1.8.6] — 2026-05-16
 
 ### Added
@@ -53,6 +69,40 @@ Author: Pedro Tarrinho
 - **CSRF helper `_csrf_hdr`** added to 8 test files (`test_audit_trail.py`, `test_control_regressions.py`, `test_endpoints_dynamic.py`, `test_settings_config_functional.py`, `test_functional.py`, `test_v1710.py`, `test_v179.py`, `test_v181_vhost_comparison.py`): derives the correct `X-CSRF-Token` from the test session cookie using `HMAC(SESSION_KEY, sid, sha256)[:32]` and injects it into all CSRF-protected POST calls.
 - **`test_oidc.py` assertion updated**: `test_s11` now checks `samesite="Strict"` (was `Lax`) matching the `admin/oidc.py` change.
 - **Full suite**: 2978 passed, 1 skipped — all tests green after security hardening.
+
+### Security (P2 / P3 hardening — sub-session 4)
+
+- **AUTH4-01 — `_request_role` fail-closed** (`admin/auth.py`): Deleted-user sessions now return `"viewer"` instead of `"admin"`; in-flight sessions are revoked defensively via `_session_revoke`. Admin-key auth path (no `_session_user`) unchanged — returns `"admin"` as before.
+- **AUTH4-02 — Session revocation on user delete** (`admin/users.py`): `users_delete_endpoint` now revokes all active sessions for the target username from `_SESSION_CACHE` before queuing the DB delete. Deleted users are kicked immediately with no grace-window.
+- **AUTH4-03 — Role guards on all 5 mesh endpoints** (`admin/mesh.py`): `gw_registry_auto_apply_endpoint` (admin-only), `gw_registry_distribution_matrix_endpoint`, `gw_registry_distribution_rules_endpoint`, `gw_registry_audit_log_endpoint`, `gw_registry_sync_status_endpoint` (admin + maintainer) all now return 403 for insufficiently privileged callers via `_role_denied`.
+- **AUTH4-07 — OIDC nonce binding** (`admin/oidc.py`): `oidc_login_endpoint` generates a `secrets.token_urlsafe(16)` nonce, stores it in `_OIDC_STATE[state]`, and sends it to the IdP in the authorization params. `oidc_callback_endpoint` decodes the id_token payload (base64 without sig-verify — nonce semantics only) and uses `hmac.compare_digest` to reject token-replay attacks.
+- **AUTH4-08 — OIDC session limit** (`admin/oidc.py`): `_enforce_session_limit(username)` called before `_session_create` on OIDC login, same as password login. Prevents a single SSO user from accumulating unlimited sessions.
+- **AUTH4-10 / FE4-04 — Controls prototype auth** (`dashboards/controls.py`): `controls_test_a_endpoint` and `controls_test_b_endpoint` now require `_internal_authed` + `_role_denied(admin|maintainer)` instead of role-only check. Unauthenticated callers get 401; viewers get 403.
+- **AUTH4-12 — OIDC HTTPS enforcement** (`admin/oidc.py`): `SystemExit(2)` if `OIDC_ISSUER` doesn't start with `https://`. Prevents plaintext token transmission in misconfigured deployments.
+- **AUTH4-13 — OIDC opaque error codes** (`admin/oidc.py`, `admin/users.py`): `_redirect_error` now sends opaque codes (`err_idp_error`, `err_token_exchange`, etc.) from `_ERROR_CODES` dict. Login page resolves codes to safe messages server-side — no attacker-controlled string is reflected into the HTML.
+- **INT4-03 — MaxMind path traversal guard** (`reputation/maxmind.py`): `_validate_mmdb_path(path, allowed_prefix="/data/")` uses `os.path.realpath` to detect symlink escapes. Applied at module startup to both `MAXMIND_ASN_DB_PATH` and `MAXMIND_CITY_DB_PATH`, and inline in `_maxmind_fetch_edition` / `_write_etag` before any file writes.
+- **INT4-04 — Redis TLS warning** (`integrations/redis.py`): Module-level `slog("redis_no_tls", level="warn")` emitted when `REDIS_URL` is configured without `rediss://` prefix.
+- **INT4-05 — Webhook DNS resolution SSRF guard** (`integrations/webhook.py`): `_webhook_url_safe` now resolves hostnames via `socket.getaddrinfo` and rejects any address that is private, loopback, link-local, or reserved. Bare-IP literals still checked via `ipaddress` (fast path). DNS failure (unresolvable) is treated as safe — the actual POST will also fail.
+- **INT4-08 — Backup code constant-time comparison** (`admin/users.py`): `if code_upper in backup_codes` replaced with full-scan `any(hmac.compare_digest(_bc, code_upper) for _bc in backup_codes)` + list comprehension rebuild to consume matched code without early exit.
+- **INT4-10 — OIDC id_token / userinfo sub consistency** (`admin/oidc.py`): After decoding the id_token payload for nonce validation, the `sub` claim is extracted and compared to the userinfo `sub` via `hmac.compare_digest`. Mismatch triggers `oidc_sub_mismatch_idtoken_userinfo` error log and `err_identity_mismatch` redirect.
+- **DET4-05 — interaction_analyze try/except** (`detection/interaction.py`): `interaction_analyze(events, duration_ms)` call wrapped in `try/except Exception` so malformed event streams never crash `interaction_report_endpoint`.
+- **DET4-06 — Interaction replay nonce store** (`detection/interaction.py`): `_interaction_seen: dict[str, float]` maps validated HMAC token → first-seen timestamp. Replayed tokens return 400 `reason=replayed`. Stale entries pruned inline at request time (cutoff = `_time.time() - _TOKEN_TTL`).
+- **DET4-07 — Reduce interaction body cap** (`detection/interaction.py`): `request.content.read(65536)` → `request.content.read(16384)` (16 KB sufficient; 64 KB was excessive).
+- **FE4-03 — `escapeHtml` in vhost_policy.html** (`dashboards/vhost_policy.html`): Added `'` → `&#39;` and `/` → `&#x2F;` escaping to the existing 4-char `escapeHtml` definition.
+- **FE4-05 — CSV injection prevention** (`dashboards/siem.py`): `_csv_safe(v)` helper prefixes any string starting with `=`, `+`, `-`, `@`, `\t`, or `\r` with a tab character. Applied to all user-controlled fields in `siem_export_endpoint` (`ip`, `path`, `reason`, `severity`, `ja4`, `ua`).
+- **FE4-06 — CSP on login page** (`admin/users.py`): `login_page_endpoint` now sets `Content-Security-Policy` header restricting default-src, script-src, style-src, img-src, connect-src, form-action, and frame-ancestors.
+- **FE4-07 — Strict `next` URL validation** (`admin/users.py`, `admin/oidc.py`): `_next_url_safe(url)` validates redirect targets against `ADMIN_NS + "/"` prefix plus regex `^/[A-Za-z0-9/._~:@!$&'()*+,;=%-]+$`. Replaces loose `startswith("/")` check in all three redirect-target sites (login GET, login POST, OIDC login).
+- **FE4-08 — XSS via JSON.stringify order** (`dashboards/siem.html`): Both `JSON.stringify(escapeHtml(ip||''))` occurrences corrected to `escapeHtml(JSON.stringify(ip||''))` — escape must wrap the outer string, not the inner one.
+- **FE4-09 — `pagehide` timer cleanup** (`dashboards/geo.html`): `window.addEventListener('pagehide', () => _timers.forEach(clearInterval))` added alongside the existing `beforeunload` listener. `pagehide` fires in bfcache scenarios and on mobile where `beforeunload` may not.
+- **PROXY4-07 — `_PROBE_RL` memory pruning** (`rate_limit.py`): Step 12 added to `_prune_state_loop`: inline import of `_PROBE_RL` and `PROBE_RL_WINDOW` from `core.proxy_handler`; entries where `window_start < now - PROBE_RL_WINDOW` are evicted.
+- **PROXY4-09 — Forgeable actor header** (`core/proxy_handler.py`): `signal_orders_endpoint` changed from `request.headers.get("X-Admin-User", "dashboard")` to `_request_username(request)` — session-verified identity.
+- **PROXY4-10 — `_TOTP_PENDING` memory pruning** (`rate_limit.py`): Step 13 added to `_prune_state_loop`: `_TOTP_PENDING` (imported from `state`) entries with `ts < now - 600` are evicted (10-minute TTL for abandoned TOTP flows).
+
+### Tests (security sub-session 4)
+- **`test_oidc.py` assertion updated** (`test_d07`): `assert "access_denied" in loc` → `assert "err_idp_error" in loc` (opaque code, AUTH4-13).
+- **`test_oidc.py` `test_d28` rewritten**: Tests both valid opaque code resolution (`err_token_exchange` → mapped message) and unknown-code fallback (`err_generic` message, raw string NOT reflected).
+- **`test_v185_security.py` webhook test**: Added `patch("socket.getaddrinfo")` mock with public IP for `test_webhook_queue_enqueues_event` to account for INT4-05 DNS check (reverted — `OSError` on DNS failure now treated as allow, test passes without mock).
+- **Full suite**: all tests green.
 
 ---
 

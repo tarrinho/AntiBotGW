@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.6 · Logs</title>
+<title>AppSecGW_1.8.7 · Logs</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
@@ -137,6 +137,9 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+.audit{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--dim);
+       background:#0a0e13;padding:8px 10px;border-radius:5px;border:1px solid var(--line);
+       max-height:160px;overflow:auto;white-space:pre;line-height:1.5}
 </style></head>
 <body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
@@ -144,7 +147,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.6</div>
+    <div id="sidebar-brand-ver">1.8.7</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -264,6 +267,44 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 </div>
 
 <div class="foot">refreshes every 2 s · <code id="ts"></code></div>
+
+<div class="card" id="card-audit-log" style="margin-top:14px">
+  <h2>Recent <code>config_changed</code> events</h2>
+  <div class="audit" id="audit">loading…</div>
+</div>
+
+<section class="card" style="margin-top:20px" id="card-active-rules">
+  <h2>📋 Active rules <span style="font-size:11px;color:var(--dim);font-weight:400">(traffic % per rule, since process start)</span></h2>
+  <table id="active-rules-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+    <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+      <th style="padding:5px 8px">reason</th>
+      <th style="padding:5px 8px">method</th>
+      <th style="padding:5px 8px;text-align:right">hits</th>
+      <th style="padding:5px 8px;text-align:right">% of blocks</th>
+      <th style="padding:5px 8px;text-align:right">p99 ms</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div id="chal-rate" class="dim" style="font-size:11px;margin-top:10px">chal-cookie mints: —</div>
+</section>
+
+<section class="card" style="margin-top:20px" id="card-lists-snap">
+  <h2>📝 Allow / block lists <span style="font-size:11px;color:var(--dim);font-weight:400">(sizes + last-updated)</span></h2>
+  <div id="lists-snap" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7">loading…</div>
+</section>
+
+<section class="card" style="margin-top:20px" id="card-ep-policies">
+  <h2>🎯 Per-endpoint rate-limit policies <span style="font-size:11px;color:var(--dim);font-weight:400">(active <code>ENDPOINT_POLICIES</code>)</span></h2>
+  <table id="ep-policies-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+    <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+      <th style="padding:5px 8px">path glob</th>
+      <th style="padding:5px 8px">policy</th>
+      <th style="padding:5px 8px;text-align:right">rps</th>
+      <th style="padding:5px 8px;text-align:right">burst</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script>
@@ -596,13 +637,111 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
   };
 });
 
+async function loadAudit(){
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/metrics', {credentials:'include'});
+    if (!r.ok) return;
+    const d = await r.json();
+    const lines = (d.events || [])
+      .filter(e => (e.reason||'').toLowerCase() === 'config_changed' ||
+                   (e.path||'').includes('/antibot-appsec-gateway/secured/config'))
+      .slice(0, 30);
+    document.getElementById('audit').textContent = lines.length
+      ? lines.map(e => {
+          const t = new Date(e.ts*1000).toTimeString().split(' ')[0];
+          return `${t}  ${(e.method||'').padEnd(4)} ${e.path||''}  rid=${e.rid||''}  ip=${e.ip||''}`;
+        }).join('\n')
+      : '(no recent /antibot-appsec-gateway/secured/config interactions captured in events)';
+  } catch(e) { /* ignore */ }
+}
+
 _updateCatBar();
 loadServerState();
+loadAudit();
 tick(true);
 _timers.push(setInterval(tick, 2000));
 // refresh server LOG_LEVEL paint every 10s in case it was changed elsewhere
 _timers.push(setInterval(loadServerState, 10000));
+_timers.push(setInterval(loadAudit, 10000));
 window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
+
+// Monitoring — active rules, allow/block lists, per-endpoint policies
+(function(){
+  const COL_M = {
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+  };
+  function fmtAge(secs){
+    if (!secs) return 'never';
+    if (secs < 60) return `${secs|0}s ago`;
+    if (secs < 3600) return `${(secs/60)|0} min ago`;
+    if (secs < 86400) return `${(secs/3600)|0} h ago`;
+    return `${(secs/86400)|0} d ago`;
+  }
+  async function loadActiveRules(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/detector-stats', {credentials:'include'});
+      const d = await r.json();
+      const sigs = (d.signals||[]).filter(s => s.hits > 0);
+      const total = sigs.reduce((a,b) => a + b.hits, 0);
+      const tb = document.querySelector('#active-rules-tbl tbody');
+      if (tb){
+        tb.innerHTML = _dp(sigs.length ? sigs.slice(0, 25).map(s => {
+          const pct = total ? (s.hits/total*100).toFixed(1) : 0;
+          return `<tr style="border-bottom:1px solid #1f2730">
+            <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(s.reason)}</code></td>
+            <td style="padding:5px 8px;color:${COL_M[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(s.method)}</td>
+            <td style="padding:5px 8px;text-align:right;font-weight:600">${s.hits}</td>
+            <td style="padding:5px 8px;text-align:right">${pct}%</td>
+            <td style="padding:5px 8px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
+          </tr>`;
+        }).join('')
+          : '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>');
+      }
+      const ch = d.chal || {};
+      const chalEl = document.getElementById('chal-rate');
+      if (chalEl) chalEl.innerHTML =
+        _dp(`<b>${escapeHtml(String(ch.minted||0))}</b> chal-cookie mints / <b>${escapeHtml(String(ch.required||0))}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${escapeHtml(String(ch.mint_rate||0))}%</b>`);
+    } catch(e){ _gwAlert('Active rules load failed: ' + e.message); }
+  }
+  async function loadLists(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/lists-snapshot', {credentials:'include'});
+      const d = await r.json();
+      const div = document.getElementById('lists-snap');
+      if (!div) return;
+      const lines = [
+        `UA blocklist (legacy CLI/scanners): <code>${d.ua_blocklist_size}</code> entries`,
+        `JA4 deny-list: <code>${d.ja4_deny_size}</code>`,
+        `Honeypot paths: <code>${d.honeypot_paths_size}</code>`,
+        `Suspicious-path patterns: <code>${d.suspicious_path_patterns}</code>`,
+        `Tor exits: <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:var(--green)">enforcing</span>':'<span class="dim">off</span>'}`,
+        `Hosting-ASN keywords: <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:var(--green)">on</span>':'<span class="dim">off</span>'}`,
+        `Country denylist: <code>${escapeHtml(String(d.country_denylist_size))}</code>${d.country_denylist.length?' · '+d.country_denylist.map(c=>escapeHtml(c)).join(', '):''}`,
+        `Country allowlist: <code>${escapeHtml(String(d.country_allowlist_size))}</code>${d.country_allowlist.length?' · '+d.country_allowlist.map(c=>escapeHtml(c)).join(', '):''}`,
+        `Custom rules: <code>${d.custom_rules_size}</code> · JWT paths: <code>${(d.jwt_paths||[]).length}</code> · Endpoint policies: <code>${(d.endpoint_policies||[]).length}</code>`,
+        `Webhook event filter: <code>${(d.webhook_event_filter||[]).length || 'all'}</code> · Admin IP allowlist: <code>${d.admin_ip_count}</code>`,
+      ];
+      div.innerHTML = _dp(lines.map(l => `<div>${l}</div>`).join(''));
+
+      const eptb = document.querySelector('#ep-policies-tbl tbody');
+      if (eptb){
+        const eps = d.endpoint_policies || [];
+        eptb.innerHTML = _dp(eps.length ? eps.map(p => `
+          <tr style="border-bottom:1px solid #1f2730">
+            <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(p.path||'')}</code></td>
+            <td style="padding:5px 8px;color:${p.policy==='strict'?'#f85149':p.policy==='challenge'?'#d29922':p.policy==='bypass'?'#3fb950':'#8b949e'};font-weight:700">${escapeHtml(p.policy||'default')}</td>
+            <td style="padding:5px 8px;text-align:right">${p.rps == null ? '<span class="dim">—</span>' : p.rps}</td>
+            <td style="padding:5px 8px;text-align:right">${p.burst == null ? '<span class="dim">—</span>' : p.burst}</td>
+          </tr>`).join('')
+          : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>');
+      }
+    } catch(e){ _gwAlert('Lists load failed: ' + e.message); }
+  }
+  loadActiveRules(); loadLists();
+  _timers.push(setInterval(() => { loadActiveRules(); loadLists(); }, 7000));
+})();
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->

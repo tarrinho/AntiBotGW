@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.6 · Controls</title>
+<title>AppSecGW_1.8.7 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -96,9 +96,6 @@ button.secondary{background:#30363d;color:var(--fg)}
 button.danger{background:var(--red)}
 button:disabled{opacity:.4;cursor:not-allowed}
 .hint{color:var(--dim);font-size:11.5px;margin-left:auto}
-.audit{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--dim);
-       background:#0a0e13;padding:8px 10px;border-radius:5px;border:1px solid var(--line);
-       max-height:160px;overflow:auto;white-space:pre;line-height:1.5}
 .banner{background:#1a2733;border-left:3px solid var(--blue);padding:10px 14px;
         border-radius:5px;color:var(--dim);font-size:12px;margin-bottom:14px}
 .banner code{background:#0d1117;color:var(--fg);padding:1px 5px;border-radius:3px}
@@ -425,7 +422,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.6</div>
+    <div id="sidebar-brand-ver">1.8.7</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -490,8 +487,9 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       hits the third-party API. Numbers below are typical, not guaranteed.
     </div>
     <div id="external-list">loading…</div>
-    <div id="ext-misc"></div>
-    <div id="external-log" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line)"></div>
+    <div style="margin-top:10px;font-size:11.5px;color:var(--dim)">
+      Credentials, log level, and webhook filter → <a href="/antibot-appsec-gateway/secured/settings#card-credentials" style="color:var(--blue)">Settings</a>
+    </div>
   </section>
 
   <section class="card" id="card-bypass" style="margin-top:20px">
@@ -514,16 +512,6 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       </div>
       <div id="bypass-paths"></div>
     </div>
-  </section>
-
-  <section class="card" id="card-infrastructure" style="margin-top:20px">
-    <h2>⚙️ Infrastructure <span style="font-size:11px;color:var(--dim);font-weight:400">(host networking, vhost routing, response rewriting)</span></h2>
-    <div class="hint" style="margin-bottom:10px">
-      Knobs that affect how the gateway binds to upstreams and rewrites responses.
-      Changes marked <span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px">REQUIRES RESTART</span>
-      take effect only after the container is restarted.
-    </div>
-    <div id="infrastructure"></div>
   </section>
 
   <section class="card" id="card-scoring">
@@ -720,43 +708,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   </section>
 
   <!-- 1.6.5 — active rules + lists snapshot + endpoint policies -->
-  <section class="card" style="margin-top:20px" id="card-active-rules">
-    <h2>📋 Active rules <span style="font-size:11px;color:var(--dim);font-weight:400">(traffic % per rule, since process start)</span></h2>
-    <table id="active-rules-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
-      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
-        <th style="padding:5px 8px">reason</th>
-        <th style="padding:5px 8px">method</th>
-        <th style="padding:5px 8px;text-align:right">hits</th>
-        <th style="padding:5px 8px;text-align:right">% of blocks</th>
-        <th style="padding:5px 8px;text-align:right">p99 ms</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-    <div id="chal-rate" class="dim" style="font-size:11px;margin-top:10px">chal-cookie mints: —</div>
-  </section>
 
-  <section class="card" style="margin-top:20px" id="card-lists-snap">
-    <h2>📝 Allow / block lists <span style="font-size:11px;color:var(--dim);font-weight:400">(sizes + last-updated)</span></h2>
-    <div id="lists-snap" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7">loading…</div>
-  </section>
-
-  <section class="card" style="margin-top:20px" id="card-ep-policies">
-    <h2>🎯 Per-endpoint rate-limit policies <span style="font-size:11px;color:var(--dim);font-weight:400">(active <code>ENDPOINT_POLICIES</code>)</span></h2>
-    <table id="ep-policies-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
-      <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
-        <th style="padding:5px 8px">path glob</th>
-        <th style="padding:5px 8px">policy</th>
-        <th style="padding:5px 8px;text-align:right">rps</th>
-        <th style="padding:5px 8px;text-align:right">burst</th>
-      </tr></thead>
-      <tbody></tbody>
-    </table>
-  </section>
-
-  <section class="card" id="card-audit-log" style="margin-top:20px">
-    <h2>📜 Recent <code>config_changed</code> events</h2>
-    <div class="audit" id="audit">loading…</div>
-  </section>
 </div><!-- /ctrl-panels -->
 </div><!-- /ctrl-split -->
 </div><!-- /page-content -->
@@ -1398,7 +1350,7 @@ async function load(){
   }
   // Group + render. Booleans (toggles) are now rendered inside the merged
   // "Defenses & scoring" table (see loadScoring), so skip them here.
-  ['thresholds','ext-misc','external-log','bypass','bypass-paths','infrastructure'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
+  ['thresholds','bypass','bypass-paths'].forEach(g => { const el = $(g); if (el) el.innerHTML = ''; });
   // Always render BYPASS_PATHS pathlist into its dedicated slot so the add
   // button is available even when the server hasn't persisted any paths yet.
   const _bpSlot = $('bypass-paths');
@@ -1407,12 +1359,16 @@ async function load(){
     if (_bpEl) _bpSlot.appendChild(_bpEl);
   }
   const map = {num:'thresholds'};
+  // infrastructure, ext-misc, external-log knobs now live in Settings
+  const _settingsCards = new Set(['infrastructure','ext-misc','external-log']);
   for (const [name, meta] of Object.entries(META)){
     if (!(name in serverState)) continue;
     if (meta.kind === 'bool' && !meta.card) continue; // detection bools live in scoring table
     if (name === 'BYPASS_PATHS') continue;     // already rendered above
+    if (name === 'DB_BACKEND' || name === 'POSTGRES_DSN') continue; // now in Settings
     const card = meta.card || map[meta.kind];
-    if (!card || !$(card)) continue;
+    if (!card || _settingsCards.has(card)) continue; // moved to Settings
+    if (!$(card)) continue;
     const el = renderControl(name, META, serverState[name]);
     if (el) $(card).appendChild(el);
   }
@@ -1458,7 +1414,6 @@ async function apply(){
       serverState = body.state || serverState;
       clearDirty();
       load();
-      loadAudit();
     } else if (rejectedN) {
       const reasons = Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ');
       showToast('All rejected — ' + reasons, 'err');
@@ -1529,24 +1484,6 @@ async function loadBans(){
       });
     });
   } catch(e){ showToast('Bans load failed: ' + e.message, 'err'); }
-}
-
-async function loadAudit(){
-  try {
-    const r = await fetch(url('/antibot-appsec-gateway/secured/metrics'));
-    if (!r.ok) return;
-    const d = await r.json();
-    const lines = (d.events || [])
-      .filter(e => (e.reason||'').toLowerCase() === 'config_changed' ||
-                   (e.path||'').includes('/antibot-appsec-gateway/secured/config'))
-      .slice(0, 30);
-    $('audit').textContent = lines.length
-      ? lines.map(e => {
-          const t = new Date(e.ts*1000).toTimeString().split(' ')[0];
-          return `${t}  ${(e.method||'').padEnd(4)} ${e.path||''}  rid=${e.rid||''}  ip=${e.ip||''}`;
-        }).join('\n')
-      : '(no recent /antibot-appsec-gateway/secured/config interactions captured in events)';
-  } catch (e) { /* ignore */ }
 }
 
 async function unban(scope, value){
@@ -3045,7 +2982,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
   Promise.all([
     load().then(() => loadScoring()),
-    loadAudit(),
     loadBans(),
     loadAdminIps(),
     loadExternal(),
@@ -3053,82 +2989,6 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshVhosts(),
   ]);
 
-  // 1.6.5 — active rules + lists snapshot + endpoint policies
-  (function(){
-    const COL_M = {
-      ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
-      cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
-      operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
-    };
-    function fmtAge(secs){
-      if (!secs) return 'never';
-      if (secs < 60) return `${secs|0}s ago`;
-      if (secs < 3600) return `${(secs/60)|0} min ago`;
-      if (secs < 86400) return `${(secs/3600)|0} h ago`;
-      return `${(secs/86400)|0} d ago`;
-    }
-    async function loadActiveRules(){
-      try {
-        const r = await fetch(url('/antibot-appsec-gateway/secured/detector-stats'), {credentials:'include'});
-        const d = await r.json();
-        const sigs = (d.signals||[]).filter(s => s.hits > 0);
-        const total = sigs.reduce((a,b) => a + b.hits, 0);
-        const tb = document.querySelector('#active-rules-tbl tbody');
-        if (tb){
-          tb.innerHTML = _dp(sigs.length ? sigs.slice(0, 25).map(s => {
-            const pct = total ? (s.hits/total*100).toFixed(1) : 0;
-            return `<tr style="border-bottom:1px solid #1f2730">
-              <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(s.reason)}</code></td>
-              <td style="padding:5px 8px;color:${COL_M[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(s.method)}</td>
-              <td style="padding:5px 8px;text-align:right;font-weight:600">${s.hits}</td>
-              <td style="padding:5px 8px;text-align:right">${pct}%</td>
-              <td style="padding:5px 8px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
-            </tr>`;
-          }).join('')
-            : '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>');
-        }
-        const ch = d.chal || {};
-        document.getElementById('chal-rate').innerHTML =
-          _dp(`<b>${escapeHtml(String(ch.minted||0))}</b> chal-cookie mints / <b>${escapeHtml(String(ch.required||0))}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${escapeHtml(String(ch.mint_rate||0))}%</b>`);
-      } catch(e){ showToast('Active rules load failed: ' + e.message, 'err'); }
-    }
-    async function loadLists(){
-      try {
-        const r = await fetch(url('/antibot-appsec-gateway/secured/lists-snapshot'), {credentials:'include'});
-        const d = await r.json();
-        const div = document.getElementById('lists-snap');
-        if (!div) return;
-        const lines = [
-          `UA blocklist (legacy CLI/scanners): <code>${d.ua_blocklist_size}</code> entries`,
-          `JA4 deny-list: <code>${d.ja4_deny_size}</code>`,
-          `Honeypot paths: <code>${d.honeypot_paths_size}</code>`,
-          `Suspicious-path patterns: <code>${d.suspicious_path_patterns}</code>`,
-          `Tor exits: <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:var(--green)">enforcing</span>':'<span class="dim">off</span>'}`,
-          `Hosting-ASN keywords: <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:var(--green)">on</span>':'<span class="dim">off</span>'}`,
-          `Country denylist: <code>${escapeHtml(String(d.country_denylist_size))}</code>${d.country_denylist.length?' · '+d.country_denylist.map(c=>escapeHtml(c)).join(', '):''}`,
-          `Country allowlist: <code>${escapeHtml(String(d.country_allowlist_size))}</code>${d.country_allowlist.length?' · '+d.country_allowlist.map(c=>escapeHtml(c)).join(', '):''}`,
-          `Custom rules: <code>${d.custom_rules_size}</code> · JWT paths: <code>${(d.jwt_paths||[]).length}</code> · Endpoint policies: <code>${(d.endpoint_policies||[]).length}</code>`,
-          `Webhook event filter: <code>${(d.webhook_event_filter||[]).length || 'all'}</code> · Admin IP allowlist: <code>${d.admin_ip_count}</code>`,
-        ];
-        div.innerHTML = _dp(lines.map(l => `<div>${l}</div>`).join(''));
-
-        const eptb = document.querySelector('#ep-policies-tbl tbody');
-        if (eptb){
-          const eps = d.endpoint_policies || [];
-          eptb.innerHTML = _dp(eps.length ? eps.map(p => `
-            <tr style="border-bottom:1px solid #1f2730">
-              <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(p.path||'')}</code></td>
-              <td style="padding:5px 8px;color:${p.policy==='strict'?'#f85149':p.policy==='challenge'?'#d29922':p.policy==='bypass'?'#3fb950':'#8b949e'};font-weight:700">${escapeHtml(p.policy||'default')}</td>
-              <td style="padding:5px 8px;text-align:right">${p.rps == null ? '<span class="dim">—</span>' : p.rps}</td>
-              <td style="padding:5px 8px;text-align:right">${p.burst == null ? '<span class="dim">—</span>' : p.burst}</td>
-            </tr>`).join('')
-            : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>');
-        }
-      } catch(e){ showToast('Lists load failed: ' + e.message, 'err'); }
-    }
-    loadActiveRules(); loadLists();
-    _timers.push(setInterval(() => { loadActiveRules(); loadLists(); }, 7000));
-  })();
 
   // 1.5.5 — never repaint while the user is typing in any input.
   function _typing(){
@@ -3138,7 +2998,6 @@ document.addEventListener('DOMContentLoaded', () => {
     return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || ae.isContentEditable;
   }
   _timers.push(setInterval(() => { if (!_typing()) load();           }, 15000));
-  _timers.push(setInterval(() => { if (!_typing()) loadAudit();      }, 10000));
   _timers.push(setInterval(() => { if (!_typing()) loadBans();       }, 4000));
   _timers.push(setInterval(() => { if (!_typing()) loadAdminIps();   }, 8000));
   _timers.push(setInterval(() => { if (!_typing()) loadExternal();   }, 6000));
@@ -4022,34 +3881,27 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     {id:'detection',  label:'Detection',     icon:'🛡️'},
     {id:'thresholds', label:'Thresholds',    icon:'📊'},
     {id:'bypass',     label:'Bypass & Bots', icon:'🚦'},
-    {id:'infra',      label:'Infrastructure',icon:'⚙️'},
     {id:'external',   label:'External',      icon:'🔌'},
-    {id:'monitoring', label:'Monitoring',    icon:'📋'},
-    {id:'admin',      label:'Admin',         icon:'🔧'},
+    {id:'admin',      label:'White/Black List', icon:'🔧'},
   ];
 
   // Map card IDs → section ID
   const CARD_SEC = {
-    'card-scoring':       'detection',
-    'card-thresholds':    'thresholds',
-    'card-bypass':        'bypass',
-    'card-infrastructure':'infra',
-    'card-external':      'external',
-    'card-active-rules':  'monitoring',
-    'card-lists-snap':    'monitoring',
-    'card-ep-policies':   'monitoring',
-    'card-unban':         'admin',
-    'card-admin-ip':      'admin',
-    'card-audit-log':     'admin',
+    'card-scoring':      'detection',
+    'card-thresholds':   'thresholds',
+    'card-bypass':       'bypass',
+    'card-external':     'external',
+    'card-unban':        'admin',
+    'card-admin-ip':     'admin',
   };
 
   // Map META key → section (for dirty badge counting)
   function _knobSec(name, m) {
     if (!m) return null;
-    if (name === 'DB_BACKEND' || name === 'POSTGRES_DSN') return 'infra';
+    // infrastructure/log/credential knobs are now in Settings — don't count here
+    if (name === 'DB_BACKEND' || name === 'POSTGRES_DSN') return null;
+    if (m.card === 'infrastructure' || m.card === 'ext-misc' || m.card === 'external-log') return null;
     if (m.card === 'bypass' || m.card === 'bypass-paths' || m.kind === 'botlist' || m.kind === 'pathlist') return 'bypass';
-    if (m.card === 'infrastructure') return 'infra';
-    if (m.card === 'ext-misc' || m.card === 'external-log') return 'external';
     if (m.kind === 'num' || m.kind === 'select') return 'thresholds';
     return 'detection'; // bool + list knobs in scoring
   }

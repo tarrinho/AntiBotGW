@@ -8,7 +8,9 @@ steps; automated agents complete all steps in milliseconds.
 Token format: {step}.{ts_ms}.{hmac16}
   step   — current step index (0-based)
   ts_ms  — millisecond timestamp when this step was issued
-  hmac16 — HMAC-SHA256(SESSION_KEY, "maze|identity|step|ts_ms")[:16]
+  hmac16 — HMAC-SHA256(SESSION_KEY, "maze|identity|step|ts_ms|dest_hash16")[:16]
+           dest_hash16 = SHA256(dest)[:16] — binds destination to prevent
+           open-redirect within the trusted host (DET4-02).
 
 Flow:
   1. Request arrives, identity has risk >= threshold → redirect to maze step 0
@@ -43,13 +45,20 @@ _MAZE_TIMING_MAX = 2048      # max identities tracked simultaneously
 _MAZE_STEPS_MAX  = 32        # max recorded steps per identity (prevents replay amplification)
 
 
-def _sign_maze_token(identity: str, step: int, ts_ms: int) -> str:
-    msg = f"maze|{identity}|{step}|{ts_ms}".encode()
+def _dest_hash(dest: str) -> str:
+    """SHA-256 of the destination path — first 16 hex chars, bound into HMAC."""
+    return hashlib.sha256(dest.encode()).hexdigest()[:16]
+
+
+def _sign_maze_token(identity: str, step: int, ts_ms: int, dest: str) -> str:
+    # DET4-02: bind dest to the token so the destination cannot be swapped
+    # without invalidating the signature.
+    msg = f"maze|{identity}|{step}|{ts_ms}|{_dest_hash(dest)}".encode()
     sig = hmac.new(SESSION_KEY, msg, hashlib.sha256).hexdigest()[:16]
     return f"{step}.{ts_ms}.{sig}"
 
 
-def _verify_maze_token(token: str, identity: str) -> tuple:
+def _verify_maze_token(token: str, identity: str, dest: str) -> tuple:
     """Returns (ok: bool, step: int, ts_ms: int)."""
     try:
         parts = token.split(".")
@@ -61,7 +70,7 @@ def _verify_maze_token(token: str, identity: str) -> tuple:
     now_ms = int(_t.time() * 1000)
     if now_ms - ts_ms > _MAZE_TOKEN_TTL_MS or ts_ms > now_ms + 5000:
         return False, 0, 0
-    full = _sign_maze_token(identity, step, ts_ms)
+    full = _sign_maze_token(identity, step, ts_ms, dest)
     expected_sig = full.rsplit(".", 1)[-1]
     if not hmac.compare_digest(sig, expected_sig):
         return False, 0, 0
@@ -78,7 +87,7 @@ def should_maze(risk_score: float, has_maze_token: bool) -> bool:
 def make_maze_entry(identity: str, dest: str) -> str:
     """Return the URL for maze step 0."""
     ts_ms = int(_t.time() * 1000)
-    token = _sign_maze_token(identity, 0, ts_ms)
+    token = _sign_maze_token(identity, 0, ts_ms, dest)
     safe_dest = quote(dest, safe="")
     return f"{ADMIN_NS}/maze?t={token}&d={safe_dest}"
 
@@ -96,7 +105,7 @@ async def redirect_maze_endpoint(request: web.Request):
     if not dest.startswith("/") or dest.startswith("//"):
         dest = "/"
 
-    ok, step, ts_ms = _verify_maze_token(token, identity)
+    ok, step, ts_ms = _verify_maze_token(token, identity, dest)
     if not ok:
         # Invalid/expired token — restart maze
         slog("maze_bad_token", level="warn", ip=ip, identity=identity[:8])
@@ -123,7 +132,7 @@ async def redirect_maze_endpoint(request: web.Request):
 
     # Issue next step
     next_ts = int(_t.time() * 1000)
-    next_token = _sign_maze_token(identity, step + 1, next_ts)
+    next_token = _sign_maze_token(identity, step + 1, next_ts, dest)
     safe_dest = quote(dest, safe="")
     next_url = f"{ADMIN_NS}/maze?t={next_token}&d={safe_dest}"
     return web.Response(status=302, headers={"Location": next_url,

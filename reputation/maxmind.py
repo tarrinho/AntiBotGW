@@ -65,7 +65,7 @@ try:
     _validate_mmdb_path(MAXMIND_ASN_DB_PATH)
     _validate_mmdb_path(MAXMIND_CITY_DB_PATH)
 except ValueError as _e:
-    print(f"FATAL: {_e}", flush=True)
+    slog("mmdb_path_traversal_fatal", level="error", err=str(_e)[:300])
     raise SystemExit(2)
 
 # ── Mutable module-level flags (set to True by _init_maxmind()) ────────────

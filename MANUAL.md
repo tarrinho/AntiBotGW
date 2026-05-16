@@ -1,6 +1,6 @@
 # AppSecGW — Operational Runbook
 
-**Version**: 1.8.6  
+**Version**: 1.8.7  
 **Author**: Pedro Tarrinho
 
 ---
@@ -426,7 +426,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.8.6
+  appsec-antibot-gw:1.8.7
 ```
 
 ### Manage at runtime (Settings UI)
