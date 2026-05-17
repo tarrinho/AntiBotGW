@@ -4066,12 +4066,17 @@ async def db_switch_endpoint(request: web.Request):
     effective_dsn = body_dsn or old_dsn
     dsn_changed = bool(body_dsn and body_dsn != old_dsn)
 
-    if dsn_changed:
+    if target == "postgres" and effective_dsn:
+        # Always propagate POSTGRES_DSN to all modules so background migration
+        # threads (which read db.postgres.POSTGRES_DSN directly) see the live
+        # value even when the DSN was saved via /secrets earlier and the switch
+        # body carries no dsn (dsn_changed=False but db.postgres still has stale import).
         _propagate_global("POSTGRES_DSN", effective_dsn)
-        # Discard stale pool — next _get_pool() creates fresh connections
-        # with the new DSN. In-flight connections from the old pool complete
-        # normally; the old _PgPool is GC'd once all references drop.
-        pg_pool_reset()
+        if dsn_changed:
+            # Discard stale pool — next _get_pool() creates fresh connections
+            # with the new DSN. When DSN is unchanged, existing connections are
+            # still valid; no pool reset needed.
+            pg_pool_reset()
 
     _propagate_global("DB_BACKEND", target)
 
@@ -4187,7 +4192,22 @@ async def db_test_endpoint(request: web.Request):
     1.6.10 — optional `?dsn=<url>` query param probes a candidate DSN without
     committing to it.  Returns only `{ok, probe}` so the switch modal can gate
     the confirm button on a successful connectivity check before the user
-    triggers the destructive restart."""
+    triggers the destructive restart.
+
+    1.8.8 — top-level try/except ensures the endpoint always returns JSON even
+    when an unexpected exception occurs; prevents the browser from receiving an
+    HTML 500 page that causes JSON.parse to fail in the dashboard."""
+    try:
+        return await _db_test_endpoint_inner(request)
+    except Exception as exc:
+        return web.json_response(
+            {"ok": False,
+             "reason": f"{type(exc).__name__}: {str(exc)[:200]}",
+             "error": "internal"},
+            status=200, headers={"Cache-Control": "no-store"})
+
+
+async def _db_test_endpoint_inner(request: web.Request):
     # 1.6.10 — pre-flight probe mode: caller supplies a candidate DSN.
     probe_dsn = request.query.get("dsn", "").strip()
     if probe_dsn:

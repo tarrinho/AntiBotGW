@@ -390,8 +390,8 @@ class TestSettingsDbTestBtn:
         marker = "document.getElementById('_tip-pg-test').onclick"
         idx = self.src.find(marker)
         assert idx != -1, "_tip-pg-test onclick not found in settings.html"
-        # grab ~50 lines of context
-        return self.src[idx: idx + 1500]
+        # grab ~80 lines of context (handler has grown with status-tile sync code)
+        return self.src[idx: idx + 2200]
 
     def test_t01_calls_db_test_not_integration_check(self):
         blk = self._tip_pg_test_handler()
@@ -679,3 +679,204 @@ async def test_d06_settings_has_switch_exposed(proxy_module):
             assert "_settingsSwitch" in await r.text(), (
                 "/settings HTML missing window._settingsSwitch"
             )
+
+
+# ── D7-D12: db-test probe-DSN dynamic tests ──────────────────────────────────
+#
+# These tests exercise the /secured/db-test endpoint end-to-end via HTTP.
+# They cover the two bugs fixed in v1.8.8:
+#   Bug A (frontend): _tip-pg-test called /integration-check, which ignores
+#          the &dsn= param — test calls /db-test directly with ?dsn=.
+#   Bug B (backend): db_test_endpoint probe mode set globals()["POSTGRES_DSN"]
+#          but not db.postgres.POSTGRES_DSN, so pg_test_roundtrip() always saw
+#          empty DSN and returned "POSTGRES_DSN not configured".
+#
+# D07  No ?dsn= → normal mode: response has sqlite + postgres top-level keys
+# D08  ?dsn=bad-addr → probe mode: ok=false, reason != "POSTGRES_DSN not configured"
+# D09  After probe call db.postgres.POSTGRES_DSN is restored to original value
+# D10  pg_test_roundtrip sees the probe_dsn during the call (not empty)
+# D11  Probe response masks the password in dsn_masked
+# D12  Unauthenticated /db-test returns 404 decoy (not 401/403)
+
+import sys as _sys
+import types as _types
+import urllib.parse as _uparse
+
+
+def _db_postgres_mod():
+    """Return the live db.postgres module if loaded, else None."""
+    return _sys.modules.get("db.postgres")
+
+
+@pytest.mark.asyncio
+async def test_d07_no_dsn_param_normal_mode(proxy_module):
+    """Without ?dsn= the endpoint returns the full normal-mode response
+    (sqlite + postgres keys), not the probe-mode shape {ok, probe}."""
+    async with _spin_upstream() as up:
+        async with _gateway(proxy_module, up) as cli:
+            r = await cli.get(
+                f"{_NS}/db-test",
+                cookies=_admin_cookie(proxy_module),
+            )
+            assert r.status == 200, f"/db-test returned HTTP {r.status}"
+            j = await r.json()
+            assert "sqlite" in j, (
+                "normal mode /db-test must include 'sqlite' key — "
+                "got: " + str(list(j.keys()))
+            )
+            assert "postgres" in j, (
+                "normal mode /db-test must include 'postgres' key — "
+                "got: " + str(list(j.keys()))
+            )
+            # probe key must NOT be present in normal mode
+            assert "probe" not in j, (
+                "normal mode /db-test must NOT include 'probe' key "
+                "(that is probe-mode only)"
+            )
+
+
+@pytest.mark.asyncio
+async def test_d08_probe_dsn_not_configured_msg_absent(proxy_module):
+    """With ?dsn=<unreachable> probe mode must NOT return
+    'POSTGRES_DSN not configured' — that was Bug B (db.postgres not patched).
+    It must return a real connection-level error instead."""
+    # Port 1 is always refused on loopback
+    bad_dsn = "postgresql://qa:qa@127.0.0.1:1/qa_db"
+    async with _spin_upstream() as up:
+        async with _gateway(proxy_module, up) as cli:
+            r = await cli.get(
+                f"{_NS}/db-test",
+                params={"dsn": bad_dsn},
+                cookies=_admin_cookie(proxy_module),
+            )
+            assert r.status == 200, f"/db-test?dsn= returned HTTP {r.status}"
+            j = await r.json()
+            # Must be probe mode response shape
+            assert "probe" in j, (
+                "?dsn= should trigger probe mode; response must contain 'probe' key — "
+                "got: " + str(list(j.keys()))
+            )
+            assert j.get("ok") is False, "unreachable DSN probe must return ok=false"
+            reason = (j.get("reason") or "").lower()
+            assert "not configured" not in reason, (
+                "probe mode must NOT return 'POSTGRES_DSN not configured' — "
+                "that indicates db.postgres was not patched before calling "
+                "pg_test_roundtrip(). Actual reason: " + j.get("reason", "")
+            )
+
+
+@pytest.mark.asyncio
+async def test_d09_probe_dsn_restored_after_call(proxy_module):
+    """After /db-test?dsn= completes, db.postgres.POSTGRES_DSN must be
+    restored to its pre-call value (empty in a fresh test gateway)."""
+    pg_mod = _db_postgres_mod()
+    if pg_mod is None:
+        pytest.skip("db.postgres not loaded yet — run after a db-test call")
+
+    original = getattr(pg_mod, "POSTGRES_DSN", "")
+    bad_dsn = "postgresql://qa:qa@127.0.0.1:1/qa_db"
+
+    async with _spin_upstream() as up:
+        async with _gateway(proxy_module, up) as cli:
+            # Force db.postgres to load by triggering a normal-mode call first
+            await cli.get(f"{_NS}/db-test", cookies=_admin_cookie(proxy_module))
+            pg_mod = _db_postgres_mod()
+            if pg_mod is None:
+                pytest.skip("db.postgres still not loaded after warm-up call")
+
+            pre_call_dsn = getattr(pg_mod, "POSTGRES_DSN", "")
+
+            await cli.get(
+                f"{_NS}/db-test",
+                params={"dsn": bad_dsn},
+                cookies=_admin_cookie(proxy_module),
+            )
+
+            post_call_dsn = getattr(pg_mod, "POSTGRES_DSN", "")
+            assert post_call_dsn == pre_call_dsn, (
+                f"db.postgres.POSTGRES_DSN leaked after probe call. "
+                f"Before: {pre_call_dsn!r}, After: {post_call_dsn!r}. "
+                f"The finally block must restore it."
+            )
+
+
+@pytest.mark.asyncio
+async def test_d10_probe_captures_dsn_in_roundtrip(proxy_module):
+    """pg_test_roundtrip must see the probe_dsn as POSTGRES_DSN during
+    its call, not the module-level empty string (that was Bug B)."""
+    captured = {}
+    probe_dsn = "postgresql://cap_user:cap_pass@127.0.0.1:1/cap_db"
+
+    original_fn = proxy_module.pg_test_roundtrip
+
+    def _capturing_roundtrip():
+        pg_mod = _db_postgres_mod()
+        captured["dsn_seen"] = getattr(pg_mod, "POSTGRES_DSN", "") if pg_mod else None
+        # Return a failure (no real connection) so the endpoint doesn't hang
+        return {"ok": False, "reason": "capture-mock"}
+
+    proxy_module.pg_test_roundtrip = _capturing_roundtrip
+    try:
+        async with _spin_upstream() as up:
+            async with _gateway(proxy_module, up) as cli:
+                await cli.get(
+                    f"{_NS}/db-test",
+                    params={"dsn": probe_dsn},
+                    cookies=_admin_cookie(proxy_module),
+                )
+    finally:
+        proxy_module.pg_test_roundtrip = original_fn
+
+    assert "dsn_seen" in captured, (
+        "mock pg_test_roundtrip was never called — "
+        "check that psycopg is installed in the test environment"
+    )
+    assert captured["dsn_seen"] == probe_dsn, (
+        f"pg_test_roundtrip saw POSTGRES_DSN={captured['dsn_seen']!r} "
+        f"but expected {probe_dsn!r}. "
+        f"db.postgres.POSTGRES_DSN was not patched before the call."
+    )
+
+
+@pytest.mark.asyncio
+async def test_d11_probe_masks_password_in_response(proxy_module):
+    """The probe response must include dsn_masked with password replaced by ****."""
+    secret_pass = "s3cr3tP@ssw0rd"
+    dsn = f"postgresql://myuser:{secret_pass}@127.0.0.1:1/mydb"
+    async with _spin_upstream() as up:
+        async with _gateway(proxy_module, up) as cli:
+            r = await cli.get(
+                f"{_NS}/db-test",
+                params={"dsn": dsn},
+                cookies=_admin_cookie(proxy_module),
+            )
+            j = await r.json()
+            assert "probe" in j, "probe key missing from response"
+            probe = j["probe"]
+            assert "dsn_masked" in probe, (
+                "probe object must contain 'dsn_masked' field"
+            )
+            masked = probe["dsn_masked"]
+            assert secret_pass not in masked, (
+                f"Password leaked in dsn_masked: {masked!r}"
+            )
+            assert "****" in masked, (
+                f"dsn_masked must replace password with ****. Got: {masked!r}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_d12_unauthenticated_db_test_no_real_data(proxy_module):
+    """Unauthenticated /db-test must not expose real gateway state.
+    The gateway either proxies the request to upstream or returns a decoy;
+    either way the response must not contain db-test JSON keys."""
+    async with _spin_upstream() as up:
+        async with _gateway(proxy_module, up) as cli:
+            r = await cli.get(f"{_NS}/db-test")
+            body = await r.text()
+            # Real db-test response always contains these keys
+            for key in ('"sqlite"', '"postgres"', '"probe"'):
+                assert key not in body, (
+                    f"Unauthenticated /db-test must not expose real data. "
+                    f"Found {key!r} in response body: {body[:200]!r}"
+                )

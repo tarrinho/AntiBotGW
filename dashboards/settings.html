@@ -3341,7 +3341,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       if (p.events_rows != null) cells.push(['Events', p.events_rows.toLocaleString()]);
       if (p.db_bytes    != null) cells.push(['DB size', `${(p.db_bytes/1048576).toFixed(1)} MB`]);
       const rc  = p.available ? 'var(--green)' : 'var(--red)';
-      cells.unshift(['Status', `<span style="color:${rc}">${p.available?'✓ reachable':'✗ unreachable'}</span>`]);
+      cells.unshift(['Status', `<span id="_tip-pg-status-val" style="color:${rc}">${p.available?'✓ reachable':'✗ unreachable'}</span>`]);
       statsHtml = `<div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
         ${cells.map(([k,v])=>`<div style="background:#0d1117;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
           <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
@@ -3444,6 +3444,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
             const db  = (p.db||p.db_name) ? ` · db ${p.db||p.db_name}` : '';
             const ms  = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
             res.style.color='var(--green)'; res.textContent=`✓ connected${ver}${db}${ms}`;
+            // Sync the Status tile — test succeeded so mark available in cache + live span
+            if (_dbSvcCache.db_postgres) _dbSvcCache.db_postgres.available = true;
+            const sv = document.getElementById('_tip-pg-status-val');
+            if (sv){ sv.style.color='var(--green)'; sv.textContent='✓ reachable'; }
           } else {
             res.style.color='var(--red)'; res.textContent='✗ '+(j.reason||p.reason||'unreachable');
           }
@@ -3536,6 +3540,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         : `<b>SQLite is single-file zero-deps</b> — correct for the default deployment.`,
     ];
     const needsTest = target === 'postgres';
+    // Set synchronously in the input listener so the async auto-fill IIFE can never
+    // overwrite a value the user has already started editing, regardless of timing.
+    let _dsnUserTouched = false;
     const dsnInput = needsTest ? `<div style="margin-top:14px">
       <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">
         PostgreSQL DSN — <span id="db-dsn-label-hint" style="color:var(--dim)">loading current value…</span>
@@ -3570,12 +3577,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     showSimpleModal(html);
     document.getElementById('db-switch-cancel').onclick = closeSimpleModal;
 
-    // _resolveModalDsn: returns "" when the field shows the server's own masked DSN
+    // _resolveModalDsn: returns "" when field still shows server's own masked DSN
     // (so the server uses its stored real credentials), or the user-typed value otherwise.
+    // Requires _dsnUserTouched to be false AND data-masked='1' — both must hold.
     function _resolveModalDsn(){
       const f = document.getElementById('db-switch-dsn');
       if (!f) return '';
-      if (f.dataset.masked === '1') return ''; // server already has the real DSN
+      if (f.dataset.masked === '1' && !_dsnUserTouched) return ''; // server already has the real DSN
       return f.value || '';
     }
 
@@ -3600,18 +3608,22 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         try {
           resultEl.innerHTML = '<span style="color:var(--dim)">Checking stored connection…</span>';
           const r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+          if (!r.ok && !(r.headers.get('content-type')||'').includes('json'))
+            throw new Error(`Server error HTTP ${r.status}`);
           const j = await r.json();
           const p = j.postgres || {};
           const masked = p.dsn_masked || '';
-          // Populate field with masked DSN (if any), mark as server-side value
-          if (masked && masked !== '(redacted)' && dsnField && !dsnField.dataset.userModified) {
+          // Populate field only when user hasn't touched it yet (closure flag, set
+          // synchronously by the input listener — immune to async timing races).
+          if (masked && masked !== '(redacted)' && dsnField && !_dsnUserTouched && !dsnField.value) {
             dsnField.value = masked;
             dsnField.dataset.masked = '1';
             if (hintEl) hintEl.innerHTML =
               'current value shown masked — edit to override, or leave as-is to use stored credentials';
           } else {
-            if (hintEl) hintEl.innerHTML = masked
+            if (hintEl) hintEl.innerHTML = masked && !_dsnUserTouched
               ? 'no DSN configured — enter one below'
+              : _dsnUserTouched ? 'custom DSN — click Test to verify before switching'
               : 'enter connection string below';
           }
           // Show current connectivity status
@@ -3639,6 +3651,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         try {
           const qs = dsnVal ? '?dsn='+encodeURIComponent(dsnVal) : '';
           const r  = await fetch('/antibot-appsec-gateway/secured/db-test'+qs, {credentials:'include'});
+          if (!r.ok && !(r.headers.get('content-type')||'').includes('json'))
+            throw new Error(`Server error HTTP ${r.status}`);
           const j  = await r.json();
           const p  = j.postgres || j.probe || {};
           if (j.ok || p.ok){
@@ -3653,10 +3667,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         } finally { testBtn.disabled=false; testBtn.textContent='Test connection'; }
       };
 
-      // When user edits the field, it's no longer the server's masked value
+      // When user edits the field, mark synchronously so the async IIFE guard sees it.
       if (dsnField) dsnField.addEventListener('input', () => {
+        _dsnUserTouched = true;
         dsnField.dataset.masked = '0';
-        dsnField.dataset.userModified = '1';
         okBtn.disabled = true;
         resultEl.textContent = '';
         if (hintEl) hintEl.textContent = 'custom DSN — click Test to verify before switching';
