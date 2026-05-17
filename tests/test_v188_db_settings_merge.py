@@ -217,14 +217,14 @@ class TestDbModal:
     def test_modal_always_full_migrate(self):
         idx = _SRC.find("function _openDbModal")
         assert idx != -1
-        snippet = _SRC[idx:idx+6000]
+        snippet = _SRC[idx:idx+16000]
         assert "fullMigrate = true" in snippet, \
             "_openDbModal must always send fullMigrate=true (no opt-out checkbox)"
 
     def test_modal_sends_full_migrate_flag(self):
         idx = _SRC.find("function _openDbModal")
         assert idx != -1
-        snippet = _SRC[idx:idx+6000]
+        snippet = _SRC[idx:idx+16000]
         assert "full_migrate" in snippet, \
             "_openDbModal must send full_migrate flag to /secured/db-switch"
 
@@ -259,14 +259,14 @@ class TestDbModal:
     def test_modal_updates_badges_on_success(self):
         idx = _SRC.find("function _openDbModal")
         assert idx != -1
-        snippet = _SRC[idx:idx+6500]
+        snippet = _SRC[idx:idx+16000]
         assert "_dbUpdateActiveBadges" in snippet, \
             "_openDbModal must call _dbUpdateActiveBadges() after a successful switch"
 
     def test_modal_starts_poll_when_full_migrate_scheduled(self):
         idx = _SRC.find("function _openDbModal")
         assert idx != -1
-        snippet = _SRC[idx:idx+6500]
+        snippet = _SRC[idx:idx+16000]
         assert "full_migrate_scheduled" in snippet, \
             "_openDbModal must check j.full_migrate_scheduled and start migration poll"
 

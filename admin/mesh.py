@@ -70,7 +70,7 @@ def _gw_generate_keypair() -> tuple[str, str]:
     except ImportError:
         raise RuntimeError(
             "Ed25519 keypair generation requires the 'cryptography' package. "
-            "Not available on this platform (armv7). Mesh signing unsupported.")
+            "Not available on this platform (armv7). Mesh signing unsupported.") from None
     priv      = Ed25519PrivateKey.generate()
     priv_raw  = priv.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
     pub_raw   = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
