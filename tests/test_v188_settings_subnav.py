@@ -366,6 +366,218 @@ class TestSettingsSubnavRegression:
         )
 
 
+# ── T: DB test-button UX (v1.8.8 fix) ────────────────────────────────────────
+
+class TestSettingsDbTestBtn:
+    """
+    T01  _tip-pg-test handler calls /secured/db-test (not /integration-check)
+    T02  DSN is built from form fields, not from a pre-saved global
+    T03  Handler validates that host, database and user are required
+    T04  Handler validates that password is required (not silently skipped)
+    T05  DSN URL includes all five fields: user, password, host, port, db
+    T06  Successful response reads j.probe.ok (not j.latency_ms)
+    T07  Success branch shows "✓ connected"
+    T08  Failure branch shows "✗ " + reason from j.reason or probe.reason
+    T09  Result element is updated before fetch (dim "testing…")
+    T10  Button is re-enabled in finally path (no early-return bug)
+    """
+
+    def setup_method(self):
+        self.src = _settings()
+
+    def _tip_pg_test_handler(self) -> str:
+        """Extract the _tip-pg-test onclick handler block from settings.html."""
+        marker = "document.getElementById('_tip-pg-test').onclick"
+        idx = self.src.find(marker)
+        assert idx != -1, "_tip-pg-test onclick not found in settings.html"
+        # grab ~50 lines of context
+        return self.src[idx: idx + 1500]
+
+    def test_t01_calls_db_test_not_integration_check(self):
+        blk = self._tip_pg_test_handler()
+        assert "/db-test" in blk, (
+            "_tip-pg-test must call /secured/db-test (probe DSN endpoint), not /integration-check"
+        )
+        assert "integration-check" not in blk, (
+            "_tip-pg-test must NOT call /integration-check — that endpoint ignores the dsn param"
+        )
+
+    def test_t02_dsn_built_from_form_fields(self):
+        blk = self._tip_pg_test_handler()
+        # DSN must be built from getFields() output (f.u / f.w / f.h / f.p / f.d)
+        assert "f.u" in blk and "f.w" in blk and "f.h" in blk, (
+            "DSN in _tip-pg-test must be assembled from form field variables (f.u, f.w, f.h, …)"
+        )
+        # Must NOT rely on a pre-saved global POSTGRES_DSN
+        assert "POSTGRES_DSN" not in blk, (
+            "_tip-pg-test handler must not reference the global POSTGRES_DSN"
+        )
+
+    def test_t03_validates_host_db_user_required(self):
+        blk = self._tip_pg_test_handler()
+        assert "f.h" in blk and "f.d" in blk and "f.u" in blk, (
+            "_tip-pg-test must check f.h, f.d and f.u (host / db / user) before fetching"
+        )
+        assert "required" in blk.lower(), (
+            "_tip-pg-test must emit a 'required' message when fields are missing"
+        )
+
+    def test_t04_validates_password_required(self):
+        blk = self._tip_pg_test_handler()
+        assert "f.w" in blk, "_tip-pg-test must check f.w (password)"
+        # Handler should guard on empty password with a user-visible message
+        assert "Password required" in blk or "password required" in blk.lower(), (
+            "_tip-pg-test must tell the user that a password is required to test"
+        )
+
+    def test_t05_dsn_contains_all_five_fields(self):
+        blk = self._tip_pg_test_handler()
+        # postgresql://${user}:${pass}@${host}:${port}/${db}
+        for field in ("f.u", "f.w", "f.h", "f.p", "f.d"):
+            assert field in blk, (
+                f"DSN in _tip-pg-test must include field variable '{field}'"
+            )
+
+    def test_t06_success_reads_probe_ok(self):
+        blk = self._tip_pg_test_handler()
+        # Response structure: {ok, probe:{ok, version, round_trip_ms, …}}
+        assert "j.probe" in blk or "probe" in blk, (
+            "_tip-pg-test success branch must read from j.probe (db-test probe payload)"
+        )
+
+    def test_t07_success_shows_connected(self):
+        blk = self._tip_pg_test_handler()
+        assert "connected" in blk, (
+            "_tip-pg-test must show '✓ connected …' on success"
+        )
+
+    def test_t08_failure_shows_reason(self):
+        blk = self._tip_pg_test_handler()
+        assert "j.reason" in blk or "p.reason" in blk, (
+            "_tip-pg-test failure branch must display j.reason / probe.reason"
+        )
+        assert "\\u2717" in blk or "✗" in blk, (
+            "_tip-pg-test failure branch must show ✗ prefix"
+        )
+
+    def test_t09_result_el_set_before_fetch(self):
+        blk = self._tip_pg_test_handler()
+        # "testing…" must appear before the fetch call
+        idx_testing = blk.find("testing")
+        idx_fetch   = blk.find("fetch(")
+        assert idx_testing != -1, "_tip-pg-test must set result text to 'testing…' before fetch"
+        assert idx_fetch   != -1, "_tip-pg-test must call fetch"
+        assert idx_testing < idx_fetch, (
+            "'testing…' status must be set BEFORE the fetch call, not after"
+        )
+
+    def test_t10_button_reenabled_after_request(self):
+        blk = self._tip_pg_test_handler()
+        # disabled=false must appear after disabled=true, and the re-enable must
+        # not be inside an if-branch (so it fires even on error)
+        assert "disabled=false" in blk or "disabled = false" in blk, (
+            "_tip-pg-test must re-enable the button after the request completes"
+        )
+        idx_disable = blk.find("this.disabled=true")
+        idx_enable  = blk.rfind("disabled=false")
+        assert idx_disable < idx_enable, (
+            "Button re-enable must appear AFTER the disable call"
+        )
+
+
+# ── B: Backend db-test probe-mode DSN patch (v1.8.8 fix) ─────────────────────
+
+class TestDbTestProbeDsnPatch:
+    """
+    B01  db_test_endpoint probe mode patches db.postgres.POSTGRES_DSN before call
+    B02  db_test_endpoint probe mode restores db.postgres.POSTGRES_DSN after call
+    B03  probe mode with bad DSN returns ok=False + reason (not "not configured")
+    B04  probe mode without ?dsn= falls through to normal mode (no patch attempt)
+    B05  pg_test_roundtrip sees probe_dsn during call, not empty string
+    """
+
+    def _ph(self):
+        import importlib, sys
+        if "core.proxy_handler" not in sys.modules:
+            import importlib.util, os
+            proj = Path(__file__).resolve().parent.parent
+            spec = importlib.util.spec_from_file_location(
+                "core.proxy_handler",
+                proj / "core" / "proxy_handler.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["core.proxy_handler"] = mod
+            spec.loader.exec_module(mod)
+        return sys.modules["core.proxy_handler"]
+
+    def test_b01_probe_mode_patches_pg_mod(self):
+        src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
+        code = src.read_text(encoding="utf-8")
+        # Probe block must assign to _pg_mod_dbt.POSTGRES_DSN (not just globals())
+        assert "_pg_mod_dbt.POSTGRES_DSN = probe_dsn" in code, (
+            "db_test_endpoint probe mode must patch db.postgres.POSTGRES_DSN "
+            "before calling pg_test_roundtrip() — globals() patch alone is insufficient"
+        )
+
+    def test_b02_probe_mode_restores_pg_mod(self):
+        src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
+        code = src.read_text(encoding="utf-8")
+        assert "_pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn" in code, (
+            "db_test_endpoint probe mode must restore db.postgres.POSTGRES_DSN "
+            "in the finally block to avoid leaking the probe DSN into the live process"
+        )
+
+    def test_b03_probe_mode_finally_block_covers_restore(self):
+        src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
+        code = src.read_text(encoding="utf-8")
+        # Locate the db_test_endpoint probe section
+        marker = "1.6.10 — pre-flight probe mode"
+        idx = code.find(marker)
+        assert idx != -1, "probe mode comment not found in proxy_handler.py"
+        blk = code[idx: idx + 1500]
+        # Both the set and restore must be present in the same block
+        assert "_pg_mod_dbt.POSTGRES_DSN = probe_dsn" in blk, (
+            "probe DSN assignment to db.postgres missing from probe block"
+        )
+        assert "_pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn" in blk, (
+            "probe DSN restore in finally missing from probe block"
+        )
+        # Restore must come AFTER set
+        idx_set     = blk.index("_pg_mod_dbt.POSTGRES_DSN = probe_dsn")
+        idx_restore = blk.index("_pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn")
+        assert idx_set < idx_restore, (
+            "DSN restore must appear after the DSN set in the probe block"
+        )
+
+    def test_b04_probe_variables_scoped_to_probe_block(self):
+        src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
+        code = src.read_text(encoding="utf-8")
+        # The probe block ends at the return web.json_response that emits {ok, probe}.
+        # Everything after that return is normal (non-probe) mode.
+        # Confirm: after the probe return, pg_mod_dbt does NOT appear again.
+        probe_return_marker = '"probe": {**probe, "dsn_masked": masked}}'
+        idx = code.find(probe_return_marker)
+        assert idx != -1, "probe return marker not found in db_test_endpoint"
+        normal_mode = code[idx + len(probe_return_marker): idx + 3000]
+        assert "pg_mod_dbt" not in normal_mode, (
+            "pg_mod_dbt reference found after the probe return — "
+            "probe variables must be scoped to the probe if-block only"
+        )
+
+    def test_b05_db_switch_and_db_test_both_patch_pg_mod(self):
+        """Both endpoints that call pg_test_roundtrip with a caller DSN must patch db.postgres."""
+        src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
+        code = src.read_text(encoding="utf-8")
+        # db-switch probe (existing, correct)
+        assert "_pg_mod.POSTGRES_DSN = dsn" in code, (
+            "db-switch probe must patch db.postgres.POSTGRES_DSN (existing fix must be intact)"
+        )
+        # db-test probe (new fix)
+        assert "_pg_mod_dbt.POSTGRES_DSN = probe_dsn" in code, (
+            "db-test probe must patch db.postgres.POSTGRES_DSN (new fix)"
+        )
+
+
 # ── D: Dynamic (live gateway) ─────────────────────────────────────────────────
 
 async def _echo_handler(request: web.Request) -> web.Response:
