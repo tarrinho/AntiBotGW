@@ -1780,19 +1780,12 @@ document.addEventListener('DOMContentLoaded', () => {
         'Service Worker Challenge':        'SW_CHALLENGE_ENABLED',
         'MaxMind GeoLite2 City':          'IMPOSSIBLE_TRAVEL_ENABLED',
       };
-      // DB backend moved to Settings → Database backend card.
+      // DB backend entries are managed in Settings → Database backend card;
+      // exclude them from the Controls integrations list entirely.
       const DB_TARGET = {
         'SQLite event store':         'sqlite',
         'PostgreSQL / TimescaleDB':   'postgres',
       };
-      const renderDbCard = () => `<div style="border:1px solid var(--line);border-radius:6px;padding:10px 14px;margin-bottom:10px;background:#0d1117;display:flex;align-items:center;gap:12px">
-        <span style="font-size:18px">🗄️</span>
-        <div style="font-size:12.5px">
-          <span style="font-weight:700">Database backend</span> —
-          <span style="color:var(--dim)">moved to</span>
-          <a href="settings.html#card-db" style="color:var(--blue)">Settings → Database backend</a>
-        </div>
-      </div>`;
       // Server's current toggle state (so the switch reflects reality even
       // if the integration was force-disabled at runtime).
       const cfg = serverState || {};
@@ -1819,7 +1812,7 @@ document.addEventListener('DOMContentLoaded', () => {
           : 'Cannot enable — set ' + (item.envs_needed||[]).join(' AND ') + ' in container env first';
         return `<div class="switch${cls}" data-knob="${knob}" ${disabledAttr} title="${escapeHtml(title)}"></div>`;
       };
-      box.innerHTML = _dp(renderDbCard() + (d.integrations||[]).filter(i => !DB_TARGET[i.name]).map(item => {
+      box.innerHTML = _dp((d.integrations||[]).filter(i => !DB_TARGET[i.name]).map(item => {
         const tel = item.telemetry || {};
         let extra = '';
         if (item.name === 'AbuseIPDB' && item.enabled) {

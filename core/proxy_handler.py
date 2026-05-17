@@ -1614,7 +1614,7 @@ async def external_endpoint(request: web.Request):
             from urllib.parse import urlparse
             p = urlparse(POSTGRES_DSN)
             pg_telemetry["endpoint"] = (
-                f"{p.scheme}://{p.username or '<user>'}:****@"
+                f"{p.scheme}://{p.username or '<user>'}:>update password<@"
                 f"{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}"
                 f"{p.path or ''}")
         except Exception:
@@ -2064,15 +2064,15 @@ async def secrets_endpoint(request: web.Request):
             rejected[k] = "value too long (max 1024 bytes)"
             continue
         global_name, _env_name = _SECRET_KEYS[k]
-        # POSTGRES_DSN sentinel: if the password component is "****", substitute
-        # the password from the currently stored DSN so callers can update
-        # host/port/db/user without re-entering the password.
-        if k == "POSTGRES_DSN" and ":****@" in v:
+        # POSTGRES_DSN sentinel: if the password component is ">update password<",
+        # substitute the password from the currently stored DSN so callers can
+        # update host/port/db/user without re-entering the password.
+        if k == "POSTGRES_DSN" and ":>update password<@" in v:
             try:
                 from urllib.parse import urlparse as _up
                 _cur_pass = (_up(g.get("POSTGRES_DSN") or "")).password or ""
                 if _cur_pass:
-                    v = v.replace(":****@", f":{_cur_pass}@", 1)
+                    v = v.replace(":>update password<@", f":{_cur_pass}@", 1)
             except Exception:
                 pass
         g[global_name] = v
@@ -4234,7 +4234,7 @@ async def _db_test_endpoint_inner(request: web.Request):
         try:
             from urllib.parse import urlparse
             p = urlparse(probe_dsn)
-            masked = f"{p.scheme}://{p.username or '<user>'}:****@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
+            masked = f"{p.scheme}://{p.username or '<user>'}:>update password<@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
         except Exception:
             masked = "(redacted)"
         return web.json_response(
@@ -4274,7 +4274,7 @@ async def _db_test_endpoint_inner(request: web.Request):
         try:
             from urllib.parse import urlparse
             p = urlparse(POSTGRES_DSN)
-            masked_dsn = f"{p.scheme}://{p.username or '<user>'}:****@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
+            masked_dsn = f"{p.scheme}://{p.username or '<user>'}:>update password<@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
         except Exception:
             masked_dsn = "(redacted)"
     return web.json_response({
@@ -5690,7 +5690,7 @@ async def geo_data_endpoint(request: web.Request):
                 if _sample_seen <= _SCRUBBER_CAP:
                     events_sample.append([float(r["ts"]), lat, lng, kind])
                 else:
-                    j = _random.randint(0, _sample_seen - 1)
+                    j = _random.randint(0, _sample_seen - 1)  # noqa: S311 — reservoir sampling, not crypto
                     if j < _SCRUBBER_CAP:
                         events_sample[j] = [float(r["ts"]), lat, lng, kind]
         finally:

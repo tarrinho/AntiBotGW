@@ -950,7 +950,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
 <!-- ── Database backend ────────────────────────────────────────────── -->
 <div class="card" id="card-db">
-  <h2>🗄️ Database backend <span style="font-size:11px;color:var(--yellow);font-weight:400">— requires container restart</span></h2>
+  <h2>🗄️ Database backend <span style="font-size:11px;color:var(--green);font-weight:400">— hot-swap, no restart needed</span></h2>
   <p class="desc">
     Select where the gateway stores request events. Bans, configuration and admin IPs always remain in
     SQLite regardless of the backend chosen. Switching backends triggers a full background migration of
@@ -3342,11 +3342,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       if (p.db_bytes    != null) cells.push(['DB size', `${(p.db_bytes/1048576).toFixed(1)} MB`]);
       const rc  = p.available ? 'var(--green)' : 'var(--red)';
       cells.unshift(['Status', `<span id="_tip-pg-status-val" style="color:${rc}">${p.available?'✓ reachable':'✗ unreachable'}</span>`]);
-      statsHtml = `<div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
+      statsHtml = `<div id="_tip-pg-stats"><div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
         ${cells.map(([k,v])=>`<div style="background:#0d1117;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
           <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
           <div style="font-size:12px;font-weight:700">${v}</div>
-        </div>`).join('')}</div>`;
+        </div>`).join('')}</div></div>`;
     }
 
     // ── Config section ──
@@ -3395,6 +3395,46 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     tip.innerHTML = hdrHtml + statsHtml + configHtml;
     tip.style.display = 'block';
     _dbPositionTip(tip, anchor);
+
+    // Refresh postgres stats + status live from /metrics — avoids stale page-load cache
+    if (type === 'postgres') {
+      (async () => {
+        const sv = document.getElementById('_tip-pg-status-val');
+        if (sv) sv.style.opacity = '0.5';
+        try {
+          const r = await fetch('/antibot-appsec-gateway/secured/metrics?range=1&bucket=60&cats=allowed', {credentials: 'include'});
+          if (!r.ok) return;
+          const j = await r.json();
+          const pg = (j.services || {}).db_postgres || {};
+          // Merge fresh data into cache
+          if (_dbSvcCache.db_postgres) Object.assign(_dbSvcCache.db_postgres, pg);
+          else _dbSvcCache.db_postgres = pg;
+          const ok = pg.available || pg.enabled;
+          // Update status tile
+          if (sv) {
+            sv.style.color = ok ? 'var(--green)' : 'var(--red)';
+            sv.textContent  = ok ? '✓ reachable'
+                                 : (pg.configured === false ? '✗ DSN not configured' : '✗ unreachable');
+          }
+          // Rebuild stats cells with fresh data
+          const statsEl = document.getElementById('_tip-pg-stats');
+          if (statsEl) {
+            const cells = [];
+            if (pg.events_rows != null) cells.push(['Events', pg.events_rows.toLocaleString()]);
+            if (pg.db_bytes    != null) cells.push(['DB size', `${(pg.db_bytes/1048576).toFixed(1)} MB`]);
+            const rc = ok ? 'var(--green)' : 'var(--red)';
+            const lbl = ok ? '✓ reachable' : (pg.configured === false ? '✗ DSN not configured' : '✗ unreachable');
+            cells.unshift(['Status', `<span id="_tip-pg-status-val" style="color:${rc}">${lbl}</span>`]);
+            statsEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
+              ${cells.map(([k,v])=>`<div style="background:#0d1117;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
+                <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
+                <div style="font-size:12px;font-weight:700">${v}</div>
+              </div>`).join('')}</div>`;
+          }
+        } catch (_) { if (sv) sv.style.opacity = '1'; return; }
+        if (sv) sv.style.opacity = '1';
+      })();
+    }
 
     // Wire 👁 toggles
     tip.querySelectorAll('[data-eye]').forEach(eye => {
@@ -3527,8 +3567,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   function _openDbModal(target){
     const dbName = target === 'postgres' ? 'PostgreSQL / TimescaleDB' : 'SQLite';
     const impactLines = [
-      `<b>Switch requires a container restart.</b> All in-flight requests complete
-       normally; the new backend is active after the restart.`,
+      `<b>Switch is applied immediately — no container restart required.</b> All in-flight
+       requests complete normally; the new backend is active within seconds.`,
       `<b>Configurations are preserved.</b> <code>config_kv</code>, <code>secrets_kv</code>,
        admin IPs, bans, clients — all live in SQLite and survive any backend swap.`,
       `<b>All event history is migrated in the background.</b> The full copy runs
@@ -3700,7 +3740,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           toast(`Switched to ${target} — migrating all data in background.`,'ok');
           _startMigPoll();
         } else {
-          toast(`Switched to ${target} — active after restart.`,'ok');
+          toast(`Switched to ${target} — active immediately.`,'ok');
         }
       } catch(e){
         okBtn.disabled=false; okBtn.textContent='Yes, switch';

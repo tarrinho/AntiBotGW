@@ -860,8 +860,9 @@ async def test_d11_probe_masks_password_in_response(proxy_module):
             assert secret_pass not in masked, (
                 f"Password leaked in dsn_masked: {masked!r}"
             )
-            assert "****" in masked, (
-                f"dsn_masked must replace password with ****. Got: {masked!r}"
+            # Proxy uses ">update password<" as the redaction placeholder
+            assert ">update password<" in masked or "****" in masked, (
+                f"dsn_masked must redact the password. Got: {masked!r}"
             )
 
 
@@ -880,3 +881,122 @@ async def test_d12_unauthenticated_db_test_no_real_data(proxy_module):
                     f"Unauthenticated /db-test must not expose real data. "
                     f"Found {key!r} in response body: {body[:200]!r}"
                 )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Live-probe status + stats tests (L) — _dbShowTip refreshes from /metrics on open
+# L01  _dbShowTip fetches /metrics (not /db-test) for postgres type
+# L02  Success path reads pg.available or pg.enabled from services.db_postgres
+# L03  Live probe updates _tip-pg-status-val to ✓ reachable on success
+# L04  Failure path falls back to "unreachable" when pg not enabled/available
+# L05  Failure path shows "DSN not configured" when pg.configured is false
+# L06  Live-probe is guarded by type === 'postgres' (not fired for sqlite)
+# L07  _tip-pg-status-val opacity set to 0.5 before fetch (loading indicator)
+# L08  opacity restored to 1 after fetch resolves (both ok and error paths)
+# L09  Stats grid wrapper has id="_tip-pg-stats" so live probe can update cells
+# L10  Live probe rebuilds stats cells (Events, DB size) from fresh metrics data
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestDbShowTipLiveProbe:
+    """Static-HTML tests verifying the live stats/status refresh added to _dbShowTip."""
+
+    def setup_method(self):
+        self.src = _settings()
+
+    def _dbShowTip_block(self) -> str:
+        """Extract the _dbShowTip function body."""
+        marker = "window._dbShowTip = function"
+        idx = self.src.find(marker)
+        assert idx != -1, "_dbShowTip not found in settings.html"
+        # 8000 chars covers the full function body including the live probe IIFE
+        return self.src[idx: idx + 8000]
+
+    def _probe_fetch_idx(self, blk: str) -> int:
+        idx = blk.find("secured/metrics")
+        assert idx != -1, "Live probe fetch to /metrics not found in _dbShowTip"
+        return idx
+
+    def test_l01_live_probe_fetches_metrics(self):
+        blk = self._dbShowTip_block()
+        assert "secured/metrics" in blk, (
+            "_dbShowTip must fetch /secured/metrics on popup open (not /db-test)"
+        )
+        # Must NOT call /db-test from the live probe block
+        probe_idx = self._probe_fetch_idx(blk)
+        context = blk[max(0, probe_idx - 100): probe_idx + 200]
+        assert "/db-test" not in context, (
+            "Live probe must use /metrics, not /db-test"
+        )
+
+    def test_l02_success_reads_available_or_enabled(self):
+        blk = self._dbShowTip_block()
+        assert "pg.available" in blk or "pg.enabled" in blk, (
+            "Live probe must read pg.available or pg.enabled from services.db_postgres"
+        )
+        assert "'✓ reachable'" in blk or '"✓ reachable"' in blk, (
+            "Live probe success path must set textContent to '✓ reachable'"
+        )
+
+    def test_l03_status_tile_updated(self):
+        blk = self._dbShowTip_block()
+        assert "_tip-pg-status-val" in blk or "sv.textContent" in blk, (
+            "Live probe must update the status tile element"
+        )
+        assert "'✓ reachable'" in blk or '"✓ reachable"' in blk, (
+            "Live probe must write '✓ reachable' on success"
+        )
+
+    def test_l04_failure_defaults_to_unreachable(self):
+        blk = self._dbShowTip_block()
+        assert "unreachable" in blk, (
+            "Live probe failure path must fall back to 'unreachable'"
+        )
+
+    def test_l05_failure_shows_dsn_not_configured(self):
+        blk = self._dbShowTip_block()
+        assert "configured" in blk and ("DSN not configured" in blk or "not configured" in blk), (
+            "Live probe failure path must distinguish 'DSN not configured' from 'unreachable'"
+        )
+
+    def test_l06_postgres_type_guard(self):
+        blk = self._dbShowTip_block()
+        probe_idx = self._probe_fetch_idx(blk)
+        context_before = blk[max(0, probe_idx - 300): probe_idx]
+        assert "postgres" in context_before, (
+            "Live probe fetch must be inside a type === 'postgres' guard"
+        )
+
+    def test_l07_opacity_set_before_fetch(self):
+        blk = self._dbShowTip_block()
+        probe_idx = self._probe_fetch_idx(blk)
+        before_fetch = blk[max(0, probe_idx - 200): probe_idx]
+        assert "opacity" in before_fetch and ("0.5" in before_fetch), (
+            "Status tile opacity must be dimmed to 0.5 before the live fetch fires"
+        )
+
+    def test_l08_opacity_restored_after_fetch(self):
+        blk = self._dbShowTip_block()
+        probe_idx = self._probe_fetch_idx(blk)
+        after_fetch = blk[probe_idx: probe_idx + 2500]
+        assert "opacity" in after_fetch and ("= '1'" in after_fetch or '= "1"' in after_fetch), (
+            "Status tile opacity must be restored to 1 after live probe completes"
+        )
+
+    def test_l09_stats_grid_has_id(self):
+        assert '_tip-pg-stats' in self.src, (
+            "Stats grid wrapper must have id='_tip-pg-stats' so live probe can update it"
+        )
+
+    def test_l10_live_probe_rebuilds_stats_cells(self):
+        blk = self._dbShowTip_block()
+        probe_idx = self._probe_fetch_idx(blk)
+        after_fetch = blk[probe_idx: probe_idx + 1500]
+        assert "_tip-pg-stats" in after_fetch, (
+            "Live probe must update _tip-pg-stats element with fresh stats cells"
+        )
+        assert "events_rows" in after_fetch, (
+            "Live probe must include events_rows in refreshed stats cells"
+        )
+        assert "db_bytes" in after_fetch, (
+            "Live probe must include db_bytes in refreshed stats cells"
+        )
