@@ -13,6 +13,7 @@
 4. [Tune knobs (hot-reload)](#4-tune-knobs-hot-reload)
 5. [Admin login](#5-admin-login)
 6. [Rotate keys](#6-rotate-keys)
+0. [Production security checklist](#0-production-security-checklist)
 7. [Unban an identity](#7-unban-an-identity)
 8. [AI-agent detection (v1.7.3)](#8-ai-agent-detection-v173)
 9. [DLP redaction](#9-dlp-redaction)
@@ -24,6 +25,31 @@
 15. [SIEM Security Event Center (v1.8.4)](#15-siem-security-event-center-v184)
 16. [Tear down](#16-tear-down)
 17. [Environment variable reference](#17-environment-variable-reference)
+
+---
+
+## 0. Production security checklist
+
+Run through this before exposing the gateway to the internet. Items marked **REQUIRED** will leave the deployment insecure if skipped.
+
+| # | Item | Variable / action | Status |
+|---|------|-------------------|--------|
+| 1 | **REQUIRED** — Restrict admin dashboard to known IPs | `ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1` | If unset, gateway logs `[SECURITY WARNING]` on every boot |
+| 2 | **REQUIRED** — Set trusted proxy CIDRs | `TRUSTED_PROXIES=<load-balancer-cidr>` | Without this, `TRUST_XFF` falls back to `"none"` and client IP detection is disabled |
+| 3 | **REQUIRED** — Mount writable data volume | `-e APPSECGW_KEY_DIR=/data -v /srv/gw:/data` | Keys stored in read-only image dir will be lost on restart |
+| 4 | Rotate the bootstrap admin password | Settings → Users after first login | Default `INTERNAL_KEY` is printed in plaintext to container logs |
+| 5 | Enable 2FA for all admin accounts | Settings → Users → TOTP | Admin session cookie is valid until expiry; 2FA limits blast radius of stolen cookie |
+| 6 | Set `ALLOWED_HOSTS` | `ALLOWED_HOSTS=your-domain.com` | Without it the Host header is not validated against an allowlist |
+| 7 | Set `UPSTREAM` to internal address only | `UPSTREAM=http://app:3000` (not a public URL) | SSRF protection filters localhost/RFC-1918 but the upstream itself should be internal |
+| 8 | Review `CUSTOM_RULES` on upgrade | Controls → Endpoint Policies | Custom rules are evaluated before all detection signals |
+
+> **How to verify #1:** If `ADMIN_ALLOWED_IPS` is unset the startup banner prints:
+> ```
+> [SECURITY WARNING] ADMIN_ALLOWED_IPS is not set.
+>   The admin dashboard is reachable from any IP address.
+>   Set ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1 before deploying to production.
+> ```
+> This line goes to **stderr**. Check with `docker logs appsecgw 2>&1 | grep SECURITY`.
 
 ---
 

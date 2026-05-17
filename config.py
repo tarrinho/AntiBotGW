@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.7"
+GW_VERSION = "AppSecGW_1.8.8"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -188,7 +188,7 @@ def _resolve_key_dir() -> str:
         d = os.path.expanduser(env_dir)
         try:
             os.makedirs(d, mode=0o700, exist_ok=True)
-            try: os.chmod(d, 0o700)
+            try: os.chmod(d, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
             except OSError: pass  # nosec B110 — chmod is best-effort hardening; dir already writable
             return d
         except OSError as _e:
@@ -614,6 +614,28 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(
 REDIS_URL          = os.environ.get("REDIS_URL", "").strip()
 REDIS_NS           = os.environ.get("REDIS_NS", "appsecgw").strip() or "appsecgw"
 REDIS_TIMEOUT      = float(os.environ.get("REDIS_TIMEOUT", "0.5"))
+# 1.8.8 — TLS enforcement. When true (default) the gateway refuses to connect
+# to Redis unless REDIS_URL uses the rediss:// scheme. Set REDIS_REQUIRE_TLS=false
+# only in isolated dev/test environments where network-level encryption is not
+# available (e.g. localhost loopback, Docker-internal network).
+REDIS_REQUIRE_TLS: bool = os.environ.get("REDIS_REQUIRE_TLS", "true").strip().lower() not in ("0", "false", "no")
+
+# 1.8.8 — IP/CIDR allowlist for Redis connections. When non-empty the gateway
+# refuses to connect to a Redis host whose resolved IP is not in this list.
+# Empty = no restriction (single-host deployments where Docker network isolation
+# is the only enforcement layer).
+_redis_allow_raw = os.environ.get("REDIS_ALLOW_LIST", "").strip()
+REDIS_ALLOW_LIST: list = []   # list of normalised CIDR strings; populated below
+if _redis_allow_raw:
+    import ipaddress as _ip
+    for _ra_entry in _redis_allow_raw.split(","):
+        _ra_entry = _ra_entry.strip()
+        if _ra_entry:
+            try:
+                REDIS_ALLOW_LIST.append(str(_ip.ip_network(_ra_entry, strict=False)))
+            except ValueError:
+                print(f"WARN: invalid REDIS_ALLOW_LIST entry {_ra_entry!r} — ignoring",
+                      flush=True)
 
 # ── Webhook fan-out ────────────────────────────────────────────────────────
 WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").strip()

@@ -214,7 +214,7 @@ async def settings_import_endpoint(request: web.Request):
         # malformed XML to break their own gateway" — not external XXE.
         # CPython 3.7+ ET.fromstring does not resolve external entities
         # and pyexpat applies its own entity-expansion limits.
-        root = _ET.fromstring(xml_bytes)  # nosec B314
+        root = _ET.fromstring(xml_bytes)  # nosec B314  # noqa: S314
     except _ET.ParseError as e:
         return web.json_response({"error": f"bad xml: {e}"}, status=400,
                                   headers={"Cache-Control": "no-store"})
@@ -489,7 +489,8 @@ async def vhost_dismiss_endpoint(request: web.Request):
     if denied := _role_denied(request, "admin"):
         return denied
 
-    import sqlite3 as _sq3, json as _json
+    import sqlite3 as _sq3
+    import json as _json
     try:
         body = await request.json()
         hostname = (body.get("hostname") or "").strip()

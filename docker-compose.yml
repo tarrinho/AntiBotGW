@@ -46,7 +46,7 @@
 
 services:
   appsec-timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:latest-pg16@sha256:51eb3bcdfc41f481c797026813d9d457fb5cbc8ea370a65640d8cda13a4040c1
     container_name: appsec-timescaledb
     restart: unless-stopped
     environment:
@@ -103,8 +103,8 @@ services:
       retries:  5
 
   appsec-antibot-gw:
-    image: appsec-antibot-gw:1.8.7
-    container_name: appsec-antibot-gw1.8.7
+    image: appsec-antibot-gw:1.8.8
+    container_name: appsec-antibot-gw1.8.8
     restart: unless-stopped
     depends_on:
       appsec-timescaledb:
@@ -151,6 +151,11 @@ services:
       # Default points at the bundled appsecgw-redis sidecar. Override
       # in .env to point elsewhere (e.g. managed Redis cloud).
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@appsecgw-redis:6379}
+
+      # ── 1.8.8 — Redis TLS enforcement ────────────────────────────────
+      # REDIS_REQUIRE_TLS defaults to true. Set false for local dev where
+      # the bundled Redis sidecar uses plain redis:// (no TLS).
+      REDIS_REQUIRE_TLS: ${REDIS_REQUIRE_TLS:-false}
 
       # ── 1.6.8 — CrowdSec (community blocklist) ───────────────────────
       # Default URL is the bundled sidecar. The bouncer key has to be

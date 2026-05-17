@@ -470,3 +470,73 @@ class TestTotpUtils:
         code = pyotp.TOTP(secret).now()
         assert _totp_verify(secret, " " + code + " "), \
             "_totp_verify must strip whitespace from submitted code"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTH5-16 — rate limit holds under concurrent requests (parallel brute-force)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTotpRateLimitParallel:
+    """Rate limit must hold when many requests arrive concurrently from the same IP.
+    The asyncio Lock in _login_rate_limit serialises access, but all 10 tasks
+    share a single event loop — this verifies the counter increments atomically
+    and that exactly 5 passes are granted before the 6th triggers the deny path."""
+
+    def test_10_concurrent_calls_allow_exactly_5(self):
+        import asyncio
+        from admin import users
+
+        test_ip = "10.200.255.1"
+
+        async def go():
+            async with users._LOGIN_BUCKET_LOCK:
+                users._LOGIN_BUCKET.pop(test_ip, None)
+            results = await asyncio.gather(
+                *[users._login_rate_limit(test_ip) for _ in range(10)]
+            )
+            accepted = sum(1 for r in results if r)
+            rejected = sum(1 for r in results if not r)
+            assert accepted == 5, (
+                f"Rate limit must allow exactly 5 concurrent attempts, got {accepted}"
+            )
+            assert rejected == 5, (
+                f"Rate limit must deny the remaining 5, got {rejected} denied"
+            )
+
+        asyncio.run(go())
+
+    def test_rate_limit_resets_after_window(self):
+        import asyncio
+        import time as _time
+        from admin import users
+
+        test_ip = "10.200.255.2"
+
+        async def go():
+            # Exhaust the bucket
+            async with users._LOGIN_BUCKET_LOCK:
+                users._LOGIN_BUCKET[test_ip] = [_time.time() - 61, 10]
+            # After window expires, first call must be allowed again
+            result = await users._login_rate_limit(test_ip)
+            assert result is True, "Rate limit must reset after 60s window expires"
+
+        asyncio.run(go())
+
+    def test_different_ips_have_independent_buckets(self):
+        import asyncio
+        from admin import users
+
+        async def go():
+            # Exhaust ip_a
+            async with users._LOGIN_BUCKET_LOCK:
+                users._LOGIN_BUCKET.pop("10.1.1.1", None)
+                users._LOGIN_BUCKET.pop("10.1.1.2", None)
+            results_a = await asyncio.gather(
+                *[users._login_rate_limit("10.1.1.1") for _ in range(6)]
+            )
+            # ip_b not exhausted — first call must pass
+            result_b = await users._login_rate_limit("10.1.1.2")
+            assert sum(results_a) == 5, "ip_a bucket must allow exactly 5"
+            assert result_b is True, "ip_b bucket must be independent of ip_a"
+
+        asyncio.run(go())

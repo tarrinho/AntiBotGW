@@ -124,7 +124,7 @@ class _PgPool:
         except _queue.Empty:
             raise TimeoutError(
                 f"PG pool exhausted (max={self._max}, timeout={timeout}s)"
-            )
+            ) from None
         if self._ping(conn):
             return conn
         # Returned connection is dead — replace it inline.
@@ -166,6 +166,17 @@ def _get_pool() -> "_PgPool | None":
     pool = _PgPool(POSTGRES_DSN, size=_PG_POOL_SIZE)
     _state._postgres_pool = pool
     return pool
+
+
+def pg_pool_reset() -> None:
+    """Discard the current pool so the next _get_pool() creates a fresh one.
+
+    Called after POSTGRES_DSN changes (hot-swap without restart) so stale
+    connections are not reused with old credentials. In-flight callers holding
+    a connection from the old pool complete normally; the old _PgPool object
+    is GC'd once all references drop.
+    """
+    _state._postgres_pool = None
 
 
 def _pg_mirror_kv(op: str, args: tuple) -> bool:
@@ -308,7 +319,7 @@ def _migrate_recent_events(target: str, window_secs: int = 60) -> dict:
                 dst.executemany(
                     "INSERT INTO events (ts, ip, ua, path, method, status, reason) "
                     "VALUES (?, ?, ?, ?, '', ?, ?)",
-                    [(r[0], r[1], (r[2] or "")[:500], r[3] or "",
+                    [(float(r[0]), r[1], (r[2] or "")[:500], r[3] or "",
                       int(r[4] or 0), r[5] or "") for r in rows])
                 dst.commit()
                 copied = len(rows)
@@ -319,6 +330,170 @@ def _migrate_recent_events(target: str, window_secs: int = 60) -> dict:
     except Exception as e:
         return {"ok": False,
                 "reason": f"{type(e).__name__}: {str(e)[:160]}"}
+
+
+# ── Background full-history migration ─────────────────────────────────────────
+# Populated by _full_migrate_background(); polled via the status endpoint.
+_BG_MIGRATION: dict = {
+    "running":      False,
+    "done":         False,
+    "error":        None,
+    "direction":    "",
+    "total":        0,
+    "copied":       0,
+    "started_at":   0.0,
+    "finished_at":  0.0,
+}
+
+
+def _bg_sqlite_to_pg(cutoff_ts: float, batch_size: int,
+                     batch_sleep: float) -> None:
+    """Copy all SQLite events with ts < cutoff_ts into Postgres in batches."""
+    pg = _postgres_load_module()
+    if pg is None or not POSTGRES_DSN:
+        raise RuntimeError("psycopg/POSTGRES_DSN unavailable")
+
+    src = sqlite3.connect(DB_PATH)
+    try:
+        total = src.execute(
+            "SELECT COUNT(*) FROM events WHERE ts < ?", (cutoff_ts,)
+        ).fetchone()[0]
+    finally:
+        src.close()
+
+    _BG_MIGRATION["total"] = total
+    if total == 0:
+        return
+
+    last_id = 0
+    while True:
+        src = sqlite3.connect(DB_PATH)
+        src.row_factory = sqlite3.Row
+        try:
+            rows = src.execute(
+                "SELECT id, ts, ip, ua, path, status, reason "
+                "FROM events WHERE id > ? AND ts < ? ORDER BY id LIMIT ?",
+                (last_id, cutoff_ts, batch_size)
+            ).fetchall()
+        finally:
+            src.close()
+
+        if not rows:
+            break
+
+        with pg.connect(POSTGRES_DSN, connect_timeout=5,
+                        autocommit=False) as dst:
+            with dst.cursor() as cur:
+                cur.executemany(
+                    "INSERT INTO events (ts, ip, ua, path, status, reason) "
+                    "VALUES (to_timestamp(%s), %s, %s, %s, %s, %s)",
+                    [(r["ts"], r["ip"], (r["ua"] or "")[:500],
+                      r["path"] or "", int(r["status"] or 0),
+                      r["reason"] or "") for r in rows])
+            dst.commit()
+
+        last_id = rows[-1]["id"]
+        _BG_MIGRATION["copied"] += len(rows)
+
+        if len(rows) < batch_size:
+            break
+        _t.sleep(batch_sleep)
+
+
+def _bg_pg_to_sqlite(cutoff_ts: float, batch_size: int,
+                     batch_sleep: float) -> None:
+    """Copy all Postgres events with ts < cutoff_ts into SQLite in batches."""
+    pg = _postgres_load_module()
+    if pg is None or not POSTGRES_DSN:
+        raise RuntimeError("psycopg/POSTGRES_DSN unavailable")
+
+    with pg.connect(POSTGRES_DSN, connect_timeout=5, autocommit=True) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT COUNT(*) FROM events WHERE ts < to_timestamp(%s)",
+                (cutoff_ts,))
+            total = cur.fetchone()[0]
+
+    _BG_MIGRATION["total"] = total
+    if total == 0:
+        return
+
+    last_id = 0
+    while True:
+        with pg.connect(POSTGRES_DSN, connect_timeout=5,
+                        autocommit=True) as src:
+            with src.cursor() as cur:
+                cur.execute(
+                    "SELECT id, EXTRACT(EPOCH FROM ts), ip, ua, path, "
+                    "       status, reason "
+                    "FROM events WHERE id > %s AND ts < to_timestamp(%s) "
+                    "ORDER BY id LIMIT %s",
+                    (last_id, cutoff_ts, batch_size))
+                rows = cur.fetchall()
+
+        if not rows:
+            break
+
+        dst = sqlite3.connect(DB_PATH)
+        try:
+            dst.executemany(
+                "INSERT OR IGNORE INTO events "
+                "(ts, ip, ua, path, method, status, reason) "
+                "VALUES (?, ?, ?, ?, '', ?, ?)",
+                [(float(r[1]), r[2], (r[3] or "")[:500], r[4] or "",
+                  int(r[5] or 0), r[6] or "") for r in rows])
+            dst.commit()
+        finally:
+            dst.close()
+
+        last_id = rows[-1][0]
+        _BG_MIGRATION["copied"] += len(rows)
+
+        if len(rows) < batch_size:
+            break
+        _t.sleep(batch_sleep)
+
+
+def _full_migrate_background(target: str, cutoff_ts: float,
+                              batch_size: int = 500,
+                              batch_sleep: float = 0.05) -> None:
+    """Full historical migration of events from old backend → new backend.
+
+    Runs in a thread-pool executor so the event loop is never blocked.
+    Updates _BG_MIGRATION in-place; poll via the db-migration-status endpoint.
+
+    cutoff_ts  — epoch seconds; only rows with ts < cutoff_ts are copied
+                 (the recent 60-second window was already handled by
+                 _migrate_recent_events at switch time).
+    batch_size — rows per INSERT batch (default 500).
+    batch_sleep — seconds to sleep between batches to reduce DB pressure.
+    """
+    direction = "sqlite->postgres" if target == "postgres" else "postgres->sqlite"
+    _BG_MIGRATION.update({
+        "running":     True,
+        "done":        False,
+        "error":       None,
+        "direction":   direction,
+        "total":       0,
+        "copied":      0,
+        "started_at":  _t.time(),
+        "finished_at": 0.0,
+    })
+    _logging.info("[bg-migrate] started direction=%s cutoff_ts=%.0f", direction, cutoff_ts)
+    try:
+        if target == "postgres":
+            _bg_sqlite_to_pg(cutoff_ts, batch_size, batch_sleep)
+        else:
+            _bg_pg_to_sqlite(cutoff_ts, batch_size, batch_sleep)
+    except Exception as e:
+        _BG_MIGRATION["error"] = f"{type(e).__name__}: {str(e)[:300]}"
+        _logging.warning("[bg-migrate] error: %s", _BG_MIGRATION["error"])
+    finally:
+        _BG_MIGRATION["running"]     = False
+        _BG_MIGRATION["done"]        = True
+        _BG_MIGRATION["finished_at"] = _t.time()
+        _logging.info("[bg-migrate] finished direction=%s copied=%d error=%s",
+                      direction, _BG_MIGRATION["copied"], _BG_MIGRATION["error"])
 
 
 def _apply_pg_migrations(cur) -> None:

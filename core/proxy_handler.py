@@ -48,7 +48,7 @@ from integrations import * # noqa: F401,F403
 from integrations.endpoint_policy import (  # noqa: F401
     _to_bool, _to_path_list, _to_ja4_set, _to_method_set,
     _to_host_set, _to_country_set, _to_endpoint_policies,
-    _to_custom_rules, _eval_custom_rules,
+    _to_custom_rules, _eval_custom_rules, _to_ip_net_list,
 )
 from admin import *        # noqa: F401,F403
 from vhost import vc, set_vhost, VHOSTS, get_vhost_rps_window, current_vhost_host, vhost_is_configured
@@ -77,7 +77,10 @@ from challenge.js_challenge import (  # noqa: F401
     _js_challenge_applicable, _js_challenge_required,
     _make_chal_cookie, _serve_js_challenge,
 )
-from db.postgres import _postgres_load_module, _migrate_recent_events  # noqa: F401
+from db.postgres import (  # noqa: F401
+    _postgres_load_module, _migrate_recent_events, pg_pool_reset,
+    _full_migrate_background, _BG_MIGRATION,
+)
 from integrations.endpoint_policy import _endpoint_rate_consume  # noqa: F401
 from identity import _sign_session, _verify_session, _record_chal_mint, _fp_hash  # noqa: F401
 from detection.canary import (  # noqa: F401
@@ -2375,6 +2378,11 @@ _HOT_RELOAD_KNOBS = {
     # 1.7.9 — runtime upstream switch (always overrideable regardless of env pin)
     # PROXY4-01: validator now calls _assert_upstream_public to prevent SSRF.
     "UPSTREAM": (lambda v: str(v).rstrip("/"), _upstream_safe_to_reload),
+    # 1.8.8 — Redis IP allowlist (comma/newline-separated CIDRs).
+    # Empty = no restriction. When set, the gateway refuses to use a Redis
+    # connection whose resolved host IP falls outside the list. Takes effect
+    # on the next ban read/write after hot-reload (no reconnect required).
+    "REDIS_ALLOW_LIST": (_to_ip_net_list, None),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2397,9 +2405,31 @@ _HOT_RELOAD_KNOBS = {
 _NOT_PERSIST_KNOBS: frozenset = frozenset({"BYPASS_MODE"})
 
 _ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE", "UPSTREAM"}
+
+
+def _env_knob_is_provided(k: str) -> bool:
+    """Return True if env var k should pin its knob.
+
+    For boolean knobs (parser is _to_bool): "0"/"false"/"no"/"off" returns
+    False so the DB can still re-enable the feature (DB-wins by default in
+    non-strict mode).  For all other knobs (int, float, str, list parsers):
+    any non-empty value counts as "operator provided this" and pins it.
+    """
+    val = os.environ.get(k, "")
+    if not val.strip():
+        return False
+    spec = _HOT_RELOAD_KNOBS.get(k)
+    if spec is not None and spec[0] is _to_bool:
+        try:
+            return _to_bool(val)
+        except ValueError:
+            return False
+    return True
+
+
 _ENV_PROVIDED_KNOBS = {
     k for k in _HOT_RELOAD_KNOBS
-    if k not in _ENV_PIN_EXCLUDE and os.environ.get(k, "").strip()
+    if k not in _ENV_PIN_EXCLUDE and _env_knob_is_provided(k)
 }
 if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
     _ENV_PROVIDED_KNOBS |= {k for k in _HOT_RELOAD_KNOBS
@@ -2601,7 +2631,7 @@ async def config_endpoint(request: web.Request):
                 # `from core.proxy_handler import _upstream_404_cache` still
                 # have a valid reference (= {} rebinds the name here, leaving
                 # importers on the stale object → KeyError on next access).
-                _upstream_404_cache.clear()  # noqa: global not needed — mutating, not rebinding
+                _upstream_404_cache.clear()  # mutating, not rebinding — no global needed
                 slog("config_upstream_changed", level="info", new_upstream=value)
             # 1.5.5 — persist to DB so the change survives container restart.
             # JSON-encode so ints / floats / bools / strings / lists round-trip.
@@ -3120,9 +3150,7 @@ async def protect(request: web.Request, handler):
     # for identities with zero accumulated risk. ESCALATION_THRESHOLD=0
     # reverts to legacy "run on every request" behaviour. Saves AbuseIPDB
     # quota + CrowdSec round-trip on the 99% of requests that are clean.
-    _esc_score    = _escalation_score(identity)
-    _escalate     = (ESCALATION_THRESHOLD <= 0)    or (_esc_score >= ESCALATION_THRESHOLD)
-    _second_order = (SECOND_ORDER_THRESHOLD <= 0)  or (_esc_score >= SECOND_ORDER_THRESHOLD)
+    _esc_score = _escalation_score(identity)
 
     # ── 1.5.3: external IP-intel layer (AbuseIPDB) — escalate-only ──
     # Cached in SQLite — typical cost is ~0.1ms cached, 100-300ms uncached
@@ -3934,26 +3962,38 @@ async def detector_stats_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+def _propagate_global(key: str, value) -> None:
+    """Set `key = value` on every loaded module that exposes that name.
+
+    Same pattern as the _mutex_propagate helper in the hot-reload config
+    endpoint — iterates sys.modules so all `from X import *` bindings in
+    other modules (metrics.py, postgres.py, …) see the new value immediately.
+    """
+    import sys as _sys_prop
+    globals()[key] = value
+    for _m in list(_sys_prop.modules.values()):
+        if _m is not None and hasattr(_m, key):
+            try:
+                setattr(_m, key, value)
+            except (AttributeError, TypeError):
+                pass
+
+
 async def db_switch_endpoint(request: web.Request):
-    """1.6.5 — operator-triggered swap of the active DB backend.
+    """1.6.5 / 1.8.7 — operator-triggered hot-swap of the active DB backend.
 
-    POST /__db-switch?key=…&target=sqlite|postgres
+    POST /secured/db-switch?target=sqlite|postgres
 
-    Persists `DB_BACKEND` (and on first switch to postgres, the supplied
-    `dsn` body field as `POSTGRES_DSN`) to `config_kv`, then calls
-    `os._exit(0)` so docker's `--restart=unless-stopped` policy brings the
-    process back with the new backend bound.
+    Hot-swaps DB_BACKEND in-process without container restart:
+      1. Pre-flight probe (postgres only) — roundtrip connectivity check
+      2. Propagate DB_BACKEND to every loaded module via sys.modules
+      3. If DSN changed — propagate POSTGRES_DSN + reset pool so next
+         _get_pool() creates fresh connections with the new credentials
+      4. Migrate last 60 s of events (best-effort continuity)
+      5. Persist to config_kv (survives restart)
 
-    Validates:
-      • target ∈ {"sqlite","postgres"}
-      • on target=postgres: psycopg is loadable AND POSTGRES_DSN is set
-        (current value or supplied in body), AND the gateway can reach
-        the DB end-to-end (round-trip probe before commit).
-
-    Impact warned by the dashboard:
-      • all in-flight requests are dropped (~1 s blip)
-      • SQLite events table is NOT migrated to Postgres or vice versa
-      • bans, config_kv, admin_ips persist (they live in SQLite always)
+    SQLite writer loop is always running and is unaffected — it handles
+    config/bans/state regardless of which backend is active for events.
     """
     if denied := _role_denied(request, "admin", "maintainer"):
         return denied
@@ -3964,14 +4004,17 @@ async def db_switch_endpoint(request: web.Request):
             status=400, headers={"Cache-Control": "no-store"})
 
     # On switch-to-postgres we may receive a fresh DSN in the body.
+    # full_migrate=true schedules a background historical migration after the switch.
     body_dsn = ""
+    full_migrate = False
     if request.method == "POST":
         try:
             raw = await asyncio.wait_for(request.content.read(8192),
                                           timeout=BODY_TIMEOUT)
             body = json.loads(raw.decode("utf-8") or "{}")
             if isinstance(body, dict):
-                body_dsn = str(body.get("dsn", "")).strip()
+                body_dsn     = str(body.get("dsn", "")).strip()
+                full_migrate = bool(body.get("full_migrate", True))
         except (asyncio.TimeoutError, ValueError, json.JSONDecodeError):
             return web.json_response(
                 {"ok": False, "reason": "bad json body"},
@@ -3989,80 +4032,148 @@ async def db_switch_endpoint(request: web.Request):
                 {"ok": False,
                  "reason": "no POSTGRES_DSN configured (set it before switching)"},
                 status=400, headers={"Cache-Control": "no-store"})
-        # Probe the DB end-to-end before committing — we don't want to
-        # re-exec the container into a state that won't connect.
+        # Probe end-to-end with a temporary globals override — does NOT
+        # commit anything; restored in the finally block on failure.
+        # Must also patch db.postgres module directly: pg_test_roundtrip()
+        # reads its own module-level POSTGRES_DSN, not this module's.
+        import sys as _sys_probe
+        _pg_mod = _sys_probe.modules.get("db.postgres")
         try:
             saved_dsn = globals().get("POSTGRES_DSN", "")
             globals()["POSTGRES_DSN"] = dsn
             globals()["DB_BACKEND"]   = "postgres"
+            if _pg_mod is not None:
+                _pg_mod_saved_dsn = getattr(_pg_mod, "POSTGRES_DSN", "")
+                _pg_mod.POSTGRES_DSN = dsn
             probe = pg_test_roundtrip()
         finally:
             globals()["POSTGRES_DSN"] = saved_dsn
             globals()["DB_BACKEND"]   = DB_BACKEND  # noqa
+            if _pg_mod is not None:
+                _pg_mod.POSTGRES_DSN = _pg_mod_saved_dsn
         if not probe.get("ok"):
             return web.json_response(
                 {"ok": False,
                  "reason": f"DB connectivity probe failed: {probe.get('reason')}"},
                 status=400, headers={"Cache-Control": "no-store"})
 
-    # 1.6.5 — copy the last 60 s of events from the source backend to the
-    # target backend so the dashboard timeline doesn't lose its tail
-    # during the cut-over. config_kv / secrets_kv / admin_ips / bans /
-    # clients / timeline ALL live in SQLite regardless of DB_BACKEND so
-    # they survive automatically — only the events split between the two.
-    # Apply the DSN temporarily so _migrate_recent_events sees the same
-    # connection state the post-restart gateway will use.
-    saved_dsn = globals().get("POSTGRES_DSN", "")
-    if target == "postgres" and body_dsn:
-        globals()["POSTGRES_DSN"] = body_dsn
-    try:
-        loop = asyncio.get_running_loop()
-        migration = await loop.run_in_executor(
-            None, _migrate_recent_events, target, 60)
-    finally:
-        globals()["POSTGRES_DSN"] = saved_dsn
-    slog("db_switch_migration", level="warn", **migration,
-         target=target)
+    # ── Hot-swap: propagate DB_BACKEND + POSTGRES_DSN to all modules ──────
+    # Order matters: DSN first (so _get_pool() in postgres.py sees the new
+    # value when the first event write triggers lazy pool creation), then
+    # DB_BACKEND so event routing in metrics.py flips atomically after
+    # the pool is ready.
+    old_dsn = globals().get("POSTGRES_DSN", "")
+    effective_dsn = body_dsn or old_dsn
+    dsn_changed = bool(body_dsn and body_dsn != old_dsn)
 
-    # Persist the new backend (and DSN if supplied) to config_kv. Uses the
-    # async writer queue so the change is durable BEFORE we exit. The
-    # config_kv table itself stays in SQLite across both backends, so
-    # this also serves as the cross-backend operational state vault.
+    if dsn_changed:
+        _propagate_global("POSTGRES_DSN", effective_dsn)
+        # Discard stale pool — next _get_pool() creates fresh connections
+        # with the new DSN. In-flight connections from the old pool complete
+        # normally; the old _PgPool is GC'd once all references drop.
+        pg_pool_reset()
+
+    _propagate_global("DB_BACKEND", target)
+
+    # ── Migrate last 60 s of events for dashboard timeline continuity ─────
+    # Capture switch_ts before the 60-s migration so the bg migration can
+    # copy everything strictly older (ts < switch_ts - 60) without overlap.
+    switch_ts = _t.time()
+    loop = asyncio.get_running_loop()
+    migration = await loop.run_in_executor(
+        None, _migrate_recent_events, target, 60)
+    slog("db_switch_migration", level="warn", **migration, target=target)
+
+    # ── Persist to config_kv (survives container restart) ─────────────────
     if db_queue is not None:
         n = _t.time()
         try:
             db_queue.put_nowait(("set_config",
                                   ("DB_BACKEND", json.dumps(target), n)))
-            if target == "postgres" and body_dsn:
+            if dsn_changed:
                 db_queue.put_nowait(("set_config",
-                                      ("POSTGRES_DSN", json.dumps(body_dsn), n)))
+                                      ("POSTGRES_DSN", json.dumps(effective_dsn), n)))
         except asyncio.QueueFull:
             return web.json_response(
                 {"ok": False, "reason": "config_kv queue full"},
                 status=503, headers={"Cache-Control": "no-store"})
-        # Give the queue a tick to flush.
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
     slog("db_switch", level="warn", target=target,
-         dsn_set=bool(body_dsn),
-         rid=request.get("_rid", ""))
+         dsn_changed=dsn_changed, rid=request.get("_rid", ""))
 
-    # Reply BEFORE exiting so the dashboard's POST gets a clean 200.
-    response = web.json_response(
+    # ── Optional: background full-history migration ────────────────────────
+    # Copies all records older than the 60-s window in a thread-pool
+    # executor — never blocks the event loop. Poll /__db-migration-status.
+    bg_scheduled = False
+    if full_migrate and not _BG_MIGRATION.get("running"):
+        cutoff_ts = switch_ts - 60
+        loop.run_in_executor(
+            None, _full_migrate_background, target, cutoff_ts)
+        bg_scheduled = True
+        slog("db_switch_bg_migrate_scheduled", level="info",
+             target=target, cutoff_ts=cutoff_ts)
+
+    return web.json_response(
         {"ok": True, "target": target,
          "events_copied": migration.get("copied", 0),
          "events_copy_direction": migration.get("direction", ""),
          "events_copy_ok": migration.get("ok", False),
          "events_copy_reason": migration.get("reason", ""),
-         "message": "DB_BACKEND persisted; container will restart in 1 s"},
+         "full_migrate_scheduled": bg_scheduled,
+         "message": f"switched to {target} — active immediately, no restart needed"},
         headers={"Cache-Control": "no-store"})
 
-    async def _delayed_exit():
-        await asyncio.sleep(1.0)
-        slog("db_switch_restart", level="warn", target=target)
-        os._exit(0)
-    asyncio.create_task(_delayed_exit())
-    return response
+
+async def db_migration_status_endpoint(request: web.Request):
+    """1.8.7 — Poll the background full-history DB migration started by
+    db_switch_endpoint when full_migrate=true.
+
+    GET /secured/db-migration-status
+
+    Returns a snapshot of _BG_MIGRATION with derived fields:
+      pct          — completion percentage (0-100)
+      elapsed_secs — seconds since migration started
+      eta_secs     — estimated seconds to completion (null when unknown)
+      rate_per_sec — rows copied per second (running average)
+    """
+    if denied := _role_denied(request, "admin", "maintainer", "viewer"):
+        return denied
+
+    status = dict(_BG_MIGRATION)  # shallow copy — readers never block writers
+    now = _t.time()
+
+    if status["running"] and status["started_at"]:
+        elapsed = now - status["started_at"]
+        status["elapsed_secs"] = round(elapsed, 1)
+        if status["total"] > 0:
+            status["pct"] = round(status["copied"] / status["total"] * 100, 1)
+            rate = status["copied"] / elapsed if elapsed > 0 else 0
+            status["rate_per_sec"] = round(rate, 1)
+            remaining = status["total"] - status["copied"]
+            status["eta_secs"] = round(remaining / rate) if rate > 0 else None
+        else:
+            status["pct"] = 0.0
+            status["rate_per_sec"] = 0.0
+            status["eta_secs"] = None
+    elif status["done"]:
+        elapsed = status["finished_at"] - status["started_at"]
+        status["elapsed_secs"] = round(elapsed, 1)
+        status["pct"] = 100.0 if not status["error"] else round(
+            status["copied"] / status["total"] * 100, 1
+        ) if status["total"] > 0 else 0.0
+        status["rate_per_sec"] = round(
+            status["copied"] / elapsed, 1
+        ) if elapsed > 0 else 0.0
+        status["eta_secs"] = 0
+    else:
+        # Never started
+        status["elapsed_secs"] = 0.0
+        status["pct"] = 0.0
+        status["rate_per_sec"] = 0.0
+        status["eta_secs"] = None
+
+    return web.json_response(status, headers={"Cache-Control": "no-store"})
 
 
 async def db_test_endpoint(request: web.Request):
@@ -4730,6 +4841,8 @@ async def metrics_endpoint(request: web.Request):
             "redis": {
                 "url":       REDIS_URL or None,
                 "connected": _redis is not None,
+                "allowlist":  REDIS_ALLOW_LIST,
+                "hmac_signing": bool(REDIS_URL),
             },
             # 1.5.5 — SQLite persistence layer status
             "db": {

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.7 · Service Metrics</title>
+<title>AppSecGW_1.8.8 · Service Metrics</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
@@ -108,6 +108,12 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
             padding:1px 6px;border-radius:3px;display:inline-block;
             max-width:160px;overflow:hidden;text-overflow:ellipsis;
             white-space:nowrap;vertical-align:middle;line-height:1.4}
+.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid #1f2730;margin-bottom:8px}
+.gw-meta .chip{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
+.gw-row.row-ok{opacity:.6}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid #1f2730;margin-top:6px}
 </style></head>
 <body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
@@ -117,7 +123,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.7</div>
+    <div id="sidebar-brand-ver">1.8.8</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -970,9 +976,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:#fff">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
+    <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
+      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
+    </div>
     <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
   </div>
 </div>
@@ -1007,19 +1016,68 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.textContent = '● ERR';
     }
   }
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  const KEY_HINTS = {
+    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
+    memory:'Consider restarting the container or increasing container memory limits',
+    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
+    integrations:'Check API keys in Settings → Integration Credentials',
+    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
+    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
+  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
+  function fmtUptime(secs){
+    if(!secs) return '?';
+    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
+    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
+  }
   pill.onclick = () => {
     if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    modalScore.textContent = lastData.score|0;
-    modalScore.style.color = colorFor(lastData.score).fg;
-    const rows = (lastData.reasons||[]).map(r => `
-      <div class="gw-row">
-        <span class="key">${escapeHtml(r.key)}</span>
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    const lbl = document.getElementById('gw-score-label');
+    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
+    const bar = document.getElementById('gw-score-bar');
+    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
+    const ver = (lastData.version||'').replace('AppSecGW_','v');
+    const up = fmtUptime(lastData.uptime_secs||0);
+    const db = lastData.db_backend||'?';
+    const rawUp = lastData.upstream||'';
+    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
+    const metaHtml = `<div class="gw-meta">
+      <span class="chip">${escapeHtml(ver)}</span>
+      <span class="chip">${escapeHtml(db)}</span>
+      <span class="chip">↑ ${escapeHtml(up)}</span>
+      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
+    </div>`;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
+      return sd!==0?sd:(b.weight||0)-(a.weight||0);
+    });
+    const rowsHtml = sorted.map(r=>{
+      const label = KEY_LABELS[r.key]||r.key;
+      const isOk = r.status==='ok';
+      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
+      return `<div class="gw-row${isOk?' row-ok':''}">
+        <span class="key">${escapeHtml(label)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
-        <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
+        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`).join('');
-    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
-      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+      </div>`;
+    }).join('');
+    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
+    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
+    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
+      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
+      <span>checked ${escapeHtml(ageStr)}</span>
     </div>`);
     modal.classList.add('show');
   };

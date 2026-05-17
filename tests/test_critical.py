@@ -272,6 +272,134 @@ def test_env_precedence_marker():
         assert proxy._ENV_PROVIDED_KNOBS == set()
 
 
+def test_env_provided_knobs_falsy_values_not_pinned():
+    """Falsy env values ("0", "false", "no", "off") must NOT add a bool knob
+    to _ENV_PROVIDED_KNOBS.  Non-bool knobs (int/float/str/list parsers) just
+    need a non-empty env value — their "falsy" concept doesn't apply.
+    Regression test for the bug where "0" (truthy as a Python string) was
+    treated as an env pin, causing disabled-by-test env vars to prevent DB
+    values from overriding them in non-strict mode."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    for k in _cph._ENV_PROVIDED_KNOBS:
+        raw = os.environ.get(k, "")
+        spec = _cph._HOT_RELOAD_KNOBS.get(k)
+        if spec is not None and spec[0] is _to_bool:
+            # Bool knob: must be affirmatively truthy
+            assert _to_bool(raw), (
+                f"_ENV_PROVIDED_KNOBS contains bool knob {k!r} with env value "
+                f"{raw!r} which is falsy — only truthy env values should pin it"
+            )
+        else:
+            # Non-bool knob: any non-empty value is fine
+            assert raw.strip(), (
+                f"_ENV_PROVIDED_KNOBS contains non-bool knob {k!r} with empty "
+                "env value — should not be pinned"
+            )
+
+
+def test_env_knob_is_provided_bool_falsy_returns_false():
+    """_env_knob_is_provided must return False for bool knobs set to "0" / "false".
+    Regression: bare os.environ.get() truthiness treated "0" as truthy, pinning
+    disabled-by-env knobs and preventing DB from re-enabling them."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    # Pick any bool knob from _HOT_RELOAD_KNOBS
+    bool_knobs = [k for k, spec in _cph._HOT_RELOAD_KNOBS.items()
+                  if spec[0] is _to_bool]
+    assert bool_knobs, "Expected at least one bool knob in _HOT_RELOAD_KNOBS"
+    k = bool_knobs[0]
+    for falsy_val in ("0", "false", "no", "off", "False", "NO"):
+        prev = os.environ.pop(k, None)
+        try:
+            os.environ[k] = falsy_val
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True for {falsy_val!r} "
+                "— falsy bool env values must not pin the knob"
+            )
+        finally:
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
+
+
+def test_env_knob_is_provided_bool_truthy_returns_true():
+    """_env_knob_is_provided must return True for bool knobs set to "1" / "true"."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    bool_knobs = [k for k, spec in _cph._HOT_RELOAD_KNOBS.items()
+                  if spec[0] is _to_bool]
+    k = bool_knobs[0]
+    for truthy_val in ("1", "true", "yes", "on", "True", "YES"):
+        prev = os.environ.pop(k, None)
+        try:
+            os.environ[k] = truthy_val
+            assert _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned False for {truthy_val!r} "
+                "— truthy bool env values must pin the knob"
+            )
+        finally:
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
+
+
+def test_env_knob_is_provided_non_bool_string_returns_true():
+    """_env_knob_is_provided must not call _to_bool on non-bool knobs.
+    Regression: calling _to_bool("postgresql://...") raised ValueError and
+    crashed the module at import time when POSTGRES_DSN was set in env."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    # Use POSTGRES_DSN — a str-parser knob that can hold a connection URL
+    k = "POSTGRES_DSN"
+    assert k in _cph._HOT_RELOAD_KNOBS, f"{k} must be in _HOT_RELOAD_KNOBS"
+    spec = _cph._HOT_RELOAD_KNOBS[k]
+    assert spec[0] is not _to_bool, f"{k} must use a non-bool parser"
+    prev = os.environ.pop(k, None)
+    try:
+        conn_str = "postgresql://user:pass@localhost:5432/testdb"
+        os.environ[k] = conn_str
+        # Must not raise — before the fix this raised ValueError
+        result = _cph._env_knob_is_provided(k)
+        assert result is True, (
+            f"_env_knob_is_provided({k!r}) with connection string returned False"
+        )
+    finally:
+        if prev is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = prev
+
+
+def test_env_knob_is_provided_empty_returns_false():
+    """Empty env value must never pin any knob regardless of parser type."""
+    import core.proxy_handler as _cph
+    for k in list(_cph._HOT_RELOAD_KNOBS)[:5]:
+        prev = os.environ.pop(k, None)
+        try:
+            # No env var set
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True with no env var"
+            )
+            # Explicit empty string
+            os.environ[k] = ""
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True for empty string"
+            )
+            # Whitespace-only
+            os.environ[k] = "   "
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True for whitespace-only"
+            )
+        finally:
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
+
+
 # ── 1.5.5 — config_kv persistence ─────────────────────────────────────────
 def test_config_kv_table_exists():
     """db_init() creates the config_kv table for hot-reload knob persistence."""
@@ -1092,6 +1220,7 @@ def test_165_every_knob_persists_round_trip():
         "UPSTREAM": "https://test-upstream.example.com",
         "STRICT_VHOST": True,
         "UPSTREAM_REWRITE_BASE": "http://host.docker.internal:8080",
+        "REDIS_ALLOW_LIST": ["172.18.0.0/16", "10.0.0.1/32"],
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)
@@ -1223,8 +1352,9 @@ def test_165_db_switch_endpoint_registered():
     assert "_postgres_load_module" in src
     # Must persist via config_kv
     assert "set_config" in src
-    # Must self-exit so docker restarts
-    assert "os._exit(0)" in src
+    # 1.8.7 — hot-swap: no restart; must propagate in-process via sys.modules
+    assert "_propagate_global" in src
+    assert "os._exit" not in src
 
 
 def test_165_pg_size_sampled_in_svc_metrics():

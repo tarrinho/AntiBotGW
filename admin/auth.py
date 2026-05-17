@@ -106,7 +106,7 @@ if _admin_ips_raw:
         except ValueError as _e:
             print(f"FATAL: invalid ADMIN_ALLOWED_IPS entry {_entry!r} — {_e}",
                   flush=True)
-            raise SystemExit(2)
+            raise SystemExit(2) from None
 
 
 def _internal_authed(request) -> bool:

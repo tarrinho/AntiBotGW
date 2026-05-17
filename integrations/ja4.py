@@ -50,8 +50,10 @@ async def _observe_ja4_ban(ja4: str) -> None:
             await asyncio.wait_for(_redis.expire(key, JA4_AUTODENY_WINDOW_S),
                                     timeout=REDIS_TIMEOUT)
             if int(n) >= JA4_AUTODENY_THRESHOLD:
+                # Use a sorted set (score = epoch) so entries age out automatically.
+                # The refresh loop prunes entries older than JA4_AUTODENY_WINDOW_S.
                 await asyncio.wait_for(
-                    _redis.sadd(f"{REDIS_NS}:ja4-denylist", ja4),
+                    _redis.zadd(f"{REDIS_NS}:ja4-denylist", {ja4: _t.time()}),
                     timeout=REDIS_TIMEOUT)
                 if ja4 not in JA4_DENY_LIST:
                     JA4_DENY_LIST.add(ja4)
@@ -82,8 +84,13 @@ async def _refresh_ja4_denylist_loop():
             await asyncio.sleep(30)
             if _redis is None:
                 continue
+            # Read live entries (score >= now - window) and prune expired ones.
+            min_score = _t.time() - JA4_AUTODENY_WINDOW_S
+            await asyncio.wait_for(
+                _redis.zremrangebyscore(f"{REDIS_NS}:ja4-denylist", 0, min_score),
+                timeout=REDIS_TIMEOUT)
             shared = await asyncio.wait_for(
-                _redis.smembers(f"{REDIS_NS}:ja4-denylist"),
+                _redis.zrangebyscore(f"{REDIS_NS}:ja4-denylist", min_score, "+inf"),
                 timeout=REDIS_TIMEOUT)
             new = {j for j in shared if j and j not in JA4_DENY_LIST}
             if new:
