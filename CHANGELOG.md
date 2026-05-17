@@ -6,6 +6,41 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.8] — 2026-05-17
+
+### Added
+
+- **Redis IP/CIDR connection allowlist** (`config.py`): `REDIS_ALLOW_LIST` env-var accepts a comma-separated list of IPs and CIDR ranges. When non-empty, the gateway rejects Redis connections from addresses not in the list. Each entry is normalised via `ipaddress.ip_network(strict=False)` at startup; invalid entries are logged as WARN and skipped. Prevents unauthorised Redis access from non-gateway hosts in multi-tenant environments.
+- **`REDIS_REQUIRE_TLS` flag** (`config.py`, `integrations/redis.py`): New boolean env-var (default `True`) — when set, the gateway refuses to connect to Redis unless `REDIS_URL` uses the `rediss://` scheme. On plaintext `redis://` with TLS required, startup logs `redis_blocked_no_tls` and exits with code 2. Set `REDIS_REQUIRE_TLS=false` to allow plaintext Redis in trusted internal networks. Enforced in `_shared_init` before the allowlist check.
+- **Ed25519 gateway mesh signing** (`admin/mesh.py`): `_gw_generate_keypair()` generates a random Curve25519 keypair (32-byte scalars encoded as 43-char base64url-no-padding). `_gw_derive_pubkey(priv)` derives the matching public key. `_gw_fingerprint(pub)` returns the first 12 hex chars of SHA256(pub). Mesh sync loop now signs outbound offer dicts with `_gw_sign_offers(priv, offers)` (Ed25519 over canonical sorted-key JSON; deterministic 64-byte / 86-char signature appended as `_sig`). Inbound offers are verified with `_gw_verify_offers(pub, sig, offers)` before acceptance; missing/invalid signatures cause `mesh_sync_no_sig` / `mesh_sync_sig_invalid` rejection events.
+- **DB backend merge QA formalised** (`dashboards/settings.html`): v1.8.8 ships the full test suite for the DB backend section merged from Controls→Settings in sub-session 4: active-state badges, migration status row (CSS progress bar, ETA, %-complete), rich `_openDbModal()` confirmation dialog, DSN override input, connection test gate, `fullMigrate=true` default, `_dbSvcCache` live stats, `_dbUpdateActiveBadges()` badge driver, parallel `loadDb()` fetch sourcing services from `/secured/metrics`.
+- **Redis security QA formalised** (`core/proxy_handler.py`, `dashboards/settings.html`): Full test coverage for Redis allowlist parser, HMAC-signed ban keys, JA4 denylist `ZADD`, allowlist enforcement middleware, and settings card UI (allowlist display, TLS scheme check, Apply POST).
+
+### Tests
+
+- **`tests/test_v188_db_settings_merge.py`** — 48 QA tests: `TestDbActiveBadges` (5), `TestDbMigStatusRow` (2), `TestDbJsFunctions` (7), `TestDbLoadDbEnhanced` (5), `TestDbHoverTooltipLiveStats` (6), `TestDbModal` (12), `TestDbUpdateActiveBadges` (2), `TestDbMigRenderRow` (4), `TestDbPollHelpers` (4), `TestDbSettingsNoBrowserConfirm` (1).
+- **`tests/test_v188_redis_security.py`** — 61 QA tests: `TestIpNetListParser` (10), `TestRedisAllowListKnob` (7), `TestRedisBanHmac` (9), `TestJa4DenylistZadd` (7), `TestRedisAllowlistEnforce` (9), `TestControlsRedisGuard` (2), `TestSettingsRedisCard` (17).
+- **`tests/test_v188_ed25519_mesh.py`** — 55 QA tests: `TestRedisRequireTls` (10), `TestEd25519KeypairGeneration` (10), `TestCanonicalOfferBytes` (8), `TestGwSignOffers` (7), `TestGwVerifyOffers` (10), `TestMeshSyncLoopSource` (10). Covers `REDIS_REQUIRE_TLS` env-var, Ed25519 keypair generation, canonical offer serialisation, signing, verification, and mesh sync loop source integrity.
+- **`tests/test_v188_settings_subnav.py`** — 71 QA tests: `TestSettingsSubnavHTML` (23), `TestSettingsSubnavCSS` (5), `TestSettingsSubnavJS` (25), `TestSettingsSubnavRegression` (12), standalone test_d01–d06 (6). Verifies the split-pane section nav added to `settings.html` — HTML structure, CSS layout, JS section routing, card-to-section mappings, and regression checks for all existing settings cards.
+- **`tests/test_performance.py`** — 9 performance regression gates: SHA256 fingerprint/header-order throughput (≥20 000 calls/s), `take_socket_ip_token` and `take_token` sequential ops/s (≥2 000/s), concurrent lock-contention check (20 workers × 50 ops < 5 s), `/live` endpoint latency (50 req · p95 < 500 ms), concurrent HTTP pass-through (20 parallel), full pipeline with 30 distinct IPs (< 20 s), `ip_state` O(1) insert check.
+- **Version sweep**: All HTML dashboards, `proxy.py`, `docker-compose.yml`, `tests/test_pure.py`, `tests/test_geo_dashboard.py`, `tests/test_v180_v181_gaps.py`, `tests/test_settings_config_functional.py`, `tests/test_endpoints_dynamic.py`, `tests/test_timescaledb_soak.py`, `tests/test_pentest_probes.py` bumped from `AppSecGW_1.8.7` → `AppSecGW_1.8.8`.
+
+### Fixed
+
+- **`cryptography` CVE-2026-26007** (`requirements.txt`, `Dockerfile`): `cryptography` dependency bumped from `>=42,<46` to `>=46.0.5` to resolve HIGH-severity subgroup-validation flaw in SECT elliptic curves. `Dockerfile` pin updated to match.
+- **`docker-compose.yml` — `REDIS_REQUIRE_TLS=false` dev override added**: `REDIS_REQUIRE_TLS` defaults to `True` in production. The bundled compose sidecar uses plain `redis://`; added `REDIS_REQUIRE_TLS: ${REDIS_REQUIRE_TLS:-false}` so local dev deployments do not exit on startup with plaintext Redis.
+
+### Validation
+
+- Full test suite: 4038 collected / individual suites all pass (unit 959 · functional 38 · integration 23 · regression+dynamic 208 · dashboard security 256 · pentest 38 · sanity 318 incl. ed25519 55 · settings-subnav 71 · performance 9). GW-Tests-Full: 67 files.
+- Bandit: 0 High / 0 Critical; 9 Medium pre-existing.
+- Trivy: 0 CRITICAL / 0 HIGH (arm64 · amd64); armv7 not built (Chainguard base dropped linux/arm/v7 from this digest).
+- Semgrep: 0 findings (1 FP annotated: insecure-file-permissions on `os.chmod(d, 0o700)` in `config.py`).
+- Step 17j (Playwright): desktop+tablet PASS (8 pages × 2 viewports = 16 checks); mobile horizontal scroll pre-existing (7/8 pages, data tables/charts).
+- Step 20 Compliance: 9/9 checks PASS (distroless, /data secrets, 30d TTL, REDIS_ALLOW_LIST, REDIS_REQUIRE_TLS, port 8443, no sshd, native arm64 image).
+
+---
+
 ## [1.8.7] — 2026-05-16
 
 ### Security
@@ -17,8 +52,42 @@ Author: Pedro Tarrinho
 - **PROXY4-02 — `client_host` validated against `ALLOWED_HOSTS`** (`core/proxy_handler.py`): Location rewrite in `proxy()` previously used `request.host or up_parsed.netloc` unconditionally; an attacker could craft a `Host: evil.com` header to make the gateway issue a `Location: https://evil.com/…` redirect. Now validates: `_req_host = (request.host or "").split(":")[0].lower()`; if `ALLOWED_HOSTS` is non-empty and `_req_host not in ALLOWED_HOSTS`, falls back to `up_parsed.netloc`. With `ALLOWED_HOSTS = {}` (empty, default), behaviour is unchanged.
 - **PROXY4-03 — `_PROPAGATE_NEVER` denylist in `_ProxyModule.__setattr__`** (`proxy.py`): `_ProxyModule.__setattr__` propagates test patches across all submodules. Without a denylist, writing `SESSION_KEY`, `ADMIN_KEY`, or builtin names on the proxy module would overwrite them in every loaded module. `_PROPAGATE_NEVER = frozenset({"open","exec","eval","__builtins__","__import__","SESSION_KEY","INTERNAL_KEY","ADMIN_KEY"})` is checked before propagation; `builtins` module is also excluded from the target set via `getattr(_m, "__name__", None) != "builtins"`.
 
+### Added
+
+- **DB backend section merged from Controls → Settings** (`dashboards/settings.html`): Full DB backend management panel migrated from `controls.html` into `settings.html` `#card-db`. Active-state badges (`#db-badge-sqlite`, `#db-badge-pg`) show `● active` on the current backend and are hidden by default. Migration status row (`#db-mig-status-row`) displays a colour-coded CSS progress bar (blue=running, green=done, red=error) with ETA and percentage, polled every 3 s while a migration is running. Rich `_openDbModal()` confirmation dialog replaces browser `confirm()`: shows data-count impact lines, DSN override input for postgres target, connection test button (`#db-test-btn`) — the Apply button is disabled until the test passes when switching to postgres. `fullMigrate=true` always sent (no opt-out). `_dbSvcCache` stores `services.db` / `services.db_postgres` for live stats in the click popover. `_dbUpdateActiveBadges()` drives badge visibility.
+- **DB backend click popover** (`dashboards/settings.html`): Clicking either DB side panel opens a persistent `#db-hover-tip` popover with live stats from `_dbSvcCache` (SQLite: size, WAL, path, rows; Postgres: version, round-trip ms, events rows, availability). Click-outside closes it. `_dbSideClick(type, anchor)` toggles: second click on the same side closes; first click on opposite side switches target and opens stats for new side.
+- **`loadDb()` parallel fetch** (`dashboards/settings.html`): Fetches `/secured/config` and `/secured/metrics` in parallel via `Promise.all`. Services data (`svc.db`, `svc.db_postgres`) correctly sourced from `/secured/metrics` — not `/secured/config` which has no services field. Populates `_dbSvcCache` on every load.
+- **`loadRedis()` parallel fetch** (`dashboards/settings.html`): Same parallel fetch pattern — Redis connection status, URL, and `REDIS_ALLOW_LIST` sourced from `/secured/metrics` and `/secured/config` respectively.
+- **Redis allowlist UI** (`dashboards/settings.html`): `#card-redis` now shows allowlist status element; `loadRedis()` reads `REDIS_ALLOW_LIST` from state and displays it; Apply button POSTs `REDIS_ALLOW_LIST` to `/secured/config`; TLS security flag checks for `rediss://` scheme.
+- **`full_migrate` default changed to `true`** (`core/proxy_handler.py`): `db_switch_endpoint` now defaults `full_migrate = bool(body.get("full_migrate", True))` (was `False`). Ensures all data is migrated on every backend switch unless caller explicitly opts out.
+
+### Fixed
+
+- **`loadDb()` / `loadRedis()` always showed wrong service status** (`dashboards/settings.html`): Both functions read `d.services` from the `/secured/config` response, which does not include a `services` key. Fixed: parallel fetch `/secured/metrics` for services data.
+- **DB toggle knob did nothing (IIFE scope)** (`dashboards/settings.html`): `dbSetTarget`, `dbToggle` defined inside `(function(){})()` IIFE — unreachable from inline `onclick` HTML attributes. Fixed: `window.dbSetTarget = dbSetTarget`, `window.dbToggle = dbToggle`.
+- **Test connection always returned "✗ unreachable"** (`dashboards/settings.html`): `/secured/db-test` returns `{postgres:{ok:true,...}}` not `{ok:true}`. Modal checked `j.ok` (always `undefined`) → OK button never enabled. Fixed: `const p = j.postgres || j.probe || {}; if (j.ok || p.ok)`.
+- **Storage card "Error: BASE is not defined"** (`dashboards/settings.html`): `loadStorage()` used `BASE + '/disk-stats'` and `BASE + '/db-vacuum'` — `BASE` from `controls.html` context, not defined in `settings.html`. Fixed: hardcoded full paths `/antibot-appsec-gateway/secured/disk-stats` and `/antibot-appsec-gateway/secured/db-vacuum`.
+- **Ruff B904 in `admin/auth.py`** (`admin/auth.py`): `raise SystemExit(2)` inside `except ValueError` now `raise SystemExit(2) from None`.
+- **Ruff B904 in `db/postgres.py`** (`db/postgres.py`): `raise TimeoutError(...)` inside `except _queue.Empty` now `raise TimeoutError(...) from None`.
+- **Ruff S314 in `admin/settings.py`** (`admin/settings.py`): `_ET.fromstring(xml_bytes)` annotated with `# noqa: S314` — confirmed false positive (admin-gated, CPython 3.7+ does not resolve external entities, existing `# nosec B314` already documented the rationale).
+
 ### Tests
 - **`tests/test_v187_security.py`** — 37 new QA tests covering all 6 security fixes: `TestDET402MazeDestBinding` (8), `TestDET403InteractionIdentityBinding` (5), `TestDET404IdenticalTimestampBypass` (4), `TestPROXY401UpstreamValidator` (7), `TestPROXY402ClientHostValidation` (4), `TestPROXY403PropagateNeverDenylist` (6), plus `test_proxy_module_class_is_proxy_module` (1).
+- **Mutation testing — step 3b** (`tests/test_pure.py`, `tests/conftest.py`, `pyproject.toml`): 158 targeted tests added across 2 phases, expanding pure-logic coverage from 78 to 504 mutants. Final score: **410/504 = 81.3%** (threshold: ≥ 80%). Phase 1 added 111 tests covering 12 previously-uncovered functions. Phase 2 added 47 targeted survivor-kill tests. 94 remaining survivors triaged. Suite: 707 tests, 0 failures.
+- **Mutation testing this cycle**: 697/783 killed = **89.0%** (≥ 80% gate). 20 timeouts noted; 86 survivors triaged (predominantly eviction-logic boundary mutations and maxsplit rsplit variants).
+- **`tests/test_v187_db_endpoints_dynamic.py`** — 20 new QA tests: `TestDbMigrationStatusEndpoint` (7), `TestDbSwitchEndpoint` (7), `TestDbRouteRegistration` (2), `TestBgMigrationShape` (1), `TestFullMigrateBackground` (1), `TestBgMigrationCutoff` (2). Covers `/db-migration-status` auth contract, progress-field shape, `/db-switch` validation, background migration cutoff logic.
+- **`tests/test_v188_db_settings_merge.py`** — 48 new QA tests: `TestDbActiveBadges` (5), `TestDbMigStatusRow` (2), `TestDbJsFunctions` (7), `TestDbLoadDbEnhanced` (5), `TestDbHoverTooltipLiveStats` (6), `TestDbModal` (12), `TestDbUpdateActiveBadges` (2), `TestDbMigRenderRow` (4), `TestDbPollHelpers` (4), `TestDbSettingsNoBrowserConfirm` (1). Covers all DB backend section merge features.
+- **`tests/test_v188_redis_security.py`** — 61 new QA tests: `TestIpNetListParser` (10), `TestRedisAllowListKnob` (7), `TestRedisBanHmac` (9), `TestJa4DenylistZadd` (7), `TestRedisAllowlistEnforce` (9), `TestControlsRedisGuard` (2), `TestSettingsRedisCard` (17). Covers Redis allowlist parsing, HMAC ban-signing, and settings card UI.
+
+- **Test fixes (2026-05-17)** — 7 tests updated to match new settings.html DB section UI (DB modal merged from controls.html in sub-session 4): `test_v185_settings_migration.py::TestSettingsDbCard` (5: window 400→600 for `loadDb()`, hover→click popover check, `db-pg-fields`→`db-switch-dsn`/`db-test-btn`/`db-switch-ok`, `pg-save-btn`→`db-switch` endpoint, `pg-test-btn`→`db-test-btn`/`/secured/db-test`); `test_v187_db_switch_hotswap.py::test_sw21_button_label_no_restart` (1: checks settings.html for "Yes, switch" since DB modal moved from controls); `test_v187_new_features.py::test_D08_db_set_target_shows_hides_pg_fields` (1: checks toggle styling + Apply gate, not `db-pg-fields`).
+- **Full suite (2026-05-17 post-fixes)**: 3958 collected, 0 failures (1 flaky: `test_accumulated_risk_triggers_ban` passes in isolation, intermittent under resource pressure), 1 skip.
+
+### Validation
+- Bandit: 0 High / 0 Critical.
+- Trivy (arm64): 0 CRITICAL / 0 HIGH / 0 MEDIUM.
+- Semgrep: 0 findings.
+- Ruff: S314 and B904 fixed; remaining E701/C901/S104/F811/E702/S608 classified as pre-existing.
+- Mypy: 232 pre-existing type annotation errors (none in v1.8.7-modified files).
 
 ---
 
@@ -100,9 +169,28 @@ Author: Pedro Tarrinho
 
 ### Tests (security sub-session 4)
 - **`test_oidc.py` assertion updated** (`test_d07`): `assert "access_denied" in loc` → `assert "err_idp_error" in loc` (opaque code, AUTH4-13).
-- **`test_oidc.py` `test_d28` rewritten**: Tests both valid opaque code resolution (`err_token_exchange` → mapped message) and unknown-code fallback (`err_generic` message, raw string NOT reflected).
+- **`test_oidc.py` `test_d28` rewritten**: Tests both valid opaque code selection (`err_token_exchange` → mapped message) and unknown-code fallback (`err_generic` message, raw string NOT reflected).
 - **`test_v185_security.py` webhook test**: Added `patch("socket.getaddrinfo")` mock with public IP for `test_webhook_queue_enqueues_event` to account for INT4-05 DNS check (reverted — `OSError` on DNS failure now treated as allow, test passes without mock).
 - **Full suite**: all tests green.
+
+### Added (activation-order controls + DB hot-swap — sub-session 5)
+
+- **Activation-order UI rewrite** (`dashboards/controls.html`): `SIGNAL_ORDER_DEFAULTS` JS map corrected to match `config.py` — 6 signals were misclassified. Panel header changed to "Activation order — risk-score gate per detector". Order-definition copy now names the gate thresholds (`SECOND_ORDER_THRESHOLD`, `ESCALATION_THRESHOLD`). Badge tooltips state the concrete gate condition per order. "Set to 0 to always run" note added for orders 2 and 3.
+- **DB backend hot-swap** (`core/proxy_handler.py`, `db/postgres.py`): `db_switch_endpoint` no longer calls `os._exit(0)` / `_delayed_exit()`. Switching backends is now fully in-process via `_propagate_global(key, value)` which iterates `sys.modules` and `setattr`s the new value on every loaded module. `pg_pool_reset()` discards the stale connection pool so the next `_get_pool()` creates fresh connections with the new DSN. Container restart is no longer needed. Controls modal button changed to "Yes, switch". `setTimeout(location.reload, 5000)` removed. `restart:true` removed from DB knob definition.
+
+### Fixed (sub-session 5)
+
+- **`decimal.Decimal` crash in Postgres→SQLite migration** (`db/postgres.py:322`): `EXTRACT(EPOCH FROM ts)` returns `decimal.Decimal` in psycopg2; SQLite's `executemany` cannot bind it. Fixed by casting `r[0]` to `float()` before insertion.
+- **Probe patching** (`core/proxy_handler.py`): `pg_test_roundtrip()` reads its own module-level `POSTGRES_DSN`. The pre-switch probe was patching `proxy_handler.py` globals but not `db.postgres` — causing the probe to always fail ("POSTGRES_DSN not configured"). Fixed by temporarily patching `db.postgres.POSTGRES_DSN` around the probe call, restored in `finally`.
+- **Dead code removal** (`core/proxy_handler.py`): Variables `_escalate` and `_second_order` assigned but never used in `protect()` removed.
+- **Stale test** (`tests/test_critical.py`): `test_165_db_switch_endpoint_registered` asserted `"os._exit(0)" in src` — updated to assert `"_propagate_global" in src` and `"os._exit" not in src`.
+- **Invalid `# noqa` directive** (`core/proxy_handler.py:2604`): `# noqa: global not needed — ...` had freeform text after the colon; ruff emitted a warning. Replaced with an inline comment.
+
+### Tests (sub-session 5)
+- **`test_v187_controls_order.py`** — 56 tests: `TestProxyHandlerDeadCode` (4), `TestSignalOrderDefaults` (31), `TestBackendConfigConsistency` (12), `TestControlsOrderUICopy` (9).
+- **`test_v187_db_switch_hotswap.py`** — 27 tests: `TestPropagateGlobal` (3), `TestEndpointSourceGuards` (5), `TestPgPoolReset` (3), `TestEventRoutingAfterHotSwap` (2), `TestMultiRoundTripPropagation` (2), `TestConfigKvPersistence` (2), `TestResponseMessage` (2), `TestSourceOrdering` (2), `TestControlsHtmlUI` (5), `TestExports` (2).
+- **`test_v187_db_switch_roundtrip.py`** — 18 tests: `TestPgTestRoundtrip` (3), `TestDbSwitchEndpointValidation` (5), `TestHotSwapBehavior` (4), `TestMigrationBehavior` (3), `TestConfigKvPersistence` (3). Updated 4 tests from prior session to match hot-swap behavior.
+- **Live validation**: 6-round-trip SQLite↔Postgres switch against live gateway (PID 1929318); all 6 switches `ok=True`, PID alive throughout, backend verified via `/secured/config` after each switch.
 
 ---
 

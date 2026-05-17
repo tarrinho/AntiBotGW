@@ -685,11 +685,13 @@ class TestDbSwitchValidation:
         )
 
     def test_os_exit_used_for_restart(self):
-        """Endpoint must use os._exit(0) to trigger container restart."""
+        """1.8.7 — hot-swap: no restart needed; uses _propagate_global instead of os._exit."""
         src = self._src()
-        assert "os._exit" in src or "_exit(0)" in src, (
-            "db_switch_endpoint must call os._exit(0) so docker's restart "
-            "policy brings the container back with the new backend bound"
+        assert "os._exit" not in src, (
+            "db_switch_endpoint must NOT call os._exit — 1.8.7 uses _propagate_global hot-swap"
+        )
+        assert "_propagate_global" in src, (
+            "db_switch_endpoint must use _propagate_global for in-process backend switch"
         )
 
     def test_response_before_exit(self):
@@ -731,24 +733,31 @@ class TestDbSwitchValidation:
 class TestStartupPostgresPath:
 
     def test_on_startup_calls_db_init_postgres(self):
-        """When DB_BACKEND=postgres in proxy.py, on_startup must call
-        db_init_postgres(). Verified via source inspection."""
+        """on_startup delegates to _startup_postgres_schema which calls
+        db_init_postgres(). Verified via source inspection of both functions."""
         import inspect
         import proxy
-        src = inspect.getsource(proxy.on_startup)
-        assert "db_init_postgres" in src, (
-            "on_startup must call db_init_postgres() so the Postgres schema "
-            "is initialised on first boot with DB_BACKEND=postgres"
+        # on_startup must delegate to _startup_postgres_schema
+        on_startup_src = inspect.getsource(proxy.on_startup)
+        assert "_startup_postgres_schema" in on_startup_src, (
+            "on_startup must call _startup_postgres_schema() (which calls "
+            "db_init_postgres) so the Postgres schema is initialised on first boot"
+        )
+        # _startup_postgres_schema must call db_init_postgres
+        helper_src = inspect.getsource(proxy._startup_postgres_schema)
+        assert "db_init_postgres" in helper_src, (
+            "_startup_postgres_schema must call db_init_postgres() so the Postgres "
+            "schema is initialised on first boot with DB_BACKEND=postgres"
         )
 
     def test_db_init_postgres_called_regardless_of_backend(self):
         """db_init_postgres should be called even with DB_BACKEND=sqlite so
         the standby schema is ready for an operator-triggered switch.
-        Verified via source: no DB_BACKEND guard before the call."""
+        Verified via source: no DB_BACKEND guard immediately before the call."""
         import inspect
         import proxy
-        src = inspect.getsource(proxy.on_startup)
-        # The call must exist
+        src = inspect.getsource(proxy._startup_postgres_schema)
+        # The call must exist in the helper
         assert "db_init_postgres" in src
         # Find the call site and verify there's no 'if DB_BACKEND' guard
         # immediately before it (it was intentionally made unconditional in 1.6.5)

@@ -344,12 +344,13 @@ class TestSettingsDbToggle:
             "dbSetTarget must update the thumb position (left) when switching backends"
 
     def test_D08_db_set_target_shows_hides_pg_fields(self, src):
+        # v1.8.7: DB modal uses DSN text input; dbSetTarget updates toggle styling + Apply gate
         idx = src.find("function dbSetTarget")
         body = src[idx: idx + 600]
-        assert "db-pg-fields" in body, \
-            "dbSetTarget must show/hide #db-pg-fields based on the selected backend"
-        assert "display" in body, \
-            "dbSetTarget must set display style on #db-pg-fields"
+        assert "db-track" in body or "db-lbl" in body, \
+            "dbSetTarget must update toggle visual (db-track or db-lbl-*)"
+        assert "btn-db-apply" in body, \
+            "dbSetTarget must enable/disable #btn-db-apply"
 
     def test_D09_db_set_target_gates_apply_button(self, src):
         idx = src.find("function dbSetTarget")

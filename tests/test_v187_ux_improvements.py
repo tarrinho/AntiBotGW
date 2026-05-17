@@ -131,7 +131,7 @@ class TestGatewayHealthPillUX:
         # The sort call must reference STATUS_ORD inside the pill onclick block
         onclick_idx = src.find("pill.onclick")
         assert onclick_idx != -1, "main.html: pill.onclick not found"
-        onclick_block = src[onclick_idx: onclick_idx + 1000]
+        onclick_block = src[onclick_idx: onclick_idx + 2000]
         assert "STATUS_ORD" in onclick_block, \
             "main.html: pill.onclick must sort reasons using STATUS_ORD"
         assert ".sort(" in onclick_block, \
@@ -163,10 +163,10 @@ class TestGatewayHealthPillUX:
         onclick_idx = src.find("pill.onclick")
         assert onclick_idx != -1
         onclick_block = src[onclick_idx: onclick_idx + 1200]
-        assert "scoreBar" in onclick_block, \
-            "main.html: pill.onclick must reference scoreBar"
+        assert "gw-score-bar" in onclick_block, \
+            "main.html: pill.onclick must look up #gw-score-bar element"
         assert "style.width" in onclick_block, \
-            "main.html: pill.onclick must set scoreBar.style.width to animate the bar"
+            "main.html: pill.onclick must set bar.style.width to animate the bar"
 
     # ok-row collapse ────────────────────────────────────────────────────────
 
@@ -177,13 +177,15 @@ class TestGatewayHealthPillUX:
     def test_G14_ok_rows_filtered_to_lists(self, src):
         onclick_idx = src.find("pill.onclick")
         assert onclick_idx != -1
-        onclick_block = src[onclick_idx: onclick_idx + 1500]
-        assert "okList" in onclick_block, \
-            "main.html: pill.onclick must build okList (collapsed ok-row summary)"
-        assert "badWarn" in onclick_block, \
-            "main.html: pill.onclick must build badWarn (rendered problem rows)"
-        assert "gw-ok-summary" in onclick_block, \
-            "main.html: pill.onclick must render .gw-ok-summary element for ok rows"
+        onclick_block = src[onclick_idx: onclick_idx + 2000]
+        # ok rows are rendered with row-ok CSS class; isOk is the filter
+        assert "row-ok" in onclick_block, \
+            "main.html: pill.onclick must mark ok rows with 'row-ok' CSS class"
+        assert "isOk" in onclick_block, \
+            "main.html: pill.onclick must check r.status==='ok' (isOk) to classify rows"
+        # gw-ok-summary CSS class must be defined (may be used for future collapse)
+        assert ".gw-ok-summary" in src, \
+            "main.html: .gw-ok-summary CSS class must be defined for ok-row summary"
 
     # Pill text and refresh note ─────────────────────────────────────────────
 

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.7 · Controls</title>
+<title>AppSecGW_1.8.8 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -358,20 +358,6 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#f85149;
   font-weight:700;margin-left:4px}
 .sf-count{font-size:10px;color:var(--dim);margin-left:6px}
-/* DB backend choice toggle */
-.db-choice-wrap{display:flex;align-items:center;gap:14px;padding:2px 0}
-.db-side{flex:1;padding:10px 12px;border-radius:6px;border:1px solid transparent;cursor:pointer;transition:all .15s;opacity:.65}
-.db-side.db-side-active{border-color:rgba(63,185,80,.3);background:rgba(63,185,80,.05);opacity:1;cursor:default}
-.db-side:not(.db-side-active):hover{background:rgba(88,166,255,.06);border-color:rgba(88,166,255,.2);opacity:1}
-.db-side-title{font-weight:700;font-size:14px;color:var(--fg)}
-.db-side-sub{font-size:10.5px;color:var(--dim);margin-top:1px}
-.db-side-badge{font-size:9px;color:#3fb950;font-weight:700;text-transform:uppercase;margin-top:6px;letter-spacing:.3px}
-.db-toggle-track{flex-shrink:0;width:60px;height:32px;background:var(--green);border-radius:16px;
-  position:relative;cursor:pointer;transition:background .15s;box-shadow:0 0 8px rgba(63,185,80,.25)}
-.db-toggle-track .db-toggle-thumb{position:absolute;top:4px;left:4px;width:24px;height:24px;
-  background:#fff;border-radius:50%;transition:left .22s cubic-bezier(.4,0,.2,1);
-  box-shadow:0 1px 4px rgba(0,0,0,.35)}
-.db-toggle-track.db-toggle-right .db-toggle-thumb{left:32px}
 /* Activation order badges */
 .sig-order{display:inline-flex;align-items:center;justify-content:center;
   width:16px;height:16px;border-radius:50%;font-size:9px;font-weight:800;
@@ -415,6 +401,12 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="order:1"].active{background:rgba(63,185,80,.15);border-color:rgba(63,185,80,.4);color:#3fb950}
 .sf-chip[data-filter="order:2"].active{background:rgba(210,153,34,.15);border-color:rgba(210,153,34,.4);color:#d29922}
 .sf-chip[data-filter="order:3"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.35);color:#f85149}
+.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid #1f2730;margin-bottom:8px}
+.gw-meta .chip{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
+.gw-row.row-ok{opacity:.6}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid #1f2730;margin-top:6px}
 </style></head><body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
@@ -422,7 +414,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.7</div>
+    <div id="sidebar-brand-ver">1.8.8</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
@@ -538,23 +530,23 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <div class="order-defs-wrap">
       <div class="order-defs-hdr" id="order-defs-hdr">
         <span class="od-toggle" id="od-toggle">▶</span>
-        <span>Activation order — when to enable each tier</span>
+        <span>Activation order — risk-score gate per detector</span>
       </div>
       <div class="order-defs" id="order-defs">
         <div class="order-def o1">
           <div class="od-head"><span class="od-num">1</span><span class="od-title">1st Order — Baseline</span></div>
-          <div class="od-body">Always active. Zero-config, microsecond cost, near-zero false-positive risk. Catches obvious bots: bad/empty UA, basic flood, canary traps, header fingerprints. Safe to enable on day 1 before any traffic analysis.</div>
-          <div class="od-trigger">Enable when: deploying the gateway — no prior evidence needed.</div>
+          <div class="od-body">Runs on every request. Zero-config, microsecond cost, near-zero false-positive risk. Catches obvious bots: bad/empty UA, basic flood, canary traps, header fingerprints, AI crawler UAs. Safe on day 1.</div>
+          <div class="od-trigger">Gate: none — always active.</div>
         </div>
         <div class="order-def o2">
           <div class="od-head"><span class="od-num">2</span><span class="od-title">2nd Order — Elevated Suspicion</span></div>
-          <div class="od-body">Enable when bot patterns appear in logs. Behavioral and AI-specific signals, regex body scans, IP reputation basics (Tor, ASN). May occasionally flag API clients — review false positives before locking in.</div>
-          <div class="od-trigger">Enable when: logs show suspicious patterns OR risk_score frequently hits 15–30 range.</div>
+          <div class="od-body">Runs only when the identity's accumulated risk score reaches SECOND_ORDER_THRESHOLD. Behavioral signals, geo/TLS fingerprinting, JS-side checks. May occasionally flag API clients with unusual patterns.</div>
+          <div class="od-trigger">Gate: identity risk ≥ SECOND_ORDER_THRESHOLD (default 15). Set to 0 to always run.</div>
         </div>
         <div class="order-def o3">
           <div class="od-head"><span class="od-num">3</span><span class="od-title">3rd Order — Confirmed Attack</span></div>
-          <div class="od-body">Aggressive or expensive controls: external API calls (AbuseIPDB, CrowdSec), geo/DC blocking, JS challenges, tarpits. Require configuration and have latency cost or collateral damage risk. Use when 1st+2nd order is insufficient.</div>
-          <div class="od-trigger">Enable when: active attack confirmed OR escalation_threshold frequently reached OR 1st+2nd insufficient.</div>
+          <div class="od-body">Runs only when identity risk reaches ESCALATION_THRESHOLD. External API calls (AbuseIPDB, CrowdSec), body regex scans (SQLi/XSS/LFI), DC/geo blocking, tarpits. Real latency + quota cost — skip on clean traffic.</div>
+          <div class="od-trigger">Gate: identity risk ≥ ESCALATION_THRESHOLD (default 0 = always run; raise to save quota).</div>
         </div>
       </div>
     </div>
@@ -862,7 +854,7 @@ const META = {
   STRICT_VHOST:            {kind:'bool', card:'infrastructure', restart:true, desc:'Return 502 for any inbound Host not explicitly registered as a vhost. Prevents the global UPSTREAM from acting as a catch-all for unknown hostnames.'},
   UPSTREAM_REWRITE_BASE:   {kind:'text', card:'infrastructure', ph:'e.g. http://host.docker.internal:8093', desc:'Strip this base URL from response bodies and Location/Link headers, turning absolute upstream URLs into relative paths. Fixes CSP violations when the upstream embeds its own hostname. Per-vhost override supported. Hot-reloadable.'},
   // 1.6.4 — pluggable event-store backend (CHANGE REQUIRES CONTAINER RESTART)
-  DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], restart:true, desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres is the future-ready slot for high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). Does not migrate data.'},
+  DB_BACKEND:              {kind:'select', options:['sqlite','postgres'], desc:'Event-store backend. sqlite (default) is single-file zero-deps. postgres enables high-volume / multi-instance deployments backed by Postgres + Timescale (psycopg must be installed in the image). Switches instantly in-process — no restart needed.'},
   POSTGRES_DSN:            {kind:'text', desc:'Postgres connection string (e.g. postgresql://user:pass@host/db). Only used when DB_BACKEND=postgres. Empty = sqlite enforced.'},
   // 1.6.5 — escalation tier + tarpit
   SECOND_ORDER_THRESHOLD:  {kind:'num', min:0, max:1000, step:0.5, desc:'Risk-score threshold above which 2nd-order behavioral detectors run (ai-enumeration, ai-no-assets, locale-geo-mismatch, tls-fingerprint, ja4-required-missing). Default 15 = any single soft-tier hit activates them. 0 = always run (no gate).', card:'thresholds'},
@@ -1366,6 +1358,7 @@ async function load(){
     if (meta.kind === 'bool' && !meta.card) continue; // detection bools live in scoring table
     if (name === 'BYPASS_PATHS') continue;     // already rendered above
     if (name === 'DB_BACKEND' || name === 'POSTGRES_DSN') continue; // now in Settings
+    if (name === 'REDIS_ALLOW_LIST') continue; // managed in Settings → Redis
     const card = meta.card || map[meta.kind];
     if (!card || _settingsCards.has(card)) continue; // moved to Settings
     if (!$(card)) continue;
@@ -1787,81 +1780,26 @@ document.addEventListener('DOMContentLoaded', () => {
         'Service Worker Challenge':        'SW_CHALLENGE_ENABLED',
         'MaxMind GeoLite2 City':          'IMPOSSIBLE_TRAVEL_ENABLED',
       };
-      // 1.6.5 — DB backend cards use a special toggle (mutually exclusive,
-      // requires a process restart). Render as colour-coded pill instead
-      // of the generic switch.
+      // DB backend moved to Settings → Database backend card.
       const DB_TARGET = {
         'SQLite event store':         'sqlite',
         'PostgreSQL / TimescaleDB':   'postgres',
       };
-      const dbItemMap = {};
-      (d.integrations||[]).forEach(item => { const t = DB_TARGET[item.name]; if (t) dbItemMap[t] = item; });
-      const sqlItem  = dbItemMap['sqlite'];
-      const pgItem   = dbItemMap['postgres'];
-      const pgActive = !!(pgItem && pgItem.enabled);
-      const pgCredsOk = pgItem ? pgItem.credentials_present !== false : false;
-      const renderDbCard = () => {
-        if (!sqlItem && !pgItem) return '';
-        const sqlPurp = sqlItem ? escapeHtml(sqlItem.purpose||'Zero-dependency single-file event store') : 'Zero-dependency single-file event store';
-        const pgPurp  = pgItem  ? escapeHtml(pgItem.purpose||'High-volume / multi-instance deployments')  : 'High-volume / multi-instance deployments';
-        return `<div style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-            <span style="font-weight:700;font-size:13px">Database backend</span>
-            <span style="font-size:10px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:2px 8px;border-radius:3px">CHANGE REQUIRES RESTART</span>
-          </div>
-          <div class="db-choice-wrap">
-            <div class="db-side${!pgActive?' db-side-active':''}"
-                 data-db-target="sqlite"
-                 data-db-name="${escapeHtml(sqlItem ? sqlItem.name : 'SQLite event store')}"
-                 data-db-active="${pgActive?'0':'1'}" data-db-creds-ok="1"
-                 title="${!pgActive?'Active backend':'Switch to SQLite (no DSN required)'}">
-              <div class="db-side-title">SQLite</div>
-              <div class="db-side-sub">event store</div>
-              <div style="color:var(--dim);font-size:10px;margin-top:4px;line-height:1.4">${sqlPurp}</div>
-              ${!pgActive ? '<div class="db-side-badge">&#9679; active</div>' : ''}
-            </div>
-            <div class="db-toggle-track${pgActive?' db-toggle-right':''}" data-db-toggle>
-              <div class="db-toggle-thumb"></div>
-            </div>
-            <div class="db-side${pgActive?' db-side-active':''}"
-                 data-db-target="postgres"
-                 data-db-name="${escapeHtml(pgItem ? pgItem.name : 'PostgreSQL / TimescaleDB')}"
-                 data-db-active="${pgActive?'1':'0'}" data-db-creds-ok="${pgCredsOk?'1':'0'}"
-                 data-pg-item="${pgItem ? encodeURIComponent(JSON.stringify(pgItem)) : ''}"
-                 title="${pgActive?'Active backend · click for details':(pgCredsOk?'Switch to PostgreSQL (RESTART REQUIRED) · click for details':'Set POSTGRES_DSN first · click for details')}">
-              <div class="db-side-title">PostgreSQL</div>
-              <div class="db-side-sub">/ TimescaleDB <span style="font-size:9px;opacity:.5;font-style:normal">ℹ</span></div>
-              <div style="color:var(--dim);font-size:10px;margin-top:4px;line-height:1.4">${pgPurp}</div>
-              ${pgActive ? '<div class="db-side-badge">&#9679; active</div>' : ''}
-              ${!pgCredsOk&&!pgActive ? '<div style="font-size:9px;color:var(--dim);margin-top:3px">set POSTGRES_DSN to enable</div>' : ''}
-            </div>
-          </div>
-        </div>`;
-      };
+      const renderDbCard = () => `<div style="border:1px solid var(--line);border-radius:6px;padding:10px 14px;margin-bottom:10px;background:#0d1117;display:flex;align-items:center;gap:12px">
+        <span style="font-size:18px">🗄️</span>
+        <div style="font-size:12.5px">
+          <span style="font-weight:700">Database backend</span> —
+          <span style="color:var(--dim)">moved to</span>
+          <a href="settings.html#card-db" style="color:var(--blue)">Settings → Database backend</a>
+        </div>
+      </div>`;
       // Server's current toggle state (so the switch reflects reality even
       // if the integration was force-disabled at runtime).
       const cfg = serverState || {};
       const renderToggle = (item) => {
         // 1.6.5 — DB backend pills (SQLite / Postgres) get their own
         // mutually-exclusive switch with a confirmation step + restart.
-        const dbTarget = DB_TARGET[item.name];
-        if (dbTarget) {
-          // 1.6.5 — DB-backend switch uses the SAME on/off toggle widget
-          // as CrowdSec/AbuseIPDB/etc. for visual consistency. Click on
-          // the inactive backend triggers the warning modal + restart.
-          // The active backend's switch is the green ON state; the
-          // inactive backend's is OFF (grey).
-          const isActive = item.enabled === true;
-          const credsOk  = item.credentials_present !== false;
-          const cls = (isActive ? ' on' : '') + (credsOk ? '' : ' switch-disabled');
-          const disabledAttr = (!credsOk && !isActive) ? 'data-disabled="1"' : '';
-          const tt = isActive
-            ? `${item.name} is the ACTIVE backend. To swap, click the OTHER backend's switch (a confirmation dialog will list the impact).`
-            : (credsOk
-                ? `Click to switch the active backend to ${item.name}. RESTART REQUIRED — confirmation dialog will list impact.`
-                : `Click to supply ${(item.envs_needed||[]).join(' AND ')} and switch to ${item.name} in one step (RESTART REQUIRED).`);
-          return '';  // rendered as combined DB card above
-        }
+        if (DB_TARGET[item.name]) return ''; // rendered in Settings → Database backend
         const knob = KNOB[item.name];
         if (!knob) return '';            // edge-only / planned — no toggle
         // 1.6.0 — toggle is clickable when CREDENTIALS are present (not just
@@ -1929,9 +1867,9 @@ document.addEventListener('DOMContentLoaded', () => {
         // 1.5.4 — embed full info as data-attr so the click-to-tooltip can pull it
         // 1.7.2 — activation order badge (same .sig-order pill as Defenses & Scoring)
         const ord = item.activation_order;
-        const ordTitles = {1:'1st order — Baseline: always safe, zero config, µs cost',
-                           2:'2nd order — Elevated Suspicion: enable when bot patterns appear',
-                           3:'3rd order — Confirmed Attack: aggressive / requires configuration'};
+        const ordTitles = {1:'1st order — always runs (no risk-score gate)',
+                           2:'2nd order — runs when identity risk ≥ SECOND_ORDER_THRESHOLD',
+                           3:'3rd order — runs when identity risk ≥ ESCALATION_THRESHOLD (external APIs / body scans)'};
         const orderBadge = (DB_TARGET[item.name] || !ord) ? '' :
           `<span class="sig-order o${ord}" style="flex-shrink:0;align-self:flex-start;margin-top:2px" title="${ordTitles[ord]||''}">${ord}</span>`;
         const itemJson = encodeURIComponent(JSON.stringify(item));
@@ -2000,164 +1938,9 @@ document.addEventListener('DOMContentLoaded', () => {
         };
       });
 
-      // Wire DB backend choice toggle
-      const openDbModal = async (target, dbName) => {
-          const impactLines = [
-            `<b>Restart required.</b> The container will exit immediately;
-             docker's <code>--restart=unless-stopped</code> policy brings it
-             back with the new backend in 1–3 s.`,
-            `<b>Existing in-flight requests are dropped</b> for the duration
-             of the restart (~1 s blip).`,
-            `<b>Configurations are preserved.</b> <code>config_kv</code>,
-             <code>secrets_kv</code>, admin IPs, bans, clients, timeline —
-             all live in SQLite always and survive any backend swap.`,
-            `<b>Last 60 s of events are copied</b> from the source backend
-             to the target backend so the dashboard timeline keeps its tail
-             during the cut-over. Older events stay in their original
-             store (no full migration).`,
-            target === 'postgres'
-              ? `<b>Postgres readiness probed before commit.</b> If the gateway
-                 can't reach the DSN, the swap is rejected and you stay on SQLite.`
-              : `<b>SQLite is single-file zero-deps</b> — correct for the
-                 default deployment shape.`,
-          ];
-          const needsTest = (target === 'postgres');
-          let dsnInput = '';
-          if (target === 'postgres') {
-            dsnInput = `<div style="margin-top:14px">
-              <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">
-                Optional — supply / override <code>POSTGRES_DSN</code> (leave blank to use the current value):
-              </label>
-              <div style="display:flex;gap:6px;align-items:center">
-                <input id="db-switch-dsn" type="text" class="num"
-                       style="flex:1;text-align:left;font-size:11px;font-family:ui-monospace,monospace"
-                       placeholder="postgresql://user:pass@host:5432/db">
-                <button id="db-test-btn" class="ctrl" style="white-space:nowrap;flex-shrink:0">
-                  Test connection
-                </button>
-              </div>
-              <div id="db-test-result" style="margin-top:8px;font-size:11.5px;min-height:20px"></div>
-            </div>`;
-          }
-          const html = `
-            <h3 style="color:#d29922">⚠ Switch active DB backend → ${escapeHtml(dbName)}</h3>
-            <ul style="margin:10px 0;padding-left:18px;font-size:12.5px;line-height:1.6;color:var(--fg)">
-              ${impactLines.map(l => '<li>' + l + '</li>').join('')}
-            </ul>
-            ${dsnInput}
-            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
-              <button id="db-switch-cancel" class="ctrl">Cancel</button>
-              <button id="db-switch-ok" class="ctrl"
-                      style="background:#d29922;color:#000;border-color:#d29922"
-                      ${needsTest ? 'disabled title="Run connection test first"' : ''}>
-                Yes, switch &amp; restart
-              </button>
-            </div>`;
-          showSimpleModal(html);
-          document.getElementById('db-switch-cancel').onclick = closeSimpleModal;
+      // DB backend wiring moved to Settings → Database backend
 
-          if (needsTest) {
-            document.getElementById('db-test-btn').onclick = async () => {
-              const testBtn   = document.getElementById('db-test-btn');
-              const resultEl  = document.getElementById('db-test-result');
-              const okBtn     = document.getElementById('db-switch-ok');
-              const dsnVal    = (document.getElementById('db-switch-dsn') || {}).value || '';
-              testBtn.disabled = true;
-              testBtn.textContent = 'Testing…';
-              resultEl.textContent = '';
-              okBtn.disabled = true;
-              try {
-                const qs = dsnVal ? '?dsn=' + encodeURIComponent(dsnVal) : '';
-                const r = await fetch(url('/antibot-appsec-gateway/secured/db-test' + qs),
-                  {credentials:'include'});
-                const j = await r.json();
-                if (j.ok) {
-                  const p = j.probe || j.postgres || {};
-                  const ver  = p.version  ? `<b>PostgreSQL ${escapeHtml(String(p.version))}</b>` : '';
-                  const db   = p.db_name  ? ` · db <code>${escapeHtml(p.db_name)}</code>` : '';
-                  const ms   = p.round_trip_ms != null ? ` · ${escapeHtml(String(p.round_trip_ms))} ms` : '';
-                  const rows = p.events_rows  != null ? ` · ${escapeHtml(String(p.events_rows))} events` : '';
-                  resultEl.innerHTML = _dp(`<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`);
-                  okBtn.disabled = false;
-                  okBtn.title = '';
-                } else {
-                  const reason = j.reason || (j.probe && j.probe.reason) || 'unreachable';
-                  resultEl.innerHTML = _dp(`<span style="color:var(--red)">✗ ${escapeHtml(reason)}</span>`);
-                  okBtn.disabled = true;
-                }
-              } catch (e) {
-                resultEl.innerHTML = _dp(`<span style="color:var(--red)">✗ Network error: ${escapeHtml(e.message)}</span>`);
-                okBtn.disabled = true;
-              } finally {
-                testBtn.disabled = false;
-                testBtn.textContent = 'Test connection';
-              }
-            };
-            const dsnField = document.getElementById('db-switch-dsn');
-            if (dsnField) {
-              dsnField.addEventListener('input', () => {
-                document.getElementById('db-switch-ok').disabled = true;
-                document.getElementById('db-test-result').textContent = '';
-              });
-            }
-          }
-
-          document.getElementById('db-switch-ok').onclick = async () => {
-            const okBtn = document.getElementById('db-switch-ok');
-            okBtn.disabled = true; okBtn.textContent = 'Switching…';
-            const dsn = (document.getElementById('db-switch-dsn') || {}).value || '';
-            try {
-              const r = await fetch(url('/antibot-appsec-gateway/secured/db-switch?target=' + target),
-                {method:'POST', headers:{'Content-Type':'application/json'},
-                 body: JSON.stringify({dsn: dsn})});
-              const j = await r.json();
-              if (!r.ok || !j.ok) {
-                okBtn.disabled = false;
-                okBtn.textContent = 'Yes, switch & restart';
-                _gwAlert('Switch rejected: ' + (j.reason || `HTTP ${r.status}`));
-                return;
-              }
-              showSimpleModal(`<h3 style="color:#3fb950">Switching to ${escapeHtml(target)}…</h3>
-                <p style="margin-top:8px;color:var(--dim);font-size:12px">
-                  Container is exiting. Docker will restart it in ~1 s.
-                  This page will auto-reload.
-                </p>`);
-              setTimeout(() => location.reload(), 5000);
-            } catch (e) {
-              okBtn.disabled = false;
-              okBtn.textContent = 'Yes, switch & restart';
-              _gwAlert('Network error: ' + e.message);
-            }
-          };
-      };
-      box.querySelectorAll('.db-side[data-db-target]').forEach(side => {
-        // Postgres card always opens the details popover on click.
-        // Switching backends is done via the toggle track.
-        if (side.dataset.dbTarget === 'postgres') {
-          side.style.cursor = 'pointer';
-          side.onclick = (ev) => {
-            if (!side.dataset.pgItem) return;
-            try { openPgDetails(JSON.parse(decodeURIComponent(side.dataset.pgItem))); }
-            catch(e) {}
-          };
-          return;
-        }
-        // SQLite side: inactive → opens switch modal
-        if (side.dataset.dbActive === '1') return;
-        side.onclick = () => openDbModal(side.dataset.dbTarget, side.dataset.dbName);
-      });
-      const dbTrack = box.querySelector('[data-db-toggle]');
-      if (dbTrack) {
-        dbTrack.onclick = () => {
-          const isPgActive = dbTrack.classList.contains('db-toggle-right');
-          const target = isPgActive ? 'sqlite' : 'postgres';
-          const side = box.querySelector(`.db-side[data-db-target="${target}"]`);
-          if (side && side.dataset.dbActive !== '1') side.click();
-        };
-      }
-
-      // Wire up the toggle clicks. Skip db-target switches — those are
-      // wired separately above with the warning modal + restart flow.
+      // Wire up integration toggle clicks (DB backend managed in Settings).
       box.querySelectorAll('.switch[data-knob]:not([data-db-target])').forEach(sw => {
         if (sw.dataset.disabled === '1') return;   // disabled (no env config)
         sw.onclick = async (ev) => {
@@ -2291,33 +2074,39 @@ document.addEventListener('DOMContentLoaded', () => {
         'soft-renderer':       ['fp'],           'webgl-missing':      ['fp'],
       };
 
-      // Activation order defaults: 1=baseline, 2=elevated suspicion, 3=confirmed attack
+      // Activation order defaults: 1=baseline (always runs), 2=elevated suspicion
+      // (SECOND_ORDER_THRESHOLD gate), 3=confirmed attack (ESCALATION_THRESHOLD gate).
+      // Must mirror config.py SECOND_ORDER_REASONS and ESCALATE_ONLY_REASONS.
       const SIGNAL_ORDER_DEFAULTS = {
-        // ── 1st order: always safe, no config, µs cost ──────────────────────
+        // ── 1st order: always runs — zero-config, µs cost, near-zero FP risk ─
         'ua-empty':1,'ua-blocked':1,'ua-too-short':1,'ua-non-browser':1,
         'ua-platform-mismatch':1,'accept-fp':1,'accept-wildcard-html':1,
         'header-order-fp':1,'h2-fp':1,'behavior':1,
         'rate-limit-ip':1,'session-flood':1,
         'header-canary':1,'json-canary':1,'canary-echo':1,
-        // ── 2nd order: behavioral / AI signals, regex scans, basic IP ───────
-        'ua-ai-openai':2,'ua-ai-anthropic':2,'ua-ai-google':2,
-        'ua-ai-perplexity':2,'ua-ai-meta':2,'ua-ai-other':2,
-        'ai-probe':2,'ai-enumeration':2,'ai-headers-empty':2,
-        'ai-headers-incomplete':2,'ai-no-assets':2,'ai-ua-ip-mismatch':2,
-        'robots-violation':2,'tor-exit':2,'asn-hosting':2,
+        // UA string checks: µs cost, gated by own AI_UA_*_ENABLED toggle
+        'ua-ai-openai':1,'ua-ai-anthropic':1,'ua-ai-google':1,
+        'ua-ai-perplexity':1,'ua-ai-meta':1,'ua-ai-other':1,
+        // Cheap header / path presence checks
+        'ai-probe':1,'ai-headers-empty':1,'ai-headers-incomplete':1,'ai-ua-ip-mismatch':1,
+        'robots-violation':1,'tor-exit':1,'suspicious-path':1,
+        // 1.7.2: Layer A — server-side cookie/lifecycle signals
+        'cookie-ghost':1,'lifecycle-miss':1,'referer-ghost':1,
+        // ── 2nd order: SECOND_ORDER_THRESHOLD gate (mirrors SECOND_ORDER_REASONS) ─
+        'ai-enumeration':2,'ai-no-assets':2,
         'locale-geo-mismatch':2,'tls-fingerprint':2,'ja4-required-missing':2,
-        'suspicious-path':2,'body-sqli':2,'body-xss':2,'body-cmd':2,
-        'body-lfi':2,'body-rce':2,'body-ssrf':2,
-        // ── 3rd order: expensive, aggressive, cfg-required, escalate-only ───
-        'country-blocked':3,'datacenter-vpn':3,
+        'direct-api-probe':2,
+        // 1.7.2: Layer B — JS/geo behavioral signals
+        'soft-renderer':2,'webgl-missing':2,'impossible-travel':2,
+        // ── 3rd order: ESCALATION_THRESHOLD gate (mirrors ESCALATE_ONLY_REASONS) ─
+        // External API calls (quota + latency), body regex scans, aggressive blocks
         'abuseipdb-high':3,'abuseipdb-med':3,'crowdsec-banned':3,
-        'js-challenge':3,'rate-limit-endpoint':3,
+        'asn-hosting':3,'datacenter-vpn':3,'coordinated-probe':3,
+        'body-sqli':3,'body-xss':3,'body-cmd':3,'body-lfi':3,'body-rce':3,'body-ssrf':3,
+        'suspicious-body':3,
+        'country-blocked':3,'js-challenge':3,'rate-limit-endpoint':3,
         'custom-rule-block':3,'auth-jwt-invalid':3,
         'tarpit-walk':3,'labyrinth-jitter':3,'botd-detected':3,
-        // ── 1.7.2: Layer A — server-side signals ──────────────────────────
-        'cookie-ghost':1,'lifecycle-miss':1,'referer-ghost':1,
-        // ── 1.7.2: Layer B — JS/geo signals ──────────────────────────────
-        'soft-renderer':2,'webgl-missing':2,'impossible-travel':2,
       };
 
       const _ORDER_LS_KEY = 'agw_sig_order';
@@ -2362,7 +2151,10 @@ document.addEventListener('DOMContentLoaded', () => {
                      : w.weight >= 20 ? 'var(--yellow)'
                      : w.weight > 0   ? 'var(--green)' : 'var(--dim)';
         const ord = getSignalOrder(w.signal, w);
-        const orderBadge = `<span class="sig-order o${ord}" data-sig="${escapeHtml(w.signal)}" data-order="${ord}" title="Activation order ${ord} — click to change">${ord}</span>`;
+        const ordDesc = ord===1 ? 'runs on every request'
+                      : ord===2 ? 'runs when risk ≥ SECOND_ORDER_THRESHOLD'
+                      :           'runs when risk ≥ ESCALATION_THRESHOLD';
+        const orderBadge = `<span class="sig-order o${ord}" data-sig="${escapeHtml(w.signal)}" data-order="${ord}" title="Order ${ord} — ${ordDesc} · click to change">${ord}</span>`;
         const sigCell = orderBadge +
           `<code class="sig-name"
             data-signal="${escapeHtml(w.signal)}"
@@ -3024,6 +2816,18 @@ const __MODAL = (() => {
 function __closeModal(){ __MODAL_BACK.style.display='none'; __MODAL.style.display='none'; }
 __MODAL_BACK.onclick = __closeModal;
 document.addEventListener('keydown', e => { if (e.key==='Escape') __closeModal(); });
+// 1.8.8 — close db-info popover on Escape or click outside
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    const tip = document.getElementById('db-info-tip');
+    if (tip && tip.style.display !== 'none') tip.style.display = 'none';
+  }
+});
+document.addEventListener('mousedown', e => {
+  const tip = document.getElementById('db-info-tip');
+  if (!tip || tip.style.display === 'none') return;
+  if (!tip.contains(e.target) && !e.target.closest('.db-side')) tip.style.display = 'none';
+});
 
 // PostgreSQL / TimescaleDB details popover
 function openPgDetails(it){
@@ -3715,9 +3519,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:#fff">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
+    <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
+      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
+    </div>
     <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
   </div>
 </div>
@@ -3752,19 +3559,68 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.textContent = '● ERR';
     }
   }
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  const KEY_HINTS = {
+    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
+    memory:'Consider restarting the container or increasing container memory limits',
+    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
+    integrations:'Check API keys in Settings → Integration Credentials',
+    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
+    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
+  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
+  function fmtUptime(secs){
+    if(!secs) return '?';
+    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
+    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
+  }
   pill.onclick = () => {
     if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    modalScore.textContent = lastData.score|0;
-    modalScore.style.color = colorFor(lastData.score).fg;
-    const rows = (lastData.reasons||[]).map(r => `
-      <div class="gw-row">
-        <span class="key">${escapeHtml(r.key)}</span>
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    const lbl = document.getElementById('gw-score-label');
+    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
+    const bar = document.getElementById('gw-score-bar');
+    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
+    const ver = (lastData.version||'').replace('AppSecGW_','v');
+    const up = fmtUptime(lastData.uptime_secs||0);
+    const db = lastData.db_backend||'?';
+    const rawUp = lastData.upstream||'';
+    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
+    const metaHtml = `<div class="gw-meta">
+      <span class="chip">${escapeHtml(ver)}</span>
+      <span class="chip">${escapeHtml(db)}</span>
+      <span class="chip">↑ ${escapeHtml(up)}</span>
+      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
+    </div>`;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
+      return sd!==0?sd:(b.weight||0)-(a.weight||0);
+    });
+    const rowsHtml = sorted.map(r=>{
+      const label = KEY_LABELS[r.key]||r.key;
+      const isOk = r.status==='ok';
+      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
+      return `<div class="gw-row${isOk?' row-ok':''}">
+        <span class="key">${escapeHtml(label)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
-        <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
+        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`).join('');
-    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
-      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+      </div>`;
+    }).join('');
+    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
+    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
+    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
+      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
+      <span>checked ${escapeHtml(ageStr)}</span>
     </div>`);
     modal.classList.add('show');
   };

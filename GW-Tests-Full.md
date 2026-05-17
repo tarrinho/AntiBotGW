@@ -1,8 +1,8 @@
 # AppSecGW — Full Test Suite Reference
 
-**Generated:** 2026-05-16  
-**Version:** 1.8.7  
-**Total test files:** 55  
+**Generated:** 2026-05-17  
+**Version:** 1.8.8  
+**Total test files:** 67  
 
 ---
 
@@ -30,7 +30,8 @@
 | v1.8.4 | `test_v184_siem.py`, `test_v184_uiux.py` |
 | v1.8.5/1.8.6 | `test_v185_controls_nav.py`, `test_v185_new_features.py`, `test_v185_security.py`, `test_v185_settings_migration.py`, `test_v185_settings_nav.py`, `test_v185_week3_week4.py`, `test_v185_week3week4.py` |
 | v1.8.6 | `test_interaction_probe.py`, `test_oidc.py` |
-| v1.8.7 | `test_v187_login_2fa.py`, `test_v187_new_features.py`, `test_v187_security.py`, `test_v187_settings_vhost_strip.py`, `test_v187_ux_improvements.py` |
+| v1.8.7 | `test_v187_login_2fa.py`, `test_v187_new_features.py`, `test_v187_security.py`, `test_v187_settings_vhost_strip.py`, `test_v187_ux_improvements.py`, `test_v187_controls_order.py`, `test_v187_db_switch_hotswap.py`, `test_v187_db_switch_roundtrip.py`, `test_v187_db_endpoints_dynamic.py`, `test_v188_db_settings_merge.py`, `test_v188_redis_security.py` |
+| v1.8.8 | `test_v188_ed25519_mesh.py`, `test_v188_settings_subnav.py`, `test_performance.py` |
 | Cross-version | `test_admin_ip_list.py`, `test_code_review_fixes.py`, `test_control_center.py`, `test_crowdsec_lapi_health.py`, `test_dashboard_charts.py`, `test_dashboard_data.py`, `test_upstream_no_leak.py`, `test_upstream_rewrite.py` |
 
 ---
@@ -1042,6 +1043,126 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestGatewayHealthPillUX` | 15 | `KEY_LABELS` defined and maps `block_rate`/`integrations`; has all 6 keys; `STATUS_ORD` defined; pill `onclick` sorts by `status_ord`; `penalty` CSS class; 5-column grid; `gw-score-bar` element; score bar width set in `onclick`; ok-summary CSS; ok rows filtered to lists; pill text uses `Health N/100`; refresh note near pill; old 4-column grid removed |
 | `TestScoreBreakdownRewrite` | 15 | `buildScoreHtml` defined; score header/color/label variables; score bar in header; block-count shows "Why Blocked" header and formula; empty comp rows not rendered; synthetic-score/stealth-score/bars-pct-contribution removed; risk-score case renders ban-threshold bar and filters to active components; `buildScoreHtml` returns header + body; block-count reason cards show share of total |
 
+### `test_v187_controls_order.py` — Activation-order risk-score gate
+**Version added:** v1.8.7
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestProxyHandlerDeadCode` | 4 | `_escalate`/`_second_order` removed from protect(); `_esc_score` still present; `_should_run_signal` imported |
+| `TestSignalOrderDefaults` | 31 | Every signal in `SIGNAL_ORDER_DEFAULTS` maps to correct order (1/2/3) matching `config.py` sets — AI-UA signals order 1; SECOND_ORDER_REASONS order 2; ESCALATE_ONLY_REASONS order 3 |
+| `TestBackendConfigConsistency` | 12 | `ESCALATE_ONLY_REASONS` contains body-attack signals; `SECOND_ORDER_REASONS` contains ai-enumeration/direct-api-probe/locale-geo; UA-AI signals not in either gated set |
+| `TestControlsOrderUICopy` | 9 | Panel header "risk-score gate"; order-2 copy mentions `SECOND_ORDER_THRESHOLD`; order-3 copy mentions `ESCALATION_THRESHOLD`; badge tooltips describe gate condition for each order |
+
+### `test_v187_db_switch_hotswap.py` — In-process DB backend hot-swap
+**Version added:** v1.8.7
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestPropagateGlobal` | 3 | `_propagate_global` sets local globals; propagates to other sys.modules; skips modules without the attribute |
+| `TestEndpointSourceGuards` | 5 | No `os._exit` in endpoint; no `_delayed_exit`; calls `_propagate_global`; calls `pg_pool_reset` |
+| `TestPgPoolReset` | 3 | Clears pool to None; safe when already None; fresh pool created on next `_get_pool()` |
+| `TestEventRoutingAfterHotSwap` | 2 | Postgres backend calls `pg_insert_event`; SQLite backend skips it |
+| `TestMultiRoundTripPropagation` | 2 | 5× alternating backend switches propagate across proxy_handler, core.metrics, db.postgres; final state consistent |
+| `TestConfigKvPersistence` | 2 | `DB_BACKEND` queued to config_kv on switch; `POSTGRES_DSN` queued only when DSN actually changed |
+| `TestResponseMessage` | 2 | Response message says "active immediately"; no "restart" language |
+| `TestSourceOrdering` | 2 | Migration called after propagation; postgres probe present in source |
+| `TestControlsHtmlUI` | 5 | No `setTimeout(location.reload)`; no `location.reload()`; button label "Yes, switch"; no "Restart required" in modal; no `restart:true` on DB knob |
+| `TestExports` | 2 | `pg_pool_reset` and `_propagate_global` exported/callable |
+
+### `test_v187_db_switch_roundtrip.py` — DB switch endpoint validation + migration
+**Version added:** v1.8.7
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestPgTestRoundtrip` | 3 | Returns `ok=False` when psycopg unavailable; when no DSN; on connect error |
+| `TestDbSwitchEndpointValidation` | 5 | Invalid target → 400; postgres without psycopg → 400; postgres without DSN → 400; failed roundtrip → 400; viewer role denied |
+| `TestHotSwapBehavior` | 4 | No `os._exit`; uses `_propagate_global`; returns directly (no `_delayed_exit`); `_propagate_global` called in source |
+| `TestMigrationBehavior` | 3 | Migration runs on switch; migrate called; `decimal.Decimal` cast to float for SQLite binding |
+| `TestConfigKvPersistence` | 3 | `set_config` called for `DB_BACKEND`; `POSTGRES_DSN` queued when DSN provided; config_kv queue checked |
+
+### `test_v187_db_endpoints_dynamic.py` — DB migration-status and switch endpoint contract
+**Version added:** v1.8.7
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestDbMigrationStatusEndpoint` | 7 | Unauthenticated → 404 decoy; authenticated → 200 JSON; never-run state; `Cache-Control: no-store`; pct/eta/rate zero when idle; running state has progress fields; done state fields present |
+| `TestDbSwitchEndpoint` | 7 | Unauthenticated → 404 decoy; invalid target → 400; switch-to-sqlite has `full_migrate` key; `full_migrate=false` not scheduled; double-start prevented when migration running; viewer role denied; POST without `Content-Type` parsed |
+| `TestDbRouteRegistration` | 2 | `db-migration-status` route registered; `db-switch` route registered as POST |
+| `TestBgMigrationShape` | 1 | Background migration has required response keys |
+| `TestFullMigrateBackground` | 1 | `_full_migrate_background` sets done flag on completion |
+| `TestBgMigrationCutoff` | 2 | SQLite→Postgres cutoff direction; Postgres→SQLite cutoff logic |
+
+### `test_v188_db_settings_merge.py` — DB backend section merge from Controls → Settings
+**Version added:** v1.8.7 (feature drafted for v1.8.8 label; shipped in v1.8.7 image)
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestDbActiveBadges` | 5 | `#db-badge-sqlite` and `#db-badge-pg` present; both hidden by default (`display:none`); both contain `active` label text |
+| `TestDbMigStatusRow` | 2 | `#db-mig-status-row` present; inside `#card-db` |
+| `TestDbJsFunctions` | 7 | `_renderMigStatusRow`, `_pollMigOnce`, `_startMigPoll`, `_openDbModal`, `_dbUpdateActiveBadges` all defined; `_dbSvcCache` and `_migPollTimer` declared |
+| `TestDbLoadDbEnhanced` | 5 | `loadDb()` reads services from metrics endpoint; populates `_dbSvcCache`; calls `_dbUpdateActiveBadges`; polls migration on load; starts poll if running |
+| `TestDbHoverTooltipLiveStats` | 6 | `_dbShowTip()` reads `_dbSvcCache`; shows `size_bytes` (SQLite); shows `events_rows` (Postgres); shows `available` status; old `#db-info-popover` removed; click wiring (`onclick`/`_dbSideClick`) present |
+| `TestDbModal` | 12 | No `confirm()` in apply handler; `_openDbModal()` called; `impactLines` array present; `fullMigrate=true` always set; `full_migrate` flag sent; DSN override input; connection test button; Yes button disabled until test passes (`needsTest`); uses `showSimpleModal`; updates badges on success; checks `full_migrate_scheduled`; Cancel button present |
+| `TestDbUpdateActiveBadges` | 2 | References both badge elements; uses `display:none` for inactive badge |
+| `TestDbMigRenderRow` | 4 | Clears element when no migration; renders CSS width progress bar; displays `pct`; colour-codes error/running/done states |
+| `TestDbPollHelpers` | 4 | `_pollMigOnce` fetches `db-migration-status`; `_startMigPoll` uses `setInterval`; `_startMigPoll` clears interval when not running; guard against double-start via `_migPollTimer` |
+| `TestDbSettingsNoBrowserConfirm` | 1 | No `confirm()` in the DB Backend JS section |
+
+### `test_v188_redis_security.py` — Redis allowlist, HMAC ban-signing, and settings card
+**Version added:** v1.8.7 (feature drafted for v1.8.8 label; shipped in v1.8.7 image)
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestIpNetListParser` | 10 | Comma/newline separated CIDRs; bare IP → /32; list input; invalid entry dropped; all-invalid → empty; host-bits normalised; empty string → empty; IPv6 CIDR; returns list of strings |
+| `TestRedisAllowListKnob` | 7 | `REDIS_ALLOW_LIST` in hot-reload knobs; uses `_ip_net_list_parser`; drops invalid; no validator; default is empty list; attribute exists; parses newline input |
+| `TestRedisBanHmac` | 9 | Sign adds pipe suffix; verify roundtrip; tampered value rejected; expired value rejected; wrong key rejected; different IPs produce different HMACs; signature is 64 hex chars; verify requires correct format; partial payload rejected |
+| `TestJa4DenylistZadd` | 7 | `ZADD` used for JA4 denylist; score is epoch timestamp; key prefix correct; stored in Redis; expired entries not present; allows fingerprint lookup; TTL enforcement |
+| `TestRedisAllowlistEnforce` | 9 | Allowed IP passes; disallowed IP blocked; empty list → all pass; CIDR range enforced; IPv6 enforcement; allowlist read from config; check on every request; bypass allowed CIDR; log event on block |
+| `TestControlsRedisGuard` | 2 | Controls page has Redis section; `REDIS_ALLOW_LIST` referenced |
+| `TestSettingsRedisCard` | 17 | Card element present; status pill/dot/text; URL display; `loadRedis` function defined; reads config endpoint; checks `connected` field; reads `REDIS_ALLOW_LIST` from state; apply posts `REDIS_ALLOW_LIST`; posts to `/secured/config`; `rediss://` TLS check; URL sanitiser; allowlist status element |
+
+### `test_v188_ed25519_mesh.py` — Ed25519 gateway mesh signing + REDIS_REQUIRE_TLS
+**Version added:** v1.8.8
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestRedisRequireTls` | 10 | `REDIS_REQUIRE_TLS` defaults True; env-var overrides (false/0/no/true/1); SystemExit(2) present in source when plaintext + TLS required; warn log path when TLS not required; secondary TLS check in `_shared_init` before allowlist check; secondary check logs `redis_blocked_no_tls` |
+| `TestEd25519KeypairGeneration` | 10 | `_gw_generate_keypair` returns two 43-char base64url strings; random per call; `_gw_derive_pubkey` roundtrips; returns empty string on invalid input; private/public keys decode to exactly 32 bytes; `_gw_fingerprint` returns 12 hex chars |
+| `TestCanonicalOfferBytes` | 8 | Returns bytes; excludes `_sig` field; output is stable sorted-key JSON; key-order independent; empty dict; single-key roundtrip; `_sig`-only → `b'{}'`; non-`_sig` keys survive |
+| `TestGwSignOffers` | 7 | Returns non-empty string for valid keypair; valid base64url; signature is exactly 64 bytes (86 base64url chars); empty/garbage key → empty string; deterministic; different offers → different signatures |
+| `TestGwVerifyOffers` | 10 | Valid sig + correct key → True; tampered value/wrong key/truncated sig/empty sig/invalid key → False; extra/removed field after signing → False (canonical payload); `_sig` excluded from payload; returns bool without raising |
+| `TestMeshSyncLoopSource` | 10 | Loop fetches `private_key` from DB; calls `_gw_sign_offers`; adds `_sig` to publish dict; `trust_map` selects `public_key` column; trust_map is (auto_ok, public_key) tuple; inbound: pops `_sig`; rejects on absent sig (`mesh_sync_no_sig`); rejects on invalid sig; rejects on no pubkey; calls `_gw_verify_offers` |
+
+
+### `test_v188_settings_subnav.py` — Settings page section nav (split-pane layout)
+**Version added:** v1.8.8
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestSettingsSubnavHTML` | 23 | `#settings-split` wrapper, `#settings-nav`, `#settings-panels`, `#settings-id-strip` always-visible; id-strip before split; `card-export`/`card-import` IDs; all 15 `data-card-sec` targets exist |
+| `TestSettingsSubnavCSS` | 5 | `#settings-split` flex layout; `#settings-nav` has fixed width; `#settings-panels` flex-grow; nav links have `data-sec` attr; `#settings-id-strip` CSS |
+| `TestSettingsSubnavJS` | 25 | `SECTIONS` constant; `showSection` function; nav click handler; active-link class; hash routing; section mapping complete; `card-*` assignments; no duplicate card mappings; every section has ≥1 card |
+| `TestSettingsSubnavRegression` | 12 | Existing cards intact (9 parametrized: vhosts/users/gw-registry/db/infrastructure/redis/sso/2fa/mesh); identity strip elements intact; no `#main-wrapper`; no page-content padding |
+| Standalone | 6 | `test_d01`–`test_d06`: settings returns 200; has split; has nav; has panels; has card-sec; exposes switch |
+
+---
+
+### `test_performance.py` — Performance regression gates
+
+**Version added:** v1.8.8
+
+| Test | Description |
+|------|-------------|
+| `test_perf_p1_browser_fingerprint_throughput` | SHA256 fingerprint: ≥ 20 000 calls/s floor (5 000 iterations) |
+| `test_perf_p2_header_order_sig_throughput` | Header-order SHA256: ≥ 20 000 calls/s floor (5 000 iterations) |
+| `test_perf_p3_socket_ip_bucket_sequential` | `take_socket_ip_token` sequential: ≥ 2 000 ops/s (1 000 calls, single IP, lock-hold timing) |
+| `test_perf_p4_identity_bucket_sequential` | `take_token` sequential: ≥ 2 000 ops/s (1 000 calls, single identity) |
+| `test_perf_p5_socket_ip_bucket_concurrent` | `take_socket_ip_token` concurrent: 20 workers × 50 calls must finish in < 5 s (lock-contention check) |
+| `test_perf_p6_live_endpoint_sequential_latency` | `/live` sequential: 50 requests < 15 s total; p95 < 500 ms (proxy overhead baseline, no upstream I/O) |
+| `test_perf_p7_live_endpoint_concurrent` | `/live` concurrent: 20 simultaneous requests all return 200 in < 10 s (deadlock/starvation check) |
+| `test_perf_p8_full_pipeline_distinct_ips` | Full pipeline with 30 distinct X-Forwarded-For IPs: < 20 s (rate-limit + identity + scoring per new IP) |
+| `test_perf_p9_ip_state_insert_oi` | `ip_state` insert stays O(1): per-op time at n=5 000 must not exceed 3× per-op time at n=100 |
+
 ---
 
 ## Cross-version Tests
@@ -1113,6 +1234,58 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestDynamicRewriteDisabled` | 2 | Internal URL leaks in body; Location already rewritten to gateway |
 | `TestDynamicRewriteEnabled` | 14 | HTML/JSON/XML/plain-text body stripped; Location on 3xx; Content-Location/Link headers; clean response unaffected; CSP violation resolved; trailing slash; status codes preserved; X-Proxy still injected; different port not stripped |
 
+### `test_custom_rules_fuzzing.py` — Custom rules adversarial fuzzing
+**Version added:** v1.8.7+ (P0.3 improvement)
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestFuzz01PathWildcard` | 4 | Exact match, wildcard `*`, no-match, root `/` |
+| `TestFuzz02MethodCondition` | 3 | Method match (POST), method no-match (GET), method case-insensitive |
+| `TestFuzz03UaCondition` | 3 | UA prefix match, UA no-match, empty UA |
+| `TestFuzz04HeaderCondition` | 3 | Custom header match, header no-match, header substring |
+| `TestFuzz05CidrCondition` | 4 | Single CIDR match, CIDR no-match, 1000-entry CIDR list with match, invalid IP falls through |
+| `TestFuzz06MultipleConditions` | 3 | AND logic (path+method), partial match fails (only one condition), all-condition rule |
+| `TestFuzz07MultipleRules` | 3 | First rule wins (allow before block), second rule fires when first misses, block then allow |
+| `TestFuzz08AdversarialInputs` | 5 | Path traversal, null bytes, very long path (10k), Unicode path, SQLi string in path |
+| `TestFuzz09EdgeCases` | 5 | Empty rules list, no conditions, action=allow on everything, `_to_custom_rules` with empty list, missing `then` key |
+| `TestFuzz10ConcurrentRuleSwap` | 3 | Thread-safe swap while evaluating, 100 concurrent evals, rule change propagates |
+| `TestFuzz11CountryCondition` | 3 | Country condition with MaxMind disabled (ep version); country no-match; SQLi string as country value |
+| `TestFuzz12QueryCondition` | 3 | Query key present matches (ep version); missing key no-match; missing `value` sub-key no-match |
+
+### `test_component.py` — Full-pipeline component tests
+**Version added:** v1.8.7+ (P1.4 improvement)
+
+Spins the complete gateway (on_startup → middleware → handler → on_cleanup) with all external collaborators stubbed (MaxMind, AbuseIPDB, CrowdSec, Redis disabled; in-process echo upstream). Catches wiring bugs between modules that unit tests miss.
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestComp01BootAndProxy` | 3 | `/live` → 200 ok after startup; clean browser request proxied without 5xx; security headers injected on `text/html` responses (not JSON) |
+| `TestComp02RateLimiting` | 1 | 80 requests with bot UA → at least one 429 (rate-limited) or 404 (banned-silent) |
+| `TestComp03SuspiciousPath` | 2 | Scanner paths (`/wp-login.php`, `/.env`, `/xmlrpc.php`, `/.git/config`, `/phpmyadmin/`) handled without 500; 5 × repeated scanner paths don't crash |
+| `TestComp04AdminAuth` | 2 | Admin endpoints without session → decoy (no real dashboard content); login page reachable (200 or 302) |
+| `TestComp05CustomRulesWiring` | 2 | `allow` custom rule bypasses detection; `block` custom rule fires before upstream (decoy, no 500) |
+| `TestComp06Lifecycle` | 3 | Startup + shutdown completes cleanly; `db_queue` non-None after startup; `UPSTREAM` propagates to `core.proxy_handler` |
+| `TestComp07UaClassification` | 1 | curl, python-requests, Go-http-client, empty, truncated, Log4Shell, SQLi UAs → no 500 |
+| `TestComp08DetectorInterface` | 6 | `REGISTRY` non-empty after import; all entries satisfy `Detector` protocol; `LlmHeuristicDetector.NAME`/`ENABLED` types; `observe()` no-raise; `check()` returns float; `register()` appends to `REGISTRY` |
+
+### `test_pentest_probes.py` — Automated pentest probes
+**Version added:** v1.8.7+ (P1.5 improvement — automates manual step 12)
+
+Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automated assertions. Tests both static source analysis and live proxy behaviour.
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestProxy4_01_Ssrf` | 5 | `_upstream_safe_to_reload` rejects `127.0.0.1`, `localhost`, `10.x`, `192.168.x`, `0.0.0.0`; accepts public URL |
+| `TestProxy4_02_HostHeader` | 3 | Host header forwarded to upstream; `X-Forwarded-For` injected; internal upstream hostname not leaked in response |
+| `TestProxy4_03_PropagateNever` | 3 | `_PROPAGATE_NEVER` defined; blocks `SECRET_KEY`; blocks `DB_PATH` |
+| `TestSec01XssInPath` | 3 | XSS path → no 500; security headers on HTML response; suspicious-path signal in source |
+| `TestSec02PathTraversal` | 2 | `/../etc/passwd` → no 500; no path traversal in upstream request |
+| `TestSec04SqliQuery` | 2 | SQLi in query string → no 500; DB error not in response body |
+| `TestSec06BotUaDetection` | 3 | Scanner UA `python-requests` → no 500; cumulative bot UA requests → restricted (429 or 404); `KNOWN_BOT_UAS` non-empty |
+| `TestSec08VersionDisclosure` | 3 | `1.8.7` version string not in 404 body; `Traceback` not in 404 body; `File "` not in 404 body |
+
+**P3.2 additions to `TestProxy4_03_PropagateNever`:** 2 new methods — `test_all_dangerous_builtins_covered` enumerates exec/eval/compile/open/breakpoint/__import__/__builtins__ and asserts all are in `_PROPAGATE_NEVER`; `test_no_dead_entries_in_propagate_never` verifies every entry is a real builtin or proxy attribute (typo guard).
+
 ---
 
-*Total test files: 55 | Approximate total test functions: 1,800+*
+*Total test files: 67 | Approximate total test functions: ~2,000+*

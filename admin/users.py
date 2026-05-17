@@ -5,6 +5,7 @@ import time as _t  # noqa: F401
 from config import *   # noqa: F401,F403
 from config import _DASHBOARDS_DIR  # noqa: F401 — underscore not exported by *
 from state import *    # noqa: F401,F403
+from state import _ACTIVE_SESSIONS, _ACTIVE_SESSION_TTL_S  # noqa: F401 — private names not exported by *
 from helpers import slog, now, get_ip  # noqa: F401
 from admin.auth import _internal_authed, _request_username, _request_role, _role_denied, _require_csrf  # noqa: F401
 from aiohttp import web
@@ -63,13 +64,6 @@ _SESSION_TTL  = 12 * 3600              # 12h sliding session
 _SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**17, 8, 1   # OWASP recommended; ~500 ms on a single core
 _LOGIN_BUCKET: dict = {}               # ip → (window_start, count)
 _LOGIN_BUCKET_LOCK = asyncio.Lock()
-# 1.6.7 — last-seen-ts per signed-in user. Bumped on every cookie-
-# authenticated request inside `_internal_authed`. In-memory so it
-# resets on container restart (acceptable: a fresh boot shows everyone
-# offline until they next interact). The Users list considers a user
-# "online" if seen in the last `_ACTIVE_SESSION_TTL_S` seconds.
-_ACTIVE_SESSION_TTL_S = 60
-_ACTIVE_SESSIONS: dict = {}            # username → last_seen_ts
 
 # 1.6.7 — per-session state. Each login mints a fresh sid; the server-
 # side `user_sessions` row is the source of truth for whether a token
@@ -1214,11 +1208,27 @@ async def totp_confirm_endpoint(request: web.Request):
         "totp_backup_codes": json.dumps(backup_codes),
         "updated_ts": _t.time(),
     }
+    queued = False
     if db_queue is not None:
         try:
             db_queue.put_nowait(("user_update", (username, fields)))
+            queued = True
         except asyncio.QueueFull:
-            return web.json_response({"error": "db queue full"}, status=503,
+            pass
+    if not queued:
+        # Queue full or absent — write synchronously so 2FA enable always persists.
+        try:
+            _cols   = ", ".join(f"{k}=?" for k in fields)
+            _params = list(fields.values()) + [username]
+            _conn = sqlite3.connect(DB_PATH)
+            _conn.execute(f"UPDATE users SET {_cols} WHERE username=?",  # nosec B608
+                          _params)
+            _conn.commit()
+            _conn.close()
+        except Exception as _e:
+            slog("totp_confirm_sync_write_failed", level="error",
+                 username=username, err=str(_e)[:200])
+            return web.json_response({"error": "db write failed"}, status=503,
                                       headers={"Cache-Control": "no-store"})
     _TOTP_PENDING.pop(username, None)
     slog("totp_enabled", level="warn", username=username, ip=get_ip(request))
@@ -1271,11 +1281,27 @@ async def totp_disable_endpoint(request: web.Request):
         "totp_backup_codes": None,
         "updated_ts": _t.time(),
     }
+    queued = False
     if db_queue is not None:
         try:
             db_queue.put_nowait(("user_update", (username, fields)))
+            queued = True
         except asyncio.QueueFull:
-            return web.json_response({"error": "db queue full"}, status=503,
+            pass
+    if not queued:
+        # Queue full or absent — write synchronously so disable always succeeds.
+        try:
+            _cols   = ", ".join(f"{k}=?" for k in fields)
+            _params = list(fields.values()) + [username]
+            _conn = sqlite3.connect(DB_PATH)
+            _conn.execute(f"UPDATE users SET {_cols} WHERE username=?",  # nosec B608
+                          _params)
+            _conn.commit()
+            _conn.close()
+        except Exception as _e:
+            slog("totp_disable_sync_write_failed", level="error",
+                 username=username, err=str(_e)[:200])
+            return web.json_response({"error": "db write failed"}, status=503,
                                       headers={"Cache-Control": "no-store"})
     slog("totp_disabled", level="warn", username=username, ip=get_ip(request))
     return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})

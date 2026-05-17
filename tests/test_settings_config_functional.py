@@ -1270,7 +1270,7 @@ class TestVhostPolicyDashboard:
         status, ct, html = _run(go())
         assert status == 200, f"GET /vhost-policy with auth returned {status}"
         assert "html" in ct, f"Content-Type not HTML: {ct}"
-        assert "AppSecGW_1.8.7" in html, "vhost-policy page missing version string"
+        assert "AppSecGW_1.8.8" in html, "vhost-policy page missing version string"
 
     def test_vhost_policy_page_no_store_header(self, proxy_module):
         async def go():

@@ -10,6 +10,7 @@ the version is considered released.
 
 | Step | Type | Gate |
 |------|------|------|
+| 0 | Zombie process cleanup | mandatory pre-flight |
 | 1 | Unit tests | blocking |
 | 2 | Functional tests | blocking |
 | 3 | Integration tests | blocking |
@@ -23,7 +24,7 @@ the version is considered released.
 | 8 | Injection sanitisation | blocking |
 | 9 | Static hardening (Bandit + Semgrep + SonarQube) | 0 H / 0 C |
 | 10 | Image CVE scan (Trivy + Aikido) | 0 C / 0 H |
-| 11 | Automated code review (CodeRabbit) | no open H/C |
+| 11 | Automated code review | no open H/C |
 | 11a | Secure code review (white-box) | blocking |
 | 12 | E2E / Black-box pentest | 0 bypasses |
 | 13 | Documentation | complete |
@@ -32,11 +33,42 @@ the version is considered released.
 | 15 | DAST (TLS, OWASP, rate, canary, fuzzing, IAST, config, chaos, contract, exploratory) | blocking |
 | 16 | Post-release bug watch | regression tests green |
 | 17 | Dashboard security standards | 0 violations |
+| 17j | Dashboard dynamic + mobile check (Playwright + Lighthouse) | 0 JS errors · mobile ≥ 70 · a11y ≥ 80 |
 | 18 | Acceptance / UAT | operator sign-off |
 | 19 | Canary deployment gate | 0 new errors in 15 min |
 | 20 | Compliance attestation | all items confirmed |
 
-Author: Pedro Tarrinho · Last updated for: 1.7.5
+Author: Pedro Tarrinho · Last updated for: 1.8.8
+
+---
+
+## 0. Zombie process cleanup
+
+**Run before any test session.** Orphaned pytest processes from previous
+sessions consume CPU/RAM and distort timing, and can cause spurious OOM
+failures in the full suite.
+
+```bash
+# Kill all pytest processes not belonging to the current session.
+# Replace <KEEP_PIDS> with PIDs of any intentional background test runs.
+KEEP="<KEEP_PIDS>"   # e.g. "1234567 1234568" or leave empty to kill all
+ps aux | grep -E '(pytest|py\.test)' | grep -v grep | awk '{print $2}' \
+  | grep -Ev "^(${KEEP// /|})$" \
+  | xargs -r kill -9
+```
+
+**Quick one-liner (kill ALL pytest, no exceptions):**
+```bash
+pkill -9 -f pytest
+```
+
+**Pass criterion:** `ps aux | grep -E 'pytest' | grep -v grep` returns nothing
+(or only intentional background runs).
+
+**Why:** Long-lived pytest workers from previous Claude Code context windows
+accumulate over sessions. Each orphan holds ~350 MB RSS and burns a full CPU
+core, saturating the host after 3–4 sessions. They also hold file locks on
+`.pytest_cache` that can corrupt incremental test runs.
 
 ---
 
@@ -262,14 +294,34 @@ triaged; accepted-risk items require a note in the validation record. Aikido
 findings that duplicate Trivy CVEs already classified are inherited — do not
 re-classify.
 
-## 11. Automated code review (CodeRabbit)
+## 11. Automated code review
 
-Run CodeRabbit on all changes in this version using the `/coderabbit:coderabbit-review`
-skill (or via the CodeRabbit GitHub integration on the release PR).
+Run the full static analysis stack:
 
-**Pass criterion:** All actionable findings resolved or explicitly classified as
-false-positive in the report. Nitpicks may be deferred with a note. No finding
-rated **high** or **critical** by CodeRabbit may be left open.
+```bash
+# ruff — comprehensive lint: errors, bugs, security, naming
+ruff check proxy.py core/ db/ scoring.py identity.py helpers.py admin/ \
+  --select E,F,W,C,B,S --ignore E501,E402,F401,F403,F405,W291,W293,W292,S110,E711,E712
+
+# ruff auto-fix safe issues (F541, B010, E401, C420)
+ruff check proxy.py core/ db/ scoring.py identity.py helpers.py admin/ \
+  --select F541,E401,C420 --fix
+
+# mypy — type checking
+mypy proxy.py core/ scoring.py identity.py helpers.py --ignore-missing-imports --no-error-summary
+
+# vulture — dead code (≥90% confidence)
+vulture proxy.py core/ db/ scoring.py identity.py helpers.py admin/ --min-confidence 90
+
+# radon — cyclomatic complexity (flag grade C+)
+radon cc proxy.py core/ scoring.py identity.py -a -n C
+```
+
+**Pass criterion:** All actionable findings resolved or explicitly classified as false-positive in the report.
+- ruff: 0 new **F841** (unused variable), **F401** (unused import from non-star import), **S314** (unnosec'd XML), **B904** (raise in except) findings.
+- mypy: no new errors vs previous release baseline.
+- vulture: 0 findings at ≥90% confidence.
+- radon: any new grade-F function must be triaged (expected for request-pipeline handlers).
 
 ## 11a. Secure code review
 Read every line of code added or modified in this version. Check for:
@@ -1128,6 +1180,237 @@ fills to origin.
 
 ---
 
+### 17j. Dashboard dynamic + mobile check (Playwright + Lighthouse)
+
+Run after every release that touches any file in `dashboards/`. Verifies that pages
+**actually load data at runtime** (not just pass static HTML checks), that no
+JavaScript errors are thrown, that layouts hold at three viewport sizes, and that
+the mobile score is acceptable.
+
+#### Prerequisites
+
+```bash
+pip install playwright
+playwright install chromium          # ~130 MB one-time download
+npm install -g lighthouse            # or: npx lighthouse (no install)
+```
+
+#### Step 1 — Playwright: dynamic load + JS errors + viewport screenshots
+
+Obtain a live session cookie first (login via the tunnel URL), then run:
+
+```python
+# scripts/dashboard_check.py
+import asyncio, pathlib
+from playwright.async_api import async_playwright
+
+# ── config ────────────────────────────────────────────────────────────────────
+BASE       = "https://<tunnel>.trycloudflare.com"   # or http://localhost:8443
+SESSION    = "<agw_session cookie value>"           # from browser DevTools after login
+CSRF       = "<agw_csrf cookie value>"
+
+PAGES = [
+    ("dashboard",     "/antibot-appsec-gateway/secured/dashboard"),
+    ("controls",      "/antibot-appsec-gateway/secured/controls"),
+    ("settings",      "/antibot-appsec-gateway/secured/settings"),
+    ("agents",        "/antibot-appsec-gateway/secured/agents"),
+    ("service",       "/antibot-appsec-gateway/secured/service"),
+    ("geo",           "/antibot-appsec-gateway/secured/geo"),
+    ("siem",          "/antibot-appsec-gateway/secured/siem"),
+    ("logs",          "/antibot-appsec-gateway/secured/logs"),
+]
+
+VIEWPORTS = [
+    ("desktop", 1440, 900),
+    ("tablet",   768, 1024),
+    ("mobile",   390,  844),   # iPhone 14
+]
+
+OUT = pathlib.Path("screenshots"); OUT.mkdir(exist_ok=True)
+
+DYNAMIC_SIGNALS = [
+    # each page must contain at least one of these after networkidle
+    "dashboard":  ["risk-score", "requests", "clients"],
+    "controls":   ["card-db", "card-redis", "card-gateway"],
+    "settings":   ["card-gateway-id", "card-db", "card-redis"],
+    "agents":     ["agent-table", "no-agents"],
+    "service":    ["cpu", "mem", "rss"],
+    "geo":        ["map", "geo-table"],
+    "siem":       ["siem-table", "no-events"],
+    "logs":       ["log-row", "no-logs"],
+]
+
+async def check():
+    async with async_playwright() as p:
+        browser  = await p.chromium.launch()
+        ctx      = await browser.new_context()
+        await ctx.add_cookies([
+            {"name": "agw_session", "value": SESSION, "domain": BASE.split("//")[1], "path": "/"},
+            {"name": "agw_csrf",    "value": CSRF,    "domain": BASE.split("//")[1], "path": "/"},
+        ])
+
+        results = []
+        for slug, path in PAGES:
+            for vp_name, w, h in VIEWPORTS:
+                page   = await ctx.new_page()
+                page.set_default_timeout(15_000)
+                errors = []
+                page.on("console",   lambda m:    errors.append(f"[console.error] {m.text}") if m.type == "error" else None)
+                page.on("pageerror", lambda e:    errors.append(f"[pageerror] {e}"))
+
+                await page.set_viewport_size({"width": w, "height": h})
+                resp = await page.goto(BASE + path, wait_until="networkidle")
+
+                # ── check 1: HTTP status ──────────────────────────────────────
+                status_ok = resp.status == 200
+
+                # ── check 2: not redirected to login ─────────────────────────
+                not_login = "/login" not in page.url
+
+                # ── check 3: dynamic content present ─────────────────────────
+                html     = await page.content()
+                signals  = DYNAMIC_SIGNALS.get(slug, [])
+                dyn_ok   = any(s in html for s in signals) if signals else True
+
+                # ── check 4: no horizontal scroll on mobile ───────────────────
+                scroll_ok = True
+                if vp_name == "mobile":
+                    scroll_w = await page.evaluate("document.documentElement.scrollWidth")
+                    scroll_ok = scroll_w <= w + 5   # 5px tolerance
+
+                # ── screenshot ───────────────────────────────────────────────
+                await page.screenshot(
+                    path=OUT / f"{slug}-{vp_name}.png",
+                    full_page=(vp_name == "desktop"),
+                )
+
+                verdict = "PASS" if (status_ok and not_login and dyn_ok and scroll_ok and not errors) else "FAIL"
+                results.append({
+                    "page": slug, "viewport": vp_name, "verdict": verdict,
+                    "status": resp.status, "not_login": not_login,
+                    "dyn_ok": dyn_ok, "scroll_ok": scroll_ok, "js_errors": len(errors),
+                    "errors": errors,
+                })
+                await page.close()
+
+        await browser.close()
+
+        # ── report ────────────────────────────────────────────────────────────
+        failures = [r for r in results if r["verdict"] == "FAIL"]
+        for r in results:
+            mark = "✓" if r["verdict"] == "PASS" else "✗"
+            print(f"  {mark} {r['page']:12s} @ {r['viewport']:8s}  "
+                  f"status={r['status']} dyn={r['dyn_ok']} scroll={r['scroll_ok']} js_err={r['js_errors']}")
+            for e in r["errors"]:
+                print(f"      !! {e}")
+
+        print(f"\nScreenshots: {OUT.resolve()}/")
+        if failures:
+            print(f"\nFAILED: {len(failures)} check(s)")
+            raise SystemExit(1)
+        print(f"\nAll {len(results)} checks PASS")
+
+asyncio.run(check())
+```
+
+```bash
+python3 scripts/dashboard_check.py
+```
+
+**What it validates per page × viewport:**
+
+| Check | Rule |
+|-------|------|
+| HTTP 200 | Page serves successfully with valid session |
+| Not redirected to `/login` | Session cookie accepted |
+| Dynamic content present | At least one known data-bearing element in the DOM |
+| No horizontal scroll on mobile | `scrollWidth ≤ viewport + 5 px` |
+| Zero JS console errors | `console.error` and `pageerror` events = 0 |
+
+**Pass criterion:** All pages × all 3 viewports = PASS. Screenshots saved to `screenshots/` for visual review.
+
+#### Step 2 — Lighthouse: mobile score + accessibility
+
+Run against the live tunnel for each page that renders meaningful content without heavy interaction:
+
+```bash
+BASE="https://<tunnel>.trycloudflare.com"
+COOKIE="agw_session=<value>; agw_csrf=<value>"
+
+for PAGE in dashboard controls settings service siem; do
+  lighthouse "${BASE}/antibot-appsec-gateway/secured/${PAGE}" \
+    --form-factor=mobile \
+    --throttling-method=simulate \
+    --extra-headers="{\"Cookie\": \"${COOKIE}\"}" \
+    --output=html \
+    --output-path="lh-${PAGE}-mobile.html" \
+    --chrome-flags="--headless --no-sandbox" \
+    --only-categories=performance,accessibility,best-practices \
+    --quiet
+  echo "Lighthouse done: ${PAGE}"
+done
+```
+
+Open the generated `.html` files in a browser to review scores.
+
+**Pass criteria:**
+
+| Category | Minimum score | Rationale |
+|----------|---------------|-----------|
+| Mobile Performance | ≥ 70 | Admin tools tolerate some weight; < 70 = unusable on slow 4G |
+| Accessibility | ≥ 80 | ARIA roles, colour contrast, keyboard nav for operator efficiency |
+| Best Practices | ≥ 85 | HTTPS, no deprecated APIs, no console errors counted by LH |
+
+Scores below threshold are **blocking** — record findings in `validation/<version>.md`
+under `§17j` and fix before UAT sign-off.
+
+#### Step 3 — Mobile visual review (human, 5 min)
+
+Open `screenshots/` and inspect each `*-mobile.png`:
+
+- [ ] Sidebar collapsed or hidden (not overlapping content)
+- [ ] Cards stack vertically (no two-column bleed on 390 px)
+- [ ] Tables have horizontal scroll wrapper (not clipped)
+- [ ] Buttons / pill actions are ≥ 44 px tap target
+- [ ] No text truncated mid-word by overflow: hidden
+
+#### Pass criterion (§17j overall)
+
+All three sub-checks must pass before the version advances to Step 18:
+
+1. Playwright: `0 FAIL` across all pages × viewports
+2. Lighthouse: mobile ≥ 70 · accessibility ≥ 80 · best-practices ≥ 85
+3. Mobile visual: all 5 checklist items confirmed
+
+Record results in `validation/<version>.md`:
+
+```markdown
+## Step 17j — Dashboard dynamic + mobile check
+
+### Playwright
+| Page | desktop | tablet | mobile |
+|------|---------|--------|--------|
+| dashboard | PASS | PASS | PASS |
+…
+
+### Lighthouse (mobile)
+| Page | Performance | Accessibility | Best Practices |
+|------|-------------|---------------|----------------|
+| dashboard | 82 | 91 | 92 |
+…
+
+### Mobile visual review
+- [x] Sidebar collapsed
+- [x] Cards stack vertically
+- [x] Tables scrollable
+- [x] Tap targets ≥ 44 px
+- [x] No overflow truncation
+
+**Result: PASS / FAIL**
+```
+
+---
+
 ## 18. Acceptance / UAT
 
 Before marking the version as production-ready, confirm it solves the actual operational problem —
@@ -1418,3 +1701,48 @@ Demo service 2 (via gateway):
 
 **Do not ask the user to do any of the above steps themselves.**
 Run all checks silently and only share the final URLs + key.
+
+---
+
+## Phase: Disk Cleanup
+
+Run when disk usage is high or after multiple build iterations.
+
+### Check
+
+```bash
+df -h / /media/share
+docker system df
+```
+
+**Trigger cleanup if:** either filesystem is above 90% used, or Docker reclaimable > 1 GB.
+
+### Clean
+
+```bash
+# Remove stopped containers, dangling images, unused networks, build cache
+docker system prune -f
+
+# Remove unused volumes (anonymous volumes from old containers)
+docker volume prune -f
+
+# Remove specific old image tags that have been superseded
+docker rmi appsec-antibot-gw:<old-version> 2>/dev/null || true
+```
+
+**Safe to remove:**
+- Dangling images (`<none>:<none>`) — always
+- Build cache — always (rebuilt on next `docker build`)
+- Old version tags (e.g. `1.8.6`) — once the new version is confirmed running
+- Unused volumes — once confirmed no active container references them
+
+**Do NOT remove:**
+- Any image currently used by a running container (`docker system df` marks these as active)
+- Named volumes that map to persistent data dirs (`/data`, `/gwdata`)
+
+### Verify after
+
+```bash
+docker system df
+df -h / /media/share
+```

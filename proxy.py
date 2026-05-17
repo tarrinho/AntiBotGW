@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.7 — entry point only.
+Anti-bot reverse proxy v1.8.8 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -165,7 +165,8 @@ import types as _types_proxy
 # NOTE: SESSION_KEY / ADMIN_KEY are intentionally NOT in this set — they must
 # propagate so that in-process key rotation reaches all submodules.
 _PROPAGATE_NEVER = frozenset({
-    "open", "exec", "eval", "__builtins__", "__import__",
+    "open", "exec", "eval", "compile", "breakpoint",
+    "__builtins__", "__import__",
 })
 
 class _ProxyModule(_types_proxy.ModuleType):
@@ -188,83 +189,68 @@ if _this_proxy_mod is not None:
     _this_proxy_mod.__class__ = _ProxyModule
 
 
-# ── Startup / cleanup ──────────────────────────���──────────────────────────────
+# ── Startup helpers (called in order from on_startup) ──────────────────────────
 
-async def on_startup(app):
-    """Initialise SQLite DB + spawn the async writer + load saved state."""
-    global db_queue, db_writer_task, prune_task, service_metrics_task
-    # Sync UPSTREAM to core.proxy_handler so startup functions (_fetch_upstream_404,
-    # proxy(), etc.) see any value set by tests or hot-reload, not the import-time snapshot.
+def _startup_db_and_state():
+    """Step 1: sync UPSTREAM, init SQLite schema, hydrate in-process state."""
     import core.proxy_handler as _cph
     _cph.UPSTREAM = UPSTREAM
     db_init()
     db_load_state()
-    # 1.6.5 — initialise MaxMind FIRST so that knob validators which gate on
-    # `_city_reader is not None` (notably COUNTRY_BLOCK_ENABLED) see the
-    # readers as loaded when db_load_config applies persisted values.
-    # Previously the load order was reversed, which caused
-    # COUNTRY_BLOCK_ENABLED=true to be silently rejected on restart and
-    # snap back to false even though the DB held the right value.
+
+
+def _startup_maxmind_propagate():
+    """Step 2: load MaxMind readers BEFORE db_load_config so country-block
+    validators see live readers. Propagate to all loaded modules immediately."""
     _init_maxmind()
-    # Propagate MaxMind state to all loaded modules so proxy_handler (which
-    # got MAXMIND_ENABLED=False at import time via `from reputation.maxmind
-    # import *`) sees the live True value before db_load_config validators run.
     import sys as _sys_mm
     import reputation.maxmind as _mm_mod
-    for _mm_attr in ("MAXMIND_ENABLED", "MAXMIND_CITY_ENABLED", "_asn_reader", "_city_reader"):
-        _mm_val = getattr(_mm_mod, _mm_attr, None)
-        for _mm_m in list(_sys_mm.modules.values()):
-            if _mm_m is not None and _mm_m is not _mm_mod and hasattr(_mm_m, _mm_attr):
+    for _attr in ("MAXMIND_ENABLED", "MAXMIND_CITY_ENABLED", "_asn_reader", "_city_reader"):
+        _val = getattr(_mm_mod, _attr, None)
+        for _m in list(_sys_mm.modules.values()):
+            if _m is not None and _m is not _mm_mod and hasattr(_m, _attr):
                 try:
-                    setattr(_mm_m, _mm_attr, _mm_val)
+                    setattr(_m, _attr, _val)
                 except (AttributeError, TypeError):
                     pass
-    # 1.6.5 — initialise the Postgres event store schema whenever
-    # POSTGRES_DSN is configured. Even when SQLite is the active backend,
-    # the standby Postgres has its schema ready so the operator can flip
-    # the switch on the Controls dashboard without first running migrate
-    # commands. Best-effort: a misconfigured DSN logs a warning but the
-    # gateway boots fine.
-    #
-    # 1.8.6 fix: _postgres_available is initialised False in state.py and
-    # was never set to True at startup, so this block never ran and the UI
-    # always showed SQLite as the active backend even with DB_BACKEND=postgres.
-    # Resolve it here by calling _postgres_load_module() and propagating the
-    # result to every loaded module before the db_init_postgres() check.
-    if POSTGRES_DSN:
-        from db.postgres import _postgres_load_module as _pg_load_check
-        if _pg_load_check() is not None:
-            import state as _state_pg
-            _state_pg._postgres_available = True
-            import sys as _sys_pg
-            for _m_pg in list(_sys_pg.modules.values()):
-                if _m_pg is not None and hasattr(_m_pg, '_postgres_available'):
-                    try:
-                        setattr(_m_pg, '_postgres_available', True)
-                    except (AttributeError, TypeError):
-                        pass
-        if db_init_postgres():
-            print(f"[db-pg] event store ready (active={DB_BACKEND})",
-                  flush=True)
-        else:
-            print("[db-pg] init failed — events will only land in the "
-                  "active backend (SQLite) until a fresh restart", flush=True)
-    # Secrets first: credential-gated knob validators (e.g. ABUSEIPDB_ENABLED,
-    # TURNSTILE_ENABLED) read globals() of core.proxy_handler to check whether
-    # the matching API key is present. Loading secrets first + propagating via
-    # _refresh_integration_state ensures those values are in every module
-    # namespace before db_load_config runs its validators.
+
+
+def _startup_postgres_schema():
+    """Step 3 (optional): migrate standby Postgres so operators can switch
+    backends live on the Controls dashboard without a manual migration step."""
+    if not POSTGRES_DSN:
+        return
+    from db.postgres import _postgres_load_module as _pg_load_check
+    if _pg_load_check() is not None:
+        import state as _state_pg
+        import sys as _sys_pg
+        _state_pg._postgres_available = True
+        for _m in list(_sys_pg.modules.values()):
+            if _m is not None and hasattr(_m, '_postgres_available'):
+                try:
+                    setattr(_m, '_postgres_available', True)
+                except (AttributeError, TypeError):
+                    pass
+    if db_init_postgres():
+        print(f"[db-pg] event store ready (active={DB_BACKEND})", flush=True)
+    else:
+        print("[db-pg] init failed — events will only land in the "
+              "active backend (SQLite) until a fresh restart", flush=True)
+
+
+def _startup_secrets_and_config():
+    """Step 4: load secrets BEFORE config so credential-gated knob validators
+    (ABUSEIPDB_ENABLED, TURNSTILE_ENABLED) see live API keys."""
     db_load_secrets()
-    # 1.5.5 — load DB-persisted hot-reload knobs over env defaults so live
-    # changes pushed via /__config survive restart.
     db_load_config()
-    # 1.6.10 — load per-gateway signal activation-order overrides from DB.
     _load_signal_order_cache()
+
+
+def _startup_db_queue():
+    """Step 5: create async DB write queue, propagate to all modules,
+    spawn writer task, rehydrate bans, start ip_state LRU eviction."""
+    global db_queue, db_writer_task
     db_queue = asyncio.Queue(maxsize=10000)
-    # Push the live Queue into every loaded module that has a db_queue
-    # attribute (submodules did `from state import *` which cached
-    # db_queue=None at import time; in tests on_startup is called multiple
-    # times so we propagate unconditionally, not just when value is None).
     import sys as _sys
     for _m in list(_sys.modules.values()):
         if _m is not None and hasattr(_m, 'db_queue'):
@@ -273,31 +259,23 @@ async def on_startup(app):
             except (AttributeError, TypeError):
                 pass
     db_writer_task = asyncio.create_task(db_writer_loop())
-    # 1.8.6 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
     from db.sqlite import _rehydrate_bans
     _rehydrate_bans()
-    # 1.8.6 — start ip_state LRU eviction loop.
     from state import _ip_state_evict_loop as _evict_loop
     import state as _state_mod
     _state_mod._ip_state_eviction_task = asyncio.create_task(_evict_loop())
-    # 1.8.6 — start webhook worker with retry + circuit breaker.
-    from integrations.webhook import start_webhook_worker
-    await start_webhook_worker()
+
+
+def _startup_admin_users_sessions():
+    """Step 6: load admin IP list, bootstrap admin user, restore session cache,
+    print first-login banner and integration status lines."""
     db_load_admin_ips()
     print(f"[admin-ips] {len(ADMIN_ALLOWED_ENTRIES)} entries loaded "
           f"({sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='env')} env, "
           f"{sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='manual')} manual)")
-    # 1.6.7 — bootstrap an `admin` user from INTERNAL_KEY on first boot
-    # so the dashboard login works out of the box.
     _user_bootstrap()
     print(f"[users] {_user_count()} dashboard user(s) registered", flush=True)
-    # 1.6.7 — load the active sessions cache from `user_sessions`.
     _session_cache_load()
-    # 1.6.7 — print first-time login instructions to the container log so
-    # an operator running `docker compose up -d` can see how to sign in
-    # without having to dig the auto-generated key out of /data. The
-    # message disappears once any user has actually logged in (same
-    # condition as the login-page bootstrap hint).
     try:
         conn = sqlite3.connect(DB_PATH)
         seen = conn.execute(
@@ -326,37 +304,6 @@ async def on_startup(app):
     if CROWDSEC_ENABLED:
         print(f"[crowdsec] active — LAPI {CROWDSEC_LAPI_URL}, "
               f"cache {CROWDSEC_CACHE_SECS}s", flush=True)
-    # 1.5.4: prime upstream 404 cache so blocked admin requests mirror it
-    if await _fetch_upstream_404():
-        print(f"[upstream-404] cached: status={_upstream_404_cache['status']} "
-              f"size={len(_upstream_404_cache['body'])}b "
-              f"ctype={_upstream_404_cache['ctype'][:40]}", flush=True)
-    else:
-        print("[upstream-404] WARN: prime fetch failed; will retry hourly. "
-              "Falling back to plain 'Not Found' until refreshed.", flush=True)
-    asyncio.create_task(_periodic_404_refresh_loop())
-    prune_task = asyncio.create_task(_prune_state_loop())
-    service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
-    # 1.8.6 Week 4 — Task K: alerting thresholds background task
-    from core.alerting import _alerting_loop
-    asyncio.create_task(_alerting_loop())
-    # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
-    # MAXMIND_LICENSE_KEY is set; checks daily, refreshes when >30d old).
-    asyncio.create_task(_maxmind_refresh_loop())
-    # 1.6.0 — Tor exit-list weekly refresh (no-op until TOR_BLOCK_ENABLED=1).
-    asyncio.create_task(_tor_refresh_loop())
-    # 1.5.0: optional shared-state connect. Failures degrade to no-op so
-    # an unreachable Redis never prevents the gateway from coming up.
-    await _shared_init()
-    # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
-    asyncio.create_task(_refresh_ja4_denylist_loop())
-    # 1.6.10 — fetch AI crawler IP ranges (OpenAI gptbot-ranges.txt) at startup;
-    # refreshes every 24 h. No-op when AI_CRAWLER_VERIFY_ENABLED=0.
-    if AI_CRAWLER_VERIFY_ENABLED:
-        asyncio.create_task(_refresh_ai_crawler_ranges())
-    # 1.6.7 — mesh-sync of integration secrets (no-op without REDIS_URL).
-    global _mesh_sync_task
-    _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
     print(f"[db] persistence active → {DB_PATH}")
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
@@ -371,7 +318,37 @@ async def on_startup(app):
     elif JS_CHALLENGE and TURNSTILE_ENABLED:
         print("[js-challenge] active (Turnstile-backed cookie gate)",
               flush=True)
-    # 1.8.6 — Populate detector health registry after all integrations are initialised
+
+
+async def _startup_integrations_and_tasks():
+    """Step 7: start webhook worker, prime upstream 404, spawn all periodic
+    background tasks (refresh loops, alerting, Redis, mesh-sync)."""
+    global prune_task, service_metrics_task, _mesh_sync_task
+    from integrations.webhook import start_webhook_worker
+    await start_webhook_worker()
+    if await _fetch_upstream_404():
+        print(f"[upstream-404] cached: status={_upstream_404_cache['status']} "
+              f"size={len(_upstream_404_cache['body'])}b "
+              f"ctype={_upstream_404_cache['ctype'][:40]}", flush=True)
+    else:
+        print("[upstream-404] WARN: prime fetch failed; will retry hourly. "
+              "Falling back to plain 'Not Found' until refreshed.", flush=True)
+    asyncio.create_task(_periodic_404_refresh_loop())
+    prune_task = asyncio.create_task(_prune_state_loop())
+    service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
+    from core.alerting import _alerting_loop
+    asyncio.create_task(_alerting_loop())
+    asyncio.create_task(_maxmind_refresh_loop())
+    asyncio.create_task(_tor_refresh_loop())
+    await _shared_init()
+    asyncio.create_task(_refresh_ja4_denylist_loop())
+    if AI_CRAWLER_VERIFY_ENABLED:
+        asyncio.create_task(_refresh_ai_crawler_ranges())
+    _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
+
+
+def _startup_detector_health():
+    """Step 8: register live detector health after all integrations are ready."""
     from state import set_detector_health
     set_detector_health("maxmind_asn",  MAXMIND_ENABLED, None if MAXMIND_ENABLED else "GeoLite2-ASN not loaded")
     set_detector_health("maxmind_city", MAXMIND_CITY_ENABLED, None if MAXMIND_CITY_ENABLED else "GeoLite2-City not loaded")
@@ -383,6 +360,21 @@ async def on_startup(app):
     set_detector_health("graphql",      GQL_ENABLED)
     set_detector_health("upload_scan",  UPLOAD_SCAN_ENABLED)
     set_detector_health("dlp",          DLP_ENABLED)
+
+
+# ── Startup / cleanup ──────────────────────────────────────────────────────────
+
+async def on_startup(app):
+    """Initialise the gateway in 8 ordered steps — see _startup_* helpers."""
+    global db_queue, db_writer_task, prune_task, service_metrics_task
+    _startup_db_and_state()          # 1. DB schema + state hydration
+    _startup_maxmind_propagate()     # 2. MaxMind readers (must precede config load)
+    _startup_postgres_schema()       # 3. Postgres schema migration (optional)
+    _startup_secrets_and_config()    # 4. Secrets → config → signal order
+    _startup_db_queue()              # 5. Async write queue + writer task
+    _startup_admin_users_sessions()  # 6. Admin IPs, users, sessions, banner
+    await _startup_integrations_and_tasks()  # 7. Webhook, 404 cache, background tasks
+    _startup_detector_health()       # 8. Detector health registry
 
 
 async def on_cleanup(app):
@@ -471,6 +463,7 @@ def make_app() -> web.Application:
         ("lists-snapshot",    "GET",    lists_snapshot_endpoint,               True),
         ("db-test",           "GET",    db_test_endpoint,                      True),
         ("db-switch",         "POST",   db_switch_endpoint,                    True),
+        ("db-migration-status", "GET",  db_migration_status_endpoint,          True),
         ("disk-stats",        "GET",    disk_stats_endpoint,                   True),
         ("db-vacuum",         "POST",   db_vacuum_endpoint,                    True),
         ("maxmind-fetch",     "POST",   maxmind_fetch_endpoint,                True),
@@ -800,7 +793,10 @@ def _eval_custom_rules(request, ip: str):
 def _verify_jwt_hs256(token: str) -> tuple:
     """_verify_jwt_hs256 reading JWT_* constants from proxy globals."""
     import base64 as _b64
-    import hashlib, hmac as _hmac, json, time as _t
+    import hashlib
+    import hmac as _hmac
+    import json
+    import time as _t
     g = globals()
     secret = g.get("JWT_HMAC_SECRET", "")
     req_iss = g.get("JWT_REQUIRED_ISSUER", "")
@@ -1060,5 +1056,13 @@ if __name__ == "__main__":
     else:
         print("  ║ Admin IPs: any (set ADMIN_ALLOWED_IPS to restrict)    ║")
     print("  ╚══════════════════════════════════════════════════════════╝")
+    if not ADMIN_ALLOWED_NETS:
+        import sys as _sys
+        print(
+            "\n[SECURITY WARNING] ADMIN_ALLOWED_IPS is not set.\n"
+            "  The admin dashboard is reachable from any IP address.\n"
+            "  Set ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1 before deploying to production.\n",
+            file=_sys.stderr, flush=True,
+        )
     web.run_app(make_app(), host=LISTEN_HOST, port=LISTEN_PORT, print=None,
                 keepalive_timeout=HEADERS_TIMEOUT)

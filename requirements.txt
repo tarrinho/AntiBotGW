@@ -28,3 +28,6 @@ psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "
 
 # 1.8.6 — TOTP two-factor authentication
 pyotp>=2.9.0
+
+# 1.8.8 — Ed25519 keypairs for gateway mesh signing (>=46.0.5 fixes CVE-2026-26007)
+cryptography>=46.0.5

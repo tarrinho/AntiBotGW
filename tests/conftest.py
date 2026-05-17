@@ -10,6 +10,19 @@ import sys
 import tempfile
 from pathlib import Path
 
+# When running under `mutmut run` (python -m mutmut), mutmut/__main__.py is
+# sys.modules['__main__'], NOT 'mutmut.__main__'. Trampoline functions do
+# `from mutmut.__main__ import record_trampoline_hit`, which re-imports the
+# module fresh and hits `set_start_method('fork')` a second time →
+# RuntimeError: context has already been set.
+# Fix: alias __main__ as mutmut.__main__ before pytest discovers the trampolines.
+def _alias_mutmut_main() -> None:
+    main = sys.modules.get("__main__")
+    if main is not None and "mutmut.__main__" not in sys.modules:
+        if hasattr(main, "record_trampoline_hit"):
+            sys.modules["mutmut.__main__"] = main
+_alias_mutmut_main()
+
 # ── 1. Tmp scratch dir for the keys + DB ───────────────────────────────────
 _TMP = tempfile.mkdtemp(prefix="appsecgw-test-")
 os.environ.setdefault("UPSTREAM",          "https://example.com")

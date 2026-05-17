@@ -45,7 +45,7 @@ def _run(cmd, timeout=60):
 
 
 @pytest.mark.skipif(not _docker_works(), reason="docker not available")
-@pytest.mark.skipif(not (_image_present("appsec-antibot-gw:1.8.7")
+@pytest.mark.skipif(not (_image_present("appsec-antibot-gw:1.8.8")
                          or _image_present("appsec-antibot-gw:1.8.6")
                          or _image_present("appsec-antibot-gw:1.6.5")),
                      reason="no appsec-antibot-gw image built")
@@ -114,8 +114,8 @@ def test_timescaledb_60s_soak():
         }
         for k, v in env_kv.items():
             env_args.extend(["-e", f"{k}={v}"])
-        gw_image = ("appsec-antibot-gw:1.8.7"
-                    if _image_present("appsec-antibot-gw:1.8.7")
+        gw_image = ("appsec-antibot-gw:1.8.8"
+                    if _image_present("appsec-antibot-gw:1.8.8")
                     else "appsec-antibot-gw:1.8.6"
                     if _image_present("appsec-antibot-gw:1.8.6")
                     else "appsec-antibot-gw:1.6.5")
