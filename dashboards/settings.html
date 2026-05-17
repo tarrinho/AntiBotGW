@@ -3431,15 +3431,22 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       };
       document.getElementById('_tip-pg-test').onclick = async function(){
         const f = getFields(); const res = document.getElementById('_tip-pg-res');
-        this.disabled=true; res.style.color='var(--dim)'; res.textContent='checking…';
+        if (!f.h||!f.d||!f.u){ res.style.color='var(--red)'; res.textContent='Host, database and user required.'; return; }
+        if (!f.w){ res.style.color='var(--red)'; res.textContent='Password required to test.'; return; }
+        this.disabled=true; res.style.color='var(--dim)'; res.textContent='testing…';
         try {
-          let qs = '?name='+encodeURIComponent('PostgreSQL / TimescaleDB');
-          if (f.h&&f.d&&f.u&&f.w) qs += '&dsn='+encodeURIComponent(
-            `postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`);
-          const r = await fetch('/antibot-appsec-gateway/secured/integration-check'+qs,{credentials:'include'});
+          const dsn = `postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`;
+          const r = await fetch('/antibot-appsec-gateway/secured/db-test?dsn='+encodeURIComponent(dsn),{credentials:'include'});
           const j = await r.json();
-          res.style.color = j.ok?'var(--green)':'var(--red)';
-          res.textContent = (j.ok?'✓ reachable':'✗ unreachable')+(j.latency_ms?` · ${j.latency_ms} ms`:'')+(j.detail?` — ${j.detail}`:'');
+          const p = j.probe || {};
+          if (j.ok || p.ok) {
+            const ver = p.version ? ` — PostgreSQL ${p.version}` : '';
+            const db  = (p.db||p.db_name) ? ` · db ${p.db||p.db_name}` : '';
+            const ms  = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
+            res.style.color='var(--green)'; res.textContent=`✓ connected${ver}${db}${ms}`;
+          } else {
+            res.style.color='var(--red)'; res.textContent='✗ '+(j.reason||p.reason||'unreachable');
+          }
         } catch(e){ res.style.color='var(--red)'; res.textContent='✗ network error'; }
         this.disabled=false;
       };
@@ -3531,10 +3538,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     const needsTest = target === 'postgres';
     const dsnInput = needsTest ? `<div style="margin-top:14px">
       <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">
-        Optional — supply / override <code>POSTGRES_DSN</code> (leave blank to use current value):
+        PostgreSQL DSN — <span id="db-dsn-label-hint" style="color:var(--dim)">loading current value…</span>
       </label>
       <div style="display:flex;gap:6px;align-items:center">
-        <input id="db-switch-dsn" type="text"
+        <input id="db-switch-dsn" type="text" data-masked="0"
                style="flex:1;background:#0d1117;border:1px solid var(--line);color:var(--fg);
                       padding:7px 10px;border-radius:5px;font-family:ui-monospace,monospace;font-size:11px"
                placeholder="postgresql://user:pass@host:5432/db">
@@ -3563,43 +3570,96 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     showSimpleModal(html);
     document.getElementById('db-switch-cancel').onclick = closeSimpleModal;
 
-    // Resolve DSN: explicit override in modal → "" (server uses configured POSTGRES_DSN)
+    // _resolveModalDsn: returns "" when the field shows the server's own masked DSN
+    // (so the server uses its stored real credentials), or the user-typed value otherwise.
     function _resolveModalDsn(){
-      return (document.getElementById('db-switch-dsn')||{}).value||'';
+      const f = document.getElementById('db-switch-dsn');
+      if (!f) return '';
+      if (f.dataset.masked === '1') return ''; // server already has the real DSN
+      return f.value || '';
+    }
+
+    function _fmtTestResult(p){
+      const ver  = p.version        ? `<b>PostgreSQL ${p.version}</b>` : '';
+      const db   = p.db             ? ` · db <code>${p.db}</code>`
+                 : p.db_name        ? ` · db <code>${p.db_name}</code>` : '';
+      const ms   = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
+      const rows = p.events_rows   != null ? ` · ${p.events_rows} events` : '';
+      return `<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`;
     }
 
     if (needsTest){
+      const dsnField  = document.getElementById('db-switch-dsn');
+      const resultEl  = document.getElementById('db-test-result');
+      const okBtn     = document.getElementById('db-switch-ok');
+      const hintEl    = document.getElementById('db-dsn-label-hint');
+
+      // Auto-check stored DSN on modal open: populate field with masked value +
+      // show connection status so the operator knows before they even click Test.
+      (async () => {
+        try {
+          resultEl.innerHTML = '<span style="color:var(--dim)">Checking stored connection…</span>';
+          const r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+          const j = await r.json();
+          const p = j.postgres || {};
+          const masked = p.dsn_masked || '';
+          // Populate field with masked DSN (if any), mark as server-side value
+          if (masked && masked !== '(redacted)' && dsnField && !dsnField.dataset.userModified) {
+            dsnField.value = masked;
+            dsnField.dataset.masked = '1';
+            if (hintEl) hintEl.innerHTML =
+              'current value shown masked — edit to override, or leave as-is to use stored credentials';
+          } else {
+            if (hintEl) hintEl.innerHTML = masked
+              ? 'no DSN configured — enter one below'
+              : 'enter connection string below';
+          }
+          // Show current connectivity status
+          if (p.ok){
+            resultEl.innerHTML = _fmtTestResult(p)
+              .replace('✓ Connected', '✓ Stored DSN connected');
+            okBtn.disabled = false; okBtn.title = '';
+          } else {
+            const reason = p.reason || j.reason || 'unreachable';
+            resultEl.innerHTML = masked
+              ? `<span style="color:var(--yellow)">⚠ Stored DSN not reachable: ${reason} — edit the field or enter a new DSN</span>`
+              : `<span style="color:var(--dim)">No stored DSN — enter one above and click Test</span>`;
+          }
+        } catch(e){
+          if (hintEl) hintEl.textContent = 'enter connection string below';
+          resultEl.innerHTML = `<span style="color:var(--dim)">Could not check stored connection: ${e.message}</span>`;
+        }
+      })();
+
+      // Test button: use _resolveModalDsn() — "" = server tests with its own DSN
       document.getElementById('db-test-btn').onclick = async () => {
-        const testBtn  = document.getElementById('db-test-btn');
-        const resultEl = document.getElementById('db-test-result');
-        const okBtn    = document.getElementById('db-switch-ok');
-        const dsnVal   = _resolveModalDsn();
+        const testBtn = document.getElementById('db-test-btn');
+        const dsnVal  = _resolveModalDsn();
         testBtn.disabled=true; testBtn.textContent='Testing…'; resultEl.textContent=''; okBtn.disabled=true;
         try {
           const qs = dsnVal ? '?dsn='+encodeURIComponent(dsnVal) : '';
-          const r = await fetch('/antibot-appsec-gateway/secured/db-test'+qs,{credentials:'include'});
-          const j = await r.json();
-          // /secured/db-test returns {sqlite:{ok,..}, postgres:{ok,..}} — check postgres sub-object
-          const p = j.postgres || j.probe || {};
+          const r  = await fetch('/antibot-appsec-gateway/secured/db-test'+qs, {credentials:'include'});
+          const j  = await r.json();
+          const p  = j.postgres || j.probe || {};
           if (j.ok || p.ok){
-            const ver  = p.version   ? `<b>PostgreSQL ${p.version}</b>` : '';
-            const db   = p.db      ? ` · db <code>${p.db}</code>` : (p.db_name ? ` · db <code>${p.db_name}</code>` : '');
-            const ms   = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
-            const rows = p.events_rows  != null ? ` · ${p.events_rows} events` : '';
-            resultEl.innerHTML = `<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`;
+            resultEl.innerHTML = _fmtTestResult(p);
             okBtn.disabled=false; okBtn.title='';
           } else {
-            const reason = j.reason || p.reason || (j.postgres ? 'unreachable' : 'no postgres result');
+            const reason = j.reason || p.reason || 'unreachable';
             resultEl.innerHTML = `<span style="color:var(--red)">✗ ${reason}</span>`;
           }
         } catch(e){
           resultEl.innerHTML = `<span style="color:var(--red)">✗ Network error: ${e.message}</span>`;
         } finally { testBtn.disabled=false; testBtn.textContent='Test connection'; }
       };
-      const dsnField = document.getElementById('db-switch-dsn');
+
+      // When user edits the field, it's no longer the server's masked value
       if (dsnField) dsnField.addEventListener('input', () => {
-        document.getElementById('db-switch-ok').disabled=true;
-        document.getElementById('db-test-result').textContent='';
+        dsnField.dataset.masked = '0';
+        dsnField.dataset.userModified = '1';
+        okBtn.disabled = true;
+        resultEl.textContent = '';
+        if (hintEl) hintEl.textContent = 'custom DSN — click Test to verify before switching';
       });
     }
 

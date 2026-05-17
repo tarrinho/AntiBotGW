@@ -4195,15 +4195,22 @@ async def db_test_endpoint(request: web.Request):
             return web.json_response(
                 {"ok": False, "reason": "psycopg not installed in this image"},
                 status=200, headers={"Cache-Control": "no-store"})
+        import sys as _sys_dbt
+        _pg_mod_dbt = _sys_dbt.modules.get("db.postgres")
         saved_dsn     = globals().get("POSTGRES_DSN", "")
         saved_backend = globals().get("DB_BACKEND", DB_BACKEND)
         try:
             globals()["POSTGRES_DSN"] = probe_dsn
             globals()["DB_BACKEND"]   = "postgres"
+            if _pg_mod_dbt is not None:
+                _pg_mod_dbt_saved_dsn = getattr(_pg_mod_dbt, "POSTGRES_DSN", "")
+                _pg_mod_dbt.POSTGRES_DSN = probe_dsn
             probe = pg_test_roundtrip()
         finally:
             globals()["POSTGRES_DSN"] = saved_dsn
             globals()["DB_BACKEND"]   = saved_backend
+            if _pg_mod_dbt is not None:
+                _pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn
         try:
             from urllib.parse import urlparse
             p = urlparse(probe_dsn)

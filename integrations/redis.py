@@ -14,8 +14,9 @@ Depends on:
   helpers.py — slog
 
 Security controls:
-  • REDIS_REQUIRE_TLS (default true) — gateway exits with FATAL at import time if
-    REDIS_URL is not rediss://. Set REDIS_REQUIRE_TLS=false only for local dev.
+  • REDIS_REQUIRE_TLS (default true) — Redis is disabled (not fatal) at import time if
+    REDIS_URL is not rediss://. Gateway continues in SQLite-only mode.
+    Set REDIS_REQUIRE_TLS=false to allow plaintext redis:// (isolated dev only).
   • REDIS_ALLOW_LIST — gateway refuses to connect if resolved Redis host IP
     is not in the configured CIDR list. Empty = no restriction.
   • HMAC ban signing — ban values are signed using the Redis password so
@@ -38,25 +39,26 @@ _redis = None          # lazy-initialised singleton; None if disabled or unavail
 _redis_host_ip = None  # resolved IP of the Redis server (cached at connect time)
 
 # INT4-04: enforce TLS for Redis connections (REDIS_REQUIRE_TLS=true by default).
-# When enforcement is on, a plaintext redis:// URL causes a FATAL startup error
-# so the operator cannot accidentally ship an unencrypted Redis connection.
-# Override with REDIS_REQUIRE_TLS=false only in isolated dev/test environments.
+# Plaintext redis:// with TLS enforcement active → Redis disabled, gateway continues
+# in SQLite-only mode. Not fatal: Redis is optional shared-state, never a hard dep.
+# Override with REDIS_REQUIRE_TLS=false to allow plaintext in isolated dev environments.
+_REDIS_TLS_BLOCKED = False
 if REDIS_URL and not REDIS_URL.startswith("rediss://"):
     if REDIS_REQUIRE_TLS:
-        print(
-            "FATAL: REDIS_URL must use rediss:// (TLS) — plaintext redis:// is not allowed. "
-            "Set REDIS_REQUIRE_TLS=false to override in isolated dev environments.",
-            flush=True)
-        raise SystemExit(2)
-    slog("redis_no_tls", level="warn",
-         msg="REDIS_URL uses plaintext — use rediss:// in production (REDIS_REQUIRE_TLS=false set)")
+        slog("redis_tls_required", level="error",
+             msg="REDIS_URL uses plaintext redis:// but REDIS_REQUIRE_TLS=true — "
+                 "Redis disabled. Use rediss:// or set REDIS_REQUIRE_TLS=false for local dev.")
+        _REDIS_TLS_BLOCKED = True
+    else:
+        slog("redis_no_tls", level="warn",
+             msg="REDIS_URL uses plaintext — use rediss:// in production (REDIS_REQUIRE_TLS=false set)")
 
 # ── HMAC signing ───────────────────────────────────────────────────────────
 # Derive signing key from the Redis password embedded in REDIS_URL.
 # All instances that can connect to Redis share the same password, so no
 # extra env var is needed. Empty password = no signing (logs a warning).
 _REDIS_HMAC_KEY: bytes = b""
-if REDIS_URL:
+if REDIS_URL and not _REDIS_TLS_BLOCKED:
     _parsed_url = _urlparse(REDIS_URL)
     _pw = _parsed_url.password or ""
     if _pw:
@@ -131,13 +133,7 @@ async def _shared_init():
     """Lazy-import redis.asyncio at startup if REDIS_URL is configured.
     Failures degrade to no-op (we never block traffic on a Redis outage)."""
     global _redis, _redis_host_ip
-    if not REDIS_URL or _redis is not None:
-        return
-
-    # ── TLS scheme check ─────────────────────────────────────────────────
-    if not REDIS_URL.startswith("rediss://") and REDIS_REQUIRE_TLS:
-        slog("redis_blocked_no_tls", level="error",
-             msg="Redis connection refused — REDIS_URL is not rediss:// and REDIS_REQUIRE_TLS=true")
+    if not REDIS_URL or _redis is not None or _REDIS_TLS_BLOCKED:
         return
 
     # ── Allowlist check ──────────────────────────────────────────────────
