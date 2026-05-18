@@ -149,13 +149,17 @@ class TestRedisRequireTls:
         result = "1".strip().lower() not in ("0", "false", "no")
         assert result is True
 
-    def test_R07_source_has_systemexit_on_plaintext(self):
-        """R07: integrations/redis.py must call SystemExit(2) for plaintext URL when TLS required."""
+    def test_R07_source_has_tls_blocked_flag(self):
+        """R07: integrations/redis.py must set _REDIS_TLS_BLOCKED (graceful degradation) for plaintext URL when TLS required.
+        Changed in 1.8.8: raise SystemExit(2) replaced with non-fatal _REDIS_TLS_BLOCKED=True so the
+        gateway continues in SQLite-only mode instead of crashing."""
         src = (_ROOT / "integrations" / "redis.py").read_text(encoding="utf-8")
-        assert "SystemExit(2)" in src, \
-            "redis.py must call SystemExit(2) when REDIS_URL is not rediss:// and REDIS_REQUIRE_TLS"
+        assert "_REDIS_TLS_BLOCKED" in src, \
+            "redis.py must set _REDIS_TLS_BLOCKED when REDIS_URL is not rediss:// and REDIS_REQUIRE_TLS"
         assert "REDIS_REQUIRE_TLS" in src, \
             "redis.py must reference REDIS_REQUIRE_TLS"
+        assert "SystemExit" not in src, \
+            "redis.py must NOT call SystemExit — gateway degrades gracefully in 1.8.8+"
 
     def test_R08_source_has_warn_fallback(self):
         """R08: redis.py must still log a warning when TLS not required (REDIS_REQUIRE_TLS=false path)."""
@@ -163,19 +167,21 @@ class TestRedisRequireTls:
         assert "redis_no_tls" in src, \
             "redis.py must log redis_no_tls when TLS not enforced"
 
-    def test_R09_shared_init_has_secondary_tls_check(self):
-        """R09: _shared_init must have a second TLS check in case URL changes after import."""
+    def test_R09_shared_init_checks_tls_blocked_flag(self):
+        """R09: _shared_init must short-circuit when _REDIS_TLS_BLOCKED is set.
+        Changed in 1.8.8: TLS enforcement moved to module-level flag; _shared_init
+        returns early if _REDIS_TLS_BLOCKED is True instead of re-checking rediss://."""
         src = inspect.getsource(_redis_mod()._shared_init)
-        assert "rediss://" in src, \
-            "_shared_init must check for rediss:// scheme"
-        assert "REDIS_REQUIRE_TLS" in src, \
-            "_shared_init must reference REDIS_REQUIRE_TLS"
+        assert "_REDIS_TLS_BLOCKED" in src, \
+            "_shared_init must check _REDIS_TLS_BLOCKED flag (set at module level)"
 
-    def test_R10_shared_init_logs_blocked_no_tls(self):
-        """R10: _shared_init must log redis_blocked_no_tls when TLS check fails."""
-        src = inspect.getsource(_redis_mod()._shared_init)
-        assert "redis_blocked_no_tls" in src, \
-            "_shared_init must log 'redis_blocked_no_tls' when TLS guard triggers"
+    def test_R10_module_level_logs_tls_required(self):
+        """R10: module level must log redis_tls_required when TLS check fails.
+        Changed in 1.8.8: log event renamed from redis_blocked_no_tls to redis_tls_required
+        and moved from _shared_init to the module-level import-time check."""
+        src = (_ROOT / "integrations" / "redis.py").read_text(encoding="utf-8")
+        assert "redis_tls_required" in src, \
+            "redis.py must log 'redis_tls_required' at module level when TLS guard triggers"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
