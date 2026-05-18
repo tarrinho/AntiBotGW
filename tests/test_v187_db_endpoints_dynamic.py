@@ -465,10 +465,19 @@ class TestDbRouteRegistration:
 class TestBgMigrationShape:
 
     def test_dbqa15_bg_migration_required_keys(self):
-        """DBQA-15: _BG_MIGRATION has exactly the required keys."""
+        """DBQA-15: _BG_MIGRATION has exactly the required keys.
+
+        1.8.8 — added `watermark` and `skipped_already_present` for the
+        MIN/MAX gap-fill idempotent migration. Both must be present.
+        """
         import db.postgres as pg
-        required = {"running", "done", "error", "direction", "total", "copied",
-                    "started_at", "finished_at"}
+        required = {
+            "running", "done", "error", "direction",
+            "total", "copied",
+            "started_at", "finished_at",
+            # 1.8.8 — idempotent migration observability
+            "watermark", "skipped_already_present",
+        }
         actual = set(pg._BG_MIGRATION.keys())
         missing = required - actual
         extra   = actual - required

@@ -612,15 +612,30 @@ class TestF5F6GeoVhostFilter:
         )
 
     def test_geo_sql_where_clause_uses_parameterized_query(self, proxy_module):
-        """Vhost filter must use ? placeholder (not f-string interpolation) — SQL injection guard."""
+        """Vhost filter must NOT format into SQL via f-string — SQL injection guard.
+
+        1.8.8 — geo_data_endpoint now uses the backend-aware db_read_events()
+        helper instead of hardcoded sqlite3.connect+SQL. Vhost is passed as a
+        kwarg, and the helper does the parameterized binding internally
+        (sqlite uses `?`, postgres uses `%s` — both safe).
+
+        Updated assertion: confirm the endpoint passes vhost via the helper
+        and doesn't manually concatenate it into a SQL string.
+        """
         import core.proxy_handler as _ph
         src = inspect.getsource(_ph.geo_data_endpoint)
-        # Must not format vhost directly into SQL string
-        assert 'f"' not in src.split("_geo_vhost_clause")[1][:200] or \
-               "vhost = ?" in src, (
-            "geo SQL clause must use parameterized ? not f-string for vhost value"
+        # Must call db_read_events with vhost as a keyword argument
+        assert "db_read_events" in src, (
+            "geo_data_endpoint must use db_read_events helper (1.8.8 refactor)"
         )
-        assert "vhost = ?" in src, "geo vhost SQL filter must use parameterized query"
+        assert "vhost=" in src, (
+            "geo_data_endpoint must pass vhost as kwarg to db_read_events "
+            "(parameterised binding happens inside the helper)"
+        )
+        # Must NOT do raw f-string SQL with vhost
+        assert 'f"SELECT' not in src and "f'SELECT" not in src, (
+            "geo_data_endpoint must not f-string format SQL — use the helper"
+        )
 
 
 # ── F7: agents_data_endpoint vhost filtering ─────────────────────────────────

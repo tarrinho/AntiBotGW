@@ -216,8 +216,11 @@ def _startup_maxmind_propagate():
 
 
 def _startup_postgres_schema():
-    """Step 3 (optional): migrate standby Postgres so operators can switch
-    backends live on the Controls dashboard without a manual migration step."""
+    """Step 4 (optional): migrate standby Postgres so operators can switch
+    backends live on the Controls dashboard without a manual migration step.
+    Must run AFTER _startup_secrets_and_config (Step 3) so that a
+    POSTGRES_DSN persisted in SQLite secrets_kv is already loaded into the
+    proxy.py namespace before the guard below fires."""
     if not POSTGRES_DSN:
         return
     from db.postgres import _postgres_load_module as _pg_load_check
@@ -239,8 +242,10 @@ def _startup_postgres_schema():
 
 
 def _startup_secrets_and_config():
-    """Step 4: load secrets BEFORE config so credential-gated knob validators
-    (ABUSEIPDB_ENABLED, TURNSTILE_ENABLED) see live API keys."""
+    """Step 3: load secrets BEFORE config so credential-gated knob validators
+    (ABUSEIPDB_ENABLED, TURNSTILE_ENABLED) see live API keys. Also populates
+    POSTGRES_DSN from SQLite secrets_kv so Step 4 (_startup_postgres_schema)
+    can connect even when the env var was not set at deploy time."""
     db_load_secrets()
     db_load_config()
     _load_signal_order_cache()
@@ -369,8 +374,10 @@ async def on_startup(app):
     global db_queue, db_writer_task, prune_task, service_metrics_task
     _startup_db_and_state()          # 1. DB schema + state hydration
     _startup_maxmind_propagate()     # 2. MaxMind readers (must precede config load)
-    _startup_postgres_schema()       # 3. Postgres schema migration (optional)
-    _startup_secrets_and_config()    # 4. Secrets → config → signal order
+    _startup_secrets_and_config()    # 3. Secrets → config → signal order
+    _startup_postgres_schema()       # 4. Postgres schema — runs AFTER secrets so
+                                     #    POSTGRES_DSN persisted in SQLite is loaded
+                                     #    before the `if not POSTGRES_DSN` guard fires
     _startup_db_queue()              # 5. Async write queue + writer task
     _startup_admin_users_sessions()  # 6. Admin IPs, users, sessions, banner
     await _startup_integrations_and_tasks()  # 7. Webhook, 404 cache, background tasks

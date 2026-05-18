@@ -1363,3 +1363,47 @@ Same attack battery executed against every locally-available image (`1.1`, `1.2`
 | Cookie gate on every non-static path | 1.4.1 | **1.4.2 (with Turnstile)** | Without Turnstile keys the gate is OFF in 1.4.2 — closes only when `TURNSTILE_*` configured |
 | Turnstile minter | 1.4.2 | 1.4.2 (when configured) | Test keys are always-pass / always-fail by Cloudflare contract; production keys reject fabricated tokens |
 | JA4 cookie binding | 1.4.1 | 1.4.2 (when JA4 header injected by trusted upstream) | Disengages on direct connections; only protects against cross-stack cookie replay |
+
+---
+
+## FAQ / Common warnings
+
+Recurring questions and benign-looking warnings the gateway and its sidecars may emit at startup.
+
+### Q1 — Redis logs `WARNING Memory overcommit must be enabled!`
+
+**Full warning seen at every `appsecgw-redis` start:**
+
+```
+1:C 18 May 2026 14:19:55.752 # WARNING Memory overcommit must be enabled!
+Without it, a background save or replication may fail under low memory
+condition. Being disabled, it can also cause failures without low memory
+condition, see https://github.com/jemalloc/jemalloc/issues/1328.
+To fix this issue add 'vm.overcommit_memory = 1' to /etc/sysctl.conf and
+then reboot or run the command 'sysctl vm.overcommit_memory=1' for this
+to take effect.
+```
+
+**What it means.** When `vm.overcommit_memory=0` (the Linux kernel default), `fork()` is gated by a free-RAM heuristic that ignores copy-on-write. Redis snapshots (BGSAVE) and replication both fork the entire process so the child can serialise the dataset while the parent keeps serving traffic — under the heuristic the kernel can refuse or kill that fork even when there's plenty of RAM in practice. With `vm.overcommit_memory=1` the kernel always allows overcommit, trusting copy-on-write — which is exactly the model Redis is designed for.
+
+**Risk if you ignore it.** Bans / canary tokens / JA4 denylist may stop persisting to Redis under memory pressure, and replication can silently fall behind. There's no security impact on AppSecGW correctness (SQLite remains source of truth, the gateway tolerates Redis being unreachable), but Redis-mesh sync across multi-node deployments degrades.
+
+**Fix (on the Docker host, not in the gateway container):**
+
+```bash
+# Apply immediately
+sudo sysctl vm.overcommit_memory=1
+
+# Persist across reboots
+echo 'vm.overcommit_memory = 1' | sudo tee -a /etc/sysctl.conf
+
+# Verify
+sysctl vm.overcommit_memory   # → vm.overcommit_memory = 1
+
+# Restart Redis so the warning is gone from the next log
+docker compose restart appsecgw-redis
+```
+
+**Why we can't fix it in `docker-compose.yml`.** `vm.overcommit_memory` is a host-namespaced kernel parameter — Docker only exposes network-namespaced sysctls (`net.ipv4.*`) via the `sysctls:` compose key. Setting it from inside a container would require `--privileged`, which is a far worse trade-off than the warning.
+
+This applies to **every** Linux host running this stack, not just armv7 boards.
