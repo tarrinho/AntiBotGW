@@ -2076,6 +2076,13 @@ async def secrets_endpoint(request: web.Request):
             except Exception:
                 pass
         g[global_name] = v
+        # 1.8.8 — hot-apply POSTGRES_DSN: propagate to every module that holds
+        # its own POSTGRES_DSN binding (notably db.postgres) so pg_test_roundtrip
+        # and the event-store writer see the new value without a container
+        # restart. Without this, /secrets would only patch proxy_handler's
+        # global; db.postgres.POSTGRES_DSN would stay stale until reboot.
+        if global_name == "POSTGRES_DSN":
+            _propagate_global("POSTGRES_DSN", v)
         applied[k] = {"length": len(v)}
         if db_queue is not None:
             try:
@@ -2434,9 +2441,10 @@ _ENV_PROVIDED_KNOBS = {
 if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
     _ENV_PROVIDED_KNOBS |= {k for k in _HOT_RELOAD_KNOBS
                              if k not in _ENV_PIN_EXCLUDE and k in os.environ}
-# DB_BACKEND is always env-pinned when explicitly set (even empty string would
-# be caught above; this guard keeps the intent explicit in the code).
-if "DB_BACKEND" in os.environ:
+# DB_BACKEND is env-pinned only when set to a meaningful value ("sqlite" or
+# "postgres"). An empty-string env var (compose default when operator omits it)
+# is NOT treated as authoritative so the DB-persisted backend survives restart.
+if os.environ.get("DB_BACKEND", "").strip() in ("sqlite", "postgres"):
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
 if "ALLOW_PRIVATE_UPSTREAM" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"ALLOW_PRIVATE_UPSTREAM"}

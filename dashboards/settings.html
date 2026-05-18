@@ -1003,6 +1003,7 @@ document.addEventListener('DOMContentLoaded', function(){
   <div id="db-mig-status-row" style="min-height:0"></div>
   <div class="row-controls" style="margin-top:10px">
     <button id="btn-db-apply" disabled>Apply backend</button>
+    <button id="btn-db-load-dsn" style="margin-left:6px">Load DSN</button>
     <span id="db-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
   </div>
 </div>
@@ -3381,12 +3382,15 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           ${_tipInp('_tip-pg-user','User',user,'text','appsecgw')}
         </div>
         ${_tipInp('_tip-pg-pass','Password','','password',credsOk?'leave blank to keep current':'required')}
-        <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
           <button id="_tip-pg-save" style="font-size:11px;padding:4px 12px;background:var(--blue);
             color:#000;border:1px solid var(--blue);border-radius:4px;cursor:pointer;font-weight:600">Save DSN</button>
           <button id="_tip-pg-test" style="font-size:11px;padding:4px 10px;background:#21262d;
             color:var(--fg);border:1px solid var(--line);border-radius:4px;cursor:pointer">Test</button>
-          <span id="_tip-pg-res" style="font-size:10.5px;color:var(--dim);flex:1"></span>
+          <button id="_tip-pg-load" title="Reload host/port/db/user from the saved DSN"
+            style="font-size:11px;padding:4px 10px;background:#21262d;
+            color:var(--fg);border:1px solid var(--line);border-radius:4px;cursor:pointer">Load DSN</button>
+          <span id="_tip-pg-res" style="font-size:10.5px;color:var(--dim);flex:1;min-width:100%"></span>
         </div>
         <div id="_tip-pg-msg" style="font-size:10.5px;min-height:14px;margin-top:5px"></div>
       </div>`;
@@ -3396,34 +3400,69 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     tip.style.display = 'block';
     _dbPositionTip(tip, anchor);
 
-    // Refresh postgres stats + status live from /metrics — avoids stale page-load cache
+    // On popup open: load current config + refresh status + stats from /db-test
     if (type === 'postgres') {
       (async () => {
-        const sv = document.getElementById('_tip-pg-status-val');
+        const sv     = document.getElementById('_tip-pg-status-val');
+        const resEl0 = document.getElementById('_tip-pg-res');
         if (sv) sv.style.opacity = '0.5';
-        try {
-          const r = await fetch('/antibot-appsec-gateway/secured/metrics?range=1&bucket=60&cats=allowed', {credentials: 'include'});
-          if (!r.ok) return;
-          const j = await r.json();
-          const pg = (j.services || {}).db_postgres || {};
-          // Merge fresh data into cache
-          if (_dbSvcCache.db_postgres) Object.assign(_dbSvcCache.db_postgres, pg);
-          else _dbSvcCache.db_postgres = pg;
-          const ok = pg.available || pg.enabled;
-          // Update status tile
+        // Helper: surface a UI-can't-read-status error WITHOUT lying about DB state
+        const showUiError = (label, detail) => {
           if (sv) {
-            sv.style.color = ok ? 'var(--green)' : 'var(--red)';
-            sv.textContent  = ok ? '✓ reachable'
-                                 : (pg.configured === false ? '✗ DSN not configured' : '✗ unreachable');
+            sv.style.color = 'var(--dim)';
+            sv.textContent = `⚠ status unknown (${label})`;
+            sv.style.opacity = '1';
           }
-          // Rebuild stats cells with fresh data
+          if (resEl0) {
+            resEl0.style.color = 'var(--dim)';
+            resEl0.textContent = `⚠ cannot read DB status: ${detail}. The DB itself may still be fine — this only means the UI couldn't query /db-test.`;
+          }
+        };
+        let r;
+        try {
+          r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials: 'include'});
+        } catch (netErr) {
+          return showUiError('network', netErr && netErr.message ? netErr.message : 'fetch failed');
+        }
+        if (!r.ok) {
+          const ct = (r.headers.get('content-type') || '').toLowerCase();
+          const hint = r.status === 404 || r.status === 403
+            ? `HTTP ${r.status} — likely blocked by admin IP allowlist or session expired`
+            : `HTTP ${r.status}`;
+          return showUiError(`HTTP ${r.status}`, hint + (ct.includes('json') ? '' : ' (non-JSON response)'));
+        }
+        let j;
+        try {
+          j = await r.json();
+        } catch (parseErr) {
+          return showUiError('parse', `response was not valid JSON (${parseErr && parseErr.message ? parseErr.message : 'parse failed'})`);
+        }
+        try {
+          const pg = j.postgres || {};
+          const isActiveBackend = j.active_backend === 'postgres';
+          const reachable = pg.available || pg.ok;
+
+          // 1. Update status tile
+          if (sv) {
+            if (reachable) {
+              sv.style.color = 'var(--green)'; sv.textContent = '✓ reachable';
+            } else if (!pg.dsn_masked) {
+              sv.style.color = 'var(--red)'; sv.textContent = '✗ DSN not configured';
+            } else {
+              sv.style.color = 'var(--red)';
+              sv.textContent = isActiveBackend ? '⚠ active · not reachable' : '✗ unreachable';
+            }
+          }
+
+          // 2. Rebuild stats cells with fresh data
           const statsEl = document.getElementById('_tip-pg-stats');
           if (statsEl) {
             const cells = [];
             if (pg.events_rows != null) cells.push(['Events', pg.events_rows.toLocaleString()]);
             if (pg.db_bytes    != null) cells.push(['DB size', `${(pg.db_bytes/1048576).toFixed(1)} MB`]);
-            const rc = ok ? 'var(--green)' : 'var(--red)';
-            const lbl = ok ? '✓ reachable' : (pg.configured === false ? '✗ DSN not configured' : '✗ unreachable');
+            if (pg.round_trip_ms != null) cells.push(['Latency', `${pg.round_trip_ms} ms`]);
+            const rc  = reachable ? 'var(--green)' : 'var(--red)';
+            const lbl = sv ? sv.textContent : (reachable ? '✓ reachable' : '✗ unreachable');
             cells.unshift(['Status', `<span id="_tip-pg-status-val" style="color:${rc}">${lbl}</span>`]);
             statsEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
               ${cells.map(([k,v])=>`<div style="background:#0d1117;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
@@ -3431,7 +3470,28 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
                 <div style="font-size:12px;font-weight:700">${v}</div>
               </div>`).join('')}</div>`;
           }
-        } catch (_) { if (sv) sv.style.opacity = '1'; return; }
+
+          // 3. Auto-populate form fields from saved DSN (password stays blank)
+          const masked = pg.dsn_masked || '';
+          if (masked && masked !== '(redacted)') {
+            const m = masked.match(/^postgresql:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+            if (m) {
+              const [, u, h, p, d] = m;
+              const setVal = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+              setVal('_tip-pg-host', h);
+              setVal('_tip-pg-port', p || '5432');
+              setVal('_tip-pg-db',   d);
+              setVal('_tip-pg-user', u);
+              if (resEl0){ resEl0.style.color='var(--dim)'; resEl0.textContent=`ℹ loaded saved DSN — ${u}@${h}:${p||'5432'}/${d}`; }
+            }
+          } else if (resEl0) {
+            resEl0.style.color='var(--dim)';
+            resEl0.textContent='ℹ no saved DSN — enter values to configure';
+          }
+        } catch (e) {
+          showUiError('render', e && e.message ? e.message : 'unexpected error');
+          return;
+        }
         if (sv) sv.style.opacity = '1';
       })();
     }
@@ -3465,7 +3525,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
             {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({POSTGRES_DSN:dsn})});
           const j = await r.json();
           msg.style.color = r.ok&&j.ok?'var(--green)':'var(--red)';
-          msg.textContent  = r.ok&&j.ok?'✓ DSN saved — restart to apply':'✗ '+(j.error||j.detail||'Failed');
+          msg.textContent  = r.ok&&j.ok?'✓ DSN saved — applied immediately':'✗ '+(j.error||j.detail||'Failed');
         } catch(e){ msg.style.color='var(--red)'; msg.textContent='✗ Network error'; }
         this.disabled=false;
       };
@@ -3474,25 +3534,88 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if (!f.h||!f.d||!f.u){ res.style.color='var(--red)'; res.textContent='Host, database and user required.'; return; }
         if (!f.w){ res.style.color='var(--red)'; res.textContent='Password required to test.'; return; }
         this.disabled=true; res.style.color='var(--dim)'; res.textContent='testing…';
+        const dsn = `postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`;
+        let r;
         try {
-          const dsn = `postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`;
-          const r = await fetch('/antibot-appsec-gateway/secured/db-test?dsn='+encodeURIComponent(dsn),{credentials:'include'});
-          const j = await r.json();
-          const p = j.probe || {};
-          if (j.ok || p.ok) {
-            const ver = p.version ? ` — PostgreSQL ${p.version}` : '';
-            const db  = (p.db||p.db_name) ? ` · db ${p.db||p.db_name}` : '';
-            const ms  = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
-            res.style.color='var(--green)'; res.textContent=`✓ connected${ver}${db}${ms}`;
-            // Sync the Status tile — test succeeded so mark available in cache + live span
-            if (_dbSvcCache.db_postgres) _dbSvcCache.db_postgres.available = true;
-            const sv = document.getElementById('_tip-pg-status-val');
-            if (sv){ sv.style.color='var(--green)'; sv.textContent='✓ reachable'; }
-          } else {
-            res.style.color='var(--red)'; res.textContent='✗ '+(j.reason||p.reason||'unreachable');
-          }
-        } catch(e){ res.style.color='var(--red)'; res.textContent='✗ network error'; }
+          r = await fetch('/antibot-appsec-gateway/secured/db-test?dsn='+encodeURIComponent(dsn),{credentials:'include'});
+        } catch(e){
+          res.style.color='var(--dim)'; res.textContent='⚠ cannot reach gateway (network) — DB state unknown';
+          this.disabled=false; return;
+        }
+        if (!r.ok) {
+          const hint = r.status === 404 || r.status === 403
+            ? 'admin endpoint blocked (allowlist or session)'
+            : `HTTP ${r.status}`;
+          res.style.color='var(--dim)';
+          res.textContent=`⚠ HTTP ${r.status} — ${hint}. UI cannot verify DB; the DB itself may still be fine.`;
+          this.disabled=false; return;
+        }
+        let j;
+        try { j = await r.json(); }
+        catch(e){
+          res.style.color='var(--dim)';
+          res.textContent='⚠ response was not JSON — DB state unknown (likely admin endpoint returned a decoy page)';
+          this.disabled=false; return;
+        }
+        const p = j.probe || {};
+        if (j.ok || p.ok) {
+          const ver = p.version ? ` — PostgreSQL ${p.version}` : '';
+          const db  = (p.db||p.db_name) ? ` · db ${p.db||p.db_name}` : '';
+          const ms  = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
+          res.style.color='var(--green)'; res.textContent=`✓ connected${ver}${db}${ms}`;
+          // Sync the Status tile — test succeeded so mark available in cache + live span
+          if (_dbSvcCache.db_postgres) _dbSvcCache.db_postgres.available = true;
+          const sv = document.getElementById('_tip-pg-status-val');
+          if (sv){ sv.style.color='var(--green)'; sv.textContent='✓ reachable'; }
+        } else {
+          // This is a REAL DB-side failure (gateway tried to connect, postgres said no)
+          res.style.color='var(--red)'; res.textContent='✗ '+(j.reason||p.reason||'unreachable');
+        }
         this.disabled=false;
+      };
+      // Explicit Load DSN button — re-fetches saved DSN and repopulates fields
+      const loadBtn = document.getElementById('_tip-pg-load');
+      if (loadBtn) loadBtn.onclick = async function(){
+        const res = document.getElementById('_tip-pg-res');
+        this.disabled = true;
+        if (res){ res.style.color='var(--dim)'; res.textContent='loading saved DSN…'; }
+        let r;
+        try {
+          r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+        } catch(e) {
+          if (res){ res.style.color='var(--dim)'; res.textContent='⚠ cannot reach gateway (network) — saved DSN unknown'; }
+          this.disabled = false; return;
+        }
+        if (!r.ok) {
+          const hint = r.status === 404 || r.status === 403
+            ? 'admin endpoint blocked (allowlist or session)'
+            : `HTTP ${r.status}`;
+          if (res){ res.style.color='var(--dim)'; res.textContent=`⚠ HTTP ${r.status} — ${hint}. Cannot read saved DSN.`; }
+          this.disabled = false; return;
+        }
+        try {
+          const j = await r.json();
+          const masked = (j.postgres||{}).dsn_masked || '';
+          if (!masked || masked === '(redacted)') {
+            if (res){ res.style.color='var(--dim)'; res.textContent='ℹ no saved DSN — enter values and Save'; }
+          } else {
+            const m = masked.match(/^postgresql:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+            if (!m) {
+              if (res){ res.style.color='var(--red)'; res.textContent='✗ could not parse saved DSN'; }
+            } else {
+              const [, u, h, p, d] = m;
+              const setVal = (id, val) => { const el=document.getElementById(id); if (el && val) el.value=val; };
+              setVal('_tip-pg-host', h);
+              setVal('_tip-pg-port', p || '5432');
+              setVal('_tip-pg-db',   d);
+              setVal('_tip-pg-user', u);
+              if (res){ res.style.color='var(--green)'; res.textContent=`✓ loaded — ${u}@${h}:${p||'5432'}/${d} · enter password to test`; }
+            }
+          }
+        } catch(e){
+          if (res){ res.style.color='var(--dim)'; res.textContent='⚠ response was not JSON — admin endpoint may have returned a decoy'; }
+        }
+        this.disabled = false;
       };
     }
   };
@@ -3753,6 +3876,32 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     const val = _dbTarget;
     if (!val || val === _dbOrig) return;
     _openDbModal(val);
+  });
+
+  $('btn-db-load-dsn').addEventListener('click', async function(){
+    const msg = $('db-msg');
+    this.disabled = true;
+    if (msg){ msg.style.color='var(--dim)'; msg.textContent='loading saved DSN…'; }
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+      if (!r.ok) throw new Error('http '+r.status);
+      const j = await r.json();
+      const masked = (j.postgres||{}).dsn_masked || '';
+      if (!masked || masked === '(redacted)') {
+        if (msg){ msg.style.color='var(--dim)'; msg.textContent='ℹ no saved DSN — configure in PostgreSQL section above'; }
+      } else {
+        const m = masked.match(/^postgresql:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+        if (!m) {
+          if (msg){ msg.style.color='var(--red)'; msg.textContent='✗ could not parse saved DSN'; }
+        } else {
+          const [, u, h, p, d] = m;
+          if (msg){ msg.style.color='var(--green)'; msg.textContent=`✓ ${u}@${h}:${p||'5432'}/${d}`; }
+        }
+      }
+    } catch(e){
+      if (msg){ msg.style.color='var(--red)'; msg.textContent='✗ load failed: '+(e.message||'network'); }
+    }
+    this.disabled = false;
   });
 
   loadDb();
