@@ -243,6 +243,21 @@ def _pg_mirror_kv(op: str, args: tuple) -> bool:
                     return False
         return True
     except Exception as e:
+        # If the table doesn't exist the schema init must have failed at startup
+        # (PG wasn't ready yet). Attempt a one-shot reinit and retry the write —
+        # this self-heals when TimescaleDB becomes reachable after the gateway
+        # boots (common in docker-compose environments without healthcheck deps).
+        try:
+            import psycopg as _psy
+            if isinstance(e, _psy.errors.UndefinedTable) and not getattr(
+                    _pg_mirror_kv, "_reinit_attempted", False):
+                _pg_mirror_kv._reinit_attempted = True
+                _logging.info("[db-pg] schema missing — attempting reinit")
+                if db_init_postgres(max_attempts=3, backoff_s=0.5):
+                    _pg_mirror_kv._reinit_attempted = False  # reset for future gaps
+                    return _pg_mirror_kv(op, args)           # retry once
+        except Exception:
+            pass
         # Log once per minute to avoid spamming.
         last = getattr(_pg_mirror_kv, "_last_warn_min", -1)
         cur_min = int(_t.time()) // 60
@@ -339,8 +354,13 @@ _BG_MIGRATION: dict = {
     "done":         False,
     "error":        None,
     "direction":    "",
-    "total":        0,
-    "copied":       0,
+    "total":        0,        # rows in source < cutoff_ts (before dedup)
+    "copied":       0,        # rows actually inserted into target
+    # 1.8.8 — idempotent migration (Approach A: watermark by MAX(ts) in target).
+    # Re-runs of the same direction skip rows the target already has, so
+    # interleaved hot-swaps don't pile up duplicates.
+    "watermark":              0.0,   # target's MAX(ts) before this run started
+    "skipped_already_present": 0,    # rows in source ≤ watermark (already migrated)
     "started_at":   0.0,
     "finished_at":  0.0,
 }
@@ -348,20 +368,72 @@ _BG_MIGRATION: dict = {
 
 def _bg_sqlite_to_pg(cutoff_ts: float, batch_size: int,
                      batch_sleep: float) -> None:
-    """Copy all SQLite events with ts < cutoff_ts into Postgres in batches."""
+    """Copy SQLite events into Postgres in batches, idempotently.
+
+    1.8.8 — two-sided watermark gap-fill:
+      • forward watermark (MAX(ts) on target): skip rows already migrated
+      • backfill watermark (MIN(ts) on target): copy rows older than target
+        has — for "Postgres added mid-history" scenarios
+
+    Copies source rows where: ts < min_target  OR  ts > max_target,
+    bounded by ts < cutoff_ts (the dual-write era already mirrors).
+
+    Limitation: this does NOT fix scattered interleaved gaps (rows missing
+    from inside the target's range, e.g. from a past dual-write failure).
+    A true composite-key dedup isn't viable: the events table contains
+    legitimate same-microsecond duplicates by every meaningful column,
+    a byproduct of HTTP/2 multiplexing. Operators with scattered gaps
+    must backfill via a one-shot SQL job.
+    """
     pg = _postgres_load_module()
     if pg is None or not POSTGRES_DSN:
         raise RuntimeError("psycopg/POSTGRES_DSN unavailable")
 
+    # 1. Read postgres MIN(ts) and MAX(ts) — the bounds of "already covered" range.
+    pg_min_ts = None
+    pg_max_ts = None
+    with pg.connect(POSTGRES_DSN, connect_timeout=5, autocommit=True) as wm_conn:
+        with wm_conn.cursor() as wm_cur:
+            wm_cur.execute(
+                "SELECT EXTRACT(EPOCH FROM MIN(ts)), "
+                "       EXTRACT(EPOCH FROM MAX(ts)) "
+                "FROM events WHERE ts < to_timestamp(%s)", (cutoff_ts,)
+            )
+            row = wm_cur.fetchone()
+            if row:
+                if row[0] is not None: pg_min_ts = float(row[0])
+                if row[1] is not None: pg_max_ts = float(row[1])
+    # Watermark = forward bound (MAX); kept for backward compat with status field.
+    watermark = pg_max_ts if pg_max_ts is not None else 0.0
+    _BG_MIGRATION["watermark"] = watermark
+
+    # 2. Decide what to copy.  Three regimes:
+    #   A. Target empty (min=max=None): copy everything < cutoff (first migration)
+    #   B. Target has data: copy where ts < pg_min OR ts > pg_max (gap-fill ends)
     src = sqlite3.connect(DB_PATH)
     try:
-        total = src.execute(
-            "SELECT COUNT(*) FROM events WHERE ts < ?", (cutoff_ts,)
-        ).fetchone()[0]
+        if pg_min_ts is None and pg_max_ts is None:
+            total = src.execute(
+                "SELECT COUNT(*) FROM events WHERE ts < ?", (cutoff_ts,)
+            ).fetchone()[0]
+            skipped = 0
+        else:
+            total = src.execute(
+                "SELECT COUNT(*) FROM events "
+                "WHERE ts < ? AND (ts < ? OR ts > ?)",
+                (cutoff_ts, pg_min_ts, pg_max_ts)
+            ).fetchone()[0]
+            # Rows in [pg_min, pg_max] are skipped — assumed mirrored by dual-write.
+            skipped = src.execute(
+                "SELECT COUNT(*) FROM events "
+                "WHERE ts < ? AND ts >= ? AND ts <= ?",
+                (cutoff_ts, pg_min_ts, pg_max_ts)
+            ).fetchone()[0]
     finally:
         src.close()
 
     _BG_MIGRATION["total"] = total
+    _BG_MIGRATION["skipped_already_present"] = skipped
     if total == 0:
         return
 
@@ -370,11 +442,21 @@ def _bg_sqlite_to_pg(cutoff_ts: float, batch_size: int,
         src = sqlite3.connect(DB_PATH)
         src.row_factory = sqlite3.Row
         try:
-            rows = src.execute(
-                "SELECT id, ts, ip, ua, path, status, reason "
-                "FROM events WHERE id > ? AND ts < ? ORDER BY id LIMIT ?",
-                (last_id, cutoff_ts, batch_size)
-            ).fetchall()
+            if pg_min_ts is None and pg_max_ts is None:
+                rows = src.execute(
+                    "SELECT id, ts, ip, ua, path, status, reason "
+                    "FROM events WHERE id > ? AND ts < ? "
+                    "ORDER BY id LIMIT ?",
+                    (last_id, cutoff_ts, batch_size)
+                ).fetchall()
+            else:
+                rows = src.execute(
+                    "SELECT id, ts, ip, ua, path, status, reason "
+                    "FROM events WHERE id > ? AND ts < ? "
+                    "  AND (ts < ? OR ts > ?) "
+                    "ORDER BY id LIMIT ?",
+                    (last_id, cutoff_ts, pg_min_ts, pg_max_ts, batch_size)
+                ).fetchall()
         finally:
             src.close()
 
@@ -402,19 +484,59 @@ def _bg_sqlite_to_pg(cutoff_ts: float, batch_size: int,
 
 def _bg_pg_to_sqlite(cutoff_ts: float, batch_size: int,
                      batch_sleep: float) -> None:
-    """Copy all Postgres events with ts < cutoff_ts into SQLite in batches."""
+    """Copy Postgres events into SQLite in batches, idempotently.
+
+    1.8.8 — symmetric two-sided watermark gap-fill.
+    See _bg_sqlite_to_pg for rationale + limitations.
+    """
     pg = _postgres_load_module()
     if pg is None or not POSTGRES_DSN:
         raise RuntimeError("psycopg/POSTGRES_DSN unavailable")
 
+    # 1. Read sqlite MIN(ts) and MAX(ts) — target's covered range.
+    sql_min_ts = None
+    sql_max_ts = None
+    wm_conn = sqlite3.connect(DB_PATH)
+    try:
+        row = wm_conn.execute(
+            "SELECT MIN(ts), MAX(ts) FROM events WHERE ts < ?", (cutoff_ts,)
+        ).fetchone()
+        if row:
+            if row[0] is not None: sql_min_ts = float(row[0])
+            if row[1] is not None: sql_max_ts = float(row[1])
+    finally:
+        wm_conn.close()
+    watermark = sql_max_ts if sql_max_ts is not None else 0.0
+    _BG_MIGRATION["watermark"] = watermark
+
+    # 2. Count source rows that fall outside [sql_min, sql_max].
+    total = 0
+    skipped = 0
     with pg.connect(POSTGRES_DSN, connect_timeout=5, autocommit=True) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT COUNT(*) FROM events WHERE ts < to_timestamp(%s)",
-                (cutoff_ts,))
-            total = cur.fetchone()[0]
+            if sql_min_ts is None and sql_max_ts is None:
+                cur.execute(
+                    "SELECT COUNT(*) FROM events WHERE ts < to_timestamp(%s)",
+                    (cutoff_ts,))
+                total = cur.fetchone()[0]
+                skipped = 0
+            else:
+                cur.execute(
+                    "SELECT COUNT(*) FROM events "
+                    "WHERE ts < to_timestamp(%s) "
+                    "  AND (ts < to_timestamp(%s) OR ts > to_timestamp(%s))",
+                    (cutoff_ts, sql_min_ts, sql_max_ts))
+                total = cur.fetchone()[0]
+                cur.execute(
+                    "SELECT COUNT(*) FROM events "
+                    "WHERE ts < to_timestamp(%s) "
+                    "  AND ts >= to_timestamp(%s) "
+                    "  AND ts <= to_timestamp(%s)",
+                    (cutoff_ts, sql_min_ts, sql_max_ts))
+                skipped = cur.fetchone()[0]
 
     _BG_MIGRATION["total"] = total
+    _BG_MIGRATION["skipped_already_present"] = skipped
     if total == 0:
         return
 
@@ -423,12 +545,22 @@ def _bg_pg_to_sqlite(cutoff_ts: float, batch_size: int,
         with pg.connect(POSTGRES_DSN, connect_timeout=5,
                         autocommit=True) as src:
             with src.cursor() as cur:
-                cur.execute(
-                    "SELECT id, EXTRACT(EPOCH FROM ts), ip, ua, path, "
-                    "       status, reason "
-                    "FROM events WHERE id > %s AND ts < to_timestamp(%s) "
-                    "ORDER BY id LIMIT %s",
-                    (last_id, cutoff_ts, batch_size))
+                if sql_min_ts is None and sql_max_ts is None:
+                    cur.execute(
+                        "SELECT id, EXTRACT(EPOCH FROM ts), ip, ua, path, "
+                        "       status, reason "
+                        "FROM events WHERE id > %s AND ts < to_timestamp(%s) "
+                        "ORDER BY id LIMIT %s",
+                        (last_id, cutoff_ts, batch_size))
+                else:
+                    cur.execute(
+                        "SELECT id, EXTRACT(EPOCH FROM ts), ip, ua, path, "
+                        "       status, reason "
+                        "FROM events WHERE id > %s "
+                        "  AND ts < to_timestamp(%s) "
+                        "  AND (ts < to_timestamp(%s) OR ts > to_timestamp(%s)) "
+                        "ORDER BY id LIMIT %s",
+                        (last_id, cutoff_ts, sql_min_ts, sql_max_ts, batch_size))
                 rows = cur.fetchall()
 
         if not rows:
@@ -476,6 +608,8 @@ def _full_migrate_background(target: str, cutoff_ts: float,
         "direction":   direction,
         "total":       0,
         "copied":      0,
+        "watermark":              0.0,
+        "skipped_already_present": 0,
         "started_at":  _t.time(),
         "finished_at": 0.0,
     })

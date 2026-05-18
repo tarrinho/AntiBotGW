@@ -854,35 +854,35 @@ class TestR1SourceGuards:
         return (_DASHBOARDS / "main.html").read_text(encoding="utf-8")
 
     def test_metrics_endpoint_uses_vhost_filter_in_events_query(self):
-        """proxy_handler.py metrics timeline branch must have vhost_filter in SQL."""
+        """proxy_handler.py metrics timeline branch must pass vhost filter to db_read_events."""
         src = self._proxy_handler_src()
-        # Find the metrics_endpoint function
         fn_start = src.find("async def metrics_endpoint(")
         assert fn_start != -1, "metrics_endpoint must exist in proxy_handler.py"
-        # Locate the filtered-timeline branch
         branch_start = src.find("if path_q or _vhost_filter:", fn_start)
         assert branch_start != -1, (
             "metrics_endpoint must have 'if path_q or _vhost_filter:' branch"
         )
-        # Verify the vhost_filter is appended to SQL params within the branch
         branch_body = src[branch_start: branch_start + 2000]
         assert "_vhost_filter" in branch_body, (
             "metrics_endpoint filtered timeline branch must reference _vhost_filter"
         )
-        assert "vhost = ?" in branch_body, (
-            "metrics_endpoint filtered timeline branch must use 'vhost = ?' SQL clause"
+        # 1.8.8: refactored from raw 'vhost = ?' SQL to db_read_events(vhost=...) abstraction
+        assert "vhost=_vhost_filter" in branch_body, (
+            "metrics_endpoint filtered timeline branch must pass vhost=_vhost_filter "
+            "to db_read_events() — raw SQL 'vhost = ?' is no longer used"
         )
 
     def test_logs_data_endpoint_has_vhost_filter(self):
-        """proxy_handler.py logs_data_endpoint must have WHERE vhost = ? for kind=requests."""
+        """proxy_handler.py logs_data_endpoint must pass vhost filter to db_read_events."""
         src = self._proxy_handler_src()
         fn_start = src.find("async def logs_data_endpoint(")
         assert fn_start != -1, "logs_data_endpoint must exist in proxy_handler.py"
-        # Find the next top-level function definition to bound our search
         fn_end = src.find("\nasync def ", fn_start + 1)
         fn_body = src[fn_start:fn_end] if fn_end != -1 else src[fn_start:]
-        assert "WHERE vhost = ?" in fn_body, (
-            "logs_data_endpoint must have 'WHERE vhost = ?' SQL clause for kind=requests"
+        # 1.8.8: refactored from raw 'WHERE vhost = ?' SQL to db_read_events(vhost=...) abstraction
+        assert "vhost=vhost_filter" in fn_body, (
+            "logs_data_endpoint must pass vhost=vhost_filter to db_read_events() "
+            "for kind=requests — raw SQL 'WHERE vhost = ?' is no longer used"
         )
 
     def test_logs_html_sends_vhost_param(self):
@@ -923,14 +923,16 @@ class TestR1SourceGuards:
         )
 
     def test_geo_data_uses_vhost_sql_clause(self):
-        """proxy_handler.py geo_data_endpoint must have vhost = ? in its SQL."""
+        """proxy_handler.py geo_data_endpoint must pass vhost filter to db_read_events."""
         src = self._proxy_handler_src()
         fn_start = src.find("async def geo_data_endpoint(")
         assert fn_start != -1, "geo_data_endpoint must exist in proxy_handler.py"
         fn_end = src.find("\nasync def ", fn_start + 1)
         fn_body = src[fn_start:fn_end] if fn_end != -1 else src[fn_start:]
-        assert "vhost = ?" in fn_body, (
-            "geo_data_endpoint must use 'vhost = ?' SQL clause when ?vhost= is set"
+        # 1.8.8: refactored from raw 'vhost = ?' SQL to db_read_events(vhost=...) abstraction
+        assert "vhost=_geo_vhost" in fn_body, (
+            "geo_data_endpoint must pass vhost=_geo_vhost to db_read_events() "
+            "— raw SQL 'vhost = ?' is no longer used"
         )
 
     def test_service_data_uses_vhost_filter(self):

@@ -840,6 +840,7 @@ def _refresh_integration_state(proxy_globals: dict) -> None:
     #   • _read_hot_reload_state() in proxy_handler returns the live values,
     #     not the config.py defaults — fixes Controls showing stale state.
     _propagate = {
+        "POSTGRES_DSN":        g.get("POSTGRES_DSN", ""),
         "ABUSEIPDB_KEY":       g.get("ABUSEIPDB_KEY", ""),
         "ABUSEIPDB_ENABLED":   g["ABUSEIPDB_ENABLED"],
         "TURNSTILE_SITEKEY":   g.get("TURNSTILE_SITEKEY", ""),
@@ -876,7 +877,15 @@ def db_load_secrets(proxy_globals: dict) -> None:
 
     Phase 2 note: `proxy_globals` must be the caller's globals() dict
     (i.e. proxy.py's module namespace) so secrets land in the right
-    module. When called from proxy.py the caller passes globals()."""
+    module. When called from proxy.py the caller passes globals().
+
+    1.8.8 — also **propagate** each loaded secret across sys.modules. The
+    historical bug: db_load_secrets would set `proxy.POSTGRES_DSN` but
+    leave `core.proxy_handler.POSTGRES_DSN` and `db.postgres.POSTGRES_DSN`
+    at their import-time empty value. /db-test then returned dsn_masked=""
+    and the popup said "no saved DSN" even though the DB had the value.
+    Mirrors the patch already in `secrets_endpoint` and `db_switch_endpoint`.
+    """
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -887,6 +896,7 @@ def db_load_secrets(proxy_globals: dict) -> None:
         return
     g = proxy_globals
     applied, env_pinned = 0, 0
+    loaded: list[tuple[str, str]] = []  # (global_name, value) to propagate
     for r in rows:
         public_name = r["key"]
         if public_name not in _SECRET_KEYS:
@@ -897,11 +907,30 @@ def db_load_secrets(proxy_globals: dict) -> None:
             env_pinned += 1
             continue
         g[global_name] = r["value"]
+        loaded.append((global_name, r["value"]))
         applied += 1
+    # 1.8.8 — propagate each loaded secret to every module that already has
+    # the same name bound. Critical for POSTGRES_DSN, which is referenced by
+    # `core.proxy_handler` (the /db-test handler reads it for `dsn_masked`)
+    # and `db.postgres` (pg_test_roundtrip + the migration helpers). Without
+    # this step, the popup's "Load DSN" returns "no saved DSN" because the
+    # only module that got the new value was proxy.py.
+    import sys as _sys
+    for global_name, value in loaded:
+        for _m in list(_sys.modules.values()):
+            if _m is None:
+                continue
+            if hasattr(_m, global_name):
+                try:
+                    setattr(_m, global_name, value)
+                except (AttributeError, TypeError):
+                    pass
     # Re-derive "configured" / "enabled" markers
     _refresh_integration_state(proxy_globals)
     if applied or env_pinned:
-        slog("db_secrets_loaded", level="info", applied=applied, env_pinned=env_pinned)
+        slog("db_secrets_loaded", level="info",
+             applied=applied, env_pinned=env_pinned,
+             propagated=len(loaded))
 
 
 def db_load_config(proxy_globals: dict) -> None:
@@ -954,12 +983,22 @@ def db_load_config(proxy_globals: dict) -> None:
                     _ph.__dict__[_cred] = g[_cred]
                 except TypeError:
                     pass
-    applied, skipped, env_pinned = 0, 0, 0
+    applied, skipped, env_pinned, secret_skipped = 0, 0, 0, 0
     for r in rows:
         key = r["key"]
         spec = _HOT_RELOAD_KNOBS.get(key)
         if spec is None:
             skipped += 1
+            continue
+        # 1.8.8 — secrets are owned by db_load_secrets (which reads
+        # secrets_kv). If a key is in BOTH _HOT_RELOAD_KNOBS and
+        # _SECRET_KEYS (notably POSTGRES_DSN), config_kv must NOT be
+        # allowed to overwrite the secret value. Historical bug:
+        # /db-switch wrote DSN to config_kv too, and if the in-memory
+        # DSN happened to be empty at that moment, the empty got
+        # persisted and silently stomped the real DSN on every restart.
+        if key in _SECRET_KEYS:
+            secret_skipped += 1
             continue
         # 1.5.5 — env wins. If the operator explicitly set this knob in the
         # container env, treat that as authoritative (GitOps determinism).
@@ -986,9 +1025,10 @@ def db_load_config(proxy_globals: dict) -> None:
         g["JS_CHAL_REQUIRE_JA4"] = False
         slog("db_config_ja4_forced_off", level="warn",
              reason="incompatible with TURNSTILE_ENABLED")
-    if applied or skipped or env_pinned:
+    if applied or skipped or env_pinned or secret_skipped:
         slog("db_config_loaded", level="info",
-             applied=applied, skipped=skipped, env_pinned=env_pinned)
+             applied=applied, skipped=skipped, env_pinned=env_pinned,
+             secret_skipped=secret_skipped)
 
 
 def db_load_state() -> None:

@@ -2083,13 +2083,13 @@ async def secrets_endpoint(request: web.Request):
         # global; db.postgres.POSTGRES_DSN would stay stale until reboot.
         if global_name == "POSTGRES_DSN":
             _propagate_global("POSTGRES_DSN", v)
-            # Re-run schema init in a background thread so tables created
-            # after first boot (when DSN was empty) are created immediately
-            # rather than failing with "relation does not exist" until the
-            # next container restart.
+            # Re-run schema init in a background thread so tables are
+            # created immediately (when DSN was empty at boot) and
+            # _postgres_available is set True so db_read_events routes
+            # to Postgres without needing a container restart.
             try:
                 _loop = asyncio.get_running_loop()
-                _loop.run_in_executor(None, db_init_postgres)
+                _loop.run_in_executor(None, _pg_init_and_activate)
             except Exception:
                 pass
         applied[k] = {"length": len(v)}
@@ -3996,6 +3996,29 @@ def _propagate_global(key: str, value) -> None:
                 pass
 
 
+def _pg_init_and_activate() -> bool:
+    """Run db_init_postgres() and, on success, set _postgres_available=True
+    across all loaded modules so db_read_events dispatches to Postgres.
+
+    Called from a thread-pool executor (never blocks the event loop).
+    Safe to call multiple times — db_init_postgres is idempotent."""
+    if not db_init_postgres():
+        return False
+    import sys as _sys_pg
+    import state as _state_pg
+    try:
+        _state_pg._postgres_available = True
+    except Exception:
+        pass
+    for _m in list(_sys_pg.modules.values()):
+        if _m is not None and hasattr(_m, "_postgres_available"):
+            try:
+                setattr(_m, "_postgres_available", True)
+            except (AttributeError, TypeError):
+                pass
+    return True
+
+
 async def db_switch_endpoint(request: web.Request):
     """1.6.5 / 1.8.7 — operator-triggered hot-swap of the active DB backend.
 
@@ -4097,14 +4120,15 @@ async def db_switch_endpoint(request: web.Request):
 
     _propagate_global("DB_BACKEND", target)
 
-    # ── Ensure schema exists before any migration touches Postgres ────────
-    # db_init_postgres() is idempotent (CREATE TABLE IF NOT EXISTS). If the
-    # container started with no DSN and the operator configured one later via
-    # /secrets, the startup init was skipped; run it now so migration threads
-    # don't hit "relation does not exist".
+    # ── Ensure schema exists + mark postgres available before migration ───
+    # _pg_init_and_activate is idempotent (CREATE TABLE IF NOT EXISTS) and
+    # sets _postgres_available=True so db_read_events routes to Postgres.
+    # If the container started with no DSN and the operator configured one
+    # via /secrets, the startup init was skipped; run it now so migration
+    # threads and dashboard reads don't race against a missing schema.
     if target == "postgres":
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, db_init_postgres)
+        await loop.run_in_executor(None, _pg_init_and_activate)
 
     # ── Migrate last 60 s of events for dashboard timeline continuity ─────
     # Capture switch_ts before the 60-s migration so the bg migration can
