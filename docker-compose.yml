@@ -169,7 +169,10 @@ services:
       # via /__controls — the Timescale sidecar above is always running so
       # the switch is one click + ~2 s container restart, no migration step
       # required (events accumulate fresh in the chosen backend).
-      DB_BACKEND:   ${DB_BACKEND:-sqlite}
+      # Leave DB_BACKEND empty so the gateway restores the DB-persisted backend
+      # (postgres/sqlite) across restarts. Set DB_BACKEND=sqlite or =postgres in
+      # .env only when you want env to override the operator's last UI choice.
+      DB_BACKEND:   ${DB_BACKEND:-}
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-appsec}:${POSTGRES_PASSWORD}@appsec-timescaledb:5432/${POSTGRES_DB:-appsec}
 
       # ── Logging ──────────────────────────────────────────────────────

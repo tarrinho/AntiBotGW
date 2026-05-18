@@ -10,6 +10,14 @@ Author: Pedro Tarrinho
 
 ### Added
 
+- **PostgreSQL popup auto-load + Load DSN button + UI honesty** (`dashboards/settings.html`):
+  - Auto-loads the configured DSN on popup open by parsing `postgres.dsn_masked` from `/db-test` and populating host/port/db/user fields; password stays blank. Visible feedback says `ℹ loaded saved DSN — user@host:port/db` or `ℹ no saved DSN — enter values to configure`.
+  - New explicit **Load DSN** button next to Save/Test for manual reload.
+  - Live status probe now distinguishes UI-cannot-read-status from DB-genuinely-down. New states: `⚠ status unknown (HTTP 404)` for admin-allowlist blocks, `⚠ status unknown (network)` for connection failure, `⚠ status unknown (parse)` for non-JSON decoy responses, `⚠ active · not reachable` for postgres-active-but-conn-down, `✗ DSN not configured` for missing DSN. Result line spells out "the DB itself may still be fine — this only means the UI couldn't query /db-test."
+  - Stats grid (Events / DB size / Latency) wrapped with `id="_tip-pg-stats"` so the live probe can rebuild cells with fresh data on each popup open.
+- **Hot-apply POSTGRES_DSN via `/secrets`** (`core/proxy_handler.py:2078`): The secrets endpoint now calls `_propagate_global("POSTGRES_DSN", v)` after persisting, so the new DSN takes effect immediately across `db.postgres` and all other modules holding their own `POSTGRES_DSN` binding. Save toast updated from `✓ DSN saved — restart to apply` → `✓ DSN saved — applied immediately`. Removes the old two-module staleness where `proxy_handler.POSTGRES_DSN` updated but `db.postgres.POSTGRES_DSN` did not until container restart.
+- **Probe-mode DSN dual-module patch** (`core/proxy_handler.py:4218`): `db_test_endpoint` probe path (`?dsn=...`) now patches both `proxy_handler.POSTGRES_DSN` and `db.postgres.POSTGRES_DSN` inside the try/finally so `pg_test_roundtrip()` reads the probe DSN, not the stale module global. Fixes the `✗ POSTGRES_DSN not configured` error when testing a candidate DSN from the popup.
+- **Top-level exception wrapper on `db_test_endpoint`** (`core/proxy_handler.py:4184`): Wraps the inner handler in a try/except that returns a JSON `{ok:false, reason:"<exc>"}` on any unhandled exception, so the browser always sees parseable JSON instead of an aiohttp HTML 500 page.
 - **Redis IP/CIDR connection allowlist** (`config.py`): `REDIS_ALLOW_LIST` env-var accepts a comma-separated list of IPs and CIDR ranges. When non-empty, the gateway rejects Redis connections from addresses not in the list. Each entry is normalised via `ipaddress.ip_network(strict=False)` at startup; invalid entries are logged as WARN and skipped. Prevents unauthorised Redis access from non-gateway hosts in multi-tenant environments.
 - **`REDIS_REQUIRE_TLS` flag** (`config.py`, `integrations/redis.py`): New boolean env-var (default `True`) — when set, the gateway refuses to connect to Redis unless `REDIS_URL` uses the `rediss://` scheme. On plaintext `redis://` with TLS required, startup logs `redis_blocked_no_tls` and exits with code 2. Set `REDIS_REQUIRE_TLS=false` to allow plaintext Redis in trusted internal networks. Enforced in `_shared_init` before the allowlist check.
 - **Ed25519 gateway mesh signing** (`admin/mesh.py`): `_gw_generate_keypair()` generates a random Curve25519 keypair (32-byte scalars encoded as 43-char base64url-no-padding). `_gw_derive_pubkey(priv)` derives the matching public key. `_gw_fingerprint(pub)` returns the first 12 hex chars of SHA256(pub). Mesh sync loop now signs outbound offer dicts with `_gw_sign_offers(priv, offers)` (Ed25519 over canonical sorted-key JSON; deterministic 64-byte / 86-char signature appended as `_sig`). Inbound offers are verified with `_gw_verify_offers(pub, sig, offers)` before acceptance; missing/invalid signatures cause `mesh_sync_no_sig` / `mesh_sync_sig_invalid` rejection events.
@@ -32,7 +40,7 @@ Author: Pedro Tarrinho
 
 ### Validation
 
-- Full test suite: 4038 collected / individual suites all pass (unit 959 · functional 38 · integration 23 · regression+dynamic 208 · dashboard security 256 · pentest 38 · sanity 318 incl. ed25519 55 · settings-subnav 71 · performance 9). GW-Tests-Full: 67 files.
+- Full test suite: 4049 collected / individual suites all pass (unit 959 · functional 38 · integration 23 · regression+dynamic 208 · dashboard security 256 · pentest 38 · sanity 318 incl. ed25519 55 · settings-subnav 71 · performance 9 · db-config-export-import +11). GW-Tests-Full: 67 files.
 - Bandit: 0 High / 0 Critical; 9 Medium pre-existing.
 - Trivy: 0 CRITICAL / 0 HIGH (arm64 · amd64); armv7 not built (Chainguard base dropped linux/arm/v7 from this digest).
 - Semgrep: 0 findings (1 FP annotated: insecure-file-permissions on `os.chmod(d, 0o700)` in `config.py`).

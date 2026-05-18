@@ -390,8 +390,8 @@ class TestSettingsDbTestBtn:
         marker = "document.getElementById('_tip-pg-test').onclick"
         idx = self.src.find(marker)
         assert idx != -1, "_tip-pg-test onclick not found in settings.html"
-        # grab ~80 lines of context (handler has grown with status-tile sync code)
-        return self.src[idx: idx + 2200]
+        # 3500 chars — handler grew with HTTP-error branches (N-series UI honesty).
+        return self.src[idx: idx + 3500]
 
     def test_t01_calls_db_test_not_integration_check(self):
         blk = self._tip_pg_test_handler()
@@ -884,21 +884,23 @@ async def test_d12_unauthenticated_db_test_no_real_data(proxy_module):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Live-probe status + stats tests (L) — _dbShowTip refreshes from /metrics on open
-# L01  _dbShowTip fetches /metrics (not /db-test) for postgres type
-# L02  Success path reads pg.available or pg.enabled from services.db_postgres
+# Live-probe status + stats + DSN auto-load (L) — _dbShowTip calls /db-test on open
+# L01  _dbShowTip fetches /db-test (non-probe, no ?dsn=) for postgres type
+# L02  Success path reads pg.available or pg.ok from j.postgres
 # L03  Live probe updates _tip-pg-status-val to ✓ reachable on success
-# L04  Failure path falls back to "unreachable" when pg not enabled/available
-# L05  Failure path shows "DSN not configured" when pg.configured is false
-# L06  Live-probe is guarded by type === 'postgres' (not fired for sqlite)
-# L07  _tip-pg-status-val opacity set to 0.5 before fetch (loading indicator)
-# L08  opacity restored to 1 after fetch resolves (both ok and error paths)
-# L09  Stats grid wrapper has id="_tip-pg-stats" so live probe can update cells
-# L10  Live probe rebuilds stats cells (Events, DB size) from fresh metrics data
+# L04  Failure path falls back to "unreachable"
+# L05  Failure path shows "DSN not configured" when dsn_masked absent
+# L06  Active-but-unreachable shows distinguishing "active · not reachable" label
+# L07  Live-probe is guarded by type === 'postgres' (not fired for sqlite)
+# L08  _tip-pg-status-val opacity set to 0.5 before fetch (loading indicator)
+# L09  opacity restored to 1 after fetch resolves (both ok and error paths)
+# L10  Stats grid wrapper has id="_tip-pg-stats" so live probe can update cells
+# L11  Live probe rebuilds stats cells (Events, DB size, Latency) from fresh data
+# L12  DSN auto-load parses dsn_masked and populates _tip-pg-host/port/db/user
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestDbShowTipLiveProbe:
-    """Static-HTML tests verifying the live stats/status refresh added to _dbShowTip."""
+    """Static-HTML tests verifying the live stats/status/DSN refresh added to _dbShowTip."""
 
     def setup_method(self):
         self.src = _settings()
@@ -908,30 +910,31 @@ class TestDbShowTipLiveProbe:
         marker = "window._dbShowTip = function"
         idx = self.src.find(marker)
         assert idx != -1, "_dbShowTip not found in settings.html"
-        # 8000 chars covers the full function body including the live probe IIFE
-        return self.src[idx: idx + 8000]
+        # 12000 chars covers full body: render + live probe IIFE + button wiring
+        return self.src[idx: idx + 12000]
 
     def _probe_fetch_idx(self, blk: str) -> int:
-        idx = blk.find("secured/metrics")
-        assert idx != -1, "Live probe fetch to /metrics not found in _dbShowTip"
+        # The live probe fetches /db-test (no ?dsn= param)
+        # Search for the fetch URL in the live-probe IIFE (not the _tip-pg-test handler)
+        # The IIFE appears before "Wire PG save/test"
+        wire_idx = blk.find("Wire PG save/test")
+        section = blk[:wire_idx] if wire_idx != -1 else blk
+        idx = section.find("secured/db-test")
+        assert idx != -1, "Live probe fetch to /db-test not found in _dbShowTip (before wire section)"
         return idx
 
-    def test_l01_live_probe_fetches_metrics(self):
+    def test_l01_live_probe_fetches_db_test(self):
         blk = self._dbShowTip_block()
-        assert "secured/metrics" in blk, (
-            "_dbShowTip must fetch /secured/metrics on popup open (not /db-test)"
-        )
-        # Must NOT call /db-test from the live probe block
         probe_idx = self._probe_fetch_idx(blk)
-        context = blk[max(0, probe_idx - 100): probe_idx + 200]
-        assert "/db-test" not in context, (
-            "Live probe must use /metrics, not /db-test"
+        snippet = blk[probe_idx: probe_idx + 60]
+        assert "dsn=" not in snippet, (
+            "Live probe must call /db-test without ?dsn= (use configured DSN, not probe DSN)"
         )
 
-    def test_l02_success_reads_available_or_enabled(self):
+    def test_l02_success_reads_available_or_ok(self):
         blk = self._dbShowTip_block()
-        assert "pg.available" in blk or "pg.enabled" in blk, (
-            "Live probe must read pg.available or pg.enabled from services.db_postgres"
+        assert "pg.available" in blk or "pg.ok" in blk, (
+            "Live probe must read pg.available or pg.ok from j.postgres"
         )
         assert "'✓ reachable'" in blk or '"✓ reachable"' in blk, (
             "Live probe success path must set textContent to '✓ reachable'"
@@ -939,58 +942,65 @@ class TestDbShowTipLiveProbe:
 
     def test_l03_status_tile_updated(self):
         blk = self._dbShowTip_block()
-        assert "_tip-pg-status-val" in blk or "sv.textContent" in blk, (
-            "Live probe must update the status tile element"
+        assert "sv.textContent" in blk, (
+            "Live probe must update sv (status tile) textContent"
         )
-        assert "'✓ reachable'" in blk or '"✓ reachable"' in blk, (
-            "Live probe must write '✓ reachable' on success"
-        )
+        assert "'✓ reachable'" in blk or '"✓ reachable"' in blk
 
     def test_l04_failure_defaults_to_unreachable(self):
         blk = self._dbShowTip_block()
         assert "unreachable" in blk, (
-            "Live probe failure path must fall back to 'unreachable'"
+            "Live probe failure path must include 'unreachable' fallback"
         )
 
     def test_l05_failure_shows_dsn_not_configured(self):
         blk = self._dbShowTip_block()
-        assert "configured" in blk and ("DSN not configured" in blk or "not configured" in blk), (
-            "Live probe failure path must distinguish 'DSN not configured' from 'unreachable'"
+        assert "DSN not configured" in blk or "not configured" in blk, (
+            "Live probe must show 'DSN not configured' when dsn_masked is absent"
         )
 
-    def test_l06_postgres_type_guard(self):
+    def test_l06_active_backend_label(self):
+        blk = self._dbShowTip_block()
+        assert "active_backend" in blk or "isActiveBackend" in blk, (
+            "Live probe must check j.active_backend to distinguish active-but-unreachable"
+        )
+        assert "not reachable" in blk or "unreachable" in blk
+
+    def test_l07_postgres_type_guard(self):
         blk = self._dbShowTip_block()
         probe_idx = self._probe_fetch_idx(blk)
-        context_before = blk[max(0, probe_idx - 300): probe_idx]
+        # 1500-char lookback covers helper definitions + guard + opacity dim
+        context_before = blk[max(0, probe_idx - 1500): probe_idx]
         assert "postgres" in context_before, (
             "Live probe fetch must be inside a type === 'postgres' guard"
         )
 
-    def test_l07_opacity_set_before_fetch(self):
+    def test_l08_opacity_set_before_fetch(self):
         blk = self._dbShowTip_block()
         probe_idx = self._probe_fetch_idx(blk)
-        before_fetch = blk[max(0, probe_idx - 200): probe_idx]
-        assert "opacity" in before_fetch and ("0.5" in before_fetch), (
+        # 1500-char lookback covers showUiError helper + opacity dim
+        before_fetch = blk[max(0, probe_idx - 1500): probe_idx]
+        assert "opacity" in before_fetch and "0.5" in before_fetch, (
             "Status tile opacity must be dimmed to 0.5 before the live fetch fires"
         )
 
-    def test_l08_opacity_restored_after_fetch(self):
+    def test_l09_opacity_restored_after_fetch(self):
         blk = self._dbShowTip_block()
         probe_idx = self._probe_fetch_idx(blk)
-        after_fetch = blk[probe_idx: probe_idx + 2500]
+        after_fetch = blk[probe_idx: probe_idx + 4000]
         assert "opacity" in after_fetch and ("= '1'" in after_fetch or '= "1"' in after_fetch), (
             "Status tile opacity must be restored to 1 after live probe completes"
         )
 
-    def test_l09_stats_grid_has_id(self):
+    def test_l10_stats_grid_has_id(self):
         assert '_tip-pg-stats' in self.src, (
             "Stats grid wrapper must have id='_tip-pg-stats' so live probe can update it"
         )
 
-    def test_l10_live_probe_rebuilds_stats_cells(self):
+    def test_l11_live_probe_rebuilds_stats_cells(self):
         blk = self._dbShowTip_block()
         probe_idx = self._probe_fetch_idx(blk)
-        after_fetch = blk[probe_idx: probe_idx + 1500]
+        after_fetch = blk[probe_idx: probe_idx + 2000]
         assert "_tip-pg-stats" in after_fetch, (
             "Live probe must update _tip-pg-stats element with fresh stats cells"
         )
@@ -999,4 +1009,221 @@ class TestDbShowTipLiveProbe:
         )
         assert "db_bytes" in after_fetch, (
             "Live probe must include db_bytes in refreshed stats cells"
+        )
+
+    def test_l12_dsn_auto_load_populates_form(self):
+        blk = self._dbShowTip_block()
+        probe_idx = self._probe_fetch_idx(blk)
+        # 5000 chars — IIFE grew with HTTP-error branches + JSON-parse handling.
+        after_fetch = blk[probe_idx: probe_idx + 5000]
+        # Must parse dsn_masked and set form fields
+        assert "dsn_masked" in after_fetch, (
+            "Live probe must read j.postgres.dsn_masked to auto-populate form fields"
+        )
+        for field_id in ("_tip-pg-host", "_tip-pg-port", "_tip-pg-db", "_tip-pg-user"):
+            assert field_id in after_fetch, (
+                f"Live probe must populate form field '{field_id}' from parsed dsn_masked"
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Load DSN button + hot-apply Save tests (M)
+# M01  Explicit "Load DSN" button (id="_tip-pg-load") rendered in popup
+# M02  Load button onclick wired with fetch to /db-test
+# M03  Load button onclick parses dsn_masked with regex
+# M04  Load button shows green ✓ feedback in _tip-pg-res on success
+# M05  Load button shows dim ℹ feedback when no saved DSN
+# M06  Save DSN toast message updated: "applied immediately" (not "restart to apply")
+# M07  Auto-load shows ℹ feedback when no saved DSN
+# M08  secrets_endpoint propagates POSTGRES_DSN via _propagate_global (hot-apply)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestLoadDsnButtonAndHotApply:
+    """Tests for the explicit Load DSN button + Save DSN hot-apply fix."""
+
+    def setup_method(self):
+        self.src = _settings()
+
+    def test_m01_load_button_rendered(self):
+        assert '_tip-pg-load' in self.src, (
+            "Popup must include id='_tip-pg-load' for the explicit Load DSN button"
+        )
+        assert 'Load DSN' in self.src, (
+            "Load button label must say 'Load DSN'"
+        )
+
+    def _load_btn_handler(self) -> str:
+        """Extract the Load button onclick handler body."""
+        # The handler is bound as loadBtn.onclick after locating the button.
+        # 3000 chars covers the body including HTTP-error branches + success path.
+        idx = self.src.find("loadBtn.onclick")
+        assert idx != -1, (
+            "Load button onclick handler not wired in settings.html "
+            "(expected 'loadBtn.onclick = ...' binding)"
+        )
+        return self.src[idx: idx + 3000]
+
+    def test_m02_load_button_calls_db_test(self):
+        block = self._load_btn_handler()
+        assert "secured/db-test" in block, (
+            "Load button must fetch /secured/db-test (no probe DSN)"
+        )
+
+    def test_m03_load_button_parses_dsn_masked(self):
+        block = self._load_btn_handler()
+        assert "dsn_masked" in block, (
+            "Load button must parse dsn_masked from response"
+        )
+        for field_id in ("_tip-pg-host", "_tip-pg-port", "_tip-pg-db", "_tip-pg-user"):
+            assert field_id in block, f"Load button must populate {field_id}"
+
+    def test_m04_load_button_success_feedback(self):
+        block = self._load_btn_handler()
+        assert "loaded" in block.lower(), (
+            "Load button must show 'loaded' confirmation on success"
+        )
+        assert "var(--green)" in block, (
+            "Load button success path must use green color"
+        )
+
+    def test_m05_load_button_no_dsn_feedback(self):
+        block = self._load_btn_handler()
+        assert "no saved DSN" in block, (
+            "Load button must show 'no saved DSN' when dsn_masked is empty"
+        )
+
+    def test_m06_save_toast_says_applied_immediately(self):
+        assert "applied immediately" in self.src, (
+            "Save DSN toast must say 'applied immediately' (hot-apply, not restart)"
+        )
+        assert "restart to apply" not in self.src, (
+            "Save DSN toast must NOT say 'restart to apply' anymore"
+        )
+
+    def test_m07_auto_load_shows_no_dsn_feedback(self):
+        # The live-probe IIFE should also show feedback when dsn_masked is empty
+        blk = self._dbShowTip_block_full()
+        assert "no saved DSN" in blk, (
+            "Auto-load (live probe IIFE) must show 'no saved DSN' feedback when empty"
+        )
+
+    def _dbShowTip_block_full(self):
+        marker = "window._dbShowTip = function"
+        idx = self.src.find(marker)
+        assert idx != -1
+        # 12000 chars covers full body including auto-load IIFE + Load button wiring
+        return self.src[idx: idx + 12000]
+
+    # ──────────────────────────────────────────────────────────────────────
+    # UI honesty (N) — popup must distinguish "can't read status" from "DB unreachable"
+    # N01  Live-probe IIFE has a showUiError helper (or equivalent dim-coloured branch)
+    # N02  HTTP non-ok in live probe → "status unknown" (NOT "unreachable")
+    # N03  Live probe surfaces HTTP status code in the message
+    # N04  Live probe distinguishes 404/403 (admin-allowlist) from generic HTTP errors
+    # N05  Live probe handles JSON parse failure separately
+    # N06  Test button distinguishes HTTP failure from real DB-unreachable
+    # N07  Test button no longer says "network error" for non-network failures
+    # N08  Load button distinguishes HTTP/JSON errors from "no saved DSN"
+    # N09  All UI-error messages clarify "the DB itself may still be fine"
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _live_probe_block(self) -> str:
+        marker = "On popup open: load current config + refresh status + stats"
+        idx = self.src.find(marker)
+        assert idx != -1, "Live-probe IIFE marker not found"
+        return self.src[idx: idx + 4500]
+
+    def test_n01_live_probe_has_ui_error_helper(self):
+        blk = self._live_probe_block()
+        assert "showUiError" in blk or "status unknown" in blk, (
+            "Live probe must have a dedicated UI-error helper or branch"
+        )
+
+    def test_n02_http_error_shows_status_unknown_not_unreachable(self):
+        blk = self._live_probe_block()
+        # The HTTP-error branch must say "status unknown" and NOT silently fall
+        # through to "unreachable". Look at the !r.ok branch.
+        assert "status unknown" in blk, (
+            "On HTTP error, popup must show 'status unknown' (UI couldn't read), "
+            "not 'unreachable' (which would lie about DB state)"
+        )
+
+    def test_n03_http_status_code_surfaced(self):
+        blk = self._live_probe_block()
+        assert "HTTP ${r.status}" in blk or "r.status" in blk, (
+            "Live probe must surface the actual HTTP status code in the error message"
+        )
+
+    def test_n04_distinguishes_admin_blocked_from_generic_http(self):
+        blk = self._live_probe_block()
+        assert "403" in blk and "404" in blk, (
+            "Live probe must explicitly handle 403/404 (admin-allowlist) cases"
+        )
+        assert "allowlist" in blk.lower() or "session" in blk.lower(), (
+            "Live probe 403/404 message must mention allowlist or session as likely cause"
+        )
+
+    def test_n05_handles_json_parse_failure(self):
+        blk = self._live_probe_block()
+        assert "parse" in blk.lower() or "not valid JSON" in blk or "not JSON" in blk, (
+            "Live probe must handle non-JSON responses separately (admin endpoint "
+            "may return HTML decoy with HTTP 200 — JSON parse would throw)"
+        )
+
+    def test_n06_test_button_distinguishes_http_vs_db_failure(self):
+        test_idx = self.src.find("_tip-pg-test').onclick")
+        assert test_idx != -1
+        blk = self.src[test_idx: test_idx + 3000]
+        # Must check r.ok explicitly and surface HTTP error separately
+        assert "r.ok" in blk or "!r.ok" in blk, (
+            "Test button must check r.ok before parsing JSON"
+        )
+        assert "HTTP" in blk and "status unknown" in blk.lower() or "HTTP" in blk, (
+            "Test button HTTP-error branch must surface HTTP status"
+        )
+
+    def test_n07_test_button_no_silent_network_error(self):
+        test_idx = self.src.find("_tip-pg-test').onclick")
+        assert test_idx != -1
+        blk = self.src[test_idx: test_idx + 3000]
+        # The OLD code had `catch(e){...textContent='✗ network error'}` for ALL
+        # error cases. The new code must distinguish network/HTTP/JSON paths.
+        network_err_count = blk.count("network")
+        # We should still mention "network" specifically for actual network failures,
+        # but NOT use it as the catch-all for HTTP or JSON errors.
+        assert "cannot reach gateway" in blk or "network)" in blk, (
+            "Test button must use 'cannot reach gateway (network)' only for real network errors"
+        )
+
+    def test_n08_load_button_separates_http_from_no_dsn(self):
+        idx = self.src.find("loadBtn.onclick")
+        assert idx != -1
+        blk = self.src[idx: idx + 2500]
+        assert "HTTP" in blk and "no saved DSN" in blk, (
+            "Load button must distinguish HTTP error (cannot read) from "
+            "'no saved DSN' (read fine but nothing configured)"
+        )
+
+    def test_n09_ui_errors_clarify_db_state_unknown(self):
+        # At least one error message in the live probe should explicitly say
+        # the DB itself may still be fine, so the user doesn't panic.
+        blk = self._live_probe_block()
+        assert "DB" in blk and ("may still be fine" in blk or "still be fine" in blk), (
+            "UI error messages must clarify that the DB itself may still be fine "
+            "when the UI cannot read the status"
+        )
+
+    def test_m08_secrets_endpoint_hot_applies_postgres_dsn(self):
+        ph_path = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
+        ph = ph_path.read_text(encoding="utf-8")
+        # Find the secrets_endpoint function
+        idx = ph.find("async def secrets_endpoint")
+        assert idx != -1, "secrets_endpoint not found in proxy_handler.py"
+        # The propagation lives inside the for-loop body (~line 2078+); the
+        # function spans ~150 lines, so search a 12000-char window.
+        body = ph[idx: idx + 12000]
+        assert '_propagate_global("POSTGRES_DSN"' in body or "_propagate_global('POSTGRES_DSN'" in body, (
+            "secrets_endpoint must call _propagate_global for POSTGRES_DSN to "
+            "hot-apply the change to db.postgres module (otherwise it stays stale "
+            "until container restart)"
         )

@@ -644,6 +644,7 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestSettingsImportTestButton` | 7 | Test button (dry_run=1): 200 on valid ZIP; doesn't mutate state; counts would-apply; error on empty body |
 | `TestVhostPolicyDashboard` | 4 | Auth guard; HTML served; no-store; X-Frame-Options |
 | `TestVhostPolicyDataEndpoint` | 8 | Auth guard; 200; required keys; vhost knobs list; global has upstream; no-store; hostname param; vhosts list |
+| `TestDbConfigExportImport` | 11 | DB_BACKEND in state; default value 'sqlite'; POSTGRES_DSN in state; export XML has both knobs; exported value matches active backend; import DB_BACKEND applied + reflects in GET; import POSTGRES_DSN applied; export after change reflects new value; invalid backend 'mysql' rejected |
 
 ---
 
