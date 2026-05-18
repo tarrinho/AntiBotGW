@@ -1129,3 +1129,111 @@ def _rehydrate_bans() -> int:
     except Exception as e:
         slog("bans_rehydrate_failed", level="warn", err=str(e)[:200])
     return count
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 1.8.8 — backend-aware event reader (sqlite side).
+# Called via db.db_read_events() dispatcher when DB_BACKEND=sqlite or when
+# postgres is configured but unavailable.
+# ────────────────────────────────────────────────────────────────────────────
+
+_VALID_EVENT_COLUMNS = frozenset({
+    "id", "ts", "ip", "ua", "path", "method", "status", "reason", "vhost",
+})
+
+_VALID_ORDER_BY = {
+    "ts": " ORDER BY ts ASC",
+    "ts asc": " ORDER BY ts ASC",
+    "ts desc": " ORDER BY ts DESC",
+    "id": " ORDER BY id ASC",
+    "id asc": " ORDER BY id ASC",
+    "id desc": " ORDER BY id DESC",
+}
+
+
+def _read_events_sql(
+    start_ts: float,
+    end_ts: float,
+    *,
+    columns=None,
+    vhost: str = "",
+    path_like: str = "",
+    reason_like: str = "",
+    ip_exact: str = "",
+    order_by: str = "",
+    limit: int = 0,
+    offset: int = 0,
+) -> list:
+    """SQLite implementation of db_read_events. Returns list of dicts.
+    `ts` is epoch float (REAL column, returned as-is).
+
+    start_ts=0 or end_ts=0 means "no bound on that side" — used by the
+    logs endpoint to grab the latest N rows without a time range.
+    """
+    cols = list(columns) if columns else ["ts", "ip", "reason"]
+    for c in cols:
+        if c not in _VALID_EVENT_COLUMNS:
+            raise ValueError(f"invalid event column: {c!r}")
+    where = []
+    params: list = []
+    if start_ts and start_ts > 0:
+        where.append("ts >= ?")
+        params.append(float(start_ts))
+    if end_ts and end_ts > 0:
+        where.append("ts <= ?")
+        params.append(float(end_ts))
+    if vhost:
+        where.append("vhost = ?")
+        params.append(vhost)
+    if path_like:
+        where.append("LOWER(path) LIKE ?")
+        params.append(f"%{path_like.lower()}%")
+    if reason_like:
+        where.append("LOWER(reason) LIKE ?")
+        params.append(f"%{reason_like.lower()}%")
+    if ip_exact:
+        where.append("ip = ?")
+        params.append(ip_exact)
+    order_clause = ""
+    if order_by:
+        ob = order_by.strip().lower()
+        if ob not in _VALID_ORDER_BY:
+            raise ValueError(f"invalid order_by: {order_by!r}")
+        order_clause = _VALID_ORDER_BY[ob]
+    limit_clause = ""
+    if limit and limit > 0:
+        limit_clause = f" LIMIT {int(limit)}"
+        if offset and offset > 0:
+            limit_clause += f" OFFSET {int(offset)}"
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    sql = (  # nosec B608 — cols/order/limit are whitelisted; values parameterized
+        f"SELECT {','.join(cols)} FROM events"
+        f"{where_sql}{order_clause}{limit_clause}"
+    )
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute(sql, params)]
+    finally:
+        conn.close()
+
+
+def _events_health_sql() -> dict:
+    """SQLite events-table health probe — count + last_event_ts.
+
+    Best-effort: returns ok=False with no counts if the DB or table is missing.
+    Used by db.db_health_snapshot() to surface write-lag in the dashboard."""
+    out = {"last_event_ts": None, "events_rows": 0, "ok": False}
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        try:
+            r = conn.execute("SELECT COUNT(*), MAX(ts) FROM events").fetchone()
+            if r:
+                out["events_rows"]   = int(r[0] or 0)
+                out["last_event_ts"] = float(r[1]) if r[1] is not None else None
+            out["ok"] = True
+        finally:
+            conn.close()
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:120]}"
+    return out

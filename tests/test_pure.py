@@ -3120,15 +3120,26 @@ def test_agents_bucket_modal_renders_authorized_robot_from_response():
 
 
 def test_agents_bucket_endpoint_returns_authorized_robot_field():
-    """agents_bucket_detail_endpoint must query reason='authorized-robot' and include
-    authorized_robot in the response payload."""
+    """agents_bucket_detail_endpoint must classify authorized-robot events and
+    expose them in the response payload.
+
+    1.8.8 — previously this checked for the literal SQL `reason='authorized-robot'`.
+    After the backend-aware refactor, classification moved from SQL filter to
+    Python (rows come from db_read_events; the `reason == 'authorized-robot'`
+    check runs in the loop body). Updated to check the new pattern.
+    """
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     fn_start = src.find("async def agents_bucket_detail_endpoint")
     assert fn_start != -1, "proxy_handler.py must define agents_bucket_detail_endpoint"
     fn_section = src[fn_start: fn_start + 8000]
-    assert "reason='authorized-robot'" in fn_section, (
-        "agents_bucket_detail_endpoint must query reason='authorized-robot' events"
+    assert (
+        'reason == "authorized-robot"' in fn_section
+        or "reason == 'authorized-robot'" in fn_section
+        or "reason='authorized-robot'" in fn_section
+    ), (
+        "agents_bucket_detail_endpoint must classify reason=='authorized-robot' events "
+        "(either via SQL filter or Python equality check after db_read_events)"
     )
     assert '"authorized_robot"' in fn_section or "'authorized_robot'" in fn_section, (
         "agents_bucket_detail_endpoint payload must include authorized_robot key"

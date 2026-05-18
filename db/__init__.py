@@ -27,3 +27,117 @@ from db.postgres import (
     _apply_pg_migrations,
     _postgres_load_module,
 )
+
+
+# 1.8.8 — Backend-aware event reader. Dispatches to sqlite or postgres
+# implementation based on DB_BACKEND + _postgres_available.
+#
+# Returns a list of dicts. The `ts` field is normalised to epoch float
+# regardless of backend (Postgres stores TIMESTAMPTZ, SQLite stores REAL).
+#
+# Why this exists: every dashboard endpoint (geo-data, logs-data,
+# agents-bucket-detail, metrics timeline, health-score) used to hardcode
+# `sqlite3.connect(DB_PATH)` for event reads, even when DB_BACKEND=postgres.
+# When dual-write failed on one side (slow armv7, transient pg outage, …)
+# the dashboards would show stale data with no obvious cause.
+#
+# Gracefully degrades on Postgres:
+#   - `vhost` and `method` filters/columns are skipped (Postgres events
+#     schema doesn't carry those columns yet — separate migration).
+#   - Falls back to SQLite if DB_BACKEND=postgres but _postgres_available=False.
+def db_read_events(
+    start_ts: float,
+    end_ts: float,
+    *,
+    columns=None,
+    vhost: str = "",
+    path_like: str = "",
+    reason_like: str = "",
+    ip_exact: str = "",
+    order_by: str = "",
+    limit: int = 0,
+    offset: int = 0,
+):
+    """Backend-aware event reader. See module docstring above for details."""
+    from db.sqlite import _read_events_sql
+    # Resolve backend lazily — DB_BACKEND lives on core.proxy_handler and is
+    # mutated by db_switch_endpoint. _postgres_available comes from state.
+    import sys as _sys
+    _ph = _sys.modules.get("core.proxy_handler")
+    backend = getattr(_ph, "DB_BACKEND", "sqlite") if _ph else "sqlite"
+    pg_ok = False
+    if backend == "postgres":
+        _st = _sys.modules.get("state")
+        pg_ok = bool(getattr(_st, "_postgres_available", False)) if _st else False
+    if backend == "postgres" and pg_ok:
+        try:
+            from db.postgres import _read_events_pg
+            return _read_events_pg(
+                start_ts, end_ts,
+                columns=columns, vhost=vhost,
+                path_like=path_like, reason_like=reason_like,
+                ip_exact=ip_exact, order_by=order_by,
+                limit=limit, offset=offset,
+            )
+        except Exception as e:
+            # Fall back to SQLite — never let a postgres read error
+            # leave the dashboard with no data.
+            from helpers import slog
+            slog("db_read_events_pg_fallback", level="warn",
+                 error=f"{type(e).__name__}: {str(e)[:120]}")
+    return _read_events_sql(
+        start_ts, end_ts,
+        columns=columns, vhost=vhost,
+        path_like=path_like, reason_like=reason_like,
+        ip_exact=ip_exact, order_by=order_by,
+        limit=limit, offset=offset,
+    )
+
+
+# 1.8.8 — per-backend write-health probe.  Returns:
+#   {
+#     "sqlite":   {"last_event_ts": float|None, "events_rows": int, "ok": bool},
+#     "postgres": {"last_event_ts": float|None, "events_rows": int, "ok": bool,
+#                  "available": bool, "configured": bool},
+#     "active_backend": "sqlite" | "postgres",
+#     "lag_seconds": float | None,  # how far behind the trailing backend is
+#     "healthy": bool,              # True iff lag_seconds < 60s OR only one backend in use
+#   }
+# Used by /db-test to surface silent dual-write breakage in the popup.
+def db_health_snapshot() -> dict:
+    """Probe both backends for write health. See module docstring."""
+    import sys as _sys, time as _t
+    from db.sqlite import _events_health_sql
+    out = {
+        "sqlite":   _events_health_sql(),
+        "postgres": {"last_event_ts": None, "events_rows": 0,
+                     "ok": False, "available": False, "configured": False},
+        "active_backend": "sqlite",
+        "lag_seconds": None,
+        "healthy": True,
+    }
+    _ph = _sys.modules.get("core.proxy_handler")
+    if _ph:
+        out["active_backend"] = getattr(_ph, "DB_BACKEND", "sqlite")
+    _st = _sys.modules.get("state")
+    pg_avail = bool(getattr(_st, "_postgres_available", False)) if _st else False
+    out["postgres"]["available"] = pg_avail
+    out["postgres"]["configured"] = bool(getattr(_ph, "POSTGRES_DSN", "")) if _ph else False
+    if pg_avail:
+        try:
+            from db.postgres import _events_health_pg
+            out["postgres"].update(_events_health_pg())
+        except Exception as e:
+            from helpers import slog
+            slog("db_health_pg_failed", level="warn",
+                 error=f"{type(e).__name__}: {str(e)[:120]}")
+    # Compute lag between backends — only meaningful when both have data.
+    s_ts = out["sqlite"].get("last_event_ts")
+    p_ts = out["postgres"].get("last_event_ts")
+    if s_ts is not None and p_ts is not None:
+        lag = abs(s_ts - p_ts)
+        out["lag_seconds"] = round(lag, 1)
+        out["healthy"] = lag < 60.0
+    elif out["active_backend"] == "postgres" and not pg_avail:
+        out["healthy"] = False
+    return out

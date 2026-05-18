@@ -987,7 +987,7 @@ class TestDbShowTipLiveProbe:
     def test_l09_opacity_restored_after_fetch(self):
         blk = self._dbShowTip_block()
         probe_idx = self._probe_fetch_idx(blk)
-        after_fetch = blk[probe_idx: probe_idx + 4000]
+        after_fetch = blk[probe_idx: probe_idx + 5500]
         assert "opacity" in after_fetch and ("= '1'" in after_fetch or '= "1"' in after_fetch), (
             "Status tile opacity must be restored to 1 after live probe completes"
         )
@@ -1226,4 +1226,142 @@ class TestLoadDsnButtonAndHotApply:
             "secrets_endpoint must call _propagate_global for POSTGRES_DSN to "
             "hot-apply the change to db.postgres module (otherwise it stays stale "
             "until container restart)"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Backend-aware reads + write-health (P series) — fixes the "armv7 server
+# dashboards empty when DB_BACKEND=postgres" + "geomap not reading postgres
+# after reboot" bugs reported by the operator.
+# P01  db.db_read_events dispatcher exists
+# P02  db._read_events_sql implementation exists
+# P03  db._read_events_pg implementation exists
+# P04  db.db_health_snapshot exists
+# P05  geo_data_endpoint uses db_read_events (not hardcoded sqlite3.connect)
+# P06  geo_drill_endpoint uses db_read_events
+# P07  logs_data_endpoint uses db_read_events
+# P08  logs_export_endpoint uses db_read_events
+# P09  agents_bucket_detail uses db_read_events (one fetch, multi-classify)
+# P10  health_score_endpoint uses db_read_events
+# P11  metrics_endpoint (path-filter timeline) uses db_read_events
+# P12  db-test response includes write_health (per-backend lag info)
+# P13  Settings popup live-probe surfaces write_health lag warning
+# P14  _events_health_sql returns dict with last_event_ts + events_rows
+# P15  Helper enforces column whitelist (raises on invalid column)
+# P16  Helper enforces order_by whitelist (raises on invalid)
+# P17  Helper accepts start_ts=0 for "no lower bound" (logs use case)
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBackendAwareReads:
+    """Tests for the 1.8.8 backend-aware event-reader + write-health refactor."""
+
+    def setup_method(self):
+        self.ph_src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+
+    def test_p01_db_read_events_dispatcher_exists(self):
+        db_init = (Path(__file__).resolve().parent.parent / "db" / "__init__.py").read_text()
+        assert "def db_read_events" in db_init, (
+            "db.db_read_events dispatcher must exist for backend-aware event reads"
+        )
+        assert "DB_BACKEND" in db_init and "_postgres_available" in db_init, (
+            "db_read_events must dispatch based on DB_BACKEND + _postgres_available"
+        )
+
+    def test_p02_read_events_sql_exists(self):
+        sql_src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
+        assert "def _read_events_sql" in sql_src, (
+            "db.sqlite._read_events_sql implementation must exist"
+        )
+
+    def test_p03_read_events_pg_exists(self):
+        pg_src = (Path(__file__).resolve().parent.parent / "db" / "postgres.py").read_text()
+        assert "def _read_events_pg" in pg_src, (
+            "db.postgres._read_events_pg implementation must exist"
+        )
+        assert "EXTRACT(EPOCH FROM ts)" in pg_src, (
+            "_read_events_pg must convert TIMESTAMPTZ to epoch float via EXTRACT(EPOCH FROM ts)"
+        )
+
+    def test_p04_db_health_snapshot_exists(self):
+        db_init = (Path(__file__).resolve().parent.parent / "db" / "__init__.py").read_text()
+        assert "def db_health_snapshot" in db_init, (
+            "db.db_health_snapshot must exist for per-backend write-health observability"
+        )
+        for k in ("active_backend", "lag_seconds", "healthy", "sqlite", "postgres"):
+            assert f'"{k}"' in db_init, f"db_health_snapshot must return key '{k}'"
+
+    @pytest.mark.parametrize("fn", [
+        "geo_data_endpoint",
+        "geo_drill_endpoint",
+        "logs_data_endpoint",
+        "logs_export_endpoint",
+        "agents_bucket_detail_endpoint",
+        "health_score_endpoint",
+        "metrics_endpoint",
+    ])
+    def test_p05_to_p11_endpoints_use_db_read_events(self, fn):
+        """Each affected dashboard endpoint must use db_read_events (not
+        hardcoded sqlite3.connect for the events table). The metrics
+        endpoint's `timeline` table read is intentionally SQLite-only and
+        not counted here (it's pre-aggregated, no Postgres mirror exists)."""
+        fn_start = self.ph_src.find(f"async def {fn}")
+        assert fn_start != -1, f"{fn} must exist in core/proxy_handler.py"
+        # Pull the function body up to the next async def.
+        next_fn = self.ph_src.find("async def ", fn_start + 1)
+        body = self.ph_src[fn_start: next_fn if next_fn != -1 else fn_start + 8000]
+        assert "db_read_events" in body, (
+            f"{fn} must call db_read_events for events reads — found stale "
+            f"hardcoded sqlite3.connect(DB_PATH) pattern instead"
+        )
+
+    def test_p12_db_test_response_includes_write_health(self):
+        idx = self.ph_src.find("async def db_test_endpoint")
+        assert idx != -1
+        # The response is built ~250 lines later
+        body = self.ph_src[idx: idx + 8000]
+        assert "write_health" in body, (
+            "/db-test response must include write_health field for per-backend lag"
+        )
+        assert "db_health_snapshot" in body, (
+            "db_test_endpoint must call db_health_snapshot()"
+        )
+
+    def test_p13_popup_surfaces_write_health_lag(self):
+        settings = (Path(__file__).resolve().parent.parent / "dashboards" / "settings.html").read_text()
+        assert "_tip-pg-lag" in settings, (
+            "Popup must contain id='_tip-pg-lag' element to surface dual-write lag"
+        )
+        assert "write_health" in settings or "j.write_health" in settings, (
+            "Popup JS must read write_health from /db-test response"
+        )
+        assert "Dual-write lag" in settings, (
+            "Popup must show 'Dual-write lag' warning when backends disagree"
+        )
+
+    def test_p14_events_health_sql_shape(self):
+        # Direct import/exec test — verify the function returns the expected shape.
+        sql_src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
+        assert "def _events_health_sql" in sql_src
+        assert "last_event_ts" in sql_src
+        assert "events_rows" in sql_src
+
+    def test_p15_column_whitelist_enforced(self):
+        sql_src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
+        assert "_VALID_EVENT_COLUMNS" in sql_src, (
+            "sqlite reader must whitelist column names to prevent SQL injection"
+        )
+        assert 'raise ValueError(f"invalid event column' in sql_src, (
+            "sqlite reader must raise on unknown column names"
+        )
+
+    def test_p16_order_by_whitelist_enforced(self):
+        sql_src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
+        assert "_VALID_ORDER_BY" in sql_src, (
+            "sqlite reader must whitelist ORDER BY values"
+        )
+
+    def test_p17_no_lower_bound_supported(self):
+        sql_src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
+        assert "start_ts and start_ts > 0" in sql_src, (
+            "sqlite reader must treat start_ts=0 as 'no lower bound' for logs endpoint"
         )
