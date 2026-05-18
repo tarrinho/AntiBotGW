@@ -155,8 +155,11 @@ async def tarpit_endpoint(request: web.Request) -> web.Response:
                  "X-Robots-Tag": "noindex,nofollow"}
     )
     await response.prepare(request)
-    for chunk in chunks:
-        await response.write(chunk)
-        await asyncio.sleep(delay)
-    await response.write_eof()
+    try:
+        for chunk in chunks:
+            await response.write(chunk)
+            await asyncio.sleep(delay)
+        await response.write_eof()
+    except ConnectionResetError:
+        pass  # bot disconnected mid-stream — normal for a tarpit
     return response

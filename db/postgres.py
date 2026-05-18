@@ -874,3 +874,171 @@ def pg_test_roundtrip() -> dict:
         return {"ok": False,
                 "reason": f"{type(e).__name__}: {str(e)[:160]}",
                 "round_trip_ms": round((_t.time() - t0) * 1000, 1)}
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# 1.8.8 — backend-aware event reader (postgres side).
+# Called via db.db_read_events() dispatcher when DB_BACKEND=postgres and
+# _postgres_available is True. ts in the returned rows is normalised to
+# epoch float (Postgres stores TIMESTAMPTZ, so we EXTRACT(EPOCH FROM ts)).
+#
+# Schema gap (long-standing — predates this fix): the Postgres `events` table
+# has no `method` or `vhost` columns, whereas SQLite has both. We gracefully
+# degrade:
+#   - Requested method/vhost columns → returned as "" (empty string)
+#   - method= or vhost= filters → skipped with a slog warning
+# This keeps dashboards working on Postgres-active deployments while a future
+# migration adds the missing columns.
+# ────────────────────────────────────────────────────────────────────────────
+
+_VALID_EVENT_COLUMNS_PG = frozenset({
+    # Postgres-native columns (real)
+    "id", "ts", "ip", "ua", "path", "status", "reason",
+    "track_key", "sid", "fp", "ja4", "request_id",
+    # SQLite-only columns (returned as "" for postgres)
+    "method", "vhost",
+})
+
+_VALID_ORDER_BY_PG = {
+    "ts": " ORDER BY ts ASC",
+    "ts asc": " ORDER BY ts ASC",
+    "ts desc": " ORDER BY ts DESC",
+    "id": " ORDER BY id ASC",
+    "id asc": " ORDER BY id ASC",
+    "id desc": " ORDER BY id DESC",
+}
+
+# Columns that exist on SQLite but NOT in Postgres events schema — caller
+# requests them; we hand back empty strings.
+_PG_MISSING_COLUMNS = frozenset({"method", "vhost"})
+
+
+def _read_events_pg(
+    start_ts: float,
+    end_ts: float,
+    *,
+    columns=None,
+    vhost: str = "",
+    path_like: str = "",
+    reason_like: str = "",
+    ip_exact: str = "",
+    order_by: str = "",
+    limit: int = 0,
+    offset: int = 0,
+) -> list:
+    """Postgres implementation of db_read_events. Returns list of dicts.
+    `ts` is normalised to epoch float via EXTRACT(EPOCH FROM ts)."""
+    pg = _postgres_load_module()
+    if pg is None:
+        raise RuntimeError("psycopg not installed")
+    if not POSTGRES_DSN:
+        raise RuntimeError("POSTGRES_DSN not configured")
+    requested = list(columns) if columns else ["ts", "ip", "reason"]
+    for c in requested:
+        if c not in _VALID_EVENT_COLUMNS_PG:
+            raise ValueError(f"invalid event column: {c!r}")
+
+    # Build the SELECT — replace ts with EXTRACT(EPOCH FROM ts); drop
+    # method/vhost (we'll inject "" for them after fetch).
+    sql_cols = []
+    real_cols = []  # column names actually fetched, for row mapping
+    for c in requested:
+        if c == "ts":
+            sql_cols.append("EXTRACT(EPOCH FROM ts) AS ts")
+            real_cols.append("ts")
+        elif c in _PG_MISSING_COLUMNS:
+            # Don't include in SELECT — fill with "" after fetch
+            real_cols.append(c)
+        else:
+            sql_cols.append(c)
+            real_cols.append(c)
+
+    where = []
+    params: list = []
+    if start_ts and start_ts > 0:
+        where.append("ts >= to_timestamp(%s)")
+        params.append(float(start_ts))
+    if end_ts and end_ts > 0:
+        where.append("ts <= to_timestamp(%s)")
+        params.append(float(end_ts))
+    # vhost filter is not supported on Postgres (no column) — log + skip
+    if vhost:
+        from helpers import slog
+        slog("db_read_events_pg_skip_vhost", level="info",
+             vhost=vhost[:64],
+             note="postgres events table has no vhost column; filter skipped")
+    if path_like:
+        where.append("LOWER(path) LIKE %s")
+        params.append(f"%{path_like.lower()}%")
+    if reason_like:
+        where.append("LOWER(reason) LIKE %s")
+        params.append(f"%{reason_like.lower()}%")
+    if ip_exact:
+        where.append("ip = %s")
+        params.append(ip_exact)
+    order_clause = ""
+    if order_by:
+        ob = order_by.strip().lower()
+        if ob not in _VALID_ORDER_BY_PG:
+            raise ValueError(f"invalid order_by: {order_by!r}")
+        order_clause = _VALID_ORDER_BY_PG[ob]
+    limit_clause = ""
+    if limit and limit > 0:
+        limit_clause = f" LIMIT {int(limit)}"
+        if offset and offset > 0:
+            limit_clause += f" OFFSET {int(offset)}"
+    # Edge case: requested columns are ALL in _PG_MISSING_COLUMNS — we still
+    # need at least one real column in the SELECT (e.g. id) to get row count.
+    if not sql_cols:
+        sql_cols = ["id"]
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    sql = (  # nosec B608 — cols/order/limit are whitelisted; values parameterized
+        f"SELECT {','.join(sql_cols)} FROM events"
+        f"{where_sql}{order_clause}{limit_clause}"
+    )
+    out = []
+    try:
+        with pg.connect(POSTGRES_DSN, connect_timeout=5) as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                # Map column names from the cursor description
+                if cur.description:
+                    fetched_names = [d[0] for d in cur.description]
+                else:
+                    fetched_names = []
+                for row in cur.fetchall():
+                    d = {}
+                    for col_name, val in zip(fetched_names, row):
+                        d[col_name] = val
+                    # Inject empty strings for SQLite-only columns
+                    for c in requested:
+                        if c in _PG_MISSING_COLUMNS and c not in d:
+                            d[c] = ""
+                    out.append(d)
+    except Exception:
+        raise
+    return out
+
+
+def _events_health_pg() -> dict:
+    """Postgres events-table health probe — count + last_event_ts (epoch).
+    Returns same shape as _events_health_sql for symmetry."""
+    out = {"last_event_ts": None, "events_rows": 0, "ok": False}
+    pg = _postgres_load_module()
+    if pg is None or not POSTGRES_DSN:
+        out["error"] = "psycopg not installed or POSTGRES_DSN unset"
+        return out
+    try:
+        with pg.connect(POSTGRES_DSN, connect_timeout=3) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*), EXTRACT(EPOCH FROM MAX(ts)) FROM events"
+                )
+                r = cur.fetchone()
+                if r:
+                    out["events_rows"]   = int(r[0] or 0)
+                    out["last_event_ts"] = float(r[1]) if r[1] is not None else None
+                out["ok"] = True
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:120]}"
+    return out

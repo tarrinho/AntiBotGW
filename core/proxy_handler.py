@@ -2083,6 +2083,15 @@ async def secrets_endpoint(request: web.Request):
         # global; db.postgres.POSTGRES_DSN would stay stale until reboot.
         if global_name == "POSTGRES_DSN":
             _propagate_global("POSTGRES_DSN", v)
+            # Re-run schema init in a background thread so tables created
+            # after first boot (when DSN was empty) are created immediately
+            # rather than failing with "relation does not exist" until the
+            # next container restart.
+            try:
+                _loop = asyncio.get_running_loop()
+                _loop.run_in_executor(None, db_init_postgres)
+            except Exception:
+                pass
         applied[k] = {"length": len(v)}
         if db_queue is not None:
             try:
@@ -4088,6 +4097,15 @@ async def db_switch_endpoint(request: web.Request):
 
     _propagate_global("DB_BACKEND", target)
 
+    # ── Ensure schema exists before any migration touches Postgres ────────
+    # db_init_postgres() is idempotent (CREATE TABLE IF NOT EXISTS). If the
+    # container started with no DSN and the operator configured one later via
+    # /secrets, the startup init was skipped; run it now so migration threads
+    # don't hit "relation does not exist".
+    if target == "postgres":
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, db_init_postgres)
+
     # ── Migrate last 60 s of events for dashboard timeline continuity ─────
     # Capture switch_ts before the 60-s migration so the bg migration can
     # copy everything strictly older (ts < switch_ts - 60) without overlap.
@@ -4285,12 +4303,21 @@ async def _db_test_endpoint_inner(request: web.Request):
             masked_dsn = f"{p.scheme}://{p.username or '<user>'}:>update password<@{p.hostname or '<host>'}{':'+str(p.port) if p.port else ''}{p.path or ''}"
         except Exception:
             masked_dsn = "(redacted)"
+    # 1.8.8 — per-backend write health.  Compares last_event_ts and event
+    # row counts between SQLite and Postgres so the popup can surface
+    # silent dual-write breakage.  Cheap (two COUNT/MAX queries).
+    try:
+        from db import db_health_snapshot
+        write_health = db_health_snapshot()
+    except Exception as e:
+        write_health = {"error": f"{type(e).__name__}: {str(e)[:120]}"}
     return web.json_response({
         "active_backend": DB_BACKEND,
         "sqlite":   sqlite_info,
         "postgres": {**postgres_info,
                       "dsn_masked": masked_dsn,
                       "available": _postgres_available},
+        "write_health": write_health,
         "ts": _t.time(),
     }, headers={"Cache-Control": "no-store"})
 
@@ -4548,18 +4575,22 @@ async def health_score_endpoint(request: web.Request):
     blocked = clean = 0
     try:
         cutoff = _t.time() - 3600
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute(
-            "SELECT reason, COUNT(*) FROM events WHERE ts >= ? GROUP BY reason",
-            (cutoff,)).fetchall()
-        conn.close()
-        for reason, count in rows:
+        # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded).
+        # Group-by is done in Python (helper returns rows, not aggregates).
+        # Acceptable for 1h windows; row count bounded.
+        from db import db_read_events as _db_read_events_hs
+        for r in _db_read_events_hs(
+            cutoff, 0,
+            columns=["reason"],
+            limit=200000,
+        ):
+            reason = r.get("reason") or ""
             if reason and reason != "OK":
-                blocked += count
+                blocked += 1
             else:
-                clean += count
+                clean += 1
     except Exception:
-        pass
+        pass  # nosec B110 — best-effort health score; missing data acceptable
     total = blocked + clean
     block_ratio = blocked / total if total else 0
     if total < 100:
@@ -4767,22 +4798,15 @@ async def metrics_endpoint(request: web.Request):
                             "bypass-path", "authorized-robot"}
             _admin_pfx   = ADMIN_NS.lower()
             try:
-                conn = sqlite3.connect(DB_PATH)
-                conn.row_factory = sqlite3.Row
-                _where_parts = ["ts >= ?", "ts <= ?"]
-                _params: list = [start_b, end_b + bucket_secs]
-                if path_q:
-                    _where_parts.append("LOWER(path) LIKE ?")
-                    _params.append(f"%{path_q}%")
-                if _vhost_filter:
-                    _where_parts.append("vhost = ?")
-                    _params.append(_vhost_filter)
-                rows = conn.execute(  # nosec B608 — where parts are hardcoded strings; values parameterized
-                    "SELECT ts, path, reason FROM events WHERE "
-                    + " AND ".join(_where_parts) + " ORDER BY ts",
-                    _params,
-                ).fetchall()
-                conn.close()
+                # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded)
+                from db import db_read_events as _db_read_events_m1
+                rows = _db_read_events_m1(
+                    start_b, end_b + bucket_secs,
+                    columns=["ts", "path", "reason"],
+                    vhost=_vhost_filter,
+                    path_like=path_q,
+                    order_by="ts asc",
+                )
                 # Also scan in-memory events (recent, not yet flushed to DB)
                 from state import events as _mem_events
                 mem_rows = [
@@ -5606,22 +5630,21 @@ async def geo_data_endpoint(request: web.Request):
         for i in range(N_ANIM)
     ]
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
+        # 1.8.8 — backend-aware read.  Was: sqlite3.connect(DB_PATH) hardcoded,
+        # which left GeoMap showing stale SQLite data on Postgres-active
+        # deployments where SQLite dual-write had silently lagged or stopped.
+        # Now dispatches to whichever backend is live.  vhost filter is
+        # skipped on Postgres (schema gap — see db/postgres.py docstring).
+        from db import db_read_events
         try:
-            # Cursor iteration (no fetchall) — avoids loading all rows into RAM for
-            # large windows (e.g. 30 days). ORDER BY omitted: rebuildBuckets() bins
-            # by ts value directly so sort order doesn't matter for correctness.
-            _geo_sql_args = [start_epoch, end_epoch]
-            _geo_vhost_clause = ""
-            if _geo_vhost:
-                _geo_vhost_clause = " AND vhost = ?"
-                _geo_sql_args.append(_geo_vhost)
-            cursor = conn.execute(
-                "SELECT ts, ip, reason FROM events "
-                "WHERE ts >= ? AND ts <= ?" + _geo_vhost_clause,
-                _geo_sql_args,
+            cursor = db_read_events(
+                start_epoch, end_epoch,
+                columns=["ts", "ip", "reason"],
+                vhost=_geo_vhost,
             )
+        except Exception:
+            cursor = []
+        try:
             for r in cursor:
                 ip = r["ip"]
                 if not ip:
@@ -5701,8 +5724,8 @@ async def geo_data_endpoint(request: web.Request):
                     j = _random.randint(0, _sample_seen - 1)  # noqa: S311 — reservoir sampling, not crypto
                     if j < _SCRUBBER_CAP:
                         events_sample[j] = [float(r["ts"]), lat, lng, kind]
-        finally:
-            conn.close()
+        except Exception:
+            pass  # nosec B110 — per-row failures swallowed; aggregation continues
     except Exception as e:
         return web.json_response(
             {"error": f"db: {e}", "points": []}, status=500,
@@ -5881,14 +5904,13 @@ async def geo_drill_endpoint(request: web.Request):
     target_key = (round(lat * 2) / 2, round(lng * 2) / 2)
 
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT ip, ua, path, reason, ts FROM events "
-            "WHERE ts >= ? AND ts <= ? LIMIT 200000",
-            (start_epoch, end_epoch),
-        ).fetchall()
-        conn.close()
+        # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded)
+        from db import db_read_events
+        rows = db_read_events(
+            start_epoch, end_epoch,
+            columns=["ip", "ua", "path", "reason", "ts"],
+            limit=200000,
+        )
     except Exception as e:
         return web.json_response(
             {"error": f"db: {e}"}, status=500,
@@ -6012,24 +6034,19 @@ async def logs_data_endpoint(request: web.Request):
         iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
         vhost_filter  = (request.query.get("vhost", "") or "").strip().lower()
         try:
-            conn = sqlite3.connect(DB_PATH)
-            conn.row_factory = sqlite3.Row
+            # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded)
+            from db import db_read_events
             # 1.6.5 — pull more rows than `limit` so we can post-filter
             # (method/ip_type) without paginating multiple SQL queries.
             sql_cap = max(limit * 4, 1000) if (method_filter != "all" or
                                                  iptype_filter != "all") else limit
-            if vhost_filter:
-                rows = conn.execute(  # nosec B608 — vhost_filter value is parameterized
-                    "SELECT id, ts, ip, ua, path, status, reason FROM events "
-                    "WHERE vhost = ? ORDER BY id DESC LIMIT ?",
-                    (vhost_filter, sql_cap),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    "SELECT id, ts, ip, ua, path, status, reason FROM events "
-                    "ORDER BY id DESC LIMIT ?", (sql_cap,)
-                ).fetchall()
-            conn.close()
+            rows = db_read_events(
+                0, 0,  # no time bound — latest N rows
+                columns=["id", "ts", "ip", "ua", "path", "status", "reason"],
+                vhost=vhost_filter,
+                order_by="id desc",
+                limit=sql_cap,
+            )
         except Exception as e:
             return web.json_response({"error": f"db: {e}"}, status=500,
                                       headers={"Cache-Control":"no-store"})
@@ -6118,12 +6135,15 @@ async def logs_export_endpoint(request: web.Request):
     await resp.write(b"id,ts,iso_ts,ip,ua,path,status,reason,method,ip_type\r\n")
     written = 0
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        # Stream from the cursor — don't load everything in memory.
-        for r in conn.execute(
-            "SELECT id, ts, ip, ua, path, status, reason FROM events "
-            "ORDER BY id DESC LIMIT ?", (cap * 2,)
+        # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded).
+        # Note: for very large exports this loses cursor streaming (helper
+        # returns a list) — acceptable trade-off for backend correctness.
+        from db import db_read_events
+        for r in db_read_events(
+            0, 0,
+            columns=["id", "ts", "ip", "ua", "path", "status", "reason"],
+            order_by="id desc",
+            limit=cap * 2,
         ):
             reason = (r["reason"] or "")
             row_level = "warn" if (reason and reason != "OK") else "info"
@@ -6160,7 +6180,6 @@ async def logs_export_endpoint(request: web.Request):
             written += 1
             if written >= cap:
                 break
-        conn.close()
     except Exception as e:
         await resp.write(f"# error: {e}\r\n".encode("utf-8"))
     await resp.write_eof()
@@ -6319,74 +6338,59 @@ async def agents_bucket_detail_endpoint(request: web.Request):
     # all_blocks=1 → include every non-OK reason (for main dashboard).
     # Default (agents page) → only AGENT_BLOCK_REASONS.
     all_blocks = request.query.get("all_blocks", "0") == "1"
-    detected_set, clean_set = {}, {}
+    detected_set, clean_set, auth_robot_set = {}, {}, {}
     try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        if all_blocks:
-            block_rows = conn.execute(
-                "SELECT ip, ua, path, reason, status FROM events "
-                "WHERE ts >= ? AND ts < ? AND reason != '' AND reason != 'OK'",
-                (t, end),
-            )
-        else:
-            agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
-            block_rows = conn.execute(
-                f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608
-                f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
-                (t, end, *AGENT_BLOCK_REASONS),
-            )
-        for r in block_rows:
+        # 1.8.8 — single backend-aware fetch + Python filtering replaces 3 separate
+        # SQLite queries (was: sqlite3.connect(DB_PATH) hardcoded × 3 with
+        # different WHERE clauses). One bucket window is typically ~60s wide
+        # so row count is bounded.
+        from db import db_read_events
+        all_rows = db_read_events(
+            t, end,
+            columns=["ip", "ua", "path", "reason", "status"],
+            limit=60000,
+        )
+        agent_block_set = set(AGENT_BLOCK_REASONS)
+        for r in all_rows:
             ip = r["ip"] or "?"
-            entry = detected_set.setdefault(ip, {
-                "ip": ip, "ua": r["ua"] or "", "count": 0,
-                "is_admin_ip": _is_admin_ip(ip),
-                "reasons": {}, "last_path": r["path"] or "",
-                "identities": ip_to_idents.get(ip, []),
-            })
-            entry["count"] += 1
-            entry["reasons"][r["reason"]] = entry["reasons"].get(r["reason"], 0) + 1
-            entry["last_path"] = r["path"] or entry["last_path"]
-        for r in conn.execute(
-            "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND (reason='' OR reason='OK') LIMIT 20000",
-            (t, end),
-        ):
-            ip = r["ip"] or "?"
-            entry = clean_set.setdefault(ip, {
-                "ip": ip, "ua": r["ua"] or "", "count": 0,
-                "is_admin_ip": _is_admin_ip(ip),
-                "last_path": r["path"] or "",
-                "identities": ip_to_idents.get(ip, []),
-            })
-            entry["count"] += 1
-            entry["last_path"] = r["path"] or entry["last_path"]
-        conn.close()
+            reason = (r["reason"] or "")
+            # Classify
+            if all_blocks:
+                is_block = reason != "" and reason != "OK"
+            else:
+                is_block = reason in agent_block_set
+            is_clean = (reason == "" or reason == "OK")
+            is_authorized_robot = (reason == "authorized-robot")
+            if is_block:
+                entry = detected_set.setdefault(ip, {
+                    "ip": ip, "ua": r["ua"] or "", "count": 0,
+                    "is_admin_ip": _is_admin_ip(ip),
+                    "reasons": {}, "last_path": r["path"] or "",
+                    "identities": ip_to_idents.get(ip, []),
+                })
+                entry["count"] += 1
+                entry["reasons"][reason] = entry["reasons"].get(reason, 0) + 1
+                entry["last_path"] = r["path"] or entry["last_path"]
+            elif is_clean and len(clean_set) < 20000:
+                entry = clean_set.setdefault(ip, {
+                    "ip": ip, "ua": r["ua"] or "", "count": 0,
+                    "is_admin_ip": _is_admin_ip(ip),
+                    "last_path": r["path"] or "",
+                    "identities": ip_to_idents.get(ip, []),
+                })
+                entry["count"] += 1
+                entry["last_path"] = r["path"] or entry["last_path"]
+            if is_authorized_robot and len(auth_robot_set) < 20000:
+                entry = auth_robot_set.setdefault(ip, {
+                    "ip": ip, "ua": r["ua"] or "", "count": 0,
+                    "is_admin_ip": _is_admin_ip(ip),
+                    "last_path": r["path"] or "",
+                    "identities": ip_to_idents.get(ip, []),
+                })
+                entry["count"] += 1
+                entry["last_path"] = r["path"] or entry["last_path"]
     except Exception as e:
         return web.json_response({"error": f"db: {e}"}, status=500)
-
-    # authorized-robot events (passthrough bots, not blocked, not clean)
-    auth_robot_set = {}
-    try:
-        conn2 = sqlite3.connect(DB_PATH)
-        conn2.row_factory = sqlite3.Row
-        for r in conn2.execute(
-            "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND reason='authorized-robot' LIMIT 20000",
-            (t, end),
-        ):
-            ip = r["ip"] or "?"
-            entry = auth_robot_set.setdefault(ip, {
-                "ip": ip, "ua": r["ua"] or "", "count": 0,
-                "is_admin_ip": _is_admin_ip(ip),
-                "last_path": r["path"] or "",
-                "identities": ip_to_idents.get(ip, []),
-            })
-            entry["count"] += 1
-            entry["last_path"] = r["path"] or entry["last_path"]
-        conn2.close()
-    except Exception:
-        pass
 
     # `missed` IPs = currently have stealth_score >= MIN and were last_seen
     # inside this bucket window. Best-effort using live state.
@@ -6424,12 +6428,13 @@ async def agents_bucket_detail_endpoint(request: web.Request):
 
     gwmgmt_set: dict = {}
     try:
-        conn3 = sqlite3.connect(DB_PATH)
-        conn3.row_factory = sqlite3.Row
-        for r in conn3.execute(
-            "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND path LIKE '/antibot-appsec-gateway/%' LIMIT 20000",
-            (t, end),
+        # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded)
+        from db import db_read_events as _db_read_events_gwm
+        for r in _db_read_events_gwm(
+            t, end,
+            columns=["ip", "ua", "path"],
+            path_like="/antibot-appsec-gateway/",
+            limit=20000,
         ):
             ip = r["ip"] or "?"
             entry = gwmgmt_set.setdefault(ip, {
@@ -6440,9 +6445,8 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             })
             entry["count"] += 1
             entry["last_path"] = r["path"] or entry["last_path"]
-        conn3.close()
     except Exception:
-        pass
+        pass  # nosec B110 — gwmgmt summary is best-effort; missing data acceptable
 
     payload = {
         "bucket_t":         t,

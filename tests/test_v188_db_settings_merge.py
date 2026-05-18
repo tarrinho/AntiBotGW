@@ -377,3 +377,92 @@ class TestDbSettingsNoBrowserConfirm:
         section = _SRC[db_start:db_end]
         assert "confirm(" not in section, \
             "DB Backend JS section must not use browser confirm() — rich modal only"
+
+
+class TestDbModalDsnHintLogic:
+    """
+    Regression tests for the 'no DSN configured' false-positive bug (v1.8.8 fix).
+
+    Root cause: the IIFE else-branch hint ternary used `masked && !_dsnUserTouched`
+    to show "no DSN configured", which fires when a DSN IS stored — the condition
+    was inverted.  Fix: gate the message on `!masked` instead.
+
+    Companion fix: autocomplete="off" on #db-switch-dsn prevents browser autofill
+    from pre-populating the field, which would cause the if-condition to fail and
+    fall into the wrong else branch.
+    """
+
+    # ── locate the IIFE inside _openDbModal ──────────────────────────────────
+
+    @staticmethod
+    def _iife_snippet(size=600):
+        idx = _SRC.find("// Auto-check stored DSN on modal open")
+        assert idx != -1, "IIFE comment anchor not found in settings.html"
+        return _SRC[idx:idx + size]
+
+    @staticmethod
+    def _else_branch_snippet(size=400):
+        idx = _SRC.find("} else {\n            if (hintEl) hintEl.innerHTML = _dsnUserTouched")
+        assert idx != -1, "else-branch hint block not found in settings.html"
+        return _SRC[idx:idx + size]
+
+    # ── autocomplete guard ────────────────────────────────────────────────────
+
+    def test_dsn_input_has_autocomplete_off(self):
+        idx = _SRC.find('id="db-switch-dsn"')
+        assert idx != -1
+        snippet = _SRC[idx:idx + 300]
+        assert 'autocomplete="off"' in snippet, \
+            '#db-switch-dsn must have autocomplete="off" to prevent browser ' \
+            'autofill pre-filling the field before the IIFE runs'
+
+    # ── hint: "no DSN configured" only when masked is falsy ──────────────────
+
+    def test_no_dsn_hint_gated_on_not_masked(self):
+        snippet = self._else_branch_snippet()
+        assert "? 'no DSN configured — enter one below'" in snippet, \
+            "else-branch must contain the 'no DSN configured' hint string"
+        # The guard must be `!masked`, never `masked` (which is the inverted bug)
+        assert ": !masked\n" in snippet or ": !masked\r\n" in snippet, \
+            "hint must use '!masked' (no DSN) — not 'masked' — to trigger " \
+            "'no DSN configured'; using 'masked' fires when DSN IS present"
+
+    def test_no_dsn_hint_not_gated_on_masked_truthy(self):
+        snippet = self._else_branch_snippet()
+        # The inverted condition `masked && !_dsnUserTouched` must not appear
+        assert "masked && !_dsnUserTouched" not in snippet, \
+            "Inverted bug condition 'masked && !_dsnUserTouched → no DSN configured' " \
+            "must not be present; it fires when DSN IS configured"
+
+    # ── hint ordering: _dsnUserTouched checked first ──────────────────────────
+
+    def test_user_touched_hint_checked_before_masked(self):
+        snippet = self._else_branch_snippet()
+        touched_pos = snippet.find("_dsnUserTouched")
+        masked_pos  = snippet.find("!masked")
+        assert touched_pos != -1 and masked_pos != -1
+        assert touched_pos < masked_pos, \
+            "_dsnUserTouched branch must be evaluated before !masked branch so " \
+            "user-typed values always show 'custom DSN' regardless of stored state"
+
+    # ── hint: "current value shown masked" is the fallback when DSN exists ────
+
+    def test_masked_set_and_not_touched_shows_current_value_hint(self):
+        snippet = self._else_branch_snippet(size=600)
+        assert "current value shown masked" in snippet, \
+            "else-branch must fall back to 'current value shown masked' hint when " \
+            "masked is set and user has not touched the field"
+
+    # ── IIFE if-condition: both masked and !dsnField.value must hold ──────────
+
+    def test_iife_if_guards_field_value_before_populate(self):
+        snippet = self._iife_snippet(size=1200)
+        assert "!dsnField.value" in snippet, \
+            "IIFE if-condition must check !dsnField.value to avoid overwriting " \
+            "a pre-existing field value (e.g. from a stale modal re-open)"
+
+    def test_iife_if_guards_user_touched_flag(self):
+        snippet = self._iife_snippet(size=1200)
+        assert "!_dsnUserTouched" in snippet, \
+            "IIFE if-condition must check !_dsnUserTouched so async auto-fill " \
+            "never overwrites a value the operator has already started typing"

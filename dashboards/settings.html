@@ -3347,7 +3347,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         ${cells.map(([k,v])=>`<div style="background:#0d1117;border:1px solid var(--line);border-radius:4px;padding:6px 8px">
           <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
           <div style="font-size:12px;font-weight:700">${v}</div>
-        </div>`).join('')}</div></div>`;
+        </div>`).join('')}</div></div>
+        <div id="_tip-pg-lag" style="font-size:10.5px;margin:0 0 6px 0;min-height:13px"></div>`;
     }
 
     // ── Config section ──
@@ -3471,6 +3472,23 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
               </div>`).join('')}</div>`;
           }
 
+          // 2b. 1.8.8 — surface dual-write lag warning (silent breakage detection)
+          const wh = j.write_health || {};
+          const lagEl = document.getElementById('_tip-pg-lag');
+          if (lagEl) {
+            if (wh.healthy === false && wh.lag_seconds != null) {
+              const trailing = (wh.sqlite?.last_event_ts || 0) < (wh.postgres?.last_event_ts || 0)
+                ? 'SQLite' : 'PostgreSQL';
+              lagEl.style.color = 'var(--orange,#d29922)';
+              lagEl.textContent = `⚠ Dual-write lag: ${trailing} is ${wh.lag_seconds.toFixed(0)}s behind. Events may be missing from dashboards.`;
+            } else if (wh.healthy === false && wh.active_backend === 'postgres' && wh.postgres?.available === false) {
+              lagEl.style.color = 'var(--orange,#d29922)';
+              lagEl.textContent = '⚠ Active backend is postgres but unavailable — writes are SQLite-only until reconnect.';
+            } else {
+              lagEl.textContent = '';
+            }
+          }
+
           // 3. Auto-populate form fields from saved DSN (password stays blank)
           const masked = pg.dsn_masked || '';
           if (masked && masked !== '(redacted)') {
@@ -3531,13 +3549,18 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       };
       document.getElementById('_tip-pg-test').onclick = async function(){
         const f = getFields(); const res = document.getElementById('_tip-pg-res');
+        const credsOk2 = _dbSvcCache.db_postgres && _dbSvcCache.db_postgres.configured;
         if (!f.h||!f.d||!f.u){ res.style.color='var(--red)'; res.textContent='Host, database and user required.'; return; }
-        if (!f.w){ res.style.color='var(--red)'; res.textContent='Password required to test.'; return; }
+        if (!f.w && !credsOk2){ res.style.color='var(--red)'; res.textContent='Password required to test.'; return; }
         this.disabled=true; res.style.color='var(--dim)'; res.textContent='testing…';
-        const dsn = `postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`;
+        // If password supplied, probe with an explicit DSN.
+        // If password empty but creds already saved, test the stored DSN (no ?dsn= param).
+        const testUrl = f.w
+          ? '/antibot-appsec-gateway/secured/db-test?dsn='+encodeURIComponent(`postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`)
+          : '/antibot-appsec-gateway/secured/db-test';
         let r;
         try {
-          r = await fetch('/antibot-appsec-gateway/secured/db-test?dsn='+encodeURIComponent(dsn),{credentials:'include'});
+          r = await fetch(testUrl, {credentials:'include'});
         } catch(e){
           res.style.color='var(--dim)'; res.textContent='⚠ cannot reach gateway (network) — DB state unknown';
           this.disabled=false; return;
@@ -3557,7 +3580,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           res.textContent='⚠ response was not JSON — DB state unknown (likely admin endpoint returned a decoy page)';
           this.disabled=false; return;
         }
-        const p = j.probe || {};
+        // ?dsn= path returns {ok, probe:{...}}; no-dsn path returns {postgres:{ok,...}}
+        const p = j.probe || j.postgres || {};
         if (j.ok || p.ok) {
           const ver = p.version ? ` — PostgreSQL ${p.version}` : '';
           const db  = (p.db||p.db_name) ? ` · db ${p.db||p.db_name}` : '';
@@ -3711,7 +3735,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         PostgreSQL DSN — <span id="db-dsn-label-hint" style="color:var(--dim)">loading current value…</span>
       </label>
       <div style="display:flex;gap:6px;align-items:center">
-        <input id="db-switch-dsn" type="text" data-masked="0"
+        <input id="db-switch-dsn" type="text" data-masked="0" autocomplete="off"
                style="flex:1;background:#0d1117;border:1px solid var(--line);color:var(--fg);
                       padding:7px 10px;border-radius:5px;font-family:ui-monospace,monospace;font-size:11px"
                placeholder="postgresql://user:pass@host:5432/db">
@@ -3784,10 +3808,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
             if (hintEl) hintEl.innerHTML =
               'current value shown masked — edit to override, or leave as-is to use stored credentials';
           } else {
-            if (hintEl) hintEl.innerHTML = masked && !_dsnUserTouched
+            if (hintEl) hintEl.innerHTML = _dsnUserTouched
+              ? 'custom DSN — click Test to verify before switching'
+              : !masked
               ? 'no DSN configured — enter one below'
-              : _dsnUserTouched ? 'custom DSN — click Test to verify before switching'
-              : 'enter connection string below';
+              : 'current value shown masked — edit to override, or leave as-is to use stored credentials';
           }
           // Show current connectivity status
           if (p.ok){
