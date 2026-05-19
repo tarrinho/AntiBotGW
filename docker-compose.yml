@@ -70,7 +70,6 @@ services:
     image: redis:7-alpine
     container_name: appsecgw-redis
     restart: unless-stopped
-    user: root          # TLS private key is root-owned; Redis needs root to read it
     command: >
       redis-server
       --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD env var is required}

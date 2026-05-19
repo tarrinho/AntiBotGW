@@ -258,14 +258,25 @@ def test_settings_sso_card_present():
     )
 
 
-def test_settings_sso_card_before_users_card():
-    """settings.html: SSO card must appear before the Users card."""
-    idx_sso   = _SETTINGS_SRC.find('id="card-sso"')
+def test_settings_users_card_before_sso_card():
+    """settings.html: Users card must appear before the SSO card.
+
+    1.8.9 — Identity & Auth section reordered so local-auth basics
+    (Users, Two-FA) precede SSO/OIDC config (which is opt-in). Most
+    operators only ever touch Users; surfacing it first reduces clicks.
+    """
     idx_users = _SETTINGS_SRC.find('id="card-users"')
-    assert idx_sso != -1,   "settings.html: SSO card (#card-sso) not found"
-    assert idx_users != -1, "settings.html: Users card (#card-users) not found"
-    assert idx_sso < idx_users, (
-        "settings.html: SSO card must appear before Users card"
+    idx_2fa   = _SETTINGS_SRC.find('id="card-2fa"')
+    idx_sso   = _SETTINGS_SRC.find('id="card-sso"')
+    idx_pend  = _SETTINGS_SRC.find('id="card-sso-pending"')
+    assert idx_users != -1, "settings.html: Users card not found"
+    assert idx_2fa   != -1, "settings.html: 2FA card not found"
+    assert idx_sso   != -1, "settings.html: SSO card not found"
+    assert idx_pend  != -1, "settings.html: SSO-pending card not found"
+    # Expected order: Users → 2FA → SSO → SSO Pending
+    assert idx_users < idx_2fa < idx_sso < idx_pend, (
+        "settings.html: Identity & Auth order must be Users → 2FA → SSO → SSO-pending. "
+        f"Got positions users={idx_users}, 2fa={idx_2fa}, sso={idx_sso}, pending={idx_pend}"
     )
 
 

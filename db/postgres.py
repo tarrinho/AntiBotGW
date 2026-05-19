@@ -349,6 +349,15 @@ def _migrate_recent_events(target: str, window_secs: int = 60) -> dict:
 
 # ── Background full-history migration ─────────────────────────────────────────
 # Populated by _full_migrate_background(); polled via the status endpoint.
+#
+# 1.8.9 — schedule lock. Without this, two near-simultaneous admin
+# /db-switch?full_migrate=true requests can both pass the
+# `not _BG_MIGRATION["running"]` guard AND both submit to the executor,
+# producing duplicate rows in the target (since _bg_sqlite_to_pg's INSERT
+# doesn't ON CONFLICT). The lock is held only across the check+flip in
+# the endpoint, not for the migration itself.
+_BG_MIGRATION_LOCK = _threading.Lock()
+
 _BG_MIGRATION: dict = {
     "running":      False,
     "done":         False,
@@ -568,6 +577,7 @@ def _bg_pg_to_sqlite(cutoff_ts: float, batch_size: int,
 
         dst = sqlite3.connect(DB_PATH)
         try:
+            before = dst.total_changes
             dst.executemany(
                 "INSERT OR IGNORE INTO events "
                 "(ts, ip, ua, path, method, status, reason) "
@@ -575,15 +585,40 @@ def _bg_pg_to_sqlite(cutoff_ts: float, batch_size: int,
                 [(float(r[1]), r[2], (r[3] or "")[:500], r[4] or "",
                   int(r[5] or 0), r[6] or "") for r in rows])
             dst.commit()
+            # 1.8.9 (L1) — INSERT OR IGNORE silently drops UNIQUE-conflict
+            # rows. `len(rows)` would overcount the migration; use the
+            # actual sqlite3 changes-counter delta so the dashboard's
+            # pct/ETA reflect real progress.
+            inserted_now = dst.total_changes - before
         finally:
             dst.close()
 
         last_id = rows[-1][0]
-        _BG_MIGRATION["copied"] += len(rows)
+        _BG_MIGRATION["copied"] += inserted_now
 
         if len(rows) < batch_size:
             break
         _t.sleep(batch_sleep)
+
+
+def _try_claim_bg_migration(direction: str) -> bool:
+    """1.8.9 — atomically check + flip `_BG_MIGRATION["running"]`. Returns
+    True iff the caller now owns the slot (i.e. is allowed to spawn the
+    background migration); False if another caller already owns it.
+
+    Fixes the M1 TOCTOU where two concurrent /db-switch admin requests
+    could each pass `not _BG_MIGRATION["running"]` and double-schedule
+    the migrator. After this returns True, the caller MUST eventually
+    set running=False (or _full_migrate_background's finally does so).
+    """
+    with _BG_MIGRATION_LOCK:
+        if _BG_MIGRATION.get("running"):
+            return False
+        _BG_MIGRATION["running"]   = True
+        _BG_MIGRATION["done"]      = False
+        _BG_MIGRATION["error"]     = None
+        _BG_MIGRATION["direction"] = direction
+        return True
 
 
 def _full_migrate_background(target: str, cutoff_ts: float,

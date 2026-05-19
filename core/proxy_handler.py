@@ -2399,6 +2399,12 @@ _HOT_RELOAD_KNOBS = {
     # connection whose resolved host IP falls outside the list. Takes effect
     # on the next ban read/write after hot-reload (no reconnect required).
     "REDIS_ALLOW_LIST": (_to_ip_net_list, None),
+    # 1.8.9 — re-added to _HOT_RELOAD_KNOBS (was pulled in PROXY4-01 but the
+    # SSRF concern is moot when changing it requires admin credentials). The
+    # UPSTREAM validator (_upstream_safe_to_reload) already reads the live flag,
+    # so toggling this off immediately re-arms the public-IP check for the next
+    # UPSTREAM hot-reload without a restart.
+    "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2455,8 +2461,6 @@ if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
 # is NOT treated as authoritative so the DB-persisted backend survives restart.
 if os.environ.get("DB_BACKEND", "").strip() in ("sqlite", "postgres"):
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"DB_BACKEND"}
-if "ALLOW_PRIVATE_UPSTREAM" in os.environ:
-    _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"ALLOW_PRIVATE_UPSTREAM"}
 if "STRICT_VHOST" in os.environ:
     _ENV_PROVIDED_KNOBS = _ENV_PROVIDED_KNOBS | {"STRICT_VHOST"}
 if "UPSTREAM_REWRITE_BASE" in os.environ:
@@ -4160,14 +4164,24 @@ async def db_switch_endpoint(request: web.Request):
     # ── Optional: background full-history migration ────────────────────────
     # Copies all records older than the 60-s window in a thread-pool
     # executor — never blocks the event loop. Poll /__db-migration-status.
+    # 1.8.9 — _try_claim_bg_migration is atomic (check + flip running=True
+    # under a lock) so two concurrent admin /db-switch requests can't both
+    # schedule the migrator and produce duplicate INSERTs.
     bg_scheduled = False
-    if full_migrate and not _BG_MIGRATION.get("running"):
-        cutoff_ts = switch_ts - 60
-        loop.run_in_executor(
-            None, _full_migrate_background, target, cutoff_ts)
-        bg_scheduled = True
-        slog("db_switch_bg_migrate_scheduled", level="info",
-             target=target, cutoff_ts=cutoff_ts)
+    if full_migrate:
+        direction = "sqlite->postgres" if target == "postgres" else "postgres->sqlite"
+        from db.postgres import _try_claim_bg_migration
+        if _try_claim_bg_migration(direction):
+            cutoff_ts = switch_ts - 60
+            loop.run_in_executor(
+                None, _full_migrate_background, target, cutoff_ts)
+            bg_scheduled = True
+            slog("db_switch_bg_migrate_scheduled", level="info",
+                 target=target, cutoff_ts=cutoff_ts)
+        else:
+            slog("db_switch_bg_migrate_skipped_concurrent", level="warn",
+                 target=target,
+                 note="another migration is already running; skipping double-schedule")
 
     return web.json_response(
         {"ok": True, "target": target,

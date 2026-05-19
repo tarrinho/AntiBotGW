@@ -132,11 +132,20 @@ def db_health_snapshot() -> dict:
             slog("db_health_pg_failed", level="warn",
                  error=f"{type(e).__name__}: {str(e)[:120]}")
     # Compute lag between backends — only meaningful when both have data.
+    # 1.8.9 (L2) — use directional diff so we identify WHICH side is
+    # trailing. abs() previously caused the popup to label the wrong
+    # side as "behind" under host-clock skew. `trailing_backend` is the
+    # side whose last_event_ts is older; `lag_seconds` is the absolute
+    # difference (kept abs so the popup's threshold check is direction-
+    # agnostic — what we care about is "how stale is the trailing side").
     s_ts = out["sqlite"].get("last_event_ts")
     p_ts = out["postgres"].get("last_event_ts")
     if s_ts is not None and p_ts is not None:
         lag = abs(s_ts - p_ts)
         out["lag_seconds"] = round(lag, 1)
+        out["trailing_backend"] = "sqlite" if s_ts < p_ts else (
+            "postgres" if p_ts < s_ts else None
+        )
         out["healthy"] = lag < 60.0
     elif out["active_backend"] == "postgres" and not pg_avail:
         out["healthy"] = False

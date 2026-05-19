@@ -1139,6 +1139,8 @@ def test_165_every_knob_persists_round_trip():
         "AI_NO_ASSETS_ENABLED": False, "SESSION_FLOOD_ENABLED": False,
         "UPSTREAM_404_TRACKING_ENABLED": False, "ANUBIS_ENABLED": False,
         "ANUBIS_DIFFICULTY_BOOST": 2,
+        # 1.8.9 — knob added without an entry here; flip to True
+        "ALLOW_PRIVATE_UPSTREAM": True,
         "TURNSTILE_RISK_THRESHOLD": 25.0,
         "RISK_BAN_THRESHOLD": 75, "SOFT_CHALLENGE_SCORE": 6.0,
         "RATE_LIMIT_BURST": 88, "RATE_LIMIT_REFILL": 7.0,
