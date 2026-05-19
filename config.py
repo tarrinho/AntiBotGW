@@ -47,10 +47,11 @@ except Exception as _e:
     print(f"FATAL: invalid UPSTREAM={_upstream_raw!r} — {_e}", flush=True)
     raise SystemExit(2)
 UPSTREAM        = _upstream_raw.rstrip("/")
-# Set ALLOW_PRIVATE_UPSTREAM=1 to permit upstream URLs that resolve to
-# RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x).
-# Only enable in trusted internal deployments — disables the SSRF guard.
-ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() == "1"
+# Permit upstream URLs that resolve to RFC-1918 / loopback addresses
+# (e.g. host.docker.internal, 192.168.x.x). Default ON because most
+# compose deployments use an internal upstream. Set ALLOW_PRIVATE_UPSTREAM=0
+# in public-cloud deployments to re-enable the SSRF guard.
+ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "1").strip() == "1"
 # STRICT_VHOST: when at least one vhost is registered, reject inbound hosts that
 # are not in the vhost table (502). Default ON. Has no effect when VHOSTS is empty
 # (single-upstream mode — global UPSTREAM is the catch-all).

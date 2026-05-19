@@ -829,6 +829,113 @@ docker compose down -v  # also removes named volumes
 | `TRUST_XFF` | `"none"` | `"none"` (default, fail-closed) · `"first"` · `"last"` — trust the named XFF hop; requires `TRUSTED_PROXIES` to be set or the proxy check fails closed |
 | `TRUSTED_PROXIES` | `""` | CIDR list of trusted reverse proxies (e.g. `10.0.0.0/8,172.16.0.0/12`) |
 
+---
+
+### X-Forwarded-For and Trusted Proxies — configuration guide
+
+#### How it works
+
+Every incoming request has two IP addresses:
+
+- **Socket peer** (`request.remote`) — the TCP connection source. This is always real and cannot be spoofed.
+- **`X-Forwarded-For` header** — added/appended by each reverse proxy in the chain. This **can be forged** by a client unless the gateway validates who is allowed to inject it.
+
+The gateway uses `TRUST_XFF` and `TRUSTED_PROXIES` together to decide which IP to use for risk scoring, geo lookups, admin-IP allowlist checks, and event recording:
+
+```
+Client → [Reverse Proxy / CDN] → [cloudflared / Docker bridge] → AppSecGW → Upstream
+          adds XFF: <real-ip>      peer visible to gateway
+```
+
+The gateway only honours the `X-Forwarded-For` header when **both** conditions are true:
+
+1. `TRUST_XFF` is set to `"first"` or `"last"` (not the default `"none"`)
+2. The **immediate TCP peer** (the IP that opened the socket to the gateway) is listed in `TRUSTED_PROXIES`
+
+If either condition fails the XFF header is ignored and the raw socket peer is used as the client IP.
+
+#### `TRUST_XFF` modes
+
+| Mode | Which XFF hop is used | When to use |
+|---|---|---|
+| `none` | XFF ignored entirely — raw socket peer used | Gateway exposed directly to the internet with no reverse proxy |
+| `first` | Leftmost entry in `X-Forwarded-For` | **Insecure unless paired with `TRUSTED_PROXIES`** — a client can prepend any IP. Only use when the front proxy strips/rewrites XFF before forwarding. |
+| `last` | Rightmost entry in `X-Forwarded-For` | **Correct for most deployments.** Each proxy appends the address it received the connection from. The rightmost entry is the IP the last trusted proxy saw — closest to the real client without being client-controlled. |
+
+> **Rule of thumb:** use `TRUST_XFF=last` unless your CDN/load balancer explicitly documents that it puts the real client IP as the **first** entry and strips any client-supplied values.
+
+#### `TRUSTED_PROXIES`
+
+Comma-separated list of CIDRs. Only peers whose IP falls inside one of these networks are allowed to supply an `X-Forwarded-For` header that the gateway will trust.
+
+**Fail-closed:** if `TRUSTED_PROXIES` is empty the gateway ignores all XFF headers regardless of `TRUST_XFF`. This prevents a spoofed-XFF bypass on deployments that have no reverse proxy.
+
+#### Common deployment scenarios
+
+**1. Cloudflare tunnel (`cloudflared`) in the same Docker Compose stack**
+
+`cloudflared` connects from the Docker bridge (`172.18.0.0/16` by default). It injects the real visitor IP as the last `X-Forwarded-For` entry.
+
+```env
+TRUST_XFF=last
+TRUSTED_PROXIES=172.18.0.0/16
+```
+
+Verify the bridge subnet with:
+```bash
+docker network inspect antibot-net --format '{{.IPAM.Config}}'
+```
+
+**2. Cloudflare tunnel running on the host (not in Docker)**
+
+`cloudflared` connects from loopback (`127.0.0.1`):
+
+```env
+TRUST_XFF=last
+TRUSTED_PROXIES=127.0.0.1/32
+```
+
+**3. Load balancer / nginx in front (same private network)**
+
+```env
+TRUST_XFF=last
+TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+**4. Multiple hops (CDN → internal LB → gateway)**
+
+Add all intermediate proxy CIDRs. The gateway only checks the **immediate peer** against `TRUSTED_PROXIES`; it does not walk the full XFF chain.
+
+```env
+TRUST_XFF=last
+TRUSTED_PROXIES=10.10.0.5/32,10.10.0.6/32
+```
+
+**5. No reverse proxy (gateway exposed directly)**
+
+```env
+TRUST_XFF=none
+# TRUSTED_PROXIES not needed
+```
+
+#### Warning: misconfiguration detection (v1.8.8)
+
+When `TRUST_XFF` is `first` or `last` but a **private-range** (RFC1918) peer sends XFF without being in `TRUSTED_PROXIES`, the gateway logs a one-shot warning:
+
+```json
+{"event":"xff_ignored_proxy_untrusted","peer":"172.18.0.1","hint":"Peer is RFC1918 (likely a Docker sidecar) but not in TRUSTED_PROXIES; XFF will be ignored and all events will record this peer IP. Add the peer's subnet to TRUSTED_PROXIES to fix."}
+```
+
+This surfaces the most common misconfiguration: a sidecar (e.g. `cloudflared`, an nginx container) is forwarding traffic with XFF but the gateway doesn't recognise it as trusted — so every event in the dashboard shows the Docker bridge IP instead of the real visitor IP.
+
+#### Security note
+
+Never add `0.0.0.0/0` to `TRUSTED_PROXIES`. Doing so allows any host to inject an arbitrary `X-Forwarded-For` header, letting an attacker impersonate any IP for ban evasion, risk-score bypass, and admin-allowlist bypass.
+
+The gateway always **overwrites** the `X-Forwarded-For` header it sends to the upstream with the gateway-computed real client IP, so the upstream cannot be manipulated by a client-supplied XFF value even if the gateway is misconfigured.
+
+---
+
 ### Virtual hosts — v1.8.4
 
 | Variable | Default | Description |

@@ -3479,8 +3479,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           const lagEl = document.getElementById('_tip-pg-lag');
           if (lagEl) {
             if (wh.healthy === false && wh.lag_seconds != null) {
-              const trailing = (wh.sqlite?.last_event_ts || 0) < (wh.postgres?.last_event_ts || 0)
-                ? 'SQLite' : 'PostgreSQL';
+              // 1.8.9 (L2) — server now returns trailing_backend directly
+              // (computed from the directional ts diff, not abs()), so
+              // clock-skew between hosts doesn't flip the displayed side.
+              const trailing = wh.trailing_backend === 'sqlite' ? 'SQLite'
+                              : wh.trailing_backend === 'postgres' ? 'PostgreSQL'
+                              : 'one backend';
               lagEl.style.color = 'var(--orange,#d29922)';
               lagEl.textContent = `⚠ Dual-write lag: ${trailing} is ${wh.lag_seconds.toFixed(0)}s behind. Events may be missing from dashboards.`;
             } else if (wh.healthy === false && wh.active_backend === 'postgres' && wh.postgres?.available === false) {
@@ -3494,7 +3498,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           // 3. Auto-populate form fields from saved DSN (password stays blank)
           const masked = pg.dsn_masked || '';
           if (masked && masked !== '(redacted)') {
-            const m = masked.match(/^postgresql:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+            const m = masked.match(/^postgres(?:ql)?:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
             if (m) {
               const [, u, h, p, d] = m;
               const setVal = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
@@ -3625,7 +3629,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           if (!masked || masked === '(redacted)') {
             if (res){ res.style.color='var(--dim)'; res.textContent='ℹ no saved DSN — enter values and Save'; }
           } else {
-            const m = masked.match(/^postgresql:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+            const m = masked.match(/^postgres(?:ql)?:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
             if (!m) {
               if (res){ res.style.color='var(--red)'; res.textContent='✗ could not parse saved DSN'; }
             } else {
@@ -3917,7 +3921,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       if (!masked || masked === '(redacted)') {
         if (msg){ msg.style.color='var(--dim)'; msg.textContent='ℹ no saved DSN — configure in PostgreSQL section above'; }
       } else {
-        const m = masked.match(/^postgresql:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+        const m = masked.match(/^postgres(?:ql)?:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
         if (!m) {
           if (msg){ msg.style.color='var(--red)'; msg.textContent='✗ could not parse saved DSN'; }
         } else {

@@ -102,7 +102,8 @@ def _assert_upstream_public(upstream: str, key: str = "UPSTREAM") -> None:
 
     Prevents accidental or malicious VHOSTS configs from turning the gateway
     into an SSRF vector that leaks internal infrastructure over public tunnels.
-    Skipped when ALLOW_PRIVATE_UPSTREAM=1 is set in the environment.
+    Skipped when ALLOW_PRIVATE_UPSTREAM=1 (the default). Set =0 in
+    public-cloud deployments to re-arm the guard.
     """
     if _cfg.ALLOW_PRIVATE_UPSTREAM:
         return
