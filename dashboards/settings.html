@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.8 · Settings</title>
+<title>AppSecGW_1.8.9 · Settings</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
@@ -723,6 +723,85 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
+<!-- ── 1.6.7 — Users ─────────────────────────────────────────────── -->
+<!-- 1.8.9 — moved to top of Identity & Auth section (most-used card) -->
+<div class="card" id="card-users" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <div>
+      <h2 style="margin-bottom:4px">Users</h2>
+      <p class="desc" style="margin:0">
+        Dashboard sign-in accounts. The first user (<code>admin</code>) is
+        bootstrapped on first boot using the gateway's startup-issued
+        admin key as the password — change it here, then add other
+        operators. Login is session-cookie based.
+      </p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span class="foot" id="users-current">—</span>
+      <button class="secondary" id="users-refresh">↻ Refresh</button>
+      <button id="users-add">+ Add user</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="gw-tbl">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Online</th>
+          <th>Role</th>
+          <th>Status</th>
+          <th>Last login</th>
+          <th>Created</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="users-tbody">
+        <tr><td colspan="7" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── 1.8.6 — Two-Factor Authentication ─────────────────────────── -->
+<!-- 1.8.9 — moved up to live next to Users (auth basics first) -->
+<div class="card" id="card-2fa" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:14px">
+    <div>
+      <h2 style="margin-bottom:4px">Two-Factor Authentication</h2>
+      <p class="desc" style="margin:0">
+        Protect your account with a TOTP authenticator app (Google Authenticator,
+        Authy, 1Password). When enabled, a 6-digit code is required after password
+        login.
+      </p>
+    </div>
+    <span id="twofa-status-badge" class="pill" style="font-size:11px">checking…</span>
+  </div>
+  <div id="twofa-setup-area" style="display:none">
+    <p class="desc" style="margin-bottom:10px">Scan this QR code (or enter the secret manually) in your authenticator app, then enter the 6-digit code to confirm.</p>
+    <div id="twofa-qr-wrap" style="margin-bottom:12px;display:none">
+      <img id="twofa-qr-img" src="" alt="TOTP QR code"
+           style="width:180px;height:180px;border:4px solid #fff;border-radius:4px;display:block">
+    </div>
+    <div id="twofa-qr-uri" style="font-size:11px;color:var(--dim);word-break:break-all;margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <input id="twofa-code" type="text" placeholder="6-digit code" maxlength="6"
+             style="width:140px;margin:0" autocomplete="one-time-code">
+      <button id="twofa-confirm">Confirm &amp; Enable</button>
+    </div>
+    <div id="twofa-backup-codes" style="display:none;margin-top:12px">
+      <p style="color:var(--yellow);font-size:12px;margin-bottom:6px">&#9888; Save these backup codes — each can be used once if you lose your authenticator:</p>
+      <pre id="twofa-codes-list" style="background:#0d1117;padding:10px;border-radius:5px;font-size:12px;color:var(--fg)"></pre>
+    </div>
+  </div>
+  <div class="row-controls" style="margin-top:10px">
+    <button id="twofa-enable-btn">Set up 2FA</button>
+    <button class="secondary" id="twofa-disable-btn" style="display:none;color:var(--red)">Disable 2FA</button>
+    <span class="foot" id="twofa-msg"></span>
+  </div>
+</div>
+
 <!-- ── 1.8.6 — SSO / OIDC configuration ─────────────────────── -->
 <div class="card" id="card-sso" style="margin-top:14px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;
@@ -783,45 +862,6 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
-<!-- ── 1.6.7 — Users ─────────────────────────────────────────────── -->
-<div class="card" id="card-users" style="margin-top:14px">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;
-              flex-wrap:wrap;gap:10px;margin-bottom:10px">
-    <div>
-      <h2 style="margin-bottom:4px">Users</h2>
-      <p class="desc" style="margin:0">
-        Dashboard sign-in accounts. The first user (<code>admin</code>) is
-        bootstrapped on first boot using the gateway's startup-issued
-        admin key as the password — change it here, then add other
-        operators. Login is session-cookie based.
-      </p>
-    </div>
-    <div style="display:flex;gap:6px;align-items:center">
-      <span class="foot" id="users-current">—</span>
-      <button class="secondary" id="users-refresh">↻ Refresh</button>
-      <button id="users-add">+ Add user</button>
-    </div>
-  </div>
-  <div style="overflow-x:auto">
-    <table class="gw-tbl">
-      <thead>
-        <tr>
-          <th>Username</th>
-          <th>Online</th>
-          <th>Role</th>
-          <th>Status</th>
-          <th>Last login</th>
-          <th>Created</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="users-tbody">
-        <tr><td colspan="7" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
-
 <!-- ── SSO Access Requests ────────────────────────────────────────── -->
 <div class="card" id="card-sso-pending" style="margin-top:14px;display:none">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;
@@ -850,44 +890,6 @@ document.addEventListener('DOMContentLoaded', function(){
       </thead>
       <tbody id="sso-pending-tbody"></tbody>
     </table>
-  </div>
-</div>
-
-<!-- ── 1.8.6 — Two-Factor Authentication ─────────────────────────── -->
-<div class="card" id="card-2fa" style="margin-top:14px">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;
-              flex-wrap:wrap;gap:10px;margin-bottom:14px">
-    <div>
-      <h2 style="margin-bottom:4px">Two-Factor Authentication</h2>
-      <p class="desc" style="margin:0">
-        Protect your account with a TOTP authenticator app (Google Authenticator,
-        Authy, 1Password). When enabled, a 6-digit code is required after password
-        login.
-      </p>
-    </div>
-    <span id="twofa-status-badge" class="pill" style="font-size:11px">checking…</span>
-  </div>
-  <div id="twofa-setup-area" style="display:none">
-    <p class="desc" style="margin-bottom:10px">Scan this QR code (or enter the secret manually) in your authenticator app, then enter the 6-digit code to confirm.</p>
-    <div id="twofa-qr-wrap" style="margin-bottom:12px;display:none">
-      <img id="twofa-qr-img" src="" alt="TOTP QR code"
-           style="width:180px;height:180px;border:4px solid #fff;border-radius:4px;display:block">
-    </div>
-    <div id="twofa-qr-uri" style="font-size:11px;color:var(--dim);word-break:break-all;margin-bottom:8px"></div>
-    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-      <input id="twofa-code" type="text" placeholder="6-digit code" maxlength="6"
-             style="width:140px;margin:0" autocomplete="one-time-code">
-      <button id="twofa-confirm">Confirm &amp; Enable</button>
-    </div>
-    <div id="twofa-backup-codes" style="display:none;margin-top:12px">
-      <p style="color:var(--yellow);font-size:12px;margin-bottom:6px">&#9888; Save these backup codes — each can be used once if you lose your authenticator:</p>
-      <pre id="twofa-codes-list" style="background:#0d1117;padding:10px;border-radius:5px;font-size:12px;color:var(--fg)"></pre>
-    </div>
-  </div>
-  <div class="row-controls" style="margin-top:10px">
-    <button id="twofa-enable-btn">Set up 2FA</button>
-    <button class="secondary" id="twofa-disable-btn" style="display:none;color:var(--red)">Disable 2FA</button>
-    <span class="foot" id="twofa-msg"></span>
   </div>
 </div>
 

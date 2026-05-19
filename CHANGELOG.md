@@ -6,6 +6,39 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.9] — 2026-05-19
+
+### Added
+
+- **Backend-aware event reader** (`db/__init__.py`, `db/sqlite.py`, `db/postgres.py`): New `db_read_events(start_ts, end_ts, *, columns, vhost, path_like, reason_like, ip_exact, order_by, limit, offset)` dispatcher routes event-table reads to the live backend (`DB_BACKEND` + `_postgres_available`). Postgres impl normalises `TIMESTAMPTZ` → epoch float via `EXTRACT(EPOCH FROM ts)`; SQLite impl is unchanged. SQL injection prevented by column / order-by whitelists. Postgres schema-gap columns (`method`, `vhost`) silently filled with `""` and corresponding filters skipped with an info-level `slog` note. Rolled out to 7 dashboard endpoints — geo_data, geo_drill, logs_data, logs_export, agents_bucket_detail (4 queries collapsed into one fetch), metrics filtered-timeline, health_score — replacing 10 hardcoded `sqlite3.connect(DB_PATH)` blocks. Fixes the long-standing bug where dashboards always read SQLite even when `DB_BACKEND=postgres`.
+- **`/db-test` write-health observability** (`core/proxy_handler.py`, `db/__init__.py`): Response now includes `write_health` with per-backend `last_event_ts`, `events_rows`, `lag_seconds`, and a top-level `healthy` flag. Computed via cheap `COUNT(*) + MAX(ts)` on both backends. Popup surfaces an orange `⚠ Dual-write lag: PostgreSQL is 47s behind. Events may be missing from dashboards.` warning when the trailing backend is ≥60s behind. New `_tip-pg-lag` element in the popup picks this up.
+- **Idempotent background migration with MIN/MAX gap-fill** (`db/postgres.py`): `_bg_sqlite_to_pg` and `_bg_pg_to_sqlite` now read both `MIN(ts)` and `MAX(ts)` on the target before copying. Only rows where `ts < min_target OR ts > max_target` are migrated; rows inside `[min, max]` are skipped as "already mirrored by dual-write". Two-sided gap-fill catches the "Postgres added mid-history" deployment pattern. Re-running the same migration after a hot-swap is now a 0.5s no-op (verified live: 6M-row migration completes in 0.6s, copies 0 rows, skipped 6,046,596). `_BG_MIGRATION` exposes new `watermark` and `skipped_already_present` counters. Cannot fix scattered same-microsecond interleaved gaps because the events table holds legitimate duplicates by every meaningful column (HTTP/2 multiplexing artefact); operators with such gaps must backfill via a one-shot SQL job.
+- **Cross-module secret propagation at boot** (`db/sqlite.py:db_load_secrets`): When a secret is loaded from `secrets_kv` at startup, propagate the new value to every `sys.modules` entry that already binds the same name. Fixes the silent armv7-server bug where `proxy.POSTGRES_DSN` got the DB value but `core.proxy_handler.POSTGRES_DSN` and `db.postgres.POSTGRES_DSN` stayed at their import-time empty value — so `/db-test` returned `dsn_masked=""` and the popup said "no saved DSN" even though `secrets_kv` had it. New `propagated=N` field in the `db_secrets_loaded` log line confirms the fix ran.
+- **`config_kv` cannot stomp `secrets_kv`** (`db/sqlite.py:db_load_config`): Keys in `_SECRET_KEYS` are now skipped in `config_kv` apply. Fixes the historical regression where `/db-switch` wrote `POSTGRES_DSN` into both `config_kv` and `secrets_kv`; if the in-memory DSN was empty at that moment, the empty got persisted and silently overwrote the real DSN on every restart. Each collision emits a new `config_kv_stomp_blocked` WARN slog with actionable hint (`DELETE FROM config_kv WHERE key=…`). New `secret_skipped=N` field in `db_config_loaded`.
+- **TRUSTED_PROXIES misconfiguration alert** (`helpers.py:get_ip`): When an inbound request has an `X-Forwarded-For` header AND the TCP peer is a private RFC1918 address NOT in `TRUSTED_PROXIES`, `get_ip()` emits `xff_ignored_proxy_untrusted` WARN slog once per peer. Catches the operator misconfig where a sidecar (e.g. cloudflared on the Docker bridge) forwards XFF traffic but the gateway records the bridge gateway IP for every request, breaking dashboards. Dedup set bounded to 256 entries (resets when full) so a malicious flood of unique private peers can't OOM the gateway. Public-peer XFF rejections are not flagged (they're normal anti-spoofing, not a misconfig).
+- **PostgreSQL popup: auto-load + Load DSN button + UI honesty** (`dashboards/settings.html`):
+  - Auto-loads the configured DSN on popup open by parsing `postgres.dsn_masked` from `/db-test`; populates host/port/db/user, password stays blank. Feedback line: `ℹ loaded saved DSN — user@host:port/db` or `ℹ no saved DSN — enter values to configure`.
+  - New explicit **Load DSN** button next to Save/Test for manual reload.
+  - Status tile now distinguishes UI-cannot-read-status from DB-genuinely-down: `⚠ status unknown (HTTP 404)` for admin-allowlist blocks, `⚠ status unknown (network)` for connection failure, `⚠ status unknown (parse)` for non-JSON decoy responses, `⚠ active · not reachable` for postgres-active-but-conn-down, `✗ DSN not configured` for missing DSN. Result line spells out "the DB itself may still be fine — this only means the UI couldn't query /db-test."
+  - Stats grid wrapper now has `id="_tip-pg-stats"` so the live probe rebuilds cells with fresh data each open.
+- **Hot-apply POSTGRES_DSN via `/secrets`** (`core/proxy_handler.py`): The secrets endpoint now calls `_propagate_global("POSTGRES_DSN", v)` after persisting, so the new DSN takes effect immediately across `db.postgres` and all other modules. Save toast: `✓ DSN saved — applied immediately` (was: `restart to apply`).
+- **`db_test_endpoint` probe-mode dual-module patch** (`core/proxy_handler.py`): Probe path (`?dsn=…`) now patches both `proxy_handler.POSTGRES_DSN` and `db.postgres.POSTGRES_DSN` inside the try/finally so `pg_test_roundtrip()` reads the probe DSN, not the stale module global. Wrapped in a top-level try/except that returns JSON `{ok:false, reason}` on any unhandled exception so the popup never sees an aiohttp HTML 500 page.
+- **README FAQ section** (`README.md`): New `## FAQ / Common warnings` section with Q1: Redis `WARNING Memory overcommit must be enabled!` explanation, host-side fix, and rationale for why it can't be addressed in docker-compose.
+
+### UI / UX
+
+- **Identity & Auth submenu reordered** (`dashboards/settings.html`): `Users` and `Two-Factor Authentication` cards moved to the top of the Identity & Auth section (above SSO / OIDC and SSO Access Requests). Reflects the common operator workflow — Users + 2FA are local-auth basics; SSO is an opt-in extra.
+
+### Tests
+
+- **`tests/test_v188_backend_aware_reads.py`** — 62 new QA tests across 7 classes: `TestReadEventsSqliteFunctional` (Q01-Q19, ephemeral SQLite + filters + injection guards), `TestHealthSnapshot` (H01-H09, db_health_snapshot shape + lag math), `TestDispatcher` (D01-D03, sqlite/postgres routing + fallback), `TestPostgresImpl` (PG01-PG05, mock-based PG reader + schema-gap workaround), `TestIdempotentMigration` (I01-I10, watermark + MIN/MAX gap-fill regimes), `TestDbLoadSecretsPropagation` (S01-S04, cross-module secret prop + env-pin + config_kv vs secrets_kv), `TestXffMisconfigAlert` (X01-X06, alert source/fire/dedup/scope), `TestConfigKvStompAlert` (C01-C02, alert source/fire). Plus 4 live-gateway integration tests (E01-E04).
+
+### Build artefacts
+
+- armv7 / arm64 / amd64 images all carry the new symbols (`db_read_events`, `db_health_snapshot`, `_bg_sqlite_to_pg`, `_bg_pg_to_sqlite`, `xff_ignored_proxy_untrusted`, `config_kv_stomp_blocked`, `_BG_MIGRATION.watermark`, `_BG_MIGRATION.skipped_already_present`).
+
+---
+
 ## [1.8.8] — 2026-05-17
 
 ### Added

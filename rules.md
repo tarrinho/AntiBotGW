@@ -38,7 +38,7 @@ the version is considered released.
 | 19 | Canary deployment gate | 0 new errors in 15 min |
 | 20 | Compliance attestation | all items confirmed |
 
-Author: Pedro Tarrinho · Last updated for: 1.8.8
+Author: Pedro Tarrinho · Last updated for: 1.8.9
 
 ---
 
