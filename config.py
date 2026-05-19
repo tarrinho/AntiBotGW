@@ -1273,6 +1273,18 @@ def match_body_group(body: bytes, ctype: str):
                 return grp
     return None
 
+# ── 1.8.9 — WAF always-on knobs ─────────────────────────────────────────────
+# All default ON. Set to 0 in .env or toggle live via /__controls to suppress
+# false positives without a container restart.
+WAF_BODY_ENABLED          = os.environ.get("WAF_BODY_ENABLED",          "1") in ("1", "true", "yes")
+WAF_SMUGGLING_ENABLED     = os.environ.get("WAF_SMUGGLING_ENABLED",     "1") in ("1", "true", "yes")
+WAF_VERB_OVERRIDE_ENABLED = os.environ.get("WAF_VERB_OVERRIDE_ENABLED", "1") in ("1", "true", "yes")
+WAF_HEADER_INJECTION_ENABLED = os.environ.get("WAF_HEADER_INJECTION_ENABLED", "1") in ("1", "true", "yes")
+WAF_GRAPHQL_ENABLED       = os.environ.get("WAF_GRAPHQL_ENABLED",       "1") in ("1", "true", "yes")
+WAF_UPLOAD_ENABLED        = os.environ.get("WAF_UPLOAD_ENABLED",        "1") in ("1", "true", "yes")
+WAF_SLOWLORIS_ENABLED     = os.environ.get("WAF_SLOWLORIS_ENABLED",     "1") in ("1", "true", "yes")
+ACCEPT_WILDCARD_CHECK_ENABLED = os.environ.get("ACCEPT_WILDCARD_CHECK_ENABLED", "1") in ("1", "true", "yes")
+
 # 1.8.6 — ungated critical patterns: fire regardless of escalation score.
 _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)\bunion[ +/*]+(all[ +/*]+)?select\b"),

@@ -709,21 +709,22 @@ async def proxy(request: web.Request):
     if request.method not in ALLOWED_METHODS:
         return web.Response(status=405, text="method not allowed\n")
 
-    # 1.8.6 — HTTP smuggling signal detection
-    _smuggling_signal = check_smuggling(request)
-    if _smuggling_signal:
-        await update_risk_and_maybe_ban(
-            request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
-            _smuggling_signal, get_ip(request))
-        return await _silent_decoy_response(
-            get_ip(request), request.headers.get("User-Agent", ""),
-            request.path, _smuggling_signal,
-            track_key=request.get("_track_key"),
-            sid=request.get("_sid", ""),
-            fp=request.get("_fp", ""))
+    # 1.8.6 — HTTP smuggling signal detection; 1.8.9 — gated by WAF_SMUGGLING_ENABLED
+    if WAF_SMUGGLING_ENABLED:
+        _smuggling_signal = check_smuggling(request)
+        if _smuggling_signal:
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                _smuggling_signal, get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, _smuggling_signal,
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
 
-    # 1.8.6 — verb override detection
-    if check_verb_override(request):
+    # 1.8.6 — verb override detection; 1.8.9 — gated by WAF_VERB_OVERRIDE_ENABLED
+    if WAF_VERB_OVERRIDE_ENABLED and check_verb_override(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
             "method-override-attempt", get_ip(request))
@@ -734,8 +735,8 @@ async def proxy(request: web.Request):
             sid=request.get("_sid", ""),
             fp=request.get("_fp", ""))
 
-    # 1.8.6 Week 3 — Task C: SSTI in attacker-controlled headers
-    if check_header_ssti(request):
+    # 1.8.6 Week 3 — Task C: SSTI in attacker-controlled headers; 1.8.9 — gated by WAF_HEADER_INJECTION_ENABLED
+    if WAF_HEADER_INJECTION_ENABLED and check_header_ssti(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
             "header-ssti", get_ip(request))
@@ -746,8 +747,8 @@ async def proxy(request: web.Request):
             sid=request.get("_sid", ""),
             fp=request.get("_fp", ""))
 
-    # 1.8.6 Week 4 — Task G: Host header injection
-    if check_host_header_injection(request):
+    # 1.8.6 Week 4 — Task G: Host header injection; 1.8.9 — gated by WAF_HEADER_INJECTION_ENABLED
+    if WAF_HEADER_INJECTION_ENABLED and check_host_header_injection(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
             "host-header-injection", get_ip(request))
@@ -843,9 +844,12 @@ async def proxy(request: web.Request):
             # 1.6.5 — bump risk + surface as 'slow-client'. Silent decoy
             # so the attacker can't distinguish a slowloris-block from any
             # other 200/404 path. The risk model decides whether to ban.
+            # 1.8.9 — gated by WAF_SLOWLORIS_ENABLED; off = plain 408 (no risk bump, no decoy).
             _ip = get_ip(request)
             _ua = request.headers.get("User-Agent", "")
             _tk = request.get("_track_key")
+            if not WAF_SLOWLORIS_ENABLED:
+                return web.Response(status=408, text="request timeout\n")
             if _tk:
                 await update_risk_and_maybe_ban(_tk, "slow-client", _ip)
             return await _silent_decoy_response(
@@ -862,7 +866,9 @@ async def proxy(request: web.Request):
 
     # 1.8.6 — ungated first-touch check: high-confidence patterns that bypass
     # the escalation threshold. Catches first-request injections (Log4Shell, SQLi).
-    if body is not None:
+    # 1.8.9 — gated by WAF_BODY_ENABLED (set to 0 to suppress false positives
+    # on legitimate search/API endpoints whose payloads match these patterns).
+    if WAF_BODY_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_always_body(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -876,7 +882,7 @@ async def proxy(request: web.Request):
                 fp=request.get("_fp", ""))
 
     # 1.8.6 Week 3 — Task A: XXE detection (ungated, XML-gated)
-    if body is not None:
+    if WAF_BODY_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_xxe_body(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -890,7 +896,7 @@ async def proxy(request: web.Request):
                 fp=request.get("_fp", ""))
 
     # 1.8.6 Week 3 — Task B: Prototype pollution detection
-    if body is not None:
+    if WAF_BODY_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_proto_pollution(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -903,8 +909,8 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.6 Week 4 — Task H: GraphQL protection
-    if body is not None:
+    # 1.8.6 Week 4 — Task H: GraphQL protection; 1.8.9 — gated by WAF_GRAPHQL_ENABLED
+    if WAF_GRAPHQL_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         from detection.graphql import check_graphql
         for _gql_sig in check_graphql(request.path, body, client_ctype):
@@ -918,8 +924,8 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.6 Week 4 — Task I: File upload content validation
-    if body is not None:
+    # 1.8.6 Week 4 — Task I: File upload content validation; 1.8.9 — gated by WAF_UPLOAD_ENABLED
+    if WAF_UPLOAD_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         _upload_sig = check_file_upload(body, client_ctype)
         if _upload_sig:
@@ -2245,7 +2251,15 @@ _HOT_RELOAD_KNOBS = {
     "TURNSTILE_ENABLED":  (_to_bool, lambda v: (not v) or bool(globals().get("TURNSTILE_SITEKEY") and globals().get("TURNSTILE_SECRET"))),
     # 1.5.4: per-detector kill-switches (default ON). Operator can mute a
     # noisy heuristic without a container restart.
-    "HONEYPOT_ENABLED":            (_to_bool, None),
+    "WAF_BODY_ENABLED":             (_to_bool, None),
+    "WAF_SMUGGLING_ENABLED":           (_to_bool, None),
+    "WAF_VERB_OVERRIDE_ENABLED":       (_to_bool, None),
+    "WAF_HEADER_INJECTION_ENABLED":    (_to_bool, None),
+    "WAF_GRAPHQL_ENABLED":             (_to_bool, None),
+    "WAF_UPLOAD_ENABLED":              (_to_bool, None),
+    "WAF_SLOWLORIS_ENABLED":           (_to_bool, None),
+    "ACCEPT_WILDCARD_CHECK_ENABLED":   (_to_bool, None),
+    "HONEYPOT_ENABLED":                (_to_bool, None),
     "SUSPICIOUS_PATH_ENABLED":     (_to_bool, None),
     "AI_PROBE_ENABLED":            (_to_bool, None),
     "UA_FILTER_ENABLED":           (_to_bool, None),
@@ -2508,6 +2522,10 @@ async def config_endpoint(request: web.Request):
         except Exception:
             _VH, _vjs = {}, lambda x: x  # noqa: E731
         _all_vhosts = sorted(_VH.keys())
+        # 1.8.9 — surface env-pinned knobs so the Controls UI can render them
+        # read-only with a badge instead of letting the operator edit and
+        # then bounce off "env-pinned" rejection from POST /config.
+        _env_pinned = sorted(_ENV_PROVIDED_KNOBS)
         if _vhost_q:
             _ov_raw = _VH.get(_vhost_q, {})
             _merged = dict(_base)
@@ -2518,10 +2536,12 @@ async def config_endpoint(request: web.Request):
                 _overridden.append(_ku)
             return web.json_response(
                 {"state": _merged, "vhost": _vhost_q,
-                 "overridden": sorted(_overridden), "vhosts": _all_vhosts},
+                 "overridden": sorted(_overridden), "vhosts": _all_vhosts,
+                 "env_pinned": _env_pinned},
                 headers={"Cache-Control": "no-store"})
         return web.json_response(
-            {"state": _base, "vhost": "", "overridden": [], "vhosts": _all_vhosts},
+            {"state": _base, "vhost": "", "overridden": [], "vhosts": _all_vhosts,
+             "env_pinned": _env_pinned},
             headers={"Cache-Control": "no-store"})
     if request.method != "POST":
         return web.json_response({"error": "method not allowed"}, status=405,
@@ -3516,7 +3536,8 @@ async def protect(request: web.Request, handler):
 
     # 3e3. Accept: */* on what looks like HTML nav (Sec-Fetch-Dest=document)
     # Browsers always send a richer Accept on document navigation.
-    if (sec_fetch_dest == "document" and accept_hdr.strip() == "*/*"):
+    # 1.8.9 — gated by ACCEPT_WILDCARD_CHECK_ENABLED.
+    if (ACCEPT_WILDCARD_CHECK_ENABLED and sec_fetch_dest == "document" and accept_hdr.strip() == "*/*"):
         await update_risk_and_maybe_ban(track_key, "accept-wildcard-html", ip)
         request_signals.append("accept-wildcard-html")
 
@@ -5287,7 +5308,7 @@ async def scoring_endpoint(request: web.Request):
         "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
         "body-cmd":           "BODY_GROUP_CMD_ENABLED",
         "auth-jwt-invalid":   None,                       # gated by JWT_VALIDATE_PATHS
-        "slow-client":        None,                       # always-on (BODY_TIMEOUT structural)
+        "slow-client":        "WAF_SLOWLORIS_ENABLED",
         "botd-detected":      "BOTD_ENABLED",              # 1.6.5 — client-side fingerprintjs/botd
         # 1.6.2 — Tier-C DLP toggles
         "dlp-cc":             "DLP_GROUP_CC_ENABLED",
@@ -5332,6 +5353,23 @@ async def scoring_endpoint(request: web.Request):
         "webgl-missing":      "FP_ENRICHMENT_ENABLED",
         # ── 1.7.3 ──
         "path-sweep":         "PATH_SWEEP_ENABLED",
+        # ── 1.8.9 — WAF always-on knobs (now toggleable) ──
+        "accept-wildcard-html":   "ACCEPT_WILDCARD_CHECK_ENABLED",
+        "body-critical-injection": "WAF_BODY_ENABLED",
+        "body-xxe":               "WAF_BODY_ENABLED",
+        "body-proto-pollution":   "WAF_BODY_ENABLED",
+        "smuggling-cl-te":        "WAF_SMUGGLING_ENABLED",
+        "smuggling-te-cl":        "WAF_SMUGGLING_ENABLED",
+        "smuggling-te-te":        "WAF_SMUGGLING_ENABLED",
+        "smuggling-invalid-te":   "WAF_SMUGGLING_ENABLED",
+        "method-override-attempt":"WAF_VERB_OVERRIDE_ENABLED",
+        "header-ssti":            "WAF_HEADER_INJECTION_ENABLED",
+        "host-header-injection":  "WAF_HEADER_INJECTION_ENABLED",
+        "gql-introspection":      "WAF_GRAPHQL_ENABLED",
+        "gql-batch-abuse":        "WAF_GRAPHQL_ENABLED",
+        "gql-depth-exceeded":     "WAF_GRAPHQL_ENABLED",
+        "upload-dangerous-ext":   "WAF_UPLOAD_ENABLED",
+        "upload-dangerous-magic": "WAF_UPLOAD_ENABLED",
     }
     # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
     #
