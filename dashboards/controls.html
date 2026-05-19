@@ -786,7 +786,15 @@ const META = {
   ANUBIS_ENABLED:          {kind:'bool', desc:'Anubis-mode (1.5.4) — strict PoW gate on every first request, even if JS_CHALLENGE=0. Raises difficulty by ANUBIS_DIFFICULTY_BOOST.'},
   ANUBIS_DIFFICULTY_BOOST: {kind:'num', min:0, max:6, step:1, desc:'Extra leading hex zeros required when Anubis-mode is on (1 ≈ 16× harder, 2 ≈ 256×).', card:'thresholds'},
   BOT_TRAP_FORMS:          {kind:'bool', desc:'Inject a hidden honey field into every <form>. Filled = bot.'},
-  BODY_PATTERN_MATCH:      {kind:'bool', desc:'Scan POST bodies for SQLi / XSS / SSTI / cmd-injection markers.'},
+  WAF_BODY_ENABLED:             {kind:'bool', desc:'1.8.9 — WAF body checks: critical SQLi (UNION SELECT), Log4Shell, SSRF/metadata IPs, path traversal, OS command injection, XXE, prototype pollution. Fires regardless of escalation score. Disable if a legitimate search or API endpoint triggers false positives.'},
+  WAF_SMUGGLING_ENABLED:        {kind:'bool', desc:'1.8.9 — HTTP request smuggling detection (CL-TE, TE-CL, TE-TE, invalid TE). Blocks requests with conflicting Content-Length/Transfer-Encoding headers. Disable only if upstream handles smuggling checks itself.'},
+  WAF_VERB_OVERRIDE_ENABLED:    {kind:'bool', desc:'1.8.9 — Verb/method override detection: blocks X-HTTP-Method-Override, X-Method-Override, _method tunnelling. Disable if your app legitimately uses method tunnelling.'},
+  WAF_HEADER_INJECTION_ENABLED: {kind:'bool', desc:'1.8.9 — Header injection: SSTI payloads in attacker-controlled headers ({{7*7}}, ${7*7}) and Host header injection. Disable if your reverse-proxy chain sends unusual Host formats.'},
+  WAF_GRAPHQL_ENABLED:          {kind:'bool', desc:'1.8.9 — GraphQL protection: blocks introspection, batch abuse, and queries exceeding depth limits. Disable on dev environments that intentionally expose introspection.'},
+  WAF_UPLOAD_ENABLED:           {kind:'bool', desc:'1.8.9 — File upload validation: blocks dangerous extensions (.php, .jsp, .exe, .sh) and dangerous magic bytes (ELF, PE, PHP). Disable if your app must accept arbitrary binary uploads validated elsewhere.'},
+  WAF_SLOWLORIS_ENABLED:        {kind:'bool', desc:'1.8.9 — Slowloris / slow-body guard: when body upload exceeds BODY_TIMEOUT the request is risk-scored and returned a silent decoy. Disable to return a plain 408 without risk-scoring (no stealth, no ban accumulation).'},
+  ACCEPT_WILDCARD_CHECK_ENABLED:{kind:'bool', desc:'1.8.9 — Accept: */* on HTML navigation (Sec-Fetch-Dest: document) risk-score bump. Real browsers always send a rich Accept on page loads; */* indicates a bot or HTTP library. Disable if a legitimate API client sends document navigation with */*.'},
+  BODY_PATTERN_MATCH:           {kind:'bool', desc:'Scan POST bodies for SQLi / XSS / SSTI / cmd-injection markers.'},
   CANARY_ECHO_DETECTION:   {kind:'bool', desc:'R7 — plant agw-c-* canary in HTML; ban any client that echoes it back.'},
   STRICT_ORIGIN:           {kind:'bool', desc:'On state-changing methods, require Origin to match ALLOWED_HOSTS.'},
   INJECT_SECURITY_HEADERS: {kind:'bool', desc:'XFO, nosniff, HSTS, COOP, CORP, Permissions-Policy on HTML responses.'},
@@ -901,6 +909,9 @@ const META = {
 let serverState = {};
 let dirty = {};
 let overriddenKnobs = new Set();
+// 1.8.9 — knobs the container env pinned at startup; mutations are
+// rejected by the server, so the UI renders them read-only with a badge.
+let envPinnedKnobs  = new Set();
 
 function $(id){ return document.getElementById(id); }
 function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
@@ -1328,6 +1339,8 @@ async function load(){
   }
   // Update overridden-knobs set and scope-bar widgets
   overriddenKnobs = new Set(body.overridden || []);
+  // 1.8.9 — capture env-pinned knobs so renderControl can disable them.
+  envPinnedKnobs = new Set(body.env_pinned || []);
   const _badge = document.getElementById('vhost-ov-badge');
   const _lnk   = document.getElementById('vhost-policy-lnk');
   const _hint   = document.getElementById('vhost-scope-hint');
@@ -1363,7 +1376,25 @@ async function load(){
     if (!card || _settingsCards.has(card)) continue; // moved to Settings
     if (!$(card)) continue;
     const el = renderControl(name, META, serverState[name]);
-    if (el) $(card).appendChild(el);
+    if (el) {
+      // 1.8.9 — mark env-pinned knobs read-only so operators can see at a
+      // glance why a value can't be changed instead of bouncing off
+      // "env-pinned" rejections after Apply.
+      if (envPinnedKnobs.has(name)) {
+        el.querySelectorAll('input,select,textarea,button').forEach(inp => {
+          inp.disabled = true;
+          inp.title = 'Pinned by container env — set ' + name + ' in .env / docker-compose to change';
+        });
+        el.style.opacity = '0.6';
+        const badge = document.createElement('span');
+        badge.textContent = '🔒 env-pinned';
+        badge.title = name + ' is set in the container env and cannot be changed at runtime';
+        badge.style.cssText = 'font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:3px;background:#3f1a1a;color:#ff7b72;border:1px solid #5a2424;margin-left:6px;vertical-align:middle';
+        const label = el.querySelector('label, .knob-label, h3, b, strong');
+        (label || el).appendChild(badge);
+      }
+      $(card).appendChild(el);
+    }
   }
   // Refresh scoring table now that serverState is fresh — toggles inside it
   // need the latest knob values to render correctly.
