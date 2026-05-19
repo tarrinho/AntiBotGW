@@ -2,7 +2,7 @@
 
 **Generated:** 2026-05-17  
 **Version:** 1.8.8  
-**Total test files:** 67  
+**Total test files:** 70  
 
 ---
 
@@ -31,7 +31,7 @@
 | v1.8.5/1.8.6 | `test_v185_controls_nav.py`, `test_v185_new_features.py`, `test_v185_security.py`, `test_v185_settings_migration.py`, `test_v185_settings_nav.py`, `test_v185_week3_week4.py`, `test_v185_week3week4.py` |
 | v1.8.6 | `test_interaction_probe.py`, `test_oidc.py` |
 | v1.8.7 | `test_v187_login_2fa.py`, `test_v187_new_features.py`, `test_v187_security.py`, `test_v187_settings_vhost_strip.py`, `test_v187_ux_improvements.py`, `test_v187_controls_order.py`, `test_v187_db_switch_hotswap.py`, `test_v187_db_switch_roundtrip.py`, `test_v187_db_endpoints_dynamic.py`, `test_v188_db_settings_merge.py`, `test_v188_redis_security.py` |
-| v1.8.8 | `test_v188_ed25519_mesh.py`, `test_v188_settings_subnav.py`, `test_performance.py` |
+| v1.8.8 | `test_v188_ed25519_mesh.py`, `test_v188_settings_subnav.py`, `test_performance.py`, `test_v188_backend_aware_reads.py`, `test_v188_session_fixes.py`, `test_v188_startup_fixes.py` |
 | Cross-version | `test_admin_ip_list.py`, `test_code_review_fixes.py`, `test_control_center.py`, `test_crowdsec_lapi_health.py`, `test_dashboard_charts.py`, `test_dashboard_data.py`, `test_upstream_no_leak.py`, `test_upstream_rewrite.py` |
 
 ---
@@ -1289,4 +1289,49 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
-*Total test files: 67 | Approximate total test functions: ~2,000+*
+### `test_v188_backend_aware_reads.py` — Backend-aware event reader + write-health observability
+
+**Version added:** v1.8.8
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestReadEventsSql` (Q01–Q19) | 19 | Functional tests against ephemeral SQLite: empty range, row return, column filter, default columns, ts normalisation, start/end_ts=0 bounds, vhost/path_like/reason_like/ip_exact filters, ASC/DESC ordering, limit/offset pagination, invalid column rejection, whitelist enforcement, empty-filter safety |
+| `TestEventsHealthSql` (H01–H04) | 4 | `_events_health_sql` shape, `last_event_ts` = MAX(ts), `events_rows` = COUNT(*), ok=False when DB missing |
+| `TestDbHealthSnapshot` (H05–H07) | 3 | `db_health_snapshot` top-level keys, `active_backend` reflects `DB_BACKEND`, `lag_seconds` None when single backend |
+| `TestXffMisconfigAlert` | 6 | XFF misconfiguration alert structure, source, bounds |
+| `TestConfigKvStompAlert` | 3 | config-kv stomp alert source exists, fires for each collision |
+| Standalone | 27 | Dashboard endpoint static checks for geo-data, logs-data, agents-bucket-detail, metrics, health-score: `db_read_events` calls, column lists, backend-aware dispatch, health endpoint wiring |
+
+---
+
+### `test_v188_session_fixes.py` — 1.8.8 bug-fix regressions (Redis TLS, DB pin, DSN propagation, geo, settings)
+
+**Version added:** v1.8.8
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestRedisTlsGracefulDegradation` (F01–F04) | 4 | `_REDIS_TLS_BLOCKED` flag presence, set on TLS error, gateway continues without Redis, flag cleared on reconnect |
+| `TestDbBackendEnvPin` (D01–D05) | 5 | `DB_BACKEND` env-pin only for meaningful values; empty/None ignored; postgres/sqlite accepted |
+| `TestPostgresDsnPropagation` (P01–P05) | 5 | `POSTGRES_DSN` always included in `_refresh_integration_state` propagation dict; non-empty value propagated; empty-string propagated without KeyError |
+| `TestGeoDataFallback` (G01–G04) | 4 | `geo_data_endpoint` returns `{configured:false}` when `MAXMIND_CITY_ENABLED` is False |
+| `TestSettingsLoadDsnButton` (S01–S04) | 4 | `btn-db-load-dsn` present in settings.html; click handler wired; DSN field populated; user-touched flag set |
+| `TestPgStatusTileLiveUpdate` (T01–T03) | 3 | PG status tile `_tip-pg-status-val` updated after successful test; test-success handler updates span; cache updated |
+| Standalone | 3 | Additional DSN hint and masking checks |
+
+---
+
+### `test_v188_startup_fixes.py` — Container-startup and test-button UX fixes
+
+**Version added:** v1.8.8
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestDockerComposeTmpfs` (C01–C03) | 3 | `docker-compose.yml` has tmpfs entry; size ≥ 64 MiB (root cause: 16 MiB too small for SQLite startup temp-files in read-only container) |
+| `TestPgTestPasswordRequired` (P01–P03) | 3 | `_tip-pg-test`: password only required when no stored creds (`credsOk2` path); no-param URL when password empty + creds saved |
+| `TestPgTestNoParamUrl` (U01–U03) | 3 | no-param URL path when password empty + creds saved |
+| `TestPgTestResponseShapes` (R01–R04) | 4 | Both `/db-test` response shapes handled: `j.probe` and `j.postgres` variants |
+| `TestPgTestHttpErrorHandling` (H01–H04) | 4 | Soft HTTP-error branches: 404/403 → warning hint (not crash); network error catch present |
+
+---
+
+*Total test files: 70 | Approximate total test functions: ~2,100+*

@@ -210,13 +210,18 @@ class TestRedisAllowlistEnforce:
 
     def _set_allowlist(self, nets: list):
         """Inject a mock proxy_handler module with REDIS_ALLOW_LIST set."""
+        self._orig_ph = sys.modules.get("core.proxy_handler")
         mock_ph = types.ModuleType("core.proxy_handler")
         mock_ph.REDIS_ALLOW_LIST = nets
         sys.modules["core.proxy_handler"] = mock_ph
         return mock_ph
 
     def teardown_method(self, _):
-        sys.modules.pop("core.proxy_handler", None)
+        orig = getattr(self, "_orig_ph", None)
+        if orig is not None:
+            sys.modules["core.proxy_handler"] = orig
+        else:
+            sys.modules.pop("core.proxy_handler", None)
 
     def test_ip_inside_cidr_allowed(self):
         self._set_allowlist(["172.18.0.0/16"])

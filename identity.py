@@ -69,7 +69,7 @@ def browser_fingerprint(request) -> str:
         request.headers.get("Accept-Language", ""),
         request.headers.get("Accept-Encoding", ""),
     ]
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+    return hashlib.sha256("|".join(parts).encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 # ── Header-order library fingerprint helpers ───────────────────────────────
@@ -80,7 +80,7 @@ def browser_fingerprint(request) -> str:
 
 def _header_order_sig(request) -> str:
     names = ":".join(k.lower() for k in request.headers.keys() if k.lower() != "host")
-    return hashlib.sha256(names[:300].encode()).hexdigest()[:12]
+    return hashlib.sha256(names[:300].encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 _LIBRARY_HEADER_SIGS: frozenset = frozenset({
@@ -161,7 +161,7 @@ def _fp_hash(ua: str, ip_tier: str, ja4: str) -> str:
     """Opaque hash of the request's (UA + IP-tier + JA4) — used as the
     ban-keying identity for fingerprints that are minting many cookies."""
     return hmac.new(SESSION_KEY,
-                    f"fp|{ua[:200]}|{ip_tier}|{ja4}".encode(),
+                    f"fp|{ua[:200]}|{ip_tier}|{ja4}".encode("utf-8", errors="replace"),
                     hashlib.sha256).hexdigest()[:24]
 
 
@@ -187,8 +187,8 @@ def compute_ja4h(request) -> str:
         ck_names = ",".join(sorted(cookies.keys()))
         hdr_count = min(len([h for h in hdrs if h.lower() not in ("cookie", "host")]), 99)
         ck_count  = min(len(cookies), 99)
-        hdr_hash  = _hl.sha256(hdr_names.encode()).hexdigest()[:12]
-        ck_hash   = _hl.sha256(ck_names.encode()).hexdigest()[:12] if ck_names else "000000000000"
+        hdr_hash  = _hl.sha256(hdr_names.encode("utf-8", errors="replace")).hexdigest()[:12]
+        ck_hash   = _hl.sha256(ck_names.encode("utf-8", errors="replace")).hexdigest()[:12] if ck_names else "000000000000"
         return f"{method}{version}{has_body}{has_ref}_{hdr_count:02d}{ck_count:02d}_{hdr_hash}_{ck_hash}"
     except Exception:
         return "error"

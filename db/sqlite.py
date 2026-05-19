@@ -999,6 +999,15 @@ def db_load_config(proxy_globals: dict) -> None:
         # persisted and silently stomped the real DSN on every restart.
         if key in _SECRET_KEYS:
             secret_skipped += 1
+            # Emit a per-collision WARN so operators can see (a) which
+            # secret keys have a stomper row in config_kv and (b) the
+            # length of the would-be-applied value (0 == the stomp case).
+            slog("config_kv_stomp_blocked", level="warn",
+                 key=key,
+                 stomper_value_len=len(r["value"] or ""),
+                 note="config_kv has a row for this key but it is also a "
+                      "secret; the secrets_kv value (loaded by db_load_secrets) "
+                      "wins. Consider DELETE FROM config_kv WHERE key='" + key + "'.")
             continue
         # 1.5.5 — env wins. If the operator explicitly set this knob in the
         # container env, treat that as authoritative (GitOps determinism).

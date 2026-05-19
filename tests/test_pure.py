@@ -311,6 +311,27 @@ def test_browser_fingerprint_separator_is_single_pipe(proxy_module):
     assert proxy_module.browser_fingerprint(r1) != proxy_module.browser_fingerprint(r2)
 
 
+def test_browser_fingerprint_invalid_utf8_surrogate_does_not_raise(proxy_module):
+    """Invalid UTF-8 surrogates in UA header must not raise UnicodeEncodeError.
+    Found via DAST fuzzing: curl --User-Agent $'\\xff\\xfe\\x00' caused HTTP 500
+    because encode() rejected surrogates. Fix: encode(..., errors='replace')."""
+    surrogate_ua = _FakeReq({
+        "User-Agent": "\udcff\udcfe\x00bad-utf8",
+        "Accept-Language": "en",
+        "Accept-Encoding": "gzip",
+    })
+    fp = proxy_module.browser_fingerprint(surrogate_ua)
+    assert isinstance(fp, str) and len(fp) == 12
+
+
+def test_header_order_sig_invalid_utf8_does_not_raise():
+    """Header names with surrogate bytes must not crash _header_order_sig."""
+    import identity as _id
+    surrogate_hdr = _FakeReq({"\udcff-Header": "value", "Accept": "*/*"})
+    sig = _id._header_order_sig(surrogate_hdr)
+    assert isinstance(sig, str) and len(sig) == 12
+
+
 # ── _verify_session boundary conditions ──────────────────────────────────
 
 def test_verify_session_accepts_exactly_64_char_sid(proxy_module):
