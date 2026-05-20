@@ -78,6 +78,12 @@ pytest tests/test_critical.py tests/test_pure.py tests/test_async.py -q
 ```
 **Pass criterion:** 100 % green. Failures block the build.
 
+**When adding a new signal or detector:** every value added to `SIGNAL_KNOB` in
+`core/proxy_handler.py` must also appear as a `bool` entry in `_VHOST_COERCE` in
+`vhost.py`, so the toggle is overridable per hostname. The test
+`test_pure.py::test_all_signal_knobs_in_vhost_coerce` enforces this automatically —
+it will fail if any `SIGNAL_KNOB` value is missing from `_VHOST_COERCE`.
+
 ## 2. Functional tests
 ```
 pytest tests/test_functional.py -q

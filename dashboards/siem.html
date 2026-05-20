@@ -188,6 +188,27 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
   #dossier-drawer{width:100%}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* -- Sidebar icon rail (desktop collapse) -- */
+#sidebar-brand{display:flex;align-items:center;justify-content:space-between;gap:6px}
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a{display:flex;align-items:center;gap:9px}
+.nav-ic{flex:0 0 18px;width:18px;text-align:center;font-size:14px;line-height:1}
+.nav-lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sidebar-footer a,#sidebar-footer button.signout{display:flex;align-items:center;gap:9px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){
+  body:not(.sb-rail) #sidebar{width:160px}
+  body.sb-rail #sidebar{width:54px}
+  body.sb-rail #sidebar-nav{padding:0 6px}
+  body.sb-rail #sidebar-nav a{justify-content:center;padding-left:8px;padding-right:8px}
+  body.sb-rail #sidebar-nav a.sub{padding-left:8px}
+  body.sb-rail .nav-lbl{display:none}
+  body.sb-rail #sidebar-brand{justify-content:center}
+  body.sb-rail #sidebar-brand-name,body.sb-rail #sidebar-brand-ver{display:none}
+  body.sb-rail #sidebar-footer a,body.sb-rail #sidebar-footer button.signout{justify-content:center}
+  body.sb-rail #sidebar-footer{padding-left:6px;padding-right:6px}
+}
 /* ── JA4 pivot drawer ── */
 #ja4-drawer{position:fixed;top:0;right:0;height:100vh;width:440px;
   background:var(--card);border-left:1px solid var(--line);
@@ -210,29 +231,33 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
     border:1px solid var(--line);color:var(--fg);padding:8px 11px;border-radius:5px;
     cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">&#9776;</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<script>(function(){function setArrow(r){var b=document.getElementById('sidebar-toggle');if(b){b.textContent=r?'›':'‹';b.title=r?'Expand menu':'Collapse menu';b.setAttribute('aria-label',b.title);}}window._sbRail=function(){var r=!document.body.classList.contains('sb-rail');document.body.classList.toggle('sb-rail',r);try{localStorage.setItem('agw_sb_rail',r?'1':'0');}catch(e){}setArrow(r);};var on=false;try{on=localStorage.getItem('agw_sb_rail')==='1';}catch(e){}if(on)document.body.classList.add('sb-rail');document.addEventListener('DOMContentLoaded',function(){setArrow(on);});})();</script>
 
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.8</div>
+    <div>
+      <div id="sidebar-brand-name">AppSecGW</div>
+      <div id="sidebar-brand-ver">1.8.9</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbRail()" title="Collapse menu" aria-label="Collapse menu">‹</button>
   </div>
   <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
-    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
-    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
-    <a href="/antibot-appsec-gateway/secured/siem" class="sub active">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
-    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
-    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/settings">Settings</a>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/control-center"><span class="nav-ic">🎛</span><span class="nav-lbl">Control Center</span></a>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub"><span class="nav-ic">📡</span><span class="nav-lbl">Live Feed</span></a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub"><span class="nav-ic">🤖</span><span class="nav-lbl">Agents</span></a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub active"><span class="nav-ic">🔍</span><span class="nav-lbl">SIEM</span></a>
+    <a href="/antibot-appsec-gateway/secured/controls"><span class="nav-ic">🛡</span><span class="nav-lbl">Controls</span></a>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub"><span class="nav-ic">🗂</span><span class="nav-lbl">Vhost Policy</span></a>
+    <a href="/antibot-appsec-gateway/secured/geo"><span class="nav-ic">🌍</span><span class="nav-lbl">GeoMap</span></a>
+    <a href="/antibot-appsec-gateway/secured/settings"><span class="nav-ic">⚙</span><span class="nav-lbl">Settings</span></a>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub"><span class="nav-ic">🩺</span><span class="nav-lbl">Service</span></a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub"><span class="nav-ic">📜</span><span class="nav-lbl">Logs</span></a>
   </nav>
   <div id="sidebar-footer">
-    <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;">My Account</a>
+    <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;"><span class="nav-ic">👤</span><span class="nav-lbl">My Account</span></a>
     <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
       <button type="submit" class="signout"
-        onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+        onclick="return confirm('Sign out and return to the login page?');"><span class="nav-ic">🚪</span><span class="nav-lbl">Sign out</span></button>
     </form>
   </div>
 </div>
