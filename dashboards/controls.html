@@ -83,27 +83,19 @@ a{color:var(--blue);text-decoration:none}
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
-/* -- Sidebar icon rail (desktop collapse) -- */
-#sidebar-brand{display:flex;align-items:center;justify-content:space-between;gap:6px}
+/* -- Sidebar collapse (desktop hide/unhide) -- */
+#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
 #sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
 #sidebar-toggle:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a{display:flex;align-items:center;gap:9px}
-.nav-ic{flex:0 0 18px;width:18px;text-align:center;font-size:14px;line-height:1}
-.nav-lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#sidebar-footer a,#sidebar-footer button.signout{display:flex;align-items:center;gap:9px}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
-@media(min-width:601px){
-  body:not(.sb-rail) #sidebar{width:160px}
-  body.sb-rail #sidebar{width:54px}
-  body.sb-rail #sidebar-nav{padding:0 6px}
-  body.sb-rail #sidebar-nav a{justify-content:center;padding-left:8px;padding-right:8px}
-  body.sb-rail #sidebar-nav a.sub{padding-left:8px}
-  body.sb-rail .nav-lbl{display:none}
-  body.sb-rail #sidebar-brand{justify-content:center}
-  body.sb-rail #sidebar-brand-name,body.sb-rail #sidebar-brand-ver{display:none}
-  body.sb-rail #sidebar-footer a,body.sb-rail #sidebar-footer button.signout{justify-content:center}
-  body.sb-rail #sidebar-footer{padding-left:6px;padding-right:6px}
-}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* -- Submenu collapse (accordion) -- */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -157,6 +149,15 @@ main{padding:0;max-width:none;margin:0}
 .cni-dirty{background:var(--yellow);color:#000;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:16px;text-align:center;display:none}
 #ctrl-nav-search{width:calc(100% - 16px);margin:0 8px 6px;background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:5px 8px;font-size:12px;outline:none}
 #ctrl-nav-search:focus{border-color:var(--blue)}
+/* -- Controls submenu icon-rail (second hide: keep section logos, drop labels) -- */
+#ctrl-nav-toggle{display:block;width:calc(100% - 16px);margin:0 8px 6px;background:#0d1117;border:1px solid var(--line);color:var(--dim);cursor:pointer;border-radius:4px;padding:4px 8px;font-size:12px;line-height:1.3;text-align:center;white-space:nowrap}
+#ctrl-nav-toggle:hover{color:var(--fg);border-color:var(--blue)}
+#ctrl-nav.cn-rail{width:50px}
+#ctrl-nav.cn-rail #ctrl-nav-search{display:none}
+#ctrl-nav.cn-rail #ctrl-nav-toggle{padding:4px 0}
+#ctrl-nav.cn-rail .cni-label{display:none}
+#ctrl-nav.cn-rail .ctrl-nav-item{justify-content:center;padding:10px 0;gap:0;position:relative}
+#ctrl-nav.cn-rail .cni-dirty{position:absolute;top:3px;right:5px;margin:0;padding:0 4px;min-width:13px;font-size:8px}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:780px){.row{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
@@ -165,6 +166,10 @@ main{padding:0;max-width:none;margin:0}
 .ctrl{display:flex;align-items:center;justify-content:space-between;
       padding:8px 0;border-bottom:1px solid #1f2730}
 .ctrl:last-child{border-bottom:none}
+.ctrl-hint{display:block;padding:6px 0;border-bottom:1px solid #1f2730;opacity:.7}
+.ctrl-hint-label{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--dim);margin-right:6px}
+.ctrl-hint-desc{font-size:11px;color:var(--dim)}
+.ctrl-hint-desc em{font-style:normal;color:var(--blue);opacity:.8}
 .ctrl .label{flex:1;min-width:0}
 .ctrl .name{color:var(--fg);font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
 .ctrl .desc{color:var(--dim);font-size:11px;margin-top:2px}
@@ -505,7 +510,9 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 </style></head><body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
-<script>(function(){function setArrow(r){var b=document.getElementById('sidebar-toggle');if(b){b.textContent=r?'›':'‹';b.title=r?'Expand menu':'Collapse menu';b.setAttribute('aria-label',b.title);}}window._sbRail=function(){var r=!document.body.classList.contains('sb-rail');document.body.classList.toggle('sb-rail',r);try{localStorage.setItem('agw_sb_rail',r?'1':'0');}catch(e){}setArrow(r);};var on=false;try{on=localStorage.getItem('agw_sb_rail')==='1';}catch(e){}if(on)document.body.classList.add('sb-rail');document.addEventListener('DOMContentLoaded',function(){setArrow(on);});})();</script>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 
 <div id="sidebar">
   <div id="sidebar-brand">
@@ -513,24 +520,24 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       <div id="sidebar-brand-name">AppSecGW</div>
       <div id="sidebar-brand-ver">1.8.9</div>
     </div>
-    <button id="sidebar-toggle" onclick="_sbRail()" title="Collapse menu" aria-label="Collapse menu">‹</button>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
   <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center"><span class="nav-ic">🎛</span><span class="nav-lbl">Control Center</span></a>
-    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub"><span class="nav-ic">📡</span><span class="nav-lbl">Live Feed</span></a>
-    <a href="/antibot-appsec-gateway/secured/agents" class="sub"><span class="nav-ic">🤖</span><span class="nav-lbl">Agents</span></a>
-    <a href="/antibot-appsec-gateway/secured/siem" class="sub"><span class="nav-ic">🔍</span><span class="nav-lbl">SIEM</span></a>
-    <a href="/antibot-appsec-gateway/secured/controls" class="active"><span class="nav-ic">🛡</span><span class="nav-lbl">Controls</span></a>
-    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub"><span class="nav-ic">🗂</span><span class="nav-lbl">Vhost Policy</span></a>
-    <a href="/antibot-appsec-gateway/secured/geo"><span class="nav-ic">🌍</span><span class="nav-lbl">GeoMap</span></a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings"><span class="nav-ic">⚙</span><span class="nav-lbl">Settings</span></a>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub"><span class="nav-ic">🩺</span><span class="nav-lbl">Service</span></a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub"><span class="nav-ic">📜</span><span class="nav-lbl">Logs</span></a>
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
-    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;"><span class="nav-ic">👤</span><span class="nav-lbl">My Account</span></a>
+    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
     <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
-      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');"><span class="nav-ic">🚪</span><span class="nav-lbl">Sign out</span></button>
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
     </form>
   </div>
 </div>
@@ -570,7 +577,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 </div>
 </div><!-- /ctrl-scope-strip -->
 <div id="ctrl-split">
-<nav id="ctrl-nav"><input id="ctrl-nav-search" placeholder="Filter sections…" oninput="_ctrlNavFilter(this.value)"></nav>
+<nav id="ctrl-nav"><button id="ctrl-nav-toggle" onclick="_ctrlNavToggle()" title="Collapse sections (keep icons)" aria-label="Collapse sections">« Collapse</button><input id="ctrl-nav-search" placeholder="Filter sections…" oninput="_ctrlNavFilter(this.value)"></nav>
 <div id="ctrl-panels">
   <div id="bypass-bar">
     <div class="bypass-sw" id="bypass-sw" title="Toggle pass-through bypass mode"></div>
@@ -990,6 +997,8 @@ const META = {
   DLP_GROUP_API_KEY_ENABLED:     {kind:'bool', desc:'DLP group: API-key shapes (Slack xoxb-, GitHub ghp_/gho_, OpenAI sk-, labelled high-entropy secrets).'},
   DLP_GROUP_PII_EMAIL_ENABLED:   {kind:'bool', desc:'DLP group: email addresses (off by default — noisy on most upstreams).'},
   DLP_GROUP_PII_SSN_ENABLED:     {kind:'bool', desc:'DLP group: US SSNs (3-2-4 digit grouping).'},
+  BOT_DETECTION_ENABLED:   {kind:'bool', desc:'Master kill-switch for the heuristic bot detection pipeline. When off, all detector scoring is skipped for this vhost; existing bans and rate limits still apply. Use for trusted internal vhosts or staging environments.'},
+  BYPASS_MODE:             {kind:'bool', desc:'Emergency site-wide bypass: all detection and ban enforcement is skipped and every request is proxied unconditionally. Intended for incident response only — turn off as soon as possible.'},
   AUTHORIZED_BOT_UAS:      {kind:'botlist', card:'bypass', desc:'Structured monitoring-bot pass-through rules. Each entry: UA substring + path (+ optional source IPs). Matched requests are recorded blue and passed through.'},
   BYPASS_PATHS:            {kind:'pathlist', card:'bypass-paths', desc:'Path prefixes that bypass ALL bot detection and are proxied directly. Use for static asset directories (/static/, /assets/, /media/) where bot signals are meaningless. Prefix match: any request path starting with an entry is exempt from all detectors, scoring, and rate limiting.'},
   WEBHOOK_EVENT_FILTER:    {kind:'list', card:'ext-misc', desc:'CSV of reasons (fnmatch globs OK) the operator wants webhook calls for. Empty = every event fires the webhook.'},
@@ -3958,6 +3967,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       const el = document.createElement('div');
       el.className = 'ctrl-nav-item' + (sec.id === _active ? ' active' : '');
       el.dataset.sec = sec.id;
+      el.title = sec.label;  // tooltip when collapsed to icon-rail
       el.innerHTML = `<span class="cni-icon">${sec.icon}</span>
         <span class="cni-label">${sec.label}</span>
         <span class="cni-dirty" id="cni-dirty-${sec.id}"></span>`;
@@ -4005,9 +4015,33 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   window._ctrlNavFilter = function(val) { _navFilter = val; _buildNav(); };
   window._ctrlNavUpdateBadges = _updateBadges;
 
+  // Second hide: collapse #ctrl-nav to an icon-rail (section logos stay,
+  // labels + search hide). Independent from the main sidebar hide.
+  function _ctrlNavSetToggle(r) {
+    const b = document.getElementById('ctrl-nav-toggle');
+    if (!b) return;
+    b.textContent = r ? '»' : '« Collapse';
+    b.title = r ? 'Expand sections' : 'Collapse sections (keep icons)';
+    b.setAttribute('aria-label', b.title);
+  }
+  window._ctrlNavToggle = function() {
+    const nav = document.getElementById('ctrl-nav');
+    if (!nav) return;
+    const r = !nav.classList.contains('cn-rail');
+    nav.classList.toggle('cn-rail', r);
+    try { localStorage.setItem('agw_ctrlnav_rail', r ? '1' : '0'); } catch (e) {}
+    _ctrlNavSetToggle(r);
+  };
+
   document.addEventListener('DOMContentLoaded', function() {
     _buildNav();
     _switch('detection');
+    // restore collapsed-rail preference
+    let _cnRail = false;
+    try { _cnRail = localStorage.getItem('agw_ctrlnav_rail') === '1'; } catch (e) {}
+    const _cnNav = document.getElementById('ctrl-nav');
+    if (_cnNav && _cnRail) _cnNav.classList.add('cn-rail');
+    _ctrlNavSetToggle(_cnRail);
 
     // Patch mark() and clearDirty() to also update badges
     const _origMark = window.mark;
@@ -4081,7 +4115,7 @@ const CTRL_GROUPS = [
   { id:'secheaders',  icon:'📋',  label:'Security Headers',   lane:'optional',knobs:[
     'INJECT_SECURITY_HEADERS'] },
   { id:'bypass',      icon:'🚦',  label:'Bypass & Allowlists',lane:'bypass',  knobs:[
-    'AUTHORIZED_BOT_UAS','BYPASS_PATHS','JS_CHAL_OPEN_PATHS'] },
+    'BOT_DETECTION_ENABLED','BYPASS_MODE','AUTHORIZED_BOT_UAS','BYPASS_PATHS','JS_CHAL_OPEN_PATHS'] },
 ];
 
 const LANE_META = {
@@ -4211,6 +4245,21 @@ function _buildGroupSection(grp, mode) {
   boolKnobs.forEach(k => {
     const row = _boolRow(k);
     if (row) body.appendChild(row);
+  });
+
+  // Non-bool knobs (pathlist, botlist, list) render as dedicated cards elsewhere
+  // on the page. Show a hint row for each so the group body is never blank.
+  const nonBoolKnobs = grp.knobs.filter(k => {
+    const m = (typeof META!=='undefined') ? META[k] : null;
+    return m && m.kind !== 'bool';
+  });
+  nonBoolKnobs.forEach(k => {
+    const m = META[k];
+    const hint = document.createElement('div');
+    hint.className = 'ctrl ctrl-hint';
+    hint.innerHTML = `<span class="ctrl-hint-label">${k}</span>`
+      + `<span class="ctrl-hint-desc">${m.desc} — <em>configured in the card below</em></span>`;
+    body.appendChild(hint);
   });
 
   sec.appendChild(hdr);
