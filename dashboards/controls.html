@@ -65,28 +65,14 @@ a{color:var(--blue);text-decoration:none}
 .lane-optional .lane-dot{background:var(--dim)}
 .grp-grid-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:4px}
 .grp-card{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
-.grp-card .grp-hdr{border-radius:0}
+.grp-card .grp-hdr{border-radius:0;cursor:default}
+.grp-card .grp-hdr:hover{background:var(--card)}
 .grp-card .grp-body{border-top:1px solid var(--line)}
-/* Sidebar mode: reuse existing #ctrl-split but swap the sections */
-#ctrl-split[data-view="sidebar"] #ctrl-nav{display:flex}
 /* accordion/grid: keep #ctrl-nav visible so Thresholds/External/Admin remain accessible */
 #ctrl-split[data-view="accordion"] #ctrl-panels,
 #ctrl-split[data-view="grid"] #ctrl-panels{display:none}
 #ctrl-split[data-view="accordion"] #grp-view,
 #ctrl-split[data-view="grid"] #grp-view{display:block}
-/* Sidebar mode: grp-view shows as single-panel on right */
-#ctrl-split[data-view="sidebar"] #grp-view{display:block;overflow-y:auto;flex:1;padding:14px}
-#ctrl-split[data-view="sidebar"] .grp-section{border-radius:8px}
-#ctrl-split[data-view="sidebar"] .grp-hdr{cursor:default}
-#ctrl-split[data-view="sidebar"] .grp-chevron{display:none}
-/* Sidebar nav items in grouped mode */
-.grp-nav-item{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .1s,color .1s;user-select:none}
-.grp-nav-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
-.grp-nav-item.active{color:#fff;background:#1f2730;border-left-color:var(--blue)}
-.grp-nav-icon{font-size:13px;width:20px;text-align:center;flex-shrink:0}
-.grp-nav-stats{font-size:10px;margin-left:auto;flex-shrink:0}
-.grp-nav-stats .n-off{color:var(--red);font-weight:700}
-.grp-nav-stats .n-ok{color:var(--dim)}
 #page-content{flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden}
 @media(max-width:600px){
   #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
@@ -97,6 +83,27 @@ a{color:var(--blue);text-decoration:none}
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* -- Sidebar icon rail (desktop collapse) -- */
+#sidebar-brand{display:flex;align-items:center;justify-content:space-between;gap:6px}
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a{display:flex;align-items:center;gap:9px}
+.nav-ic{flex:0 0 18px;width:18px;text-align:center;font-size:14px;line-height:1}
+.nav-lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#sidebar-footer a,#sidebar-footer button.signout{display:flex;align-items:center;gap:9px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){
+  body:not(.sb-rail) #sidebar{width:160px}
+  body.sb-rail #sidebar{width:54px}
+  body.sb-rail #sidebar-nav{padding:0 6px}
+  body.sb-rail #sidebar-nav a{justify-content:center;padding-left:8px;padding-right:8px}
+  body.sb-rail #sidebar-nav a.sub{padding-left:8px}
+  body.sb-rail .nav-lbl{display:none}
+  body.sb-rail #sidebar-brand{justify-content:center}
+  body.sb-rail #sidebar-brand-name,body.sb-rail #sidebar-brand-ver{display:none}
+  body.sb-rail #sidebar-footer a,body.sb-rail #sidebar-footer button.signout{justify-content:center}
+  body.sb-rail #sidebar-footer{padding-left:6px;padding-right:6px}
+}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -498,28 +505,32 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 </style></head><body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<script>(function(){function setArrow(r){var b=document.getElementById('sidebar-toggle');if(b){b.textContent=r?'›':'‹';b.title=r?'Expand menu':'Collapse menu';b.setAttribute('aria-label',b.title);}}window._sbRail=function(){var r=!document.body.classList.contains('sb-rail');document.body.classList.toggle('sb-rail',r);try{localStorage.setItem('agw_sb_rail',r?'1':'0');}catch(e){}setArrow(r);};var on=false;try{on=localStorage.getItem('agw_sb_rail')==='1';}catch(e){}if(on)document.body.classList.add('sb-rail');document.addEventListener('DOMContentLoaded',function(){setArrow(on);});})();</script>
 
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.8</div>
+    <div>
+      <div id="sidebar-brand-name">AppSecGW</div>
+      <div id="sidebar-brand-ver">1.8.9</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbRail()" title="Collapse menu" aria-label="Collapse menu">‹</button>
   </div>
   <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
-    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
-    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
-    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a>
-    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
-    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/control-center"><span class="nav-ic">🎛</span><span class="nav-lbl">Control Center</span></a>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub"><span class="nav-ic">📡</span><span class="nav-lbl">Live Feed</span></a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub"><span class="nav-ic">🤖</span><span class="nav-lbl">Agents</span></a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub"><span class="nav-ic">🔍</span><span class="nav-lbl">SIEM</span></a>
+    <a href="/antibot-appsec-gateway/secured/controls" class="active"><span class="nav-ic">🛡</span><span class="nav-lbl">Controls</span></a>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub"><span class="nav-ic">🗂</span><span class="nav-lbl">Vhost Policy</span></a>
+    <a href="/antibot-appsec-gateway/secured/geo"><span class="nav-ic">🌍</span><span class="nav-lbl">GeoMap</span></a>
+    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings"><span class="nav-ic">⚙</span><span class="nav-lbl">Settings</span></a>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub"><span class="nav-ic">🩺</span><span class="nav-lbl">Service</span></a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub"><span class="nav-ic">📜</span><span class="nav-lbl">Logs</span></a>
   </nav>
   <div id="sidebar-footer">
-    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
+    <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;"><span class="nav-ic">👤</span><span class="nav-lbl">My Account</span></a>
     <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
-      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');"><span class="nav-ic">🚪</span><span class="nav-lbl">Sign out</span></button>
     </form>
   </div>
 </div>
@@ -527,7 +538,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="topbar">
   <div id="topbar-title">Controls</div>
   <div id="view-picker">
-    <button id="vp-default" class="vp-active" title="Default — sections sidebar" onclick="_setView('default')">
+    <button id="vp-default" class="vp-active" title="Default — sections view" onclick="_setView('default')">
       <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="4" height="13" rx="1" fill="currentColor" opacity=".6"/><rect x="5.5" y="0" width="7.5" height="3" rx="1" fill="currentColor"/><rect x="5.5" y="5" width="7.5" height="3" rx="1" fill="currentColor"/><rect x="5.5" y="10" width="7.5" height="3" rx="1" fill="currentColor"/></svg>
       <span class="vp-label">Default</span>
     </button>
@@ -538,10 +549,6 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <button id="vp-grid" title="Grid — grouped by impact lane" onclick="_setView('grid')">
       <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="5.5" height="5.5" rx="1" fill="currentColor"/><rect x="7.5" y="0" width="5.5" height="5.5" rx="1" fill="currentColor"/><rect x="0" y="7.5" width="5.5" height="5.5" rx="1" fill="currentColor"/><rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1" fill="currentColor"/></svg>
       <span class="vp-label">Grid</span>
-    </button>
-    <button id="vp-sidebar" title="Sidebar — group-by-group navigation" onclick="_setView('sidebar')">
-      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="4" height="13" rx="1" fill="currentColor" opacity=".8"/><rect x="5.5" y="0" width="7.5" height="13" rx="1" fill="currentColor" opacity=".4"/></svg>
-      <span class="vp-label">Sidebar</span>
     </button>
   </div>
   <div id="topbar-right" style="display:flex;align-items:center;gap:8px">
@@ -3961,7 +3968,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
 
   function _switch(secId) {
-    // In grouped views (accordion/grid/sidebar), nav click → switch to Default first
+    // In grouped views (accordion/grid), nav click → switch to Default first
     const splitEl = document.getElementById('ctrl-split');
     const curView = splitEl ? (splitEl.dataset.view || 'default') : 'default';
     if (curView !== 'default' && typeof window._setView === 'function') {
@@ -4019,9 +4026,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     }
 
     // Restore last-used view from localStorage (view-switcher persistence)
-    const _savedView = localStorage.getItem('agw-ctrl-view') || 'default';
-    if (_savedView !== 'default') {
-      setTimeout(function() { if (typeof window._setView === 'function') window._setView(_savedView); }, 50);
+    const _savedView = localStorage.getItem('agw_ctrl_view') || 'default';
+    const _validView = ['default','accordion','grid'].includes(_savedView) ? _savedView : 'default';
+    if (_validView !== 'default') {
+      setTimeout(function() { if (typeof window._setView === 'function') window._setView(_validView); }, 50);
     }
   });
 })();
@@ -4084,8 +4092,8 @@ const LANE_META = {
 };
 
 // ── State ─────────────────────────────────────────────────────────────────────
-let _view = localStorage.getItem('agw_ctrl_view') || 'default';
-let _sidebarActive = CTRL_GROUPS[0].id;
+const _storedView = localStorage.getItem('agw_ctrl_view') || 'default';
+let _view = ['default','accordion','grid'].includes(_storedView) ? _storedView : 'default';
 let _collapsedGroups = new Set(JSON.parse(localStorage.getItem('agw_ctrl_collapsed') || '[]'));
 
 function _saveCollapsed() {
@@ -4226,13 +4234,6 @@ function _refreshGroupStats() {
       btn.textContent = stats.off > 0 ? 'Enable all' : 'Disable all';
       btn.className = 'grp-toggle-all' + (stats.off===0?' all-on':stats.on===0?' all-off':'');
     }
-    // sidebar nav stats
-    const navStat = document.querySelector(`[data-grp-nav-stats="${grp.id}"]`);
-    if (navStat) {
-      navStat.innerHTML = stats.off > 0
-        ? `<span class="n-off">${stats.off} off</span>`
-        : `<span class="n-ok">✓</span>`;
-    }
   });
 }
 
@@ -4241,32 +4242,6 @@ function _renderGroupedView(mode) {
   const container = document.getElementById('grp-view');
   if (!container) return;
   container.innerHTML = '';
-
-  if (mode === 'sidebar') {
-    // Build groups nav into #ctrl-nav (replace existing nav items)
-    const nav = document.getElementById('ctrl-nav');
-    if (nav) {
-      nav.querySelectorAll('.grp-nav-item').forEach(el => el.remove());
-      const search = document.getElementById('ctrl-nav-search');
-      CTRL_GROUPS.forEach(grp => {
-        const stats = _groupStats(grp);
-        const el = document.createElement('div');
-        el.className = 'grp-nav-item' + (grp.id === _sidebarActive ? ' active' : '');
-        el.dataset.grpNav = grp.id;
-        el.innerHTML = `<span class="grp-nav-icon">${grp.icon}</span>
-          <span style="flex:1;font-size:12.5px">${grp.label}</span>
-          <span class="grp-nav-stats" data-grp-nav-stats="${grp.id}">${stats.off > 0 ? `<span class="n-off">${stats.off} off</span>` : '<span class="n-ok">✓</span>'}</span>`;
-        el.onclick = () => {
-          _sidebarActive = grp.id;
-          document.querySelectorAll('.grp-nav-item').forEach(e => e.classList.toggle('active', e.dataset.grpNav === grp.id));
-          _renderSingleGroup(grp);
-        };
-        nav.appendChild(el);
-      });
-    }
-    _renderSingleGroup(CTRL_GROUPS.find(g => g.id === _sidebarActive) || CTRL_GROUPS[0]);
-    return;
-  }
 
   if (mode === 'accordion') {
     CTRL_GROUPS.forEach(grp => {
@@ -4294,13 +4269,6 @@ function _renderGroupedView(mode) {
   }
 }
 
-function _renderSingleGroup(grp) {
-  const container = document.getElementById('grp-view');
-  if (!container) return;
-  container.innerHTML = '';
-  container.appendChild(_buildGroupSection(grp, 'sidebar'));
-}
-
 // ── View switcher ─────────────────────────────────────────────────────────────
 window._setView = function(mode) {
   _view = mode;
@@ -4309,7 +4277,7 @@ window._setView = function(mode) {
   if (!split) return;
 
   // Update button states
-  ['default','accordion','grid','sidebar'].forEach(m => {
+  ['default','accordion','grid'].forEach(m => {
     const btn = document.getElementById('vp-' + m);
     if (btn) btn.classList.toggle('vp-active', m === mode);
   });
@@ -4318,8 +4286,6 @@ window._setView = function(mode) {
   split.setAttribute('data-view', mode);
 
   if (mode === 'default') {
-    // Restore original nav items, hide grouped nav items
-    document.querySelectorAll('.grp-nav-item').forEach(el => el.remove());
     if (typeof _buildNav === 'function') _buildNav();
     if (typeof _switch === 'function') _switch('detection');
     return;

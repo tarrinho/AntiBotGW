@@ -5835,14 +5835,35 @@ def test_settings_topnav_has_vhost_policy_link():
 
 
 def test_vhost_coerce_expanded():
-    """_VHOST_COERCE must contain at least 100 knobs (expanded in 1.8.1)."""
+    """_VHOST_COERCE must contain at least 148 knobs (expanded in 1.8.9)."""
     import sys, os
     os.environ.setdefault("UPSTREAM", "https://example.com")
     import importlib
     vhost_mod = importlib.import_module("vhost")
     count = len(vhost_mod._VHOST_COERCE)
-    assert count >= 100, (
-        f"_VHOST_COERCE has only {count} entries — expected ≥100 after 1.8.1 expansion"
+    assert count >= 148, (
+        f"_VHOST_COERCE has only {count} entries — expected ≥148 after 1.8.9 expansion"
+    )
+
+
+def test_all_signal_knobs_in_vhost_coerce():
+    """Every SIGNAL_KNOB toggle value must be overridable at the vhost level.
+
+    When a new signal is added to SIGNAL_KNOB, its knob env-var must also be
+    added to _VHOST_COERCE so operators can enable/disable it per-hostname.
+    This test catches the gap where a knob is wired to SIGNAL_KNOB but
+    forgotten in _VHOST_COERCE, silently making the per-vhost toggle a no-op.
+    """
+    import os, importlib
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    vhost_mod = importlib.import_module("vhost")
+    from core.proxy_handler import SIGNAL_KNOB
+    signal_knobs = set(SIGNAL_KNOB.values())
+    vhost_keys  = set(vhost_mod._VHOST_COERCE.keys())
+    missing = signal_knobs - vhost_keys
+    assert not missing, (
+        f"SIGNAL_KNOB toggle(s) missing from _VHOST_COERCE — "
+        f"add them as bool entries in vhost.py: {sorted(missing)}"
     )
 
 
