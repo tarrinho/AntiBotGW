@@ -1199,6 +1199,21 @@ document.addEventListener('DOMContentLoaded', function(){
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script>
+// Inject X-CSRF-Token automatically for every state-mutating same-origin request.
+(function() {
+  const _orig = window.fetch;
+  window.fetch = function(resource, init) {
+    const m = ((init && init.method) || 'GET').toUpperCase();
+    if (m !== 'GET' && m !== 'HEAD') {
+      init = init || {};
+      init.headers = Object.assign({}, init.headers,
+        {'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''});
+    }
+    return _orig.call(this, resource, init);
+  };
+}());
+</script>
+<script>
 "use strict";
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
@@ -3070,24 +3085,47 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
   function csrf() { return document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || ''; }
 
+  // The /secured/* gate silently 404-decoys (HTML, not JSON) when the admin
+  // session is missing/expired, so r.json() would throw. Parse defensively and
+  // treat 401/403/404 as "session expired" rather than a cryptic error.
+  function _isAuthFail(status) { return status === 401 || status === 403 || status === 404; }
+  async function _readJson(r) { try { return await r.json(); } catch (_) { return null; } }
+  const _SESSION_MSG = 'Your admin session has expired — reload the page and sign in again.';
+
   async function load2fa() {
+    let r;
     try {
-      const r = await fetch(NS + '/secured/2fa-status', {credentials:'include'});
-      const j = await r.json();
-      const on = !!j.enabled;
-      badge.textContent = on ? '● Enabled' : '○ Disabled';
-      badge.style.background = on ? 'var(--green,#238636)' : 'var(--line)';
-      badge.style.color = on ? '#fff' : 'var(--dim)';
-      enableBtn.style.display  = on ? 'none' : '';
-      disableBtn.style.display = on ? '' : 'none';
-      if (!on) { setupArea.style.display = 'none'; qrWrap.style.display = 'none'; qrImg.src = ''; }
-    } catch(e) { badge.textContent = 'error'; }
+      r = await fetch(NS + '/secured/2fa-status', {credentials:'include'});
+    } catch (e) {
+      badge.textContent = '⚠ offline';
+      badge.title = 'Network error reading 2FA status: ' + e;
+      badge.style.background = 'var(--line)'; badge.style.color = 'var(--dim)';
+      return;
+    }
+    if (!r.ok) {
+      badge.textContent = _isAuthFail(r.status) ? '⚠ sign in again' : ('⚠ error ' + r.status);
+      badge.title = _isAuthFail(r.status) ? _SESSION_MSG
+                                          : ('2FA status request failed (HTTP ' + r.status + ').');
+      badge.style.background = 'var(--line)'; badge.style.color = 'var(--dim)';
+      enableBtn.style.display = 'none'; disableBtn.style.display = 'none';
+      return;
+    }
+    const j = (await _readJson(r)) || {};
+    const on = !!j.enabled;
+    badge.textContent = on ? '● Enabled' : '○ Disabled';
+    badge.title = '';
+    badge.style.background = on ? 'var(--green,#238636)' : 'var(--line)';
+    badge.style.color = on ? '#fff' : 'var(--dim)';
+    enableBtn.style.display  = on ? 'none' : '';
+    disableBtn.style.display = on ? '' : 'none';
+    if (!on) { setupArea.style.display = 'none'; qrWrap.style.display = 'none'; qrImg.src = ''; }
   }
 
   enableBtn.addEventListener('click', async () => {
     try {
       const r = await fetch(NS + '/secured/2fa-setup', {credentials:'include'});
-      const j = await r.json();
+      if (!r.ok) { msgEl.textContent = _isAuthFail(r.status) ? _SESSION_MSG : ('Setup failed (HTTP ' + r.status + ').'); return; }
+      const j = (await _readJson(r)) || {};
       if (j.qr_data_url) {
         qrImg.src = j.qr_data_url;
         qrWrap.style.display = '';
@@ -3107,13 +3145,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf()},
         body: JSON.stringify({code}),
       });
-      const j = await r.json();
+      const j = (await _readJson(r)) || {};
       if (r.ok) {
         codesList.textContent = (j.backup_codes || []).join('\n');
         backupDiv.style.display = '';
         msgEl.textContent = '2FA enabled.';
         await load2fa();
-      } else { msgEl.textContent = j.error || 'Confirm failed'; }
+      } else { msgEl.textContent = _isAuthFail(r.status) ? _SESSION_MSG : (j.error || 'Confirm failed'); }
     } catch(e) { msgEl.textContent = String(e); }
     setTimeout(() => { msgEl.textContent = ''; }, 5000);
   });
@@ -3127,9 +3165,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf()},
         body: JSON.stringify({code: code.trim()}),
       });
-      const j = await r.json();
+      const j = (await _readJson(r)) || {};
       if (r.ok) { msgEl.textContent = '2FA disabled.'; await load2fa(); }
-      else { msgEl.textContent = j.error || 'Disable failed'; }
+      else { msgEl.textContent = _isAuthFail(r.status) ? _SESSION_MSG : (j.error || 'Disable failed'); }
     } catch(e) { msgEl.textContent = String(e); }
     setTimeout(() => { msgEl.textContent = ''; }, 4000);
   });
