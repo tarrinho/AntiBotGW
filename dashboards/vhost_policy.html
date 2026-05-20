@@ -48,6 +48,8 @@ a{color:var(--blue);text-decoration:none}
 #sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
 @media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
 /* -- Submenu collapse (accordion) -- */
 #sidebar-nav .nav-parent{display:flex;align-items:center}
 #sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -337,7 +339,40 @@ var KNOB_META = {
   INJECT_SECURITY_HEADERS:       {g:'Origin / Headers',  t:'bool'},
   ALLOWED_METHODS:               {g:'Origin / Headers',  t:'list'},
   UPSTREAM_MAX_BODY:             {g:'Upstream',          t:'int'},
-  UPSTREAM_MAX_RESP:             {g:'Upstream',          t:'int'}
+  UPSTREAM_MAX_RESP:             {g:'Upstream',          t:'int'},
+  // 1.8.10 — 1.8.9 WAF + detector + rate-limit + auth knobs (were rendering as
+  // generic "Other" text inputs because they were missing here)
+  WAF_BODY_ENABLED:              {g:'WAF',               t:'bool'},
+  WAF_SMUGGLING_ENABLED:         {g:'WAF',               t:'bool'},
+  WAF_GRAPHQL_ENABLED:           {g:'WAF',               t:'bool'},
+  WAF_UPLOAD_ENABLED:            {g:'WAF',               t:'bool'},
+  WAF_VERB_OVERRIDE_ENABLED:     {g:'WAF',               t:'bool'},
+  WAF_HEADER_INJECTION_ENABLED:  {g:'WAF',               t:'bool'},
+  WAF_SLOWLORIS_ENABLED:         {g:'WAF',               t:'bool'},
+  ACCEPT_WILDCARD_CHECK_ENABLED: {g:'Detectors',         t:'bool'},
+  HONEY_CRED_ENABLED:            {g:'Detectors',         t:'bool'},
+  CANARY_PROBE_ENABLED:          {g:'Detectors',         t:'bool'},
+  INTERACTION_PROBE_ENABLED:     {g:'Detectors',         t:'bool'},
+  AUTOMATION_PROBE_ENABLED:      {g:'Detectors',         t:'bool'},
+  LLM_HEURISTIC_ENABLED:         {g:'Detectors',         t:'bool'},
+  COORDINATED_ATTACK_ENABLED:    {g:'Detectors',         t:'bool'},
+  JOURNEY_CHECK_ENABLED:         {g:'Detectors',         t:'bool'},
+  SESSION_CHURN_ENABLED:         {g:'Detectors',         t:'bool'},
+  PATH_SWEEP_ENABLED:            {g:'Detectors',         t:'bool'},
+  TLS_FP_BLOCK_ENABLED:          {g:'Fingerprint',       t:'bool'},
+  JA4H_DENY_ENABLED:             {g:'Fingerprint',       t:'bool'},
+  JA4_REQUIRED_ENABLED:          {g:'Fingerprint',       t:'bool'},
+  HOST_BLOCKING_ENABLED:         {g:'Rate / Traffic',    t:'bool'},
+  RATE_LIMIT_ENABLED:            {g:'Rate / Traffic',    t:'bool'},
+  RATE_LIMIT_IP_ENABLED:         {g:'Rate / Traffic',    t:'bool'},
+  ENDPOINT_RATE_LIMIT_ENABLED:   {g:'Rate / Traffic',    t:'bool'},
+  TRAFFIC_THRESHOLD_ENABLED:     {g:'Rate / Traffic',    t:'bool'},
+  JWT_VALIDATION_ENABLED:        {g:'Auth / Headers',    t:'bool'},
+  REQUIRED_HEADERS_ENABLED:      {g:'Auth / Headers',    t:'bool'},
+  UPSTREAM_AUTH_FAIL_ENABLED:    {g:'Auth / Headers',    t:'bool'},
+  FP_BAN_CHECK_ENABLED:          {g:'Detectors',         t:'bool'},
+  CUSTOM_RULES_ENABLED:          {g:'Detectors',         t:'bool'},
+  UPSTREAM_REWRITE_BASE:         {g:'Routing',           t:'str'}
 };
 
 function escapeHtml(s){

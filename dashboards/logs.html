@@ -49,6 +49,8 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 #sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
 @media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
 /* -- Submenu collapse (accordion) -- */
 #sidebar-nav .nav-parent{display:flex;align-items:center}
 #sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -777,6 +779,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+/* 1.8.10 fix — reserve right space so the fixed Health pill + log selector never overlap topbar buttons (e.g. Apply changes) */
+@media(min-width:601px){#topbar{padding-right:280px}}
 #gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
   display:flex;align-items:center;gap:5px;
   background:#161b22;border:1px solid #30363d;border-radius:14px;

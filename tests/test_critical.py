@@ -1141,6 +1141,10 @@ def test_165_every_knob_persists_round_trip():
         "ANUBIS_DIFFICULTY_BOOST": 2,
         # 1.8.9 — knob added without an entry here; flip to True
         "ALLOW_PRIVATE_UPSTREAM": True,
+        # 1.8.x — XFF resolution + master bot-detection toggle
+        "BOT_DETECTION_ENABLED": False,
+        "TRUST_XFF": "first",
+        "TRUSTED_PROXIES": ["10.0.0.0/8"],
         "TURNSTILE_RISK_THRESHOLD": 25.0,
         "RISK_BAN_THRESHOLD": 75, "SOFT_CHALLENGE_SCORE": 6.0,
         "RATE_LIMIT_BURST": 88, "RATE_LIMIT_REFILL": 7.0,
