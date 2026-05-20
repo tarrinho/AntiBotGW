@@ -6,6 +6,26 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.10] — 2026-05-20
+
+### Added
+
+- **Collapsible left sidebar (full hide / unhide)** (9 dashboards: main, controls, settings, agents, siem, geo, service, logs, vhost_policy): a `‹` toggle on the brand row slides the whole sidebar away; a floating `☰` button (top-left) brings it back. State persisted per browser via `localStorage["agw_sb_collapsed"]` and restored before `#sidebar` is parsed (no flash). Desktop-only — mobile keeps its existing off-canvas `#mob-menu`, so there is never a double `☰`. Wide-mode sidebar widened 148→160px.
+- **Sidebar submenu accordion** (same 9 dashboards): the three parent groups that own sub-items — Control Center (Live Feed / Agents / SIEM), Controls (Vhost Policy), Settings (Service / Logs) — gain a caret `▾` that collapses/expands their `.sub` children. GeoMap has no sub-items and stays a plain link. Each group's state is remembered independently via `localStorage["agw_sub_<group>"]`.
+- **Controls-page "second hide" — section icon-rail** (`dashboards/controls.html`): the in-page `#ctrl-nav` section submenu (Detection / Thresholds / Bypass & Bots / External / White-Black List) collapses to a 50px icon-rail — the section logos stay, labels and the filter box hide, panels expand to full width. Toggle `« Collapse` ↔ `»`; icons stay clickable and carry a `title` tooltip; dirty-knob badges shrink to a corner dot. State in `localStorage["agw_ctrlnav_rail"]`. Independent from the main sidebar hide.
+- **Settings-page "second hide" — section icon-rail** (`dashboards/settings.html`): the in-page `#settings-nav` submenu (Routing / Identity & Auth / Mesh / Infrastructure / Config) gets the same icon-rail collapse. Toggle is built in JS (because `_buildNav()` rewrites `innerHTML`) and the rail preference is restored before the rebuild to avoid an expand→collapse flash. State in `localStorage["agw_setnav_rail"]`. Three sidebar/Controls/Settings hides each use a distinct storage key and do not interfere.
+
+### Tests
+
+- New `tests/test_v189_sidebar_collapse.py` — sidebar full-hide + accordion markup on all 9 real dashboards (toggle/reopen wiring, desktop-gated CSS, GeoMap has no caret, no icon-rail leftovers, restore-before-`#sidebar` ordering, brand version).
+- New `tests/test_v189_ctrlnav_rail.py` and `tests/test_v189_setnav_rail.py` — Controls / Settings icon-rail second-hides (toggle wired, rail keeps `.cni-icon`/`.sni-icon` and hides labels, item tooltips, restore-before-build, and assertions that the main sidebar hide is untouched / no `sb-rail` leak).
+
+### Validation
+
+- Version bumped 1.8.9 → 1.8.10 across `config.py` (`GW_VERSION`), `proxy.py`, `docker-compose.yml`, all dashboard `<title>`/brand strings, and version-string test guards.
+
+---
+
 ## [1.8.9] — 2026-05-19
 
 ### Fixed
