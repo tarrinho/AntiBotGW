@@ -291,6 +291,42 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Upstream limits ───────────────────────────────────────────────────────
     "UPSTREAM_MAX_BODY":             int,
     "UPSTREAM_MAX_RESP":             int,
+    # ── WAF module kill-switches (1.8.9) ──────────────────────────────────────
+    "WAF_BODY_ENABLED":              bool,
+    "WAF_SMUGGLING_ENABLED":         bool,
+    "WAF_GRAPHQL_ENABLED":           bool,
+    "WAF_UPLOAD_ENABLED":            bool,
+    "WAF_VERB_OVERRIDE_ENABLED":     bool,
+    "WAF_HEADER_INJECTION_ENABLED":  bool,
+    "WAF_SLOWLORIS_ENABLED":         bool,
+    "ACCEPT_WILDCARD_CHECK_ENABLED": bool,
+    # ── Probe / interaction detectors (1.8.9) ─────────────────────────────────
+    "HONEY_CRED_ENABLED":            bool,
+    "CANARY_PROBE_ENABLED":          bool,
+    "INTERACTION_PROBE_ENABLED":     bool,
+    "AUTOMATION_PROBE_ENABLED":      bool,
+    "LLM_HEURISTIC_ENABLED":         bool,
+    # ── Session / journey detectors (1.8.9) ───────────────────────────────────
+    "COORDINATED_ATTACK_ENABLED":    bool,
+    "JOURNEY_CHECK_ENABLED":         bool,
+    "SESSION_CHURN_ENABLED":         bool,
+    # ── Network / TLS / JA4 (1.8.9) ──────────────────────────────────────────
+    "TLS_FP_BLOCK_ENABLED":          bool,
+    "JA4H_DENY_ENABLED":             bool,
+    "JA4_REQUIRED_ENABLED":          bool,
+    "HOST_BLOCKING_ENABLED":         bool,
+    # ── Rate limiting / threshold detectors (1.8.9) ───────────────────────────
+    "RATE_LIMIT_ENABLED":            bool,
+    "RATE_LIMIT_IP_ENABLED":         bool,
+    "ENDPOINT_RATE_LIMIT_ENABLED":   bool,
+    "TRAFFIC_THRESHOLD_ENABLED":     bool,
+    "PATH_SWEEP_ENABLED":            bool,
+    # ── Auth / header enforcement (1.8.9) ─────────────────────────────────────
+    "JWT_VALIDATION_ENABLED":        bool,
+    "REQUIRED_HEADERS_ENABLED":      bool,
+    "UPSTREAM_AUTH_FAIL_ENABLED":    bool,
+    "FP_BAN_CHECK_ENABLED":          bool,
+    "CUSTOM_RULES_ENABLED":          bool,
 }
 
 # ── Parse VHOSTS env var ───────────────────────────────────────────────────────

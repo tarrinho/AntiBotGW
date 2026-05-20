@@ -353,7 +353,7 @@ def test_s26_incident_critical_frozenset_defined():
     assert "_INCIDENT_CRITICAL" in src, (
         "analytics.py: _INCIDENT_CRITICAL frozenset not defined."
     )
-    for reason in ("canary-echo", "honey-cred", "redirect-maze-bot", "canary-probe-miss"):
+    for reason in ("canary-echo", "honey-cred", "canary-probe-miss"):
         assert reason in src, (
             f"analytics.py: '{reason}' not in _INCIDENT_CRITICAL."
         )

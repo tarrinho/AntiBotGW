@@ -89,9 +89,6 @@ from detection.canary import (  # noqa: F401
     inject_canary_probe, canary_probe_endpoint, check_canary_probe,
 )
 from detection.honey_cred import inject_honey_creds, lookup_honey_key  # noqa: F401
-from detection.redirect_maze import (  # noqa: F401
-    should_maze, make_maze_entry, redirect_maze_endpoint,
-)
 import detection.llm_heuristic as _llm_heuristic  # noqa: F401
 from detection.automation import _inject_automation_probe  # noqa: F401
 from detection.cookie_lifecycle import (  # noqa: F401
@@ -387,6 +384,26 @@ def _csp_inject_cf_turnstile(csp: str) -> str:
     if (not injected_script or not injected_frame) and default_idx is not None:
         out[default_idx] = out[default_idx].rstrip() + " " + _CF_TURNSTILE_ORIGIN
     return ";".join(out)
+
+
+_FAVICON_TAG = (
+    b'<link rel="shortcut icon" type="image/x-icon"'
+    b' href="/antibot-appsec-gateway/favicon.ico">'
+    b'<link rel="apple-touch-icon"'
+    b' href="/antibot-appsec-gateway/apple-touch-icon.png">'
+)
+
+def _inject_favicon(body: bytes) -> bytes:
+    """Inject gateway favicon tags into the <head> of HTML responses."""
+    if _FAVICON_TAG in body:
+        return body
+    for tag in (b"<head>", b"<HEAD>"):
+        idx = body.find(tag)
+        if idx != -1:
+            ins = idx + len(tag)
+            return body[:ins] + _FAVICON_TAG + body[ins:]
+    return body
+
 
 # ── v1.4: Slowloris guard (default ON with sensible timeouts) ────────────
 HEADERS_TIMEOUT = float(os.environ.get("HEADERS_TIMEOUT", "10"))   # secs to receive full headers
@@ -1250,6 +1267,7 @@ async def proxy(request: web.Request):
                 # H7/N1: inject honey-links only when Content-Type begins with
                 # text/html (rejects `application/text/html-foo` substrings).
                 if ctype.startswith("text/html"):
+                    resp_body = _inject_favicon(resp_body)
                     resp_body = _inject_honey_links(resp_body)
                     # v1.4 #6 — bot-trap form fields (no-op when disabled).
                     resp_body = _inject_bot_trap(resp_body)
@@ -2218,12 +2236,29 @@ def _upstream_safe_to_reload(v: str) -> bool:
         return False
     if globals().get("ALLOW_PRIVATE_UPSTREAM"):
         return True
+    # Inline private-IP guard so the check honours the LOCAL flag, not
+    # vhost._cfg.ALLOW_PRIVATE_UPSTREAM (a separate module-level copy).
     try:
-        import vhost as _vh
-        _vh._assert_upstream_public(v, key="UPSTREAM(hot-reload)")
+        import urllib.parse as _up, socket as _sock, ipaddress as _ipa
+        from vhost import _PRIVATE_NETS
+        _host = _up.urlparse(v).hostname
+        if not _host:
+            return False
+        try:
+            _addrs = {r[4][0] for r in _sock.getaddrinfo(_host, None)}
+        except _sock.gaierror:
+            return True  # DNS failure — let runtime handle
+        for _a in _addrs:
+            try:
+                _ip = _ipa.ip_address(_a)
+                if isinstance(_ip, _ipa.IPv6Address) and _ip.ipv4_mapped:
+                    _ip = _ip.ipv4_mapped
+            except ValueError:
+                continue
+            for _net in _PRIVATE_NETS:
+                if _ip in _net:
+                    return False
         return True
-    except SystemExit:
-        return False
     except Exception:
         return True
 
@@ -2259,6 +2294,27 @@ _HOT_RELOAD_KNOBS = {
     "WAF_UPLOAD_ENABLED":              (_to_bool, None),
     "WAF_SLOWLORIS_ENABLED":           (_to_bool, None),
     "ACCEPT_WILDCARD_CHECK_ENABLED":   (_to_bool, None),
+    "SESSION_CHURN_ENABLED":           (_to_bool, None),
+    "JA4H_DENY_ENABLED":               (_to_bool, None),
+    "HOST_BLOCKING_ENABLED":           (_to_bool, None),
+    "REQUIRED_HEADERS_ENABLED":        (_to_bool, None),
+    "JA4_REQUIRED_ENABLED":            (_to_bool, None),
+    "UPSTREAM_AUTH_FAIL_ENABLED":      (_to_bool, None),
+    "RATE_LIMIT_IP_ENABLED":           (_to_bool, None),
+    "RATE_LIMIT_ENABLED":              (_to_bool, None),
+    "FP_BAN_CHECK_ENABLED":            (_to_bool, None),
+    "TRAFFIC_THRESHOLD_ENABLED":       (_to_bool, None),
+    "TLS_FP_BLOCK_ENABLED":            (_to_bool, None),
+    "JWT_VALIDATION_ENABLED":          (_to_bool, None),
+    "CUSTOM_RULES_ENABLED":            (_to_bool, None),
+    "ENDPOINT_RATE_LIMIT_ENABLED":     (_to_bool, None),
+    "HONEY_CRED_ENABLED":              (_to_bool, None),
+    "CANARY_PROBE_ENABLED":            (_to_bool, None),
+    "LLM_HEURISTIC_ENABLED":           (_to_bool, None),
+    "AUTOMATION_PROBE_ENABLED":        (_to_bool, None),
+    "INTERACTION_PROBE_ENABLED":       (_to_bool, None),
+    "COORDINATED_ATTACK_ENABLED":      (_to_bool, None),
+    "JOURNEY_CHECK_ENABLED":           (_to_bool, None),
     "HONEYPOT_ENABLED":                (_to_bool, None),
     "SUSPICIOUS_PATH_ENABLED":     (_to_bool, None),
     "AI_PROBE_ENABLED":            (_to_bool, None),
@@ -2413,12 +2469,9 @@ _HOT_RELOAD_KNOBS = {
     # connection whose resolved host IP falls outside the list. Takes effect
     # on the next ban read/write after hot-reload (no reconnect required).
     "REDIS_ALLOW_LIST": (_to_ip_net_list, None),
-    # 1.8.9 — re-added to _HOT_RELOAD_KNOBS (was pulled in PROXY4-01 but the
-    # SSRF concern is moot when changing it requires admin credentials). The
-    # UPSTREAM validator (_upstream_safe_to_reload) already reads the live flag,
-    # so toggling this off immediately re-arms the public-IP check for the next
-    # UPSTREAM hot-reload without a restart.
-    "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
+    # ALLOW_PRIVATE_UPSTREAM intentionally absent — must not be hot-reloadable
+    # to prevent an operator (or attacker with admin creds) from disabling the
+    # SSRF guard at runtime. Requires a container restart to change.
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2828,6 +2881,24 @@ async def protect(request: web.Request, handler):
                          "Cache-Control": "no-store",
                          _REQUEST_ID_HEADER: rid})
 
+    # 1.8.9 — Dashboard bypass mode (raised in priority).
+    # When BYPASS_MODE=True every non-admin upstream request is passed
+    # through with zero detection, zero ban enforcement, AND zero
+    # AUTHORIZED_BOT_UAS evaluation. Previously this check sat below
+    # AUTHORIZED_BOT_UAS at line 2932, which let `action=ban` /
+    # `action=really-ban` entries still block traffic in bypass mode
+    # — contradicting the operator's "all controls disabled" intent.
+    # The check is intentionally placed AFTER protocol-level safety
+    # (control-byte path reject @2789) so CRLF injection is still
+    # blocked at the wire, but BEFORE every operator-policy branch.
+    if vc('BYPASS_MODE') and not _is_admin_path(request.path):
+        resp = await handler(request)
+        _bm_ip = get_ip(request) or request.remote or ""
+        await record(_bm_ip, request.headers.get("User-Agent", ""),
+                     request.path, resp.status, "",
+                     track_key=_bm_ip, request_id=rid, method=request.method)
+        return resp
+
     # 1.7.4 — Authorized monitoring bot pass-through.
     # Each entry in AUTHORIZED_BOT_UAS is a dict: {name, ua, path, ips, action, enabled}.
     # UA substring + path must match; ips (when non-empty) restricts source IPs.
@@ -2903,18 +2974,9 @@ async def protect(request: web.Request, handler):
                      track_key=_bp_ip, request_id=rid, method=request.method)
         return resp
 
-    # 1.7.8 — Dashboard bypass mode. When BYPASS_MODE=True (set by the Controls
-    # bypass toggle) every non-admin upstream request is passed through with zero
-    # detection or ban enforcement. Admin-namespace paths still go through the
-    # normal protect() flow so admin auth remains in effect.
-    if vc('BYPASS_MODE') and not _is_admin_path(request.path):
-        resp = await handler(request)
-        _bm_ip = get_ip(request) or request.remote or ""
-        # Empty reason → shows as clean allowed traffic in dashboard (no label).
-        await record(_bm_ip, request.headers.get("User-Agent", ""),
-                     request.path, resp.status, "",
-                     track_key=_bm_ip, request_id=rid, method=request.method)
-        return resp
+    # 1.8.9 — BYPASS_MODE was moved to line ~2855 (above AUTHORIZED_BOT_UAS)
+    # so that operator-policy branches like `action=ban` can't fire when
+    # the operator has explicitly disabled all controls.
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
@@ -2928,7 +2990,7 @@ async def protect(request: web.Request, handler):
         _vrps_win = get_vhost_rps_window(current_vhost_host()) or _global_rps_window
         while _vrps_win and _vrps_win[0] < cutoff:
             _vrps_win.popleft()
-        if len(_vrps_win) >= _vrps_limit:
+        if TRAFFIC_THRESHOLD_ENABLED and len(_vrps_win) >= _vrps_limit:
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(
@@ -2951,7 +3013,7 @@ async def protect(request: web.Request, handler):
     # may be "example.com:8443").
     if ALLOWED_HOSTS:
         host = (request.host or "").split(":", 1)[0].lower()
-        if host not in ALLOWED_HOSTS:
+        if HOST_BLOCKING_ENABLED and host not in ALLOWED_HOSTS:
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(ip, ua, request.path,
@@ -2963,7 +3025,7 @@ async def protect(request: web.Request, handler):
     # short-circuit the chain (legitimate internal callers / IP-pinned
     # automation), and a `block` rule can deny on operator-specific
     # conditions the built-in detectors don't cover.
-    if CUSTOM_RULES:
+    if CUSTOM_RULES_ENABLED and CUSTOM_RULES:
         _ip = get_ip(request)
         _action, _tag = _eval_custom_rules(request, _ip)
         if _action == "allow":
@@ -3000,7 +3062,7 @@ async def protect(request: web.Request, handler):
     # (weight 25) and silent-decoy. Doesn't replace upstream auth — adds
     # an edge gate so probing this route without a token never reaches
     # the application.
-    if JWT_VALIDATE_PATHS and _jwt_required_for(request.path):
+    if JWT_VALIDATION_ENABLED and JWT_VALIDATE_PATHS and _jwt_required_for(request.path):
         _auth = request.headers.get("Authorization", "")
         _ok = False
         if _auth.lower().startswith("bearer "):
@@ -3017,7 +3079,7 @@ async def protect(request: web.Request, handler):
     # The upstream TLS terminator (cloudflared, nginx, ALB) injects the
     # client's handshake fingerprint as a header. Off by default — operator
     # opts in via JA4_DENY_LIST.
-    if _tls_fingerprint_blocked(request):
+    if TLS_FP_BLOCK_ENABLED and _tls_fingerprint_blocked(request):
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
         return await _silent_decoy_response(ip, ua, request.path,
@@ -3037,7 +3099,7 @@ async def protect(request: web.Request, handler):
     # ── v1.4.2 Layer 0.7: Required custom-header presence ───────────────
     # Operator-defined headers (REQUIRED_HEADERS=X-Client-Version,...) must
     # be present on every non-/__/  /  non-static request.
-    if _missing_required_header(request):
+    if REQUIRED_HEADERS_ENABLED and _missing_required_header(request):
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
         return await _silent_decoy_response(ip, ua, request.path,
@@ -3321,7 +3383,7 @@ async def protect(request: web.Request, handler):
     if ja4h and ja4h != "error":
         async with state_lock:
             ip_state[track_key].last_ja4h = ja4h
-        if ja4h in JA4H_DENY_LIST:
+        if JA4H_DENY_ENABLED and ja4h in JA4H_DENY_LIST:
             await update_risk_and_maybe_ban(track_key, "ja4h-deny", ip)
             # Flag for inclusion in request_signals later (appended after request_signals is init'd)
             request["_ja4h_deny"] = True
@@ -3368,7 +3430,7 @@ async def protect(request: web.Request, handler):
     # fingerprint hit this gate even if they carry a fresh chal cookie.
     fp_hash_key = _fp_hash(ua, _ip_tier(ip), ja4)
     fp_banned, _ = await is_banned(fp_hash_key)
-    if fp_banned:
+    if FP_BAN_CHECK_ENABLED and fp_banned:
         return await _silent_decoy_response(
             ip, ua, path, "fp-banned", track_key=track_key, sid=sid,
             fp=fp, ja4=ja4, request_id=rid)
@@ -3378,7 +3440,7 @@ async def protect(request: web.Request, handler):
     # (path_glob, identity). Over-budget requests return the silent decoy
     # but accrue zero risk (throttle is not a malicious signal).
     _ep_rule = _endpoint_rule(request.path)
-    if _ep_rule and _ep_rule.get("rps"):
+    if ENDPOINT_RATE_LIMIT_ENABLED and _ep_rule and _ep_rule.get("rps"):
         if not await _endpoint_rate_consume(_ep_rule, track_key):
             return await _silent_decoy_response(
                 ip, ua, path, "rate-limit-endpoint",
@@ -3555,7 +3617,7 @@ async def protect(request: web.Request, handler):
     # 1.6.10 — JA4_FAIL_CLOSED: when the operator configures trusted JA4 peers,
     # they can opt-in to hard-deny (instead of soft-score) when the header is
     # absent. Static assets are exempt so CDN pre-fetch doesn't break.
-    if JA4_TRUSTED_NETS and JA4_HEADER and not request.headers.get(JA4_HEADER):
+    if JA4_REQUIRED_ENABLED and JA4_TRUSTED_NETS and JA4_HEADER and not request.headers.get(JA4_HEADER):
         if JA4_FAIL_CLOSED and not path.endswith(
                 (".css", ".js", ".png", ".jpg", ".jpeg", ".gif",
                  ".svg", ".webp", ".woff", ".woff2", ".ttf", ".ico",
@@ -3639,7 +3701,7 @@ async def protect(request: web.Request, handler):
     #     defeats "rotate UA every request to get a fresh identity bucket"
     #     bypass. This bucket is INDEPENDENT from any client-supplied header.
     socket_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
-    sip_ok, sip_retry = await take_socket_ip_token(socket_ip)
+    sip_ok, sip_retry = (True, 0) if not RATE_LIMIT_IP_ENABLED else await take_socket_ip_token(socket_ip)
     if not sip_ok:
         return await deny(429, "rate-limit-ip",
                           {"error": "ip rate limit exceeded",
@@ -3659,7 +3721,7 @@ async def protect(request: web.Request, handler):
         ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".svg",
         ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf",
         ".eot", ".map", ".mp4", ".webm", ".mp3", ".ogg")))
-    if not is_static_asset_get:
+    if RATE_LIMIT_ENABLED and not is_static_asset_get:
         allowed, retry, remaining_tokens = await take_token(track_key)
         if not allowed:
             return await deny(429, "rate-limit",
@@ -3812,7 +3874,7 @@ async def protect(request: web.Request, handler):
                 _cs_s.auth_failure_window_start = _cs_now
             _cs_s.auth_failures += 1
             _cs_af = _cs_s.auth_failures
-        if _cs_af >= AUTH_FAIL_THRESHOLD:
+        if UPSTREAM_AUTH_FAIL_ENABLED and _cs_af >= AUTH_FAIL_THRESHOLD:
             await update_risk_and_maybe_ban(track_key, "upstream-auth-fail", ip)
         # Global clustering: measure recent auth-fail rate
         _auth_fail_global.append(_cs_now)
@@ -5173,6 +5235,140 @@ async def unban_endpoint(request: web.Request):
         "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
         headers={"Cache-Control": "no-store"})
 
+# Each entry annotated with the runtime-toggle knob (if any) that
+# controls whether the detector runs. UI uses this to render a switch
+# next to the weight, merging the old "Toggles" and "Bot scoring
+# weights" cards into a single table.
+SIGNAL_KNOB = {
+    # Operator-toggleable detectors → runtime ON/OFF switch
+    "js-challenge":       "JS_CHALLENGE",
+    "bot-trap":           "BOT_TRAP_FORMS",
+    "suspicious-body":    "BODY_PATTERN_MATCH",
+    "canary-echo":        "CANARY_ECHO_DETECTION",
+    "accept-fp":          "ACCEPT_FP_ENABLED",
+    "labyrinth-jitter":   "LABYRINTH_JITTER_ENABLED",
+    "header-canary":      "HEADER_CANARY_ENABLED",
+    "origin-mismatch":    "STRICT_ORIGIN",
+    "tls-fingerprint":    "TLS_FP_BLOCK_ENABLED",
+    "abuseipdb-high":     "ABUSEIPDB_ENABLED",
+    "abuseipdb-med":      "ABUSEIPDB_ENABLED",
+    "crowdsec-banned":    "CROWDSEC_ENABLED",
+    "asn-hosting":        "MAXMIND_ENABLED",
+    # 1.6.0 — Tier-A toggles
+    "country-blocked":    "COUNTRY_BLOCK_ENABLED",
+    "tor-exit":           "TOR_BLOCK_ENABLED",
+    "datacenter-vpn":     "DC_VPN_BLOCK_ENABLED",
+    "ua-ai-openai":       "AI_UA_OPENAI_ENABLED",
+    "ua-ai-anthropic":    "AI_UA_ANTHROPIC_ENABLED",
+    "ua-ai-google":       "AI_UA_GOOGLE_ENABLED",
+    "ua-ai-perplexity":   "AI_UA_PERPLEXITY_ENABLED",
+    "ua-ai-meta":         "AI_UA_META_ENABLED",
+    "ua-ai-other":        "AI_UA_OTHER_ENABLED",
+    # 1.6.1 — Tier-B toggles
+    "custom-rule-block":  "CUSTOM_RULES_ENABLED",
+    "rate-limit-endpoint": "ENDPOINT_RATE_LIMIT_ENABLED",
+    "body-sqli":          "BODY_GROUP_SQLI_ENABLED",
+    "body-xss":           "BODY_GROUP_XSS_ENABLED",
+    "body-lfi":           "BODY_GROUP_LFI_ENABLED",
+    "body-rce":           "BODY_GROUP_RCE_ENABLED",
+    "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
+    "body-cmd":           "BODY_GROUP_CMD_ENABLED",
+    "auth-jwt-invalid":   "JWT_VALIDATION_ENABLED",
+    "slow-client":        "WAF_SLOWLORIS_ENABLED",
+    "botd-detected":      "BOTD_ENABLED",              # 1.6.5 — client-side fingerprintjs/botd
+    # 1.6.2 — Tier-C DLP toggles
+    "dlp-cc":             "DLP_GROUP_CC_ENABLED",
+    "dlp-aws":            "DLP_GROUP_AWS_ENABLED",
+    "dlp-jwt":            "DLP_GROUP_JWT_ENABLED",
+    "dlp-private-key":    "DLP_GROUP_PRIVATE_KEY_ENABLED",
+    "dlp-api-key":        "DLP_GROUP_API_KEY_ENABLED",
+    "dlp-pii-email":      "DLP_GROUP_PII_EMAIL_ENABLED",
+    "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
+    # 1.6.9 — AI Labyrinth
+    "tarpit-walk":        "LABYRINTH_ENABLED",
+    # 1.6.10
+    "header-order-fp":    "HEADER_ORDER_FP_ENABLED",
+    "ai-ua-ip-mismatch":  "AI_CRAWLER_VERIFY_ENABLED",
+    "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
+    "robots-violation":   "ROBOTS_MONITOR_ENABLED",
+    "h2-fp":              "H2_FP_ENABLED",
+    "json-canary":        "JSON_CANARY_ENABLED",
+    # 1.5.4: 11 new per-detector kill-switches
+    "honeypot":           "HONEYPOT_ENABLED",
+    "honeypot-silent":    "HONEYPOT_ENABLED",
+    "suspicious-path":    "SUSPICIOUS_PATH_ENABLED",
+    "ai-probe":           "AI_PROBE_ENABLED",
+    "ua-empty":           "UA_FILTER_ENABLED",
+    "ua-blocked":         "UA_FILTER_ENABLED",
+    "ua-too-short":       "UA_FILTER_ENABLED",
+    "ua-non-browser":     "UA_FILTER_ENABLED",
+    "ua-platform-mismatch": "UA_PLATFORM_CHECK_ENABLED",
+    "ai-headers-empty":   "HEADER_COMPLETENESS_ENABLED",
+    "ai-headers-incomplete": "HEADER_COMPLETENESS_ENABLED",
+    "behavior":           "BEHAVIORAL_CHECK_ENABLED",
+    "ai-enumeration":     "AI_ENUMERATION_ENABLED",
+    "ai-no-assets":       "AI_NO_ASSETS_ENABLED",
+    "session-flood":      "SESSION_FLOOD_ENABLED",
+    "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
+    # ── 1.7.2 ──
+    "cookie-ghost":       "COOKIE_GHOST_ENABLED",
+    "lifecycle-miss":     "COOKIE_LIFECYCLE_ENABLED",
+    "referer-ghost":      "REFERER_CHAIN_ENABLED",
+    "impossible-travel":  "IMPOSSIBLE_TRAVEL_ENABLED",
+    "soft-renderer":      "FP_ENRICHMENT_ENABLED",
+    "webgl-missing":      "FP_ENRICHMENT_ENABLED",
+    # ── 1.7.3 ──
+    "path-sweep":         "PATH_SWEEP_ENABLED",
+    # ── 1.8.9 — WAF always-on knobs (now toggleable) ──
+    "accept-wildcard-html":   "ACCEPT_WILDCARD_CHECK_ENABLED",
+    "body-critical-injection": "WAF_BODY_ENABLED",
+    "body-xxe":               "WAF_BODY_ENABLED",
+    "body-proto-pollution":   "WAF_BODY_ENABLED",
+    "smuggling-cl-te":        "WAF_SMUGGLING_ENABLED",
+    "smuggling-te-cl":        "WAF_SMUGGLING_ENABLED",
+    "smuggling-te-te":        "WAF_SMUGGLING_ENABLED",
+    "smuggling-invalid-te":   "WAF_SMUGGLING_ENABLED",
+    "method-override-attempt":"WAF_VERB_OVERRIDE_ENABLED",
+    "header-ssti":            "WAF_HEADER_INJECTION_ENABLED",
+    "host-header-injection":  "WAF_HEADER_INJECTION_ENABLED",
+    "gql-introspection":      "WAF_GRAPHQL_ENABLED",
+    "gql-batch-abuse":        "WAF_GRAPHQL_ENABLED",
+    "gql-depth-exceeded":     "WAF_GRAPHQL_ENABLED",
+    "upload-dangerous-ext":   "WAF_UPLOAD_ENABLED",
+    "upload-dangerous-magic": "WAF_UPLOAD_ENABLED",
+    # ── 1.8.9 — Remaining always-on controls now toggleable ──
+    "smuggling-dual-header":    "WAF_SMUGGLING_ENABLED",
+    "smuggling-obfuscated-te":  "WAF_SMUGGLING_ENABLED",
+    "smuggling-duplicate-cl":   "WAF_SMUGGLING_ENABLED",
+    "honey-cred":               "HONEY_CRED_ENABLED",
+    "canary-probe-miss":        "CANARY_PROBE_ENABLED",
+    "llm-no-subresources":      "LLM_HEURISTIC_ENABLED",
+    "webdriver-detected":       "AUTOMATION_PROBE_ENABLED",
+    "bot-motion":               "INTERACTION_PROBE_ENABLED",
+    "no-interaction":           "INTERACTION_PROBE_ENABLED",
+    "scripted-motion":          "INTERACTION_PROBE_ENABLED",
+    "bot-scroll":               "INTERACTION_PROBE_ENABLED",
+    "scripted-keys":            "INTERACTION_PROBE_ENABLED",
+    "low-entropy-input":        "INTERACTION_PROBE_ENABLED",
+    "coordinated-probe":        "COORDINATED_ATTACK_ENABLED",
+    "direct-api-probe":         "JOURNEY_CHECK_ENABLED",
+    "session-churn":            "SESSION_CHURN_ENABLED",
+    "ja4h-deny":                "JA4H_DENY_ENABLED",
+    "host-not-allowed":         "HOST_BLOCKING_ENABLED",
+    "missing-required-header":  "REQUIRED_HEADERS_ENABLED",
+    "ja4-required-missing":     "JA4_REQUIRED_ENABLED",
+    "upstream-auth-fail":       "UPSTREAM_AUTH_FAIL_ENABLED",
+    "headers-suspicious":       "HEADER_COMPLETENESS_ENABLED",
+    "rate-limit-ip":            "RATE_LIMIT_IP_ENABLED",
+    "rate-limit":               "RATE_LIMIT_ENABLED",
+    "fp-banned":                "FP_BAN_CHECK_ENABLED",
+    "traffic-threshold":        "TRAFFIC_THRESHOLD_ENABLED",
+    "tls-fingerprint":          "TLS_FP_BLOCK_ENABLED",
+    "auth-jwt-invalid":         "JWT_VALIDATION_ENABLED",
+    "custom-rule-block":        "CUSTOM_RULES_ENABLED",
+    "rate-limit-endpoint":      "ENDPOINT_RATE_LIMIT_ENABLED",
+}
+
 async def scoring_endpoint(request: web.Request):
     """Read-only view of the bot scoring config: per-signal weight, ban
     thresholds, decay, and a short description per signal so the operator
@@ -5268,108 +5464,6 @@ async def scoring_endpoint(request: web.Request):
         "webgl-missing":         ("soft",  "Chrome UA but no WebGL renderer returned — headless Chrome with WebGL blocked or disabled (common in Puppeteer/Playwright default configs)."),
         # ── 1.7.3 ──
         "path-sweep":            ("hard",  "Identity visited too many distinct non-static paths in a short window (PATH_SWEEP_THRESHOLD in PATH_SWEEP_WINDOW_SECS s) — automated content discovery / directory enumeration after warm-up bypass."),
-    }
-    # Each entry annotated with the runtime-toggle knob (if any) that
-    # controls whether the detector runs. UI uses this to render a switch
-    # next to the weight, merging the old "Toggles" and "Bot scoring
-    # weights" cards into a single table.
-    SIGNAL_KNOB = {
-        # Operator-toggleable detectors → runtime ON/OFF switch
-        "js-challenge":       "JS_CHALLENGE",
-        "bot-trap":           "BOT_TRAP_FORMS",
-        "suspicious-body":    "BODY_PATTERN_MATCH",
-        "canary-echo":        "CANARY_ECHO_DETECTION",
-        "accept-fp":          "ACCEPT_FP_ENABLED",
-        "labyrinth-jitter":   "LABYRINTH_JITTER_ENABLED",
-        "header-canary":      "HEADER_CANARY_ENABLED",
-        "origin-mismatch":    "STRICT_ORIGIN",
-        "tls-fingerprint":    None,
-        "abuseipdb-high":     "ABUSEIPDB_ENABLED",
-        "abuseipdb-med":      "ABUSEIPDB_ENABLED",
-        "crowdsec-banned":    "CROWDSEC_ENABLED",
-        "asn-hosting":        "MAXMIND_ENABLED",
-        # 1.6.0 — Tier-A toggles
-        "country-blocked":    "COUNTRY_BLOCK_ENABLED",
-        "tor-exit":           "TOR_BLOCK_ENABLED",
-        "datacenter-vpn":     "DC_VPN_BLOCK_ENABLED",
-        "ua-ai-openai":       "AI_UA_OPENAI_ENABLED",
-        "ua-ai-anthropic":    "AI_UA_ANTHROPIC_ENABLED",
-        "ua-ai-google":       "AI_UA_GOOGLE_ENABLED",
-        "ua-ai-perplexity":   "AI_UA_PERPLEXITY_ENABLED",
-        "ua-ai-meta":         "AI_UA_META_ENABLED",
-        "ua-ai-other":        "AI_UA_OTHER_ENABLED",
-        # 1.6.1 — Tier-B toggles
-        "custom-rule-block":  None,                       # always-on (rules opt-in)
-        "rate-limit-endpoint": None,                      # part of ENDPOINT_POLICIES
-        "body-sqli":          "BODY_GROUP_SQLI_ENABLED",
-        "body-xss":           "BODY_GROUP_XSS_ENABLED",
-        "body-lfi":           "BODY_GROUP_LFI_ENABLED",
-        "body-rce":           "BODY_GROUP_RCE_ENABLED",
-        "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
-        "body-cmd":           "BODY_GROUP_CMD_ENABLED",
-        "auth-jwt-invalid":   None,                       # gated by JWT_VALIDATE_PATHS
-        "slow-client":        "WAF_SLOWLORIS_ENABLED",
-        "botd-detected":      "BOTD_ENABLED",              # 1.6.5 — client-side fingerprintjs/botd
-        # 1.6.2 — Tier-C DLP toggles
-        "dlp-cc":             "DLP_GROUP_CC_ENABLED",
-        "dlp-aws":            "DLP_GROUP_AWS_ENABLED",
-        "dlp-jwt":            "DLP_GROUP_JWT_ENABLED",
-        "dlp-private-key":    "DLP_GROUP_PRIVATE_KEY_ENABLED",
-        "dlp-api-key":        "DLP_GROUP_API_KEY_ENABLED",
-        "dlp-pii-email":      "DLP_GROUP_PII_EMAIL_ENABLED",
-        "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
-        # 1.6.9 — AI Labyrinth
-        "tarpit-walk":        "LABYRINTH_ENABLED",
-        # 1.6.10
-        "header-order-fp":    "HEADER_ORDER_FP_ENABLED",
-        "ai-ua-ip-mismatch":  "AI_CRAWLER_VERIFY_ENABLED",
-        "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
-        "robots-violation":   "ROBOTS_MONITOR_ENABLED",
-        "h2-fp":              "H2_FP_ENABLED",
-        "json-canary":        "JSON_CANARY_ENABLED",
-        # 1.5.4: 11 new per-detector kill-switches
-        "honeypot":           "HONEYPOT_ENABLED",
-        "honeypot-silent":    "HONEYPOT_ENABLED",
-        "suspicious-path":    "SUSPICIOUS_PATH_ENABLED",
-        "ai-probe":           "AI_PROBE_ENABLED",
-        "ua-empty":           "UA_FILTER_ENABLED",
-        "ua-blocked":         "UA_FILTER_ENABLED",
-        "ua-too-short":       "UA_FILTER_ENABLED",
-        "ua-non-browser":     "UA_FILTER_ENABLED",
-        "ua-platform-mismatch": "UA_PLATFORM_CHECK_ENABLED",
-        "ai-headers-empty":   "HEADER_COMPLETENESS_ENABLED",
-        "ai-headers-incomplete": "HEADER_COMPLETENESS_ENABLED",
-        "behavior":           "BEHAVIORAL_CHECK_ENABLED",
-        "ai-enumeration":     "AI_ENUMERATION_ENABLED",
-        "ai-no-assets":       "AI_NO_ASSETS_ENABLED",
-        "session-flood":      "SESSION_FLOOD_ENABLED",
-        "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
-        # ── 1.7.2 ──
-        "cookie-ghost":       "COOKIE_GHOST_ENABLED",
-        "lifecycle-miss":     "COOKIE_LIFECYCLE_ENABLED",
-        "referer-ghost":      "REFERER_CHAIN_ENABLED",
-        "impossible-travel":  "IMPOSSIBLE_TRAVEL_ENABLED",
-        "soft-renderer":      "FP_ENRICHMENT_ENABLED",
-        "webgl-missing":      "FP_ENRICHMENT_ENABLED",
-        # ── 1.7.3 ──
-        "path-sweep":         "PATH_SWEEP_ENABLED",
-        # ── 1.8.9 — WAF always-on knobs (now toggleable) ──
-        "accept-wildcard-html":   "ACCEPT_WILDCARD_CHECK_ENABLED",
-        "body-critical-injection": "WAF_BODY_ENABLED",
-        "body-xxe":               "WAF_BODY_ENABLED",
-        "body-proto-pollution":   "WAF_BODY_ENABLED",
-        "smuggling-cl-te":        "WAF_SMUGGLING_ENABLED",
-        "smuggling-te-cl":        "WAF_SMUGGLING_ENABLED",
-        "smuggling-te-te":        "WAF_SMUGGLING_ENABLED",
-        "smuggling-invalid-te":   "WAF_SMUGGLING_ENABLED",
-        "method-override-attempt":"WAF_VERB_OVERRIDE_ENABLED",
-        "header-ssti":            "WAF_HEADER_INJECTION_ENABLED",
-        "host-header-injection":  "WAF_HEADER_INJECTION_ENABLED",
-        "gql-introspection":      "WAF_GRAPHQL_ENABLED",
-        "gql-batch-abuse":        "WAF_GRAPHQL_ENABLED",
-        "gql-depth-exceeded":     "WAF_GRAPHQL_ENABLED",
-        "upload-dangerous-ext":   "WAF_UPLOAD_ENABLED",
-        "upload-dangerous-magic": "WAF_UPLOAD_ENABLED",
     }
     # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
     #

@@ -1,8 +1,8 @@
 # AppSecGW — Full Test Suite Reference
 
-**Generated:** 2026-05-17  
-**Version:** 1.8.8  
-**Total test files:** 70  
+**Generated:** 2026-05-19  
+**Version:** 1.8.9  
+**Total test files:** 72  
 
 ---
 
@@ -32,6 +32,7 @@
 | v1.8.6 | `test_interaction_probe.py`, `test_oidc.py` |
 | v1.8.7 | `test_v187_login_2fa.py`, `test_v187_new_features.py`, `test_v187_security.py`, `test_v187_settings_vhost_strip.py`, `test_v187_ux_improvements.py`, `test_v187_controls_order.py`, `test_v187_db_switch_hotswap.py`, `test_v187_db_switch_roundtrip.py`, `test_v187_db_endpoints_dynamic.py`, `test_v188_db_settings_merge.py`, `test_v188_redis_security.py` |
 | v1.8.8 | `test_v188_ed25519_mesh.py`, `test_v188_settings_subnav.py`, `test_performance.py`, `test_v188_backend_aware_reads.py`, `test_v188_session_fixes.py`, `test_v188_startup_fixes.py` |
+| v1.8.9 | `test_live_gw.py`, `test_v189_knob_kill_switches.py` |
 | Cross-version | `test_admin_ip_list.py`, `test_code_review_fixes.py`, `test_control_center.py`, `test_crowdsec_lapi_health.py`, `test_dashboard_charts.py`, `test_dashboard_data.py`, `test_upstream_no_leak.py`, `test_upstream_rewrite.py` |
 
 ---
@@ -1334,4 +1335,51 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
-*Total test files: 70 | Approximate total test functions: ~2,100+*
+---
+
+### `test_live_gw.py` — Black-box live gateway pentest suite
+
+**Version added:** v1.8.9
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestALiveness` | — | Gateway liveness + UPSTREAM environment sanity |
+| `TestBBotUADetection` | — | Bot UA signals score correctly |
+| `TestCAdminLockdown` | — | Admin paths reject unauthed requests with silent decoy |
+| `TestDSuspiciousPath` | — | Path traversal + injection payloads trigger detection |
+| `TestEHeaderInjection` | — | Header SSTI + Host injection signals fire |
+| `TestFFuzzingResilience` | — | Malformed requests do not cause 500 or crash |
+| `TestGRateLimit` | — | Rate limiting fires on burst traffic |
+| `TestHAdminAPI` | — | Admin API endpoints respond correctly for authed requests |
+| `TestISessionBehaviour` | — | Session cookie lifecycle and churn detection |
+| `TestJSecurityHeaders` | — | Security headers injected on HTML responses |
+| `TestKChallengePage` | — | JS challenge page renders correctly |
+| `TestLBodyInjection` | — | POST body injection payloads trigger WAF |
+| `TestMNoInfoDisclosure` | — | Error responses do not leak version or stack traces |
+| `TestNAdminPathConfusion` | — | Admin path confusion / partial-match attacks rejected |
+| `TestOSessionLifecycle` | — | Session creation, touch, and expiry flow |
+| `TestPConfigWriteResilience` | — | Config write endpoints resilient to invalid input |
+| `TestQReflectedContent` | — | Reflected content XSS prevention in dashboard |
+| `TestRMethodOverride` | — | HTTP verb override detection |
+| `TestSCachePoisoning` | — | Cache poisoning via Host/X-Forwarded-Host rejected |
+| `TestTAdminEnumeration` | — | Admin endpoint enumeration returns uniform 404 decoy |
+
+*Requires `LIVE_GW_URL` + `LIVE_GW_ADMIN_KEY` env vars; skipped in CI without live gateway.*
+
+---
+
+### `test_v189_knob_kill_switches.py` — 1.8.9 kill-switch knob registry and gate tests
+
+**Version added:** v1.8.9
+
+| Class | Tests | Description |
+|-------|-------|-------------|
+| `TestRegistryCompleteness` | 5 | All 1.8.9 knobs in `_HOT_RELOAD_KNOBS`, default True, no None signals, every risk-weight signal has a knob, knob names in config namespace |
+| `TestGateLogic` | 9 | WAF body/smuggling/verb-override/header/graphql/upload, session-churn, rate-limit, host-blocking gates in correct source file |
+| `TestHotReloadRoundTrip` | 6 | Knob persistence: toggling to False persists, toggling back to True restores; all new knobs in hot-reload registry |
+| `TestSignalKnobMapping` | 29 | Each signal maps to the expected kill-switch knob (parametrized) |
+| `TestKnobDynamic` | 12 | Runtime hot-reload: disable each detector class, confirm signals suppressed; re-enable, confirm restored |
+
+---
+
+*Total test files: 72 | Approximate total test functions: ~2,200+*

@@ -31,86 +31,6 @@ sys.path.insert(0, os.path.dirname(_HERE))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DET4-02: Redirect maze dest bound in HMAC
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestDET402MazeDestBinding:
-    """dest is now part of the HMAC — swapping it must invalidate the token."""
-
-    def _import(self):
-        from detection.redirect_maze import (
-            _sign_maze_token, _verify_maze_token, _dest_hash,
-        )
-        return _sign_maze_token, _verify_maze_token, _dest_hash
-
-    def test_dest_hash_returns_16_hex_chars(self):
-        _sign, _verify, _dest_hash = self._import()
-        h = _dest_hash("/foo/bar")
-        assert len(h) == 16
-        assert all(c in "0123456789abcdef" for c in h)
-
-    def test_valid_token_verifies_with_same_dest(self):
-        _sign, _verify, _ = self._import()
-        ts = int(time.time() * 1000)
-        dest = "/dashboard"
-        tok = _sign("identity-abc", 0, ts, dest)
-        ok, step, _ = _verify(tok, "identity-abc", dest)
-        assert ok
-        assert step == 0
-
-    def test_swapped_dest_invalidates_token(self):
-        _sign, _verify, _ = self._import()
-        ts = int(time.time() * 1000)
-        tok = _sign("identity-abc", 0, ts, "/original")
-        ok, _, _ = _verify(tok, "identity-abc", "/attacker-controlled")
-        assert not ok, "Token must be invalid when dest is swapped"
-
-    def test_different_step_invalidates_token(self):
-        _sign, _verify, _ = self._import()
-        ts = int(time.time() * 1000)
-        tok = _sign("identity-abc", 0, ts, "/dest")
-        # Manually craft a token that claims step=1 but has sig for step=0
-        parts = tok.split(".")
-        tampered = f"1.{parts[1]}.{parts[2]}"
-        ok, _, _ = _verify(tampered, "identity-abc", "/dest")
-        assert not ok
-
-    def test_different_identity_invalidates_token(self):
-        _sign, _verify, _ = self._import()
-        ts = int(time.time() * 1000)
-        tok = _sign("identity-abc", 0, ts, "/dest")
-        ok, _, _ = _verify(tok, "identity-XYZ", "/dest")
-        assert not ok
-
-    def test_expired_token_rejected(self):
-        _sign, _verify, _ = self._import()
-        old_ts = int(time.time() * 1000) - 31_000  # 31 s ago
-        tok = _sign("identity-abc", 0, old_ts, "/dest")
-        ok, _, _ = _verify(tok, "identity-abc", "/dest")
-        assert not ok
-
-    def test_malformed_token_rejected(self):
-        _sign, _verify, _ = self._import()
-        for bad in ("", "abc", "1.2", "a.b.c.d", "notanumber.2.sig"):
-            ok, _, _ = _verify(bad, "identity-abc", "/dest")
-            assert not ok, f"Should reject: {bad!r}"
-
-    def test_make_maze_entry_includes_dest_in_token(self):
-        from detection.redirect_maze import make_maze_entry, _verify_maze_token
-        from urllib.parse import urlparse, parse_qs, unquote
-        url = make_maze_entry("id-test", "/secure-page")
-        parsed = urlparse(url)
-        qs = parse_qs(parsed.query)
-        tok = qs["t"][0]
-        dest = unquote(qs["d"][0])
-        ok, _, _ = _verify_maze_token(tok, "id-test", dest)
-        assert ok
-        # Swapping dest must fail
-        ok2, _, _ = _verify_maze_token(tok, "id-test", "/evil")
-        assert not ok2
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # DET4-03: Interaction token bound to session identity, not IP
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -233,10 +153,10 @@ class TestPROXY401UpstreamValidator:
             assert _upstream_safe_to_reload("https://public-host.example.com/")
 
     def test_private_ip_rejected(self):
-        from core.proxy_handler import _upstream_safe_to_reload
-        # _assert_upstream_public raises SystemExit for private IPs
-        with patch("vhost._assert_upstream_public", side_effect=SystemExit(1)):
-            assert not _upstream_safe_to_reload("http://192.168.1.1/")
+        from core import proxy_handler
+        # Inline check rejects RFC-1918 when ALLOW_PRIVATE_UPSTREAM is False
+        with patch.object(proxy_handler, "ALLOW_PRIVATE_UPSTREAM", False):
+            assert not proxy_handler._upstream_safe_to_reload("http://192.168.1.1/")
 
     def test_wrong_scheme_rejected(self):
         from core.proxy_handler import _upstream_safe_to_reload

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AppSecGW_1.8.9 · Agents</title>
 <style>
@@ -1445,7 +1445,7 @@ const RISK_WEIGHTS_JS = {
   "ai-ua-ip-mismatch":30,"locale-geo-mismatch":10,"robots-violation":5,
   "h2-fp":3,"webdriver-detected":30,"coordinated-probe":25,"direct-api-probe":15,
   "cookie-ghost":20,"lifecycle-miss":12,"referer-ghost":10,"impossible-travel":35,
-  "soft-renderer":25,"webgl-missing":15,"honey-cred":90,"redirect-maze-bot":55,
+  "soft-renderer":25,"webgl-missing":15,"honey-cred":90,
   "llm-no-subresources":40,"canary-probe-miss":35,"body-critical-injection":80,
   "method-override-attempt":35,"smuggling-dual-header":90,"smuggling-invalid-te":90,
   "smuggling-obfuscated-te":90,"smuggling-duplicate-cl":90,"body-xxe":80,
@@ -1490,7 +1490,7 @@ const RISK_LABELS_JS = {
   "lifecycle-miss":"Request lifecycle anomaly","referer-ghost":"Referer to page never served",
   "impossible-travel":"Impossible geographic travel speed","soft-renderer":"Software renderer (headless)",
   "webgl-missing":"WebGL absent (headless indicator)","honey-cred":"Used injected fake credentials",
-  "redirect-maze-bot":"Solved redirect maze too fast","llm-no-subresources":"HTML fetched, no CSS/JS/images",
+  "llm-no-subresources":"HTML fetched, no CSS/JS/images",
   "canary-probe-miss":"Canary preload never fetched","body-critical-injection":"Critical injection in body",
   "method-override-attempt":"HTTP method override attempt","smuggling-dual-header":"Request smuggling (dual header)",
   "smuggling-invalid-te":"Request smuggling (invalid TE)","smuggling-obfuscated-te":"Request smuggling (obfuscated TE)",
@@ -1615,7 +1615,7 @@ const BLOCK_DETAIL_JS = {
   "dlp-api-key": "A generic API key pattern was detected in the request. May indicate credential testing, a misconfigured client, or an attacker using a leaked key.",
   "dlp-pii-email": "An email address pattern was detected in a location inconsistent with normal application flow. May indicate scraping of user data or testing of enumeration endpoints.",
   "dlp-pii-ssn": "A Social Security Number (SSN) pattern was detected in the request. Possible data exfiltration, form fuzzing with PII, or testing of identity verification endpoints.",
-  "labyrinth-jitter": "Timing jitter analysis on the client's navigation through the labyrinth (redirect maze) indicated automated traversal. The jitter pattern doesn't match human click latency distributions.",
+  "labyrinth-jitter": "Timing jitter analysis on the client's navigation through the AI Labyrinth indicated automated traversal. The jitter pattern doesn't match human click latency distributions.",
   "header-canary": "A canary token injected into a response header was echoed back in a subsequent request. This proves the client is reading and replaying response headers — a capability unique to scripted clients.",
   "json-canary": "A canary token injected into a JSON response body was echoed back by the client. This confirms the client is parsing JSON responses and extracting values — not a passive HTTP client.",
   "bypass-path": "The request matched a configured bypass rule that exempts this path from normal gateway inspection. This appears in block logs when the bypass interacts with other active rules.",
@@ -1635,7 +1635,7 @@ const RISK_CATEGORY_JS = {
   "suspicious-body":"INJECTION",
   "smuggling-dual-header":"SMUGGLING","smuggling-invalid-te":"SMUGGLING",
   "smuggling-obfuscated-te":"SMUGGLING","smuggling-duplicate-cl":"SMUGGLING",
-  "method-override-attempt":"EVASION","redirect-maze-bot":"EVASION","js-challenge":"EVASION",
+  "method-override-attempt":"EVASION","js-challenge":"EVASION",
   "ua-empty":"BOT-UA","ua-blocked":"BOT-UA","ua-non-browser":"BOT-UA",
   "ua-too-short":"BOT-UA","ua-platform-mismatch":"BOT-UA",
   "ua-ai-openai":"BOT-UA","ua-ai-anthropic":"BOT-UA","ua-ai-google":"BOT-UA",
@@ -1726,7 +1726,6 @@ const RISK_DETAIL_JS = {
   "smuggling-obfuscated-te":"The Transfer-Encoding header is obfuscated (e.g. 'chunKed', tab-prefixed, or space-padded) to bypass WAF inspection while still being processed by the backend parser.",
   "smuggling-duplicate-cl":"Duplicate Content-Length headers with different values — exploits servers that pick the first vs last CL value to desynchronize request body length parsing.",
   "method-override-attempt":"The client attempted to override the HTTP method using X-HTTP-Method-Override, X-Method-Override, or _method parameters — a technique to bypass method-based access controls.",
-  "redirect-maze-bot":"The client navigated a series of obscure redirect chains (the 'maze') faster than any human could. These mazes are calibrated against human click-through speed; bots that follow them mechanically trip this signal.",
   "js-challenge":"The client failed, timed out, or produced an incorrect response to the JavaScript proof-of-work challenge. May indicate a headless browser, JS-disabled scraper, or a bot that partially executes JS.",
   "ua-empty":"The HTTP request arrived with no User-Agent header. Every modern browser and mobile OS sends this header unconditionally. Its absence strongly indicates a raw HTTP client, CLI tool, or misconfigured automation.",
   "ua-blocked":"The User-Agent string matches an entry in the gateway's explicit blocklist — a known scanner signature, malicious tool, or explicitly banned client.",

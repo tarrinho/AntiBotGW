@@ -63,9 +63,6 @@ from detection.canary import (  # noqa: F401
     inject_canary_probe, canary_probe_endpoint, check_canary_probe,
 )
 from detection.honey_cred import inject_honey_creds, lookup_honey_key  # noqa: F401
-from detection.redirect_maze import (  # noqa: F401
-    should_maze, make_maze_entry, redirect_maze_endpoint,
-)
 import detection.llm_heuristic as _llm_heuristic  # noqa: F401
 from core.proxy_handler import honey_probe_endpoint  # noqa: F401
 from detection.automation import automation_report_endpoint  # noqa: F401
@@ -443,7 +440,6 @@ def make_app() -> web.Application:
         ("tarpit/{token}",     "GET",  tarpit_endpoint,               False),
         # 1.7.3 — AI-agent detection probes (public, no auth)
         ("probe",                       "GET", honey_probe_endpoint,      False),
-        ("maze",                        "GET", redirect_maze_endpoint,    False),
         ("canary-probe/{token}",        "GET", canary_probe_endpoint,     False),
         # ── secured (admin-IP + admin-key gated) ────────────────
         ("status",            "GET",    status_endpoint,                       True),
@@ -606,6 +602,29 @@ def make_app() -> web.Application:
     async def _live_stub(_r):
         return web.Response(text="ok", content_type="text/plain")
     app.router.add_get(PUBLIC + "/live", _live_stub)
+
+    # Favicon — served at the gateway namespace so the injected <link> tags
+    # resolve regardless of what the upstream serves at /favicon.ico.
+    _STATIC_DIR = _DASHBOARDS_DIR / "static"
+
+    async def _favicon_handler(_r):
+        _data = (_STATIC_DIR / "favicon.ico").read_bytes()
+        return web.Response(body=_data, content_type="image/x-icon",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
+    async def _apple_touch_icon_handler(_r):
+        _data = (_STATIC_DIR / "apple-touch-icon.png").read_bytes()
+        return web.Response(body=_data, content_type="image/png",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
+    async def _favicon_svg_handler(_r):
+        _data = (_STATIC_DIR / "favicon.svg").read_bytes()
+        return web.Response(body=_data, content_type="image/svg+xml",
+                            headers={"Cache-Control": "public, max-age=86400"})
+
+    app.router.add_get(PUBLIC + "/favicon.ico",        _favicon_handler)
+    app.router.add_get(PUBLIC + "/apple-touch-icon.png", _apple_touch_icon_handler)
+    app.router.add_get(PUBLIC + "/favicon.svg",        _favicon_svg_handler)
 
     # 1.6.10 — robots.txt: served before the catch-all proxy so the gateway
     # controls the content regardless of what the upstream serves at /robots.txt.

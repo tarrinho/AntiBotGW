@@ -20,6 +20,7 @@ from config import (
     SESSION_SAMESITE,
     SESSION_SECURE,
     NEW_SESSIONS_PER_IP_PER_MIN,
+    SESSION_CHURN_ENABLED,
 )
 from state import (
     state_lock,
@@ -204,7 +205,7 @@ async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
     q.append(n)
     while q and q[0] < n - SESSION_CHURN_WINDOW_S:
         q.popleft()
-    if len(q) > SESSION_CHURN_MAX:
+    if SESSION_CHURN_ENABLED and len(q) > SESSION_CHURN_MAX:
         slog("session_churn", level="warn", rid=rid, fp_hash=fp_h,
              ip_tier=ip_tier, ja4=ja4, count=len(q),
              window_s=SESSION_CHURN_WINDOW_S)

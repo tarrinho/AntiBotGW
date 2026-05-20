@@ -119,7 +119,7 @@ async def _eval_server_alert_rules(
 
 # ── Severity classification ──────────────────────────────────────────────────
 _SEV_CRITICAL = {
-    "canary-echo", "honey-cred", "redirect-maze-bot",
+    "canary-echo", "honey-cred",
     "canary-probe-miss", "honeypot", "honeypot-silent",
 }
 _SEV_HIGH = {
@@ -162,7 +162,7 @@ for _r in ("body-sqli", "body-xss", "body-lfi", "body-cmd",
     _CAT_MAP[_r] = "Injection"
 for _r in ("honeypot", "honeypot-silent", "honey-cred", "bot-trap"):
     _CAT_MAP[_r] = "Honeypot"
-for _r in ("canary-echo", "canary-probe-miss", "redirect-maze-bot"):
+for _r in ("canary-echo", "canary-probe-miss"):
     _CAT_MAP[_r] = "Canary"
 for _r in ("banned", "really-banned", "banned-silent",
            "bot-rule-ban", "bot-rule-really-ban", "peer-sync-ban"):

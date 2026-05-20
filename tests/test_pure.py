@@ -1027,9 +1027,9 @@ def test_ja4_required_missing_logs_warning(proxy_module, caplog):
 
 
 # ── DAST regression: probe endpoints in _ADMIN_PUBLIC_SUBPATHS ────────────
-# Bug: /probe, /maze, /canary-probe/ were missing from _ADMIN_PUBLIC_SUBPATHS.
+# Bug: /probe, /canary-probe/ were missing from _ADMIN_PUBLIC_SUBPATHS.
 # protect() intercepts every admin-namespace path not in that list and
-# returns a 404 decoy before route dispatch — P1/P2/P4 detectors had zero
+# returns a 404 decoy before route dispatch — P1/P4 detectors had zero
 # effect in production because their endpoints were unreachable.
 
 def test_probe_endpoint_in_admin_public_subpaths():
@@ -1042,16 +1042,6 @@ def test_probe_endpoint_in_admin_public_subpaths():
     )
 
 
-def test_maze_endpoint_in_admin_public_subpaths():
-    """P2 redirect-maze endpoint must be publicly reachable (no admin auth)."""
-    from config import _ADMIN_PUBLIC_SUBPATHS
-    assert "/maze" in _ADMIN_PUBLIC_SUBPATHS, (
-        "/maze must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
-        "admin-namespace path not in this list before route dispatch, making "
-        "the redirect-maze P2 detector completely non-functional"
-    )
-
-
 def test_canary_probe_in_admin_public_subpaths():
     """P4 canary-probe endpoint must be publicly reachable (no admin auth)."""
     from config import _ADMIN_PUBLIC_SUBPATHS
@@ -1060,6 +1050,18 @@ def test_canary_probe_in_admin_public_subpaths():
         "admin-namespace path not in this list before route dispatch, making "
         "the browser execution probe P4 detector completely non-functional"
     )
+
+
+def test_favicon_assets_in_admin_public_subpaths():
+    """Favicon assets must be publicly reachable — injected into every HTML
+    response so browsers fetch them without a session cookie."""
+    from config import _ADMIN_PUBLIC_SUBPATHS
+    for path in ("/favicon.ico", "/apple-touch-icon.png", "/favicon.svg"):
+        assert path in _ADMIN_PUBLIC_SUBPATHS, (
+            f"{path} must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
+            "admin-namespace path not in this list; favicon 404s on every page "
+            "when this entry is missing"
+        )
 
 
 # ── DAST regression: NameError 's' on ban recovery ───────────────────────
@@ -2182,7 +2184,7 @@ def test_authorized_bot_bypass_only_on_root():
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1500]
+    bot_block = src[bot_idx: bot_idx + 4000]
     assert "request.path ==" in bot_block or "request.path !=" in bot_block, (
         "Authorized bot bypass must compare request.path against the configured "
         "path from each entry (using == or !=)"
@@ -2881,7 +2883,7 @@ def test_authorized_bot_bypass_uses_per_entry_path_variable():
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1500]
+    bot_block = src[bot_idx: bot_idx + 4000]
     assert "_bot_path" in bot_block, (
         "protect() must extract _bot_path from each entry — "
         "the path to match is per-entry, not a global constant"
@@ -2899,7 +2901,7 @@ def test_authorized_bot_bypass_splits_on_colon():
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1000]
+    bot_block = src[bot_idx: bot_idx + 4000]
     assert "_colon" in bot_block or '.find(":")' in bot_block or "split(" in bot_block, (
         "protect() bypass must locate the ':' separator in each UA:path entry "
         "to split UA substring from path"
@@ -2916,7 +2918,7 @@ def test_authorized_bot_bypass_backward_compat_no_colon():
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1500]
+    bot_block = src[bot_idx: bot_idx + 4000]
     # The new dict-based code uses .get("path", "/") and or "/" as fallbacks;
     # legacy string branch uses else "/" and or "/".
     assert (
@@ -2990,7 +2992,7 @@ def test_authorized_bot_allow_action_sets_custom_rule_flag():
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 2500]
+    bot_block = src[bot_idx: bot_idx + 4000]
     assert "_custom_rule_allow" in bot_block, (
         "protect() bypass block must set request['_custom_rule_allow'] = True "
         "when action is 'allow' — so the bot is silently passed through"
@@ -3004,7 +3006,7 @@ def test_authorized_bot_ban_action_sets_banned_until():
     src = inspect.getsource(proxy_handler.protect)
     bot_idx = src.find("AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 3000]
+    bot_block = src[bot_idx: bot_idx + 4000]
     assert "banned_until" in bot_block, (
         "protect() bypass block must set ip_state[...].banned_until for "
         "ban/really-ban actions"
