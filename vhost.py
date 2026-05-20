@@ -151,6 +151,24 @@ def _to_json_list(v: Any) -> list:
     return _json.loads(v) if isinstance(v, str) else []
 
 
+def _to_bool(v: Any) -> bool:
+    """String-aware boolean coercion for per-vhost overrides.
+
+    Bare ``bool`` is wrong here: ``bool("false")`` is ``True`` (any non-empty
+    string is truthy), so an override sent as the string ``"false"`` by the
+    policy UI would be stored as ``True`` — silently dropping the change. This
+    parser treats the usual textual forms correctly while passing real bools
+    and numbers through unchanged.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
 _VHOST_COERCE: Dict[str, Any] = {
     # ── Routing ───────────────────────────────────────────────────────────────
     "UPSTREAM":                      str,
@@ -328,6 +346,14 @@ _VHOST_COERCE: Dict[str, Any] = {
     "FP_BAN_CHECK_ENABLED":          bool,
     "CUSTOM_RULES_ENABLED":          bool,
 }
+
+# 1.8.10 — replace every bare ``bool`` coercer with the string-aware ``_to_bool``.
+# The policy UI may send a boolean override as the string "true"/"false"; bare
+# ``bool("false")`` is ``True``, which silently dropped such changes. Done as a
+# post-pass so the table above stays readable.
+for _vk, _vc in list(_VHOST_COERCE.items()):
+    if _vc is bool:
+        _VHOST_COERCE[_vk] = _to_bool
 
 # ── Parse VHOSTS env var ───────────────────────────────────────────────────────
 _VHOSTS_RAW = os.environ.get("VHOSTS", "").strip()

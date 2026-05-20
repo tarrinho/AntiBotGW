@@ -670,6 +670,9 @@ if _trusted_proxies_raw:
         except ValueError as _e2:
             print(f"FATAL: invalid TRUSTED_PROXIES entry {_e!r} — {_e2}", flush=True)
             raise SystemExit(2)
+# Normalised CIDR strings — hot-reload stores/reads this form; TRUSTED_PROXIES_NETS
+# holds the parsed ip_network objects and is updated in tandem by proxy_handler.
+TRUSTED_PROXIES: list = [str(n) for n in TRUSTED_PROXIES_NETS]
 
 # ── Structured logging + request correlation IDs ─────────────────────────
 LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").lower()

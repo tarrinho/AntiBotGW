@@ -5806,16 +5806,44 @@ def test_vhost_policy_html_active_nav_link():
 
 
 def test_vhost_policy_html_knob_meta_coverage():
-    """vhost_policy.html KNOB_META must reference the same knobs as _VHOST_COERCE."""
-    import re
+    """Every per-vhost-overridable knob (_VHOST_COERCE) MUST appear in
+    vhost_policy.html KNOB_META with a type matching its coercer.
+
+    A knob missing here falls back to the generic 'Other' text-input widget,
+    which sends bool values as the strings "true"/"false" — and silently
+    mis-saves them (see test_v1810_vhost_knob_persist). This is the guard that
+    was too weak (only counted ≥100) and let the 1.8.9 WAF knobs slip through.
+    """
+    import os, re, importlib
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    vhost_mod = importlib.import_module("vhost")
+    coerce = vhost_mod._VHOST_COERCE
     src = _dash("vhost_policy.html")
-    # Extract keys from KNOB_META object in the script
-    meta_keys = set(re.findall(r'^\s{2}([A-Z][A-Z0-9_]+):', src, re.MULTILINE))
-    # Must have at least 100 knobs declared (we added 116 to _VHOST_COERCE)
-    assert len(meta_keys) >= 100, (
-        f"vhost_policy.html: KNOB_META has only {len(meta_keys)} entries — "
-        "expected ≥100 to match expanded _VHOST_COERCE"
+    m = re.search(r"var KNOB_META\s*=\s*\{(.*?)\n\};", src, re.S)
+    assert m, "KNOB_META object not found in vhost_policy.html"
+    body = m.group(1)
+    meta = dict(re.findall(r"([A-Z0-9_]+):\s*\{[^}]*?t:'([a-z]+)'", body))
+
+    missing = sorted(set(coerce) - set(meta))
+    assert not missing, (
+        f"vhost_policy.html KNOB_META is missing {len(missing)} overridable "
+        f"knob(s) — they would render as generic 'Other' text inputs and "
+        f"mis-save bool values: {missing}"
     )
+
+    # type must match the coercer family for the unambiguous coercers
+    _to_bool = vhost_mod._to_bool
+    expect = {}
+    for k, c in coerce.items():
+        if c is _to_bool:
+            expect[k] = "bool"
+        elif c is int:
+            expect[k] = "int"
+        elif c is str:
+            expect[k] = "str"
+    bad = [f"{k}: KNOB_META t='{meta.get(k)}' but coercer expects '{exp}'"
+           for k, exp in expect.items() if meta.get(k) != exp]
+    assert not bad, "vhost_policy.html KNOB_META type mismatches:\n" + "\n".join(bad)
 
 
 def test_settings_vhost_table_has_policy_link():
@@ -5876,8 +5904,14 @@ def test_bot_detection_enabled_in_vhost_coerce():
         "BOT_DETECTION_ENABLED not in _VHOST_COERCE — per-vhost bot detection "
         "toggle cannot be applied via the vhost override system."
     )
-    assert vhost_mod._VHOST_COERCE["BOT_DETECTION_ENABLED"] is bool, (
-        "_VHOST_COERCE['BOT_DETECTION_ENABLED'] must be bool coercer."
+    coercer = vhost_mod._VHOST_COERCE["BOT_DETECTION_ENABLED"]
+    # 1.8.10 — bool knobs use the string-aware _to_bool (NOT bare `bool`, which
+    # mis-coerces the string "false" to True). See test_v1810_vhost_knob_persist.
+    assert coercer is vhost_mod._to_bool, (
+        "_VHOST_COERCE['BOT_DETECTION_ENABLED'] must use the _to_bool coercer."
+    )
+    assert coercer("false") is False and coercer("true") is True, (
+        "BOT_DETECTION_ENABLED coercer must parse string booleans correctly."
     )
 
 

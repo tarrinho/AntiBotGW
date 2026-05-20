@@ -48,6 +48,8 @@ a{color:var(--blue);text-decoration:none}
 #sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
 @media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
 /* -- Submenu collapse (accordion) -- */
 #sidebar-nav .nav-parent{display:flex;align-items:center}
 #sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -3152,6 +3154,11 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     {key:'UPSTREAM_REWRITE_BASE', kind:'text', restart:false,
      ph:'e.g. http://host.docker.internal:8093',
      desc:'Strip this base URL from response bodies and Location/Link headers. Fixes CSP violations when upstream embeds its own hostname. Hot-reloadable.'},
+    {key:'TRUST_XFF', kind:'select', options:['none','first','last'], restart:false,
+     desc:'Which X-Forwarded-For hop to trust for client IP resolution. "none" (default) ignores XFF entirely. "first" trusts the leftmost entry (only safe when the front proxy strips/rewrites XFF). "last" trusts the rightmost entry added by the trusted proxy. Requires TRUSTED_PROXIES to be set.'},
+    {key:'TRUSTED_PROXIES', kind:'list', restart:false,
+     ph:'10.0.0.0/8, 172.16.0.0/12',
+     desc:'Comma-separated CIDRs of reverse proxies/CDN nodes whose X-Forwarded-For header the gateway trusts. Only the immediate TCP peer is checked. Must be set for TRUST_XFF to take effect (fail-closed: empty = XFF always ignored). Example: 172.18.0.0/16,103.21.244.0/22'},
   ];
   let _infraState = {};
   let _infraDirty = {};
@@ -3193,6 +3200,27 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
           <input type="text" value="${_esc(val||'')}" placeholder="${_esc(k.ph||'')}"
+                 style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+                 oninput="_infraChange('${_esc(k.key)}',this.value)">
+        </div>`;
+      }
+      if (k.kind === 'select') {
+        const opts = (k.options||[]).map(o =>
+          `<option value="${_esc(o)}"${o===(val||'')?' selected':''}>${_esc(o)}</option>`
+        ).join('');
+        return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <select style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+                  onchange="_infraChange('${_esc(k.key)}',this.value)">${opts}</select>
+        </div>`;
+      }
+      if (k.kind === 'list') {
+        const dispVal = Array.isArray(val) ? val.join(', ') : (val||'');
+        return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <input type="text" value="${_esc(dispVal)}" placeholder="${_esc(k.ph||'')}"
                  style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
                  oninput="_infraChange('${_esc(k.key)}',this.value)">
         </div>`;

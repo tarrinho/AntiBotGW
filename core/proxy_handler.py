@@ -2471,6 +2471,9 @@ _HOT_RELOAD_KNOBS = {
     # connection whose resolved host IP falls outside the list. Takes effect
     # on the next ban read/write after hot-reload (no reconnect required).
     "REDIS_ALLOW_LIST": (_to_ip_net_list, None),
+    # XFF trust — hot-reload updates both TRUST_XFF and TRUSTED_PROXIES_NETS
+    "TRUST_XFF":       (lambda v: str(v).lower(), lambda v: v in ("none", "first", "last")),
+    "TRUSTED_PROXIES": (_to_ip_net_list, None),
     # ALLOW_PRIVATE_UPSTREAM intentionally absent — must not be hot-reloadable
     # to prevent an operator (or attacker with admin creds) from disabling the
     # SSRF guard at runtime. Requires a container restart to change.
@@ -2705,6 +2708,24 @@ async def config_endpoint(request: web.Request):
                     if _hr_m is not None and hasattr(_hr_m, "_LOG_LEVEL_N"):
                         try:
                             setattr(_hr_m, "_LOG_LEVEL_N", _new_level_n)
+                        except (AttributeError, TypeError):
+                            pass
+            # TRUSTED_PROXIES stores normalised CIDR strings; TRUSTED_PROXIES_NETS
+            # holds ip_network objects used by helpers._peer_is_trusted_proxy.
+            # Update both so in-flight requests immediately use the new list.
+            if k == "TRUSTED_PROXIES":
+                import ipaddress as _ipa_tp_hr
+                _nets_hr = []
+                for _c in value:
+                    try:
+                        _nets_hr.append(_ipa_tp_hr.ip_network(_c, strict=False))
+                    except ValueError:
+                        pass
+                g["TRUSTED_PROXIES_NETS"] = _nets_hr
+                for _hr_m in list(_sys_hr.modules.values()):
+                    if _hr_m is not None and hasattr(_hr_m, "TRUSTED_PROXIES_NETS"):
+                        try:
+                            setattr(_hr_m, "TRUSTED_PROXIES_NETS", _nets_hr)
                         except (AttributeError, TypeError):
                             pass
             applied[k] = sorted(value) if isinstance(value, set) else value
