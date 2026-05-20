@@ -1223,6 +1223,21 @@ def test_165_every_knob_persists_round_trip():
         "STRICT_VHOST": True,
         "UPSTREAM_REWRITE_BASE": "http://host.docker.internal:8080",
         "REDIS_ALLOW_LIST": ["172.18.0.0/16", "10.0.0.1/32"],
+        # 1.8.9 — always-on-to-knob conversions
+        "WAF_BODY_ENABLED": False, "WAF_SMUGGLING_ENABLED": False,
+        "WAF_VERB_OVERRIDE_ENABLED": False, "WAF_HEADER_INJECTION_ENABLED": False,
+        "WAF_GRAPHQL_ENABLED": False, "WAF_UPLOAD_ENABLED": False,
+        "WAF_SLOWLORIS_ENABLED": False, "ACCEPT_WILDCARD_CHECK_ENABLED": False,
+        "SESSION_CHURN_ENABLED": False, "JA4H_DENY_ENABLED": False,
+        "HOST_BLOCKING_ENABLED": False, "REQUIRED_HEADERS_ENABLED": False,
+        "JA4_REQUIRED_ENABLED": False, "UPSTREAM_AUTH_FAIL_ENABLED": False,
+        "RATE_LIMIT_IP_ENABLED": False, "RATE_LIMIT_ENABLED": False,
+        "FP_BAN_CHECK_ENABLED": False, "TRAFFIC_THRESHOLD_ENABLED": False,
+        "TLS_FP_BLOCK_ENABLED": False, "JWT_VALIDATION_ENABLED": False,
+        "CUSTOM_RULES_ENABLED": False, "ENDPOINT_RATE_LIMIT_ENABLED": False,
+        "HONEY_CRED_ENABLED": False, "CANARY_PROBE_ENABLED": False, "LLM_HEURISTIC_ENABLED": False,
+        "AUTOMATION_PROBE_ENABLED": False, "INTERACTION_PROBE_ENABLED": False,
+        "COORDINATED_ATTACK_ENABLED": False, "JOURNEY_CHECK_ENABLED": False,
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

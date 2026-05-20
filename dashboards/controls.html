@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AppSecGW_1.8.9 · Controls</title>
 <style>
@@ -31,6 +31,62 @@ a{color:var(--blue);text-decoration:none}
 #topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
+/* ── View picker ── */
+#view-picker{display:flex;background:#0d1117;border:1px solid var(--line);border-radius:6px;overflow:hidden;flex-shrink:0}
+#view-picker button{background:none;border:none;color:var(--dim);padding:5px 11px;font:inherit;font-size:12px;cursor:pointer;border-right:1px solid var(--line);display:flex;align-items:center;gap:5px;transition:color .1s,background .1s;white-space:nowrap}
+#view-picker button:last-child{border-right:none}
+#view-picker button:hover{color:var(--fg);background:#1f2730}
+#view-picker button.vp-active{color:#fff;background:#1f2730;font-weight:600}
+#view-picker button svg{flex-shrink:0}
+/* ── Grouped view container (shared by accordion + grid) ── */
+#grp-view{display:none;flex:1;overflow-y:auto;padding:14px}
+/* Accordion mode */
+.grp-section{border:1px solid var(--line);border-radius:8px;margin-bottom:10px;overflow:hidden}
+.grp-hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--card);cursor:pointer;user-select:none;transition:background .1s}
+.grp-hdr:hover{background:#1a2030}
+.grp-icon{font-size:15px;width:22px;text-align:center;flex-shrink:0}
+.grp-name{flex:1;font-size:13px;font-weight:600;color:#fff}
+.grp-stats{font-size:11px;color:var(--dim);flex-shrink:0}
+.grp-stats .grp-on{color:var(--green);font-weight:600}
+.grp-stats .grp-off{color:var(--red);font-weight:600}
+.grp-toggle-all{background:none;border:1px solid var(--line);color:var(--dim);font:11px inherit;cursor:pointer;padding:3px 9px;border-radius:4px;flex-shrink:0;transition:color .1s,border-color .1s}
+.grp-toggle-all:hover{color:var(--fg);border-color:var(--fg)}
+.grp-toggle-all.all-off{border-color:var(--red);color:var(--red)}
+.grp-toggle-all.all-on{border-color:var(--green);color:var(--green)}
+.grp-chevron{font-size:11px;color:var(--dim);flex-shrink:0;transition:transform .15s}
+.grp-section.collapsed .grp-chevron{transform:rotate(-90deg)}
+.grp-body{background:#0d1117;border-top:1px solid var(--line)}
+.grp-section.collapsed .grp-body{display:none}
+/* Grid mode (swim-lane cards) */
+.lane-hdr{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--dim);margin:18px 0 8px;padding-bottom:6px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+.lane-hdr .lane-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.lane-hard .lane-dot{background:var(--red)}
+.lane-scoring .lane-dot{background:var(--yellow)}
+.lane-optional .lane-dot{background:var(--dim)}
+.grp-grid-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px;margin-bottom:4px}
+.grp-card{background:var(--card);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.grp-card .grp-hdr{border-radius:0}
+.grp-card .grp-body{border-top:1px solid var(--line)}
+/* Sidebar mode: reuse existing #ctrl-split but swap the sections */
+#ctrl-split[data-view="sidebar"] #ctrl-nav{display:flex}
+/* accordion/grid: keep #ctrl-nav visible so Thresholds/External/Admin remain accessible */
+#ctrl-split[data-view="accordion"] #ctrl-panels,
+#ctrl-split[data-view="grid"] #ctrl-panels{display:none}
+#ctrl-split[data-view="accordion"] #grp-view,
+#ctrl-split[data-view="grid"] #grp-view{display:block}
+/* Sidebar mode: grp-view shows as single-panel on right */
+#ctrl-split[data-view="sidebar"] #grp-view{display:block;overflow-y:auto;flex:1;padding:14px}
+#ctrl-split[data-view="sidebar"] .grp-section{border-radius:8px}
+#ctrl-split[data-view="sidebar"] .grp-hdr{cursor:default}
+#ctrl-split[data-view="sidebar"] .grp-chevron{display:none}
+/* Sidebar nav items in grouped mode */
+.grp-nav-item{display:flex;align-items:center;gap:8px;padding:7px 12px;cursor:pointer;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .1s,color .1s;user-select:none}
+.grp-nav-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
+.grp-nav-item.active{color:#fff;background:#1f2730;border-left-color:var(--blue)}
+.grp-nav-icon{font-size:13px;width:20px;text-align:center;flex-shrink:0}
+.grp-nav-stats{font-size:10px;margin-left:auto;flex-shrink:0}
+.grp-nav-stats .n-off{color:var(--red);font-weight:700}
+.grp-nav-stats .n-ok{color:var(--dim)}
 #page-content{flex:1;display:flex;flex-direction:column;padding:0;overflow:hidden}
 @media(max-width:600px){
   #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
@@ -46,6 +102,38 @@ a{color:var(--blue);text-decoration:none}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
   .btn{min-height:36px;padding:8px 12px}
   .btn-sm{min-height:32px;padding:6px 10px}
+}
+/* ── View-picker: icon-only on narrow screens ── */
+@media(max-width:700px){
+  #view-picker button{padding:5px 9px}
+  #view-picker button span.vp-label{display:none}
+  #topbar{gap:8px}
+}
+@media(max-width:480px){
+  #hint{display:none}
+  #topbar-right{gap:6px}
+}
+/* ── Mobile: move view-picker to its own full-width row ── */
+@media(max-width:600px){
+  #view-picker{
+    order:10;           /* push after title + right actions */
+    width:100%;
+    border-radius:0;
+    border:none;
+    border-top:1px solid var(--line);
+    justify-content:space-around;
+    background:#0a0f16;
+  }
+  #view-picker button{
+    flex:1;
+    justify-content:center;
+    padding:8px 4px;
+    border-right:1px solid var(--line);
+  }
+  #view-picker button span.vp-label{display:inline}  /* show labels in full-width row */
+  #view-picker button:last-child{border-right:none}
+  /* topbar-title: leave room for fixed LOG+GW overlays (they sit at right:14/120px) */
+  #topbar-title{max-width:calc(100% - 260px)}
 }
 main{padding:0;max-width:none;margin:0}
 /* ── Controls split-pane nav ── */
@@ -438,6 +526,24 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Controls</div>
+  <div id="view-picker">
+    <button id="vp-default" class="vp-active" title="Default — sections sidebar" onclick="_setView('default')">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="4" height="13" rx="1" fill="currentColor" opacity=".6"/><rect x="5.5" y="0" width="7.5" height="3" rx="1" fill="currentColor"/><rect x="5.5" y="5" width="7.5" height="3" rx="1" fill="currentColor"/><rect x="5.5" y="10" width="7.5" height="3" rx="1" fill="currentColor"/></svg>
+      <span class="vp-label">Default</span>
+    </button>
+    <button id="vp-accordion" title="Accordion — all groups collapsed" onclick="_setView('accordion')">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="13" height="3" rx="1" fill="currentColor"/><rect x="0" y="5" width="13" height="3" rx="1" fill="currentColor" opacity=".5"/><rect x="0" y="10" width="13" height="3" rx="1" fill="currentColor" opacity=".3"/></svg>
+      <span class="vp-label">Accordion</span>
+    </button>
+    <button id="vp-grid" title="Grid — grouped by impact lane" onclick="_setView('grid')">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="5.5" height="5.5" rx="1" fill="currentColor"/><rect x="7.5" y="0" width="5.5" height="5.5" rx="1" fill="currentColor"/><rect x="0" y="7.5" width="5.5" height="5.5" rx="1" fill="currentColor"/><rect x="7.5" y="7.5" width="5.5" height="5.5" rx="1" fill="currentColor"/></svg>
+      <span class="vp-label">Grid</span>
+    </button>
+    <button id="vp-sidebar" title="Sidebar — group-by-group navigation" onclick="_setView('sidebar')">
+      <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="0" y="0" width="4" height="13" rx="1" fill="currentColor" opacity=".8"/><rect x="5.5" y="0" width="7.5" height="13" rx="1" fill="currentColor" opacity=".4"/></svg>
+      <span class="vp-label">Sidebar</span>
+    </button>
+  </div>
   <div id="topbar-right" style="display:flex;align-items:center;gap:8px">
     <span class="hint" id="hint" style="font-size:11px;color:var(--dim)">No pending changes.</span>
     <button class="secondary" id="reset" disabled>Reset</button>
@@ -461,7 +567,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="ctrl-panels">
   <div id="bypass-bar">
     <div class="bypass-sw" id="bypass-sw" title="Toggle pass-through bypass mode"></div>
-    <span id="bypass-label">Bot Detection</span>
+    <span id="bypass-label">Bot Protection (Active)</span>
     <span id="bypass-desc">— click to disable all controls (pass-through mode)</span>
     <span id="bypass-warn">⚠ BYPASS ACTIVE — no bot protection running</span>
   </div>
@@ -702,6 +808,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <!-- 1.6.5 — active rules + lists snapshot + endpoint policies -->
 
 </div><!-- /ctrl-panels -->
+<div id="grp-view"><!-- populated by _renderGroupedView() --></div>
 </div><!-- /ctrl-split -->
 </div><!-- /page-content -->
 
@@ -794,6 +901,27 @@ const META = {
   WAF_UPLOAD_ENABLED:           {kind:'bool', desc:'1.8.9 — File upload validation: blocks dangerous extensions (.php, .jsp, .exe, .sh) and dangerous magic bytes (ELF, PE, PHP). Disable if your app must accept arbitrary binary uploads validated elsewhere.'},
   WAF_SLOWLORIS_ENABLED:        {kind:'bool', desc:'1.8.9 — Slowloris / slow-body guard: when body upload exceeds BODY_TIMEOUT the request is risk-scored and returned a silent decoy. Disable to return a plain 408 without risk-scoring (no stealth, no ban accumulation).'},
   ACCEPT_WILDCARD_CHECK_ENABLED:{kind:'bool', desc:'1.8.9 — Accept: */* on HTML navigation (Sec-Fetch-Dest: document) risk-score bump. Real browsers always send a rich Accept on page loads; */* indicates a bot or HTTP library. Disable if a legitimate API client sends document navigation with */*.'},
+  SESSION_CHURN_ENABLED:         {kind:'bool', desc:'1.8.9 — Session churn detection: flags identities that rotate cookies faster than SESSION_CHURN_MAX per SESSION_CHURN_WINDOW_S. Disable if a legitimate mobile app or SPA aggressively creates new sessions.'},
+  JA4H_DENY_ENABLED:             {kind:'bool', desc:'1.8.9 — JA4H (HTTP request fingerprint) deny-list enforcement. Only fires when JA4H_DENY_LIST is non-empty. Disable to bypass the deny-list without clearing it.'},
+  HOST_BLOCKING_ENABLED:         {kind:'bool', desc:'1.8.9 — Host header enforcement against ALLOWED_HOSTS. Only fires when ALLOWED_HOSTS is configured. Disable to bypass host-based blocking without clearing the allowlist.'},
+  REQUIRED_HEADERS_ENABLED:      {kind:'bool', desc:'1.8.9 — REQUIRED_HEADERS enforcement: blocks requests missing operator-configured mandatory headers. Only fires when REQUIRED_HEADERS is configured. Disable to bypass without clearing the list.'},
+  JA4_REQUIRED_ENABLED:          {kind:'bool', desc:'1.8.9 — JA4 fingerprint required from trusted peer enforcement. Only fires when JA4_TRUSTED_NETS and JA4_HEADER are configured. Disable to bypass without clearing TLS fingerprint config.'},
+  UPSTREAM_AUTH_FAIL_ENABLED:    {kind:'bool', desc:'1.8.9 — Upstream auth failure tracking: bumps risk when a session exceeds AUTH_FAIL_THRESHOLD upstream 401/403 responses. Disable during auth system debugging to suppress false positives.'},
+  RATE_LIMIT_IP_ENABLED:         {kind:'bool', desc:'1.8.9 — Per-IP socket rate limiting (IP_BURST / IP_REFILL token bucket). Disable temporarily when legitimate clients behind NAT are hitting the per-IP cap. CAUTION: disabling removes a key DoS defence.'},
+  RATE_LIMIT_ENABLED:            {kind:'bool', desc:'1.8.9 — Per-identity rate limiting (RATE_LIMIT_BURST / RATE_LIMIT_REFILL token bucket). Disable temporarily when a high-volume legitimate client is hitting the per-session cap. CAUTION: disabling removes a key DoS defence.'},
+  FP_BAN_CHECK_ENABLED:          {kind:'bool', desc:'1.8.9 — Fingerprint-based ban enforcement: blocks requests whose UA+IP-tier+JA4 hash is on the ban list. Disable to let fingerprint-banned clients through. CAUTION: disabling bypasses ban system for non-cookie-tracked clients.'},
+  TRAFFIC_THRESHOLD_ENABLED:     {kind:'bool', desc:'1.8.9 — Global RPS cap enforcement (GLOBAL_RPS_LIMIT). Only active when GLOBAL_RPS_LIMIT > 0. Disable to bypass the global cap without zeroing it.'},
+  TLS_FP_BLOCK_ENABLED:          {kind:'bool', desc:'1.8.9 — TLS fingerprint (JA4/JA3) deny-list enforcement. Only fires when JA4_DENY_LIST is non-empty. Disable to bypass TLS-fingerprint blocking without clearing the deny-list.'},
+  JWT_VALIDATION_ENABLED:        {kind:'bool', desc:'1.8.9 — JWT Authorization header validation on paths in JWT_VALIDATE_PATHS. Fires only when JWT_VALIDATE_PATHS is configured. Disable during JWT key rotation or token debugging.'},
+  CUSTOM_RULES_ENABLED:          {kind:'bool', desc:'1.8.9 — Custom rule engine: evaluates CUSTOM_RULES JSON against every request. Disable to pause all custom rules without clearing them — useful for incident debugging.'},
+  ENDPOINT_RATE_LIMIT_ENABLED:   {kind:'bool', desc:'1.8.9 — Per-endpoint rate limits from ENDPOINT_POLICIES. Fires only when a matching policy has rps/burst set. Disable to bypass endpoint throttling without clearing policies.'},
+  HONEY_CRED_ENABLED:            {kind:'bool', desc:'Credential honeypot: inject fake credentials into login forms; flag any client that submits them. Disable if the app already handles credential honeytraps server-side.'},
+  CANARY_PROBE_ENABLED:          {kind:'bool', desc:'Browser execution probe: inject a preload link that a real browser fetches; score identities that never fetch it. Disable if CSP or service-worker configuration suppresses the preload.'},
+  LLM_HEURISTIC_ENABLED:         {kind:'bool', desc:'LLM no-subresources heuristic: score identities that fetch HTML but never load its sub-resources (images/CSS/JS) — characteristic of LLM scrapers and headless pipelines.'},
+  AUTOMATION_PROBE_ENABLED:      {kind:'bool', desc:'Automation probe: inject a JS snippet that detects navigator.webdriver and automation markers; flag identified automation. Disable if Playwright/Puppeteer test accounts must pass through.'},
+  INTERACTION_PROBE_ENABLED:     {kind:'bool', desc:'Interaction analysis: score bot-like mouse/scroll/keyboard patterns (straight-line motion, uniform velocity, scripted keys, zero interaction). Disable if your JS challenge page does not collect interaction events.'},
+  COORDINATED_ATTACK_ENABLED:    {kind:'bool', desc:'Coordinated attack detection: flag IPs from ASNs where many distinct identities are probing the same paths simultaneously. Requires MaxMind ASN data.'},
+  JOURNEY_CHECK_ENABLED:         {kind:'bool', desc:'Journey / direct API probe detection: flag identities that call JSON API endpoints directly without ever loading the page that normally leads there. Disable if your API is intentionally public.'},
   BODY_PATTERN_MATCH:           {kind:'bool', desc:'Scan POST bodies for SQLi / XSS / SSTI / cmd-injection markers.'},
   CANARY_ECHO_DETECTION:   {kind:'bool', desc:'R7 — plant agw-c-* canary in HTML; ban any client that echoes it back.'},
   STRICT_ORIGIN:           {kind:'bool', desc:'On state-changing methods, require Origin to match ALLOWED_HOSTS.'},
@@ -2207,26 +2335,16 @@ document.addEventListener('DOMContentLoaded', () => {
           <td style="padding:5px 8px;color:var(--dim)">${escapeHtml(w.description)}</td>
         </tr>`;
       };
-      // 1.6.3 — split into "Toggleable" (operator can mute) vs
-      // "Always on" (no kill-switch). Each section ordered by weight desc.
       const allWeights = (d.weights || []).slice();
       const toggleable = allWeights
         .filter(w => w.toggle)
         .sort((a, b) => b.weight - a.weight);
-      const alwaysOn = allWeights
-        .filter(w => !w.toggle)
-        .sort((a, b) => b.weight - a.weight);
       const sectionHeader = (title, count) =>
         `<tr><td colspan="6" style="padding:10px 8px 4px 8px;background:#0d1117;color:var(--blue);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-top:1px solid var(--line)">${escapeHtml(title)} <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">· ${count} controls · click switch to mute / unmute</span></td></tr>`;
-      const sectionHeaderAlways = (title, count) =>
-        `<tr><td colspan="6" style="padding:10px 8px 4px 8px;background:#0d1117;color:var(--green);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-top:1px solid var(--line)">${escapeHtml(title)} <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">· ${count} controls · structural — no kill-switch</span></td></tr>`;
       const toggleableRows = toggleable.map(renderRow).join('');
-      const alwaysOnRows   = alwaysOn.map(renderRow).join('');
       const weightRows =
         sectionHeader('Toggleable controls (sorted by weight)', toggleable.length) +
-        toggleableRows +
-        sectionHeaderAlways('Always-on controls (sorted by weight)', alwaysOn.length) +
-        alwaysOnRows;
+        toggleableRows;
       // Modifier rows — toggles that don't add weight
       const modHeader = `<tr><td colspan="6" style="padding:10px 8px 4px 8px;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600">Behavior modifiers (no weight)</td></tr>`;
       const modRows = (d.modifiers||[]).map(m => {
@@ -3371,6 +3489,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   function _setBypassUI(active){
     sw.classList.toggle('on', active);
     bar.classList.toggle('bypass-on', active);
+    // 1.8.9 — label tracks state: Active when protection running, Disabled
+    // when bypass is on (pass-through). Matches operator mental model.
+    const labelEl = document.getElementById('bypass-label');
+    if (labelEl) labelEl.textContent = active
+      ? 'Bot Protection (Disabled)'
+      : 'Bot Protection (Active)';
     document.getElementById('bypass-desc').textContent = active
       ? '— all detection controls disabled'
       : '— click to disable all controls (pass-through mode)';
@@ -3393,10 +3517,25 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     payload['BYPASS_MODE'] = true;
 
     try {
+      // 1.8.9 — explicit X-CSRF-Token belt + braces. The global fetch shim
+      // at the top of this file already injects it, but a stale or missing
+      // agw_csrf cookie was producing "CSRF token invalid" 403s for some
+      // operators. If the cookie is missing, surface a clear hint instead
+      // of the generic 'server 403'.
+      const _csrf = (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '';
+      if (!_csrf) {
+        showToast('CSRF cookie missing — session may have expired. Reload page and log in again.', 'err');
+        return;
+      }
       const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
-        {method:'POST', headers:{'Content-Type':'application/json'},
+        {method:'POST',
+         headers:{'Content-Type':'application/json', 'X-CSRF-Token': _csrf},
          credentials:'include', body: JSON.stringify(payload)});
-      if (!r.ok){ showToast('Bypass failed: server ' + r.status, 'err'); return; }
+      if (!r.ok){
+        const txt = await r.text().catch(()=>'').then(t => t.slice(0, 120));
+        showToast(`Bypass failed: HTTP ${r.status}${txt ? ' — ' + txt : ''}`, 'err');
+        return;
+      }
       const d = await r.json();
       const n = d.applied ? Object.keys(d.applied).length : 0;
       localStorage.setItem(_BYPASS_ACTIVE_KEY, '1');
@@ -3423,10 +3562,20 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     }
 
     try {
+      const _csrf = (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '';
+      if (!_csrf) {
+        showToast('CSRF cookie missing — session may have expired. Reload page and log in again.', 'err');
+        return;
+      }
       const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
-        {method:'POST', headers:{'Content-Type':'application/json'},
+        {method:'POST',
+         headers:{'Content-Type':'application/json', 'X-CSRF-Token': _csrf},
          credentials:'include', body: JSON.stringify(snap)});
-      if (!r.ok){ showToast('Restore failed: server ' + r.status, 'err'); return; }
+      if (!r.ok){
+        const txt = await r.text().catch(()=>'').then(t => t.slice(0, 120));
+        showToast(`Restore failed: HTTP ${r.status}${txt ? ' — ' + txt : ''}`, 'err');
+        return;
+      }
       const d = await r.json();
       const n = d.applied ? Object.keys(d.applied).length : 0;
       localStorage.removeItem(_BYPASS_ACTIVE_KEY);
@@ -3812,6 +3961,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
 
   function _switch(secId) {
+    // In grouped views (accordion/grid/sidebar), nav click → switch to Default first
+    const splitEl = document.getElementById('ctrl-split');
+    const curView = splitEl ? (splitEl.dataset.view || 'default') : 'default';
+    if (curView !== 'default' && typeof window._setView === 'function') {
+      window._setView('default');
+    }
     _active = secId;
     for (const [cardId, sec] of Object.entries(CARD_SEC)) {
       const el = document.getElementById(cardId);
@@ -3862,7 +4017,329 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         _updateBadges();
       };
     }
+
+    // Restore last-used view from localStorage (view-switcher persistence)
+    const _savedView = localStorage.getItem('agw-ctrl-view') || 'default';
+    if (_savedView !== 'default') {
+      setTimeout(function() { if (typeof window._setView === 'function') window._setView(_savedView); }, 50);
+    }
   });
+})();
+</script>
+<script>
+// ── Grouped view: data + rendering engine ─────────────────────────────────────
+(function(){
+
+// ── Group definitions ─────────────────────────────────────────────────────────
+const CTRL_GROUPS = [
+  { id:'waf',         icon:'🛡',  label:'WAF',                lane:'hard',    knobs:[
+    'WAF_BODY_ENABLED','WAF_SMUGGLING_ENABLED','WAF_VERB_OVERRIDE_ENABLED',
+    'WAF_HEADER_INJECTION_ENABLED','WAF_GRAPHQL_ENABLED','WAF_UPLOAD_ENABLED',
+    'WAF_SLOWLORIS_ENABLED','ACCEPT_WILDCARD_CHECK_ENABLED','STRICT_ORIGIN',
+    'BODY_PATTERN_MATCH','BODY_GROUP_SQLI_ENABLED','BODY_GROUP_XSS_ENABLED',
+    'BODY_GROUP_LFI_ENABLED','BODY_GROUP_RCE_ENABLED','BODY_GROUP_SSRF_ENABLED',
+    'BODY_GROUP_CMD_ENABLED','CUSTOM_RULES_ENABLED'] },
+  { id:'ratelimit',   icon:'⏱',  label:'Rate Limiting',      lane:'hard',    knobs:[
+    'RATE_LIMIT_ENABLED','RATE_LIMIT_IP_ENABLED','ENDPOINT_RATE_LIMIT_ENABLED',
+    'TRAFFIC_THRESHOLD_ENABLED'] },
+  { id:'network',     icon:'🌍',  label:'Network Blocking',   lane:'hard',    knobs:[
+    'COUNTRY_BLOCK_ENABLED','TOR_BLOCK_ENABLED','DC_VPN_BLOCK_ENABLED',
+    'HOST_BLOCKING_ENABLED'] },
+  { id:'idprobe',     icon:'🔍',  label:'Identity Probes',    lane:'scoring', knobs:[
+    'JS_CHALLENGE','ANUBIS_ENABLED','BOTD_ENABLED','AUTOMATION_PROBE_ENABLED',
+    'INTERACTION_PROBE_ENABLED','FP_ENRICHMENT_ENABLED','SW_CHALLENGE_ENABLED',
+    'JS_CHAL_BIND_JA4','JS_CHAL_REQUIRE_JA4','JS_CHAL_STRICT_STATIC'] },
+  { id:'botbehavior', icon:'🤖',  label:'Bot Behavior',       lane:'scoring', knobs:[
+    'SESSION_CHURN_ENABLED','COOKIE_GHOST_ENABLED','COOKIE_LIFECYCLE_ENABLED',
+    'REFERER_CHAIN_ENABLED','IMPOSSIBLE_TRAVEL_ENABLED','COORDINATED_ATTACK_ENABLED',
+    'JOURNEY_CHECK_ENABLED','UPSTREAM_AUTH_FAIL_ENABLED','FP_BAN_CHECK_ENABLED'] },
+  { id:'fingerprint', icon:'🔑',  label:'Fingerprint & TLS',  lane:'scoring', knobs:[
+    'TLS_FP_BLOCK_ENABLED','JA4H_DENY_ENABLED','JA4_REQUIRED_ENABLED','JA4_FAIL_CLOSED',
+    'HEADER_ORDER_FP_ENABLED','ACCEPT_FP_ENABLED','H2_FP_ENABLED',
+    'REQUIRED_HEADERS_ENABLED','JWT_VALIDATION_ENABLED'] },
+  { id:'aicrawlers',  icon:'🤖',  label:'AI / LLM Crawlers',  lane:'scoring', knobs:[
+    'AI_UA_OPENAI_ENABLED','AI_UA_ANTHROPIC_ENABLED','AI_UA_GOOGLE_ENABLED',
+    'AI_UA_PERPLEXITY_ENABLED','AI_UA_META_ENABLED','AI_UA_OTHER_ENABLED',
+    'LLM_HEURISTIC_ENABLED','ROBOTS_MONITOR_ENABLED','AI_CRAWLER_VERIFY_ENABLED'] },
+  { id:'canary',      icon:'🐦',  label:'Canary & Honeypot',  lane:'scoring', knobs:[
+    'CANARY_ECHO_DETECTION','CANARY_PROBE_ENABLED','HEADER_CANARY_ENABLED',
+    'JSON_CANARY_ENABLED','HONEY_CRED_ENABLED','BOT_TRAP_FORMS'] },
+  { id:'tarpit',      icon:'🌀',  label:'Tarpit & Labyrinth', lane:'optional',knobs:[
+    'TARPIT_ENABLED','LABYRINTH_ENABLED','LABYRINTH_JITTER_ENABLED'] },
+  { id:'dlp',         icon:'🔒',  label:'DLP · Outbound',     lane:'optional',knobs:[
+    'DLP_ENABLED','DLP_REDACT','DLP_GROUP_CC_ENABLED','DLP_GROUP_AWS_ENABLED',
+    'DLP_GROUP_JWT_ENABLED','DLP_GROUP_PRIVATE_KEY_ENABLED','DLP_GROUP_API_KEY_ENABLED',
+    'DLP_GROUP_PII_EMAIL_ENABLED','DLP_GROUP_PII_SSN_ENABLED'] },
+  { id:'secheaders',  icon:'📋',  label:'Security Headers',   lane:'optional',knobs:[
+    'INJECT_SECURITY_HEADERS'] },
+  { id:'bypass',      icon:'🚦',  label:'Bypass & Allowlists',lane:'bypass',  knobs:[
+    'AUTHORIZED_BOT_UAS','BYPASS_PATHS','JS_CHAL_OPEN_PATHS'] },
+];
+
+const LANE_META = {
+  hard:    { label:'Hard Blocks',        desc:'Fire before scoring — single trigger can block/ban',   cls:'lane-hard'    },
+  scoring: { label:'Scoring Detectors',  desc:'Accumulate risk toward challenge or ban',               cls:'lane-scoring'  },
+  optional:{ label:'Optional / Specialized', desc:'Off by default or narrow use-case',                cls:'lane-optional' },
+  bypass:  { label:'Bypass & Allowlists',desc:'Exceptions and pass-through rules',                     cls:'lane-optional' },
+};
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let _view = localStorage.getItem('agw_ctrl_view') || 'default';
+let _sidebarActive = CTRL_GROUPS[0].id;
+let _collapsedGroups = new Set(JSON.parse(localStorage.getItem('agw_ctrl_collapsed') || '[]'));
+
+function _saveCollapsed() {
+  localStorage.setItem('agw_ctrl_collapsed', JSON.stringify([..._collapsedGroups]));
+}
+
+// ── Group stats helper ─────────────────────────────────────────────────────────
+function _groupStats(grp) {
+  if (typeof serverState === 'undefined') return {on:0,off:0,total:0};
+  const bools = grp.knobs.filter(k => {
+    const m = (typeof META !== 'undefined') ? META[k] : null;
+    return m && m.kind === 'bool' && (k in serverState);
+  });
+  const on  = bools.filter(k => serverState[k]).length;
+  return { on, off: bools.length - on, total: bools.length };
+}
+
+// ── Render a single bool row (switch + name + desc) ──────────────────────────
+function _boolRow(name) {
+  const m = (typeof META !== 'undefined') ? META[name] : null;
+  if (!m || m.kind !== 'bool') return null;
+  const val = (typeof serverState !== 'undefined') ? !!serverState[name] : false;
+  const isPinned = (typeof envPinnedKnobs !== 'undefined') && envPinnedKnobs.has(name);
+  const isOv     = (typeof overriddenKnobs !== 'undefined') && overriddenKnobs.has(name);
+  const row = document.createElement('div');
+  row.className = 'ctrl' + (isOv ? ' vhost-ov' : '');
+  row.dataset.name = name;
+  row.dataset.grpBool = '1';
+  const sw = document.createElement('div');
+  sw.className = 'switch' + (val ? ' on' : '') + (isPinned ? ' switch-disabled' : '');
+  sw.dataset.boolKnob = name;
+  if (!isPinned) {
+    sw.onclick = async () => {
+      const nv = !sw.classList.contains('on');
+      sw.classList.toggle('on', nv);
+      await _applyBool(sw, name, nv);
+      // sync all other switches for same knob (scoring table + other views)
+      document.querySelectorAll(`.switch[data-bool-knob="${name}"],.switch[data-knob-scoring="${name}"]`).forEach(s => {
+        if (s !== sw) s.classList.toggle('on', nv);
+      });
+      _refreshGroupStats();
+    };
+  }
+  const restartBadge = m.restart
+    ? ' <span style="font-size:9px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 5px;border-radius:3px;vertical-align:middle">RESTART</span>'
+    : '';
+  const pinBadge = isPinned
+    ? ' <span style="font-size:9px;color:#ff7b72;background:#3f1a1a;border:1px solid #5a2424;padding:1px 5px;border-radius:3px;vertical-align:middle">🔒 env-pinned</span>'
+    : '';
+  row.innerHTML = `<div class="label"><div class="name" style="font-family:ui-monospace,Menlo,monospace;font-size:12px">${escapeHtml(name)}${restartBadge}${pinBadge}</div><div class="desc" style="font-size:11px;color:var(--dim);margin-top:2px">${escapeHtml(m.desc||'')}</div></div>`;
+  const inp = document.createElement('div');
+  inp.className = 'input';
+  inp.appendChild(sw);
+  row.appendChild(inp);
+  return row;
+}
+
+// ── Build one group section element ──────────────────────────────────────────
+function _buildGroupSection(grp, mode) {
+  const stats = _groupStats(grp);
+  const isCollapsed = (mode === 'accordion') && _collapsedGroups.has(grp.id);
+  const sec = document.createElement('div');
+  sec.className = 'grp-section' + (isCollapsed ? ' collapsed' : '');
+  if (mode === 'grid') sec.className = 'grp-card';
+  sec.dataset.grpId = grp.id;
+
+  // Header
+  const hdr = document.createElement('div');
+  hdr.className = 'grp-hdr';
+  const statsHtml = stats.total === 0 ? ''
+    : stats.off > 0
+      ? `<span class="grp-stats"><span class="grp-off">${stats.off} off</span> / ${stats.total}</span>`
+      : `<span class="grp-stats"><span class="grp-on">all on</span></span>`;
+  hdr.innerHTML = `<span class="grp-icon">${grp.icon}</span>
+    <span class="grp-name">${grp.label}</span>
+    <span class="grp-stats-wrap" data-grp-stats="${grp.id}">${statsHtml}</span>
+    ${stats.total > 0 ? `<button class="grp-toggle-all${stats.off===0?' all-on':stats.on===0?' all-off':''}" data-grp-toggle="${grp.id}" title="Toggle all in group">${stats.off > 0 ? 'Enable all' : 'Disable all'}</button>` : ''}
+    ${mode !== 'grid' ? '<span class="grp-chevron">▾</span>' : ''}`;
+
+  if (mode === 'accordion') {
+    hdr.onclick = (e) => {
+      if (e.target.closest('[data-grp-toggle]')) return;
+      sec.classList.toggle('collapsed');
+      if (sec.classList.contains('collapsed')) _collapsedGroups.add(grp.id);
+      else _collapsedGroups.delete(grp.id);
+      _saveCollapsed();
+    };
+  }
+
+  // Group toggle-all button
+  hdr.querySelector('[data-grp-toggle]')?.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    const enable = stats.off > 0; // if any off → enable all; else disable all
+    const bools = grp.knobs.filter(k => (typeof META!=='undefined')&&META[k]&&META[k].kind==='bool'&&(k in serverState));
+    btn.disabled = true;
+    for (const k of bools) {
+      if (serverState[k] === enable) continue; // already in target state
+      const sw = document.querySelector(`.switch[data-bool-knob="${k}"]`);
+      if (sw && !sw.classList.contains('switch-disabled')) {
+        sw.classList.toggle('on', enable);
+        await _applyBool(sw, k, enable);
+        document.querySelectorAll(`.switch[data-bool-knob="${k}"],.switch[data-knob-scoring="${k}"]`).forEach(s => {
+          if (s !== sw) s.classList.toggle('on', enable);
+        });
+      }
+    }
+    btn.disabled = false;
+    _refreshGroupStats();
+  });
+
+  const body = document.createElement('div');
+  body.className = 'grp-body';
+  const boolKnobs = grp.knobs.filter(k => (typeof META!=='undefined')&&META[k]&&META[k].kind==='bool');
+  boolKnobs.forEach(k => {
+    const row = _boolRow(k);
+    if (row) body.appendChild(row);
+  });
+
+  sec.appendChild(hdr);
+  sec.appendChild(body);
+  return sec;
+}
+
+// ── Refresh stats badges without full re-render ──────────────────────────────
+function _refreshGroupStats() {
+  CTRL_GROUPS.forEach(grp => {
+    const stats = _groupStats(grp);
+    const wrap = document.querySelector(`[data-grp-stats="${grp.id}"]`);
+    if (!wrap) return;
+    const statsHtml = stats.total === 0 ? ''
+      : stats.off > 0
+        ? `<span class="grp-stats"><span class="grp-off">${stats.off} off</span> / ${stats.total}</span>`
+        : `<span class="grp-stats"><span class="grp-on">all on</span></span>`;
+    wrap.innerHTML = statsHtml;
+    const btn = document.querySelector(`[data-grp-toggle="${grp.id}"]`);
+    if (btn) {
+      btn.textContent = stats.off > 0 ? 'Enable all' : 'Disable all';
+      btn.className = 'grp-toggle-all' + (stats.off===0?' all-on':stats.on===0?' all-off':'');
+    }
+    // sidebar nav stats
+    const navStat = document.querySelector(`[data-grp-nav-stats="${grp.id}"]`);
+    if (navStat) {
+      navStat.innerHTML = stats.off > 0
+        ? `<span class="n-off">${stats.off} off</span>`
+        : `<span class="n-ok">✓</span>`;
+    }
+  });
+}
+
+// ── Render grouped view ──────────────────────────────────────────────────────
+function _renderGroupedView(mode) {
+  const container = document.getElementById('grp-view');
+  if (!container) return;
+  container.innerHTML = '';
+
+  if (mode === 'sidebar') {
+    // Build groups nav into #ctrl-nav (replace existing nav items)
+    const nav = document.getElementById('ctrl-nav');
+    if (nav) {
+      nav.querySelectorAll('.grp-nav-item').forEach(el => el.remove());
+      const search = document.getElementById('ctrl-nav-search');
+      CTRL_GROUPS.forEach(grp => {
+        const stats = _groupStats(grp);
+        const el = document.createElement('div');
+        el.className = 'grp-nav-item' + (grp.id === _sidebarActive ? ' active' : '');
+        el.dataset.grpNav = grp.id;
+        el.innerHTML = `<span class="grp-nav-icon">${grp.icon}</span>
+          <span style="flex:1;font-size:12.5px">${grp.label}</span>
+          <span class="grp-nav-stats" data-grp-nav-stats="${grp.id}">${stats.off > 0 ? `<span class="n-off">${stats.off} off</span>` : '<span class="n-ok">✓</span>'}</span>`;
+        el.onclick = () => {
+          _sidebarActive = grp.id;
+          document.querySelectorAll('.grp-nav-item').forEach(e => e.classList.toggle('active', e.dataset.grpNav === grp.id));
+          _renderSingleGroup(grp);
+        };
+        nav.appendChild(el);
+      });
+    }
+    _renderSingleGroup(CTRL_GROUPS.find(g => g.id === _sidebarActive) || CTRL_GROUPS[0]);
+    return;
+  }
+
+  if (mode === 'accordion') {
+    CTRL_GROUPS.forEach(grp => {
+      container.appendChild(_buildGroupSection(grp, 'accordion'));
+    });
+    return;
+  }
+
+  if (mode === 'grid') {
+    const lanes = ['hard','scoring','optional','bypass'];
+    lanes.forEach(lane => {
+      const groups = CTRL_GROUPS.filter(g => g.lane === lane);
+      if (!groups.length) return;
+      const lm = LANE_META[lane];
+      const laneHdr = document.createElement('div');
+      laneHdr.className = `lane-hdr ${lm.cls}`;
+      laneHdr.innerHTML = `<span class="lane-dot"></span><span style="color:var(--fg)">${lm.label}</span><span style="font-weight:400;color:var(--dim);font-size:10px;margin-left:6px;text-transform:none;letter-spacing:0">${lm.desc}</span>`;
+      container.appendChild(laneHdr);
+      const row = document.createElement('div');
+      row.className = 'grp-grid-row';
+      groups.forEach(grp => row.appendChild(_buildGroupSection(grp, 'grid')));
+      container.appendChild(row);
+    });
+    return;
+  }
+}
+
+function _renderSingleGroup(grp) {
+  const container = document.getElementById('grp-view');
+  if (!container) return;
+  container.innerHTML = '';
+  container.appendChild(_buildGroupSection(grp, 'sidebar'));
+}
+
+// ── View switcher ─────────────────────────────────────────────────────────────
+window._setView = function(mode) {
+  _view = mode;
+  localStorage.setItem('agw_ctrl_view', mode);
+  const split = document.getElementById('ctrl-split');
+  if (!split) return;
+
+  // Update button states
+  ['default','accordion','grid','sidebar'].forEach(m => {
+    const btn = document.getElementById('vp-' + m);
+    if (btn) btn.classList.toggle('vp-active', m === mode);
+  });
+
+  // Set data-view on #ctrl-split (CSS handles show/hide)
+  split.setAttribute('data-view', mode);
+
+  if (mode === 'default') {
+    // Restore original nav items, hide grouped nav items
+    document.querySelectorAll('.grp-nav-item').forEach(el => el.remove());
+    if (typeof _buildNav === 'function') _buildNav();
+    if (typeof _switch === 'function') _switch('detection');
+    return;
+  }
+
+  // Rebuild grouped view with current serverState
+  _renderGroupedView(mode);
+};
+
+// ── Re-render grouped view after data loads ───────────────────────────────────
+const _origLoad = window.load;
+if (typeof _origLoad === 'function') {
+  window.load = async function() {
+    await _origLoad.apply(this, arguments);
+    if (_view !== 'default') {
+      _renderGroupedView(_view);
+    }
+  };
+}
+
 })();
 </script>
 </div><!-- /page-content -->

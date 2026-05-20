@@ -8,6 +8,12 @@ Author: Pedro Tarrinho
 
 ## [1.8.9] — 2026-05-19
 
+### Fixed
+
+- **BYPASS_MODE absolute pass-through** (`core/proxy_handler.py`): the `BYPASS_MODE` check in `protect()` is hoisted from line ~2950 to line ~2855, above the `AUTHORIZED_BOT_UAS` loop. Previously, when an operator disabled "Bot Detection" via the Controls toggle, `AUTHORIZED_BOT_UAS` entries with `action=ban` or `action=really-ban` would still ban traffic — contradicting the operator's "all controls disabled" intent. The check now lives below protocol-level safety (control-byte/CRLF reject) but above every operator-policy branch. Empty `reason=""` on the recorded event keeps the dashboard timeline clean.
+- **`/config` GET response exposes `env_pinned`** (`core/proxy_handler.py:config_endpoint`): the response now carries `env_pinned: [<knob names>]` listing knobs the container env pinned at startup. The Controls UI consumes this to render those controls read-only with a 🔒 badge instead of letting the operator edit and then bounce off `env-pinned (set via container env, not mutable at runtime)` rejection from the Apply POST. Closes the operator-reported "reject - {}" symptom on `ALLOW_PRIVATE_UPSTREAM`.
+- **Controls UI honours `env_pinned`** (`dashboards/controls.html`): new `envPinnedKnobs` Set is populated from `body.env_pinned`. Rendering loop disables all `input/select/textarea/button` inside affected control wrappers and appends a "🔒 env-pinned" badge with a tooltip pointing at the .env / docker-compose source.
+
 ### Fixed (review findings, applied in 1.8.9)
 
 - **M1 — BG migration TOCTOU**: new `db.postgres._try_claim_bg_migration(direction)` atomically checks `_BG_MIGRATION["running"]` and flips it to `True` under a `threading.Lock`. `db_switch_endpoint` now calls this instead of the racy `if not _BG_MIGRATION.get("running")` check. Two concurrent admin `/db-switch?full_migrate=true` requests can no longer both pass the guard and double-schedule the migrator (which previously could insert duplicate event rows since `_bg_sqlite_to_pg` uses plain `INSERT`). Concurrent rejections log `db_switch_bg_migrate_skipped_concurrent`.
@@ -34,15 +40,31 @@ Author: Pedro Tarrinho
 
 ### UI / UX
 
+- **Gateway favicon** (`dashboards/static/favicon.ico`, `dashboards/static/apple-touch-icon.png`, `dashboards/static/favicon.svg`, `core/proxy_handler.py`, `proxy.py`, `config.py`): Shield + robot + prohibition-badge favicon injected into every HTML response the gateway forwards or serves. Three new static routes under `/antibot-appsec-gateway/` serve the ICO (multi-size 16/32/48/64px), Apple touch icon (180×180), and source SVG. `_inject_favicon()` inserted as the first step of the HTML injection pipeline so upstream pages pick up the favicon without touching the upstream codebase. All 15 dashboard HTML templates also embed the `<link>` tags directly. All three favicon subpaths added to `_ADMIN_PUBLIC_SUBPATHS` so browsers can fetch them without a session cookie.
 - **Identity & Auth submenu reordered** (`dashboards/settings.html`): `Users` and `Two-Factor Authentication` cards moved to the top of the Identity & Auth section (above SSO / OIDC and SSO Access Requests). Reflects the common operator workflow — Users + 2FA are local-auth basics; SSO is an opt-in extra.
+
+### Added (continued — always-on → knob conversion)
+
+- **30 new kill-switch env vars** (`config.py`, `core/proxy_handler.py`, `identity.py`): Every previously structural "always-on" WAF check and detector now has a dedicated boolean knob, defaulting to `"1"` (on). Any knob can be set to `"0"` / `"false"` / `"no"` via container env or hot-reload from the Controls dashboard. Zero previously-toggleable controls were changed — only structural controls that lacked a kill-switch gained one. Knobs added: `WAF_BODY_ENABLED`, `WAF_SMUGGLING_ENABLED`, `WAF_VERB_OVERRIDE_ENABLED`, `WAF_HEADER_INJECTION_ENABLED`, `WAF_GRAPHQL_ENABLED`, `WAF_UPLOAD_ENABLED`, `WAF_SLOWLORIS_ENABLED`, `ACCEPT_WILDCARD_CHECK_ENABLED`, `SESSION_CHURN_ENABLED`, `JA4H_DENY_ENABLED`, `HOST_BLOCKING_ENABLED`, `REQUIRED_HEADERS_ENABLED`, `JA4_REQUIRED_ENABLED`, `UPSTREAM_AUTH_FAIL_ENABLED`, `RATE_LIMIT_IP_ENABLED`, `RATE_LIMIT_ENABLED`, `FP_BAN_CHECK_ENABLED`, `TRAFFIC_THRESHOLD_ENABLED`, `TLS_FP_BLOCK_ENABLED`, `JWT_VALIDATION_ENABLED`, `CUSTOM_RULES_ENABLED`, `ENDPOINT_RATE_LIMIT_ENABLED`, `HONEY_CRED_ENABLED`, `REDIRECT_MAZE_ENABLED`, `CANARY_PROBE_ENABLED`, `LLM_HEURISTIC_ENABLED`, `AUTOMATION_PROBE_ENABLED`, `INTERACTION_PROBE_ENABLED`, `COORDINATED_ATTACK_ENABLED`, `JOURNEY_CHECK_ENABLED`.
+- **Controls UI "Always-on controls" section eliminated**: All 31 signals previously listed under "Always-on controls · structural — no kill-switch" now appear in the toggleable controls section with their respective knob. The "Always-on" section is empty in 1.8.9. All 30 new knobs registered in `_HOT_RELOAD_KNOBS` for live toggle without container restart. All 30 knobs appear in the Controls dashboard with bool toggle UI.
 
 ### Tests
 
 - **`tests/test_v188_backend_aware_reads.py`** — 62 new QA tests across 7 classes: `TestReadEventsSqliteFunctional` (Q01-Q19, ephemeral SQLite + filters + injection guards), `TestHealthSnapshot` (H01-H09, db_health_snapshot shape + lag math), `TestDispatcher` (D01-D03, sqlite/postgres routing + fallback), `TestPostgresImpl` (PG01-PG05, mock-based PG reader + schema-gap workaround), `TestIdempotentMigration` (I01-I10, watermark + MIN/MAX gap-fill regimes), `TestDbLoadSecretsPropagation` (S01-S04, cross-module secret prop + env-pin + config_kv vs secrets_kv), `TestXffMisconfigAlert` (X01-X06, alert source/fire/dedup/scope), `TestConfigKvStompAlert` (C01-C02, alert source/fire). Plus 4 live-gateway integration tests (E01-E04).
+- **`tests/test_critical.py`** — 30 new test values added to `test_165_every_knob_persists_round_trip` for 1.8.9 kill-switch knobs. Guards against silent snap-back regression.
+- **`tests/test_pure.py`** — fixed 6 `bot_block` window-size ordering dependencies (1500→4000 chars) so tests pass both standalone and in full suite.
+
+### Validation
+
+- Unit: 961 pass (+1 `test_favicon_assets_in_admin_public_subpaths`) · Functional: 38 pass · Integration: 23 pass · Regression: 145 pass
+- Mutation: 88.3% (709/803 killed)
+- Bandit: 0 High / 0 Critical · 11 Medium (all B608 confirmed FP)
+- Semgrep: 0 findings
+- Trivy: 0 Critical / 0 High / 0 Medium (all 3 arches)
 
 ### Build artefacts
 
-- armv7 / arm64 / amd64 images all carry the new symbols (`db_read_events`, `db_health_snapshot`, `_bg_sqlite_to_pg`, `_bg_pg_to_sqlite`, `xff_ignored_proxy_untrusted`, `config_kv_stomp_blocked`, `_BG_MIGRATION.watermark`, `_BG_MIGRATION.skipped_already_present`).
+- armv7 / arm64 / amd64 images all carry the new symbols (`db_read_events`, `db_health_snapshot`, `_bg_sqlite_to_pg`, `_bg_pg_to_sqlite`, `xff_ignored_proxy_untrusted`, `config_kv_stomp_blocked`, `_BG_MIGRATION.watermark`, `_BG_MIGRATION.skipped_already_present`, all 30 new kill-switch knobs).
 
 ---
 

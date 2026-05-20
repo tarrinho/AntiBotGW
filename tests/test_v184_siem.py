@@ -454,7 +454,7 @@ def test_s30_badge_live_present():
 
 def test_s31_sev_critical_members():
     src = _siem_src()
-    for reason in ("canary-echo", "honey-cred", "redirect-maze-bot",
+    for reason in ("canary-echo", "honey-cred",
                    "canary-probe-miss", "honeypot", "honeypot-silent"):
         assert reason in src, (
             f"siem.py: '{reason}' missing from _SEV_CRITICAL."
@@ -544,7 +544,6 @@ def test_s41_threat_cat_canary():
     fn = ns["_threat_cat"]
     assert fn("canary-echo") == "Canary"
     assert fn("canary-probe-miss") == "Canary"
-    assert fn("redirect-maze-bot") == "Canary"
 
 
 def test_s42_threat_cat_bot_scraper():

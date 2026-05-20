@@ -693,11 +693,15 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/sw.js",
     # 1.7.3 — AI-agent detection probes (public, no auth required)
     "/probe",
-    "/maze",
     "/canary-probe/",
     # 1.8.5 — interaction-report must be public: bot-detection JS posts here
     # before any session exists. Missing entry caused silent bot-detect failure.
     "/interaction-report",
+    # 1.8.9 — favicon assets: injected into every HTML response so browsers
+    # fetch them without a session cookie.
+    "/favicon.ico",
+    "/apple-touch-icon.png",
+    "/favicon.svg",
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout",
                          "/auth/oidc/login", "/auth/oidc/callback",
@@ -801,7 +805,6 @@ RISK_WEIGHTS = {
     "webgl-missing":         15,
     # 1.7.3 — AI-agent specific signals
     "honey-cred":            90,   # P1: fake credential used
-    "redirect-maze-bot":     55,   # P2: maze completed too fast
     "llm-no-subresources":   40,   # P3: HTML fetched without CSS/JS/images
     "canary-probe-miss":     35,   # P4: preload probe never fetched
     # 1.8.6 — new signals
@@ -895,15 +898,6 @@ PATH_SWEEP_THRESHOLD    = int(os.environ.get("PATH_SWEEP_THRESHOLD",    "40"))  
 # high-confidence bot flag.
 HONEY_CRED_ENABLED = os.environ.get("HONEY_CRED_ENABLED", "1") in ("1", "true", "yes")
 HONEY_CRED_SCORE   = float(os.environ.get("HONEY_CRED_SCORE", "90"))
-
-# ── 1.7.3 — P2: risk-gated redirect maze ─────────────────────────────────────
-# For identities above threshold, serve a chain of signed redirects.
-# Agents follow all steps in milliseconds; humans show normal latency.
-REDIRECT_MAZE_ENABLED   = os.environ.get("REDIRECT_MAZE_ENABLED",   "0") in ("1", "true", "yes")
-REDIRECT_MAZE_THRESHOLD = float(os.environ.get("REDIRECT_MAZE_THRESHOLD", "20"))  # risk score
-REDIRECT_MAZE_DEPTH     = int(os.environ.get("REDIRECT_MAZE_DEPTH",     "4"))     # redirect steps
-REDIRECT_MAZE_MIN_MS    = float(os.environ.get("REDIRECT_MAZE_MIN_MS",  "800"))   # ms a human needs
-REDIRECT_MAZE_SCORE     = float(os.environ.get("REDIRECT_MAZE_SCORE",   "55"))
 
 # ── 1.7.3 — P3: LLM no-subresource heuristic ────────────────────────────────
 # Real browsers load CSS/JS/images for every HTML page. AI agents fetch only
@@ -1284,6 +1278,22 @@ WAF_GRAPHQL_ENABLED       = os.environ.get("WAF_GRAPHQL_ENABLED",       "1") in 
 WAF_UPLOAD_ENABLED        = os.environ.get("WAF_UPLOAD_ENABLED",        "1") in ("1", "true", "yes")
 WAF_SLOWLORIS_ENABLED     = os.environ.get("WAF_SLOWLORIS_ENABLED",     "1") in ("1", "true", "yes")
 ACCEPT_WILDCARD_CHECK_ENABLED = os.environ.get("ACCEPT_WILDCARD_CHECK_ENABLED", "1") in ("1", "true", "yes")
+
+# ── 1.8.9 — Additional kill-switches (previously structural / always-on) ────
+SESSION_CHURN_ENABLED        = os.environ.get("SESSION_CHURN_ENABLED",        "1") in ("1", "true", "yes")
+JA4H_DENY_ENABLED            = os.environ.get("JA4H_DENY_ENABLED",            "1") in ("1", "true", "yes")
+HOST_BLOCKING_ENABLED        = os.environ.get("HOST_BLOCKING_ENABLED",        "1") in ("1", "true", "yes")
+REQUIRED_HEADERS_ENABLED     = os.environ.get("REQUIRED_HEADERS_ENABLED",     "1") in ("1", "true", "yes")
+JA4_REQUIRED_ENABLED         = os.environ.get("JA4_REQUIRED_ENABLED",         "1") in ("1", "true", "yes")
+UPSTREAM_AUTH_FAIL_ENABLED   = os.environ.get("UPSTREAM_AUTH_FAIL_ENABLED",   "1") in ("1", "true", "yes")
+RATE_LIMIT_IP_ENABLED        = os.environ.get("RATE_LIMIT_IP_ENABLED",        "1") in ("1", "true", "yes")
+RATE_LIMIT_ENABLED           = os.environ.get("RATE_LIMIT_ENABLED",           "1") in ("1", "true", "yes")
+FP_BAN_CHECK_ENABLED         = os.environ.get("FP_BAN_CHECK_ENABLED",         "1") in ("1", "true", "yes")
+TRAFFIC_THRESHOLD_ENABLED    = os.environ.get("TRAFFIC_THRESHOLD_ENABLED",    "1") in ("1", "true", "yes")
+TLS_FP_BLOCK_ENABLED         = os.environ.get("TLS_FP_BLOCK_ENABLED",         "1") in ("1", "true", "yes")
+JWT_VALIDATION_ENABLED       = os.environ.get("JWT_VALIDATION_ENABLED",       "1") in ("1", "true", "yes")
+CUSTOM_RULES_ENABLED         = os.environ.get("CUSTOM_RULES_ENABLED",         "1") in ("1", "true", "yes")
+ENDPOINT_RATE_LIMIT_ENABLED  = os.environ.get("ENDPOINT_RATE_LIMIT_ENABLED",  "1") in ("1", "true", "yes")
 
 # 1.8.6 — ungated critical patterns: fire regardless of escalation score.
 _BODY_ALWAYS_RE = (

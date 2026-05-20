@@ -351,7 +351,7 @@ async def signal_performance_endpoint(request: web.Request):
 # ── Endpoint E: /secured/security-incidents ─────────────────────────────────
 
 _INCIDENT_CRITICAL = frozenset({
-    "canary-echo", "honey-cred", "redirect-maze-bot", "canary-probe-miss",
+    "canary-echo", "honey-cred", "canary-probe-miss",
 })
 _INCIDENT_HIGH = frozenset({
     "honeypot", "honeypot-silent", "body-rce", "body-ssrf", "body-cmd",
@@ -550,7 +550,7 @@ _IP_BAN_REASONS  = frozenset({
     "crowdsec-block", "peer-sync-ban", "canary-echo", "honey-cred",
 })
 _SES_BAN_REASONS = frozenset({
-    "banned-silent", "honeypot-silent", "redirect-maze-bot",
+    "banned-silent", "honeypot-silent",
 })
 _BYPASS_REASONS  = frozenset({
     "bypass-mode", "bypass-path", "authorized-robot",

@@ -1824,34 +1824,40 @@ class TestVhostsAPI:
     def test_post_private_ip_upstream_blocked(self, proxy_module):
         """Adding an UPSTREAM that resolves to a private/RFC-1918 address must
         be rejected to prevent SSRF through the public tunnel."""
-        async def go():
-            async with _spin_upstream() as up:
-                async with _spin_proxy(proxy_module, up) as c:
-                    cookie = self._cookie(proxy_module)
-                    private_upstreams = [
-                        "http://127.0.0.1:9999",
-                        "http://192.168.1.1",
-                        "http://10.0.0.1:8080",
-                        "http://172.16.0.1",
-                    ]
-                    for priv in private_upstreams:
-                        r = await c.post(
-                            NS + "/vhosts",
-                            json={"hostname": "evil.test.com", "UPSTREAM": priv},
-                            cookies={proxy_module._SESSION_COOKIE: cookie},
-                        )
-                        if r.status == 200:
-                            d = await r.json()
-                            assert d.get("ok") is False, (
-                                f"POST /vhosts with private UPSTREAM {priv!r} must "
-                                f"return ok=False (SSRF guard); got {d}"
+        import config as _cfg
+        _saved = _cfg.ALLOW_PRIVATE_UPSTREAM
+        _cfg.ALLOW_PRIVATE_UPSTREAM = False
+        try:
+            async def go():
+                async with _spin_upstream() as up:
+                    async with _spin_proxy(proxy_module, up) as c:
+                        cookie = self._cookie(proxy_module)
+                        private_upstreams = [
+                            "http://127.0.0.1:9999",
+                            "http://192.168.1.1",
+                            "http://10.0.0.1:8080",
+                            "http://172.16.0.1",
+                        ]
+                        for priv in private_upstreams:
+                            r = await c.post(
+                                NS + "/vhosts",
+                                json={"hostname": "evil.test.com", "UPSTREAM": priv},
+                                cookies={proxy_module._SESSION_COOKIE: cookie},
                             )
-                        else:
-                            assert r.status in (400, 422), (
-                                f"POST /vhosts with private UPSTREAM {priv!r}: "
-                                f"unexpected status {r.status}"
-                            )
-        _run(go())
+                            if r.status == 200:
+                                d = await r.json()
+                                assert d.get("ok") is False, (
+                                    f"POST /vhosts with private UPSTREAM {priv!r} must "
+                                    f"return ok=False (SSRF guard); got {d}"
+                                )
+                            else:
+                                assert r.status in (400, 422), (
+                                    f"POST /vhosts with private UPSTREAM {priv!r}: "
+                                    f"unexpected status {r.status}"
+                                )
+            _run(go())
+        finally:
+            _cfg.ALLOW_PRIVATE_UPSTREAM = _saved
 
     # ── DELETE: removes an existing entry ────────────────────────────────────
     def test_delete_vhost(self, proxy_module):
