@@ -41,27 +41,19 @@ a{color:var(--blue);text-decoration:none}
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
-/* -- Sidebar icon rail (desktop collapse) -- */
-#sidebar-brand{display:flex;align-items:center;justify-content:space-between;gap:6px}
+/* -- Sidebar collapse (desktop hide/unhide) -- */
+#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
 #sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
 #sidebar-toggle:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a{display:flex;align-items:center;gap:9px}
-.nav-ic{flex:0 0 18px;width:18px;text-align:center;font-size:14px;line-height:1}
-.nav-lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#sidebar-footer a,#sidebar-footer button.signout{display:flex;align-items:center;gap:9px}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
-@media(min-width:601px){
-  body:not(.sb-rail) #sidebar{width:160px}
-  body.sb-rail #sidebar{width:54px}
-  body.sb-rail #sidebar-nav{padding:0 6px}
-  body.sb-rail #sidebar-nav a{justify-content:center;padding-left:8px;padding-right:8px}
-  body.sb-rail #sidebar-nav a.sub{padding-left:8px}
-  body.sb-rail .nav-lbl{display:none}
-  body.sb-rail #sidebar-brand{justify-content:center}
-  body.sb-rail #sidebar-brand-name,body.sb-rail #sidebar-brand-ver{display:none}
-  body.sb-rail #sidebar-footer a,body.sb-rail #sidebar-footer button.signout{justify-content:center}
-  body.sb-rail #sidebar-footer{padding-left:6px;padding-right:6px}
-}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* -- Submenu collapse (accordion) -- */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -123,7 +115,9 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 </style></head><body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
-<script>(function(){function setArrow(r){var b=document.getElementById('sidebar-toggle');if(b){b.textContent=r?'›':'‹';b.title=r?'Expand menu':'Collapse menu';b.setAttribute('aria-label',b.title);}}window._sbRail=function(){var r=!document.body.classList.contains('sb-rail');document.body.classList.toggle('sb-rail',r);try{localStorage.setItem('agw_sb_rail',r?'1':'0');}catch(e){}setArrow(r);};var on=false;try{on=localStorage.getItem('agw_sb_rail')==='1';}catch(e){}if(on)document.body.classList.add('sb-rail');document.addEventListener('DOMContentLoaded',function(){setArrow(on);});})();</script>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 
 <div id="sidebar">
   <div id="sidebar-brand">
@@ -131,24 +125,24 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
       <div id="sidebar-brand-name">AppSecGW</div>
       <div id="sidebar-brand-ver">1.8.9</div>
     </div>
-    <button id="sidebar-toggle" onclick="_sbRail()" title="Collapse menu" aria-label="Collapse menu">‹</button>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
   <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center"><span class="nav-ic">🎛</span><span class="nav-lbl">Control Center</span></a>
-    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub"><span class="nav-ic">📡</span><span class="nav-lbl">Live Feed</span></a>
-    <a href="/antibot-appsec-gateway/secured/agents" class="sub"><span class="nav-ic">🤖</span><span class="nav-lbl">Agents</span></a>
-    <a href="/antibot-appsec-gateway/secured/siem" class="sub"><span class="nav-ic">🔍</span><span class="nav-lbl">SIEM</span></a>
-    <a href="/antibot-appsec-gateway/secured/controls"><span class="nav-ic">🛡</span><span class="nav-lbl">Controls</span></a>
-    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub active"><span class="nav-ic">🗂</span><span class="nav-lbl">Vhost Policy</span></a>
-    <a href="/antibot-appsec-gateway/secured/geo"><span class="nav-ic">🌍</span><span class="nav-lbl">GeoMap</span></a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings"><span class="nav-ic">⚙</span><span class="nav-lbl">Settings</span></a>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub"><span class="nav-ic">🩺</span><span class="nav-lbl">Service</span></a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub"><span class="nav-ic">📜</span><span class="nav-lbl">Logs</span></a>
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub active">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
-    <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;"><span class="nav-ic">👤</span><span class="nav-lbl">My Account</span></a>
+    <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;">My Account</a>
     <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
-      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');"><span class="nav-ic">🚪</span><span class="nav-lbl">Sign out</span></button>
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
     </form>
   </div>
 </div>
