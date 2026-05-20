@@ -10090,3 +10090,181 @@ class TestSaveSignalOrder:
             assert params[4] == actor, f"params[4] must be actor (kills 32): {params!r}"
         finally:
             os.unlink(db_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bypass & Allowlists — static QA (1.8.10)
+# Covers the five knobs in the Bypass & Allowlists controls group:
+#   BYPASS_MODE, BOT_DETECTION_ENABLED, BYPASS_PATHS,
+#   AUTHORIZED_BOT_UAS, JS_CHAL_OPEN_PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBypassAllowlistsStaticQA:
+
+    # ── Knob presence in _HOT_RELOAD_KNOBS ───────────────────────────────────
+
+    def _knobs(self):
+        from core.proxy_handler import _HOT_RELOAD_KNOBS
+        return _HOT_RELOAD_KNOBS
+
+    def test_bypass_mode_in_hot_reload_knobs(self):
+        """BYPASS_MODE must be hot-reloadable (incident-response toggle)."""
+        assert "BYPASS_MODE" in self._knobs(), (
+            "BYPASS_MODE missing from _HOT_RELOAD_KNOBS — "
+            "operators cannot toggle site-wide bypass at runtime"
+        )
+
+    def test_bot_detection_enabled_in_hot_reload_knobs(self):
+        """BOT_DETECTION_ENABLED must be hot-reloadable (global master switch)."""
+        assert "BOT_DETECTION_ENABLED" in self._knobs(), (
+            "BOT_DETECTION_ENABLED missing from _HOT_RELOAD_KNOBS — "
+            "global bot-detection master switch cannot be toggled at runtime"
+        )
+
+    def test_bypass_paths_in_hot_reload_knobs(self):
+        """BYPASS_PATHS must be hot-reloadable (operators add/remove paths live)."""
+        assert "BYPASS_PATHS" in self._knobs(), (
+            "BYPASS_PATHS missing from _HOT_RELOAD_KNOBS"
+        )
+
+    def test_js_chal_open_paths_in_hot_reload_knobs(self):
+        """JS_CHAL_OPEN_PATHS must be hot-reloadable."""
+        assert "JS_CHAL_OPEN_PATHS" in self._knobs(), (
+            "JS_CHAL_OPEN_PATHS missing from _HOT_RELOAD_KNOBS"
+        )
+
+    def test_authorized_bot_uas_in_hot_reload_knobs(self):
+        """AUTHORIZED_BOT_UAS must be hot-reloadable."""
+        assert "AUTHORIZED_BOT_UAS" in self._knobs(), (
+            "AUTHORIZED_BOT_UAS missing from _HOT_RELOAD_KNOBS"
+        )
+
+    # ── _NOT_PERSIST_KNOBS ────────────────────────────────────────────────────
+
+    def test_bypass_mode_in_not_persist_knobs(self):
+        """BYPASS_MODE must NOT be persisted to the DB (resets on restart)."""
+        from core.proxy_handler import _NOT_PERSIST_KNOBS
+        assert "BYPASS_MODE" in _NOT_PERSIST_KNOBS, (
+            "BYPASS_MODE must be in _NOT_PERSIST_KNOBS so it resets to False "
+            "on container restart — emergency bypass must never survive a restart"
+        )
+
+    def test_bot_detection_enabled_not_in_not_persist_knobs(self):
+        """BOT_DETECTION_ENABLED should persist across restarts (intentional setting)."""
+        from core.proxy_handler import _NOT_PERSIST_KNOBS
+        assert "BOT_DETECTION_ENABLED" not in _NOT_PERSIST_KNOBS, (
+            "BOT_DETECTION_ENABLED must persist across restarts — "
+            "it is an intentional vhost/global configuration, not an incident toggle"
+        )
+
+    # ── Source ordering ───────────────────────────────────────────────────────
+
+    def test_bypass_mode_precedes_authorized_bot_uas_in_source(self):
+        """BYPASS_MODE guard must appear before AUTHORIZED_BOT_UAS in protect().
+
+        If BYPASS_MODE sits below AUTHORIZED_BOT_UAS, action=ban entries can
+        still ban traffic even when the operator has enabled bypass mode.
+        """
+        import inspect
+        from core import proxy_handler
+        src = inspect.getsource(proxy_handler.protect)
+        bypass_idx  = src.find("if vc('BYPASS_MODE') and not _is_admin_path")
+        bot_uas_idx = src.find("if AUTHORIZED_BOT_UAS:")
+        assert bypass_idx != -1,  "BYPASS_MODE check missing from protect()"
+        assert bot_uas_idx != -1, "AUTHORIZED_BOT_UAS loop missing from protect()"
+        assert bypass_idx < bot_uas_idx, (
+            f"BYPASS_MODE check (pos {bypass_idx}) must precede "
+            f"AUTHORIZED_BOT_UAS (pos {bot_uas_idx}) in protect() — "
+            "otherwise action=ban entries fire even in bypass mode"
+        )
+
+    def test_bypass_mode_precedes_bypass_paths_in_source(self):
+        """BYPASS_MODE guard must appear before BYPASS_PATHS in protect()."""
+        import inspect
+        from core import proxy_handler
+        src = inspect.getsource(proxy_handler.protect)
+        bypass_idx  = src.find("if vc('BYPASS_MODE') and not _is_admin_path")
+        paths_idx   = src.find("if vc('BYPASS_PATHS') and any(")
+        assert bypass_idx != -1, "BYPASS_MODE check missing"
+        assert paths_idx  != -1, "BYPASS_PATHS check missing"
+        assert bypass_idx < paths_idx, (
+            "BYPASS_MODE must precede BYPASS_PATHS in protect()"
+        )
+
+    def test_bot_detection_enabled_gate_after_rate_limit(self):
+        """BOT_DETECTION_ENABLED gate must sit AFTER rate-limit enforcement.
+
+        Rate limits are unconditional — they must fire even when bot detection
+        is disabled (e.g. for a trusted internal vhost under attack).
+        """
+        import inspect
+        from core import proxy_handler
+        src = inspect.getsource(proxy_handler.protect)
+        rate_idx = src.find("rate-limit-endpoint")
+        bde_idx  = src.find("if not vc('BOT_DETECTION_ENABLED')")
+        assert rate_idx != -1, "rate-limit-endpoint reason missing from protect()"
+        assert bde_idx  != -1, "BOT_DETECTION_ENABLED gate missing from protect()"
+        assert rate_idx < bde_idx, (
+            f"Rate-limit enforcement (pos {rate_idx}) must precede "
+            f"BOT_DETECTION_ENABLED gate (pos {bde_idx}) — "
+            "rate limits must apply even when bot detection is off"
+        )
+
+    # ── AUTHORIZED_BOT_UAS action validation ──────────────────────────────────
+
+    def test_authorized_bot_uas_valid_actions(self):
+        """Every entry in default AUTHORIZED_BOT_UAS must have a recognised action."""
+        import os, importlib
+        os.environ.setdefault("UPSTREAM", "https://example.com")
+        cfg = importlib.import_module("config")
+        valid_actions = {"authorized-robot", "allow", "ban", "really-ban"}
+        for entry in getattr(cfg, "AUTHORIZED_BOT_UAS", []):
+            if not isinstance(entry, dict):
+                continue
+            action = entry.get("action", "authorized-robot")
+            assert action in valid_actions, (
+                f"AUTHORIZED_BOT_UAS entry {entry.get('name')!r} has "
+                f"unrecognised action {action!r} — valid: {sorted(valid_actions)}"
+            )
+
+    def test_authorized_bot_uas_enabled_field_is_bool(self):
+        """Every dict entry in AUTHORIZED_BOT_UAS must have enabled as a bool."""
+        import os, importlib
+        os.environ.setdefault("UPSTREAM", "https://example.com")
+        cfg = importlib.import_module("config")
+        for entry in getattr(cfg, "AUTHORIZED_BOT_UAS", []):
+            if not isinstance(entry, dict):
+                continue
+            assert isinstance(entry.get("enabled", True), bool), (
+                f"AUTHORIZED_BOT_UAS entry {entry.get('name')!r}: "
+                f"'enabled' must be bool, got {type(entry.get('enabled'))}"
+            )
+
+    # ── Dashboard META coverage ───────────────────────────────────────────────
+
+    def test_bypass_group_bool_knobs_in_controls_meta(self):
+        """BOT_DETECTION_ENABLED and BYPASS_MODE must appear in controls.html META dict."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent /
+               "dashboards" / "controls.html").read_text()
+        for knob in ("BOT_DETECTION_ENABLED", "BYPASS_MODE"):
+            assert f"{knob}:" in src, (
+                f"{knob} missing from controls.html META — "
+                "the Bypass & Allowlists group card will be empty"
+            )
+
+    def test_bypass_group_knobs_in_ctrl_groups(self):
+        """The bypass CTRL_GROUP must list all 5 bypass knobs."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent /
+               "dashboards" / "controls.html").read_text()
+        # Find the CTRL_GROUPS entry (has lane:'bypass' + knobs:)
+        bypass_block_start = src.find("lane:'bypass',  knobs:")
+        assert bypass_block_start != -1, "bypass CTRL_GROUP knobs entry missing from controls.html"
+        bypass_block = src[bypass_block_start: bypass_block_start + 400]
+        for knob in ("BOT_DETECTION_ENABLED", "BYPASS_MODE",
+                     "AUTHORIZED_BOT_UAS", "BYPASS_PATHS", "JS_CHAL_OPEN_PATHS"):
+            assert knob in bypass_block, (
+                f"{knob} missing from bypass CTRL_GROUP knobs list — "
+                "it will not appear in the Bypass & Allowlists panel"
+            )

@@ -1,8 +1,8 @@
 # AppSecGW — Full Test Suite Reference
 
-**Generated:** 2026-05-19  
-**Version:** 1.8.9  
-**Total test files:** 72  
+**Generated:** 2026-05-20  
+**Version:** 1.8.10  
+**Total test files:** 75  
 
 ---
 
@@ -33,6 +33,7 @@
 | v1.8.7 | `test_v187_login_2fa.py`, `test_v187_new_features.py`, `test_v187_security.py`, `test_v187_settings_vhost_strip.py`, `test_v187_ux_improvements.py`, `test_v187_controls_order.py`, `test_v187_db_switch_hotswap.py`, `test_v187_db_switch_roundtrip.py`, `test_v187_db_endpoints_dynamic.py`, `test_v188_db_settings_merge.py`, `test_v188_redis_security.py` |
 | v1.8.8 | `test_v188_ed25519_mesh.py`, `test_v188_settings_subnav.py`, `test_performance.py`, `test_v188_backend_aware_reads.py`, `test_v188_session_fixes.py`, `test_v188_startup_fixes.py` |
 | v1.8.9 | `test_live_gw.py`, `test_v189_knob_kill_switches.py` |
+| v1.8.10 | `test_v189_sidebar_collapse.py`, `test_v189_ctrlnav_rail.py`, `test_v189_setnav_rail.py` |
 | Cross-version | `test_admin_ip_list.py`, `test_code_review_fixes.py`, `test_control_center.py`, `test_crowdsec_lapi_health.py`, `test_dashboard_charts.py`, `test_dashboard_data.py`, `test_upstream_no_leak.py`, `test_upstream_rewrite.py` |
 
 ---
@@ -1382,4 +1383,36 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
-*Total test files: 72 | Approximate total test functions: ~2,200+*
+---
+
+### `test_v189_sidebar_collapse.py` — Sidebar full-hide + submenu accordion (9 dashboards)
+
+**Version added:** v1.8.10
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (parametrized, 9 dashboards) | 55 | Full-hide toggle + reopen wiring, desktop-gated CSS, `agw_sb_collapsed` restore, submenu accordion carets on the 3 parent groups, GeoMap has no caret, no icon-rail leftovers, restore-before-`#sidebar` ordering, brand version 1.8.10 |
+
+---
+
+### `test_v189_ctrlnav_rail.py` — Controls-page section icon-rail "second hide"
+
+**Version added:** v1.8.10
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 6 | `#ctrl-nav` toggle wired to `_ctrlNavToggle`, `agw_ctrlnav_rail` persistence, rail keeps `.cni-icon` / hides `.cni-label` + search, item tooltips, main sidebar hide untouched (no `sb-rail` leak) |
+
+---
+
+### `test_v189_setnav_rail.py` — Settings-page section icon-rail "second hide"
+
+**Version added:** v1.8.10
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 6 | `#settings-nav` toggle built in JS + wired, `agw_setnav_rail` persistence, rail keeps `.sni-icon` / hides `.sni-label`, restore-before-`_buildNav` (no flash), main sidebar hide untouched |
+
+---
+
+*Total test files: 75 | Approximate total test functions: ~2,270+*

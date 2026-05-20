@@ -2430,6 +2430,8 @@ _HOT_RELOAD_KNOBS = {
     # 1.7.8 — Dashboard bypass mode (all detection + ban enforcement off).
     # Listed as NOT_PERSIST so it resets to False on container restart.
     "BYPASS_MODE":            (_to_bool, None),
+    # 1.8.10 — Global bot-detection master switch (per-vhost via vc(); global via hot-reload).
+    "BOT_DETECTION_ENABLED":  (_to_bool, None),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
     # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
