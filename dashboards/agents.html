@@ -163,6 +163,7 @@ a.rsn-ctrl:hover{text-decoration:underline}
 .rsn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:#6e7681;vertical-align:middle}
 .rsn-dot.on{background:var(--green)}
 .rsn-dot.off{background:#6e7681}
+.rsn-kv{display:inline-block;font-size:9.5px;background:#21262d;color:var(--dim);padding:0 5px;border-radius:3px;margin-left:6px;vertical-align:middle;font-weight:600}
 .rsn-tier{display:inline-block;font-size:8.5px;line-height:1.5;text-transform:uppercase;padding:0 4px;border-radius:3px;margin-left:6px;font-weight:700;vertical-align:middle}
 .rsn-tier.t-info{background:#30363d;color:var(--dim)}
 .rsn-tier.t-soft{background:rgba(210,153,34,.16);color:var(--yellow)}
@@ -1387,11 +1388,12 @@ window._gwIdentityPopover = (function(){
   // absent from the map is not a tunable detection (e.g. a ban outcome).
   let _knobMap = null;
   let _knobState = {};
+  let _knobPage = {};
   let _signalMeta = {};
-  function _loadKnobs(){
-    if (_knobMap !== null) return;
-    _knobMap = {};  // mark in-flight so we don't double-fetch
-    fetch('/antibot-appsec-gateway/secured/scoring', {credentials:'include'})
+  function _loadKnobs(force){
+    if (_knobMap !== null && !force) return Promise.resolve();
+    if (_knobMap === null) _knobMap = {};  // mark in-flight so we don't double-fetch
+    return fetch('/antibot-appsec-gateway/secured/scoring', {credentials:'include'})
       .then(r => r.ok ? r.json() : null)
       .then(d => {
         if (!d) return;
@@ -1405,15 +1407,21 @@ window._gwIdentityPopover = (function(){
           _knobMap = m;
         }
         if (d.knob_state  && typeof d.knob_state  === 'object') _knobState  = d.knob_state;
+        if (d.knob_page   && typeof d.knob_page   === 'object') _knobPage   = d.knob_page;
         if (d.signal_meta && typeof d.signal_meta === 'object') _signalMeta = d.signal_meta;
       })
       .catch(() => {});
   }
   function _ctrlCell(reason){
-    // {knob, on, text, dim} — knob name, current on/off state, display text.
+    // {knob, kind, on, display, page, text, dim} for the control column.
     if (_knobMap && (reason in _knobMap)) {
       const knob = _knobMap[reason];
-      if (knob) return {knob: knob, on: !!_knobState[knob], text: knob, dim: false};
+      if (knob) {
+        const st = _knobState[knob] || {};
+        return {knob: knob, kind: st.kind || 'bool', on: !!st.on,
+                display: st.display || '', page: _knobPage[knob] || 'controls',
+                text: knob, dim: false};
+      }
       return {knob: null, on: null, text: 'always-on', dim: true};  // mandatory gate
     }
     return {knob: null, on: null, text: '—', dim: true};
@@ -1507,9 +1515,18 @@ window._gwIdentityPopover = (function(){
           const rdesc = meta.desc ? escapeHtml(meta.desc) : escapeHtml(reason);
           let ctrlHtml;
           if (ctrl.knob) {
-            const dot = `<span class="rsn-dot ${ctrl.on?'on':'off'}"></span>`;
-            const href = '/antibot-appsec-gateway/secured/controls#knob=' + encodeURIComponent(ctrl.knob);
-            ctrlHtml = `<a class="rsn-ctrl" href="${href}" title="${escapeHtml(ctrl.knob)} — ${ctrl.on?'enabled':'disabled'} · click to open in Controls">${dot}${escapeHtml(ctrl.knob)}</a>`;
+            const page = (ctrl.page === 'settings') ? 'settings' : 'controls';
+            const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(ctrl.knob);
+            let indicator, ttl;
+            if (ctrl.kind === 'bool') {
+              indicator = `<span class="rsn-dot ${ctrl.on?'on':'off'}"></span>${escapeHtml(ctrl.knob)}`;
+              ttl = ctrl.on ? 'enabled' : 'disabled';
+            } else {
+              const vb = ctrl.display ? `<span class="rsn-kv">${escapeHtml(ctrl.display)}</span>` : '';
+              indicator = `${escapeHtml(ctrl.knob)}${vb}`;
+              ttl = ctrl.display || 'configured';
+            }
+            ctrlHtml = `<a class="rsn-ctrl" href="${href}" title="${escapeHtml(ctrl.knob)} — ${escapeHtml(ttl)} · click to open in ${page==='settings'?'Settings':'Controls'}">${indicator}</a>`;
           } else {
             ctrlHtml = `<span class="rsn-ctrl dim" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>`;
           }
@@ -1529,7 +1546,7 @@ window._gwIdentityPopover = (function(){
       ${head}${rows}`;
   }
   _loadKnobs();  // warm the reason→control map so it's ready when a modal opens
-  return { normalizeId, buildIdHtml, buildRiskHtml };
+  return { normalizeId, buildIdHtml, buildRiskHtml, refreshKnobs: function(){ return _loadKnobs(true); } };
 })();
 
 // 1.8.6 — risk signal metadata (mirrors config.py RISK_WEIGHTS)
@@ -2274,6 +2291,13 @@ function openPopover(kind, s, x, y){
     fetchIpIntel(d.ip).then(html => {
       const node = document.getElementById('ip-intel-section');
       if (node) node.innerHTML = _dp(html);
+    }).catch(() => {});
+  }
+  if (kind === 'risk' && window._gwIdentityPopover.refreshKnobs) {
+    // Refresh live control state so the on/off dots are current, then re-render.
+    window._gwIdentityPopover.refreshKnobs().then(() => {
+      const pb = document.getElementById('pop-body');
+      if (pb) pb.innerHTML = _dp(window._gwIdentityPopover.buildRiskHtml(d));
     }).catch(() => {});
   }
   if (kind === 'score') {

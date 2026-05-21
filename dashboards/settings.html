@@ -94,6 +94,8 @@ button{background:var(--blue);color:#fff;border:none;padding:9px 18px;
        font-family:inherit}
 button:hover{filter:brightness(1.1)}
 button:disabled{opacity:.4;cursor:not-allowed}
+@keyframes knobFlash{0%{background:rgba(88,166,255,.28)}100%{background:transparent}}
+.knob-deeplink-flash{animation:knobFlash 2.4s ease-out;border-radius:6px;box-shadow:0 0 0 2px var(--blue) inset}
 button.secondary{background:#30363d;color:var(--fg)}
 button.danger{background:var(--red)}
 .drop{border:2px dashed var(--line);border-radius:8px;padding:24px;text-align:center;
@@ -3353,6 +3355,29 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   $('btn-infra-reset').addEventListener('click', () => loadInfra());
 
   loadInfra();
+
+  // Deep-link: #knob=NAME (from the Risk-breakdown control link) → scroll to the
+  // Infrastructure knob (or the Admin-IPs card for ADMIN_ALLOWED_IPS) + flash.
+  // Infra rows render async, so retry briefly until present.
+  function _settingsDeepLink() {
+    const m = (location.hash || '').match(/[#&]knob=([A-Za-z0-9_]+)/);
+    if (!m) return;
+    const knob = m[1];
+    let tries = 0;
+    (function find() {
+      let el = document.querySelector(`[data-ikey="${knob}"]`);
+      if (!el && knob === 'ADMIN_ALLOWED_IPS')
+        el = document.getElementById('admin-ips-card') || document.getElementById('admin-ips');
+      if (!el) el = document.getElementById('infra-body');   // fallback: the card
+      if (!el) { if (tries++ < 12) setTimeout(find, 300); return; }
+      const row = el.closest('div[style*="border-bottom"]') || el;
+      row.scrollIntoView({behavior: 'smooth', block: 'center'});
+      row.classList.add('knob-deeplink-flash');
+      setTimeout(() => row.classList.remove('knob-deeplink-flash'), 2600);
+    })();
+  }
+  _settingsDeepLink();
+  window.addEventListener('hashchange', _settingsDeepLink);
 
   // ── DB Backend ────────────────────────────────────────────────────
   let _dbOrig = 'sqlite';
