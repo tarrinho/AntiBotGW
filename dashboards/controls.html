@@ -168,6 +168,10 @@ main{padding:0;max-width:none;margin:0}
 .ctrl{display:flex;align-items:center;justify-content:space-between;
       padding:8px 0;border-bottom:1px solid #1f2730}
 .ctrl:last-child{border-bottom:none}
+/* deep-link highlight: flash a knob row when arrived via #knob=NAME */
+@keyframes knobFlash{0%{background:rgba(88,166,255,.28)}100%{background:transparent}}
+.ctrl.knob-deeplink-flash{animation:knobFlash 2.4s ease-out;border-radius:6px;
+  box-shadow:0 0 0 2px var(--blue) inset}
 .ctrl-hint{display:block;padding:6px 0;border-bottom:1px solid #1f2730;opacity:.7}
 .ctrl-hint-label{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--dim);margin-right:6px}
 .ctrl-hint-desc{font-size:11px;color:var(--dim)}
@@ -836,14 +840,26 @@ const url = p => p;   // identity — kept for the ~30 fetch call-sites througho
 // Inject X-CSRF-Token automatically for every state-mutating same-origin request.
 (function() {
   const _orig = window.fetch;
+  function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}
   window.fetch = function(resource, init) {
     const m = ((init && init.method) || 'GET').toUpperCase();
-    if (m !== 'GET' && m !== 'HEAD') {
-      init = init || {};
-      init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
-    }
-    return _orig.call(this, resource, init);
+    if (m === 'GET' || m === 'HEAD') return _orig.call(this, resource, init);
+    init = init || {};
+    init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': _agwTok()});
+    const _self = this;
+    return _orig.call(_self, resource, init).then(function(resp){
+      if (resp.status !== 403) return resp;
+      // Stale CSRF token (session rotated, or CDN HttpOnly'd the cookie) —
+      // refresh from the server and retry once so operators never clear cookies.
+      return _orig.call(_self, '/antibot-appsec-gateway/secured/csrf', {credentials:'include'})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){
+          if (!j || !j.token || j.token === _agwTok()) return resp;
+          window.__AGW_CSRF__ = j.token;
+          init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': j.token});
+          return _orig.call(_self, resource, init);
+        }).catch(function(){ return resp; });
+    });
   };
 }());
 const _dp = (h) => {
@@ -4023,6 +4039,33 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   window._ctrlNavFilter = function(val) { _navFilter = val; _buildNav(); };
   window._ctrlNavUpdateBadges = _updateBadges;
 
+  // Deep-link: #knob=NAME (from the Risk-breakdown "control" link) → switch to
+  // the knob's section, scroll to it, and flash a highlight. Knob rows render
+  // asynchronously after the config load, so retry briefly until present.
+  function _deepLinkToKnob() {
+    const m = (location.hash || '').match(/[#&]knob=([A-Za-z0-9_]+)/);
+    if (!m) return;
+    const knob = m[1];
+    try {
+      const meta = (typeof META !== 'undefined') ? META[knob] : null;
+      const sec = _knobSec(knob, meta);
+      if (sec) _switch(sec);
+    } catch (e) {}
+    let tries = 0;
+    (function find() {
+      const el = document.querySelector(
+        `[data-bool-knob="${knob}"],[data-knob-scoring="${knob}"],[data-knob="${knob}"]`);
+      if (!el) { if (tries++ < 12) setTimeout(find, 300); return; }
+      const row = el.closest('.ctrl') || el;
+      row.scrollIntoView({behavior: 'smooth', block: 'center'});
+      row.classList.add('knob-deeplink-flash');
+      setTimeout(() => row.classList.remove('knob-deeplink-flash'), 2600);
+    })();
+  }
+  window._deepLinkToKnob = _deepLinkToKnob;
+  // Re-run if the hash changes while already on the page.
+  window.addEventListener('hashchange', _deepLinkToKnob);
+
   // Second hide: collapse #ctrl-nav to an icon-rail (section logos stay,
   // labels + search hide). Independent from the main sidebar hide.
   function _ctrlNavSetToggle(r) {
@@ -4044,6 +4087,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   document.addEventListener('DOMContentLoaded', function() {
     _buildNav();
     _switch('detection');
+    _deepLinkToKnob();   // honour #knob=NAME from the Risk-breakdown control link
     // restore collapsed-rail preference
     let _cnRail = false;
     try { _cnRail = localStorage.getItem('agw_ctrlnav_rail') === '1'; } catch (e) {}

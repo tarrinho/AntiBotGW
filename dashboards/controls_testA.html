@@ -112,14 +112,26 @@ nav{padding:6px 0}
 // Inject X-CSRF-Token automatically for every state-mutating same-origin request.
 (function() {
   const _orig = window.fetch;
+  function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}
   window.fetch = function(resource, init) {
     const m = ((init && init.method) || 'GET').toUpperCase();
-    if (m !== 'GET' && m !== 'HEAD') {
-      init = init || {};
-      init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
-    }
-    return _orig.call(this, resource, init);
+    if (m === 'GET' || m === 'HEAD') return _orig.call(this, resource, init);
+    init = init || {};
+    init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': _agwTok()});
+    const _self = this;
+    return _orig.call(_self, resource, init).then(function(resp){
+      if (resp.status !== 403) return resp;
+      // Stale CSRF token (session rotated, or CDN HttpOnly'd the cookie) —
+      // refresh from the server and retry once so operators never clear cookies.
+      return _orig.call(_self, '/antibot-appsec-gateway/secured/csrf', {credentials:'include'})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){
+          if (!j || !j.token || j.token === _agwTok()) return resp;
+          window.__AGW_CSRF__ = j.token;
+          init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': j.token});
+          return _orig.call(_self, resource, init);
+        }).catch(function(){ return resp; });
+    });
   };
 }());
 const _dp = h => {
