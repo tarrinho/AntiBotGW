@@ -50,6 +50,9 @@ _PASSTHROUGH_REASONS: frozenset = frozenset({
     "authorized-robot",
     "bypass-path",         # BYPASS_PATHS prefix match — allowed, no detection
     "operator-passthrough",# authenticated operator accessing upstream — allowed
+    "operator-self",       # 1.8.10 — operator's own lapsed-session XHR noise on
+                           # admin paths; decoyed but benign, not a block.
+                           # (admin-probe = anonymous recon stays OUT → counted.)
 })
 
 

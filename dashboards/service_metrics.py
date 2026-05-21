@@ -469,7 +469,7 @@ async def service_metrics_data_endpoint(request: web.Request):
             row = conn.execute(
                 "SELECT COUNT(*), "
                 "SUM(CASE WHEN reason IN ('ok','allowed','authorized-robot') THEN 1 ELSE 0 END), "
-                "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe') THEN 1 ELSE 0 END) "
+                "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe','operator-self') THEN 1 ELSE 0 END) "
                 "FROM events WHERE ts >= ? AND ts <= ? AND vhost = ?",
                 (_win_start, end_b + bucket_secs, _vhost),
             ).fetchone()

@@ -205,10 +205,16 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .modal .kv{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .modal .kv .k{color:var(--dim);text-align:right}
 .modal .kv .v{color:var(--fg);word-break:break-all}
-.modal .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:8px;align-items:center;
+.modal .rsn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 54px 44px;gap:8px;align-items:center;
             padding:5px 0;border-bottom:1px solid var(--line)}
 .modal .rsn:last-child{border-bottom:0}
-.modal .rsn-name{color:var(--fg)}
+.modal .rsn-name{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal .rsn-ctrl{color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal .rsn-ctrl.dim{color:var(--dim)}
+.modal .rsn-head{border-bottom:1px solid var(--line)}
+.modal .rsn-head .rsn-name,.modal .rsn-head .rsn-ctrl,.modal .rsn-head .rsn-val{
+  color:var(--dim);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
 .modal .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
 .modal .rsn-bar>div{height:100%;background:var(--red)}
 .modal .rsn-val{color:var(--red);text-align:right;font-weight:600}
@@ -760,6 +766,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+<script>(function(){var _orig=window.fetch;window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m!=='GET'&&m!=='HEAD'){init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':(window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});}return _orig.call(this,resource,init);};})();</script>
 <script>
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
@@ -1910,6 +1917,38 @@ window._gwIdentityPopover = (function(){
     if (s < 86400)return (s/3600).toFixed(1)+'h ago';
     return (s/86400).toFixed(1)+'d ago';
   }
+  // reason → controlling knob map, lazily loaded from the scoring endpoint.
+  // null value = detection signal with no kill-switch (always-on); a reason
+  // absent from the map is not a tunable detection (e.g. a ban outcome).
+  let _knobMap = null;
+  function _loadKnobs(){
+    if (_knobMap !== null) return;
+    _knobMap = {};  // mark in-flight so we don't double-fetch
+    fetch('/antibot-appsec-gateway/secured/scoring', {credentials:'include'})
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        // Prefer the full reason→knob map (covers synthetic reasons like
+        // chal-required / pow-required); fall back to weights[].toggle.
+        if (d.signal_knob && typeof d.signal_knob === 'object') {
+          _knobMap = d.signal_knob;
+        } else if (Array.isArray(d.weights)) {
+          const m = {};
+          d.weights.forEach(w => { if (w && w.signal) m[w.signal] = w.toggle || null; });
+          _knobMap = m;
+        }
+      })
+      .catch(() => {});
+  }
+  function _ctrlCell(reason){
+    // Returns {text, dim} for the control column.
+    if (_knobMap && (reason in _knobMap)) {
+      return _knobMap[reason]
+        ? {text: _knobMap[reason], dim: false}
+        : {text: 'always-on', dim: true};
+    }
+    return {text: '—', dim: true};
+  }
   function normalizeId(raw){
     const bbd = Array.isArray(raw.blocks_breakdown)
       ? raw.blocks_breakdown
@@ -1982,11 +2021,20 @@ window._gwIdentityPopover = (function(){
     const isWeighted = !!d.risk_breakdown;
     const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
     const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
+    const head = breakdown.length
+      ? `<div class="rsn rsn-head">
+           <span class="rsn-name">signal</span>
+           <span class="rsn-ctrl">control</span>
+           <span></span>
+           <span class="rsn-val">${isWeighted?'risk':'hits'}</span></div>`
+      : '';
     const rows = breakdown.length
       ? breakdown.map(([reason, val])=>{
           const pct = (val/total*100).toFixed(0);
+          const ctrl = _ctrlCell(reason);
           return `<div class="rsn">
             <span class="rsn-name">${escapeHtml(reason)}</span>
+            <span class="rsn-ctrl${ctrl.dim?' dim':''}" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>
             <div class="rsn-bar"><div style="width:${pct}%"></div></div>
             <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
@@ -1997,8 +2045,9 @@ window._gwIdentityPopover = (function(){
         decays at half-life 1h ·
         ban threshold ≥ 50 (≥100 for NAT)
       </div>
-      ${rows}`;
+      ${head}${rows}`;
   }
+  _loadKnobs();  // warm the reason→control map so it's ready when a modal opens
   return { normalizeId, buildIdHtml, buildRiskHtml };
 })();
 
@@ -2551,7 +2600,9 @@ window._gwIdentityPopover = (function(){
     // Synthetic reasons (not in RISK_WEIGHTS — emitted by middleware directly)
     "banned-silent":         {tier:"info", weight:0,  text:"Identity is currently in the hostile pool (24-h ban after risk crossed threshold OR honeypot/AI-flagged hit). Every request returns the upstream's homepage so the bot can't tell it was caught."},
     "chal-required":         {tier:"info", weight:0,  text:"Cookie gate (`JS_CHALLENGE=1`) requires a valid `chal` cookie and this request didn't carry one. Browser solves Turnstile / heuristic auto-mint to get the cookie; pure-HTTP bots get silent-decoyed."},
-    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/antibot-appsec-gateway/secured/metrics`, `/antibot-appsec-gateway/secured/live-feed`, etc. is never confirmed to outsiders."},
+    "internal-probe":        {tier:"info", weight:0,  text:"Legacy (pre-1.8.10) reason for an unauthenticated admin-path hit. Now split into `operator-self` (benign) and `admin-probe` (recon). Returns the upstream's 404 page."},
+    "operator-self":         {tier:"info", weight:0,  text:"Operator's OWN browser hitting an admin path with a genuinely-issued but lapsed session (expired/revoked/cache-evicted) — typically XHRs fired after the session dropped. Decoyed with upstream-404 but benign: NOT counted as a block. Re-login to clear it."},
+    "admin-probe":           {tier:"warn", weight:0,  text:"Anonymous request to an admin path with NO valid `agw_session` cookie — external reconnaissance of `/antibot-appsec-gateway/secured/*`, `/__config`, etc. Returns the upstream's 404 (existence never confirmed) and IS counted as a block so recon shows up in threat metrics."},
     "admin-ip-blocked":      {tier:"info", weight:0,  text:"`ADMIN_ALLOWED_IPS` is configured and the source IP is not on the list. Admin endpoints return upstream-404 (mirrors a real not-found, no leak)."},
     "pow-required":          {tier:"info", weight:0,  text:"`POW_REQUIRED_PATHS` includes this path and the request didn't carry a valid `X-PoW-Token`/`X-PoW-Solution`. Returns 402 with a fresh challenge."},
     "OK":                    {tier:"info", weight:0,  text:"Request was forwarded to the upstream. No detector fired."},
@@ -2878,10 +2929,15 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   letter-spacing:.6px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
 #risk-pop .x{cursor:pointer;color:var(--dim);font-size:15px;line-height:1;font-weight:400}
 #risk-pop .x:hover{color:var(--red)}
-#risk-pop .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:6px;
+#risk-pop .rsn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 50px 40px;gap:6px;
   align-items:center;padding:4px 0;border-bottom:1px solid var(--line)}
 #risk-pop .rsn:last-child{border-bottom:0}
-#risk-pop .rsn-name{color:var(--fg);font-size:11px}
+#risk-pop .rsn-name{color:var(--fg);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#risk-pop .rsn-ctrl{color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-size:10px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#risk-pop .rsn-ctrl.dim{color:var(--dim)}
+#risk-pop .rsn-head .rsn-name,#risk-pop .rsn-head .rsn-ctrl,#risk-pop .rsn-head .rsn-val{
+  color:var(--dim);font-weight:600;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px}
 #risk-pop .rsn-bar{height:7px;background:#0a0e13;border-radius:3px;overflow:hidden}
 #risk-pop .rsn-bar>div{height:100%;background:var(--red)}
 #risk-pop .rsn-val{color:var(--red);text-align:right;font-weight:600;font-size:11px}

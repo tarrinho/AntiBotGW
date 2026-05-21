@@ -20,6 +20,12 @@ Author: Pedro Tarrinho
 - New `tests/test_v189_sidebar_collapse.py` — sidebar full-hide + accordion markup on all 9 real dashboards (toggle/reopen wiring, desktop-gated CSS, GeoMap has no caret, no icon-rail leftovers, restore-before-`#sidebar` ordering, brand version).
 - New `tests/test_v189_ctrlnav_rail.py` and `tests/test_v189_setnav_rail.py` — Controls / Settings icon-rail second-hides (toggle wired, rail keeps `.cni-icon`/`.sni-icon` and hides labels, item tooltips, restore-before-build, and assertions that the main sidebar hide is untouched / no `sb-rail` leak).
 
+### Fixed
+
+- **`SIGNAL_KNOB` duplicate dict keys — ruff F601** (`core/proxy_handler.py`): four key literals (`tls-fingerprint`, `auth-jwt-invalid`, `custom-rule-block`, `rate-limit-endpoint`) appeared twice in `SIGNAL_KNOB` with identical values. Python silently kept only the last occurrence; no runtime behaviour change, but the lint finding masked any future value divergence. Removed the first-occurrence duplicates (lines 5434–5437 in the pre-fix source).
+- **`test_165_every_knob_persists_round_trip` — missing test values** (`tests/test_critical.py`): three new hot-reload knobs registered in 1.8.10 (`BOT_DETECTION_ENABLED`, `TRUST_XFF`, `TRUSTED_PROXIES`) were absent from the `test_values` dict, causing an `AssertionError: add a test value for new knob(s)` at startup. Added appropriate test values (`BOT_DETECTION_ENABLED=False`, `TRUST_XFF="first"`, `TRUSTED_PROXIES=["10.0.0.0/8"]`) aligned with their declared parser types in `_HOT_RELOAD_KNOBS`.
+- **`test_165_every_knob_persists_round_trip` — module cache pollution** (`tests/test_critical.py`): the `finally` block restored only the `proxy` module's attributes, leaving `config`, `detection.llm_heuristic`, and other modules contaminated with test values (`BOT_DETECTION_ENABLED=False`, `LLM_HEURISTIC_ENABLED=False`, etc.) written by `db_load_config`'s propagation loop. This caused 32 cross-test failures in `test_pure.py` (`TestLlmObserveAndCheck`, `TestRecordChalMint`, etc.). Extended the `finally` block to propagate restorations to all `sys.modules` entries via the same `setattr` loop pattern used by `db_load_config`.
+
 ### Validation
 
 - Version bumped 1.8.9 → 1.8.10 across `config.py` (`GW_VERSION`), `proxy.py`, `docker-compose.yml`, all dashboard `<title>`/brand strings, and version-string test guards.

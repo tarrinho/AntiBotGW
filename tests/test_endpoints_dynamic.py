@@ -1831,6 +1831,15 @@ class TestVhostsAPI:
             async def go():
                 async with _spin_upstream() as up:
                     async with _spin_proxy(proxy_module, up) as c:
+                        # ALLOW_PRIVATE_UPSTREAM is hot-reloadable + persisted now,
+                        # so on_startup's db_load_config can restore it from
+                        # config_kv. Re-assert the guard ON after startup.
+                        _cfg.ALLOW_PRIVATE_UPSTREAM = False
+                        try:
+                            import vhost as _vh
+                            _vh._cfg.ALLOW_PRIVATE_UPSTREAM = False
+                        except Exception:
+                            pass
                         cookie = self._cookie(proxy_module)
                         private_upstreams = [
                             "http://127.0.0.1:9999",

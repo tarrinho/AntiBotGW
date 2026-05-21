@@ -412,13 +412,17 @@ def test_s26_escape_html_in_render_top_ips():
 
 def test_s27_tick_interval_in_timers_dcl():
     src = _html()
-    dcl_idx = src.find("DOMContentLoaded")
-    assert dcl_idx != -1, "siem.html: DOMContentLoaded listener not found."
-    dcl_end = src.find("});", dcl_idx)
-    dcl = src[dcl_idx:dcl_end]
-    assert "_timers.push(setInterval(tick" in dcl, (
-        "siem.html: tick() setInterval not pushed to _timers in DOMContentLoaded. "
+    # 1.8.10 — the shared sidebar accordion adds its own DOMContentLoaded listener
+    # near the top of every dashboard, so we can't assume the first one wires the
+    # tick. Locate the timer-tracked tick directly, then confirm it sits inside a
+    # DOMContentLoaded listener (so it's cleaned up on navigation).
+    idx = src.find("_timers.push(setInterval(tick")
+    assert idx != -1, (
+        "siem.html: tick() setInterval not pushed to _timers. "
         "The interval will leak on navigation without cleanup."
+    )
+    assert src.rfind("DOMContentLoaded", 0, idx) != -1, (
+        "siem.html: tick() timer must be wired inside a DOMContentLoaded listener."
     )
 
 

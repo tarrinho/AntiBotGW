@@ -117,7 +117,7 @@ nav{padding:6px 0}
     if (m !== 'GET' && m !== 'HEAD') {
       init = init || {};
       init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''});
+        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
     }
     return _orig.call(this, resource, init);
   };

@@ -431,9 +431,9 @@ async def vhost_stats_endpoint(request: web.Request):
             "SELECT vhost, "
             "  SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS total_1h, "
             "  SUM(CASE WHEN ts >= ? AND reason IN ('','ok','allowed','authorized-robot') THEN 1 ELSE 0 END) AS allowed_1h, "
-            "  SUM(CASE WHEN ts >= ? AND reason NOT IN ('','ok','allowed','authorized-robot','operator-passthrough','internal-probe') THEN 1 ELSE 0 END) AS blocked_1h, "
+            "  SUM(CASE WHEN ts >= ? AND reason NOT IN ('','ok','allowed','authorized-robot','operator-passthrough','internal-probe','operator-self') THEN 1 ELSE 0 END) AS blocked_1h, "
             "  SUM(CASE WHEN ts >= ? THEN 1 ELSE 0 END) AS total_24h, "
-            "  SUM(CASE WHEN ts >= ? AND reason NOT IN ('','ok','allowed','authorized-robot','operator-passthrough','internal-probe') THEN 1 ELSE 0 END) AS blocked_24h, "
+            "  SUM(CASE WHEN ts >= ? AND reason NOT IN ('','ok','allowed','authorized-robot','operator-passthrough','internal-probe','operator-self') THEN 1 ELSE 0 END) AS blocked_24h, "
             "  MAX(ts) AS last_seen_ts "
             "FROM events WHERE ts >= ? AND vhost != '' "
             "GROUP BY vhost ORDER BY total_1h DESC",
@@ -743,7 +743,7 @@ async def audit_log_endpoint(request: web.Request):
 
 # ── 1.8.2 — Control Center analytics endpoints ────────────────────────────────
 
-_SKIP_REASONS = ('', 'ok', 'allowed', 'authorized-robot', 'operator-passthrough', 'internal-probe')
+_SKIP_REASONS = ('', 'ok', 'allowed', 'authorized-robot', 'operator-passthrough', 'internal-probe', 'operator-self')
 
 
 async def block_reasons_timeline_endpoint(request: web.Request):

@@ -419,6 +419,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+<script>(function(){var _orig=window.fetch;window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m!=='GET'&&m!=='HEAD'){init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':(window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});}return _orig.call(this,resource,init);};})();</script>
 <script>
 function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
 const _dp = (h) => {

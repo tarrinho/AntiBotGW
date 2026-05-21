@@ -1207,7 +1207,7 @@ document.addEventListener('DOMContentLoaded', function(){
     if (m !== 'GET' && m !== 'HEAD') {
       init = init || {};
       init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''});
+        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
     }
     return _orig.call(this, resource, init);
   };
@@ -2799,24 +2799,47 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const ORDER = {bad:0, warn:1, ok:2};
 
   let lastData = null;
+  let authError = false;
+
+  // Surface an admin-auth/session failure on the Health pill so it's visible
+  // globally (not buried in one card). Any admin fetch that gets 401/403/404
+  // — including the silent 404 decoy served when the session has expired —
+  // can call window._gwPillAuthError() to flip the pill here.
+  function _setAuthError(){
+    authError = true; lastData = null;
+    pill.style.background  = '#3d1a1a';
+    pill.style.color       = '#f85149';
+    pill.style.borderColor = '#f85149';
+    pill.textContent       = '● ⚠ sign in';
+    pill.title = 'An admin request failed authentication — your session has expired. '
+               + 'Reload the page and sign in again.';
+  }
+  window._gwPillAuthError = _setAuthError;
 
   async function tick(){
+    let r;
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
-                            {credentials:'include'});
-      const d = await r.json();
-      lastData = d;
-      const s = d.score|0;
-      const c = colorFor(s);
-      pill.style.background  = c.bg;
-      pill.style.color       = c.fg;
-      pill.style.borderColor = c.edge;
-      pill.textContent = `● Health  ${s}/100`;
+      r = await fetch('/antibot-appsec-gateway/secured/health-score', {credentials:'include'});
     } catch(e){
-      pill.style.background  = '#3d1a1a';
-      pill.style.color       = '#f85149';
-      pill.textContent       = '● Health  ERR';
+      pill.style.background='#3d1a1a'; pill.style.color='#f85149'; pill.style.borderColor='#f85149';
+      pill.textContent='● Health  ERR';
+      pill.title='Could not reach the gateway (network error). Refreshes every 15 s.';
+      return;
     }
+    // 401/403/404 (incl the expired-session decoy) → auth/session problem
+    if (r.status === 401 || r.status === 403 || r.status === 404) { _setAuthError(); return; }
+    let d;
+    try { d = await r.json(); }
+    catch(_){ _setAuthError(); return; }   // non-JSON decoy ⇒ session likely gone
+    authError = false;
+    lastData = d;
+    const s = d.score|0;
+    const c = colorFor(s);
+    pill.style.background  = c.bg;
+    pill.style.color       = c.fg;
+    pill.style.borderColor = c.edge;
+    pill.textContent = `● Health  ${s}/100`;
+    pill.title = 'Gateway health score — refreshes every 15 s · click for breakdown';
   }
 
   const KEY_LABELS = {
@@ -2839,6 +2862,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
   }
   pill.onclick = () => {
+    if (authError){
+      modalBody.innerHTML = '<div style="padding:10px 4px;color:#f85149;font-size:13px;line-height:1.5">'
+        + '<strong>⚠ Admin session expired</strong><br>'
+        + 'A secured request failed authentication. Reload the page and sign in again to restore access.'
+        + '</div><div style="padding:4px"><button onclick="location.reload()">Reload &amp; sign in</button></div>';
+      modal.classList.add('show'); return;
+    }
     if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
     const s = lastData.score|0;
     const c = colorFor(s);
@@ -3032,7 +3062,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       return;
     }
     try {
-      const csrf = document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
+      const csrf = window.__AGW_CSRF__ || document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
       const r = await fetch(NS + '/secured/secrets', {
         method: 'POST', credentials: 'include',
         headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf},
@@ -3052,7 +3082,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
   document.getElementById('sso-clear').addEventListener('click', async () => {
     if (!confirm('Disable SSO? This will remove all OIDC credentials and hide the SSO login button.')) return;
-    const csrf = document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
+    const csrf = window.__AGW_CSRF__ || document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
     const keys = ['OIDC_ISSUER','OIDC_CLIENT_ID','OIDC_CLIENT_SECRET','OIDC_DEFAULT_ROLE','OIDC_SCOPES'];
     for (const k of keys) {
       await fetch(NS + '/secured/secrets?name=' + k, {
@@ -3083,7 +3113,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const qrWrap    = document.getElementById('twofa-qr-wrap');
   const qrImg     = document.getElementById('twofa-qr-img');
 
-  function csrf() { return document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || ''; }
+  function csrf() { return window.__AGW_CSRF__ || document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || ''; }
 
   // The /secured/* gate silently 404-decoys (HTML, not JSON) when the admin
   // session is missing/expired, so r.json() would throw. Parse defensively and
@@ -3108,6 +3138,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
                                           : ('2FA status request failed (HTTP ' + r.status + ').');
       badge.style.background = 'var(--line)'; badge.style.color = 'var(--dim)';
       enableBtn.style.display = 'none'; disableBtn.style.display = 'none';
+      // also surface globally on the Health pill (top-right)
+      if (_isAuthFail(r.status) && window._gwPillAuthError) window._gwPillAuthError();
       return;
     }
     const j = (await _readJson(r)) || {};
@@ -3185,9 +3217,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
   // ── Infrastructure ─────────────────────────────────────────────
   const INFRA_KNOBS = [
-    {key:'ALLOW_PRIVATE_UPSTREAM', kind:'bool', restart:true,
+    {key:'ALLOW_PRIVATE_UPSTREAM', kind:'bool', restart:false,
      desc:'Allow upstream URLs resolving to RFC-1918/loopback (e.g. host.docker.internal). Disables SSRF guard — only for trusted internal deployments.'},
-    {key:'STRICT_VHOST', kind:'bool', restart:true,
+    {key:'STRICT_VHOST', kind:'bool', restart:false,
      desc:'Return 502 for inbound Host not registered as a vhost. Prevents global UPSTREAM acting as catch-all for unknown hostnames.'},
     {key:'UPSTREAM_REWRITE_BASE', kind:'text', restart:false,
      ph:'e.g. http://host.docker.internal:8093',
@@ -3223,44 +3255,48 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         : '';
       if (k.kind === 'bool') {
         const on = !!val;
+        const ikey = k.restart ? '' : `data-ikey="${_esc(k.key)}"`;
+        const cur = k.restart ? 'cursor:not-allowed;opacity:.5' : 'cursor:pointer';
         return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #1f2730">
           <div style="flex:1;min-width:0">
             <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)">${_esc(k.key)}${restart}</div>
             <div style="font-size:11px;color:var(--dim);margin-top:3px">${_esc(k.desc)}</div>
           </div>
-          <div data-ikey="${_esc(k.key)}" style="position:relative;width:42px;height:22px;background:${on?'var(--green)':'#30363d'};border-radius:11px;cursor:pointer;transition:background .15s;flex-shrink:0;margin-left:14px">
+          <div ${ikey} style="position:relative;width:42px;height:22px;background:${on?'var(--green)':'#30363d'};border-radius:11px;${cur};transition:background .15s;flex-shrink:0;margin-left:14px">
             <span style="position:absolute;top:2px;left:${on?'22px':'2px'};width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;display:block"></span>
           </div>
         </div>`;
       }
       if (k.kind === 'text') {
+        const ro = k.restart ? 'disabled style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
+                             : `style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" oninput="_infraChange('${_esc(k.key)}',this.value)"`;
         return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
-          <input type="text" value="${_esc(val||'')}" placeholder="${_esc(k.ph||'')}"
-                 style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
-                 oninput="_infraChange('${_esc(k.key)}',this.value)">
+          <input type="text" value="${_esc(val||'')}" placeholder="${_esc(k.ph||'')}" ${ro}>
         </div>`;
       }
       if (k.kind === 'select') {
         const opts = (k.options||[]).map(o =>
           `<option value="${_esc(o)}"${o===(val||'')?' selected':''}>${_esc(o)}</option>`
         ).join('');
+        const roDis = k.restart ? 'disabled ' : '';
+        const roEvt = k.restart ? '' : `onchange="_infraChange('${_esc(k.key)}',this.value)"`;
         return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
-          <select style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
-                  onchange="_infraChange('${_esc(k.key)}',this.value)">${opts}</select>
+          <select ${roDis}style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+                  ${roEvt}>${opts}</select>
         </div>`;
       }
       if (k.kind === 'list') {
         const dispVal = Array.isArray(val) ? val.join(', ') : (val||'');
+        const ro = k.restart ? 'disabled style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
+                             : `style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" oninput="_infraChange('${_esc(k.key)}',this.value)"`;
         return `<div style="padding:10px 0;border-bottom:1px solid #1f2730">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
-          <input type="text" value="${_esc(dispVal)}" placeholder="${_esc(k.ph||'')}"
-                 style="width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
-                 oninput="_infraChange('${_esc(k.key)}',this.value)">
+          <input type="text" value="${_esc(dispVal)}" placeholder="${_esc(k.ph||'')}" ${ro}>
         </div>`;
       }
       return '';
@@ -3293,8 +3329,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     if (!Object.keys(_infraDirty).length) return;
     this.disabled = true;
     try {
+      const _iCsrf = (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'');
       const r = await fetch('/antibot-appsec-gateway/secured/config',
-        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(_infraDirty)});
+        {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':_iCsrf},credentials:'include',body:JSON.stringify(_infraDirty)});
       const d = await r.json();
       const n = d.applied ? Object.keys(d.applied).length : 0;
       if (r.ok && n) { toast('Applied '+n+' change(s)','ok'); await loadInfra(); }

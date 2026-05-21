@@ -210,6 +210,7 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 </div>
 
 <div id="gw-alert"></div>
+<script>(function(){var _orig=window.fetch;window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m!=='GET'&&m!=='HEAD'){init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':(window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});}return _orig.call(this,resource,init);};})();</script>
 
 <script>
 'use strict';

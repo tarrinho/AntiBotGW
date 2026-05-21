@@ -219,7 +219,7 @@
 | `test_164_db_backend_falls_back_when_psycopg_missing` | `DB_BACKEND=postgres` without psycopg falls back to SQLite |
 | `test_165_detector_stats_endpoint_registered` | `/secured/detector-stats` exists |
 | `test_165_botd_wired` | FingerprintJS BotD bundle wired in, knob hot-reloadable |
-| `test_165_every_knob_persists_round_trip` | Comprehensive round-trip test for every `_HOT_RELOAD_KNOBS` entry |
+| `test_165_every_knob_persists_round_trip` | Comprehensive round-trip test for every `_HOT_RELOAD_KNOBS` entry; `test_values` updated for `BOT_DETECTION_ENABLED`, `TRUST_XFF`, `TRUSTED_PROXIES` (1.8.10); `finally` extends restoration to all `sys.modules` entries to prevent cross-test pollution from `db_load_config` propagation loop |
 | `test_165_admin_ip_bypasses_country_block` | Admin-allowlisted IPs bypass `COUNTRY_BLOCK_ENABLED` |
 | `test_165_tarpit_knobs_registered` | `TARPIT_ENABLED` + `TARPIT_DELAY_MS` hot-reloadable |
 | `test_168_labyrinth_knobs_in_hot_reload` | `LABYRINTH_*` hot-reload knobs registered |
@@ -1415,4 +1415,143 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
-*Total test files: 75 | Approximate total test functions: ~2,270+*
+### `test_v1810_2fa_status_robust.py` — 2FA card + Health pill session-expiry robustness
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 10 | `isAuthFail()` helper covers 401/403/404; `load2fa()` guards `.ok` before `.json()`; Health pill exposes `authErrorHook` + detects 404 auth failure; pill modal explains session expiry |
+
+---
+
+### `test_v1810_admin_probe_classification.py` — Admin-path reason split (`admin-probe` / `operator-self`)
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestClassification` | 8 | Legacy `internal-probe` not emitted; unauthenticated → `admin-probe`, authenticated → `operator-self`; IP-blocked still distinct |
+| `TestBlockedConsistency` | 2 | Metrics passthrough emits `operator-self` |
+
+---
+
+### `test_v1810_csrf_cookie.py` — CSRF cookie issuance and self-heal
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 5 | OIDC/SSO login sets `agw_csrf`; password login sets `agw_csrf`; `protect()` re-issues stale/missing CSRF cookie; `record()` still called in authed branch; CSRF token round-trip |
+
+---
+
+### `test_v1810_csrf_session_regression.py` — Session key persistence across container restarts
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestSessionKeyPersistence` | 5 | Dockerfile and armv7 Dockerfile symlink `.session_key` → `/data`; docker-compose mounts named `data` volume and sets `APPSECGW_KEY_DIR=/data` |
+| `TestCsrfTokenValidation` | 9 | HMAC structure; wrong key rejected; CSRF token format |
+| `TestSsoOidcPath` | 8 | OIDC callback sets both session + CSRF cookies; shim coverage |
+| `TestProtectMiddleware` | 12 | Protect middleware re-issues CSRF; CSRF check on POST |
+| other | 12 | Edge cases |
+
+---
+
+### `test_v1810_csrf_shim_coverage.py` — Global `fetch` CSRF shim on all dashboards
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestShimPresence` | 12 | Shim present on vhost_policy, main, controls, geo, logs, agents, siem, service, settings dashboards |
+| `TestShimBehaviour` | 8 | Shim intercepts POST/PATCH/DELETE; injects `X-CSRF-Token`; GET not intercepted |
+
+---
+
+### `test_v1810_infra_restart_knobs.py` — Infrastructure restart-required knob UX
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestInfraRestartKnobs` | 14 | `ALLOW_PRIVATE_UPSTREAM` and `STRICT_VHOST` in `INFRA_KNOBS`; no `data-ikey`; `render_infra` uses pointer cursor not `not-allowed` for restart knobs |
+
+---
+
+### `test_v1810_reason_descriptions.py` — Admin-namespace reason descriptions
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 6 | Admin reasons (`admin-probe`, `operator-self`, `live-not-loopback`, `chal-required`) have descriptions, labels, and `admin` category with colour + action; legacy `internal-probe` split explained |
+
+---
+
+### `test_v1810_riskbreakdown_control_column.py` — Risk-score-breakdown "control" column
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestServerContract` | 6 | `SIGNAL_KNOB` maps reasons to knobs; scoring endpoint emits `toggle` per signal; synthetic reasons mapped; full `SIGNAL_KNOB` exposed |
+| `TestRiskBreakdownColumn` | 5 | Frontend loads knob map from scoring endpoint; column rendered per row |
+
+---
+
+### `test_v1810_score_controls.py` — Score-breakdown "Controls governing this score"
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 5 | JS `SIGNAL_KNOB` matches backend; `buildScoreHtml` helpers present; controls area uses live ON/OFF state; score popover refreshes control state |
+
+---
+
+### `test_v1810_topbar_overlap.py` — Topbar overlap fix (static)
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 6 | Fixed-widget pages reserve right space; reserve is desktop-scoped; inflow pages keep widgets in topbar; collapsed topbar reserves left space |
+
+---
+
+### `test_v1810_topbar_overlap_dynamic.py` — Topbar overlap fix (headless Chromium)
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (parametrized, 5 dashboards) | 15 | `getBoundingClientRect` verifies fixed Health pill + log selector do not overlap topbar buttons/title at 1400px viewport |
+
+---
+
+### `test_v1810_trusted_proxies_hotreload.py` — `TRUSTED_PROXIES` / `TRUST_XFF` hot-reload
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestRegistry` | 5 | `TRUSTED_PROXIES` + `TRUST_XFF` in `_HOT_RELOAD_KNOBS`; exported from config; `TRUSTED_PROXIES` is list; `ALLOW_PRIVATE_UPSTREAM` hot-reloadable |
+| `TestHotReload` | 8 | Round-trip CIDR list; `get_ip()` honours `TRUST_XFF=first/last/none`; private-upstream guard trips with `ALLOW_PRIVATE_UPSTREAM=False` |
+| other | 21 | Settings CSRF shim; controls sidebar removal; edge cases |
+
+---
+
+### `test_v1810_vhost_knob_persist.py` — Per-vhost knob persistence (`_to_bool` coercion)
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 19 | `_to_bool` parses `"true"/"false"/"0"/"1"`; no bare `bool` coercer; `KNOB_META` completeness for WAF_* and 30 other knobs; vhost save/load round-trips bool knobs |
+
+---
+
+*Total test files: 88 | Approximate total test functions: ~2,465+*

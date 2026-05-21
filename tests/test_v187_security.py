@@ -176,11 +176,20 @@ class TestPROXY401UpstreamValidator:
                 mock_check.assert_not_called()
                 assert result
 
-    def test_allow_private_upstream_not_in_hot_reload_knobs(self):
-        from core.proxy_handler import _HOT_RELOAD_KNOBS
-        assert "ALLOW_PRIVATE_UPSTREAM" not in _HOT_RELOAD_KNOBS, (
-            "ALLOW_PRIVATE_UPSTREAM must be removed from _HOT_RELOAD_KNOBS "
-            "to prevent runtime SSRF enablement via hot-reload"
+    def test_allow_private_upstream_runtime_toggle_is_operator_accepted(self):
+        """1.8.x — by explicit operator request ALLOW_PRIVATE_UPSTREAM is now
+        runtime-togglable from Settings (env value is the cold-start default;
+        the change persists, DB-wins on restart). The SSRF tradeoff of letting
+        an admin disable the guard without a restart is documented + accepted in
+        core/proxy_handler.py for trusted internal deployments. It is excluded
+        from env-pinning so the dashboard toggle is honoured."""
+        from core.proxy_handler import _HOT_RELOAD_KNOBS, _ENV_PIN_EXCLUDE
+        assert "ALLOW_PRIVATE_UPSTREAM" in _HOT_RELOAD_KNOBS, (
+            "ALLOW_PRIVATE_UPSTREAM is intentionally hot-reloadable (operator request)"
+        )
+        assert "ALLOW_PRIVATE_UPSTREAM" in _ENV_PIN_EXCLUDE, (
+            "ALLOW_PRIVATE_UPSTREAM must be excluded from env-pinning so the "
+            "runtime Settings toggle is honoured"
         )
 
     def test_upstream_knob_uses_safe_validator(self):
