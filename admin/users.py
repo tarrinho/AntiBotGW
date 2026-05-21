@@ -565,6 +565,11 @@ async def logout_endpoint(request: web.Request):
             _session_revoke(sid, by_username=user)
     resp = web.HTTPFound("/antibot-appsec-gateway/login")
     resp.del_cookie(_SESSION_COOKIE, path="/")
+    # Clear agw_csrf too — otherwise it lingers and, after a re-login that
+    # mints a new sid, the stale token mismatches and every POST fails with
+    # "CSRF token invalid". (The session_cookie_finalizer self-heal also
+    # re-issues it, but clearing on logout keeps the cookie jar clean.)
+    resp.del_cookie("agw_csrf", path="/")
     return resp
 
 
@@ -1315,8 +1320,16 @@ async def totp_status_endpoint(request: web.Request):
     username = _request_username(request)
     if not username or username in ("admin-key", "unknown"):
         return web.json_response({"enabled": False}, headers={"Cache-Control": "no-store"})
-    user = _user_load(username)
-    enabled = bool(user and user.get("totp_enabled"))
+    # Never let a users-table read fault 500 this endpoint: the Settings 2FA
+    # card calls it on every page load and an HTML 500 page would surface as a
+    # cryptic "error" badge. Degrade to enabled:false and log instead.
+    try:
+        user = _user_load(username)
+        enabled = bool(user and user.get("totp_enabled"))
+    except Exception as _e:  # noqa: BLE001 — defensive: DB/backend hiccup must not crash the card
+        slog("totp_status_load_failed", level="warn", username=username,
+             ip=get_ip(request), error=str(_e))
+        enabled = False
     return web.json_response({"enabled": enabled}, headers={"Cache-Control": "no-store"})
 
 

@@ -841,7 +841,7 @@ const url = p => p;   // identity — kept for the ~30 fetch call-sites througho
     if (m !== 'GET' && m !== 'HEAD') {
       init = init || {};
       init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''});
+        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
     }
     return _orig.call(this, resource, init);
   };
@@ -3540,7 +3540,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       // agw_csrf cookie was producing "CSRF token invalid" 403s for some
       // operators. If the cookie is missing, surface a clear hint instead
       // of the generic 'server 403'.
-      const _csrf = (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '';
+      const _csrf = (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]) || '';
       if (!_csrf) {
         showToast('CSRF cookie missing — session may have expired. Reload page and log in again.', 'err');
         return;
@@ -3580,7 +3580,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     }
 
     try {
-      const _csrf = (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '';
+      const _csrf = (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]) || '';
       if (!_csrf) {
         showToast('CSRF cookie missing — session may have expired. Reload page and log in again.', 'err');
         return;
@@ -3989,6 +3989,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       window._setView('default');
     }
     _active = secId;
+    // The Default/Accordion/Grid view-picker only applies to the Detection
+    // section (the grouped bool-knob layout). Hide it on every other section.
+    const _vp = document.getElementById('view-picker');
+    if (_vp) _vp.style.display = (secId === 'detection') ? '' : 'none';
     for (const [cardId, sec] of Object.entries(CARD_SEC)) {
       const el = document.getElementById(cardId);
       if (el) el.style.display = (sec === secId) ? '' : 'none';
@@ -4258,11 +4262,12 @@ function _buildGroupSection(grp, mode) {
     return m && m.kind !== 'bool';
   });
   nonBoolKnobs.forEach(k => {
-    const m = META[k];
+    const m = (typeof META !== 'undefined') ? META[k] : null;
+    if (!m) return;
     const hint = document.createElement('div');
     hint.className = 'ctrl ctrl-hint';
-    hint.innerHTML = `<span class="ctrl-hint-label">${k}</span>`
-      + `<span class="ctrl-hint-desc">${m.desc} — <em>configured in the card below</em></span>`;
+    hint.innerHTML = `<span class="ctrl-hint-label">${escapeHtml(k)}</span>`
+      + `<span class="ctrl-hint-desc">${escapeHtml(m.desc||'')} — <em>configured in the card below</em></span>`;
     body.appendChild(hint);
   });
 

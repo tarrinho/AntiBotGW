@@ -910,8 +910,9 @@ class TestDbShowTipLiveProbe:
         marker = "window._dbShowTip = function"
         idx = self.src.find(marker)
         assert idx != -1, "_dbShowTip not found in settings.html"
-        # 12000 chars covers full body: render + live probe IIFE + button wiring
-        return self.src[idx: idx + 12000]
+        # 18000 chars covers the full body: render + live probe IIFE (stats grid +
+        # dual-write-lag warning + DSN auto-fill + opacity restore) + button wiring.
+        return self.src[idx: idx + 18000]
 
     def _probe_fetch_idx(self, blk: str) -> int:
         # The live probe fetches /db-test (no ?dsn= param)
@@ -987,7 +988,12 @@ class TestDbShowTipLiveProbe:
     def test_l09_opacity_restored_after_fetch(self):
         blk = self._dbShowTip_block()
         probe_idx = self._probe_fetch_idx(blk)
-        after_fetch = blk[probe_idx: probe_idx + 5500]
+        # Window widened (1.8.x) to cover the full success path: the live probe
+        # now rebuilds the stats grid + dual-write-lag warning + DSN auto-fill
+        # before restoring opacity at the end, so the restore sits well past the
+        # original 5500-char window. showUiError also restores it on every error
+        # path. Cap at the block length.
+        after_fetch = blk[probe_idx: probe_idx + 9000]
         assert "opacity" in after_fetch and ("= '1'" in after_fetch or '= "1"' in after_fetch), (
             "Status tile opacity must be restored to 1 after live probe completes"
         )

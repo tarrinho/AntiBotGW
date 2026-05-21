@@ -511,6 +511,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 </div>
 
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+<script>(function(){var _orig=window.fetch;window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m!=='GET'&&m!=='HEAD'){init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':(window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});}return _orig.call(this,resource,init);};})();</script>
 <script>
 'use strict';
 
@@ -695,7 +696,7 @@ function _addServerRule() {
   fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {
     method:'POST', credentials:'same-origin',
     headers:{'Content-Type':'application/json',
-             'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''},
+             'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')},
     body:JSON.stringify(payload),
   }).then(function(r) { return r.json(); })
     .then(function(d) {
@@ -707,14 +708,14 @@ function _deleteServerRule(id) {
   if (!confirm('Delete this server rule?')) return;
   fetch('/antibot-appsec-gateway/secured/siem-alert-rules?id=' + id,
         {method:'DELETE', credentials:'same-origin',
-         headers:{'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''}})
+         headers:{'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')}})
     .then(function() { _loadServerRules(); });
 }
 function _toggleServerRule(id, newEnabled) {
   fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {
     method:'PATCH', credentials:'same-origin',
     headers:{'Content-Type':'application/json',
-             'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''},
+             'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')},
     body:JSON.stringify({id:id, enabled:newEnabled}),
   }).then(function() { _loadServerRules(); });
 }

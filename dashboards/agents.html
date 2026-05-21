@@ -146,10 +146,14 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .popover .kv{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .popover .kv .k{color:var(--dim);text-align:right}
 .popover .kv .v{color:var(--fg);word-break:break-all}
-.popover .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:8px;align-items:center;
+.popover .rsn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 54px 44px;gap:8px;align-items:center;
         padding:3px 0;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11px}
 .popover .rsn:last-child{border-bottom:0}
-.popover .rsn-name{color:var(--fg)}
+.popover .rsn-name{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.popover .rsn-ctrl{color:var(--blue);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.popover .rsn-ctrl.dim{color:var(--dim)}
+.popover .rsn-head .rsn-name,.popover .rsn-head .rsn-ctrl,.popover .rsn-head .rsn-val{
+  color:var(--dim);font-weight:600;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px}
 .popover .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
 .popover .rsn-bar>div{height:100%;background:var(--red)}
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
@@ -386,7 +390,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     if (m !== 'GET' && m !== 'HEAD') {
       init = init || {};
       init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||''});
+        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
     }
     return _orig.call(this, resource, init);
   };
@@ -1354,6 +1358,38 @@ window._gwIdentityPopover = (function(){
     if (s < 86400)return (s/3600).toFixed(1)+'h ago';
     return (s/86400).toFixed(1)+'d ago';
   }
+  // reason → controlling knob map, lazily loaded from the scoring endpoint.
+  // null value = detection signal with no kill-switch (always-on); a reason
+  // absent from the map is not a tunable detection (e.g. a ban outcome).
+  let _knobMap = null;
+  function _loadKnobs(){
+    if (_knobMap !== null) return;
+    _knobMap = {};  // mark in-flight so we don't double-fetch
+    fetch('/antibot-appsec-gateway/secured/scoring', {credentials:'include'})
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        // Prefer the full reason→knob map (covers synthetic reasons like
+        // chal-required / pow-required); fall back to weights[].toggle.
+        if (d.signal_knob && typeof d.signal_knob === 'object') {
+          _knobMap = d.signal_knob;
+        } else if (Array.isArray(d.weights)) {
+          const m = {};
+          d.weights.forEach(w => { if (w && w.signal) m[w.signal] = w.toggle || null; });
+          _knobMap = m;
+        }
+      })
+      .catch(() => {});
+  }
+  function _ctrlCell(reason){
+    // Returns {text, dim} for the control column.
+    if (_knobMap && (reason in _knobMap)) {
+      return _knobMap[reason]
+        ? {text: _knobMap[reason], dim: false}
+        : {text: 'always-on', dim: true};
+    }
+    return {text: '—', dim: true};
+  }
   function normalizeId(raw){
     const bbd = Array.isArray(raw.blocks_breakdown)
       ? raw.blocks_breakdown
@@ -1426,11 +1462,20 @@ window._gwIdentityPopover = (function(){
     const isWeighted = !!d.risk_breakdown;
     const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
     const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
+    const head = breakdown.length
+      ? `<div class="rsn rsn-head">
+           <span class="rsn-name">signal</span>
+           <span class="rsn-ctrl">control</span>
+           <span></span>
+           <span class="rsn-val">${isWeighted?'risk':'hits'}</span></div>`
+      : '';
     const rows = breakdown.length
       ? breakdown.map(([reason, val])=>{
           const pct = (val/total*100).toFixed(0);
+          const ctrl = _ctrlCell(reason);
           return `<div class="rsn">
             <span class="rsn-name">${escapeHtml(reason)}</span>
+            <span class="rsn-ctrl${ctrl.dim?' dim':''}" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>
             <div class="rsn-bar"><div style="width:${pct}%"></div></div>
             <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
@@ -1441,8 +1486,9 @@ window._gwIdentityPopover = (function(){
         decays at half-life 1h ·
         ban threshold ≥ 50 (≥100 for NAT)
       </div>
-      ${rows}`;
+      ${head}${rows}`;
   }
+  _loadKnobs();  // warm the reason→control map so it's ready when a modal opens
   return { normalizeId, buildIdHtml, buildRiskHtml };
 })();
 
@@ -1530,6 +1576,10 @@ const RISK_BAN_THRESHOLD = 50;
 // Block reason labels and descriptions (block_count synthetic score)
 const BLOCK_LABELS_JS = {
   "admin-ip-blocked":        "Admin endpoint — IP not in allowlist",
+  "internal-probe":          "Admin namespace probe (legacy label)",
+  "admin-probe":             "Admin namespace probe — no session",
+  "operator-self":           "Operator browser — session lapsed",
+  "operator-passthrough":    "Operator dashboard access (authenticated)",
   "ua-blocked":              "User-Agent explicitly blocked",
   "ua-empty":                "No User-Agent header",
   "ua-too-short":            "User-Agent suspiciously short",
@@ -1640,6 +1690,10 @@ const BLOCK_DETAIL_JS = {
   "header-canary": "A canary token injected into a response header was echoed back in a subsequent request. This proves the client is reading and replaying response headers — a capability unique to scripted clients.",
   "json-canary": "A canary token injected into a JSON response body was echoed back by the client. This confirms the client is parsing JSON responses and extracting values — not a passive HTTP client.",
   "bypass-path": "The request matched a configured bypass rule that exempts this path from normal gateway inspection. This appears in block logs when the bypass interacts with other active rules.",
+  "internal-probe": "Legacy label (pre-1.8.10) for a request to the gateway's own admin namespace (/antibot-appsec-gateway/secured/…) from an allow-listed IP that carried no valid operator session. As of 1.8.10 this is split into 'operator-self' (the operator's own browser after its session lapsed) and 'admin-probe' (anonymous recon); existing 'internal-probe' rows are historical. The request was served the silent 404 decoy — it is not a real block, and these are not bot detections.",
+  "admin-probe": "A request to the gateway admin namespace (/secured/…) from an allow-listed IP with NO valid session cookie — anonymous or external reconnaissance of admin paths. The gateway served the silent 404 decoy (identical to any non-existent upstream path) so the prober learns nothing. Counted as a block so admin-namespace recon is visible in threat metrics.",
+  "operator-self": "The operator's own browser making admin XHRs after its agw_session lapsed server-side (expired, revoked, or evicted from the session cache). Benign self-noise — the dashboard just needs a re-login (the page surfaces a 'session expired' prompt). Excluded from real block counts.",
+  "operator-passthrough": "An authenticated operator successfully reaching the admin dashboard or API. Recorded on the gateway-management timeline for visibility; it is an allowed request, not a block.",
 };
 
 const RISK_CATEGORY_JS = {
@@ -1679,6 +1733,8 @@ const RISK_CATEGORY_JS = {
   "no-interaction":"INTERACTION","bot-motion":"INTERACTION","scripted-motion":"INTERACTION",
   "bot-scroll":"INTERACTION","scripted-keys":"INTERACTION","low-entropy-input":"INTERACTION",
   "custom-rule-block":"RULE","host-not-allowed":"CONFIG",
+  "admin-ip-blocked":"ADMIN","internal-probe":"ADMIN","admin-probe":"ADMIN",
+  "operator-self":"ADMIN","operator-passthrough":"ADMIN",
 };
 const RISK_CAT_COLORS = {
   "HONEYPOT":   ["#f85149","#3d1212"],"INJECTION":  ["#f85149","#3d1212"],
@@ -1691,6 +1747,7 @@ const RISK_CAT_COLORS = {
   "HEADERS":    ["#5fb3c0","#0f1f22"],"NETWORK":    ["#58a6ff","#0d1b2a"],
   "GEO":        ["#58a6ff","#0d1b2a"],"INTERACTION":["#3fb950","#0f2018"],
   "RULE":       ["#8b949e","#1c2128"],"CONFIG":     ["#8b949e","#1c2128"],
+  "ADMIN":      ["#58a6ff","#0d1b2a"],
 };
 const RISK_ACTION_JS = {
   "HONEYPOT":   "Immediate ban recommended — honeypot/trap access is an unambiguous bot signal with no false-positive scenario.",
@@ -1712,6 +1769,7 @@ const RISK_ACTION_JS = {
   "SCANNING":   "Block if persistent — active enumeration of the attack surface indicates targeted reconnaissance.",
   "RULE":       "See the Rules dashboard for operator-defined remediation guidance.",
   "CONFIG":     "Verify gateway configuration — unexpected Host header may indicate virtual host scanning.",
+  "ADMIN":      "Gateway-management traffic, not bot detection. Operator-self / passthrough is benign (re-login if a session lapsed); admin-probe / admin-ip-blocked is reconnaissance of the admin namespace already served a silent 404 decoy — tighten ADMIN_ALLOWED_IPS if it persists from untrusted sources.",
 };
 const RISK_DETAIL_JS = {
   "honeypot":"A fake URL planted deliberately to catch automated scanners. Legitimate human users never navigate to these endpoints — only bots following link graphs or fuzzing paths will trigger this signal. A single hit is a near-certain indicator of automation.",
@@ -1806,6 +1864,175 @@ const RISK_DETAIL_JS = {
   "scripted-keys":"Keyboard events were observed but inter-key timing is too regular — fixed millisecond delays between keystrokes indicate scripted input rather than human typing variability.",
   "low-entropy-input":"Form input has very low Shannon entropy — short, highly predictable, or repetitive values that are statistically inconsistent with human-typed text.",
 };
+
+// 1.8.10 — reason/signal → governing control knob (mirror of core/proxy_handler.py
+// SIGNAL_KNOB; kept in sync by tests/test_v1810_score_controls.py). Used by the
+// score breakdown to show which controls govern an identity's score.
+const SIGNAL_KNOB_JS = {
+  "js-challenge":"JS_CHALLENGE",
+  "bot-trap":"BOT_TRAP_FORMS",
+  "suspicious-body":"BODY_PATTERN_MATCH",
+  "canary-echo":"CANARY_ECHO_DETECTION",
+  "accept-fp":"ACCEPT_FP_ENABLED",
+  "labyrinth-jitter":"LABYRINTH_JITTER_ENABLED",
+  "header-canary":"HEADER_CANARY_ENABLED",
+  "origin-mismatch":"STRICT_ORIGIN",
+  "tls-fingerprint":"TLS_FP_BLOCK_ENABLED",
+  "abuseipdb-high":"ABUSEIPDB_ENABLED",
+  "abuseipdb-med":"ABUSEIPDB_ENABLED",
+  "crowdsec-banned":"CROWDSEC_ENABLED",
+  "asn-hosting":"MAXMIND_ENABLED",
+  "country-blocked":"COUNTRY_BLOCK_ENABLED",
+  "tor-exit":"TOR_BLOCK_ENABLED",
+  "datacenter-vpn":"DC_VPN_BLOCK_ENABLED",
+  "ua-ai-openai":"AI_UA_OPENAI_ENABLED",
+  "ua-ai-anthropic":"AI_UA_ANTHROPIC_ENABLED",
+  "ua-ai-google":"AI_UA_GOOGLE_ENABLED",
+  "ua-ai-perplexity":"AI_UA_PERPLEXITY_ENABLED",
+  "ua-ai-meta":"AI_UA_META_ENABLED",
+  "ua-ai-other":"AI_UA_OTHER_ENABLED",
+  "custom-rule-block":"CUSTOM_RULES_ENABLED",
+  "rate-limit-endpoint":"ENDPOINT_RATE_LIMIT_ENABLED",
+  "body-sqli":"BODY_GROUP_SQLI_ENABLED",
+  "body-xss":"BODY_GROUP_XSS_ENABLED",
+  "body-lfi":"BODY_GROUP_LFI_ENABLED",
+  "body-rce":"BODY_GROUP_RCE_ENABLED",
+  "body-ssrf":"BODY_GROUP_SSRF_ENABLED",
+  "body-cmd":"BODY_GROUP_CMD_ENABLED",
+  "auth-jwt-invalid":"JWT_VALIDATION_ENABLED",
+  "slow-client":"WAF_SLOWLORIS_ENABLED",
+  "botd-detected":"BOTD_ENABLED",
+  "dlp-cc":"DLP_GROUP_CC_ENABLED",
+  "dlp-aws":"DLP_GROUP_AWS_ENABLED",
+  "dlp-jwt":"DLP_GROUP_JWT_ENABLED",
+  "dlp-private-key":"DLP_GROUP_PRIVATE_KEY_ENABLED",
+  "dlp-api-key":"DLP_GROUP_API_KEY_ENABLED",
+  "dlp-pii-email":"DLP_GROUP_PII_EMAIL_ENABLED",
+  "dlp-pii-ssn":"DLP_GROUP_PII_SSN_ENABLED",
+  "tarpit-walk":"LABYRINTH_ENABLED",
+  "header-order-fp":"HEADER_ORDER_FP_ENABLED",
+  "ai-ua-ip-mismatch":"AI_CRAWLER_VERIFY_ENABLED",
+  "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
+  "robots-violation":"ROBOTS_MONITOR_ENABLED",
+  "h2-fp":"H2_FP_ENABLED",
+  "json-canary":"JSON_CANARY_ENABLED",
+  "honeypot":"HONEYPOT_ENABLED",
+  "honeypot-silent":"HONEYPOT_ENABLED",
+  "suspicious-path":"SUSPICIOUS_PATH_ENABLED",
+  "ai-probe":"AI_PROBE_ENABLED",
+  "ua-empty":"UA_FILTER_ENABLED",
+  "ua-blocked":"UA_FILTER_ENABLED",
+  "ua-too-short":"UA_FILTER_ENABLED",
+  "ua-non-browser":"UA_FILTER_ENABLED",
+  "ua-platform-mismatch":"UA_PLATFORM_CHECK_ENABLED",
+  "ai-headers-empty":"HEADER_COMPLETENESS_ENABLED",
+  "ai-headers-incomplete":"HEADER_COMPLETENESS_ENABLED",
+  "behavior":"BEHAVIORAL_CHECK_ENABLED",
+  "ai-enumeration":"AI_ENUMERATION_ENABLED",
+  "ai-no-assets":"AI_NO_ASSETS_ENABLED",
+  "session-flood":"SESSION_FLOOD_ENABLED",
+  "upstream-404":"UPSTREAM_404_TRACKING_ENABLED",
+  "cookie-ghost":"COOKIE_GHOST_ENABLED",
+  "lifecycle-miss":"COOKIE_LIFECYCLE_ENABLED",
+  "referer-ghost":"REFERER_CHAIN_ENABLED",
+  "impossible-travel":"IMPOSSIBLE_TRAVEL_ENABLED",
+  "soft-renderer":"FP_ENRICHMENT_ENABLED",
+  "webgl-missing":"FP_ENRICHMENT_ENABLED",
+  "path-sweep":"PATH_SWEEP_ENABLED",
+  "accept-wildcard-html":"ACCEPT_WILDCARD_CHECK_ENABLED",
+  "body-critical-injection":"WAF_BODY_ENABLED",
+  "body-xxe":"WAF_BODY_ENABLED",
+  "body-proto-pollution":"WAF_BODY_ENABLED",
+  "smuggling-cl-te":"WAF_SMUGGLING_ENABLED",
+  "smuggling-te-cl":"WAF_SMUGGLING_ENABLED",
+  "smuggling-te-te":"WAF_SMUGGLING_ENABLED",
+  "smuggling-invalid-te":"WAF_SMUGGLING_ENABLED",
+  "method-override-attempt":"WAF_VERB_OVERRIDE_ENABLED",
+  "header-ssti":"WAF_HEADER_INJECTION_ENABLED",
+  "host-header-injection":"WAF_HEADER_INJECTION_ENABLED",
+  "gql-introspection":"WAF_GRAPHQL_ENABLED",
+  "gql-batch-abuse":"WAF_GRAPHQL_ENABLED",
+  "gql-depth-exceeded":"WAF_GRAPHQL_ENABLED",
+  "upload-dangerous-ext":"WAF_UPLOAD_ENABLED",
+  "upload-dangerous-magic":"WAF_UPLOAD_ENABLED",
+  "smuggling-dual-header":"WAF_SMUGGLING_ENABLED",
+  "smuggling-obfuscated-te":"WAF_SMUGGLING_ENABLED",
+  "smuggling-duplicate-cl":"WAF_SMUGGLING_ENABLED",
+  "honey-cred":"HONEY_CRED_ENABLED",
+  "canary-probe-miss":"CANARY_PROBE_ENABLED",
+  "llm-no-subresources":"LLM_HEURISTIC_ENABLED",
+  "webdriver-detected":"AUTOMATION_PROBE_ENABLED",
+  "bot-motion":"INTERACTION_PROBE_ENABLED",
+  "no-interaction":"INTERACTION_PROBE_ENABLED",
+  "scripted-motion":"INTERACTION_PROBE_ENABLED",
+  "bot-scroll":"INTERACTION_PROBE_ENABLED",
+  "scripted-keys":"INTERACTION_PROBE_ENABLED",
+  "low-entropy-input":"INTERACTION_PROBE_ENABLED",
+  "coordinated-probe":"COORDINATED_ATTACK_ENABLED",
+  "direct-api-probe":"JOURNEY_CHECK_ENABLED",
+  "session-churn":"SESSION_CHURN_ENABLED",
+  "ja4h-deny":"JA4H_DENY_ENABLED",
+  "host-not-allowed":"HOST_BLOCKING_ENABLED",
+  "missing-required-header":"REQUIRED_HEADERS_ENABLED",
+  "ja4-required-missing":"JA4_REQUIRED_ENABLED",
+  "upstream-auth-fail":"UPSTREAM_AUTH_FAIL_ENABLED",
+  "headers-suspicious":"HEADER_COMPLETENESS_ENABLED",
+  "rate-limit-ip":"RATE_LIMIT_IP_ENABLED",
+  "rate-limit":"RATE_LIMIT_ENABLED",
+  "fp-banned":"FP_BAN_CHECK_ENABLED",
+  "traffic-threshold":"TRAFFIC_THRESHOLD_ENABLED",
+  "chal-required":"JS_CHALLENGE",
+  "pow-required":"POW_REQUIRED_PATHS",
+  "admin-ip-blocked":"ADMIN_ALLOWED_IPS",
+  "banned-silent":"RISK_BAN_THRESHOLD",
+  "banned":"RISK_BAN_THRESHOLD",
+};
+// Cached hot-reload knob state (knob → bool) for the score-breakdown Controls area.
+window._gwKnobState = window._gwKnobState || null;
+async function _gwLoadKnobState(){
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+    if (!r.ok) return;
+    const j = await r.json();
+    window._gwKnobState = j.state || {};
+  } catch(_) {}
+}
+try { _gwLoadKnobState(); } catch(_) {}
+// Build the 'Controls governing this score' section for an identity record.
+function _gwControlsSection(d){
+  const reasons = new Set();
+  (d.blocks_breakdown||[]).forEach(x=>reasons.add(x[0]));
+  (d.risk_breakdown||[]).forEach(x=>reasons.add(x[0]));
+  const knobs = new Map();
+  reasons.forEach(rsn=>{ const k = SIGNAL_KNOB_JS[rsn]; if(k){ if(!knobs.has(k)) knobs.set(k,[]); knobs.get(k).push(rsn); } });
+  if (!knobs.size) {
+    // Reasons present but none map to an operator-toggleable control (e.g.
+    // gateway-management / admin-namespace reasons like internal-probe, or
+    // always-on structural checks). Show the area with an explanation rather
+    // than rendering nothing, so the operator knows why it's empty.
+    return reasons.size ? `<div class="rs-divider"></div>
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:12px 0 8px;font-weight:700">Controls governing this score</div>
+      <div class="dim" style="font-size:11px;line-height:1.5">No operator-toggleable control governs this score — its signals are gateway-management / admin-namespace reasons (e.g. <code>internal-probe</code>, <code>admin-probe</code>) or always-on structural checks, not detector knobs.</div>` : '';
+  }
+  const st = window._gwKnobState;
+  const rows = [...knobs.entries()].sort((a,b)=>a[0]<b[0]?-1:1).map(([k,rs])=>{
+    let dot,lbl,col;
+    if (!st || !(k in st)) { dot='\u25CF'; lbl='?'; col='#8b949e'; }
+    else if (st[k])        { dot='\u25CF'; lbl='ON'; col='#3fb950'; }
+    else                   { dot='\u25CB'; lbl='OFF'; col='#f85149'; }
+    return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #1f2730;font-size:11px">
+      <span style="color:${col};flex-shrink:0">${dot}</span>
+      <span style="font-family:ui-monospace,Menlo,monospace;color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="governs: ${escapeHtml(rs.join(', '))}">${escapeHtml(k)}</span>
+      <span style="color:${col};font-weight:700;flex-shrink:0">${lbl}</span>
+      <a href="/antibot-appsec-gateway/secured/controls" style="margin-left:auto;flex-shrink:0;color:var(--blue);text-decoration:none">\u2192 Controls</a>
+    </div>`;
+  }).join('');
+  const note = !st ? '<div class="dim" style="font-size:10px;margin-top:4px">loading control states\u2026</div>' : '';
+  return `<div class="rs-divider"></div>
+    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:12px 0 8px;font-weight:700">Controls governing this score</div>
+    ${rows}${note}
+    <div class="dim" style="font-size:10px;margin-top:6px">Toggle these on the Controls page to change how this identity is scored. \u25CF on \u00B7 \u25CB off</div>`;
+}
 
 // 1.8.6 — stealth score breakdown (agents-only; uses escapeHtml global)
 function buildScoreHtml(d){
@@ -1984,6 +2211,11 @@ function buildScoreHtml(d){
     body = `<div style="font-size:11px;color:var(--dim);padding:8px 0">No active risk or block signals.</div>`;
   }
 
+  // 1.8.10 — new area: the control knobs that govern this score's signals, with
+  // live ON/OFF state. Wrapped in an id so openPopover can refresh it once the
+  // latest /secured/config state arrives.
+  body += `<div id="gw-score-controls">${_gwControlsSection(d)}</div>`;
+
   return scoreHeader + body;
 }
 
@@ -2002,6 +2234,13 @@ function openPopover(kind, s, x, y){
     fetchIpIntel(d.ip).then(html => {
       const node = document.getElementById('ip-intel-section');
       if (node) node.innerHTML = _dp(html);
+    }).catch(() => {});
+  }
+  if (kind === 'score') {
+    // refresh control ON/OFF state, then re-render just the Controls area
+    _gwLoadKnobState().then(() => {
+      const node = document.getElementById('gw-score-controls');
+      if (node) node.innerHTML = _dp(_gwControlsSection(d));
     }).catch(() => {});
   }
   POP.style.display = 'block';

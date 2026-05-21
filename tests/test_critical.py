@@ -1141,10 +1141,6 @@ def test_165_every_knob_persists_round_trip():
         "ANUBIS_DIFFICULTY_BOOST": 2,
         # 1.8.9 — knob added without an entry here; flip to True
         "ALLOW_PRIVATE_UPSTREAM": True,
-        # 1.8.x — XFF resolution + master bot-detection toggle
-        "BOT_DETECTION_ENABLED": False,
-        "TRUST_XFF": "first",
-        "TRUSTED_PROXIES": ["10.0.0.0/8"],
         "TURNSTILE_RISK_THRESHOLD": 25.0,
         "RISK_BAN_THRESHOLD": 75, "SOFT_CHALLENGE_SCORE": 6.0,
         "RATE_LIMIT_BURST": 88, "RATE_LIMIT_REFILL": 7.0,
@@ -1242,6 +1238,10 @@ def test_165_every_knob_persists_round_trip():
         "HONEY_CRED_ENABLED": False, "CANARY_PROBE_ENABLED": False, "LLM_HEURISTIC_ENABLED": False,
         "AUTOMATION_PROBE_ENABLED": False, "INTERACTION_PROBE_ENABLED": False,
         "COORDINATED_ATTACK_ENABLED": False, "JOURNEY_CHECK_ENABLED": False,
+        # 1.8.10
+        "BOT_DETECTION_ENABLED": False,
+        "TRUST_XFF": "first",
+        "TRUSTED_PROXIES": ["10.0.0.0/8"],
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)
@@ -1309,8 +1309,17 @@ def test_165_every_knob_persists_round_trip():
         # Restore originals so other tests aren't polluted.
         proxy._ENV_PROVIDED_KNOBS = saved_env_set
         proxy._city_reader = saved_city_reader
+        import sys as _sys_restore
         for k, v in original.items():
             setattr(proxy, k, v)
+            # Also restore all other loaded modules that db_load_config propagated to.
+            for _m in list(_sys_restore.modules.values()):
+                if (_m is not None and _m is not proxy
+                        and hasattr(_m, k)):
+                    try:
+                        setattr(_m, k, v)
+                    except (AttributeError, TypeError):
+                        pass
         # Wipe config_kv so other tests start clean.
         conn = sqlite3.connect(proxy.DB_PATH)
         conn.execute("DELETE FROM config_kv")

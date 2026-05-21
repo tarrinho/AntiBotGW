@@ -1023,6 +1023,18 @@ def db_load_config(proxy_globals: dict) -> None:
                 skipped += 1
                 continue
             g[key] = value
+            # Propagate to all loaded modules so request handlers (e.g.
+            # core.proxy_handler) that hold their own copy of the global
+            # see the DB-loaded value immediately — mirrors what the
+            # hot-reload POST handler does at runtime.
+            import sys as _sys_dbc
+            for _hr_m in list(_sys_dbc.modules.values()):
+                if (_hr_m is not None and _hr_m is not g
+                        and hasattr(_hr_m, key)):
+                    try:
+                        setattr(_hr_m, key, value)
+                    except (AttributeError, TypeError):
+                        pass
             applied += 1
         except (ValueError, TypeError, json.JSONDecodeError) as e:
             slog("db_config_parse_err", level="warn", key=key, error=str(e))

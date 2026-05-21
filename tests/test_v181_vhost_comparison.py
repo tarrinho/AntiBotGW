@@ -1378,16 +1378,22 @@ class TestRVRefreshVhosts:
     def test_rv3_refresh_vhosts_called_on_domcontentloaded(self):
         """refreshVhosts() must be called in the DOMContentLoaded Promise.all block."""
         src = (DASHBOARDS / "controls.html").read_text()
-        # Anchor search to after DOMContentLoaded so we skip the inner Promise.all
-        # inside refreshVhosts() itself and find the startup block
-        dcl_idx = src.find("DOMContentLoaded")
-        assert dcl_idx != -1, "controls.html must have DOMContentLoaded listener"
-        pa_idx = src.find("Promise.all([", dcl_idx)
-        assert pa_idx != -1, "controls.html must have Promise.all startup block after DOMContentLoaded"
-        pa_block = src[pa_idx: pa_idx + 400]
-        assert "refreshVhosts()" in pa_block, (
-            "Promise.all startup block must call refreshVhosts() so the selector "
-            "is populated immediately on page load, not only after the first interval"
+        assert "DOMContentLoaded" in src, "controls.html must have DOMContentLoaded listener"
+        # 1.8.10 — the shared sidebar accordion adds its own DOMContentLoaded near
+        # the top, so we can't anchor on the first one. Scan every Promise.all
+        # block for the startup one that calls refreshVhosts().
+        pa_idx = src.find("Promise.all([")
+        pa_block = ""
+        while pa_idx != -1:
+            chunk = src[pa_idx: pa_idx + 400]
+            if "refreshVhosts()" in chunk:
+                pa_block = chunk
+                break
+            pa_idx = src.find("Promise.all([", pa_idx + 1)
+        assert pa_block, (
+            "controls.html must call refreshVhosts() in a Promise.all startup block "
+            "so the selector is populated immediately on page load, not only after "
+            "the first interval"
         )
 
     def test_rv4_refresh_vhosts_interval_5s(self):

@@ -80,6 +80,9 @@ AGENT_BLOCK_REASONS = (
     "tls-fingerprint", "origin-mismatch", "missing-required-header",
     # LLM / AI-agent specific (1.7.2)
     "canary-echo", "internal-probe", "automation-probe",
+    # 1.8.10 — anonymous admin-namespace recon (counted block). operator-self
+    # (the operator's own lapsed-session noise) is intentionally NOT listed.
+    "admin-probe",
 )
 
 

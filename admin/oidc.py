@@ -313,6 +313,19 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
                     max_age=_SESSION_TTL, httponly=True,
                     samesite="Strict", path="/",
                     secure=SESSION_SECURE)
+    # 1.8.10 — SSO logins MUST also issue the CSRF cookie, exactly like password
+    # login (admin/users.py). Without it the fetch shim sends an empty
+    # X-CSRF-Token and every state-mutating POST (config / bypass / disable-all)
+    # fails with 403 "CSRF token invalid".
+    _parts = token.split("|")
+    if len(_parts) > 1 and _parts[1]:
+        import hashlib as _hashlib
+        from config import SESSION_KEY as _SESSION_KEY
+        _csrf = hmac.new(_SESSION_KEY, _parts[1].encode(), _hashlib.sha256).hexdigest()[:32]
+        resp.set_cookie("agw_csrf", _csrf,
+                        max_age=_SESSION_TTL, httponly=False,
+                        samesite="Strict", path="/",
+                        secure=SESSION_SECURE)
     return resp
 
 

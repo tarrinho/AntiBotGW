@@ -5002,12 +5002,16 @@ def test_main_html_apply_filters_calls_sync_panel_legends():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _gw_popover_section(dashboard: str) -> str:
-    """Return the _gwIdentityPopover block from the given dashboard file."""
+    """Return the _gwIdentityPopover IIFE block from the given dashboard file."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / dashboard).read_text()
     idx = src.find("window._gwIdentityPopover")
     assert idx != -1, f"{dashboard} must define window._gwIdentityPopover"
-    return src[idx: idx + 6000]
+    # Extract the full IIFE (ends with })()); after the opening assignment)
+    end = src.find("})();", idx)
+    if end != -1:
+        return src[idx: end + 5]
+    return src[idx: idx + 9000]  # generous fallback
 
 
 def test_gw_identity_popover_defined_in_agents_html():
@@ -5886,7 +5890,8 @@ def test_all_signal_knobs_in_vhost_coerce():
     os.environ.setdefault("UPSTREAM", "https://example.com")
     vhost_mod = importlib.import_module("vhost")
     from core.proxy_handler import SIGNAL_KNOB
-    signal_knobs = set(SIGNAL_KNOB.values())
+    # None values are signals with no kill-switch (always-on) — exclude from check
+    signal_knobs = {v for v in SIGNAL_KNOB.values() if v is not None}
     vhost_keys  = set(vhost_mod._VHOST_COERCE.keys())
     missing = signal_knobs - vhost_keys
     assert not missing, (

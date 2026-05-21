@@ -2474,9 +2474,7 @@ _HOT_RELOAD_KNOBS = {
     # XFF trust — hot-reload updates both TRUST_XFF and TRUSTED_PROXIES_NETS
     "TRUST_XFF":       (lambda v: str(v).lower(), lambda v: v in ("none", "first", "last")),
     "TRUSTED_PROXIES": (_to_ip_net_list, None),
-    # ALLOW_PRIVATE_UPSTREAM intentionally absent — must not be hot-reloadable
-    # to prevent an operator (or attacker with admin creds) from disabling the
-    # SSRF guard at runtime. Requires a container restart to change.
+    "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2492,13 +2490,19 @@ _HOT_RELOAD_KNOBS = {
 # TURNSTILE_ENABLED and JS_CHALLENGE are intentionally excluded: the env sets
 # the startup default but the dashboard must be able to toggle them at runtime
 # (e.g. disabling Turnstile for a maintenance window without a container restart).
+# ALLOW_PRIVATE_UPSTREAM is excluded by operator request: the env value is the
+# cold-start default, but the SSRF guard can be toggled at runtime from Settings
+# and the change persists (DB-wins on restart). NOTE: this lets an admin disable
+# the SSRF guard without a container restart — acceptable for trusted internal
+# deployments where operational flexibility outweighs the GitOps lock.
 # Knobs that are NOT persisted to the config_kv DB table. They remain
 # session-only and always reset to their default on container restart.
 # BYPASS_MODE is intentionally here: it's an incident-response toggle that
 # must default to False on every cold start for safety.
 _NOT_PERSIST_KNOBS: frozenset = frozenset({"BYPASS_MODE"})
 
-_ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE", "UPSTREAM"}
+_ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE", "UPSTREAM",
+                    "ALLOW_PRIVATE_UPSTREAM"}
 
 
 def _env_knob_is_provided(k: str) -> bool:
@@ -3210,11 +3214,52 @@ async def protect(request: web.Request, handler):
                 _adm_ua = request.headers.get("User-Agent", "")
                 await record(_adm_ip, _adm_ua, request.path,
                               _adm_resp.status, "operator-passthrough", request_id=rid)
+            # 1.8.10 — self-heal the CSRF cookie. agw_csrf is only set at login,
+            # so a session whose csrf cookie expired (it lives 12 h while the
+            # session can be refreshed), was never set (SSO), or went stale would
+            # fail every state-mutating POST with "CSRF token invalid". Re-issue
+            # the correct value on any authed response where it's missing/wrong,
+            # so simply loading a page restores it — no re-login needed.
+            try:
+                _sid_csrf = request.get("_session_sid", "")
+                if _sid_csrf and hasattr(_adm_resp, "set_cookie"):
+                    import hmac as _hm_csrf
+                    import hashlib as _hh_csrf
+                    from admin.users import _SESSION_TTL as _sttl_csrf
+                    _want_csrf = _hm_csrf.new(SESSION_KEY, _sid_csrf.encode(),
+                                              _hh_csrf.sha256).hexdigest()[:32]
+                    if request.cookies.get("agw_csrf", "") != _want_csrf:
+                        _adm_resp.set_cookie("agw_csrf", _want_csrf,
+                                             max_age=_sttl_csrf, httponly=False,
+                                             samesite="Strict", path="/",
+                                             secure=SESSION_SECURE)
+            except Exception:  # nosec B110 — best-effort cookie refresh; never break the response
+                pass
             return _adm_resp
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
-        reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)
-                  else "internal-probe")
+        if not _admin_ip_allowed(request):
+            reason = "admin-ip-blocked"
+        else:
+            # 1.8.10 — IP allowed but not an authenticated operator. Split the
+            # legacy catch-all "internal-probe" into two so metrics are honest:
+            #   • operator-self — a genuinely-issued agw_session that lapsed
+            #     server-side (expired/revoked/cache-evicted). This is the
+            #     operator's own browser making XHRs after the session dropped —
+            #     benign self-noise, excluded from blocked counts.
+            #   • admin-probe   — no valid session cookie at all: anonymous /
+            #     external reconnaissance of the admin namespace. Counted as a
+            #     block so recon shows up in threat metrics.
+            # _session_parse validates the HMAC, so a forged cookie cannot
+            # masquerade as operator-self — it falls through to admin-probe.
+            try:
+                from admin.users import (_session_parse as _sp_cls,
+                                         _SESSION_COOKIE as _sc_cls)
+                _cookie_cls = request.cookies.get(_sc_cls, "")
+                _operator_self = bool(_cookie_cls) and _sp_cls(_cookie_cls) is not None
+            except Exception:
+                _operator_self = False
+            reason = "operator-self" if _operator_self else "admin-probe"
         # 1.5.4: serve the upstream's actual 404 page (cached at startup,
         # refreshed hourly). An attacker probing the admin namespace sees
         # the same response as if they'd hit any non-existent path on the
@@ -5386,10 +5431,18 @@ SIGNAL_KNOB = {
     "rate-limit":               "RATE_LIMIT_ENABLED",
     "fp-banned":                "FP_BAN_CHECK_ENABLED",
     "traffic-threshold":        "TRAFFIC_THRESHOLD_ENABLED",
-    "tls-fingerprint":          "TLS_FP_BLOCK_ENABLED",
-    "auth-jwt-invalid":         "JWT_VALIDATION_ENABLED",
-    "custom-rule-block":        "CUSTOM_RULES_ENABLED",
-    "rate-limit-endpoint":      "ENDPOINT_RATE_LIMIT_ENABLED",
+    # 1.8.10 — synthetic reasons emitted directly by middleware (not in
+    # RISK_WEIGHTS). Mapped so the Risk-breakdown "control" column shows the
+    # knob that governs them instead of "—". Admin-namespace gates are
+    # mandatory (no on/off) → None = always-on.
+    "chal-required":            "JS_CHALLENGE",
+    "pow-required":             "POW_REQUIRED_PATHS",
+    "admin-ip-blocked":         None,   # ADMIN_ALLOWED_IPS is not a per-vhost toggle
+    "banned-silent":            "RISK_BAN_THRESHOLD",
+    "banned":                   "RISK_BAN_THRESHOLD",
+    "admin-probe":              None,   # admin auth is always-on (not toggleable)
+    "operator-self":            None,   # admin auth is always-on
+    "internal-probe":           None,   # legacy admin-gate reason; always-on
 }
 
 async def scoring_endpoint(request: web.Request):
@@ -5640,6 +5693,10 @@ async def scoring_endpoint(request: web.Request):
     ]
     return web.json_response({
         "weights":   weights,
+        # Full reason→knob map (incl. synthetic reasons not in RISK_WEIGHTS) so
+        # the Risk-breakdown "control" column can resolve every reason. null = a
+        # mandatory/always-on gate with no toggle.
+        "signal_knob": dict(SIGNAL_KNOB),
         "modifiers": [{"toggle": k, "description": d} for k, d in modifiers],
         "thresholds": {
             "RISK_BAN_THRESHOLD":      RISK_BAN_THRESHOLD,
