@@ -5567,6 +5567,15 @@ async def scoring_endpoint(request: web.Request):
         "webgl-missing":         ("soft",  "Chrome UA but no WebGL renderer returned — headless Chrome with WebGL blocked or disabled (common in Puppeteer/Playwright default configs)."),
         # ── 1.7.3 ──
         "path-sweep":            ("hard",  "Identity visited too many distinct non-static paths in a short window (PATH_SWEEP_THRESHOLD in PATH_SWEEP_WINDOW_SECS s) — automated content discovery / directory enumeration after warm-up bypass."),
+        # ── 1.8.10 — synthetic reasons (emitted by middleware, weight 0) ──
+        "chal-required":         ("info", "JS-challenge gate (JS_CHALLENGE): the request lacked a valid `chal` cookie. A real browser solves Turnstile / the heuristic challenge to obtain it; pure-HTTP bots are silent-decoyed."),
+        "pow-required":          ("info", "Proof-of-Work gate (POW_REQUIRED_PATHS): this path requires a valid PoW token/solution. Returns 402 with a fresh challenge until solved."),
+        "admin-probe":           ("info", "Unauthenticated request to an admin path — anonymous reconnaissance of /secured/*, /__config, etc. Served the upstream 404 decoy. Admin auth is mandatory (no toggle)."),
+        "operator-self":         ("info", "The operator's OWN browser hitting an admin path with a lapsed (expired/revoked) session — benign self-noise; decoyed but NOT counted as a block. Re-login clears it."),
+        "internal-probe":        ("info", "Legacy (pre-1.8.10) unauthenticated admin-path reason; now split into operator-self (benign) and admin-probe (recon)."),
+        "admin-ip-blocked":      ("info", "Source IP is not in ADMIN_ALLOWED_IPS. Admin endpoints return the upstream 404 (mirrors a real not-found — no leak)."),
+        "banned-silent":         ("info", "Identity is in the 24h hostile pool (risk crossed RISK_BAN_THRESHOLD, or a really-ban signal like canary-echo/honeypot fired). Every request returns the upstream homepage so the bot can't tell it was caught."),
+        "banned":                ("info", "Identity is currently banned (risk ≥ RISK_BAN_THRESHOLD)."),
     }
     # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
     #
@@ -5723,12 +5732,28 @@ async def scoring_endpoint(request: web.Request):
     #   signal_meta : per-reason {weight, tier, desc} covering scored AND
     #                 synthetic reasons (for the severity badge + tooltip)
     _g = globals()
-    knob_state = {}
+    # Controls that live on the Settings page (not the Controls page) — used to
+    # route the Risk-breakdown "control" deep-link to the right page.
+    _SETTINGS_KNOBS = {"ADMIN_ALLOWED_IPS", "ALLOW_PRIVATE_UPSTREAM", "STRICT_VHOST",
+                       "UPSTREAM_REWRITE_BASE", "TRUST_XFF", "TRUSTED_PROXIES"}
+    knob_state = {}   # {knob: {on, kind, display}}  — kind drives dot-vs-value UI
+    knob_page  = {}   # {knob: "controls"|"settings"} — deep-link target page
     for _kn in {v for v in SIGNAL_KNOB.values() if v}:
         _v = _g.get(_kn)
-        # "enabled" = truthy: True for bools, non-empty for list/str knobs
-        # (ADMIN_ALLOWED_IPS, POW_REQUIRED_PATHS, …), non-zero for numbers.
-        knob_state[_kn] = bool(_v)
+        if isinstance(_v, bool):
+            _info = {"on": _v, "kind": "bool", "display": "on" if _v else "off"}
+        elif isinstance(_v, (int, float)):
+            _info = {"on": bool(_v), "kind": "num", "display": str(_v)}
+        elif isinstance(_v, (list, tuple, set, frozenset)):
+            _n = len(_v)
+            _info = {"on": _n > 0, "kind": "list",
+                     "display": "none" if _n == 0 else f"{_n} set"}
+        elif isinstance(_v, str):
+            _info = {"on": bool(_v), "kind": "str", "display": (_v[:32] if _v else "—")}
+        else:
+            _info = {"on": bool(_v), "kind": "other", "display": "on" if _v else "off"}
+        knob_state[_kn] = _info
+        knob_page[_kn] = "settings" if _kn in _SETTINGS_KNOBS else "controls"
     signal_meta = {}
     for _rsn, _kn in SIGNAL_KNOB.items():
         _tier, _desc = DESCRIPTIONS.get(_rsn, ("", ""))
@@ -5743,7 +5768,8 @@ async def scoring_endpoint(request: web.Request):
         # the Risk-breakdown "control" column can resolve every reason. null = a
         # mandatory/always-on gate with no toggle.
         "signal_knob":  dict(SIGNAL_KNOB),
-        "knob_state":   knob_state,    # {knob: bool} current enabled state
+        "knob_state":   knob_state,    # {knob: {on, kind, display}} live state
+        "knob_page":    knob_page,     # {knob: "controls"|"settings"} link target
         "signal_meta":  signal_meta,   # {reason: {weight, tier, desc}}
         "modifiers": [{"toggle": k, "description": d} for k, d in modifiers],
         "thresholds": {

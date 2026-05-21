@@ -4055,7 +4055,14 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     (function find() {
       const el = document.querySelector(
         `[data-bool-knob="${knob}"],[data-knob-scoring="${knob}"],[data-knob="${knob}"]`);
-      if (!el) { if (tries++ < 12) setTimeout(find, 300); return; }
+      if (!el) {
+        if (tries++ < 12) { setTimeout(find, 300); return; }
+        // Not a Controls-page toggle (e.g. configured per-vhost in Vhost Policy,
+        // or an integration knob). Inform instead of silently doing nothing.
+        if (typeof showToast === 'function')
+          showToast('“' + knob + '” isn’t a toggle on this page — it may be configured per-vhost (Vhost Policy) or under an integration.', 'err');
+        return;
+      }
       const row = el.closest('.ctrl') || el;
       row.scrollIntoView({behavior: 'smooth', block: 'center'});
       row.classList.add('knob-deeplink-flash');
