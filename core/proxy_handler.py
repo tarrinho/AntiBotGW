@@ -2569,6 +2569,33 @@ def _read_hot_reload_state() -> dict:
     return out
 
 
+async def csrf_endpoint(request: web.Request):
+    """GET <NS>/secured/csrf — return the CURRENT CSRF token for the caller's
+    session as JSON: {"token": "<hex>"}.
+
+    The token is HMAC(SESSION_KEY, sid)[:32], derived from the live agw_session
+    cookie — so it is always correct even when:
+      • a CDN (e.g. Cloudflare) rewrote agw_csrf to HttpOnly (JS can't read it);
+      • the session rotated after page load, leaving the injected
+        window.__AGW_CSRF__ global stale.
+    The dashboard fetch shim calls this on a 403 to self-heal the token and
+    retry once, so operators never have to clear cookies. Auth is enforced by
+    the protect middleware (admin path); GET needs no CSRF of its own.
+    """
+    sid = request.get("_session_sid", "") if hasattr(request, "get") else ""
+    if not sid:
+        from admin.users import _session_parse, _SESSION_COOKIE
+        _ck = request.cookies.get(_SESSION_COOKIE, "") if getattr(request, "cookies", None) else ""
+        _p = _session_parse(_ck) if _ck else None
+        sid = _p[1] if _p else ""
+    if not sid:
+        return web.json_response({"error": "auth"}, status=401,
+                                 headers={"Cache-Control": "no-store"})
+    import hmac as _hm_c, hashlib as _hh_c
+    token = _hm_c.new(SESSION_KEY, sid.encode(), _hh_c.sha256).hexdigest()[:32]
+    return web.json_response({"token": token}, headers={"Cache-Control": "no-store"})
+
+
 @_require_csrf
 async def config_endpoint(request: web.Request):
     """GET  /__config?key=...              -> current state of all hot-reloadable knobs.
@@ -5437,7 +5464,7 @@ SIGNAL_KNOB = {
     # mandatory (no on/off) → None = always-on.
     "chal-required":            "JS_CHALLENGE",
     "pow-required":             "POW_REQUIRED_PATHS",
-    "admin-ip-blocked":         None,   # ADMIN_ALLOWED_IPS is not a per-vhost toggle
+    "admin-ip-blocked":         "ADMIN_ALLOWED_IPS",  # source IP not on the allowlist
     "banned-silent":            "RISK_BAN_THRESHOLD",
     "banned":                   "RISK_BAN_THRESHOLD",
     "admin-probe":              None,   # admin auth is always-on (not toggleable)
@@ -5691,12 +5718,33 @@ async def scoring_endpoint(request: web.Request):
         ("TARPIT_ENABLED",          "Add TARPIT_DELAY_MS slowdown to every soft-band response (tarpit-walk flow). Maximises attacker CPU/bandwidth cost without blocking."),
         ("SW_CHALLENGE_ENABLED",    "Register a Service Worker at /antibot-appsec-gateway/sw.js that stamps X-SW-Active: 1 on intercepted requests. Absence after expected registration = headless-browser signal."),
     ]
+    # 1.8.10 — enrich the Risk-breakdown "control" column:
+    #   knob_state  : current enabled state of every controlling knob (on/off dot)
+    #   signal_meta : per-reason {weight, tier, desc} covering scored AND
+    #                 synthetic reasons (for the severity badge + tooltip)
+    _g = globals()
+    knob_state = {}
+    for _kn in {v for v in SIGNAL_KNOB.values() if v}:
+        _v = _g.get(_kn)
+        # "enabled" = truthy: True for bools, non-empty for list/str knobs
+        # (ADMIN_ALLOWED_IPS, POW_REQUIRED_PATHS, …), non-zero for numbers.
+        knob_state[_kn] = bool(_v)
+    signal_meta = {}
+    for _rsn, _kn in SIGNAL_KNOB.items():
+        _tier, _desc = DESCRIPTIONS.get(_rsn, ("", ""))
+        signal_meta[_rsn] = {
+            "weight": RISK_WEIGHTS.get(_rsn, 0),
+            "tier":   _tier,
+            "desc":   _desc,
+        }
     return web.json_response({
         "weights":   weights,
         # Full reason→knob map (incl. synthetic reasons not in RISK_WEIGHTS) so
         # the Risk-breakdown "control" column can resolve every reason. null = a
         # mandatory/always-on gate with no toggle.
-        "signal_knob": dict(SIGNAL_KNOB),
+        "signal_knob":  dict(SIGNAL_KNOB),
+        "knob_state":   knob_state,    # {knob: bool} current enabled state
+        "signal_meta":  signal_meta,   # {reason: {weight, tier, desc}}
         "modifiers": [{"toggle": k, "description": d} for k, d in modifiers],
         "thresholds": {
             "RISK_BAN_THRESHOLD":      RISK_BAN_THRESHOLD,

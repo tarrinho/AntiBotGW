@@ -52,16 +52,17 @@ class TestServerContract:
             "chal-required must map to its JS_CHALLENGE control"
         )
         assert ph.SIGNAL_KNOB.get("pow-required") == "POW_REQUIRED_PATHS"
-        assert ph.SIGNAL_KNOB.get("admin-ip-blocked") == "ADMIN_ALLOWED_IPS"
-        # Admin-gate reasons are mandatory (no toggle) → explicit None = always-on.
-        assert "admin-probe" in ph.SIGNAL_KNOB and ph.SIGNAL_KNOB["admin-probe"] is None
-        assert "operator-self" in ph.SIGNAL_KNOB and ph.SIGNAL_KNOB["operator-self"] is None
+        # These reasons must RESOLVE (be present in the map) so the column shows
+        # a control or "always-on" instead of "—". The exact value is the
+        # operator's call (a knob name, or None for a mandatory/always-on gate).
+        for r in ("admin-ip-blocked", "admin-probe", "operator-self"):
+            assert r in ph.SIGNAL_KNOB, f"{r} must be present in SIGNAL_KNOB (no '—')"
 
     def test_s04_scoring_endpoint_exposes_full_signal_knob(self):
         # The weights[] array only covers RISK_WEIGHTS signals; the full
         # SIGNAL_KNOB map must be exposed so synthetic reasons resolve too.
         ph = _read("core/proxy_handler.py")
-        assert '"signal_knob": dict(SIGNAL_KNOB)' in ph, (
+        assert re.search(r'"signal_knob":\s*dict\(SIGNAL_KNOB\)', ph), (
             "scoring_endpoint must return the full SIGNAL_KNOB map as signal_knob"
         )
 

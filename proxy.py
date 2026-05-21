@@ -484,6 +484,7 @@ def make_app() -> web.Application:
         ("secrets",           "DELETE", secrets_endpoint,                      True),
         ("config",            "GET",    config_endpoint,                       True),
         ("config",            "POST",   config_endpoint,                       True),
+        ("csrf",              "GET",    csrf_endpoint,                         True),
         ("agents",            "GET",    agents_dashboard_endpoint,             True),
         ("agents-data",       "GET",    agents_data_endpoint,                  True),
         ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),

@@ -157,6 +157,18 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .popover .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
 .popover .rsn-bar>div{height:100%;background:var(--red)}
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
+/* risk-breakdown control column enrichments */
+a.rsn-ctrl{text-decoration:none}
+a.rsn-ctrl:hover{text-decoration:underline}
+.rsn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:#6e7681;vertical-align:middle}
+.rsn-dot.on{background:var(--green)}
+.rsn-dot.off{background:#6e7681}
+.rsn-tier{display:inline-block;font-size:8.5px;line-height:1.5;text-transform:uppercase;padding:0 4px;border-radius:3px;margin-left:6px;font-weight:700;vertical-align:middle}
+.rsn-tier.t-info{background:#30363d;color:var(--dim)}
+.rsn-tier.t-soft{background:rgba(210,153,34,.16);color:var(--yellow)}
+.rsn-tier.t-med{background:rgba(219,109,40,.18);color:#e0823a}
+.rsn-tier.t-hard{background:rgba(248,81,73,.16);color:var(--red)}
+.rsn-tier.t-modifier{background:rgba(88,166,255,.14);color:var(--blue)}
 .popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
 .risk-sig{background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px;margin-bottom:6px}
 .risk-sig:last-child{margin-bottom:0}
@@ -385,14 +397,26 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 // Inject X-CSRF-Token automatically for every state-mutating same-origin request.
 (function() {
   const _orig = window.fetch;
+  function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}
   window.fetch = function(resource, init) {
     const m = ((init && init.method) || 'GET').toUpperCase();
-    if (m !== 'GET' && m !== 'HEAD') {
-      init = init || {};
-      init.headers = Object.assign({}, init.headers,
-        {'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')});
-    }
-    return _orig.call(this, resource, init);
+    if (m === 'GET' || m === 'HEAD') return _orig.call(this, resource, init);
+    init = init || {};
+    init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': _agwTok()});
+    const _self = this;
+    return _orig.call(_self, resource, init).then(function(resp){
+      if (resp.status !== 403) return resp;
+      // Stale CSRF token (session rotated, or CDN HttpOnly'd the cookie) —
+      // refresh from the server and retry once so operators never clear cookies.
+      return _orig.call(_self, '/antibot-appsec-gateway/secured/csrf', {credentials:'include'})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){
+          if (!j || !j.token || j.token === _agwTok()) return resp;
+          window.__AGW_CSRF__ = j.token;
+          init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': j.token});
+          return _orig.call(_self, resource, init);
+        }).catch(function(){ return resp; });
+    });
   };
 }());
 function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
@@ -1362,6 +1386,8 @@ window._gwIdentityPopover = (function(){
   // null value = detection signal with no kill-switch (always-on); a reason
   // absent from the map is not a tunable detection (e.g. a ban outcome).
   let _knobMap = null;
+  let _knobState = {};
+  let _signalMeta = {};
   function _loadKnobs(){
     if (_knobMap !== null) return;
     _knobMap = {};  // mark in-flight so we don't double-fetch
@@ -1378,18 +1404,21 @@ window._gwIdentityPopover = (function(){
           d.weights.forEach(w => { if (w && w.signal) m[w.signal] = w.toggle || null; });
           _knobMap = m;
         }
+        if (d.knob_state  && typeof d.knob_state  === 'object') _knobState  = d.knob_state;
+        if (d.signal_meta && typeof d.signal_meta === 'object') _signalMeta = d.signal_meta;
       })
       .catch(() => {});
   }
   function _ctrlCell(reason){
-    // Returns {text, dim} for the control column.
+    // {knob, on, text, dim} — knob name, current on/off state, display text.
     if (_knobMap && (reason in _knobMap)) {
-      return _knobMap[reason]
-        ? {text: _knobMap[reason], dim: false}
-        : {text: 'always-on', dim: true};
+      const knob = _knobMap[reason];
+      if (knob) return {knob: knob, on: !!_knobState[knob], text: knob, dim: false};
+      return {knob: null, on: null, text: 'always-on', dim: true};  // mandatory gate
     }
-    return {text: '—', dim: true};
+    return {knob: null, on: null, text: '—', dim: true};
   }
+  function _reasonMeta(reason){ return _signalMeta[reason] || {}; }
   function normalizeId(raw){
     const bbd = Array.isArray(raw.blocks_breakdown)
       ? raw.blocks_breakdown
@@ -1473,9 +1502,20 @@ window._gwIdentityPopover = (function(){
       ? breakdown.map(([reason, val])=>{
           const pct = (val/total*100).toFixed(0);
           const ctrl = _ctrlCell(reason);
+          const meta = _reasonMeta(reason);
+          const tier = meta.tier ? `<span class="rsn-tier t-${escapeHtml(meta.tier)}">${escapeHtml(meta.tier)}</span>` : '';
+          const rdesc = meta.desc ? escapeHtml(meta.desc) : escapeHtml(reason);
+          let ctrlHtml;
+          if (ctrl.knob) {
+            const dot = `<span class="rsn-dot ${ctrl.on?'on':'off'}"></span>`;
+            const href = '/antibot-appsec-gateway/secured/controls#knob=' + encodeURIComponent(ctrl.knob);
+            ctrlHtml = `<a class="rsn-ctrl" href="${href}" title="${escapeHtml(ctrl.knob)} — ${ctrl.on?'enabled':'disabled'} · click to open in Controls">${dot}${escapeHtml(ctrl.knob)}</a>`;
+          } else {
+            ctrlHtml = `<span class="rsn-ctrl dim" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>`;
+          }
           return `<div class="rsn">
-            <span class="rsn-name">${escapeHtml(reason)}</span>
-            <span class="rsn-ctrl${ctrl.dim?' dim':''}" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>
+            <span class="rsn-name" title="${rdesc}">${escapeHtml(reason)}${tier}</span>
+            ${ctrlHtml}
             <div class="rsn-bar"><div style="width:${pct}%"></div></div>
             <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
