@@ -4,8 +4,8 @@
 <title>AppSecGW_1.8.11 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;}
-html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
 html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
@@ -13,7 +13,7 @@ html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-
 html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
 html[data-theme="light"] .card{border-color:var(--line)}
 html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
-html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}html[data-theme="light"] .banner{background:#e8f4fd!important;color:var(--fg)}html[data-theme="light"] #_sig-tip{background:#f0f6ff!important;border-color:rgba(0,0,0,.12)!important}html[data-theme="light"] .cs-results{background:#f0f6ff!important;border-color:rgba(0,0,0,.12)!important;color:var(--fg)}html[data-theme="light"] .order-pop{background:#f0f6ff!important;border-color:rgba(0,0,0,.12)!important;color:var(--fg)}html[data-theme="light"] .gw-hint{color:var(--dim)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
@@ -21,12 +21,12 @@ a{color:var(--blue);text-decoration:none}
 /* ── Sidebar ── */
 #sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-nav a.active{color:#fff;background:var(--bg-hover);font-weight:600}
+#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
@@ -37,7 +37,7 @@ a{color:var(--blue);text-decoration:none}
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
 #topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
 /* ── View picker ── */
@@ -45,16 +45,16 @@ a{color:var(--blue);text-decoration:none}
 #view-picker button{background:none;border:none;color:var(--dim);padding:5px 11px;font:inherit;font-size:12px;cursor:pointer;border-right:1px solid var(--line);display:flex;align-items:center;gap:5px;transition:color .1s,background .1s;white-space:nowrap}
 #view-picker button:last-child{border-right:none}
 #view-picker button:hover{color:var(--fg);background:var(--bg-hover)}
-#view-picker button.vp-active{color:#fff;background:var(--bg-hover);font-weight:600}
+#view-picker button.vp-active{color:var(--bright);background:var(--bg-hover);font-weight:600}
 #view-picker button svg{flex-shrink:0}
 /* ── Grouped view container (shared by accordion + grid) ── */
 #grp-view{display:none;flex:1;overflow-y:auto;padding:14px}
 /* Accordion mode */
 .grp-section{border:1px solid var(--line);border-radius:8px;margin-bottom:10px;overflow:hidden}
 .grp-hdr{display:flex;align-items:center;gap:10px;padding:10px 14px;background:var(--card);cursor:pointer;user-select:none;transition:background .1s}
-.grp-hdr:hover{background:#1a2030}
+.grp-hdr:hover{background:var(--bg-hover)}
 .grp-icon{font-size:15px;width:22px;text-align:center;flex-shrink:0}
-.grp-name{flex:1;font-size:13px;font-weight:600;color:#fff}
+.grp-name{flex:1;font-size:13px;font-weight:600;color:var(--bright)}
 .grp-stats{font-size:11px;color:var(--dim);flex-shrink:0}
 .grp-stats .grp-on{color:var(--green);font-weight:600}
 .grp-stats .grp-off{color:var(--red);font-weight:600}
@@ -154,7 +154,7 @@ main{padding:0;max-width:none;margin:0}
 #ctrl-scope-strip #vhost-scope-bar{margin-bottom:8px}
 .ctrl-nav-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .1s,color .1s;user-select:none}
 .ctrl-nav-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
-.ctrl-nav-item.active{color:#fff;background:var(--bg-hover);border-left-color:var(--blue)}
+.ctrl-nav-item.active{color:var(--bright);background:var(--bg-hover);border-left-color:var(--blue)}
 .cni-icon{font-size:14px;width:20px;text-align:center;flex-shrink:0}
 .cni-label{flex:1}
 .cni-dirty{background:var(--yellow);color:#000;font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:16px;text-align:center;display:none}
@@ -205,7 +205,7 @@ main{padding:0;max-width:none;margin:0}
 .dirty .name::before{content:'● ';color:var(--yellow)}
 .actions{display:flex;gap:10px;margin-top:18px;padding:14px;background:var(--card);
          border:1px solid var(--line);border-radius:8px;align-items:center}
-button{background:var(--blue);color:#fff;border:none;padding:8px 16px;
+button{background:var(--blue);color:var(--bright);border:none;padding:8px 16px;
        border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
 button.secondary{background:var(--line);color:var(--fg)}
 button.danger{background:var(--red)}
@@ -233,8 +233,8 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .thr-row:last-child{border-bottom:none}
 .thr-name{font-family:ui-monospace,Menlo,monospace;color:var(--fg);font-weight:600}
 .thr-name .dir{color:var(--dim);font-size:10px;font-weight:400;margin-left:4px}
-.thr-cur{text-align:right;font-family:ui-monospace,monospace;color:#fff;font-weight:600;font-size:13px}
-.thr-cur input{width:100%;background:var(--bg);color:#fff;border:1px solid var(--blue);border-radius:4px;
+.thr-cur{text-align:right;font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;font-size:13px}
+.thr-cur input{width:100%;background:var(--bg);color:var(--bright);border:1px solid var(--blue);border-radius:4px;
                padding:4px 8px;font-family:inherit;font-size:13px;text-align:right}
 .thr-bar{position:relative;height:10px;background:var(--bg-elevated);border-radius:5px;overflow:hidden}
 .thr-bar::after{content:'';position:absolute;top:0;left:0;height:100%;width:100%;
@@ -255,7 +255,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 #ord-slider .ord-scale{position:absolute;left:0;right:0;top:42px;display:flex;justify-content:space-between;font:10px ui-monospace,monospace;color:var(--dim);pointer-events:none}
 #ord-slider .ord-knob{position:absolute;top:14px;width:30px;height:30px;border-radius:50%;
   background:var(--card);border:3px solid #fff;cursor:grab;transform:translateX(-50%);
-  display:flex;align-items:center;justify-content:center;font:700 11px ui-monospace;color:#fff;
+  display:flex;align-items:center;justify-content:center;font:700 11px ui-monospace;color:var(--bright);
   box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:2;user-select:none;transition:opacity .15s}
 #ord-slider .ord-knob:hover{box-shadow:0 0 0 4px rgba(255,255,255,.08)}
 #ord-slider .ord-knob.drag{cursor:grabbing;box-shadow:0 4px 12px rgba(0,0,0,.6)}
@@ -301,7 +301,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .kind-mmdb      {background:rgba(88,166,255,.12);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
 .kind-network   {background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.3)}
 .kind-response  {background:rgba(188,140,255,.12);color:#bc8cff;border:1px solid rgba(188,140,255,.3)}
-.kind-adversary {background:rgba(88,166,255,.08);color:#79c0ff;border:1px solid rgba(88,166,255,.2)}
+.kind-adversary {background:rgba(88,166,255,.08);color:var(--blue);border:1px solid rgba(88,166,255,.2)}
 .kind-modifier  {background:rgba(139,148,158,.08);color:#8b949e;border:1px solid rgba(139,148,158,.2)}
 
 /* Kind-legend strip above the scoring table */
@@ -385,7 +385,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 /* signal name click-tooltip */
 .sig-name{cursor:pointer;border-bottom:1px dotted var(--blue);color:var(--blue);
   font-family:ui-monospace,Menlo,monospace;transition:color .1s}
-.sig-name:hover{color:#79c0ff}
+.sig-name:hover{color:var(--blue)}
 #_sig-tip{position:fixed;background:#1c2333;border:1px solid rgba(88,166,255,.4);border-radius:8px;
   padding:0;font-size:12px;color:var(--fg);max-width:500px;min-width:300px;line-height:1.5;
   z-index:600;box-shadow:0 8px 32px rgba(0,0,0,.65);display:none;overflow:hidden;
@@ -393,7 +393,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .stip-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:10px 14px 9px;border-bottom:1px solid var(--line);background:#1a2540}
 .stip-hdr-left{display:flex;align-items:center;gap:8px;min-width:0}
-.stip-hdr code{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:#79c0ff;
+.stip-hdr code{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--blue);
   font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stip-badges{display:flex;gap:5px;flex-shrink:0;align-items:center}
 .stip-ver{font-size:9.5px;padding:1px 6px;border-radius:10px;font-weight:700;
@@ -405,7 +405,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .stip-meta .mk{color:var(--dim);font-weight:600;white-space:nowrap;padding-top:1px}
 .stip-meta .mv{color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .stip-meta .mv code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
-  background:rgba(88,166,255,.1);color:#79c0ff;padding:0 4px;border-radius:3px}
+  background:rgba(88,166,255,.1);color:var(--blue);padding:0 4px;border-radius:3px}
 .stip-cfg{margin-top:11px;padding:8px 11px;background:rgba(63,185,80,.06);
   border:1px solid rgba(63,185,80,.2);border-radius:5px;font-size:10.5px;color:var(--dim);line-height:1.55}
 .stip-cfg strong{color:#3fb950}
@@ -419,7 +419,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .stip-list-editor{margin-bottom:9px}
 .stip-list-label{font-size:10px;color:var(--dim);margin-bottom:3px;display:flex;align-items:center;gap:5px}
 .stip-list-label code{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;
-  background:rgba(88,166,255,.1);color:#79c0ff;padding:0 3px;border-radius:2px}
+  background:rgba(88,166,255,.1);color:var(--blue);padding:0 3px;border-radius:2px}
 .stip-list-field{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line);
   color:var(--fg);font-family:ui-monospace,Menlo,monospace;font-size:11px;border-radius:4px;
   padding:5px 7px;resize:vertical;min-height:54px;outline:none;transition:border-color .15s}
@@ -447,7 +447,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .cs-item{padding:4px 8px;cursor:pointer;font-size:11px;display:flex;gap:7px;align-items:center}
 .cs-item:hover,.cs-item.focused{background:rgba(88,166,255,.1)}
 .cs-item code{font-family:ui-monospace,Menlo,monospace;font-size:10px;flex-shrink:0;
-  background:rgba(88,166,255,.1);color:#79c0ff;padding:0 4px;border-radius:2px}
+  background:rgba(88,166,255,.1);color:var(--blue);padding:0 4px;border-radius:2px}
 .cs-item .cs-name{color:var(--fg);font-size:10.5px}
 .cs-item .cs-added{font-size:9px;color:#3fb950;margin-left:auto}
 .stip-val-err{font-size:10px;color:#f85149;margin-top:3px;padding:3px 6px;
@@ -467,7 +467,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sf-chip[data-filter="tier:soft"].active{background:rgba(63,185,80,.15);border-color:rgba(63,185,80,.4);color:#3fb950}
 .sf-chip[data-filter="tier:info"].active{background:rgba(139,148,158,.15);border-color:rgba(139,148,158,.35);color:#8b949e}
 .sf-chip[data-filter="tier:intel"].active{background:rgba(188,140,255,.15);border-color:rgba(188,140,255,.4);color:#bc8cff}
-.sf-chip[data-filter="tier:modifier"].active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.4);color:#79c0ff}
+.sf-chip[data-filter="tier:modifier"].active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.4);color:var(--blue)}
 .sf-chip[data-filter="tag:fp"].active{background:rgba(188,140,255,.15);border-color:rgba(188,140,255,.4);color:#bc8cff}
 .sf-clear{font-size:10px;padding:2px 8px;border-radius:12px;cursor:pointer;
   background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.3);color:#f85149;
@@ -523,7 +523,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .gw-row.row-ok{opacity:.6}
 .gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
 </style></head><body>
-<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
 <button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
 <script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
@@ -687,7 +687,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       </div>
     </div>
     <!-- 1.6.10 — order-threshold slider -->
-    <div style="margin:10px 0 14px;padding:10px 12px;background:#0d1117;border:1px solid var(--line);border-radius:6px">
+    <div style="margin:10px 0 14px;padding:10px 12px;background:var(--bg);border:1px solid var(--line);border-radius:6px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
         <span style="font-size:11px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">
           Score thresholds
@@ -766,8 +766,8 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <h2>🔓 Unban an identity / IP</h2>
     <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
       <input id="unban-target" type="text" placeholder="track-key or IP"
-             style="flex:1;min-width:240px;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
-      <select id="unban-mode" style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px">
+             style="flex:1;min-width:240px;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
+      <select id="unban-mode" style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px">
         <option value="id">match identity (track-key)</option>
         <option value="ip">match IP</option>
       </select>
@@ -817,9 +817,9 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     </div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
       <input id="aip-cidr" type="text" placeholder="IP or CIDR" autocomplete="off"
-             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px;flex:0 1 220px">
+             style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px;flex:0 1 220px">
       <input id="aip-desc" type="text" placeholder="description (e.g. 'Pedro home VPN')" autocomplete="off"
-             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px;flex:1 1 320px">
+             style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:12px;flex:1 1 320px">
       <button id="aip-add">Add</button>
       <span id="aip-msg" style="color:var(--dim);font-size:11.5px"></span>
     </div>
@@ -1429,7 +1429,7 @@ function showToast(msg, kind, onUndo){
   if (onUndo) {
     t.innerHTML = _dp(escapeHtml(String(msg)) +
       '<button id="toast-undo-btn" style="margin-left:10px;background:rgba(255,255,255,.18);' +
-      'border:1px solid rgba(255,255,255,.3);color:#fff;padding:2px 8px;border-radius:3px;' +
+      'border:1px solid rgba(255,255,255,.3);color:var(--bright);padding:2px 8px;border-radius:3px;' +
       'cursor:pointer;font-size:11px;font-weight:600;vertical-align:middle">Undo</button>');
     const btn = document.getElementById('toast-undo-btn');
     if (btn) btn.onclick = (ev) => {
@@ -1635,7 +1635,7 @@ async function loadBans(){
     window._bannedList = banned;
     tbody.innerHTML = _dp(banned.map((c, i) => {
       const id = c.id || c.ip || '';
-      return `<tr data-i="${i}" class="ban-row" style="border-bottom:1px solid #1f2730;cursor:pointer" title="click for full details">
+      return `<tr data-i="${i}" class="ban-row" style="border-bottom:1px solid var(--line);cursor:pointer" title="click for full details">
         <td style="padding:6px 8px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;border-bottom:1px dotted var(--blue)"
             title="${escapeHtml(id)}"><b>${escapeHtml(id.slice(0,18))}</b></td>
         <td style="padding:6px 8px;color:var(--dim)">${escapeHtml(c.last_ip || '')}</td>
@@ -1761,14 +1761,14 @@ document.addEventListener('DOMContentLoaded', () => {
         Type <b style="color:var(--fg)">UNBAN ALL</b> to confirm.
       </p>
       <input id="_unban-confirm-inp" type="text" placeholder="UNBAN ALL"
-             style="width:100%;box-sizing:border-box;background:#0d1117;color:var(--fg);
+             style="width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);
                     border:1px solid var(--line);border-radius:4px;padding:6px 10px;font-size:13px">
       <div style="display:flex;gap:8px;margin-top:12px;justify-content:flex-end">
         <button onclick="closeSimpleModal()"
                 style="padding:5px 14px;background:#21262d;color:var(--fg);border:1px solid var(--line);
                        border-radius:4px;cursor:pointer">Cancel</button>
         <button id="_unban-confirm-btn"
-                style="padding:5px 14px;background:var(--red);color:#fff;border:none;
+                style="padding:5px 14px;background:var(--red);color:var(--bright);border:none;
                        border-radius:4px;cursor:pointer;font-weight:600">Clear all bans</button>
       </div>`);
     const inp = document.getElementById('_unban-confirm-inp');
@@ -1794,7 +1794,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const when = e.added_ts ? new Date(e.added_ts*1000).toISOString().replace('T',' ').slice(0,19) : '—';
         const desc = escapeHtml(e.description || e.note || '');
         const tag = e.source==='env'
-          ? '<span style="background:#1f3a4f;color:#79c0ff;padding:1px 7px;border-radius:3px;font-size:10px">env</span>'
+          ? '<span style="background:#1f3a4f;color:var(--blue);padding:1px 7px;border-radius:3px;font-size:10px">env</span>'
           : '<span style="background:#1f4830;color:#3fb950;padding:1px 7px;border-radius:3px;font-size:10px">manual</span>';
         return `<tr style="border-bottom:1px solid var(--line)" data-cidr="${e.cidr}">
           <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${e.cidr}</code></td>
@@ -1829,7 +1829,7 @@ document.addEventListener('DOMContentLoaded', () => {
           const inp = document.createElement('input');
           inp.type = 'text';
           inp.value = orig;
-          inp.style.cssText = 'width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--blue);border-radius:3px;padding:3px 6px;font-size:11.5px;font-family:inherit';
+          inp.style.cssText = 'width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--blue);border-radius:3px;padding:3px 6px;font-size:11.5px;font-family:inherit';
           cell.innerHTML = '';
           cell.appendChild(inp);
           inp.focus(); inp.select();
@@ -1964,7 +1964,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (item.enabled) return '<span style="background:#1f4830;color:var(--green);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">ACTIVE</span>';
         if (item.status === 'configured') return '<span style="background:#3d3a1a;color:var(--yellow);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">CONFIGURED</span>';
         if (item.status === 'edge-only (no in-process integration)')
-          return '<span style="background:#1a3a4a;color:#79c0ff;padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">EDGE</span>';
+          return '<span style="background:#1a3a4a;color:var(--blue);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">EDGE</span>';
         if (item.status === 'not implemented')
           return '<span style="background:#30363d;color:var(--dim);padding:2px 8px;border-radius:3px;font-size:10px;font-weight:600">PLANNED</span>';
         if (item.status === 'missing-db')
@@ -2069,7 +2069,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const orderBadge = (DB_TARGET[item.name] || !ord) ? '' :
           `<span class="sig-order o${ord}" style="flex-shrink:0;align-self:flex-start;margin-top:2px" title="${ordTitles[ord]||''}">${ord}</span>`;
         const itemJson = encodeURIComponent(JSON.stringify(item));
-        return `<div class="integration-card" data-item="${itemJson}" style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:#0d1117;cursor:pointer;transition:border-color .12s" title="click for full details">
+        return `<div class="integration-card" data-item="${itemJson}" style="border:1px solid var(--line);border-radius:6px;padding:12px 14px;margin-bottom:10px;background:var(--bg);cursor:pointer;transition:border-color .12s" title="click for full details">
           <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">
             <div style="flex:1 1 280px;display:flex;align-items:flex-start;gap:12px">
               ${orderBadge}
@@ -2113,7 +2113,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // 1.5.4 — Wire integration-card click → details modal
       box.querySelectorAll('.integration-card').forEach(card => {
-        card.onmouseover = () => card.style.borderColor = 'var(--blue)';
+        card.onmouseover = () => card.style.borderColor = '#79c0ff';
         card.onmouseout  = () => card.style.borderColor = 'var(--line)';
         card.onclick = (ev) => {
           // Don't open the modal when user clicks the toggle switch OR
@@ -2218,7 +2218,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const kind = cost.kind || '';
         const isAdversary = kind === 'adversary';
         // For adversary signals: numbers are attacker delay, never hits legit traffic
-        const tColor = isAdversary ? 'var(--blue)'
+        const tColor = isAdversary ? '#79c0ff'
                      : t >= 50  ? 'var(--red)'
                      : t >= 1   ? 'var(--yellow)'
                      : 'var(--green)';
@@ -2384,7 +2384,7 @@ document.addEventListener('DOMContentLoaded', () => {
         .filter(w => w.toggle)
         .sort((a, b) => b.weight - a.weight);
       const sectionHeader = (title, count) =>
-        `<tr><td colspan="6" style="padding:10px 8px 4px 8px;background:#0d1117;color:var(--blue);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-top:1px solid var(--line)">${escapeHtml(title)} <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">· ${count} controls · click switch to mute / unmute</span></td></tr>`;
+        `<tr><td colspan="6" style="padding:10px 8px 4px 8px;background:var(--bg);color:var(--blue);font-size:10.5px;text-transform:uppercase;letter-spacing:.5px;font-weight:700;border-top:1px solid var(--line)">${escapeHtml(title)} <span style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">· ${count} controls · click switch to mute / unmute</span></td></tr>`;
       const toggleableRows = toggleable.map(renderRow).join('');
       const weightRows =
         sectionHeader('Toggleable controls (sorted by weight)', toggleable.length) +
@@ -2758,7 +2758,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const costDisplay = costKind
           ? `<span class="kind-badge kind-${costKind}" style="font-size:9px">${costKind}</span> `
             + (costKind==='adversary'
-              ? `<span style="color:#79c0ff">${fmtMs(costTyp)}</span> adversary delay`
+              ? `<span style="color:var(--blue)">${fmtMs(costTyp)}</span> adversary delay`
               : `typical <span style="color:${costTyp>=50?'#f85149':costTyp>=1?'#d29922':'#3fb950'};font-weight:600">${fmtMs(costTyp)}</span>, p99 ${fmtMs(costP99)}`)
           : '—';
 
@@ -3038,11 +3038,11 @@ function openPgDetails(it){
 
   const statsHtml = (tel.size_bytes != null || tel.events_rows != null) ? `
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
-      ${tel.events_rows != null ? `<div style="background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px">
+      ${tel.events_rows != null ? `<div style="background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:8px 10px">
         <div style="font-size:10px;color:var(--dim)">events stored</div>
         <div style="font-size:15px;font-weight:700">${tel.events_rows.toLocaleString()}</div>
       </div>` : ''}
-      ${tel.size_bytes != null ? `<div style="background:#0d1117;border:1px solid var(--line);border-radius:5px;padding:8px 10px">
+      ${tel.size_bytes != null ? `<div style="background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:8px 10px">
         <div style="font-size:10px;color:var(--dim)">DB size</div>
         <div style="font-size:15px;font-weight:700">${(tel.size_bytes/1024/1024).toFixed(1)} MB</div>
       </div>` : ''}
@@ -3054,7 +3054,7 @@ function openPgDetails(it){
       <div style="position:relative">
         <input id="${id}" type="${type}" value="${escapeHtml(val)}" placeholder="${escapeHtml(ph)}"
                autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-               style="width:100%;box-sizing:border-box;background:#0d1117;color:var(--fg);
+               style="width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);
                       border:1px solid var(--line);padding:6px ${type==='password'?'32px':'8px'} 6px 8px;
                       border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px">
         ${type === 'password' ? `<span data-eye="${id}" title="Reveal / hide"
@@ -3235,7 +3235,7 @@ function openSecretEditor(name, anchor){
     </div>
     <input type="${SECRET_INPUT_TYPE}" placeholder="${escapeHtml(SECRET_PLACEHOLDER)}"
            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-           style="width:100%;background:#0d1117;color:var(--fg);border:1px solid var(--line);
+           style="width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
                   padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;
                   font-size:12px;margin-bottom:8px">
     <!-- 1.6.7 — mesh-sync toggle: when ON, this gateway publishes the
@@ -3244,7 +3244,7 @@ function openSecretEditor(name, anchor){
          queue, awaiting operator confirmation before going live. -->
     <label data-mesh-row style="display:flex;align-items:center;gap:8px;
            font-size:10.5px;color:var(--dim);margin:6px 0 8px 0;cursor:pointer;
-           padding:6px 8px;background:#0d1117;border:1px solid #1f2730;
+           padding:6px 8px;background:var(--bg);border:1px solid var(--line);
            border-radius:5px;user-select:none">
       <input type="checkbox" data-mesh-toggle style="accent-color:var(--purple);transform:scale(1.1)">
       <span style="flex:1">
@@ -3688,7 +3688,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
   padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
-  background:var(--card);color:#fff;border:1px solid var(--line);
+  background:var(--card);color:var(--bright);border:1px solid var(--line);
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
 /* 1.8.10 fix — reserve right space so the fixed Health pill + log selector never overlap topbar buttons (e.g. Apply changes) */
@@ -3710,7 +3710,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 .gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
   padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
-.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+.gw-modal-card h3{margin:0 0 8px 0;color:var(--bright);font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
 .gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
@@ -3721,7 +3721,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 .gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
-.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+.gw-row .val{font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;text-align:right}
 </style>
 <!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
 <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
@@ -3738,7 +3738,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway Health · <span id="gw-modal-score" style="color:#fff">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
     <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
@@ -3909,7 +3909,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
       var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
@@ -3937,7 +3937,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:var(--bright);border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>');
         el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
@@ -4429,9 +4429,9 @@ if (typeof _origLoad === 'function') {
 </script>
 <script>
 window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
-var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4'};
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
-if(typeof Chart!=='undefined'&&Chart.instances){var gc=next==='light'?'rgba(0,0,0,.08)':'#21262d',tc=next==='light'?'#636e7b':'#8b949e';Object.values(Chart.instances).forEach(function(c){try{var sc=c.options.scales||{};Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});c.update('none');}catch(e){}});}
+if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
 fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
 (function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
 </script>

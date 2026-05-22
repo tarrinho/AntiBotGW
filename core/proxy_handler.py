@@ -1049,7 +1049,11 @@ async def proxy(request: web.Request):
                 async for chunk in resp.content.iter_any():
                     total += len(chunk)
                     if total > UPSTREAM_MAX_RESP:
-                        return web.Response(status=502,
+                        # 1.8.11: 413 Content Too Large (was 502) — the upstream
+                        # responded fine; we refuse to relay because the body
+                        # exceeds UPSTREAM_MAX_RESP. 413 distinguishes this size
+                        # limit from a genuine upstream/gateway failure (502).
+                        return web.Response(status=413,
                                             text="upstream response too large\n")
                     chunks.append(chunk)
                 resp_body = b"".join(chunks)

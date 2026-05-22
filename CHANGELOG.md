@@ -62,6 +62,25 @@ review of the codebase (no functional/UI changes).
 - New runtime dependency **PyJWT** (`requirements.txt`) — used only for OIDC
   id_token verification; imported lazily so non-OIDC deployments don't need it.
 - `ALLOW_PRIVATE_UPSTREAM` default `1` → `0` (see M2).
+- **Oversize upstream response → `413` (was `502`)** (`core/proxy_handler.py`): a
+  response body exceeding `UPSTREAM_MAX_RESP` now returns **413 Content Too Large**
+  instead of 502, so it is distinguishable from a genuine upstream/gateway failure.
+- **`UPSTREAM_MAX_RESP` + `UPSTREAM_MAX_BODY` now editable in the UI**
+  (`dashboards/settings.html`): both upstream size caps are surfaced as integer
+  fields in **Settings → Infrastructure** (they were hot-reloadable but not shown,
+  so operators couldn't raise the cap to serve large downloads like APKs/media).
+  Adds a `number` field kind to the Infrastructure card.
+
+### Fixed
+
+- **Light-theme contrast across all 11 dashboards** (`dashboards/*.html`): many
+  components hardcoded dark hex (`#0d1117`, `#161b22`, `#0e2c4a`, `#3d1f1f`, …)
+  instead of theme variables, so they stayed black with low-contrast text when
+  `data-theme="light"` was active (e.g. Detector Status chips, table-row hover,
+  active period/segment buttons, action pills, inset stat boxes, mobile menu).
+  Converted to theme-adaptive `var(--*)` / `rgba()` values; chart palettes kept
+  as hex (canvas can't resolve CSS variables). Also bumped the stale `1.8.8`
+  brand-version label on `control_center` / `center_control` to `1.8.11`.
 
 ### Deferred
 
