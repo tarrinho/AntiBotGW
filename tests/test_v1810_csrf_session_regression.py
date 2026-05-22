@@ -278,7 +278,7 @@ class TestLogoutClearsCsrf:
 
 # ── G: CDN-proof CSRF token global (Cloudflare adds HttpOnly to agw_csrf) ─────
 #
-# Observed on pt4.tech (server: cloudflare): the CDN rewrites Set-Cookie to add
+# Observed behind Cloudflare: the CDN rewrites Set-Cookie to add
 # HttpOnly, making agw_csrf unreadable by document.cookie → the JS shim sends an
 # empty token → 403 on every POST. Fix: the gateway injects the token into the
 # dashboard HTML as window.__AGW_CSRF__, and the shim reads that first.
@@ -345,7 +345,7 @@ class TestCsrfGlobalInjection:
         )
 
     def test_g09_injects_even_when_shim_references_global(self):
-        # REGRESSION (pt4.tech): a real dashboard page contains the fetch shim,
+        # REGRESSION (CDN-fronted): a real dashboard page contains the fetch shim,
         # which references `window.__AGW_CSRF__` (the || fallback). The injection
         # idempotency check must NOT treat that as 'already injected' — otherwise
         # the global is never DEFINED and the shim falls back to the (CDN-broken)

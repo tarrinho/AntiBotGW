@@ -181,10 +181,25 @@ def _make_config_zip(knobs: dict) -> bytes:
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_table():
-    import proxy as _p
+    import sys, proxy as _p
     _wipe_audit(_p)
+    # Snapshot hot-reloadable knobs that config-endpoint tests modify so they
+    # don't leak into later tests (config_endpoint propagates to all modules).
+    import config as _cfg
+    _snap = {k: getattr(_cfg, k) for k in dir(_cfg)
+             if not k.startswith("_") and isinstance(getattr(_cfg, k), (int, float, bool, str, list))}
     yield
     _wipe_audit(_p)
+    # Restore snapshotted config values across all loaded modules.
+    for k, v in _snap.items():
+        if getattr(_cfg, k, None) != v:
+            setattr(_cfg, k, v)
+            for _m in list(sys.modules.values()):
+                if _m is not None and _m is not _cfg and hasattr(_m, k):
+                    try:
+                        setattr(_m, k, v)
+                    except (AttributeError, TypeError):
+                        pass
 
 
 # ── U1: gw_audit table schema ─────────────────────────────────────────────────

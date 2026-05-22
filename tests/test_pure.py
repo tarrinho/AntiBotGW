@@ -3379,9 +3379,9 @@ def test_agents_html_popover_banline_has_authorized_bot_case():
     Logic now lives in window._gwIdentityPopover.buildIdHtml — search there."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
-    pop_idx = src.find("window._gwIdentityPopover")
+    pop_idx = src.find("window._gwIdentityPopover = (function(){")
     assert pop_idx != -1, "agents.html must define window._gwIdentityPopover"
-    pop_section = src[pop_idx: pop_idx + 4000]
+    pop_section = src[pop_idx: pop_idx + 6000]
     assert "is_authorized_bot" in pop_section, (
         "agents.html _gwIdentityPopover.buildIdHtml must check is_authorized_bot — "
         "without it the popover status line never shows 'Authorized Bot'"
@@ -3396,9 +3396,9 @@ def test_main_html_popover_banline_has_authorized_bot_case():
     Logic now lives in window._gwIdentityPopover.buildIdHtml — search there."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
-    pop_idx = src.find("window._gwIdentityPopover")
+    pop_idx = src.find("window._gwIdentityPopover = (function(){")
     assert pop_idx != -1, "main.html must define window._gwIdentityPopover"
-    pop_section = src[pop_idx: pop_idx + 4000]
+    pop_section = src[pop_idx: pop_idx + 6000]
     assert "is_authorized_bot" in pop_section, (
         "main.html _gwIdentityPopover.buildIdHtml must check is_authorized_bot — "
         "without it the popover status line never shows 'Authorized Bot'"
@@ -3781,7 +3781,7 @@ def test_main_html_tick_calls_apply_filters():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     tick_idx = src.find("async function tick()")
     assert tick_idx != -1
-    tick_body = src[tick_idx: tick_idx + 5000]
+    tick_body = src[tick_idx: tick_idx + 8000]
     assert "_applyFilters()" in tick_body, (
         "main.html tick() must call _applyFilters() for client table rendering (1.7.6)"
     )
@@ -5005,7 +5005,11 @@ def _gw_popover_section(dashboard: str) -> str:
     """Return the _gwIdentityPopover IIFE block from the given dashboard file."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / dashboard).read_text()
-    idx = src.find("window._gwIdentityPopover")
+    # Anchor on the IIFE *definition* — other code may reference
+    # window._gwIdentityPopover (e.g. the top-controls panel) earlier in the file.
+    idx = src.find("window._gwIdentityPopover = (function(){")
+    if idx == -1:
+        idx = src.find("window._gwIdentityPopover")
     assert idx != -1, f"{dashboard} must define window._gwIdentityPopover"
     # Extract the full IIFE (ends with })()); after the opening assignment)
     end = src.find("})();", idx)
@@ -5293,7 +5297,7 @@ def test_gw_identity_popover_open_client_popover_calls_fetch_with_normalized_ip(
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     pop_idx = src.find("window.openClientPopover")
     assert pop_idx != -1
-    pop_body = src[pop_idx: pop_idx + 800]
+    pop_body = src[pop_idx: pop_idx + 2400]
     assert "fetchIpIntel(d.ip)" in pop_body, (
         "openClientPopover must pass d.ip to fetchIpIntel, not c.last_ip — "
         "d.ip is the normalizeId output which handles the ip/last_ip fallback chain"
@@ -5890,8 +5894,11 @@ def test_all_signal_knobs_in_vhost_coerce():
     os.environ.setdefault("UPSTREAM", "https://example.com")
     vhost_mod = importlib.import_module("vhost")
     from core.proxy_handler import SIGNAL_KNOB
-    # None values are signals with no kill-switch (always-on) — exclude from check
-    signal_knobs = {v for v in SIGNAL_KNOB.values() if v is not None}
+    # None values are signals with no kill-switch (always-on) — exclude from check.
+    # ADMIN_ALLOWED_IPS is a global admin security control (not a per-vhost
+    # toggle) — admin routes are not vhost-scoped so per-vhost override is N/A.
+    _GLOBAL_ONLY = {"ADMIN_ALLOWED_IPS"}
+    signal_knobs = {v for v in SIGNAL_KNOB.values() if v is not None} - _GLOBAL_ONLY
     vhost_keys  = set(vhost_mod._VHOST_COERCE.keys())
     missing = signal_knobs - vhost_keys
     assert not missing, (

@@ -11,6 +11,8 @@ the version is considered released.
 | Step | Type | Gate |
 |------|------|------|
 | 0 | Zombie process cleanup | mandatory pre-flight |
+| 0a | Version consistency | blocking pre-flight |
+| 0b | Admin key strength (≥16-char random) | blocking pre-flight |
 | 1 | Unit tests | blocking |
 | 2 | Functional tests | blocking |
 | 3 | Integration tests | blocking |
@@ -69,6 +71,80 @@ pkill -9 -f pytest
 accumulate over sessions. Each orphan holds ~350 MB RSS and burns a full CPU
 core, saturating the host after 3–4 sessions. They also hold file locks on
 `.pytest_cache` that can corrupt incremental test runs.
+
+---
+
+## 0a. Version consistency
+
+**Run before build.** `config.GW_VERSION` is the single source of truth for the
+gateway version. Every other surface that hard-codes the version must match it,
+or the build ships a mislabelled image / a dashboard that lies about its version.
+
+```bash
+pytest tests/test_v1810_version_consistency.py -q
+```
+
+Surfaces verified against `config.GW_VERSION` (`AppSecGW_X.Y.Z`):
+- `proxy.py` references the bare `X.Y.Z`.
+- `docker-compose.yml` — `image: appsec-antibot-gw:X.Y.Z` **and** `container_name:
+  appsec-antibot-gwX.Y.Z` both match; no stale second `appsec-antibot-gw:` tag.
+- Every served dashboard (`main`, `control_center`, `agents`, `siem`, `settings`,
+  `vhost_policy`, `controls`, `geo`, `logs`, `service`) carries `GW_VERSION` in its
+  `<title>`/brand, and **none** displays a different `AppSecGW_X.Y.Z`.
+
+**Pass criterion:** 100 % green. Any mismatch is blocking — fix the lagging
+surface (or `GW_VERSION`) before building. Historical feature comments
+(`# 1.8.x — …`) are NOT version strings and are ignored. When iterating on the
+same release, keep all surfaces on the *same* tag (do not bump per micro-fix;
+see version-bump discipline).
+
+**Manual cross-check** (what the test automates):
+```bash
+grep -n 'GW_VERSION' config.py
+grep -nE 'image:|container_name:' docker-compose.yml | grep appsec-antibot-gw
+grep -rhoE 'AppSecGW_[0-9]+\.[0-9]+\.[0-9]+' dashboards/*.html | sort | uniq -c
+```
+
+---
+
+## 0b. Admin key strength (≥16-char random)
+
+**Rule.** The gateway's admin key / bootstrap password (`ADMIN_KEY` /
+`INTERNAL_KEY`, and any operator password set thereafter) **MUST be a
+randomly-generated secret of at least 16 characters** drawn from a mixed
+alphabet. Never ship or demo with a guessable, word-based, or reused key — the
+login form is internet-reachable and a weak key is brute-forceable.
+
+**Generate one:**
+```bash
+# 16-char URL/shell-safe random key (alphanumeric)
+python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(16)))"
+# or:  openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16; echo
+```
+
+Set it at deploy time (`-e ADMIN_KEY=<key>` / compose env), then rotate again
+via **Settings → Users** after first login. The bootstrap key is printed to
+container logs in plaintext, so treat the first-login rotation as mandatory.
+
+**Pass criterion (blocking):**
+- The admin key in use is ≥16 chars, random (not a dictionary word / known
+  pattern / reused secret), and not the framework default.
+- No weak/demo key (`admin`, `password`, `test`, `LocalTest…`, etc.) is present
+  in any committed `.env`, compose file, or deploy script.
+- `git`/secret scan (§7) shows no admin key committed in plaintext.
+
+```bash
+# Quick check: no obviously-weak admin key VALUE committed.
+# Anchors on a real assignment (excludes comments); skips env-passthrough
+# (${...}) and blank/templated values; flags weak literal values only.
+grep -rhInE '^[[:space:]]*(ADMIN_KEY|INTERNAL_KEY)[[:space:]]*[:=]' .env* docker-compose*.yml deploy*/ 2>/dev/null \
+  | grep -vE '\$\{|[:=][[:space:]]*$|<key>|<your' \
+  | grep -iE '(admin|password|passwd|test|changeme|1234|secret|local)' \
+  && echo "WEAK KEY FOUND" || echo "no weak key literals"
+```
+
+> Demo/tunnel instances are not exempt — a public trycloudflare URL is
+> internet-reachable. Use a fresh 16-char random key there too.
 
 ---
 
@@ -531,10 +607,10 @@ docker build --platform linux/arm/v7 -f Dockerfile.armv7 \
 ```
 **Pass criterion:** All three builds exit 0 with no layer errors.
 
-### 14c. Tag and push to Harbor
-Registry: `>harbor</antibotappsecgw/antibotappsecgw`
+### 14c. Tag and push to your registry
+Registry: `registry.example.com/appsecgw/appsecgw` (set to your own)
 ```
-HARBOR=>harbor</antibotappsecgw/antibotappsecgw
+HARBOR=registry.example.com/appsecgw/appsecgw
 VER=<version>
 
 docker tag appsec-antibot-gw:${VER}-amd64 ${HARBOR}:${VER}-amd64
@@ -1441,7 +1517,7 @@ Before promoting the multi-arch manifest to the `latest` tag in Harbor, perform 
 rollout to a non-critical gateway instance (e.g. staging or a single production node).
 
 ```bash
-HARBOR=>harbor</antibotappsecgw/antibotappsecgw
+HARBOR=registry.example.com/appsecgw/appsecgw
 VER=<version>
 
 # 1. Deploy only to canary node (direct image tag, not manifest)

@@ -1425,6 +1425,16 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
+### `test_v1810_admin_key_strength.py` — Admin key strength (Gate 0b)
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 4 | No weak/guessable admin key committed to env/compose/deploy; no committed key < 16 chars; compose uses env-passthrough (`${ADMIN_KEY}`) not a literal; the ≥16-char-random rule is documented in rules.md Gate 0b + MANUAL §0 |
+
+---
+
 ### `test_v1810_admin_probe_classification.py` — Admin-path reason split (`admin-probe` / `operator-self`)
 
 **Version added:** v1.8.10 (bugfix iteration)
@@ -1433,6 +1443,17 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | `TestClassification` | 8 | Legacy `internal-probe` not emitted; unauthenticated → `admin-probe`, authenticated → `operator-self`; IP-blocked still distinct |
 | `TestBlockedConsistency` | 2 | Metrics passthrough emits `operator-self` |
+
+---
+
+### `test_v1810_csrf_autorefresh.py` — CSRF token auto-refresh + retry-on-403
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestCsrfEndpoint` | 5 | `GET /secured/csrf` returns `{token}` from the live session HMAC; not `@_require_csrf`; 401 without session; route registered |
+| `TestRetryShim` | 5 | every dashboard's fetch shim refreshes the token + retries once on 403; updates `window.__AGW_CSRF__`; no legacy non-retry shim left |
 
 ---
 
@@ -1502,6 +1523,31 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
+### `test_v1810_riskbreakdown_enrichment.py` — Risk-breakdown control column enrichments
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestServerEnrichment` | 5 | `admin-ip-blocked`→`ADMIN_ALLOWED_IPS`; scoring returns `knob_state` (on/kind/display), `knob_page`, `signal_meta` (weight/tier/desc) covering synthetic reasons |
+| `TestUiEnrichment` | 7 | on/off dot + value badge, page-aware clickable deep-link, severity tier + description tooltip, refresh-on-modal-open |
+| `TestControlsDeepLink` | 5 | controls.html `#knob=NAME` deep-link (switch section, scroll, flash); graceful toast when not on page |
+| `TestRound2Improvements` | 6 | synthetic-reason descriptions, settings deep-link, non-bool value display |
+
+---
+
+### `test_v1810_riskmodal_actions.py` — In-modal ban actions + Top-controls panel
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestBanHeaderUnban` | 5 | ban-vs-score header, self-ban (admin IP) banner, Unban button + `wireRiskActions` wiring + confirm |
+| `TestInlineQuickDisable` | 4 | bool control dot is a quick-toggle → `POST /config {knob:!on}` (bool-only) |
+| `TestTopControlsPanel` | 4 | live-feed panel aggregates `by_reason`→control, ranked, page-aware links |
+
+---
+
 ### `test_v1810_score_controls.py` — Score-breakdown "Controls governing this score"
 
 **Version added:** v1.8.10 (bugfix iteration)
@@ -1544,6 +1590,17 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
+### `test_v1810_version_consistency.py` — Version single-source-of-truth (Gate 0a)
+
+**Version added:** v1.8.10 (bugfix iteration)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestVersionCanonical` | 1 | `config.GW_VERSION` is well-formed `AppSecGW_X.Y.Z` |
+| `TestVersionSurfaces` | 6 | `proxy.py`, `docker-compose.yml` image tag + container name, and every served dashboard match `GW_VERSION`; no dashboard shows a different `AppSecGW_X.Y.Z`; no stale second compose image tag |
+
+---
+
 ### `test_v1810_vhost_knob_persist.py` — Per-vhost knob persistence (`_to_bool` coercion)
 
 **Version added:** v1.8.10 (bugfix iteration)
@@ -1554,4 +1611,4 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
-*Total test files: 88 | Approximate total test functions: ~2,465+*
+*Total test files: 93 | Approximate total test functions: ~2,494+*

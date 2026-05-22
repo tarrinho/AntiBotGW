@@ -10,6 +10,25 @@ Author: Pedro Tarrinho
 
 ### Added
 
+- **CSRF token auto-refresh — never clear cookies again** (`core/proxy_handler.py` `csrf_endpoint`, all 12 dashboards): new `GET /antibot-appsec-gateway/secured/csrf` returns the live token `{"token": HMAC(SESSION_KEY, sid)[:32]}` as JSON (readable even when a CDN forces the cookie HttpOnly). The global fetch shim, on any `403`, fetches a fresh token, updates `window.__AGW_CSRF__`, and retries the request **once** — so a stale token self-heals. Also: the gateway injects `<script data-agw-csrf>window.__AGW_CSRF__="…"</script>` into every authed dashboard `<head>` (CDN-proof token delivery), and `session_cookie_finalizer` re-issues a stale/missing `agw_csrf` on every response.
+- **Risk-breakdown "Control" column** (`dashboards/main.html`, `agents.html` shared popover; `scoring_endpoint`): the Risk-score-breakdown modal now shows, per reason, the **control that provokes it** — with a live **on/off dot** (or value for thresholds/lists), a **clickable deep-link** to the knob on the right page (Controls vs Settings, `#knob=NAME` → scroll + flash), and a **severity tier badge + description tooltip**. Backed by new scoring fields `signal_knob`, `knob_state` (`{on,kind,display}`), `knob_page`, `signal_meta` (`{weight,tier,desc}`). State refetched each time the modal opens.
+- **In-modal ban actions** (shared popover `wireRiskActions`): an **Unban this identity** button + a **self-ban guard** banner (warns when the banned identity is an admin IP — likely operator self-ban), a **ban-vs-score header** ("Banned ≈Xh left; live risk decayed but the ban is separate"), and **inline quick-disable** (click a control's dot → confirm → `POST /config` to toggle it off in place).
+- **Top controls by blocks** panel (`dashboards/main.html` live feed): aggregates `by_reason` → controlling knob, ranked by block count, each click-to-open — spot an over-aggressive control at a glance.
+- **`TRUST_XFF` / `TRUSTED_PROXIES` runtime-configurable** (Settings → Infrastructure; `_HOT_RELOAD_KNOBS`): the X-Forwarded-For trust hop and trusted-proxy CIDRs are now hot-reloadable (no restart); `TRUSTED_PROXIES_NETS` is rebuilt and propagated to `helpers` on apply.
+- **`ALLOW_PRIVATE_UPSTREAM` runtime-mutable** (`_HOT_RELOAD_KNOBS` + `_ENV_PIN_EXCLUDE`): the SSRF-guard toggle is now hot-reloadable from Settings and stays mutable even when set via container env (env = startup default; runtime change persists, DB-wins on restart).
+
+### Changed
+
+- **`internal-probe` split → `operator-self` + `admin-probe`** (`core/proxy_handler.py`): the legacy catch-all admin-path reason is replaced by `operator-self` (a genuinely-issued but lapsed session — the operator's own browser; benign, excluded from blocked counts) and `admin-probe` (no valid session — anonymous recon; **counted** as a block). Blocked-count accounting reconciled across `core/metrics.py` `_PASSTHROUGH_REASONS`, `admin/settings.py` `_SKIP_REASONS` + SQL, and `dashboards/service_metrics.py` so all three agree.
+- **`admin-ip-blocked` → `ADMIN_ALLOWED_IPS`** and synthetic reasons (`chal-required`→`JS_CHALLENGE`, `pow-required`→`POW_REQUIRED_PATHS`, `banned-silent`→`RISK_BAN_THRESHOLD`, …) mapped in `SIGNAL_KNOB` so the control column resolves them instead of "—"; admin-gate reasons show "always-on".
+- **`restart:true` infra knobs render read-only** in Settings (no interactive toggle that would bounce off "not-hot-reloadable"); **`STRICT_VHOST` corrected to `restart:false`** (it IS hot-reloadable).
+- **Controls view-picker scoped to Detection** (`dashboards/controls.html`): the Default / Accordion / Grid layout switcher only appears on the Detection section (it has no effect on the others); the legacy "Sidebar" view was removed.
+
+### Fixed
+
+- **"CSRF token invalid" on dashboards behind a CDN** (root cause: Cloudflare rewrites `Set-Cookie` to add `HttpOnly`, so JS can't read `agw_csrf`): fixed by the `window.__AGW_CSRF__` injection + `/secured/csrf` auto-refresh + retry-on-403 above; the global fetch CSRF shim was also added to every served dashboard page that lacked it (vhost_policy, main, control_center, geo, logs, service, siem), and `logout_endpoint` now clears `agw_csrf` too.
+- **Sessions invalidated on redeploy** — regression guards locking `SESSION_KEY` persistence on the `/data` volume (Dockerfile/Dockerfile.armv7 symlinks, named volume, `APPSECGW_KEY_DIR`, load-if-exists).
+
 - **Collapsible left sidebar (full hide / unhide)** (9 dashboards: main, controls, settings, agents, siem, geo, service, logs, vhost_policy): a `‹` toggle on the brand row slides the whole sidebar away; a floating `☰` button (top-left) brings it back. State persisted per browser via `localStorage["agw_sb_collapsed"]` and restored before `#sidebar` is parsed (no flash). Desktop-only — mobile keeps its existing off-canvas `#mob-menu`, so there is never a double `☰`. Wide-mode sidebar widened 148→160px.
 - **Sidebar submenu accordion** (same 9 dashboards): the three parent groups that own sub-items — Control Center (Live Feed / Agents / SIEM), Controls (Vhost Policy), Settings (Service / Logs) — gain a caret `▾` that collapses/expands their `.sub` children. GeoMap has no sub-items and stays a plain link. Each group's state is remembered independently via `localStorage["agw_sub_<group>"]`.
 - **Controls-page "second hide" — section icon-rail** (`dashboards/controls.html`): the in-page `#ctrl-nav` section submenu (Detection / Thresholds / Bypass & Bots / External / White-Black List) collapses to a 50px icon-rail — the section logos stay, labels and the filter box hide, panels expand to full width. Toggle `« Collapse` ↔ `»`; icons stay clickable and carry a `title` tooltip; dirty-knob badges shrink to a corner dot. State in `localStorage["agw_ctrlnav_rail"]`. Independent from the main sidebar hide.
@@ -17,6 +36,11 @@ Author: Pedro Tarrinho
 
 ### Tests
 
+- New `tests/test_v1810_csrf_session_regression.py` (28), `test_v1810_csrf_autorefresh.py` (10), `test_v1810_csrf_shim_coverage.py` (20) — CSRF: SESSION_KEY persistence, token round-trip, self-heal, `window.__AGW_CSRF__` injection (incl. the marker-idempotency regression), `/secured/csrf` + retry-on-403, shim present on every served page, logout clears `agw_csrf`.
+- New `tests/test_v1810_riskbreakdown_control_column.py` (12), `test_v1810_riskbreakdown_enrichment.py` (23), `test_v1810_riskmodal_actions.py` (13) — Control column: reason→knob coverage/correctness, on/off state + clickable page-aware deep-link + severity/tooltip, ban header + unban + self-ban guard + inline quick-disable + Top-controls panel.
+- New `tests/test_v1810_admin_probe_classification.py` (10) — `operator-self`/`admin-probe` split + blocked-count consistency across metrics/settings/service.
+- New `tests/test_v1810_infra_restart_knobs.py` (14) and `test_v1810_trusted_proxies_hotreload.py` (32) — restart-required read-only UX, `ALLOW_PRIVATE_UPSTREAM` runtime-mutable + env-pin exclude, `TRUST_XFF`/`TRUSTED_PROXIES` hot-reload + propagation, Controls view-picker scoping.
+- Fixed brittle `tests/test_pure.py` `_gwIdentityPopover` helpers (first-occurrence anchor + fixed-size slices) that broke on the new top-controls reference / longer modal functions — anchored on the IIFE definition, widened windows.
 - New `tests/test_v189_sidebar_collapse.py` — sidebar full-hide + accordion markup on all 9 real dashboards (toggle/reopen wiring, desktop-gated CSS, GeoMap has no caret, no icon-rail leftovers, restore-before-`#sidebar` ordering, brand version).
 - New `tests/test_v189_ctrlnav_rail.py` and `tests/test_v189_setnav_rail.py` — Controls / Settings icon-rail second-hides (toggle wired, rail keeps `.cni-icon`/`.sni-icon` and hides labels, item tooltips, restore-before-build, and assertions that the main sidebar hide is untouched / no `sb-rail` leak).
 
@@ -1344,7 +1368,7 @@ Author: Pedro Tarrinho
   reaches a live integration without operator confirmation. `ADMIN_KEY` / `SESSION_KEY` /
   `INTERNAL_KEY` excluded from allowlist.
 - **UX polish** — green ● LIVE pill normalised across every dashboard; portal footer
-  (Antibot AppSec Gateway · © 2026 redacted, S.A. · Confidential); Sign-out link inline
+  (Antibot AppSec Gateway · © 2026 Pedro Tarrinho · Apache-2.0); Sign-out link inline
   next to Settings in every topnav with confirm prompt; Online column in Users table (60 s
   in-memory TTL).
 - Additive column upgrades for `admin_ips` and other tables driven by a central registry

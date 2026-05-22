@@ -51,8 +51,8 @@ def _csrf_self_heal(request: web.Request, response) -> None:
     where the browser kept the old value), making every state-mutating POST
     fail with "CSRF token invalid" even though the session itself is valid.
 
-    Channel 2 exists because a CDN/proxy in front of the gateway (observed:
-    Cloudflare on pt4.tech) can rewrite Set-Cookie to add `HttpOnly`, which
+    Channel 2 exists because a CDN/proxy in front of the gateway (observed
+    behind Cloudflare) can rewrite Set-Cookie to add `HttpOnly`, which
     makes agw_csrf unreadable by `document.cookie` — so the JS shim would send
     an empty token and every POST would 403. Injecting the token into the page
     as a JS global lets the shim read it regardless of what the CDN does to the

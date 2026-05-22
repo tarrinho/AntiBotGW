@@ -117,6 +117,19 @@ def _wipe_config_kv_between_tests():
         import proxy as _p
         _p.INJECT_SECURITY_HEADERS = True   # security headers test would fail if False
         _p.BYPASS_MODE = False              # must be False or detection tests are skipped
+        # RISK_BAN_THRESHOLD: config-endpoint integration tests set this to
+        # non-default values (60, 75, …) and the propagation to sys.modules
+        # survives proxy teardown, causing test_accumulated_risk_triggers_ban
+        # to use the wrong threshold for its ceiling calculation.
+        import config as _cfg
+        _default_rbt = 50  # config.py default
+        if getattr(_cfg, "RISK_BAN_THRESHOLD", _default_rbt) != _default_rbt:
+            for _rm in list(sys.modules.values()):
+                if _rm is not None and hasattr(_rm, "RISK_BAN_THRESHOLD"):
+                    try:
+                        setattr(_rm, "RISK_BAN_THRESHOLD", _default_rbt)
+                    except (AttributeError, TypeError):
+                        pass
     except Exception:
         pass
     # Clear VHOSTS after every test. VHOSTS is a module-level dict in vhost.py
