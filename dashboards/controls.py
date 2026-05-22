@@ -54,4 +54,7 @@ async def controls_dashboard_endpoint(request: web.Request):
     """Ops dashboard with on/off switches + thresholds for every hot-reloadable knob."""
     if _request_role(request) == "viewer":
         return web.HTTPFound("/antibot-appsec-gateway/secured/live-feed")
-    return web.Response(text=CONTROLS_DASHBOARD_HTML, content_type="text/html", headers=_PROTO_HEADERS)
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    _body = CONTROLS_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
+    return web.Response(text=_body, content_type="text/html", headers=_PROTO_HEADERS)

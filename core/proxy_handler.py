@@ -354,6 +354,16 @@ HOP_BY_HOP_RESPONSE = {
 UPSTREAM_MAX_BODY = int(os.environ.get("UPSTREAM_MAX_BODY", str(2 * 1024 * 1024)))  # 2 MiB
 UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(8 * 1024 * 1024)))  # 8 MiB
 
+# 1.8.11 (H1): if the WAF body-scan window is smaller than the body we accept
+# and forward, an attacker can hide a payload past the scanned prefix. Warn so
+# the operator notices the gap (defaults are equal, so this never fires unless
+# UPSTREAM_MAX_BODY is raised without raising WAF_BODY_SCAN_BYTES).
+if WAF_BODY_SCAN_BYTES < UPSTREAM_MAX_BODY:
+    slog("waf_body_scan_window_too_small", level="warn",
+         scan_bytes=WAF_BODY_SCAN_BYTES, max_body=UPSTREAM_MAX_BODY,
+         note="payloads past the scan window bypass the body WAF; "
+              "raise WAF_BODY_SCAN_BYTES to >= UPSTREAM_MAX_BODY")
+
 _CF_TURNSTILE_ORIGIN = "https://challenges.cloudflare.com"
 
 def _csp_inject_cf_turnstile(csp: str) -> str:
@@ -384,25 +394,6 @@ def _csp_inject_cf_turnstile(csp: str) -> str:
     if (not injected_script or not injected_frame) and default_idx is not None:
         out[default_idx] = out[default_idx].rstrip() + " " + _CF_TURNSTILE_ORIGIN
     return ";".join(out)
-
-
-_FAVICON_TAG = (
-    b'<link rel="shortcut icon" type="image/x-icon"'
-    b' href="/antibot-appsec-gateway/favicon.ico">'
-    b'<link rel="apple-touch-icon"'
-    b' href="/antibot-appsec-gateway/apple-touch-icon.png">'
-)
-
-def _inject_favicon(body: bytes) -> bytes:
-    """Inject gateway favicon tags into the <head> of HTML responses."""
-    if _FAVICON_TAG in body:
-        return body
-    for tag in (b"<head>", b"<HEAD>"):
-        idx = body.find(tag)
-        if idx != -1:
-            ins = idx + len(tag)
-            return body[:ins] + _FAVICON_TAG + body[ins:]
-    return body
 
 
 # ── v1.4: Slowloris guard (default ON with sensible timeouts) ────────────
@@ -1267,7 +1258,6 @@ async def proxy(request: web.Request):
                 # H7/N1: inject honey-links only when Content-Type begins with
                 # text/html (rejects `application/text/html-foo` substrings).
                 if ctype.startswith("text/html"):
-                    resp_body = _inject_favicon(resp_body)
                     resp_body = _inject_honey_links(resp_body)
                     # v1.4 #6 — bot-trap form fields (no-op when disabled).
                     resp_body = _inject_bot_trap(resp_body)
@@ -2475,6 +2465,17 @@ _HOT_RELOAD_KNOBS = {
     "TRUST_XFF":       (lambda v: str(v).lower(), lambda v: v in ("none", "first", "last")),
     "TRUSTED_PROXIES": (_to_ip_net_list, None),
     "ALLOW_PRIVATE_UPSTREAM": (_to_bool, None),
+    # 1.8.11 QW-1 — extra honeypot paths (JSON array of strings).
+    # Stored as the *extra* paths only; the post-apply hook below merges
+    # them into HONEYPOT_PATHS so the live detection set is updated.
+    "HONEYPOT_EXTRA_PATHS": (_to_path_list, None),
+    # 1.8.11 QW-6 — behavioral detector thresholds
+    "BEHAVIORAL_SAMPLE_N":          (int,   lambda v: 4 <= v <= 100),
+    "BEHAVIORAL_COV_THRESHOLD":     (float, lambda v: 0.0 < v <= 1.0),
+    "BEHAVIORAL_R1_THRESHOLD":      (float, lambda v: 0.0 < v <= 1.0),
+    "BEHAVIORAL_BIN_PCT_THRESHOLD": (float, lambda v: 0.0 < v <= 1.0),
+    "BEHAVIORAL_MAX_INTERVAL_S":    (float, lambda v: 0.1 <= v <= 60.0),
+    "BEHAVIORAL_SKIP_INTERVAL_S":   (float, lambda v: 0.1 <= v <= 300.0),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2567,6 +2568,34 @@ def _read_hot_reload_state() -> dict:
             v = sorted(v)
         out[k] = _json_safe(v)
     return out
+
+
+async def ui_theme_endpoint(request: web.Request):
+    """GET  /secured/ui-theme  → {"theme": "dark"|"light"}
+    POST /secured/ui-theme  {"theme": "dark"|"light"} → persist to config_kv (SQLite + Postgres)."""
+    from db.sqlite import get_ui_theme as _get_theme
+    if request.method == "GET":
+        theme = _get_theme(DB_PATH)
+        return web.json_response({"theme": theme}, headers={"Cache-Control": "no-store"})
+    if request.method != "POST":
+        return web.json_response({"error": "method not allowed"}, status=405,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        raw = await asyncio.wait_for(request.content.read(256), timeout=BODY_TIMEOUT)
+        body = json.loads(raw.decode("utf-8") or "{}")
+        theme = body.get("theme", "dark")
+        if theme not in ("dark", "light"):
+            return web.json_response({"error": "theme must be 'dark' or 'light'"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+    except (asyncio.TimeoutError, ValueError, json.JSONDecodeError) as e:
+        return web.json_response({"error": f"bad request: {e}"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("set_config", ("ui_theme", json.dumps(theme), _t.time())))
+        except asyncio.QueueFull:
+            pass
+    return web.json_response({"theme": theme}, headers={"Cache-Control": "no-store"})
 
 
 async def csrf_endpoint(request: web.Request):
@@ -2757,6 +2786,18 @@ async def config_endpoint(request: web.Request):
                     if _hr_m is not None and hasattr(_hr_m, "TRUSTED_PROXIES_NETS"):
                         try:
                             setattr(_hr_m, "TRUSTED_PROXIES_NETS", _nets_hr)
+                        except (AttributeError, TypeError):
+                            pass
+            # 1.8.11 QW-1 — when extra honeypot paths change, rebuild the live
+            # detection set by merging the new extras into the base set.
+            if k == "HONEYPOT_EXTRA_PATHS":
+                from config import HONEYPOT_PATHS as _HP_BASE
+                _new_hp = _HP_BASE | set(value)
+                g["HONEYPOT_PATHS"] = _new_hp
+                for _hr_m in list(_sys_hr.modules.values()):
+                    if _hr_m is not None and hasattr(_hr_m, "HONEYPOT_PATHS"):
+                        try:
+                            setattr(_hr_m, "HONEYPOT_PATHS", _new_hp)
                         except (AttributeError, TypeError):
                             pass
             applied[k] = sorted(value) if isinstance(value, set) else value
@@ -3235,6 +3276,19 @@ async def protect(request: web.Request, handler):
                 return await handler(request)
             # else: fall through to silent decoy
         elif _admin_ip_allowed(request) and _internal_authed(request):
+            # 1.8.11 (H2): central CSRF gate. Every state-changing request to
+            # the authenticated admin namespace must carry a valid X-CSRF-Token,
+            # so coverage can't silently drift as handlers are added (the
+            # per-handler @_require_csrf decorator stays as defence-in-depth).
+            # Login / logout / 2FA-login and public admin paths are handled in
+            # the branches above and never reach here; every dashboard mutation
+            # goes through the fetch CSRF shim, so the header is always present.
+            if request.method not in ("GET", "HEAD", "OPTIONS"):
+                from admin.auth import _csrf_token_valid as _ctv
+                if not _ctv(request):
+                    return web.json_response(
+                        {"error": "CSRF token invalid"}, status=403,
+                        headers={"Cache-Control": "no-store"})
             _adm_resp = await handler(request)
             if sub not in _ADMIN_POLL_SUBPATHS:
                 _adm_ip = get_ip(request)
@@ -3256,9 +3310,11 @@ async def protect(request: web.Request, handler):
                     _want_csrf = _hm_csrf.new(SESSION_KEY, _sid_csrf.encode(),
                                               _hh_csrf.sha256).hexdigest()[:32]
                     if request.cookies.get("agw_csrf", "") != _want_csrf:
+                        # 1.8.11 (M1): scope to ADMIN_NS so the readable CSRF
+                        # token is never sent to the proxied upstream surface.
                         _adm_resp.set_cookie("agw_csrf", _want_csrf,
                                              max_age=_sttl_csrf, httponly=False,
-                                             samesite="Strict", path="/",
+                                             samesite="Strict", path=ADMIN_NS,
                                              secure=SESSION_SECURE)
             except Exception:  # nosec B110 — best-effort cookie refresh; never break the response
                 pass
@@ -4009,27 +4065,38 @@ async def pow_endpoint(request: web.Request):
 async def honey_probe_endpoint(request: web.Request):
     """1.7.3 P1 — AI agent honey credential probe.
     GET /antibot-appsec-gateway/probe?k=<key>
-    If the key matches a previously injected honey credential, bump the
-    risk of the identity it was issued to. Always return 200 so the agent
-    thinks the endpoint is live.
+    If the key matches a previously injected honey credential, flag the
+    REQUESTER as a bot. Always return 200 so the agent thinks the endpoint
+    is live.
 
     False-positive guard: real browsers have a valid chal cookie (auto-minted
     on first HTML GET or issued after Turnstile). AI agents scraping HTML via
     WebFetch/urllib have no cookie. Skip the ban when the requester carries a
     valid chal cookie — they are almost certainly a human who noticed the
-    comment in DevTools and curiosity-clicked the URL."""
+    comment in DevTools and curiosity-clicked the URL.
+
+    1.8.11 security fix: previously this banned the identity the key was
+    *issued to*, with no rate limit — so anyone who obtained a victim's honey
+    key (shared NAT, a cached/archived page, the key is printed in the victim's
+    HTML) could ban that victim at will (cross-identity DoS / ban amplification).
+    Now we (a) rate-limit per source IP and (b) penalise the REQUESTER'S OWN
+    identity, never a third party. Submitting a *valid* honey credential is
+    itself the bot signal; the chal-cookie guard still shields real browsers
+    (so an attacker can't <img>-trick a logged-in victim into self-banning)."""
     ip = get_ip(request)
     key = request.rel_url.query.get("k", "")
-    if key and len(key) <= 64:
-        honey_identity = lookup_honey_key(key)
-        if honey_identity:
+    if key and len(key) <= 64 and _probe_rate_limit_ok(ip):
+        # lookup validates the key is a real injected honey credential.
+        if lookup_honey_key(key):
             # Skip ban if requester has a valid JS-challenge cookie — real browser.
             ua       = request.headers.get("User-Agent", "")
             cookie   = request.cookies.get(CHAL_COOKIE, "")
             has_chal = bool(cookie and _verify_chal_cookie(
                 cookie, ua, _ip_tier(ip), _request_ja4(request)))
             if not has_chal:
-                await update_risk_and_maybe_ban(honey_identity, "honey-cred", ip)
+                # Ban the requester's own identity, NOT the issued-for identity.
+                req_identity = request.get("_track_key") or get_identity(request)[0]
+                await update_risk_and_maybe_ban(req_identity, "honey-cred", ip)
     # Bland 200 response — never 403/404, would tell the agent its probe failed
     return web.Response(
         status=200,
@@ -5225,7 +5292,9 @@ async def metrics_endpoint(request: web.Request):
 
 async def dashboard_endpoint(request: web.Request):
     """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics)."""
-    body = DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body,
         content_type="text/html",
@@ -5329,6 +5398,121 @@ async def unban_endpoint(request: web.Request):
     return web.json_response({"cleared": cleared, "scope":
         "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
         headers={"Cache-Control": "no-store"})
+
+@_require_csrf
+async def bulk_unban_endpoint(request: web.Request):
+    """Admin: bulk-clear bans matching a reason glob or ASN.
+
+    DELETE /secured/bans?reason=<glob>
+        Clears in-memory risk scores and DB bans whose reason fnmatch-matches
+        the glob (e.g. reason=honeypot* or reason=ua-ai-*).
+
+    DELETE /secured/bans?asn=<number>
+        Clears bans for all identities last seen on the given ASN (requires
+        in-memory last_asn field; no-op if ASN tracking not active).
+
+    DELETE /secured/bans?reason=<glob>&asn=<number>
+        Intersection — reason AND asn must both match.
+
+    POST body may also supply {"reason":"<glob>","asn":<int>} for symmetry
+    with unban_endpoint; method must be POST or DELETE.
+
+    Returns {"cleared": N, "reason_glob": str, "asn": int|null}.
+    """
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+
+    import fnmatch as _fnm
+
+    if request.method == "POST":
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        reason_glob = str(data.get("reason", "") or "").strip()
+        asn_str     = str(data.get("asn", "") or "").strip()
+    else:
+        reason_glob = request.query.get("reason", "").strip()
+        asn_str     = request.query.get("asn", "").strip()
+
+    if not reason_glob and not asn_str:
+        return web.json_response(
+            {"error": "Provide ?reason=<glob> and/or ?asn=<number>"},
+            status=400, headers={"Cache-Control": "no-store"},
+        )
+
+    target_asn: int | None = None
+    if asn_str:
+        try:
+            target_asn = int(asn_str)
+        except ValueError:
+            return web.json_response(
+                {"error": "asn must be an integer"},
+                status=400, headers={"Cache-Control": "no-store"},
+            )
+
+    cleared = 0
+    matched_ips: list[str] = []
+    async with state_lock:
+        n = now()
+        for k, s in ip_state.items():
+            if s.banned_until <= n:
+                continue
+            reason_match = (
+                not reason_glob
+                or any(_fnm.fnmatch(r, reason_glob) for r in s.risk_by_reason)
+            )
+            asn_match = (
+                target_asn is None
+                or getattr(s, "last_asn", None) == target_asn
+            )
+            if reason_match and asn_match:
+                s.banned_until = 0.0
+                s.risk_score   = 0.0
+                matched_ips.append(s.last_ip or k)
+                cleared += 1
+
+    # Best-effort DB cleanup
+    if matched_ips or reason_glob:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            if reason_glob and not matched_ips:
+                # glob-only: delete matching DB rows directly (db may have
+                # rows whose in-memory state already expired)
+                all_bans = conn.execute(
+                    "SELECT ip, reason FROM bans"
+                ).fetchall()
+                db_del = [
+                    row[0] for row in all_bans
+                    if _fnm.fnmatch(str(row[1] or ""), reason_glob)
+                ]
+                for ip in db_del:
+                    conn.execute("DELETE FROM bans WHERE ip=?", (ip,))
+                    conn.execute(
+                        "UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
+                        (ip,),
+                    )
+            else:
+                for ip in matched_ips:
+                    conn.execute("DELETE FROM bans WHERE ip=?", (ip,))
+                    conn.execute(
+                        "UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
+                        (ip,),
+                    )
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            print(f"[bulk_unban] db error: {_e}")
+
+    print(
+        f"event=bulk_unban reason_glob={reason_glob!r} asn={target_asn} count={cleared}",
+        flush=True,
+    )
+    return web.json_response(
+        {"cleared": cleared, "reason_glob": reason_glob, "asn": target_asn},
+        headers={"Cache-Control": "no-store"},
+    )
+
 
 # Each entry annotated with the runtime-toggle knob (if any) that
 # controls whether the detector runs. UI uses this to render a switch

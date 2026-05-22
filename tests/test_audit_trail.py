@@ -516,6 +516,7 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "audit-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200, f"POST /vhosts returned {r.status}"
@@ -535,6 +536,7 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "actor-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -555,6 +557,7 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "detail-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -578,6 +581,7 @@ class TestF2VhostsEndpointAudit:
                     r = await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "del-audit.example.com"},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200, f"DELETE /vhosts returned {r.status}"
@@ -596,6 +600,7 @@ class TestF2VhostsEndpointAudit:
                     await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "delactor.example.com"},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -615,6 +620,7 @@ class TestF2VhostsEndpointAudit:
                     await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "deldetail.example.com"},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)

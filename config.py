@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.10"
+GW_VERSION = "AppSecGW_1.8.11"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -48,10 +48,12 @@ except Exception as _e:
     raise SystemExit(2)
 UPSTREAM        = _upstream_raw.rstrip("/")
 # Permit upstream URLs that resolve to RFC-1918 / loopback addresses
-# (e.g. host.docker.internal, 192.168.x.x). Default ON because most
-# compose deployments use an internal upstream. Set ALLOW_PRIVATE_UPSTREAM=0
-# in public-cloud deployments to re-enable the SSRF guard.
-ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "1").strip() == "1"
+# (e.g. host.docker.internal, 192.168.x.x). Default OFF — the SSRF guard is
+# ON by default (1.8.11, fail-closed), so an admin cannot repoint UPSTREAM at
+# cloud metadata (169.254.169.254) or internal services. Set
+# ALLOW_PRIVATE_UPSTREAM=1 for compose deployments that legitimately use an
+# internal upstream (host.docker.internal / 192.168.x.x / a sidecar service).
+ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() == "1"
 # STRICT_VHOST: when at least one vhost is registered, reject inbound hosts that
 # are not in the vhost table (502). Default ON. Has no effect when VHOSTS is empty
 # (single-upstream mode — global UPSTREAM is the catch-all).
@@ -175,8 +177,18 @@ _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)
 POW_VALID_SECS    = 300     # 5 minutes
-BEHAVIOR_WINDOW   = 30      # seconds
-BEHAVIOR_MAX_REGULAR = 8    # >N requests with σ<10ms → bot
+BEHAVIOR_WINDOW   = 30      # retained for backwards compat — not used by behavioral.py
+BEHAVIOR_MAX_REGULAR = 8    # retained for backwards compat — not used by behavioral.py
+
+# 1.8.11 QW-6 — expose actual behavioral detection thresholds as env vars.
+# behavioral.py uses statistical analysis on the last N request intervals;
+# these constants map directly to the three orthogonal tests it runs.
+BEHAVIORAL_SAMPLE_N         = int(os.environ.get("BEHAVIORAL_SAMPLE_N",    "16"))   # last N intervals to analyse
+BEHAVIORAL_COV_THRESHOLD    = float(os.environ.get("BEHAVIORAL_COV_THRESHOLD", "0.05"))  # σ/μ below this → too regular
+BEHAVIORAL_R1_THRESHOLD     = float(os.environ.get("BEHAVIORAL_R1_THRESHOLD",  "0.85"))  # lag-1 autocorrelation above this → bot
+BEHAVIORAL_BIN_PCT_THRESHOLD= float(os.environ.get("BEHAVIORAL_BIN_PCT",       "0.70"))  # % of intervals in one 50ms bin above this → bot
+BEHAVIORAL_MAX_INTERVAL_S   = float(os.environ.get("BEHAVIORAL_MAX_INTERVAL",  "2.0"))   # μ above this → skip (too slow for bot)
+BEHAVIORAL_SKIP_INTERVAL_S  = float(os.environ.get("BEHAVIORAL_SKIP_INTERVAL", "5.0"))   # individual interval above this → skip entire sample
 
 # 1.6.7 — runtime-key directory.
 # Container (Dockerfile symlinks /app/.X_key → /data/.X_key on build) keeps
@@ -306,6 +318,22 @@ HONEYPOT_PATHS = {
     "/api/_debug/dump", "/api/v0/admin",
     "/staff/dashboard.json", "/.crawler-trap/secrets",
 }
+
+# 1.8.11 QW-1 — operator-injectable extra honeypot trap paths.
+# HONEYPOT_EXTRA_PATHS: comma-separated or JSON-array of path strings, e.g.
+#   HONEYPOT_EXTRA_PATHS='["/my-secret-admin","/legacy/backdoor.php"]'
+# Merged into HONEYPOT_PATHS at startup; also hot-reloadable via /__config.
+_honeypot_extra_raw = os.environ.get("HONEYPOT_EXTRA_PATHS", "").strip()
+HONEYPOT_EXTRA_PATHS: list = []
+if _honeypot_extra_raw:
+    try:
+        _extra = json.loads(_honeypot_extra_raw) if _honeypot_extra_raw.startswith("[") \
+            else [p.strip() for p in _honeypot_extra_raw.split(",") if p.strip()]
+        if isinstance(_extra, list):
+            HONEYPOT_EXTRA_PATHS = [str(p) for p in _extra if p]
+            HONEYPOT_PATHS = HONEYPOT_PATHS | set(HONEYPOT_EXTRA_PATHS)
+    except Exception:
+        pass
 
 # Path PATTERNS (regex) that indicate file-hunting / CTF reconnaissance.
 SUSPICIOUS_PATH_PATTERNS = (
@@ -1099,6 +1127,14 @@ JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
                       if p.strip()]
 
 # ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────────
+# 1.8.11 security fix (H1): the body inspectors used to scan only the first
+# 64 KiB of the request body while the proxy accepts and forwards up to
+# UPSTREAM_MAX_BODY (2 MiB by default). An attacker could prepend 64 KiB of
+# padding and smuggle any SQLi/XSS/RCE/XXE/GraphQL payload past the entire WAF.
+# WAF_BODY_SCAN_BYTES now defaults to the full accepted body so there is no
+# unscanned tail. Keep this >= UPSTREAM_MAX_BODY; lowering it re-opens the
+# padding bypass (a startup check in proxy.py warns if it is smaller).
+WAF_BODY_SCAN_BYTES = int(os.environ.get("WAF_BODY_SCAN_BYTES", str(2 * 1024 * 1024)))
 BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
 SUSPICIOUS_BODY_PATTERNS = (
     # Legacy catch-all set kept for backwards compatibility with the
@@ -1234,7 +1270,7 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
                                   "text/plain", "text/xml", "application/xml")):
         return False
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     if "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
@@ -1250,7 +1286,7 @@ def match_body_group(body: bytes, ctype: str):
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
                                   "text/plain", "text/xml", "application/xml")):
         return None
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     if "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
@@ -1327,7 +1363,7 @@ def check_always_body(body: bytes, ctype: str) -> bool:
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
                                   "text/plain", "text/xml", "application/xml")):
         return False
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     if "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
@@ -1504,7 +1540,7 @@ def check_xxe_body(body: bytes, ctype: str) -> bool:
     is_xml = any(t in cl for t in ("xml", "text/html")) or body[:5] in (b"<?xml", b"<!DOC")
     if not is_xml:
         return False
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     return any(p.search(sample) for p in _XXE_RE)
 
 
@@ -1533,7 +1569,7 @@ def check_proto_pollution(body: bytes, ctype: str) -> bool:
     """Detect prototype pollution in JSON bodies (or via regex fallback)."""
     if not body:
         return False
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     cl = ctype.lower()
     # Try JSON parse for application/json
     if "application/json" in cl:

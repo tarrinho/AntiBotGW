@@ -465,8 +465,18 @@ def test_d14_config_exports_oidc_vars():
 @asynccontextmanager
 async def _fake_keycloak(token_status: int = 200, token_resp: dict | None = None,
                           userinfo_status: int = 200, userinfo_resp: dict | None = None):
-    """Spin up a minimal Keycloak-shaped HTTP server for a single test."""
-    _tok  = token_resp    or {"access_token": "tok123", "token_type": "Bearer"}
+    """Spin up a minimal Keycloak-shaped HTTP server for a single test.
+
+    1.8.11: the OIDC code flow now REQUIRES and cryptographically verifies the
+    id_token (signature via JWKS + iss/aud/exp + nonce). These flow tests focus
+    on identity mapping / provisioning / cookies, so the default token response
+    carries a placeholder id_token and the signature verification is stubbed
+    here. The real JWKS / RS256 verification (valid token passes; none-alg,
+    bad-signature, wrong-aud/iss, nonce-mismatch all rejected) is covered in
+    tests/test_v1811_oidc_idtoken_verify.py.
+    """
+    _tok  = token_resp    or {"access_token": "tok123", "token_type": "Bearer",
+                               "id_token": "eyJhbGciOiJSUzI1NiJ9.e30.sig"}
     _user = userinfo_resp or {"sub": "sub123", "preferred_username": "alice",
                                "email": "alice@example.com"}
 
@@ -485,7 +495,8 @@ async def _fake_keycloak(token_status: int = 200, token_resp: dict | None = None
     await site.start()
     port = site._server.sockets[0].getsockname()[1]
     try:
-        yield f"http://127.0.0.1:{port}/realms/test"
+        with patch("admin.oidc._verify_id_token", AsyncMock(return_value={})):
+            yield f"http://127.0.0.1:{port}/realms/test"
     finally:
         await runner.cleanup()
 

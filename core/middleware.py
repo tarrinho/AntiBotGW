@@ -62,6 +62,12 @@ def _csrf_self_heal(request: web.Request, response) -> None:
     Runs on EVERY response (this middleware wraps all routes, including
     registered dashboard pages like /secured/settings).
     """
+    # 1.8.11 (M1): only ever touch the CSRF token inside the admin namespace.
+    # Both channels — and the cookie's path=ADMIN_NS below — keep the readable
+    # agw_csrf token off the proxied upstream surface, so an XSS in the upstream
+    # app cannot read it and drive same-origin admin actions.
+    if not (request.path or "").startswith(ADMIN_NS):
+        return
     # Lazy import: admin.users imports config/state, importing it at module
     # load time would create a cycle through this middleware module.
     try:
@@ -91,7 +97,7 @@ def _csrf_self_heal(request: web.Request, response) -> None:
             response.set_cookie(
                 "agw_csrf", want,
                 max_age=_SESSION_TTL, httponly=False,
-                samesite="Strict", path="/", secure=SESSION_SECURE,
+                samesite="Strict", path=ADMIN_NS, secure=SESSION_SECURE,
             )
         except Exception:
             pass  # streaming/FileResponse may not allow post-hoc cookies

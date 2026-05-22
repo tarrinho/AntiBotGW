@@ -254,7 +254,10 @@ class TestCsrfSelfHeal:
         assert kw.get("httponly") is False, (
             "agw_csrf must NOT be httponly — the JS shim reads it from document.cookie"
         )
-        assert kw.get("path") == "/", "agw_csrf must be set at path=/ (single canonical cookie)"
+        # 1.8.11 (M1): scoped to the admin namespace so the readable CSRF token
+        # is never delivered to the proxied upstream surface (XSS-to-admin guard).
+        assert kw.get("path") == "/antibot-appsec-gateway", (
+            "agw_csrf must be scoped to the admin namespace, not path=/")
 
 
 # ── L: logout clears agw_csrf ────────────────────────────────────────────────

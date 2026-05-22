@@ -86,6 +86,17 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """X-CSRF-Token header for CSRF-protected admin POSTs (central gate, 1.8.11)."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(),
+                      hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _seed_events_vhost(proxy_module, rows):
     """Insert (ts, ip, ua, path, method, status, reason, vhost) into events."""
     conn = sqlite3.connect(proxy_module.DB_PATH)

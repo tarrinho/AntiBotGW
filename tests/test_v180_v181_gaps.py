@@ -296,8 +296,8 @@ class TestControlCenterPage:
 
     def test_version_string_in_title(self):
         src = _dash("control_center.html")
-        assert "AppSecGW_1.8.10" in src, (
-            "control_center.html: version string AppSecGW_1.8.10 missing from <title>"
+        assert "AppSecGW_1.8.11" in src, (
+            "control_center.html: version string AppSecGW_1.8.11 missing from <title>"
         )
 
     def test_active_nav_link_is_control_center(self):

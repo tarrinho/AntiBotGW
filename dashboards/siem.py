@@ -28,6 +28,11 @@ def _csv_safe(v: object) -> object:
 # ── Alert rule constants ──────────────────────────────────────────────────────
 _ALERT_COOLDOWN_S = 300
 _VALID_METRICS = frozenset({"block_pct", "blocked", "bans", "threat_index", "crit_count", "high_count"})
+# 1.8.11 QW-5 — metric names starting with "reason_count:" carry a glob
+# suffix (e.g. "reason_count:ua-ai-*") that is matched against event reasons
+# in the evaluation window. Stored as-is in DB; the colon prefix identifies
+# this class so old numeric-only rules are never misclassified.
+_REASON_COUNT_PREFIX = "reason_count:"
 _VALID_OPS     = frozenset({">", ">=", "<", "<="})
 
 # ── Server-side rules in-memory cache (avoids DB hit on every 5s poll) ───────
@@ -56,9 +61,15 @@ def _get_cached_rules() -> list:
 
 
 async def _eval_server_alert_rules(
-        stats: dict, threat_index: int, crit_n: int, high_n: int) -> list:
+        stats: dict, threat_index: int, crit_n: int, high_n: int,
+        reason_counts: dict | None = None) -> list:
     """Evaluate enabled DB rules; fire webhooks + persist fire records on trigger.
-    Returns list of currently-firing rule dicts for the UI."""
+    Returns list of currently-firing rule dicts for the UI.
+
+    reason_counts: optional pre-computed {reason: count} dict for this window.
+    When provided, rules with metric="reason_count:<glob>" are also evaluated.
+    """
+    import fnmatch as _fnm
     rules = _get_cached_rules()
     if not rules:
         return []
@@ -74,10 +85,24 @@ async def _eval_server_alert_rules(
         "high_count":   float(high_n),
     }
 
+    # 1.8.11 QW-5 — pre-compute reason_count:<glob> values on demand
+    def _reason_count_for_glob(glob: str) -> float:
+        if not reason_counts:
+            return 0.0
+        return float(sum(
+            cnt for rsn, cnt in reason_counts.items()
+            if _fnm.fnmatch(rsn, glob)
+        ))
+
     firing: list = []
     for rule in rules:
         op  = rule["op"]
-        val = metric_vals.get(rule["metric"], 0.0)
+        metric = rule["metric"]
+        if metric.startswith(_REASON_COUNT_PREFIX):
+            glob = metric[len(_REASON_COUNT_PREFIX):]
+            val = _reason_count_for_glob(glob)
+        else:
+            val = metric_vals.get(metric, 0.0)
         thr = float(rule["threshold"])
         triggered = (
             (op == ">"  and val > thr) or
@@ -273,7 +298,8 @@ async def siem_data_endpoint(request: web.Request) -> web.Response:
         "bans":    n_active_bans,
         "bypasses": bypasses,
     }
-    firing_rules = await _eval_server_alert_rules(stats_snap, threat_index, crit_n, high_n)
+    firing_rules = await _eval_server_alert_rules(
+        stats_snap, threat_index, crit_n, high_n, reason_counts=reason_counts)
 
     # ── Coordinated attack clusters ──────────────────────────────────────────
     clusters_out: list[dict] = []
@@ -561,9 +587,17 @@ async def siem_alert_rules_endpoint(request: web.Request) -> web.Response:
             cooldown_s = max(0, min(86400, int(body.get("cooldown_s", _ALERT_COOLDOWN_S))))
         except (ValueError, TypeError):
             cooldown_s = _ALERT_COOLDOWN_S
-        if metric not in _VALID_METRICS:
+        # 1.8.11 QW-5 — accept reason_count:<glob> metric names
+        _metric_ok = (
+            metric in _VALID_METRICS
+            or (metric.startswith(_REASON_COUNT_PREFIX) and len(metric) > len(_REASON_COUNT_PREFIX))
+        )
+        if not _metric_ok:
             return web.json_response(
-                {"error": f"invalid metric; valid: {sorted(_VALID_METRICS)}"}, status=400)
+                {"error": (
+                    f"invalid metric; valid: {sorted(_VALID_METRICS)} "
+                    f"or reason_count:<glob> (e.g. reason_count:ua-ai-*)"
+                )}, status=400)
         if op not in _VALID_OPS:
             return web.json_response(
                 {"error": f"invalid op; valid: {sorted(_VALID_OPS)}"}, status=400)
@@ -733,6 +767,101 @@ async def siem_export_endpoint(request: web.Request) -> web.Response:
         content_type="text/csv",
         headers={
             "Content-Disposition": f'attachment; filename="siem-events-{int(now_ts)}.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+# ── 1.8.11 QW-4 — Audit log export ───────────────────────────────────────────
+async def audit_log_export_endpoint(request: web.Request) -> web.Response:
+    """GET /…/audit-log-export — stream audit_events rows as CSV or JSON.
+
+    Query params (all optional):
+      start=<float>   Unix epoch lower bound (inclusive). Default: 24h ago.
+      end=<float>     Unix epoch upper bound (inclusive). Default: now.
+      format=csv|json Response format (default csv).
+      event_type=<str> Filter by exact event_type (e.g. login_failed).
+      actor=<str>     Filter by exact actor username.
+      limit=<int>     Max rows returned (default 5000, max 50000).
+    """
+    now_ts = now()
+    try:
+        start = float(request.query.get("start", now_ts - 86400))
+    except (ValueError, TypeError):
+        start = now_ts - 86400
+    try:
+        end = float(request.query.get("end", now_ts))
+    except (ValueError, TypeError):
+        end = now_ts
+    try:
+        limit = max(1, min(50000, int(request.query.get("limit", "5000"))))
+    except (ValueError, TypeError):
+        limit = 5000
+    fmt         = request.query.get("format", "csv").strip().lower()
+    event_filter = request.query.get("event_type", "").strip()
+    actor_filter = request.query.get("actor", "").strip()
+
+    where_clauses = ["ts >= ?", "ts <= ?"]
+    params: list = [start, end]
+    if event_filter:
+        where_clauses.append("event_type = ?")
+        params.append(event_filter)
+    if actor_filter:
+        where_clauses.append("actor = ?")
+        params.append(actor_filter)
+    params.append(limit)
+
+    try:
+        conn = _sqlite3.connect(DB_PATH)
+        conn.row_factory = _sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, ts, event_type, actor, target, ip, detail, session_id, severity "  # nosec B608
+            f"FROM audit_events WHERE {' AND '.join(where_clauses)} "
+            "ORDER BY ts DESC LIMIT ?",
+            params,
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response({"error": str(e)[:200]}, status=500,
+                                 headers={"Cache-Control": "no-store"})
+
+    if fmt == "json":
+        data = [
+            {k: row[k] for k in ("id", "ts", "event_type", "actor", "target",
+                                  "ip", "detail", "session_id", "severity")}
+            for row in rows
+        ]
+        return web.Response(
+            body=_json.dumps({"rows": data, "count": len(data)},
+                             separators=(",", ":"), default=str).encode(),
+            content_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="audit-export-{int(now_ts)}.json"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    # CSV output
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id", "ts", "event_type", "actor", "target", "ip",
+                     "detail", "session_id", "severity"])
+    for row in rows:
+        writer.writerow([
+            row["id"], row["ts"],
+            _csv_safe(row["event_type"] or ""),
+            _csv_safe(row["actor"] or ""),
+            _csv_safe(row["target"] or ""),
+            _csv_safe(row["ip"] or ""),
+            _csv_safe(row["detail"] or ""),
+            _csv_safe(row["session_id"] or ""),
+            _csv_safe(row["severity"] or ""),
+        ])
+    return web.Response(
+        body=buf.getvalue().encode("utf-8"),
+        content_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="audit-export-{int(now_ts)}.csv"',
             "Cache-Control": "no-store",
         },
     )

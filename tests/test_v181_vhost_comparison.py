@@ -951,6 +951,7 @@ class TestRegressions:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/vhost-stats", json={},
+                                     headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # 405 from aiohttp router (GET-only route); or 404/200 decoy if
                     # the route is not registered at all — either way NOT real admin data.
@@ -1047,6 +1048,7 @@ class TestRegressions:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/vhost-breakdown", json={},
+                                     headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     body = await r.text()
                     if r.status == 200:
@@ -1498,6 +1500,7 @@ class TestRVRefreshVhosts:
                             r_post = await c.post(
                                 NS + "/vhosts",
                                 json={"hostname": "dynamic.test", "UPSTREAM": up},
+                                headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                                 cookies={proxy_module._SESSION_COOKIE: cookie},
                             )
                         assert r_post.status == 200, (
@@ -1527,6 +1530,7 @@ class TestRVRefreshVhosts:
                         r_del = await c.delete(
                             NS + "/vhosts",
                             json={"hostname": "todelete.test"},
+                            headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r_del.status == 200

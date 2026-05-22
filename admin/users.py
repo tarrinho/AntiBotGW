@@ -188,7 +188,8 @@ def _session_cache_load() -> None:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT sid, username, expires_ts, status FROM user_sessions "
+            "SELECT sid, username, expires_ts, status, ip, last_seen_ts "
+            "FROM user_sessions "
             "WHERE status = 'active' AND expires_ts > ?",
             (_t.time(),)).fetchall()
         conn.close()
@@ -198,10 +199,16 @@ def _session_cache_load() -> None:
         return
     fresh = {}
     for r in rows:
+        # 1.8.11: restore source_ip + last-seen so BIND_SESSION_TO_IP and the
+        # idle-timeout keep enforcing after a restart. Previously these were
+        # dropped on reload, silently disabling IP-binding for every live
+        # session post-restart (common in container redeploys).
         fresh[r["sid"]] = {
-            "username":   r["username"],
-            "expires_ts": float(r["expires_ts"] or 0),
-            "revoked":    False,
+            "username":    r["username"],
+            "expires_ts":  float(r["expires_ts"] or 0),
+            "revoked":     False,
+            "source_ip":   r["ip"] or "",
+            "_last_touch": float(r["last_seen_ts"] or 0),
         }
     _SESSION_CACHE.clear()
     _SESSION_CACHE.update(fresh)
@@ -539,7 +546,7 @@ async def login_submit_endpoint(request: web.Request):
                      secure=SESSION_SECURE)
     resp.set_cookie("agw_csrf", csrf_token,
                      max_age=_SESSION_TTL, httponly=False,
-                     samesite="Strict", path="/",
+                     samesite="Strict", path=ADMIN_NS,  # 1.8.11 (M1): keep off upstream surface
                      secure=SESSION_SECURE)
     return resp
 
@@ -569,7 +576,7 @@ async def logout_endpoint(request: web.Request):
     # mints a new sid, the stale token mismatches and every POST fails with
     # "CSRF token invalid". (The session_cookie_finalizer self-heal also
     # re-issues it, but clearing on logout keeps the cookie jar clean.)
-    resp.del_cookie("agw_csrf", path="/")
+    resp.del_cookie("agw_csrf", path=ADMIN_NS)  # 1.8.11 (M1): match the scoped set-path
     return resp
 
 
@@ -1138,7 +1145,7 @@ async def totp_verify_endpoint(request: web.Request):
                      secure=SESSION_SECURE)
     resp.set_cookie("agw_csrf", csrf_token,
                      max_age=_SESSION_TTL, httponly=False,
-                     samesite="Strict", path="/",
+                     samesite="Strict", path=ADMIN_NS,  # 1.8.11 (M1): keep off upstream surface
                      secure=SESSION_SECURE)
     return resp
 

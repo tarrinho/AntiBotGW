@@ -353,7 +353,9 @@ AGENTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "agents.html").read_text(encoding="ut
 
 
 async def agents_dashboard_endpoint(request: web.Request):
-    body = AGENTS_DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = AGENTS_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body, content_type="text/html",
         headers={

@@ -58,6 +58,72 @@ _CALLBACK_PATH      = ADMIN_NS + "/auth/oidc/callback"
 _POST_LOGIN_PATH    = ADMIN_NS + "/secured/control-center"
 _STATE_TTL_S        = 300   # 5-minute window for the browser round-trip
 
+# ── 1.8.11 (M3): id_token signature verification ──────────────────────────────
+# Previously the id_token was base64-decoded WITHOUT verifying its signature, so
+# its nonce/sub claims were attacker-influenceable. Now we verify the signature
+# against the issuer JWKS and validate iss/aud/exp + nonce before trusting any
+# claim. Asymmetric algs only — never HS* (alg confusion with the client secret)
+# and never 'none'.
+_JWKS_URI           = (OIDC_ISSUER + "/protocol/openid-connect/certs") if OIDC_ISSUER else ""
+_JWKS_TTL_S         = 3600
+_JWKS_CACHE: dict   = {}   # jwks_uri -> (jwks_dict, fetched_monotonic)
+_OIDC_ALLOWED_ALGS  = ("RS256", "RS384", "RS512", "PS256", "ES256", "ES384", "ES512")
+
+
+async def _fetch_jwks(http, *, force: bool = False) -> dict:
+    now = _t.monotonic()
+    cached = _JWKS_CACHE.get(_JWKS_URI)
+    if cached and not force and (now - cached[1] < _JWKS_TTL_S):
+        return cached[0]
+    async with http.get(_JWKS_URI, headers={"Accept": "application/json"},
+                        timeout=ClientTimeout(total=8.0)) as r:
+        if r.status != 200:
+            raise ValueError(f"jwks fetch status {r.status}")
+        data = await r.json(content_type=None)
+    _JWKS_CACHE[_JWKS_URI] = (data, now)
+    return data
+
+
+def _jwk_for_kid(jwks: dict, kid: str):
+    for k in jwks.get("keys", []):
+        if k.get("kid") == kid:
+            return k
+    return None
+
+
+async def _verify_id_token(http, id_token_raw: str, expected_nonce: str) -> dict:
+    """Verify the id_token (signature via issuer JWKS, iss/aud/exp, nonce) and
+    return the verified claims. Raises on any failure (caller fails closed)."""
+    import jwt as _pyjwt   # lazy: PyJWT is needed only when OIDC is configured
+
+    header = _pyjwt.get_unverified_header(id_token_raw)
+    alg = header.get("alg", "")
+    if alg not in _OIDC_ALLOWED_ALGS:
+        raise ValueError(f"disallowed id_token alg {alg!r}")
+    kid = header.get("kid", "")
+
+    jwks = await _fetch_jwks(http)
+    jwk = _jwk_for_kid(jwks, kid)
+    if jwk is None:
+        # Signing key may have rotated — force one refresh before giving up.
+        jwks = await _fetch_jwks(http, force=True)
+        jwk = _jwk_for_kid(jwks, kid)
+    if jwk is None:
+        raise ValueError("no matching JWKS key for id_token kid")
+
+    signing_key = _pyjwt.PyJWK.from_dict(jwk).key
+    claims = _pyjwt.decode(
+        id_token_raw, signing_key,
+        algorithms=list(_OIDC_ALLOWED_ALGS),
+        audience=OIDC_CLIENT_ID, issuer=OIDC_ISSUER,
+        options={"require": ["exp", "iat", "iss", "aud"]},
+    )
+    tok_nonce = claims.get("nonce", "")
+    if not (expected_nonce and tok_nonce
+            and hmac.compare_digest(expected_nonce, tok_nonce)):
+        raise ValueError("id_token nonce mismatch")
+    return claims
+
 # ── State store — CSRF protection ─────────────────────────────────────────────
 # state_token → {"next_url": str, "expires_ts": float}
 _OIDC_STATE: dict = {}
@@ -173,23 +239,25 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
                 slog("oidc_no_access_token", level="warn", ip=ip)
                 return _redirect_error("err_no_access_token")
 
-            # AUTH4-07: validate nonce from id_token payload to prevent token replay
+            # AUTH4-07 / 1.8.11 (M3): cryptographically verify the id_token
+            # (signature via issuer JWKS + iss/aud/exp + nonce) before trusting
+            # any of its claims. Previously this was an UNVERIFIED base64 decode,
+            # so the nonce/sub it carried gave no real assurance. An id_token is
+            # required (a nonce was requested at /login), and verification fails
+            # closed.
             stored_nonce = state_data.get("nonce", "")
             id_token_raw = token_data.get("id_token", "")
             id_token_payload: dict = {}
-            if stored_nonce and id_token_raw:
-                try:
-                    parts = id_token_raw.split(".")
-                    padded = parts[1] + "=" * (-len(parts[1]) % 4)
-                    id_token_payload = json.loads(base64.urlsafe_b64decode(padded))
-                    token_nonce = id_token_payload.get("nonce", "")
-                    if not hmac.compare_digest(stored_nonce, token_nonce):
-                        slog("oidc_nonce_mismatch", level="error", ip=ip)
-                        return _redirect_error("err_token_replay")
-                except Exception as _e:
-                    slog("oidc_nonce_decode_failed", level="warn",
-                         err=str(_e)[:120], ip=ip)
-                    return _redirect_error("err_token_replay")
+            if not id_token_raw:
+                slog("oidc_missing_id_token", level="error", ip=ip)
+                return _redirect_error("err_token_replay")
+            try:
+                id_token_payload = await _verify_id_token(
+                    http, id_token_raw, stored_nonce)
+            except Exception as _e:
+                slog("oidc_id_token_invalid", level="error",
+                     err=f"{type(_e).__name__}: {str(_e)[:160]}", ip=ip)
+                return _redirect_error("err_token_replay")
 
             # Step 2: userinfo
             async with http.get(
@@ -324,7 +392,7 @@ async def oidc_callback_endpoint(request: web.Request) -> web.Response:
         _csrf = hmac.new(_SESSION_KEY, _parts[1].encode(), _hashlib.sha256).hexdigest()[:32]
         resp.set_cookie("agw_csrf", _csrf,
                         max_age=_SESSION_TTL, httponly=False,
-                        samesite="Strict", path="/",
+                        samesite="Strict", path=ADMIN_NS,  # 1.8.11 (M1): keep off upstream surface
                         secure=SESSION_SECURE)
     return resp
 
