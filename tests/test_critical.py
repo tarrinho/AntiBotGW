@@ -1559,7 +1559,7 @@ def test_167_gw_id_from_domain():
     f = proxy._gw_id_from_domain
     # Typical hostnames.
     assert f("gw-prod.example.com")        == "gw-prod-example-com"
-    assert f("Fin-Video.Trycloudflare.COM") == "fin-video-trycloudflare-com"
+    assert f("Demo-Tunnel.Trycloudflare.COM") == "demo-tunnel-trycloudflare-com"
     assert f("gw.local")                   == "gw-local"
     # Edge: empty / None / pure-punctuation collapses.
     assert f("")          == ""
@@ -1573,8 +1573,8 @@ def test_167_gw_id_from_domain():
     assert 2 <= len(out) <= 63
     assert out.startswith("a" * 60)
     # Result must round-trip through the validator.
-    for d in ["gw-prod.example.com", "fin-video-code-harold.trycloudflare.com",
-              "node1.test-env.cfappsecurity.com"]:
+    for d in ["gw-prod.example.com", "demo-tunnel-abc123.trycloudflare.com",
+              "node1.test-env.example.com"]:
         derived = f(d)
         ok, _ = proxy._gw_validate_id(derived)
         assert ok, f"derived {derived!r} from {d!r} fails validator"

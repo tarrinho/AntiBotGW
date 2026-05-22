@@ -225,6 +225,21 @@ a.rsn-ctrl:hover{text-decoration:underline}
 .rsn-dot.on{background:var(--green)}
 .rsn-dot.off{background:#6e7681}
 .rsn-kv{display:inline-block;font-size:9.5px;background:#21262d;color:var(--dim);padding:0 5px;border-radius:3px;margin-left:6px;vertical-align:middle;font-weight:600}
+/* round-3: control cell as flex (dot/link/value), inline quick-toggle, ban header */
+.rsn-ctrl{display:flex;align-items:center;min-width:0}
+.rsn-ctrl-link{color:var(--blue);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:10.5px}
+.rsn-ctrl-link:hover{text-decoration:underline}
+.gw-qd{border:none;padding:0;cursor:pointer;flex-shrink:0}
+.gw-qd:hover{box-shadow:0 0 0 2px rgba(88,166,255,.55)}
+.gw-qd.busy{opacity:.4;cursor:wait}
+.gw-ban-hdr{background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.32);border-radius:6px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.45}
+.gw-ban-line{color:var(--red);font-weight:700;margin-bottom:4px}
+.gw-self{color:var(--yellow);margin-bottom:4px}
+.gw-ban-note{color:var(--dim);margin-bottom:8px}
+.gw-unban{background:var(--red);color:#fff;border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.gw-unban:hover{filter:brightness(1.12)}
+.gw-unban:disabled{opacity:.55;cursor:default}
+.gw-ban-hdr.gw-cleared{opacity:.6;border-color:var(--green)}
 .rsn-tier{display:inline-block;font-size:8.5px;line-height:1.5;text-transform:uppercase;padding:0 4px;border-radius:3px;margin-left:6px;font-weight:700;vertical-align:middle}
 .rsn-tier.t-info{background:#30363d;color:var(--dim)}
 .rsn-tier.t-soft{background:rgba(210,153,34,.16);color:var(--yellow)}
@@ -531,6 +546,11 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
       <h2>HTTP status distribution</h2>
       <div class="reasons" id="statuses"></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Top controls by blocks <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">reasons aggregated to the control that fires them · click to open · spot an over-aggressive control</span></h2>
+    <div class="reasons" id="top-controls"><span class="dim">loading…</span></div>
   </div>
 
   <!-- 1.5.4: Service health + per-detector counters -->
@@ -1521,6 +1541,33 @@ async function tick() {
       });
     }
 
+    // Top controls by blocks — aggregate by_reason → the control that fires it.
+    const tcEl = document.getElementById('top-controls');
+    if (tcEl) {
+      const km = (window._gwIdentityPopover && window._gwIdentityPopover.signalKnob)
+        ? window._gwIdentityPopover.signalKnob() : {};
+      const pm = (window._gwIdentityPopover && window._gwIdentityPopover.knobPage)
+        ? window._gwIdentityPopover.knobPage() : {};
+      if (!Object.keys(km).length) {
+        tcEl.innerHTML = '<span class="dim">loading…</span>';
+      } else {
+        const agg = {};
+        for (const [rsn, cnt] of Object.entries(reasons)) {
+          const knob = km[rsn];           // null = always-on, undefined = unmapped
+          if (!knob) continue;
+          agg[knob] = (agg[knob] || 0) + (cnt | 0);
+        }
+        const top = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 10);
+        tcEl.innerHTML = top.length
+          ? _dp(top.map(([knob, cnt]) => {
+              const page = (pm[knob] === 'settings') ? 'settings' : 'controls';
+              const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(knob);
+              return `<span class="lbl"><a href="${href}" title="open ${escapeHtml(knob)} in ${page==='settings'?'Settings':'Controls'}">${escapeHtml(knob)}</a></span><span class="val">${cnt}</span>`;
+            }).join(''))
+          : '<span class="dim">no control-attributed blocks yet</span>';
+      }
+    }
+
     // Statuses
     const statuses = d.by_status || {};
     const sEl = document.getElementById('statuses');
@@ -1930,6 +1977,11 @@ window._gwIdentityPopover = (function(){
     if (s < 86400)return (s/3600).toFixed(1)+'h ago';
     return (s/86400).toFixed(1)+'d ago';
   }
+  function _fmtdur(s){ s=Math.max(0,s|0);
+    if(s>=86400)return (s/86400).toFixed(1)+'d';
+    if(s>=3600)return (s/3600).toFixed(1)+'h';
+    if(s>=60)return Math.round(s/60)+'m';
+    return s+'s'; }
   // reason → controlling knob map, lazily loaded from the scoring endpoint.
   // null value = detection signal with no kill-switch (always-on); a reason
   // absent from the map is not a tunable detection (e.g. a ban outcome).
@@ -2064,16 +2116,15 @@ window._gwIdentityPopover = (function(){
           if (ctrl.knob) {
             const page = (ctrl.page === 'settings') ? 'settings' : 'controls';
             const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(ctrl.knob);
-            let indicator, ttl;
+            const lnk = `<a class="rsn-ctrl-link" href="${href}" title="${escapeHtml(ctrl.knob)} · open in ${page==='settings'?'Settings':'Controls'}">${escapeHtml(ctrl.knob)}</a>`;
             if (ctrl.kind === 'bool') {
-              indicator = `<span class="rsn-dot ${ctrl.on?'on':'off'}"></span>${escapeHtml(ctrl.knob)}`;
-              ttl = ctrl.on ? 'enabled' : 'disabled';
+              // the dot doubles as a quick-toggle button (disable/enable in place)
+              const qd = `<button class="gw-qd rsn-dot ${ctrl.on?'on':'off'}" data-qd-knob="${escapeHtml(ctrl.knob)}" data-qd-on="${ctrl.on?'1':'0'}" title="${ctrl.on?'Disable':'Enable'} ${escapeHtml(ctrl.knob)} now"></button>`;
+              ctrlHtml = `<span class="rsn-ctrl">${qd}${lnk}</span>`;
             } else {
               const vb = ctrl.display ? `<span class="rsn-kv">${escapeHtml(ctrl.display)}</span>` : '';
-              indicator = `${escapeHtml(ctrl.knob)}${vb}`;
-              ttl = ctrl.display || 'configured';
+              ctrlHtml = `<span class="rsn-ctrl">${lnk}${vb}</span>`;
             }
-            ctrlHtml = `<a class="rsn-ctrl" href="${href}" title="${escapeHtml(ctrl.knob)} — ${escapeHtml(ttl)} · click to open in ${page==='settings'?'Settings':'Controls'}">${indicator}</a>`;
           } else {
             ctrlHtml = `<span class="rsn-ctrl dim" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>`;
           }
@@ -2084,7 +2135,19 @@ window._gwIdentityPopover = (function(){
             <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
       : `<div class="empty">no contributing signals (score may be from already-decayed events)</div>`;
+    let banHdr = '';
+    if (d.banned_secs > 0) {
+      const really = d.banned_secs > 86400;
+      const topRsn = breakdown.length ? escapeHtml(breakdown[0][0]) : '';
+      banHdr = `<div class="gw-ban-hdr">
+        <div class="gw-ban-line">\ud83d\udd34 ${really?'Really Banned':'Banned'} · ≈${_fmtdur(d.banned_secs)} left${topRsn?` · likely tripped <b>${topRsn}</b>`:''}</div>
+        ${d.is_admin_ip ? `<div class="gw-self">⚠ Looks like an operator session (admin IP) — probably a self-ban from testing.</div>` : ''}
+        <div class="gw-ban-note">Live risk <b>${rs}</b> is the decaying score; the ban is a separate ${really?'extended':'24h'} entry and does <b>not</b> decay with it.</div>
+        <button class="gw-unban" data-unban-id="${escapeHtml(d.id)}" data-unban-ip="${escapeHtml(d.ip)}">Unban this identity</button>
+      </div>`;
+    }
     return `
+      ${banHdr}
       <div class="dim" style="margin-bottom:8px">
         Live risk: <b style="color:var(--red)">${rs}</b> ·
         decays at half-life 1h ·
@@ -2092,8 +2155,57 @@ window._gwIdentityPopover = (function(){
       </div>
       ${head}${rows}`;
   }
+  // Wire interactive actions inside a freshly-rendered risk modal (DOMPurify
+  // strips inline handlers, so we attach them to the live nodes here).
+  function wireRiskActions(container, d){
+    if (!container) return;
+    container.querySelectorAll('.gw-unban').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const id = btn.getAttribute('data-unban-id') || '';
+        const ip = btn.getAttribute('data-unban-ip') || '';
+        if (!window.confirm('Unban this identity?\n\n' + (id || ip))) return;
+        btn.disabled = true; btn.textContent = 'Unbanning…';
+        const payload = id ? {id:id} : {ip:ip};
+        fetch('/antibot-appsec-gateway/secured/unban', {method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(j){
+            if (j && j.cleared !== undefined){
+              btn.textContent = '✓ Unbanned (' + (j.cleared||0) + ')';
+              const hdr = btn.closest('.gw-ban-hdr'); if (hdr) hdr.classList.add('gw-cleared');
+            } else { btn.textContent = 'Failed'; btn.disabled = false; }
+          })
+          .catch(function(){ btn.textContent = 'Failed'; btn.disabled = false; });
+      });
+    });
+    container.querySelectorAll('.gw-qd').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const knob = btn.getAttribute('data-qd-knob');
+        const on = btn.getAttribute('data-qd-on') === '1';
+        const next = !on;
+        if (!window.confirm((next?'Enable':'Disable') + ' ' + knob + ' now?')) return;
+        btn.classList.add('busy');
+        const body = {}; body[knob] = next;
+        fetch('/antibot-appsec-gateway/secured/config', {method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(j){
+            btn.classList.remove('busy');
+            if (j && j.applied && Object.keys(j.applied).length){
+              btn.classList.toggle('on', next); btn.classList.toggle('off', !next);
+              btn.setAttribute('data-qd-on', next?'1':'0');
+              btn.title = (next?'Disable':'Enable') + ' ' + knob + ' now';
+            }
+          })
+          .catch(function(){ btn.classList.remove('busy'); });
+      });
+    });
+  }
   _loadKnobs();  // warm the reason→control map so it's ready when a modal opens
-  return { normalizeId, buildIdHtml, buildRiskHtml, refreshKnobs: function(){ return _loadKnobs(true); } };
+  return { normalizeId, buildIdHtml, buildRiskHtml, wireRiskActions,
+           refreshKnobs: function(){ return _loadKnobs(true); },
+           signalKnob: function(){ return _knobMap || {}; },
+           knobPage: function(){ return _knobPage || {}; } };
 })();
 
 // ── 1.5.4 Reason drill-down + identity popovers ─────────────────────
@@ -2116,14 +2228,19 @@ window._gwIdentityPopover = (function(){
     document.getElementById('modal-close').onclick = close;
     document.getElementById('modal-body').innerHTML = _dp(body);
     back.classList.add('show'); modal.classList.add('show');
-    if (kind === 'risk-main' && window._gwIdentityPopover.refreshKnobs) {
+    if (kind === 'risk-main') {
+      window._gwIdentityPopover.wireRiskActions(document.getElementById('modal-body'), d);
       // Refresh live control state so the on/off dots reflect current toggles
       // (not whatever was cached at page load), then re-render if still open.
-      window._gwIdentityPopover.refreshKnobs().then(() => {
-        const mb = document.getElementById('modal-body');
-        if (mb && modal.classList.contains('show'))
-          mb.innerHTML = _dp(window._gwIdentityPopover.buildRiskHtml(d));
-      });
+      if (window._gwIdentityPopover.refreshKnobs) {
+        window._gwIdentityPopover.refreshKnobs().then(() => {
+          const mb = document.getElementById('modal-body');
+          if (mb && modal.classList.contains('show')) {
+            mb.innerHTML = _dp(window._gwIdentityPopover.buildRiskHtml(d));
+            window._gwIdentityPopover.wireRiskActions(mb, d);
+          }
+        });
+      }
     }
     if (kind === 'id-main' && d.ip) {
       window.fetchIpIntel(d.ip).then(html => {
@@ -3697,7 +3814,7 @@ function colorFor(score){
 })();
 </script>
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 redacted, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
   <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">

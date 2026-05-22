@@ -249,10 +249,10 @@ def test_portal_footer_css_defined(page):
 
 @pytest.mark.parametrize("page", _ALL_DASH)
 def test_portal_footer_copyright_text(page):
-    """Portal footer must contain the copyright / confidentiality notice."""
+    """Portal footer must contain the copyright / license notice."""
     src = _dash(page)
-    assert "Confidential" in src or "redacted" in src, (
-        f"{page}: portal-footer missing expected copyright/confidentiality text"
+    assert "Pedro Tarrinho" in src or "Apache-2.0" in src, (
+        f"{page}: portal-footer missing expected copyright/license text"
     )
 
 

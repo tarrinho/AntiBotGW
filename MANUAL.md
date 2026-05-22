@@ -37,7 +37,7 @@ Run through this before exposing the gateway to the internet. Items marked **REQ
 | 1 | **REQUIRED** — Restrict admin dashboard to known IPs | `ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1` | If unset, gateway logs `[SECURITY WARNING]` on every boot |
 | 2 | **REQUIRED** — Set trusted proxy CIDRs | `TRUSTED_PROXIES=<load-balancer-cidr>` | Without this, `TRUST_XFF` falls back to `"none"` and client IP detection is disabled |
 | 3 | **REQUIRED** — Mount writable data volume | `-e APPSECGW_KEY_DIR=/data -v /srv/gw:/data` | Keys stored in read-only image dir will be lost on restart |
-| 4 | Rotate the bootstrap admin password | Settings → Users after first login | Default `INTERNAL_KEY` is printed in plaintext to container logs |
+| 4 | **REQUIRED** — Admin key / bootstrap password = **≥16-char random** secret | Generate: `python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(16)))"` → set as `ADMIN_KEY`/`INTERNAL_KEY`; rotate again via Settings → Users after first login | Never use a guessable/dictionary key. Default `INTERNAL_KEY` is printed in plaintext to container logs. A short or word-based key is brute-forceable through the login form. |
 | 5 | Enable 2FA for all admin accounts | Settings → Users → TOTP | Admin session cookie is valid until expiry; 2FA limits blast radius of stolen cookie |
 | 6 | Set `ALLOWED_HOSTS` | `ALLOWED_HOSTS=your-domain.com` | Without it the Host header is not validated against an allowlist |
 | 7 | Set `UPSTREAM` to internal address only | `UPSTREAM=http://app:3000` (not a public URL) | SSRF protection filters localhost/RFC-1918 but the upstream itself should be internal |
@@ -157,7 +157,7 @@ docker exec -it appsecgw sqlite3 /data/antibot.db \
 
 ## 4. Tune knobs (hot-reload)
 
-All hot-reloadable knobs take effect immediately — no restart needed. Changes are persisted in the `config_kv` SQLite table and survive restarts. **ENV wins over DB**: if a knob is set via container env, it cannot be overridden at runtime.
+All hot-reloadable knobs take effect immediately — no restart needed. Changes are persisted in the `config_kv` SQLite table and survive restarts. **ENV wins over DB**: if a knob is set via container env, it cannot be overridden at runtime — **except** the env-pin-excluded knobs (`TURNSTILE_ENABLED`, `JS_CHALLENGE`, `UPSTREAM`, `ALLOW_PRIVATE_UPSTREAM`), where the env value is only the cold-start default and runtime changes are allowed and persist (DB-wins on restart). As of 1.8.10, `TRUST_XFF`, `TRUSTED_PROXIES`, and `ALLOW_PRIVATE_UPSTREAM` are hot-reloadable from **Settings → Infrastructure** (no restart). A knob shown read-only in Settings with a `REQUIRES RESTART` badge is not hot-reloadable; one shown with a 🔒 / env-pinned note was fixed via container env.
 
 ### Via admin dashboard (Controls tab)
 
@@ -199,6 +199,23 @@ curl -s -b jar -X POST http://localhost:8080/antibot-appsec-gateway/secured/conf
 | Lower LLM heuristic page count | `LLM_HTML_MIN_COUNT` | 3 (default 5) |
 | Lower canary-probe page count | `CANARY_PROBE_MIN_HTML` | 2 (default 3) |
 
+### Find which control caused a block (1.8.10)
+
+You don't have to guess which knob to tune. On the **Live Feed** (or **Agents**),
+click an identity's risk score → the **Risk score breakdown** modal lists every
+reason that fired with a **Control** column showing the exact knob that provokes
+it, a live **on/off dot** (or value for thresholds/lists), and a **severity**
+badge. Click the control name to jump straight to it (Controls or Settings,
+scrolled + highlighted), or click its **dot to disable that detection in place**
+(confirm → applied immediately). The live-feed **Top controls by blocks** panel
+ranks controls by how many blocks they caused — the fastest way to spot an
+over-aggressive detector banning legitimate users.
+
+> Reasons map to controls via the server-side `SIGNAL_KNOB` table, surfaced by
+> `GET /secured/scoring` (`signal_knob` / `knob_state` / `knob_page` /
+> `signal_meta`). Admin-gate reasons (`admin-probe`, `operator-self`) show
+> "always-on" — there is no toggle (admin auth is mandatory).
+
 ---
 
 ## 5. Admin login
@@ -225,6 +242,28 @@ curl -s -c jar -X POST http://localhost:8080/antibot-appsec-gateway/login \
 # All subsequent admin requests use -b jar
 curl -s -b jar http://localhost:8080/antibot-appsec-gateway/secured/control-center
 ```
+
+### CSRF token for state-mutating API calls (1.8.10)
+
+State-mutating requests (`POST`/`PATCH`/`DELETE` to `/secured/...`) require an
+`X-CSRF-Token` header = the `agw_csrf` cookie value (`HMAC(SESSION_KEY, sid)`).
+The dashboard JS handles this automatically and **self-heals** a stale token: on
+any `403` it re-fetches `GET /secured/csrf` and retries once — so operators never
+have to clear cookies, even behind a CDN (e.g. Cloudflare) that rewrites the
+cookie to `HttpOnly`. When **scripting** the admin API, send the header
+explicitly:
+
+```bash
+# Fetch the current CSRF token (JSON; works regardless of cookie HttpOnly)
+TOK=$(curl -s -b jar http://localhost:8080/antibot-appsec-gateway/secured/csrf \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+curl -s -b jar -X POST http://localhost:8080/antibot-appsec-gateway/secured/config \
+  -H "X-CSRF-Token: $TOK" -H 'Content-Type: application/json' -d '{"JS_CHALLENGE":"1"}'
+```
+
+> Symptom `{"error":"CSRF token invalid"}` on a valid session usually means a
+> stale token; in the browser it self-heals on the next request. If it persists,
+> the session itself lapsed — re-login.
 
 ### Override the bootstrap password
 
@@ -262,13 +301,19 @@ curl -s -b jar -X POST \
 
 Controls tab → **Banned identities** section → click **Unban** next to the row.
 
+**From the risk breakdown (1.8.10):** on the Live Feed / Agents, click a banned
+identity's risk score → the modal shows a ban header ("Banned ≈Xh left; the live
+risk decayed but the ban is a separate entry") and an **Unban this identity**
+button. If the identity is an admin IP, a **self-ban guard** banner warns it is
+"likely a self-ban from testing" — handy when you ban yourself with curl/replay.
+
 ### Via API
 
 ```bash
 # Unban by identity hash
 curl -s -b jar -X POST http://localhost:8080/antibot-appsec-gateway/secured/unban \
   -H 'Content-Type: application/json' \
-  -d '{"identity": "<identity-hash>"}'
+  -d '{"id": "<identity-hash>"}'        # or {"ip": "1.2.3.4"} | {"all": true}
 ```
 
 Identity hashes appear in the event log (`identity` field) and in the agents dashboard drill-down.

@@ -1,0 +1,18 @@
+# Code owners — require maintainer review on every change.
+# GitHub auto-requests review from the owner(s) below when a PR touches
+# matching paths. Combined with branch protection ("Require review from
+# Code Owners"), this makes the maintainer the merge gatekeeper.
+#
+# !! REPLACE @YOUR_GITHUB_USERNAME with your actual GitHub handle. !!
+# (CODEOWNERS needs a GitHub @username or team — an email won't work here.)
+
+# Everything → the maintainer
+*                       @YOUR_GITHUB_USERNAME
+
+# Governance / licensing files — extra-protect (same owner; listed explicitly
+# so they always require review even if you later add other owners above).
+/LICENSE                @YOUR_GITHUB_USERNAME
+/CLA.md                 @YOUR_GITHUB_USERNAME
+/CONTRIBUTING.md        @YOUR_GITHUB_USERNAME
+/CODEOWNERS             @YOUR_GITHUB_USERNAME
+/.github/               @YOUR_GITHUB_USERNAME
