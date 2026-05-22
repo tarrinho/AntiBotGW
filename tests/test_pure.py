@@ -3004,7 +3004,8 @@ def test_authorized_bot_ban_action_sets_banned_until():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    # Search for the for-loop block, not the earlier comment that mentions the var name
+    bot_idx = src.find("for _bot in AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
     bot_block = src[bot_idx: bot_idx + 4000]
     assert "banned_until" in bot_block, (
@@ -10474,3 +10475,351 @@ def test_behavioral_hot_reload_knobs_registered():
             f"{knob} missing from _HOT_RELOAD_KNOBS — "
             "operator cannot tune behavioral thresholds without container restart"
         )
+
+
+# ── M-4: IP ban persistence ────────────────────────────────────────────────
+
+def test_ip_bans_schema_has_table():
+    """ip_bans table DDL must be in db/sqlite.py."""
+    import inspect
+    from db import sqlite as _sq
+    src = inspect.getsource(_sq)
+    assert "CREATE TABLE IF NOT EXISTS ip_bans" in src
+    assert "ip_bans(banned_until)" in src, "Missing index on banned_until"
+
+
+def test_check_ip_ban_exported():
+    """check_ip_ban and prune_ip_bans must be exported from db package."""
+    from db import check_ip_ban, prune_ip_bans  # noqa: F401
+    assert callable(check_ip_ban)
+    assert callable(prune_ip_bans)
+
+
+def test_check_ip_ban_miss_returns_zero(tmp_path):
+    """check_ip_ban returns 0 when IP is not banned."""
+    import importlib, sys
+    # Patch DB_PATH to a temp file so the function can create the schema
+    orig = None
+    try:
+        from db import sqlite as _sq
+        orig = _sq.DB_PATH
+        _sq.DB_PATH = str(tmp_path / "test.db")
+        import sqlite3
+        conn = sqlite3.connect(_sq.DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY, banned_until REAL NOT NULL,
+            reason TEXT, ts REAL NOT NULL)""")
+        conn.commit(); conn.close()
+        result = _sq.check_ip_ban("1.2.3.4")
+        assert result == 0.0, f"Expected 0.0, got {result}"
+    finally:
+        if orig is not None:
+            _sq.DB_PATH = orig
+
+
+def test_check_ip_ban_hit_returns_until(tmp_path):
+    """check_ip_ban returns banned_until for an active ban."""
+    import time as _time
+    import sqlite3
+    from db import sqlite as _sq
+    orig = _sq.DB_PATH
+    try:
+        _sq.DB_PATH = str(tmp_path / "test.db")
+        conn = sqlite3.connect(_sq.DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY, banned_until REAL NOT NULL,
+            reason TEXT, ts REAL NOT NULL)""")
+        future = _time.time() + 3600
+        conn.execute("INSERT INTO ip_bans VALUES (?,?,?,?)",
+                     ("10.0.0.1", future, "test", _time.time()))
+        conn.commit(); conn.close()
+        result = _sq.check_ip_ban("10.0.0.1")
+        assert abs(result - future) < 1.0, f"Expected ~{future}, got {result}"
+    finally:
+        _sq.DB_PATH = orig
+
+
+def test_prune_ip_bans_removes_expired(tmp_path):
+    """prune_ip_bans deletes only expired rows, leaves active ones."""
+    import time as _time
+    import sqlite3
+    from db import sqlite as _sq
+    orig = _sq.DB_PATH
+    try:
+        _sq.DB_PATH = str(tmp_path / "test.db")
+        conn = sqlite3.connect(_sq.DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY, banned_until REAL NOT NULL,
+            reason TEXT, ts REAL NOT NULL)""")
+        past = _time.time() - 1
+        future = _time.time() + 3600
+        conn.execute("INSERT INTO ip_bans VALUES (?,?,?,?)",
+                     ("expired.ip", past, "old", _time.time()))
+        conn.execute("INSERT INTO ip_bans VALUES (?,?,?,?)",
+                     ("active.ip", future, "current", _time.time()))
+        conn.commit(); conn.close()
+        pruned = _sq.prune_ip_bans()
+        assert pruned == 1, f"Expected 1 pruned row, got {pruned}"
+        conn2 = sqlite3.connect(_sq.DB_PATH)
+        rows = conn2.execute("SELECT ip FROM ip_bans").fetchall()
+        conn2.close()
+        assert len(rows) == 1 and rows[0][0] == "active.ip"
+    finally:
+        _sq.DB_PATH = orig
+
+
+def test_ip_ban_written_on_hostile_ban_in_scoring():
+    """ban() must enqueue ip_ban op for secs >= HOSTILE_BAN_SECS."""
+    import inspect
+    import scoring
+    src = inspect.getsource(scoring.ban)
+    assert "ip_ban" in src, "ban() does not enqueue ip_ban op"
+    assert "HOSTILE_BAN_SECS" in src, "ban() ip_ban condition missing HOSTILE_BAN_SECS threshold"
+
+
+def test_ip_ban_written_on_risk_ban():
+    """update_risk_and_maybe_ban() must enqueue ip_ban when ban_dur >= HOSTILE_BAN_SECS."""
+    import inspect
+    import scoring
+    src = inspect.getsource(scoring.update_risk_and_maybe_ban)
+    assert "ip_ban" in src, "update_risk_and_maybe_ban() does not enqueue ip_ban op"
+    assert "HOSTILE_BAN_SECS" in src, "ip_ban condition missing HOSTILE_BAN_SECS threshold"
+
+
+def test_protect_has_ip_ban_check():
+    """protect() must perform an ip-ban point-lookup before identity derivation."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    assert "check_ip_ban" in src, "protect() missing check_ip_ban call"
+    assert "ip-ban" in src, "protect() ip_ban check must emit 'ip-ban' reason"
+
+
+def test_prune_loop_calls_prune_ip_bans():
+    """_prune_state_loop must call prune_ip_bans to expire ip_bans rows."""
+    import inspect
+    from rate_limit import _prune_state_loop
+    src = inspect.getsource(_prune_state_loop)
+    assert "prune_ip_bans" in src, "_prune_state_loop does not call prune_ip_bans"
+
+
+def test_unban_endpoint_clears_ip_bans():
+    """unban_endpoint must DELETE from ip_bans table."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.unban_endpoint)
+    assert "ip_bans" in src, "unban_endpoint does not clean ip_bans table"
+
+
+# ── SH-1: SSRF guard on URL-type secrets ──────────────────────────────────
+
+def test_ssrf_guard_url_helper_exists():
+    """_ssrf_guard_url must be defined in proxy_handler."""
+    from core.proxy_handler import _ssrf_guard_url
+    assert callable(_ssrf_guard_url)
+
+
+def test_url_secret_guards_map_exists():
+    """_URL_SECRET_GUARDS must include CROWDSEC_LAPI_URL and OIDC_ISSUER."""
+    from core.proxy_handler import _URL_SECRET_GUARDS
+    assert "CROWDSEC_LAPI_URL" in _URL_SECRET_GUARDS
+    assert "OIDC_ISSUER" in _URL_SECRET_GUARDS
+
+
+def test_ssrf_guard_blocks_cloud_metadata():
+    """_ssrf_guard_url must raise ValueError for cloud metadata IP 169.254.169.254."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('169.254.169.254', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        try:
+            _ssrf_guard_url("http://metadata.internal/", label="CROWDSEC_LAPI_URL",
+                            allow_loopback=True)
+            assert False, "Expected ValueError for cloud metadata address"
+        except ValueError as e:
+            assert "SSRF guard" in str(e)
+
+
+def test_ssrf_guard_blocks_rfc1918():
+    """_ssrf_guard_url must raise ValueError for RFC1918 addresses."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('10.0.0.1', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        try:
+            _ssrf_guard_url("http://internal.corp/", label="CROWDSEC_LAPI_URL",
+                            allow_loopback=True)
+            assert False, "Expected ValueError for RFC1918 address"
+        except ValueError as e:
+            assert "SSRF guard" in str(e)
+
+
+def test_ssrf_guard_allows_loopback_when_flag_set():
+    """_ssrf_guard_url must allow 127.0.0.1 when allow_loopback=True."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        _ssrf_guard_url("http://localhost:8080/", label="CROWDSEC_LAPI_URL",
+                        allow_loopback=True)  # Must not raise
+
+
+def test_ssrf_guard_blocks_loopback_when_flag_off():
+    """_ssrf_guard_url must block 127.0.0.1 when allow_loopback=False."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        try:
+            _ssrf_guard_url("http://localhost/", label="OIDC_ISSUER",
+                            allow_loopback=False)
+            assert False, "Expected ValueError for loopback when allow_loopback=False"
+        except ValueError:
+            pass
+
+
+def test_secrets_endpoint_applies_ssrf_guard():
+    """secrets_endpoint POST loop must call _ssrf_guard_url for URL secrets."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.secrets_endpoint)
+    assert "_ssrf_guard_url" in src, \
+        "secrets_endpoint does not apply SSRF guard on URL-type secrets"
+    assert "_URL_SECRET_GUARDS" in src
+
+
+def test_settings_import_applies_ssrf_guard():
+    """settings_import_endpoint must apply SSRF guard on URL secrets."""
+    import inspect
+    from admin import settings
+    src = inspect.getsource(settings.settings_import_endpoint)
+    assert "_ssrf_guard_url" in src, \
+        "settings_import_endpoint does not apply SSRF guard on URL-type secrets"
+
+
+# ── SH-3: PoW endpoint rate limiting ─────────────────────────────────────────
+
+def test_pow_rl_dicts_defined():
+    """_POW_RL and _POW_CHAL_CACHE must be defined in proxy_handler."""
+    from core.proxy_handler import _POW_RL, _POW_CHAL_CACHE
+    assert isinstance(_POW_RL, dict)
+    assert isinstance(_POW_CHAL_CACHE, dict)
+
+
+def test_pow_rl_constants_defined():
+    """POW_RL_LIMIT and POW_RL_WINDOW must be defined and sane."""
+    from core.proxy_handler import POW_RL_LIMIT, POW_RL_WINDOW
+    assert isinstance(POW_RL_LIMIT, int) and POW_RL_LIMIT >= 1
+    assert isinstance(POW_RL_WINDOW, float) and POW_RL_WINDOW >= 1.0
+
+
+def test_pow_endpoint_applies_rate_limit():
+    """pow_endpoint source must reference _POW_RL for rate limiting."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.pow_endpoint)
+    assert "_POW_RL" in src, "pow_endpoint does not use _POW_RL for rate limiting"
+    assert "429" in src, "pow_endpoint does not return 429 on rate-limit breach"
+    assert "Retry-After" in src, "pow_endpoint missing Retry-After header on 429"
+
+
+def test_pow_endpoint_idempotent_cache():
+    """pow_endpoint must reuse _POW_CHAL_CACHE within window."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.pow_endpoint)
+    assert "_POW_CHAL_CACHE" in src, \
+        "pow_endpoint does not cache challenges for idempotent issuance"
+
+
+def test_pow_endpoint_uses_socket_ip():
+    """pow_endpoint must rate-limit by socket IP (request.remote), not XFF."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.pow_endpoint)
+    assert "request.remote" in src, \
+        "pow_endpoint does not use request.remote for rate-limit source IP"
+
+
+def test_prune_loop_prunes_pow_rl():
+    """_prune_state_loop must prune _POW_RL and _POW_CHAL_CACHE."""
+    import inspect
+    from rate_limit import _prune_state_loop
+    src = inspect.getsource(_prune_state_loop)
+    assert "_POW_RL" in src, "_prune_state_loop does not prune _POW_RL"
+    assert "_POW_CHAL_CACHE" in src, "_prune_state_loop does not prune _POW_CHAL_CACHE"
+
+
+# ── M-6: Redis ban retry queue ─────────────────────────────────────────────
+
+def test_pending_redis_bans_deque_defined():
+    """_pending_redis_bans must be a bounded deque (maxlen=1000)."""
+    from integrations.redis import _pending_redis_bans
+    import collections
+    assert isinstance(_pending_redis_bans, collections.deque)
+    assert _pending_redis_bans.maxlen == 1000
+
+
+def test_shared_ban_set_enqueues_on_failure():
+    """_shared_ban_set must push to _pending_redis_bans when Redis write fails."""
+    import inspect
+    from integrations import redis as _redis_mod
+    src = inspect.getsource(_redis_mod._shared_ban_set)
+    assert "_pending_redis_bans" in src, \
+        "_shared_ban_set does not enqueue failed bans to _pending_redis_bans"
+    assert "redis_ban_queued" in src, \
+        "_shared_ban_set does not emit redis_ban_queued slog"
+
+
+def test_redis_ban_flush_loop_defined():
+    """_redis_ban_flush_loop must be an async coroutine function."""
+    import asyncio
+    from integrations.redis import _redis_ban_flush_loop
+    assert asyncio.iscoroutinefunction(_redis_ban_flush_loop)
+
+
+def test_redis_ban_flush_loop_emits_flushed_log():
+    """_redis_ban_flush_loop must emit redis_ban_flushed slog on success."""
+    import inspect
+    from integrations.redis import _redis_ban_flush_loop
+    src = inspect.getsource(_redis_ban_flush_loop)
+    assert "redis_ban_flushed" in src
+    assert "redis_ban_flush_failed" in src
+
+
+def test_redis_ban_flush_loop_exponential_backoff():
+    """_redis_ban_flush_loop must implement exponential backoff on repeated failures."""
+    import inspect
+    from integrations.redis import _redis_ban_flush_loop
+    src = inspect.getsource(_redis_ban_flush_loop)
+    assert "_backoff" in src and "* 2" in src, \
+        "_redis_ban_flush_loop missing exponential backoff"
+    assert "_MAX_BACKOFF" in src, "missing _MAX_BACKOFF cap"
+
+
+def test_redis_flush_loop_started_in_proxy():
+    """proxy.py must import and start _redis_ban_flush_loop in on_startup."""
+    import inspect
+    import proxy
+    src = inspect.getsource(proxy)
+    assert "_redis_ban_flush_loop" in src, \
+        "proxy.py does not import _redis_ban_flush_loop"
+    startup_src = inspect.getsource(proxy._startup_integrations_and_tasks)
+    assert "_redis_ban_flush_loop" in startup_src, \
+        "_startup_integrations_and_tasks does not start _redis_ban_flush_loop"

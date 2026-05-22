@@ -24,6 +24,7 @@ Security controls:
 """
 
 import asyncio
+import collections
 import hashlib
 import hmac as _hmac
 import ipaddress
@@ -37,6 +38,12 @@ from helpers import slog
 # ── Module-level Redis singleton ──────────────────────────────────────────
 _redis = None          # lazy-initialised singleton; None if disabled or unavailable
 _redis_host_ip = None  # resolved IP of the Redis server (cached at connect time)
+
+# M-6 — pending ban queue: bans that could not be written to Redis (transient
+# failure) are buffered here and flushed by _redis_ban_flush_loop(). Bounded
+# at 1000 entries so a prolonged Redis outage never inflates memory; the oldest
+# entry is silently dropped when the deque is full (FIFO eviction).
+_pending_redis_bans: collections.deque = collections.deque(maxlen=1000)
 
 # INT4-04: enforce TLS for Redis connections (REDIS_REQUIRE_TLS=true by default).
 # Plaintext redis:// with TLS enforcement active → Redis disabled, gateway continues
@@ -193,6 +200,10 @@ async def _shared_ban_set(track_key: str, until_epoch: float, reason: str):
     except Exception as e:
         slog("shared_ban_set_failed", level="warn",
              track_key=track_key[:32], error=str(e)[:80])
+        # M-6: queue for retry — _redis_ban_flush_loop will retry until Redis recovers.
+        _pending_redis_bans.append((track_key, until_epoch, reason))
+        slog("redis_ban_queued", level="info",
+             track_key=track_key[:32], pending=len(_pending_redis_bans))
 
 
 async def _shared_ban_get(track_key: str) -> float:
@@ -213,3 +224,65 @@ async def _shared_ban_get(track_key: str) -> float:
         return float(verified.split("|", 1)[0])
     except Exception:
         return 0.0
+
+
+async def _redis_ban_flush_loop() -> None:
+    """M-6 — Background coroutine: retry pending Redis bans after transient failures.
+
+    Runs every 10 s when the queue is empty. When items are present, attempts to
+    flush all of them in a single pass and backs off exponentially (up to 120 s)
+    if Redis is still unreachable. Emits redis_ban_flushed / redis_ban_flush_failed
+    structured logs so operators can track recovery.
+    """
+    _BASE_INTERVAL = 10.0
+    _MAX_BACKOFF   = 120.0
+    _backoff       = _BASE_INTERVAL
+    while True:
+        try:
+            if not _pending_redis_bans:
+                await asyncio.sleep(_BASE_INTERVAL)
+                _backoff = _BASE_INTERVAL
+                continue
+            if _redis is None or not _check_redis_allowed(_redis_host_ip):
+                await asyncio.sleep(_backoff)
+                _backoff = min(_backoff * 2, _MAX_BACKOFF)
+                continue
+            n_pending = len(_pending_redis_bans)
+            flushed = 0
+            failed  = 0
+            # Drain the deque in a single pass; on failure stop and back off.
+            while _pending_redis_bans:
+                entry = _pending_redis_bans[0]
+                track_key, until_epoch, reason = entry
+                ttl = max(1, int(until_epoch - _t.time()))
+                if ttl <= 0:
+                    _pending_redis_bans.popleft()
+                    continue
+                raw_value = f"{int(until_epoch)}|{reason[:32]}"
+                signed = _hmac_sign(raw_value)
+                try:
+                    await asyncio.wait_for(
+                        _redis.set(f"{REDIS_NS}:ban:{track_key}", signed, ex=ttl),
+                        timeout=REDIS_TIMEOUT)
+                    _pending_redis_bans.popleft()
+                    flushed += 1
+                except Exception as e:
+                    slog("redis_ban_flush_failed", level="warn",
+                         track_key=track_key[:32], error=str(e)[:80],
+                         remaining=len(_pending_redis_bans))
+                    failed += 1
+                    break
+            if flushed:
+                slog("redis_ban_flushed", level="info",
+                     flushed=flushed, failed=failed, was_pending=n_pending)
+            if failed:
+                _backoff = min(_backoff * 2, _MAX_BACKOFF)
+                await asyncio.sleep(_backoff)
+            else:
+                _backoff = _BASE_INTERVAL
+                await asyncio.sleep(_BASE_INTERVAL)
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            slog("redis_flush_loop_error", level="error", error=str(e)[:120])
+            await asyncio.sleep(_BASE_INTERVAL)

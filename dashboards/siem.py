@@ -472,8 +472,10 @@ SIEM_DASHBOARD_HTML = (_DASHBOARDS_DIR / "siem.html").read_text(encoding="utf-8"
 
 async def siem_dashboard_endpoint(request: web.Request) -> web.Response:
     """Serve the SIEM Security Event Center dashboard."""
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
     return web.Response(
-        text=SIEM_DASHBOARD_HTML,
+        text=SIEM_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1),
         content_type="text/html",
         headers={
             "Cache-Control":        "no-store",

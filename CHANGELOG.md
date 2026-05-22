@@ -96,6 +96,43 @@ review of the codebase (no functional/UI changes).
   `BEHAVIOR_WINDOW` and `BEHAVIOR_MAX_REGULAR` are retained for backwards compat
   but were never read by `behavioral.py`; a comment marks them as legacy.
 
+### Security (Wave 2)
+
+- **M-4 — IP ban persistence across SESSION_KEY rotation** (`db/sqlite.py`,
+  `scoring.py`, `core/proxy_handler.py`, `rate_limit.py`): hostile bans
+  (≥ `HOSTILE_BAN_SECS`, default 24 h) are now written to a persistent
+  `ip_bans` table keyed on the raw client IP address. On each request
+  `protect()` performs a synchronous SQLite WAL point-lookup before identity
+  derivation; if the IP is found, a `ip-ban` silent-decoy fires immediately.
+  Previously, a banned attacker could regenerate a fresh session cookie to
+  bypass an active ban. The table is pruned each prune-loop cycle alongside
+  the rest of the state. Unban endpoints (`unban_endpoint`, `bulk_unban_endpoint`)
+  also DELETE from `ip_bans` so manual operator unbans work end-to-end.
+- **SH-1 — SSRF guard on URL-type secrets** (`core/proxy_handler.py`,
+  `admin/settings.py`): `CROWDSEC_LAPI_URL` and `OIDC_ISSUER` are now
+  validated against the SSRF guard (`_ssrf_guard_url`) when saved via
+  `POST /__secrets` or `POST /__settings-import`. The guard resolves the
+  hostname and rejects RFC1918 + link-local addresses (169.254.0.0/16,
+  10.0.0.0/8, etc.). For CrowdSec (`allow_loopback=True`) the loopback
+  range 127.0.0.0/8 is permitted so a sidecar LAPI on localhost still works.
+  Emits `ssrf_guard_blocked` WARN slog on rejection. Skipped when
+  `ALLOW_PRIVATE_UPSTREAM=1` for parity with the upstream SSRF guard.
+- **SH-3 — Rate-limit PoW issue endpoint** (`core/proxy_handler.py`,
+  `rate_limit.py`): `pow_endpoint` now enforces per-source-IP rate limiting
+  (`POW_RL_LIMIT=5` / `POW_RL_WINDOW=60s`, env-configurable) using
+  `request.remote` to resist X-Forwarded-For spoofing. Returns `429 + Retry-After`
+  on breach. Idempotent issuance: repeated calls from the same IP within the
+  window return the cached challenge string (`_POW_CHAL_CACHE`) so rapid
+  page loads share a single challenge token and don't accumulate server state.
+  Both dicts are pruned in the prune-loop cycle.
+- **M-6 — Redis ban retry queue** (`integrations/redis.py`, `proxy.py`): when
+  `_shared_ban_set` fails with a transient Redis error, the ban entry is pushed
+  to `_pending_redis_bans` (bounded `deque(maxlen=1000)`) and a new
+  `_redis_ban_flush_loop` coroutine retries the flush every 10 s with
+  exponential back-off up to 120 s. Emits `redis_ban_queued` on enqueue and
+  `redis_ban_flushed` / `redis_ban_flush_failed` on each flush attempt.
+  A prolonged Redis outage never blocks banning or inflates memory.
+
 ### Tests
 
 - New `tests/test_v1811_security.py` — 20 tests covering H1–H3, M1–M4, M7
@@ -112,7 +149,23 @@ review of the codebase (no functional/UI changes).
   QW-1 (HONEYPOT_EXTRA_PATHS merge + hot-reload registration), QW-3 (bulk_unban
   endpoint existence + route wiring), QW-4 (audit_log_export endpoint + route),
   QW-5 (_REASON_COUNT_PREFIX constant + eval logic), QW-6 (six threshold constants
-  in config + behavioral.py usage + hot-reload knobs). `856 unit` total.
+  in config + behavioral.py usage + hot-reload knobs).
+- **M-4 regression tests** (`tests/test_pure.py`): 10 new pure tests covering
+  ip_bans schema, `check_ip_ban` / `prune_ip_bans` exported + functional
+  (miss → 0.0, hit → until, expired pruned), `ban()` + `update_risk_and_maybe_ban()`
+  enqueue ip_ban op on hostile bans, `protect()` ip-ban check presence,
+  prune-loop wiring, unban endpoint cleanup.
+- **SH-1 regression tests**: 8 tests covering `_ssrf_guard_url` callable + blocks
+  cloud-metadata (169.254.169.254), RFC1918 (10.x), allows loopback when
+  flag set, blocks loopback when flag off; secrets endpoint and settings-import
+  both apply the guard.
+- **SH-3 regression tests**: 6 tests covering `_POW_RL` / `_POW_CHAL_CACHE`
+  dicts, constants sanity, `pow_endpoint` 429 + Retry-After, idempotent cache,
+  socket-IP source, prune-loop wiring.
+- **M-6 regression tests**: 6 tests covering `_pending_redis_bans` deque bound,
+  `_shared_ban_set` enqueues + logs on failure, `_redis_ban_flush_loop` async
+  coroutine, flushed/failed log events, exponential backoff, proxy.py startup wiring.
+  `886 unit` total (test_pure.py) + 121 (test_critical.py) = **1007 total**.
 
 ---
 

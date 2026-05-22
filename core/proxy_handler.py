@@ -128,6 +128,17 @@ _PROBE_RL: dict = {}   # ip → [window_start, count]
 PROBE_RL_LIMIT  = 20
 PROBE_RL_WINDOW = 10.0
 
+# SH-3 — PoW issue endpoint rate limiter + idempotent cache.
+# Prevents CPU exhaustion from rapid challenge-farming (each challenge
+# generation is cheap but at scale it adds up; more importantly the endpoint
+# must not be used as an oracle to scan for solvable difficulties).
+# Rate limit: POW_RL_LIMIT requests per POW_RL_WINDOW seconds per source IP.
+# Within the window, the same challenge string is reused (idempotent).
+_POW_RL: dict = {}        # ip → [window_start, count]
+_POW_CHAL_CACHE: dict = {} # ip → (challenge_str, issued_at)
+POW_RL_LIMIT  = int(os.environ.get("POW_ISSUE_RL_LIMIT",  "5"))
+POW_RL_WINDOW = float(os.environ.get("POW_ISSUE_RL_WINDOW", "60.0"))
+
 
 def _probe_rate_limit_ok(ip: str) -> bool:
     import time as _time
@@ -2077,6 +2088,13 @@ async def secrets_endpoint(request: web.Request):
         if len(v) > 1024:
             rejected[k] = "value too long (max 1024 bytes)"
             continue
+        # SH-1: SSRF guard on URL-type secrets.
+        if k in _URL_SECRET_GUARDS:
+            try:
+                _ssrf_guard_url(v, label=k, allow_loopback=_URL_SECRET_GUARDS[k])
+            except ValueError as _ssrf_err:
+                rejected[k] = str(_ssrf_err)[:200]
+                continue
         global_name, _env_name = _SECRET_KEYS[k]
         # POSTGRES_DSN sentinel: if the password component is ">update password<",
         # substitute the password from the currently stored DSN so callers can
@@ -2251,6 +2269,56 @@ def _upstream_safe_to_reload(v: str) -> bool:
         return True
     except Exception:
         return True
+
+
+def _ssrf_guard_url(url: str, label: str = "", allow_loopback: bool = False) -> None:
+    """Raise ValueError if *url* resolves to a private / cloud-metadata address.
+
+    Used to guard URL-type secrets (CROWDSEC_LAPI_URL, OIDC_ISSUER) so an
+    authenticated operator cannot weaponise the gateway as an SSRF vector by
+    pointing a reputation URL at http://169.254.169.254/ or an internal service.
+
+    allow_loopback=True exempts 127.0.0.0/8 and ::1 (CrowdSec sidecar pattern).
+    Skipped entirely when ALLOW_PRIVATE_UPSTREAM=1 for parity with upstream guard.
+    """
+    if globals().get("ALLOW_PRIVATE_UPSTREAM"):
+        return
+    import urllib.parse as _up2, socket as _sock2, ipaddress as _ipa2
+    from vhost import _PRIVATE_NETS as _PN
+    parsed = _up2.urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"SSRF guard: {label or 'url'!r} has no hostname")
+    try:
+        addrs = {r[4][0] for r in _sock2.getaddrinfo(host, None)}
+    except _sock2.gaierror:
+        return  # DNS failure — let runtime handle
+    for addr_str in addrs:
+        try:
+            ip = _ipa2.ip_address(addr_str)
+            if isinstance(ip, _ipa2.IPv6Address) and ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+        except ValueError:
+            continue
+        for net in _PN:
+            if allow_loopback and net.overlaps(_ipa2.ip_network("127.0.0.0/8")):
+                continue
+            if allow_loopback and net.overlaps(_ipa2.ip_network("::1/128")):
+                continue
+            if ip in net:
+                slog("ssrf_guard_blocked", level="warn",
+                     label=label or url[:60], ip=str(ip), net=str(net))
+                raise ValueError(
+                    f"SSRF guard: {label or url[:60]!r} resolves to private "
+                    f"address {ip} ({net}). Use ALLOW_PRIVATE_UPSTREAM=1 to permit.")
+
+
+# Secrets that carry HTTP URLs and need an SSRF check on write.
+# allow_loopback=True: CrowdSec LAPI may legitimately run as a sidecar on 127.x.
+_URL_SECRET_GUARDS: dict = {
+    "CROWDSEC_LAPI_URL": True,   # allow_loopback=True
+    "OIDC_ISSUER":       False,  # public OIDC provider expected; block all private IPs
+}
 
 
 # name -> (parser, optional validator returning bool)
@@ -2993,6 +3061,24 @@ async def protect(request: web.Request, handler):
                      request.path, resp.status, "",
                      track_key=_bm_ip, request_id=rid, method=request.method)
         return resp
+
+    # 1.8.12 M-4 — IP ban persistence: block raw IPs that earned a hostile ban
+    # across SESSION_KEY rotations. check_ip_ban() is a synchronous SQLite
+    # point-lookup with a 0.1 s timeout — effectively zero overhead on the hot
+    # path because SQLite WAL reads never block the writer.
+    if not _is_admin_path(request.path):
+        _raw_ip_check = get_ip(request) or request.remote or ""
+        if _raw_ip_check:
+            try:
+                from db import check_ip_ban
+                _ip_ban_until = check_ip_ban(_raw_ip_check)
+                if _ip_ban_until > 0:
+                    _ua_ipb = request.headers.get("User-Agent", "")
+                    return await _silent_decoy_response(
+                        _raw_ip_check, _ua_ipb, request.path,
+                        "ip-ban", ja4=_request_ja4(request), request_id=rid)
+            except Exception:
+                pass  # nosec B110 — ip_bans check is defence-in-depth; never blocks on error
 
     # 1.7.4 — Authorized monitoring bot pass-through.
     # Each entry in AUTHORIZED_BOT_UAS is a dict: {name, ua, path, ips, action, enabled}.
@@ -4045,14 +4131,41 @@ async def protect(request: web.Request, handler):
 async def pow_endpoint(request: web.Request):
     """Issue a fresh PoW challenge bound to (method, path) supplied via query.
     Example: /__pow?method=POST&path=/login
+
+    SH-3: rate-limited per source IP (POW_RL_LIMIT req / POW_RL_WINDOW s).
+    Returns the cached challenge string when the same IP calls within the window
+    so multiple rapid calls do not burn extra server CPU (idempotent issuance).
     """
     method = (request.query.get("method", "POST") or "POST").upper()
     path = request.query.get("path", "/") or "/"
-    # 1.6.10 — pass caller's current risk_score for difficulty scaling
-    identity, _, _, _, _ = get_identity(request)
-    async with state_lock:
-        _risk = int(ip_state[identity].risk_score)
-    challenge = make_pow_challenge(method, path, risk_score=_risk)
+
+    # Rate-limit by socket IP (not X-Forwarded-For — prevents header spoofing).
+    _pow_src_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel
+    import time as _t_pow
+    _now_pow = _t_pow.monotonic()
+    _rl_entry = _POW_RL.get(_pow_src_ip)
+    if _rl_entry is None or _now_pow - _rl_entry[0] > POW_RL_WINDOW:
+        _POW_RL[_pow_src_ip] = [_now_pow, 1]
+    elif _rl_entry[1] >= POW_RL_LIMIT:
+        return web.Response(
+            status=429, text="rate limit\n",
+            headers={"Retry-After": str(int(POW_RL_WINDOW)),
+                     "Cache-Control": "no-store"})
+    else:
+        _rl_entry[1] += 1
+
+    # Idempotent: reuse cached challenge if within the window.
+    _cached = _POW_CHAL_CACHE.get(_pow_src_ip)
+    if _cached and _now_pow - _cached[1] < POW_RL_WINDOW:
+        challenge = _cached[0]
+    else:
+        # 1.6.10 — pass caller's current risk_score for difficulty scaling
+        identity, _, _, _, _ = get_identity(request)
+        async with state_lock:
+            _risk = int(ip_state[identity].risk_score)
+        challenge = make_pow_challenge(method, path, risk_score=_risk)
+        _POW_CHAL_CACHE[_pow_src_ip] = (challenge, _now_pow)
+
     eff_diff = int(challenge.split("|")[2])
     return web.json_response({
         "challenge": challenge,
@@ -5320,8 +5433,10 @@ CONTROL_CENTER_HTML    = (_DASHBOARDS_DIR / "control_center.html").read_text(enc
 
 async def control_center_endpoint(request: web.Request):
     """Control Center — landing page after login; shows vhost traffic summary."""
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
     return web.Response(
-        text=CONTROL_CENTER_HTML,
+        text=CONTROL_CENTER_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1),
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -5377,18 +5492,21 @@ async def unban_endpoint(request: web.Request):
                     s.banned_until = 0.0
                 s.risk_score = 0.0
                 cleared += 1
-        # Also clear DB bans table for matched IPs (best-effort).
+        # Also clear DB bans table + ip_bans for matched IPs (best-effort).
         try:
             conn = sqlite3.connect(DB_PATH)
             if do_all:
                 conn.execute("DELETE FROM bans")
+                conn.execute("DELETE FROM ip_bans")
                 conn.execute("UPDATE clients SET banned_until_epoch=0")
             elif target_ip:
                 conn.execute("DELETE FROM bans WHERE ip=?", (target_ip,))
+                conn.execute("DELETE FROM ip_bans WHERE ip=?", (target_ip,))
                 conn.execute("UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
                              (target_ip,))
             elif target_id:
                 conn.execute("DELETE FROM bans WHERE ip=?", (target_id,))
+                conn.execute("DELETE FROM ip_bans WHERE ip=?", (target_id,))
                 conn.execute("UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
                              (target_id,))
             conn.commit()
@@ -5472,7 +5590,7 @@ async def bulk_unban_endpoint(request: web.Request):
                 matched_ips.append(s.last_ip or k)
                 cleared += 1
 
-    # Best-effort DB cleanup
+    # Best-effort DB cleanup (bans + ip_bans)
     if matched_ips or reason_glob:
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -5488,6 +5606,7 @@ async def bulk_unban_endpoint(request: web.Request):
                 ]
                 for ip in db_del:
                     conn.execute("DELETE FROM bans WHERE ip=?", (ip,))
+                    conn.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
                     conn.execute(
                         "UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
                         (ip,),
@@ -5495,6 +5614,7 @@ async def bulk_unban_endpoint(request: web.Request):
             else:
                 for ip in matched_ips:
                     conn.execute("DELETE FROM bans WHERE ip=?", (ip,))
+                    conn.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
                     conn.execute(
                         "UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
                         (ip,),
@@ -6489,7 +6609,9 @@ async def geo_drill_endpoint(request: web.Request):
 
 async def geo_dashboard_endpoint(request: web.Request):
     """HTML dashboard rendering the world-map geo view."""
-    body = GEO_DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = GEO_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -6696,7 +6818,9 @@ async def logs_export_endpoint(request: web.Request):
 
 async def logs_dashboard_endpoint(request: web.Request):
     """HTML dashboard for the Logs viewer (request log + GW log + level toggle)."""
-    body = LOGS_DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = LOGS_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body, content_type="text/html",
         headers={

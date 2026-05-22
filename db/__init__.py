@@ -16,6 +16,8 @@ from db.sqlite import (
     _SCHEMA_MIGRATIONS,
     _apply_sqlite_migrations,
     _refresh_integration_state,
+    check_ip_ban,
+    prune_ip_bans,
 )
 from db.postgres import (
     db_init_postgres,
