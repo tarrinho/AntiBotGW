@@ -981,6 +981,8 @@ const META = {
   REALLY_BAN_SECS:         {kind:'num', min:3600, max:31536000,  step:3600,  desc:'Really Ban — extended ban for definitive bot proof: canary-echo, honeypot, honeypot-silent (default 2592000 = 30 days).', card:'thresholds'},
   CANARY_TTL_S:            {kind:'num', min:30,   max:86400, step:30,  desc:'Canary token validity window.', card:'thresholds'},
   GLOBAL_RPS_LIMIT:        {kind:'num', min:0,    max:100000,step:10,  desc:'Operator throttle: silent-decoy any request beyond N req/s globally. 0 = disabled.', card:'thresholds'},
+  UPSTREAM_MAX_BODY:       {kind:'num', min:1024, max:1073741824, step:1024, desc:'Max request body the gateway accepts and forwards to upstream (bytes). Default 2097152 (2 MiB). Keep WAF_BODY_SCAN_BYTES ≥ this value — raising body limit without raising the scan window re-opens a WAF bypass.', card:'thresholds'},
+  UPSTREAM_MAX_RESP:       {kind:'num', min:1024, max:1073741824, step:1024, desc:'Max response body buffered from upstream (bytes). Default 8388608 (8 MiB). Responses exceeding this limit return 413 (Content Too Large) to the client.', card:'thresholds'},
   SESSION_CHURN_WINDOW_S:  {kind:'num', min:5,    max:3600,  step:1,   desc:'Window for fresh-session-rate detector.', card:'thresholds'},
   SESSION_CHURN_MAX:       {kind:'num', min:1,    max:1000,  step:1,   desc:'Max chal cookies a single fingerprint may mint per window.', card:'thresholds'},
   JA4_AUTODENY_THRESHOLD:  {kind:'num', min:1,    max:100,   step:1,   desc:'Distinct bans on a JA4 before auto-adding it to the deny list.', card:'thresholds'},
