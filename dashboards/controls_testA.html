@@ -5,7 +5,16 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Controls · Test A · Split pane</title>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--card:#161b22;--line:#21262d;--blue:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2993a;--dim:#8b949e;--panel:#1c2128}
+:root{--bg:#0d1117;--fg:#c9d1d9;--card:#161b22;--line:#21262d;--blue:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2993a;--dim:#8b949e;--panel:#1c2128--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:var(--bg);color:var(--fg);font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;font-size:13px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
 
@@ -53,13 +62,13 @@ nav{padding:6px 0}
 .ctrl .name{font-size:12px;font-weight:600;font-family:ui-monospace,Menlo,monospace;color:var(--fg)}
 .ctrl .desc{font-size:11px;color:var(--dim);margin-top:2px;line-height:1.5}
 .ctrl .input{display:flex;align-items:center;flex-shrink:0;padding-top:2px}
-.switch{width:36px;height:20px;border-radius:10px;background:#30363d;cursor:pointer;position:relative;flex-shrink:0;transition:background .2s}
+.switch{width:36px;height:20px;border-radius:10px;background:var(--line);cursor:pointer;position:relative;flex-shrink:0;transition:background .2s}
 .switch::after{content:'';position:absolute;width:14px;height:14px;border-radius:50%;background:#fff;top:3px;left:3px;transition:transform .2s}
 .switch.on{background:var(--green)}
 .switch.on::after{transform:translateX(16px)}
-.num{background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:4px 7px;font-size:12px;width:90px;text-align:right;outline:none}
+.num{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:4px 7px;font-size:12px;width:90px;text-align:right;outline:none}
 .num:focus{border-color:var(--blue)}
-.text{background:#0d1117;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:4px 7px;font-size:12px;width:300px;resize:vertical;min-height:28px;outline:none}
+.text{background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:4px 7px;font-size:12px;width:300px;resize:vertical;min-height:28px;outline:none}
 .text:focus{border-color:var(--blue)}
 .restart-badge{font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px;vertical-align:middle;white-space:nowrap}
 
@@ -84,6 +93,7 @@ nav{padding:6px 0}
   <span id="hint" class="badge-label">No pending changes.</span>
   <button class="btn" id="reset" disabled>Reset</button>
   <button class="btn primary" id="apply" disabled>Apply</button>
+  <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
 </div>
 
 <div class="layout">
@@ -479,6 +489,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('search-inp').oninput = () => renderSection();
   load();
 });
+</script>
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances){var gc=next==='light'?'rgba(0,0,0,.08)':'#21262d',tc=next==='light'?'#636e7b':'#8b949e';Object.values(Chart.instances).forEach(function(c){try{var sc=c.options.scales||{};Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});c.update('none');}catch(e){}});}
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
 </script>
 </body>
 </html>

@@ -168,6 +168,18 @@ def db_init():
         ts            REAL
     );
 
+    -- 1.8.12 M-4 — IP-keyed ban table that survives SESSION_KEY rotation.
+    -- Hostile/long-duration bans (>= HOSTILE_BAN_SECS) are mirrored here
+    -- keyed by raw client IP, not by track_key.  protect() checks this table
+    -- before identity derivation so a rotated key cannot free a hostile ban.
+    CREATE TABLE IF NOT EXISTS ip_bans (
+        ip            TEXT PRIMARY KEY,
+        banned_until  REAL NOT NULL,
+        reason        TEXT,
+        ts            REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ip_bans_until ON ip_bans(banned_until);
+
     CREATE TABLE IF NOT EXISTS admin_ips (
         cidr        TEXT PRIMARY KEY,
         added_ts    REAL NOT NULL,
@@ -485,6 +497,18 @@ async def db_writer_loop():
                           ON CONFLICT(ip) DO UPDATE SET banned_until=excluded.banned_until,
                                                         reason=excluded.reason, ts=excluded.ts
                         """, args)
+                    elif op == "ip_ban":
+                        # 1.8.12 M-4 — args = (ip, banned_until, reason, ts)
+                        conn.execute("""
+                          INSERT INTO ip_bans (ip,banned_until,reason,ts) VALUES (?,?,?,?)
+                          ON CONFLICT(ip) DO UPDATE SET
+                            banned_until=CASE WHEN excluded.banned_until > banned_until
+                                              THEN excluded.banned_until ELSE banned_until END,
+                            reason=excluded.reason, ts=excluded.ts
+                        """, args)
+                    elif op == "ip_ban_del":
+                        # args = (ip,)
+                        conn.execute("DELETE FROM ip_bans WHERE ip = ?", args)
                     elif op == "svc_metric":
                         # args is a tuple of values matching the column order.
                         # 1.6.5: appended pg_db_bytes + pg_events_rows
@@ -1204,6 +1228,39 @@ def _rehydrate_bans() -> int:
     except Exception as e:
         slog("bans_rehydrate_failed", level="warn", err=str(e)[:200])
     return count
+
+
+def check_ip_ban(ip: str) -> float:
+    """1.8.12 M-4 — Synchronous point-lookup in ip_bans.
+    Returns banned_until epoch (> now) or 0.0 if not banned / table absent.
+    Called from protect() before identity derivation so key rotation can never
+    free a hostile ban.  Uses a short-lived connection — no shared state."""
+    if not ip:
+        return 0.0
+    n = time.time()
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=0.1)
+        row = conn.execute(
+            "SELECT banned_until FROM ip_bans WHERE ip=? AND banned_until > ?",
+            (ip, n)).fetchone()
+        conn.close()
+        return float(row[0]) if row else 0.0
+    except Exception:
+        return 0.0
+
+
+def prune_ip_bans() -> int:
+    """Remove expired ip_bans rows. Called from _prune_state_loop."""
+    n = time.time()
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cur = conn.execute("DELETE FROM ip_bans WHERE banned_until <= ?", (n,))
+        count = cur.rowcount
+        conn.commit()
+        conn.close()
+        return count
+    except Exception:
+        return 0
 
 
 # ────────────────────────────────────────────────────────────────────────────

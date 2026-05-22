@@ -4,17 +4,25 @@
 <title>AppSecGW_1.8.11 · SIEM</title>
 <style>
 :root{
-  --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+  --bg:var(--bg);--card:var(--card);--line:var(--line);--fg:#c9d1d9;--dim:#8b949e;
   --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
   --purple:#bc8cff;--orange:#ff7b3a;
   --sev-crit:#ff4444;--sev-high:#ff7b3a;--sev-med:#d29922;
-  --sev-low:#58a6ff;--sev-info:#8b949e;
-}
+  --sev-low:#58a6ff;--sev-info:#8b949e;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);
   display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
 #sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
@@ -23,20 +31,20 @@ body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;
   font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:#fff;background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;
   display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;
   padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:#1f2730}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 #topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+  padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
 #topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;
   gap:8px;white-space:nowrap}
 #topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
@@ -54,7 +62,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;
 #kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
 /* ── Tables ── */
 table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+table th{background:var(--bg-elevated);color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
   text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
@@ -69,13 +77,13 @@ table tbody tr:hover{background:rgba(255,255,255,.03);cursor:pointer}
 .sev-low{background:#0e2040;color:var(--sev-low)}
 .sev-info{background:#1a1a1a;color:var(--sev-info)}
 /* ── Controls ── */
-.btn{background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:5px;
+.btn{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);border-radius:5px;
   padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;
   transition:background .1s,border-color .1s}
 .btn:hover{background:#2d333b;border-color:#58a6ff;color:#fff}
 .btn.active{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff;font-weight:600}
 .btn-sm{font-size:10px;padding:2px 8px}
-select.ctrl{background:#21262d;color:var(--fg);border:1px solid var(--line);
+select.ctrl{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:4px 6px;font-size:11px;cursor:pointer;font-family:inherit}
 select.ctrl:focus{outline:none;border-color:var(--blue)}
 /* ── Banners ── */
@@ -94,7 +102,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 .tab-bar{display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--line);padding-bottom:8px}
 .tab-btn{background:none;border:none;color:var(--dim);cursor:pointer;font:inherit;
   font-size:12px;padding:4px 12px;border-radius:4px}
-.tab-btn:hover{color:var(--fg);background:#1f2730}
+.tab-btn:hover{color:var(--fg);background:var(--bg-hover)}
 .tab-btn.active{color:#fff;background:#0e2c4a;font-weight:600}
 .tab-pane{display:none}
 .tab-pane.active{display:block}
@@ -103,10 +111,10 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
   border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
 #rule-add-form label{font-size:11px;color:var(--dim);display:flex;flex-direction:column;gap:3px}
 #rule-add-form input,#rule-add-form select{
-  background:#21262d;color:var(--fg);border:1px solid var(--line);
+  background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:4px 7px;font-size:11px;font-family:inherit}
 .srv-form-label{font-size:11px;color:var(--dim);display:flex;flex-direction:column;gap:3px}
-.srv-form-input{background:#21262d;color:var(--fg);border:1px solid var(--line);
+.srv-form-input{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:4px 7px;font-size:11px;font-family:inherit}
 .fire-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;
   font-family:ui-monospace}
@@ -114,7 +122,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 .fire-alert{background:#3a1a1a;color:var(--sev-crit)}
 /* ── Threat index bar ── */
 #threat-bar-wrap{margin-top:8px}
-#threat-bar-track{height:8px;background:#0a0e13;border-radius:4px;overflow:hidden}
+#threat-bar-track{height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden}
 #threat-bar-fill{height:100%;border-radius:4px;transition:width .4s,background .4s}
 /* ── Live badge ── */
 #badge-live{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;
@@ -138,7 +146,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 .sev-pill.active[data-sev="medium"]{background:var(--sev-med);color:#000}
 .sev-pill.active[data-sev="low"]{background:var(--sev-low);color:#000}
 .sev-pill.active[data-sev="info"]{background:var(--sev-info);color:#000}
-#feed-reason-filter{background:#21262d;color:var(--fg);border:1px solid var(--line);
+#feed-reason-filter{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:3px 7px;font-size:11px;font-family:inherit;min-width:120px}
 #feed-wrap{max-height:340px;overflow-y:auto}
 /* ── Cluster panel ── */
@@ -191,8 +199,8 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 /* -- Sidebar collapse (desktop hide/unhide) -- */
 #sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
 #sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
-#sidebar-toggle:hover{color:var(--fg);background:#1f2730}
-#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
 @media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
 /* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
@@ -201,7 +209,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 #sidebar-nav .nav-parent{display:flex;align-items:center}
 #sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
-.nav-caret:hover{color:var(--fg);background:#1f2730}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-nav a.sub.sub-hidden{display:none}
 /* ── JA4 pivot drawer ── */
 #ja4-drawer{position:fixed;top:0;right:0;height:100vh;width:440px;
@@ -268,6 +276,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
              margin-left:2px;transition:background .3s"></span>
   </div>
   <div id="topbar-right">
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">&#x1F319;</button>
     <button class="btn btn-sm" id="btn-rules" onclick="_toggleRulesPanel()">&#9889; Alert Rules (<span id="rules-count">0</span>)</button>
     <button class="btn btn-sm" onclick="_exportCsv()">&#8659; Export CSV</button>
     <button class="btn btn-sm" data-mins="15" onclick="_setMins(this)">15m</button>
@@ -644,7 +653,7 @@ function _evaluateRules(stats, threatIndex) {
 
 // ── Server-side rules ─────────────────────────────────────────────────────────
 function _loadServerRules() {
-  fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {credentials:'same-origin'})
+  fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {credentials:'include'})
     .then(function(r) { return r.ok ? r.json() : null; })
     .then(function(d) {
       if (!d) return;
@@ -694,7 +703,7 @@ function _addServerRule() {
     cooldown_s: parseInt(document.getElementById('srule-cooldown').value, 10) || 300,
   };
   fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {
-    method:'POST', credentials:'same-origin',
+    method:'POST', credentials:'include',
     headers:{'Content-Type':'application/json',
              'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')},
     body:JSON.stringify(payload),
@@ -707,13 +716,13 @@ function _addServerRule() {
 function _deleteServerRule(id) {
   if (!confirm('Delete this server rule?')) return;
   fetch('/antibot-appsec-gateway/secured/siem-alert-rules?id=' + id,
-        {method:'DELETE', credentials:'same-origin',
+        {method:'DELETE', credentials:'include',
          headers:{'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')}})
     .then(function() { _loadServerRules(); });
 }
 function _toggleServerRule(id, newEnabled) {
   fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {
-    method:'PATCH', credentials:'same-origin',
+    method:'PATCH', credentials:'include',
     headers:{'Content-Type':'application/json',
              'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')},
     body:JSON.stringify({id:id, enabled:newEnabled}),
@@ -904,7 +913,7 @@ function _openDossier(ip) {
   document.getElementById('dossier-drawer').classList.add('open');
   _currentDossierTab = 'overview';
   _setActiveDtab('overview');
-  fetch('/antibot-appsec-gateway/secured/siem-dossier?ip=' + encodeURIComponent(ip), {credentials:'same-origin'})
+  fetch('/antibot-appsec-gateway/secured/siem-dossier?ip=' + encodeURIComponent(ip), {credentials:'include'})
     .then(function(r) { return r.ok ? r.json() : null; })
     .then(function(d) {
       if (!d) { document.getElementById('dossier-body').innerHTML = '<p class="dim">Error.</p>'; return; }
@@ -1072,7 +1081,7 @@ function _updateSevChart(evts) {
 function tick() {
   var url = '/antibot-appsec-gateway/secured/siem-data?mins=' + selectedMins
     + (selectedVhost ? '&vhost=' + encodeURIComponent(selectedVhost) : '');
-  fetch(url, {credentials:'same-origin'})
+  fetch(url, {credentials:'include'})
     .then(function(r) {
       if (r.status===401||r.status===403) { window.location.href='/antibot-appsec-gateway/secured/login'; return null; }
       if (!r.ok) throw new Error('HTTP '+r.status);
@@ -1125,6 +1134,14 @@ document.addEventListener('DOMContentLoaded', function() {
   _timers.push(setInterval(tick, 5000));
   _startSSE();
 });
+</script>
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances){var gc=next==='light'?'rgba(0,0,0,.08)':'#21262d',tc=next==='light'?'#636e7b':'#8b949e';Object.values(Chart.instances).forEach(function(c){try{var sc=c.options.scales||{};Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});c.update('none');}catch(e){}});}
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
 </script>
 </body>
 </html>

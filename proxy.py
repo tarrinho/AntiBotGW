@@ -111,7 +111,7 @@ from challenge.js_challenge import (  # noqa: F401
 )
 from detection.paths import _inject_bot_trap  # noqa: F401
 from config import _HOSTILE_REASONS  # noqa: F401
-from integrations.redis import _redis, _shared_ban_set, _shared_ban_get  # noqa: F401
+from integrations.redis import _redis, _shared_ban_set, _shared_ban_get, _redis_ban_flush_loop  # noqa: F401
 from integrations.ja4 import _observe_ja4_ban  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
 from detection.canary import _scan_request_for_canary  # noqa: F401
@@ -343,6 +343,7 @@ async def _startup_integrations_and_tasks():
     asyncio.create_task(_maxmind_refresh_loop())
     asyncio.create_task(_tor_refresh_loop())
     await _shared_init()
+    asyncio.create_task(_redis_ban_flush_loop())
     asyncio.create_task(_refresh_ja4_denylist_loop())
     if AI_CRAWLER_VERIFY_ENABLED:
         asyncio.create_task(_refresh_ai_crawler_ranges())

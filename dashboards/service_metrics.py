@@ -513,7 +513,9 @@ SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="
 
 
 async def service_dashboard_endpoint(request: web.Request):
-    body = SERVICE_DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = SERVICE_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body, content_type="text/html",
         headers={

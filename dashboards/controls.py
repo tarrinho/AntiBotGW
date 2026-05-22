@@ -36,7 +36,10 @@ async def controls_test_a_endpoint(request: web.Request):
                                   headers={"Cache-Control": "no-store"})
     if denied := _role_denied(request, "admin", "maintainer"):
         return denied
-    return web.Response(text=CONTROLS_TEST_A_HTML, content_type="text/html", headers=_PROTO_HEADERS)
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    _body_a = CONTROLS_TEST_A_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
+    return web.Response(text=_body_a, content_type="text/html", headers=_PROTO_HEADERS)
 
 
 async def controls_test_b_endpoint(request: web.Request):
@@ -47,7 +50,10 @@ async def controls_test_b_endpoint(request: web.Request):
                                   headers={"Cache-Control": "no-store"})
     if denied := _role_denied(request, "admin", "maintainer"):
         return denied
-    return web.Response(text=CONTROLS_TEST_B_HTML, content_type="text/html", headers=_PROTO_HEADERS)
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    _body_b = CONTROLS_TEST_B_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
+    return web.Response(text=_body_b, content_type="text/html", headers=_PROTO_HEADERS)
 
 
 async def controls_dashboard_endpoint(request: web.Request):

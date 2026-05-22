@@ -185,7 +185,13 @@ async def _prune_state_loop():
                                       key=lambda kv: kv[1], reverse=True)[:500]
                         _cat_dict.clear()
                         _cat_dict.update(keep)
-                # 9. Prune expired CrowdSec cache entries + recount active_bans.
+                # 9. M-4: prune expired ip_bans rows.
+                try:
+                    from db import prune_ip_bans as _prune_ip_bans
+                    _prune_ip_bans()
+                except Exception:
+                    pass
+                # 10. Prune expired CrowdSec cache entries + recount active_bans.
                 try:
                     from reputation.crowdsec import _crowdsec_cache, _crowdsec_stats
                     _cs_now = _time.time()
@@ -198,7 +204,7 @@ async def _prune_state_loop():
                         if _v[0] is not None and _v[1] > _cs_now)
                 except ImportError:
                     pass
-                # 10. H5: prune remaining unbounded dicts.
+                # 11. H5: prune remaining unbounded dicts.
                 # _ACTIVE_SESSIONS: username → last_seen_ts (wall clock from _t.time()).
                 # Use _time.time() not n (which is monotonic) for the comparison.
                 _AS_PRUNE_TTL = 43200  # 12 h — matches _SESSION_TTL in admin/users.py
@@ -222,7 +228,7 @@ async def _prune_state_loop():
                              if _ck[2] < _now_min - 10]
                 for _ck in _stale_ck:
                     _asn_path_clusters.pop(_ck, None)
-                # 11. _fp_session_creations: fingerprint → deque[timestamps].
+                # 12. _fp_session_creations: fingerprint → deque[timestamps].
                 # Never pruned elsewhere; evict stale fingerprints (all timestamps
                 # older than SESSION_CHURN_WINDOW_S) to prevent UA-rotating attackers
                 # from inflating memory indefinitely.
@@ -235,7 +241,7 @@ async def _prune_state_loop():
                         _fp_session_creations.pop(_fp, None)
                 except ImportError:
                     pass
-                # 12. PROXY4-07: _PROBE_RL — ip → [window_start, count].
+                # 13. PROXY4-07: _PROBE_RL — ip → [window_start, count].
                 # Entries are never evicted by the hot path; prune when the
                 # window_start is older than the rate-limit window so stale IPs
                 # do not accumulate indefinitely.
@@ -248,7 +254,20 @@ async def _prune_state_loop():
                         _PROBE_RL.pop(_ip, None)
                 except ImportError:
                     pass
-                # 13. PROXY4-10: _TOTP_PENDING — username → {ts, step/secret, …}.
+                # SH-3: prune _POW_RL + _POW_CHAL_CACHE idle entries.
+                try:
+                    from core.proxy_handler import (_POW_RL, _POW_CHAL_CACHE,
+                                                     POW_RL_WINDOW)
+                    _pow_cutoff = _time.time() - POW_RL_WINDOW
+                    for _ip in [_k for _k, _e in list(_POW_RL.items())
+                                 if not _e or _e[0] < _pow_cutoff]:
+                        _POW_RL.pop(_ip, None)
+                    for _ip in [_k for _k, _e in list(_POW_CHAL_CACHE.items())
+                                 if not _e or _e[1] < _pow_cutoff]:
+                        _POW_CHAL_CACHE.pop(_ip, None)
+                except ImportError:
+                    pass
+                # 14. PROXY4-10: _TOTP_PENDING — username → {ts, step/secret, …}.
                 # Scratch dict for the TOTP login / provisioning flow; prune entries
                 # older than 10 minutes to prevent unbounded growth from abandoned flows.
                 _totp_cutoff = _time.time() - 600

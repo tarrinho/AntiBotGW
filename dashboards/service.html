@@ -4,30 +4,39 @@
 <title>AppSecGW_1.8.11 · Service Metrics</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
 #sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:#fff;background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:#1f2730}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
 #topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
@@ -44,8 +53,8 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 /* -- Sidebar collapse (desktop hide/unhide) -- */
 #sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
 #sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
-#sidebar-toggle:hover{color:var(--fg);background:#1f2730}
-#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
 @media(max-width:600px){#sidebar-toggle{display:none}}
 @media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
 /* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
@@ -54,7 +63,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 #sidebar-nav .nav-parent{display:flex;align-items:center}
 #sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
-.nav-caret:hover{color:var(--fg);background:#1f2730}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
@@ -91,7 +100,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .thr-legend .tw{color:var(--yellow)}
 .thr-legend .tc{color:var(--red)}
 table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+table th{background:var(--bg-elevated);color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:11.5px}
@@ -101,7 +110,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
 .nav a{color:var(--blue);text-decoration:none}
 .nav a:hover{text-decoration:underline}
-.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+.ctrl{background:var(--bg);color:var(--fg);border:1px solid var(--line);
       border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;
       font-family:inherit;line-height:1.4}
 .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
@@ -124,11 +133,11 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
             max-width:160px;overflow:hidden;text-overflow:ellipsis;
             white-space:nowrap;vertical-align:middle;line-height:1.4}
 .gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
-.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid #1f2730;margin-bottom:8px}
-.gw-meta .chip{background:#0d1117;border:1px solid #30363d;border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--bg-hover);margin-bottom:8px}
+.gw-meta .chip{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
 .gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
 .gw-row.row-ok{opacity:.6}
-.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid #1f2730;margin-top:6px}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
 </style></head>
 <body>
 <button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
@@ -169,7 +178,9 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 <div id="stale-banner">⚠ Data may be stale — last fetch failed. Retrying…</div>
 <div id="topbar">
   <div id="topbar-title">Service Metrics <span class="pill" id="live">● LIVE</span></div>
-  <div id="topbar-right"></div>
+  <div id="topbar-right">
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">&#x1F319;</button>
+  </div>
 </div>
 <div id="page-content">
 
@@ -950,33 +961,33 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
   padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
-  background:#161b22;color:#fff;border:1px solid #30363d;
+  background:var(--card);color:#fff;border:1px solid var(--line);
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
 /* 1.8.10 fix — reserve right space so the fixed Health pill + log selector never overlap topbar buttons (e.g. Apply changes) */
 @media(min-width:601px){#topbar{padding-right:280px}}
 #gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
   display:flex;align-items:center;gap:5px;
-  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
   font-size:10.5px;color:#8b949e;
   box-shadow:0 2px 6px rgba(0,0,0,.3)}
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
-#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+#gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
 #gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
 .gw-modal-overlay.show{display:flex}
-.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+.gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
   padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
 .gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
 .gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
-  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+  padding:8px 4px;border-bottom:1px solid var(--bg-hover);align-items:center;font-size:12px}
 .gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
 .gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
 .gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
@@ -1440,4 +1451,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances){var gc=next==='light'?'rgba(0,0,0,.08)':'#21262d',tc=next==='light'?'#636e7b':'#8b949e';Object.values(Chart.instances).forEach(function(c){try{var sc=c.options.scales||{};Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});c.update('none');}catch(e){}});}
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
+</script>
 </body></html>

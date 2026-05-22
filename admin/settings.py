@@ -320,6 +320,17 @@ async def settings_import_endpoint(request: web.Request):
                 value = (se.text or "").strip()
                 if not value:
                     continue
+                # SH-1: SSRF guard on URL-type secrets.
+                try:
+                    from core.proxy_handler import _ssrf_guard_url, _URL_SECRET_GUARDS
+                    if name in _URL_SECRET_GUARDS:
+                        _ssrf_guard_url(value, label=name,
+                                        allow_loopback=_URL_SECRET_GUARDS[name])
+                except ValueError as _ssrf_err:
+                    summary["errors"].append(f"secret {name}: {str(_ssrf_err)[:200]}")
+                    continue
+                except ImportError:
+                    pass
                 if dry_run:
                     summary["secrets_applied"] += 1
                     continue
@@ -609,8 +620,10 @@ async def vhost_policy_dashboard_endpoint(request: web.Request):
     """GET /__vhost-policy — render the per-vhost policy page (admin-only)."""
     if denied := _role_denied(request, "admin"):
         return denied
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
     return web.Response(
-        text=VHOST_POLICY_DASHBOARD_HTML,
+        text=VHOST_POLICY_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1),
         content_type="text/html",
         headers=_SECURITY_HEADERS,
     )
