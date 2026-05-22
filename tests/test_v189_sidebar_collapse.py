@@ -89,7 +89,7 @@ def test_no_rail_or_icon_markup(name):
 @pytest.mark.parametrize("name", REAL)
 def test_brand_version_current(name):
     h = _html(name)
-    assert '<div id="sidebar-brand-ver">1.8.10</div>' in h, \
+    assert '<div id="sidebar-brand-ver">1.8.11</div>' in h, \
         f"{name}: brand version not 1.8.10"
 
 

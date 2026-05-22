@@ -297,3 +297,35 @@ class TestM7SessionCacheRestore:
         assert entry.get("_last_touch") == pytest.approx(now - 5, abs=1), (
             "_last_touch must be restored so idle-timeout survives restart"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Follow-up — UPSTREAM_MAX_RESP editable in Settings + 413 on oversize response
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestUpstreamMaxRespUX:
+    def test_max_resp_knobs_hot_reloadable(self):
+        assert "UPSTREAM_MAX_RESP" in proxy_handler._HOT_RELOAD_KNOBS
+        assert "UPSTREAM_MAX_BODY" in proxy_handler._HOT_RELOAD_KNOBS
+
+    def test_settings_ui_exposes_max_resp_fields(self):
+        """Both upstream size caps must be editable in Settings → Infrastructure
+        (they were hot-reloadable but not surfaced, so operators couldn't raise
+        the cap to serve large downloads)."""
+        s = open(os.path.join(os.path.dirname(__file__), "..", "dashboards",
+                              "settings.html"), encoding="utf-8").read()
+        assert "{key:'UPSTREAM_MAX_RESP', kind:'number'" in s, \
+            "UPSTREAM_MAX_RESP must be an editable Infrastructure field"
+        assert "{key:'UPSTREAM_MAX_BODY', kind:'number'" in s
+        assert "k.kind === 'number'" in s, \
+            "Infrastructure card must render the integer ('number') field kind"
+
+    def test_oversize_upstream_response_returns_413(self):
+        """An upstream response exceeding UPSTREAM_MAX_RESP must return 413
+        (Content Too Large), not 502 — the upstream itself responded fine."""
+        src = inspect.getsource(proxy_handler)
+        idx = src.find("upstream response too large")
+        assert idx != -1
+        assert "status=413" in src[idx - 150:idx], (
+            "oversize upstream response must return 413, not 502"
+        )
