@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.10 — entry point only.
+Anti-bot reverse proxy v1.8.11 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -448,6 +448,9 @@ def make_app() -> web.Application:
         ("metrics",           "GET",    metrics_endpoint,                      True),
         ("unban",             "GET",    unban_endpoint,                        True),
         ("unban",             "POST",   unban_endpoint,                        True),
+        # 1.8.11 QW-3 — bulk unban by reason glob / ASN
+        ("bans",              "DELETE", bulk_unban_endpoint,                   True),
+        ("bans",              "POST",   bulk_unban_endpoint,                   True),
         ("ban",               "GET",    ban_endpoint,                          True),
         ("ban",               "POST",   ban_endpoint,                          True),
         ("scoring",           "GET",    scoring_endpoint,                      True),
@@ -485,6 +488,8 @@ def make_app() -> web.Application:
         ("config",            "GET",    config_endpoint,                       True),
         ("config",            "POST",   config_endpoint,                       True),
         ("csrf",              "GET",    csrf_endpoint,                         True),
+        ("ui-theme",          "GET",    ui_theme_endpoint,                     True),
+        ("ui-theme",          "POST",   ui_theme_endpoint,                     True),
         ("agents",            "GET",    agents_dashboard_endpoint,             True),
         ("agents-data",       "GET",    agents_data_endpoint,                  True),
         ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),
@@ -531,6 +536,8 @@ def make_app() -> web.Application:
         ("siem-alert-rules",         "PATCH",  siem_alert_rules_endpoint,             True),
         ("siem-dossier",             "GET",    siem_dossier_endpoint,                 True),
         ("siem-export",              "GET",    siem_export_endpoint,                  True),
+        # 1.8.11 QW-4 — audit log export (CSV / JSON)
+        ("audit-log-export",         "GET",    audit_log_export_endpoint,             True),
     ]
 
     _METHOD_MAP = {
@@ -604,23 +611,23 @@ def make_app() -> web.Application:
         return web.Response(text="ok", content_type="text/plain")
     app.router.add_get(PUBLIC + "/live", _live_stub)
 
-    # Favicon — served at the gateway namespace so the injected <link> tags
-    # resolve regardless of what the upstream serves at /favicon.ico.
-    _STATIC_DIR = _DASHBOARDS_DIR / "static"
+    # Favicon — read once at startup; closures hold the cached bytes so
+    # every request is served from memory with zero disk I/O.
+    _STATIC_DIR      = _DASHBOARDS_DIR / "static"
+    _favicon_bytes   = (_STATIC_DIR / "favicon.ico").read_bytes()
+    _apple_bytes     = (_STATIC_DIR / "apple-touch-icon.png").read_bytes()
+    _favicon_svg_b   = (_STATIC_DIR / "favicon.svg").read_bytes()
 
     async def _favicon_handler(_r):
-        _data = (_STATIC_DIR / "favicon.ico").read_bytes()
-        return web.Response(body=_data, content_type="image/x-icon",
+        return web.Response(body=_favicon_bytes, content_type="image/x-icon",
                             headers={"Cache-Control": "public, max-age=86400"})
 
     async def _apple_touch_icon_handler(_r):
-        _data = (_STATIC_DIR / "apple-touch-icon.png").read_bytes()
-        return web.Response(body=_data, content_type="image/png",
+        return web.Response(body=_apple_bytes, content_type="image/png",
                             headers={"Cache-Control": "public, max-age=86400"})
 
     async def _favicon_svg_handler(_r):
-        _data = (_STATIC_DIR / "favicon.svg").read_bytes()
-        return web.Response(body=_data, content_type="image/svg+xml",
+        return web.Response(body=_favicon_svg_b, content_type="image/svg+xml",
                             headers={"Cache-Control": "public, max-age=86400"})
 
     app.router.add_get(PUBLIC + "/favicon.ico",        _favicon_handler)

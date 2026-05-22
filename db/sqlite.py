@@ -1052,6 +1052,20 @@ def db_load_config(proxy_globals: dict) -> None:
              secret_skipped=secret_skipped)
 
 
+def get_ui_theme(db_path: str) -> str:
+    """Read the persisted UI theme preference from config_kv. Returns 'dark' or 'light'."""
+    try:
+        conn = sqlite3.connect(db_path, timeout=2)
+        row = conn.execute("SELECT value FROM config_kv WHERE key='ui_theme'").fetchone()
+        conn.close()
+        if row:
+            val = json.loads(row[0])
+            return val if val in ("dark", "light") else "dark"
+    except Exception:
+        pass
+    return "dark"
+
+
 def db_load_state() -> None:
     """Load saved state at startup. Populates state-module objects
     (ip_state, metrics, events, timeline, SERVICE_METRICS_HISTORY)

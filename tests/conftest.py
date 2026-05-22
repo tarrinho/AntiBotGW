@@ -142,3 +142,50 @@ def _wipe_config_kv_between_tests():
         _vh.VHOSTS.clear()
     except Exception:
         pass
+
+
+# ── 1.8.11: CSRF auto-attach for the in-process test HTTP client ─────────────
+# The central CSRF gate (core.proxy_handler.protect) now requires a valid
+# X-CSRF-Token header on EVERY state-changing request to the admin namespace —
+# exactly as the live dashboard's fetch() shim attaches it from window.__AGW_CSRF__.
+# To keep the aiohttp TestClient faithful to a real browser, this autouse fixture
+# wraps TestClient.request: for a non-safe method carrying an `agw_session`
+# cookie, it derives the matching token (HMAC(SESSION_KEY, sid)[:32]) and adds
+# the header *only when the test didn't set one*. Tests that set X-CSRF-Token
+# explicitly (including deliberately-wrong values, e.g. CSRF-rejection tests)
+# are left untouched, so negative-path coverage still works.
+@pytest.fixture(autouse=True)
+def _auto_attach_csrf_header():
+    import hashlib as _hl, hmac as _hm
+    try:
+        from aiohttp.test_utils import TestClient
+    except Exception:
+        yield
+        return
+    # NOTE: TestClient.post/get/delete dispatch through TestClient._request
+    # (the underscore coroutine), not the public request(), so we patch that.
+    _orig_request = TestClient._request
+
+    async def _request_with_csrf(self, method, path, *args, **kwargs):
+        try:
+            if str(method).upper() not in ("GET", "HEAD", "OPTIONS", "TRACE"):
+                cookies = kwargs.get("cookies") or {}
+                sess = cookies.get("agw_session", "") if isinstance(cookies, dict) else ""
+                if isinstance(sess, str) and sess.count("|") >= 3:
+                    hdrs = dict(kwargs.get("headers") or {})
+                    if not any(k.lower() == "x-csrf-token" for k in hdrs):
+                        import config as _cfg
+                        sid = sess.split("|")[1]
+                        hdrs["X-CSRF-Token"] = _hm.new(
+                            _cfg.SESSION_KEY, sid.encode(), _hl.sha256
+                        ).hexdigest()[:32]
+                        kwargs["headers"] = hdrs
+        except Exception:
+            pass  # never let the shim break a request
+        return await _orig_request(self, method, path, *args, **kwargs)
+
+    TestClient._request = _request_with_csrf
+    try:
+        yield
+    finally:
+        TestClient._request = _orig_request

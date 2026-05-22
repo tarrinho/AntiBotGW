@@ -84,6 +84,17 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """X-CSRF-Token header for CSRF-protected admin POSTs (central gate, 1.8.11)."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(),
+                      hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -325,7 +336,11 @@ class TestAdminIPsEndpointGaps:
     """Requires in-process proxy (uses _spin_proxy)."""
 
     def _ck(self, pm):
-        return {pm._SESSION_COOKIE: _make_admin_cookie(pm)}
+        # 1.8.11: cache per-test so a request's cookie and its derived
+        # X-CSRF-Token (central CSRF gate) reference the same session sid.
+        if not hasattr(self, "_ck_cached"):
+            self._ck_cached = {pm._SESSION_COOKIE: _make_admin_cookie(pm)}
+        return self._ck_cached
 
     # ── GET ──────────────────────────────────────────────────────────────────
 
@@ -368,6 +383,7 @@ class TestAdminIPsEndpointGaps:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "198.51.100.0/24"},
+                                     headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                      cookies=self._ck(proxy_module))
                     d = await r.json()
                     assert "entries" in d
@@ -382,9 +398,11 @@ class TestAdminIPsEndpointGaps:
                     # Must add loopback first so TestClient stays allowed
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     r2 = await c.post(NS + "/admin-ips",
                                       json={"cidr": "127.0.0.0/8"},
+                                      headers=_csrf_hdr(proxy_module, ck),
                                       cookies=ck)
                     assert r2.status == 400, \
                         f"Duplicate CIDR POST expected 400, got {r2.status}"
@@ -398,6 +416,7 @@ class TestAdminIPsEndpointGaps:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.post(NS + "/admin-ips",
                                      json={},
+                                     headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                      cookies=self._ck(proxy_module))
                     assert r.status in (400, 422)
         _run(go())
@@ -411,6 +430,7 @@ class TestAdminIPsEndpointGaps:
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8",
                                        "description": "loopback"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     r = await c.get(NS + "/admin-ips", cookies=ck)
                     d = await r.json()
@@ -429,10 +449,12 @@ class TestAdminIPsEndpointGaps:
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8",
                                        "description": "old"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     r = await c.patch(NS + "/admin-ips",
                                       json={"cidr": "127.0.0.0/8",
                                             "description": "updated-desc"},
+                                      headers=_csrf_hdr(proxy_module, ck),
                                       cookies=ck)
                     assert r.status == 200
                     d = await r.json()
@@ -450,6 +472,7 @@ class TestAdminIPsEndpointGaps:
                     r = await c.patch(NS + "/admin-ips",
                                       json={"cidr": "192.0.2.0/24",
                                             "description": "ghost"},
+                                      headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                       cookies=self._ck(proxy_module))
                     assert r.status == 400, \
                         f"PATCH non-existent CIDR expected 400, got {r.status}"
@@ -464,6 +487,7 @@ class TestAdminIPsEndpointGaps:
                     r = await c.patch(NS + "/admin-ips",
                                       json={"cidr": "garbage",
                                             "description": "x"},
+                                      headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                       cookies=self._ck(proxy_module))
                     assert r.status == 400
         _run(go())
@@ -475,6 +499,7 @@ class TestAdminIPsEndpointGaps:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.delete(NS + "/admin-ips?cidr=192.0.2.0/24",
+                                       headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                        cookies=self._ck(proxy_module))
                     assert r.status == 400, \
                         f"DELETE non-existent CIDR expected 400, got {r.status}"
@@ -487,6 +512,7 @@ class TestAdminIPsEndpointGaps:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.delete(NS + "/admin-ips?cidr=bad-cidr",
+                                       headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                        cookies=self._ck(proxy_module))
                     assert r.status == 400
         _run(go())
@@ -498,8 +524,10 @@ class TestAdminIPsEndpointGaps:
                     ck = self._ck(proxy_module)
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     await c.delete(NS + "/admin-ips?cidr=127.0.0.0/8",
+                                   headers=_csrf_hdr(proxy_module, ck),
                                    cookies=ck)
                     r = await c.get(NS + "/admin-ips", cookies=ck)
                     d = await r.json()
@@ -515,8 +543,10 @@ class TestAdminIPsEndpointGaps:
                     ck = self._ck(proxy_module)
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     r = await c.delete(NS + "/admin-ips?cidr=127.0.0.0/8",
+                                       headers=_csrf_hdr(proxy_module, ck),
                                        cookies=ck)
                     d = await r.json()
                     assert "entries" in d
@@ -528,6 +558,7 @@ class TestAdminIPsEndpointGaps:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.delete(NS + "/admin-ips",
+                                       headers=_csrf_hdr(proxy_module, self._ck(proxy_module)),
                                        cookies=self._ck(proxy_module))
                     assert r.status in (400, 422)
         _run(go())
@@ -551,6 +582,7 @@ class TestAdminIPEnforcement:
                     # Add CIDR that excludes 127.0.0.1 — TestClient is now blocked
                     r_add = await c.post(NS + "/admin-ips",
                                          json={"cidr": "192.0.2.0/24"},
+                                         headers=_csrf_hdr(proxy_module, ck),
                                          cookies=ck)
                     assert r_add.status == 200, \
                         "POST /admin-ips must succeed before lockout"
@@ -570,6 +602,7 @@ class TestAdminIPEnforcement:
                     ck = {proxy_module._SESSION_COOKIE: _make_admin_cookie(proxy_module)}
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "192.0.2.0/24"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     r = await c.get(NS + "/status", cookies=ck)
                     assert r.status not in (401, 403), \
@@ -585,6 +618,7 @@ class TestAdminIPEnforcement:
                     ck = {proxy_module._SESSION_COOKIE: _make_admin_cookie(proxy_module)}
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     r = await c.get(NS + "/metrics", cookies=ck)
                     assert r.status == 200, \
@@ -627,8 +661,10 @@ class TestAdminIPEnforcement:
                     # Add loopback (so we stay connected), then remove it
                     await c.post(NS + "/admin-ips",
                                  json={"cidr": "127.0.0.0/8"},
+                                 headers=_csrf_hdr(proxy_module, ck),
                                  cookies=ck)
                     await c.delete(NS + "/admin-ips?cidr=127.0.0.0/8",
+                                   headers=_csrf_hdr(proxy_module, ck),
                                    cookies=ck)
                     # Allowlist now empty → open again
                     r = await c.get(NS + "/metrics", cookies=ck)

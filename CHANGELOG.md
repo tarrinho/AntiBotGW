@@ -6,6 +6,116 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.11] — 2026-05-22
+
+Security-hardening release. Fixes the priority findings from a full security
+review of the codebase (no functional/UI changes).
+
+### Security
+
+- **H1 — WAF body inspection no longer bypassable with padding** (`config.py`,
+  `detection/graphql.py`, `core/proxy_handler.py`): the body inspectors used to
+  scan only the first 64 KiB while the proxy accepts/forwards up to
+  `UPSTREAM_MAX_BODY` (2 MiB), so prepending 64 KiB of padding smuggled any
+  SQLi/XSS/RCE/XXE/GraphQL payload past the WAF. New `WAF_BODY_SCAN_BYTES`
+  (default = 2 MiB) makes every inspector scan the full accepted body; a
+  startup warning fires if it is set below `UPSTREAM_MAX_BODY`.
+- **H2 — central CSRF enforcement** (`core/proxy_handler.py` `protect`): every
+  state-changing request to the authenticated admin namespace now requires a
+  valid `X-CSRF-Token`, enforced once in the middleware so coverage can't drift
+  as handlers are added (per-handler `@_require_csrf` stays as defence-in-depth).
+  Closes the gap where `/__secrets`, `/__vhosts`, the mesh registry/sync
+  endpoints, settings-import and the DLP mutators relied on `SameSite=Strict`
+  alone.
+- **H3 — honey-cred can no longer be used to ban a victim** (`honey_probe_endpoint`):
+  previously a hit on a victim's honey-key banned the *issued-for* identity with
+  no rate limit (cross-identity DoS / ban amplification). Now the endpoint is
+  rate-limited per source IP and penalises the **requester's own identity**;
+  the chal-cookie guard still shields real browsers.
+- **M1 — `agw_csrf` scoped to the admin namespace** (`core/middleware.py`,
+  `admin/users.py`, `admin/oidc.py`, `core/proxy_handler.py`): the readable CSRF
+  cookie is now `path=ADMIN_NS` (was `path=/`) and the self-heal only runs for
+  admin requests, so an XSS in the proxied upstream app can no longer read the
+  token. `agw_session` (HttpOnly) is unchanged.
+- **M2 — `ALLOW_PRIVATE_UPSTREAM` now defaults OFF** (`config.py`): the SSRF
+  guard on `UPSTREAM`/per-vhost upstreams is on by default; set
+  `ALLOW_PRIVATE_UPSTREAM=1` for compose deployments using an internal upstream.
+- **M3 — OIDC id_token is cryptographically verified** (`admin/oidc.py`): the
+  id_token signature is now validated against the issuer JWKS (RS256/ES*; never
+  `none`/HS*), with `iss`/`aud`/`exp` + nonce checks, before any claim is
+  trusted. Previously it was base64-decoded without signature verification.
+- **M4 — PoW minimum-solve-time + single-use token** (`challenge/pow.py`): the
+  fixed 1000 ms drift slack collapsed the floor to zero at the default
+  `POW_MIN_SOLVE_MS=200`, so instant/precomputed solutions passed; the slack is
+  now bounded to a fraction of the minimum (floor ≥ 0). The replay store is
+  keyed on the token alone (one accepted solve per token).
+- **M5 (bonus) — GraphQL body window + bounded depth scan** (`detection/graphql.py`):
+  introspection/batch detection now scans the full body (`WAF_BODY_SCAN_BYTES`);
+  the depth byte-loop is bounded to keep per-request CPU O(1).
+- **M7 — `BIND_SESSION_TO_IP` / idle-timeout survive restart** (`admin/users.py`):
+  `_session_cache_load` now restores `source_ip` and last-seen from
+  `user_sessions`; previously these were dropped on reload, silently disabling
+  IP-binding for every live session after a container redeploy.
+
+### Changed
+
+- New runtime dependency **PyJWT** (`requirements.txt`) — used only for OIDC
+  id_token verification; imported lazily so non-OIDC deployments don't need it.
+- `ALLOW_PRIVATE_UPSTREAM` default `1` → `0` (see M2).
+
+### Deferred
+
+- **M6 — remove `script-src 'unsafe-inline'` from the dashboard CSP**: requires
+  migrating ~216 inline event handlers to `addEventListener` across 12
+  dashboards (a partial change is cosmetic while `'unsafe-inline'` remains).
+  Tracked as a follow-up; the live feeds are already `escapeHtml` + DOMPurify
+  defended, so no exploitable XSS was found.
+
+### Operator experience (Quick Wins)
+
+- **QW-1 — `HONEYPOT_EXTRA_PATHS`**: JSON array env var that merges extra trap
+  paths into `HONEYPOT_PATHS` at startup without a code change.  Hot-reloadable
+  via `/__config`. Example: `HONEYPOT_EXTRA_PATHS='["/internal/debug","/api/v0/dump"]'`.
+- **QW-3 — Bulk unban by reason**: `DELETE /secured/bans?reason=<glob>` clears
+  all bans whose risk signal matches an fnmatch glob (e.g. `reason=ua-ai-*`).
+  Also accepts `?asn=<number>` for ASN-scoped clearing; POST body symmetrical.
+  Emits `event=bulk_unban count=N` structured log on every call.
+- **QW-4 — Audit log export**: `GET /secured/audit-log-export?start=<ts>&end=<ts>&format=csv|json`
+  streams `audit_events` rows filtered by time range, `event_type`, and `actor`.
+  Defaults to CSV; `format=json` returns `{rows,count}` attachment.
+- **QW-5 — SIEM fnmatch alert rules**: SIEM alert rules now accept
+  `reason_count:<glob>` as a metric name (e.g. `reason_count:ua-ai-*`).  The
+  rule threshold is evaluated against the count of events in the window whose
+  reason matches the glob.  Rules validated on POST; the evaluation loop forwards
+  the pre-computed `reason_counts` dict so no extra DB queries are needed.
+- **QW-6 — Behavioral detection thresholds as env vars**: six statistical
+  constants used by the timing-analysis detector are now configurable at startup
+  and hot-reloadable: `BEHAVIORAL_SAMPLE_N` (default 16), `BEHAVIORAL_COV_THRESHOLD`
+  (0.05), `BEHAVIORAL_R1_THRESHOLD` (0.85), `BEHAVIORAL_BIN_PCT_THRESHOLD` (0.70),
+  `BEHAVIORAL_MAX_INTERVAL_S` (2.0 s), `BEHAVIORAL_SKIP_INTERVAL_S` (5.0 s).
+  `BEHAVIOR_WINDOW` and `BEHAVIOR_MAX_REGULAR` are retained for backwards compat
+  but were never read by `behavioral.py`; a comment marks them as legacy.
+
+### Tests
+
+- New `tests/test_v1811_security.py` — 20 tests covering H1–H3, M1–M4, M7
+  (incl. real RSA/JWKS OIDC verification: valid passes; none-alg, bad-signature,
+  wrong-aud/iss, nonce-mismatch and expired all rejected).
+- `tests/conftest.py` — autouse `_auto_attach_csrf_header` fixture: the
+  in-process `TestClient` now attaches the matching `X-CSRF-Token` for
+  authenticated non-safe requests, mirroring the dashboard fetch shim, so the
+  central CSRF gate doesn't require touching every admin-mutation test.
+- Updated version/assertion stragglers + `protect`-source-window tests; `test_r03`
+  excludes the admin-namespace request classifications (which legitimately have
+  no kill-switch).
+- **Quick wins regression tests** (`tests/test_pure.py`): 11 new pure tests covering
+  QW-1 (HONEYPOT_EXTRA_PATHS merge + hot-reload registration), QW-3 (bulk_unban
+  endpoint existence + route wiring), QW-4 (audit_log_export endpoint + route),
+  QW-5 (_REASON_COUNT_PREFIX constant + eval logic), QW-6 (six threshold constants
+  in config + behavioral.py usage + hot-reload knobs). `856 unit` total.
+
+---
+
 ## [1.8.10] — 2026-05-20
 
 ### Added

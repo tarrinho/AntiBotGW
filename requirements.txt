@@ -31,3 +31,7 @@ pyotp>=2.9.0
 
 # 1.8.8 — Ed25519 keypairs for gateway mesh signing (>=46.0.5 fixes CVE-2026-26007)
 cryptography>=46.0.5
+
+# 1.8.11 — OIDC id_token signature verification (JWKS / RS256). Used only when
+# OIDC is configured; imported lazily so non-OIDC deployments don't require it.
+PyJWT>=2.10.0

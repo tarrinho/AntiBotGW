@@ -1,10 +1,18 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.10 · Controls</title>
+<title>AppSecGW_1.8.11 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6}
+html[data-theme="light"] #sidebar-nav a.active{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
@@ -524,7 +532,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.10</div>
+      <div id="sidebar-brand-ver">1.8.11</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -568,6 +576,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <span class="hint" id="hint" style="font-size:11px;color:var(--dim)">No pending changes.</span>
     <button class="secondary" id="reset" disabled>Reset</button>
     <button id="apply" disabled>Apply changes</button>
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
   </div>
 </div>
 <div id="page-content">
@@ -4416,6 +4425,10 @@ if (typeof _origLoad === 'function') {
 }
 
 })();
+</script>
+<script>
+window._toggleTheme=function(){var h=document.documentElement,next=h.getAttribute('data-theme')==='light'?'dark':'light';h.setAttribute('data-theme',next);var b=document.getElementById('theme-toggle');if(b)b.textContent=next==='light'?'☀':'🌙';fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->

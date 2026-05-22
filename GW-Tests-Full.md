@@ -1611,4 +1611,26 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 
 ---
 
-*Total test files: 93 | Approximate total test functions: ~2,494+*
+### `test_v1811_security.py` — 1.8.11 security-release QA
+
+**Version added:** v1.8.11 (security hardening)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestH1WafBodyWindow` | 3 | `WAF_BODY_SCAN_BYTES` ≥ `UPSTREAM_MAX_BODY`; SQLi past 64 KiB padding is detected; no hardcoded `body[:65536]` cap remains |
+| `TestH2CentralCsrf` | 2 | `protect()` validates CSRF for non-safe methods in the authed-admin branch; `_csrf_token_valid` accepts the correct token, rejects wrong/missing, exempts GET |
+| `TestH3HoneyCred` | 1 | honey probe is rate-limited and bans the requester's identity, never the issued-for (victim) identity |
+| `TestM1CsrfCookieScope` | 2 | no `agw_csrf` cookie set/deleted at `path="/"`; `_csrf_self_heal` early-returns off the admin namespace |
+| `TestM2PrivateUpstreamDefault` | 1 | `ALLOW_PRIVATE_UPSTREAM` defaults to `"0"` (SSRF guard on) |
+| `TestM3OidcIdTokenVerify` | 7 | real RSA/JWKS: valid id_token passes; `none`-alg, bad-signature, wrong-aud, wrong-iss, nonce-mismatch and expired all rejected |
+| `TestM4Pow` | 3 | solution below the (non-zero) floor rejected; floor non-zero at default; replay store keyed on token alone |
+| `TestM7SessionCacheRestore` | 1 | `_session_cache_load` restores `source_ip` + last-seen so `BIND_SESSION_TO_IP` / idle-timeout survive restart |
+
+Plus `tests/conftest.py` autouse `_auto_attach_csrf_header` — the in-process
+`TestClient` attaches the matching `X-CSRF-Token` for authenticated non-safe
+requests (mirrors the dashboard fetch shim) so the central CSRF gate works
+suite-wide without editing every admin-mutation test.
+
+---
+
+*Total test files: 94 | Approximate total test functions: ~2,514+*

@@ -19,20 +19,24 @@ def check_graphql(path: str, body: bytes, content_type: str) -> list:
     if _cfg.GQL_PATHS and path_base not in _cfg.GQL_PATHS:
         return []
     signals = []
-    sample = body[:65536]
-    # Introspection check
+    # 1.8.11 (H1): scan the full accepted body, not just the first 64 KiB, so a
+    # large batch / introspection payload can't be hidden behind padding.
+    sample = body[:_cfg.WAF_BODY_SCAN_BYTES]
+    # Introspection check (regex is C-level — cheap even over a large body).
     if not _cfg.GQL_ALLOW_INTROSPECTION and _GQL_INTROSPECTION_RE.search(sample):
         signals.append("gql-introspection")
-    # Batch abuse (array of operations)
+    # Batch abuse (array of operations) — json.loads is C-level.
     try:
         parsed = json.loads(sample)
         if isinstance(parsed, list) and len(parsed) > _cfg.GQL_BATCH_LIMIT:
             signals.append("gql-batch-abuse")
     except Exception:
         pass
-    # Depth check (count brace nesting)
+    # Depth check (count brace nesting). This is a Python-level byte loop, so
+    # bound it to keep per-request CPU O(1) on large bodies; nesting attacks
+    # manifest well within this window.
     depth = max_depth = 0
-    for b in sample:
+    for b in sample[:262144]:
         if b == ord('{'):
             depth += 1
             if depth > max_depth:

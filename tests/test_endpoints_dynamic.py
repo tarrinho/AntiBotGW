@@ -186,7 +186,7 @@ class TestAuthGuard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/live-feed")
                     body = await r.text()
-                    assert "AppSecGW_1.8.10 · Live Feed" not in body
+                    assert "AppSecGW_1.8.11 · Live Feed" not in body
         _run(go())
 
     def test_config_unauthenticated_decoy(self, proxy_module):
@@ -739,6 +739,7 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"signal": "suspicious-path", "order": 1},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -754,6 +755,7 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"signal": "suspicious-path", "order": 99},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -765,6 +767,7 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"order": 2},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -1495,6 +1498,7 @@ class TestAdminIPsEndpoint:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "192.0.2.0/24",
                                            "description": "test-block"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -1512,10 +1516,12 @@ class TestAdminIPsEndpoint:
                     r1 = await c.post(NS + "/admin-ips",
                                       json={"cidr": "127.0.0.0/8",
                                             "description": "loopback-test"},
+                                      headers=_csrf_hdr(proxy_module, cookie),
                                       cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r1.status == 200
                     # Now delete it
                     r = await c.delete(NS + "/admin-ips?cidr=127.0.0.0/8",
+                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -1697,6 +1703,7 @@ class TestAdminIPsValidation:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "not-a-valid-cidr",
                                            "description": "test"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # Must reject with 400 or return ok=False
                     if r.status == 200:
@@ -1770,6 +1777,7 @@ class TestVhostsAPI:
                                          json={"hostname": "test.example.com",
                                                "UPSTREAM": up,
                                                "UA_FILTER_ENABLED": True},
+                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, f"POST /vhosts: expected 200, got {r.status}"
                     d = await r.json()
@@ -1792,6 +1800,7 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.post(NS + "/vhosts",
                                      json={"UPSTREAM": up},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     if r.status == 200:
                         d = await r.json()
@@ -1810,6 +1819,7 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.post(NS + "/vhosts",
                                      json={"hostname": "test.example.com"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     if r.status == 200:
                         d = await r.json()
@@ -1851,6 +1861,7 @@ class TestVhostsAPI:
                             r = await c.post(
                                 NS + "/vhosts",
                                 json={"hostname": "evil.test.com", "UPSTREAM": priv},
+                                headers=_csrf_hdr(proxy_module, cookie),
                                 cookies={proxy_module._SESSION_COOKIE: cookie},
                             )
                             if r.status == 200:
@@ -1879,10 +1890,12 @@ class TestVhostsAPI:
                     with _patch("vhost._assert_upstream_public"):
                         await c.post(NS + "/vhosts",
                                      json={"hostname": "del.example.com", "UPSTREAM": up},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # Then delete
                     r = await c.delete(NS + "/vhosts",
                                        json={"hostname": "del.example.com"},
+                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"DELETE /vhosts: expected 200, got {r.status}"
@@ -1912,6 +1925,7 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.delete(NS + "/vhosts",
                                        json={"hostname": "nope.example.com"},
+                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"DELETE /vhosts non-existent: expected 200, got {r.status}"
@@ -1936,6 +1950,7 @@ class TestVhostsAPI:
                         r = await c.post(NS + "/vhosts",
                                          json={"hostname": "UPPER.Example.COM",
                                                "UPSTREAM": up},
+                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, f"POST /vhosts lowercase: expected 200, got {r.status}"
                     d = await r.json()
@@ -1965,6 +1980,7 @@ class TestVhostsAPI:
                         r = await c.post(NS + "/vhosts",
                                          json={"hostname": "alias.example.com",
                                                "upstream": up},
+                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"POST /vhosts with lowercase 'upstream': expected 200, got {r.status}"
@@ -2020,7 +2036,7 @@ class TestControlCenterCharts:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/control-center", headers=_browser_headers())
                     body = await r.text()
-                    assert "AppSecGW_1.8.10 · Control Center" not in body, \
+                    assert "AppSecGW_1.8.11 · Control Center" not in body, \
                         "control-center: unauthenticated request must not return dashboard HTML"
         _run(go())
 

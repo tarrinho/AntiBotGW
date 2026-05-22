@@ -698,7 +698,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.10"
+_EXPECTED_VERSION = "AppSecGW_1.8.11"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -714,7 +714,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.10\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.11\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache", "mutants"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -3914,8 +3914,9 @@ def test_protect_authenticated_admin_path_calls_record():
     # Locate the authenticated admin path branch
     admin_block_idx = src.find("_admin_ip_allowed(request) and _internal_authed(request)")
     assert admin_block_idx != -1, "protect() must have the authed-admin-path branch"
-    # record() must be called inside that block (within 400 chars of the branch)
-    block = src[admin_block_idx: admin_block_idx + 400]
+    # record() must be called inside that block. 1.8.11: widened window — the
+    # central CSRF gate now sits between the branch and the record() call.
+    block = src[admin_block_idx: admin_block_idx + 1600]
     assert "await record(" in block, (
         "protect() must call record() for authenticated admin path requests so that "
         "operator dashboard accesses appear in ip_state with last_path = /antibot-appsec-gateway/... "
@@ -3935,7 +3936,8 @@ def test_protect_authenticated_admin_path_uses_operator_passthrough_reason():
     src = inspect.getsource(proxy_handler.protect)
     admin_block_idx = src.find("_admin_ip_allowed(request) and _internal_authed(request)")
     assert admin_block_idx != -1
-    block = src[admin_block_idx: admin_block_idx + 400]
+    # 1.8.11: widened window — central CSRF gate added before the record() call.
+    block = src[admin_block_idx: admin_block_idx + 1600]
     assert "operator-passthrough" in block, (
         "protect() must pass reason='operator-passthrough' to record() for "
         "authenticated admin path requests so events are labelled correctly in the DB"
@@ -5754,7 +5756,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.10" in src, "vhost_policy.html: version string missing or stale"
+    assert "AppSecGW_1.8.11" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():
@@ -10314,3 +10316,161 @@ class TestBypassAllowlistsStaticQA:
                 f"{knob} missing from bypass CTRL_GROUP knobs list — "
                 "it will not appear in the Bypass & Allowlists panel"
             )
+
+
+# ── 1.8.11 QW-1: HONEYPOT_EXTRA_PATHS env merge ──────────────────────────────
+
+def test_honeypot_extra_paths_merged():
+    """HONEYPOT_EXTRA_PATHS JSON array merges into HONEYPOT_PATHS at startup."""
+    import importlib, sys, os
+    env_bak = os.environ.copy()
+    os.environ["HONEYPOT_EXTRA_PATHS"] = '["/my-secret-admin", "/legacy/backdoor.php"]'
+    try:
+        if "config" in sys.modules:
+            del sys.modules["config"]
+        import config
+        assert "/my-secret-admin" in config.HONEYPOT_PATHS, (
+            "HONEYPOT_EXTRA_PATHS entry /my-secret-admin not merged into HONEYPOT_PATHS"
+        )
+        assert "/legacy/backdoor.php" in config.HONEYPOT_PATHS, (
+            "HONEYPOT_EXTRA_PATHS entry /legacy/backdoor.php not merged into HONEYPOT_PATHS"
+        )
+        # original paths still present
+        assert "/wp-admin" in config.HONEYPOT_PATHS
+    finally:
+        os.environ.clear()
+        os.environ.update(env_bak)
+        if "config" in sys.modules:
+            del sys.modules["config"]
+
+
+def test_honeypot_extra_paths_in_hot_reload_knobs():
+    """HONEYPOT_EXTRA_PATHS must be registered in _HOT_RELOAD_KNOBS."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler)
+    assert '"HONEYPOT_EXTRA_PATHS"' in src, (
+        "HONEYPOT_EXTRA_PATHS missing from _HOT_RELOAD_KNOBS — "
+        "runtime injection of extra trap paths requires hot-reload support"
+    )
+
+
+# ── 1.8.11 QW-3: bulk unban endpoint ─────────────────────────────────────────
+
+def test_bulk_unban_endpoint_exists():
+    """bulk_unban_endpoint must be defined in core.proxy_handler."""
+    from core import proxy_handler
+    assert hasattr(proxy_handler, "bulk_unban_endpoint"), (
+        "bulk_unban_endpoint missing from core.proxy_handler"
+    )
+
+
+def test_bulk_unban_route_registered():
+    """DELETE /secured/bans must be wired in proxy.py routes table."""
+    import inspect
+    import proxy as _proxy_module
+    src = inspect.getsource(_proxy_module.make_app)
+    assert "bulk_unban_endpoint" in src, (
+        "bulk_unban_endpoint not registered in make_app() routes — "
+        "DELETE /secured/bans will return 404"
+    )
+
+
+# ── 1.8.11 QW-4: audit log export endpoint ───────────────────────────────────
+
+def test_audit_log_export_endpoint_exists():
+    """audit_log_export_endpoint must be defined in dashboards.siem."""
+    from dashboards import siem
+    assert hasattr(siem, "audit_log_export_endpoint"), (
+        "audit_log_export_endpoint missing from dashboards.siem"
+    )
+
+
+def test_audit_log_export_route_registered():
+    """GET /secured/audit-log-export must be wired in proxy.py routes table."""
+    import inspect
+    import proxy as _proxy_module
+    src = inspect.getsource(_proxy_module.make_app)
+    assert "audit_log_export_endpoint" in src, (
+        "audit_log_export_endpoint not registered in make_app() routes — "
+        "GET /secured/audit-log-export will return 404"
+    )
+
+
+# ── 1.8.11 QW-5: SIEM reason_count fnmatch metric ────────────────────────────
+
+def test_siem_reason_count_prefix_defined():
+    """_REASON_COUNT_PREFIX constant must be in dashboards.siem."""
+    from dashboards import siem
+    assert hasattr(siem, "_REASON_COUNT_PREFIX"), (
+        "_REASON_COUNT_PREFIX missing from dashboards.siem"
+    )
+    assert siem._REASON_COUNT_PREFIX == "reason_count:", (
+        "_REASON_COUNT_PREFIX must equal 'reason_count:'"
+    )
+
+
+def test_siem_alert_rules_accepts_reason_count_metric():
+    """_eval_server_alert_rules must accept reason_count:<glob> metrics."""
+    import inspect
+    from dashboards import siem
+    src = inspect.getsource(siem._eval_server_alert_rules)
+    assert "_REASON_COUNT_PREFIX" in src, (
+        "_eval_server_alert_rules does not handle reason_count: metric type"
+    )
+
+
+# ── 1.8.11 QW-6: behavioral threshold env vars ───────────────────────────────
+
+def test_behavioral_threshold_env_vars_exist():
+    """Six behavioral threshold constants must be exposed in config."""
+    import config
+    for attr in (
+        "BEHAVIORAL_SAMPLE_N",
+        "BEHAVIORAL_COV_THRESHOLD",
+        "BEHAVIORAL_R1_THRESHOLD",
+        "BEHAVIORAL_BIN_PCT_THRESHOLD",
+        "BEHAVIORAL_MAX_INTERVAL_S",
+        "BEHAVIORAL_SKIP_INTERVAL_S",
+    ):
+        assert hasattr(config, attr), (
+            f"config.{attr} missing — behavioral thresholds must be env-configurable"
+        )
+
+
+def test_behavioral_py_uses_config_thresholds():
+    """detection/behavioral.py must import and use the config threshold constants."""
+    import inspect
+    from detection import behavioral
+    src = inspect.getsource(behavioral)
+    for name in (
+        "BEHAVIORAL_SAMPLE_N",
+        "BEHAVIORAL_COV_THRESHOLD",
+        "BEHAVIORAL_R1_THRESHOLD",
+        "BEHAVIORAL_BIN_PCT_THRESHOLD",
+        "BEHAVIORAL_MAX_INTERVAL_S",
+        "BEHAVIORAL_SKIP_INTERVAL_S",
+    ):
+        assert name in src, (
+            f"detection/behavioral.py does not use {name} — "
+            "env-var override has no effect; hardcoded threshold still in use"
+        )
+
+
+def test_behavioral_hot_reload_knobs_registered():
+    """Behavioral threshold knobs must be in _HOT_RELOAD_KNOBS."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler)
+    for knob in (
+        '"BEHAVIORAL_SAMPLE_N"',
+        '"BEHAVIORAL_COV_THRESHOLD"',
+        '"BEHAVIORAL_R1_THRESHOLD"',
+        '"BEHAVIORAL_BIN_PCT_THRESHOLD"',
+        '"BEHAVIORAL_MAX_INTERVAL_S"',
+        '"BEHAVIORAL_SKIP_INTERVAL_S"',
+    ):
+        assert knob in src, (
+            f"{knob} missing from _HOT_RELOAD_KNOBS — "
+            "operator cannot tune behavioral thresholds without container restart"
+        )

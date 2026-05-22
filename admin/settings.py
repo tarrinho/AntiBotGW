@@ -16,7 +16,9 @@ async def settings_dashboard_endpoint(request: web.Request):
     """GET /__settings — render the Settings dashboard (admin-only)."""
     if denied := _role_denied(request, "admin"):
         return denied
-    body = SETTINGS_DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = SETTINGS_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body, content_type="text/html",
         headers={

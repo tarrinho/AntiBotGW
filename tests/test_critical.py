@@ -1242,6 +1242,14 @@ def test_165_every_knob_persists_round_trip():
         "BOT_DETECTION_ENABLED": False,
         "TRUST_XFF": "first",
         "TRUSTED_PROXIES": ["10.0.0.0/8"],
+        # 1.8.11 QW-1/QW-6
+        "HONEYPOT_EXTRA_PATHS": ["/test-extra-trap"],
+        "BEHAVIORAL_SAMPLE_N": 20,
+        "BEHAVIORAL_COV_THRESHOLD": 0.04,
+        "BEHAVIORAL_R1_THRESHOLD": 0.80,
+        "BEHAVIORAL_BIN_PCT_THRESHOLD": 0.65,
+        "BEHAVIORAL_MAX_INTERVAL_S": 1.5,
+        "BEHAVIORAL_SKIP_INTERVAL_S": 4.0,
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

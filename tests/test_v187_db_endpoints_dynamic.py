@@ -91,6 +91,17 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """X-CSRF-Token header for CSRF-protected admin POSTs (central gate, 1.8.11)."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(),
+                      hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _make_viewer_cookie(proxy_module):
     """Prime a viewer-role session. Insert the user directly into the DB."""
     import sqlite3, hashlib
@@ -333,6 +344,7 @@ class TestDbSwitchEndpoint:
                     # target is a query param, not body
                     r = await c.post(
                         NS + "/db-switch?target=mysql",
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 400, f"DBQA-07: expected 400, got {r.status}"
@@ -352,6 +364,7 @@ class TestDbSwitchEndpoint:
                         r = await c.post(
                             NS + "/db-switch?target=sqlite",
                             json={},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                     assert r.status == 200, f"DBQA-08: expected 200, got {r.status}"
@@ -371,6 +384,7 @@ class TestDbSwitchEndpoint:
                         r = await c.post(
                             NS + "/db-switch?target=sqlite",
                             json={"full_migrate": False},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                     d = await r.json()
@@ -392,6 +406,7 @@ class TestDbSwitchEndpoint:
                         r = await c.post(
                             NS + "/db-switch?target=sqlite",
                             json={"full_migrate": True},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                     d = await r.json()
@@ -410,6 +425,7 @@ class TestDbSwitchEndpoint:
                     r = await c.post(
                         NS + "/db-switch?target=sqlite",
                         json={},
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 403, f"DBQA-19: viewer should get 403, got {r.status}"
@@ -424,7 +440,8 @@ class TestDbSwitchEndpoint:
                     r = await c.post(
                         NS + "/db-switch",
                         data=b'{"target":"mysql"}',
-                        headers={"Content-Type": "application/octet-stream"},
+                        headers={"Content-Type": "application/octet-stream",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     # Either 400 (parsed and rejected invalid target) or 400 (parse fail)
