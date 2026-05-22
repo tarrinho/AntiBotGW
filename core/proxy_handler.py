@@ -1423,6 +1423,12 @@ async def thresholds_endpoint(request: web.Request):
          "Window (s) in which same identity must not span two countries"),
         ("POW_CHAL_THRESHOLD",          0,   100000, "lower-is-stricter",
          "Risk score at or above which JS challenge embeds a PoW puzzle (0 = never)"),
+        ("UPSTREAM_MAX_BODY",  1024, 1073741824, "lower-is-stricter",
+         "Max request body forwarded to upstream (bytes). Default 2 MiB. "
+         "Keep WAF_BODY_SCAN_BYTES >= this to avoid a WAF bypass."),
+        ("UPSTREAM_MAX_RESP",  1024, 1073741824, "lower-is-stricter",
+         "Max upstream response body buffered (bytes). Default 8 MiB. "
+         "Responses over this limit return 413 to the client."),
     ]
     g = globals()
     out = []
