@@ -1,7 +1,7 @@
 # ─── Stage 1: build deps using Chainguard's Wolfi-based python:latest-dev.
 # Same Python interpreter as the runtime stage so wheels match exactly.
 # Chainguard ships fixes for OS-level CVEs typically within hours of disclosure.
-FROM cgr.dev/chainguard/python:latest-dev@sha256:370bd2839528ba9e1ab67db1a334ed05f17abea986c781355866f1fb48913069 AS builder
+FROM cgr.dev/chainguard/python:latest-dev@sha256:6766a166e2a242a14d3b1505fca8de6c81825ee361cc850fa0e78b01cc738f32 AS builder
 
 USER root
 WORKDIR /tmp
@@ -11,11 +11,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
        'aiohttp==3.13.5' \
        'maxminddb==2.8.2' \
        'psycopg[binary]==3.3.4' \
-       'redis==5.3.1' \
-       'pyotp>=2.9.0' \
-       'qrcode>=7.0' \
-       'cryptography>=46.0.5' \
-       'PyJWT>=2.8.0'
+       'redis==5.3.1'
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.
@@ -52,7 +48,7 @@ USER nonroot
 # ─── Stage 2: Chainguard's distroless python runtime (Wolfi). No shell, no
 # apt, no systemd, no ncurses, no util-linux, no expat-side-tools. Built
 # from upstream sources with continuous security patching. ───
-FROM cgr.dev/chainguard/python:latest@sha256:c4c316e93a69c2d966a3cb10aeae1f2f26a520096ceceb9a6251792b87e85483
+FROM cgr.dev/chainguard/python:latest@sha256:daab958311b820bc98b7896df8e306ddb0c842b934453c91fb540008b1684f0c
 
 COPY --from=builder --chown=65532:65532 /rootfs /
 
@@ -66,7 +62,7 @@ USER 65532:65532
 # `docker run -e KEY=VAL` or compose env_file.
 ENV LISTEN_HOST=0.0.0.0 \
     LISTEN_PORT=8443 \
-    TRUST_XFF=none \
+    TRUST_XFF=last \
     DB_PATH=/data/antibot.db \
     DEBUG=0 \
     PYTHONUNBUFFERED=1 \

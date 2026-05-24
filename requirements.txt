@@ -8,7 +8,7 @@ redis>=5,<6
 
 # Test-only dependencies. Used by GitHub Actions and `pytest tests/`.
 pytest>=8,<9
-pytest-asyncio>=1.0,<2
+pytest-asyncio>=0.23,<1
 pytest-aiohttp>=1.0,<2
 fakeredis>=2,<3
 
@@ -25,13 +25,3 @@ maxminddb>=2.6,<3
 # `psycopg` (without [binary]) which builds the C extension on demand.
 # The marker below skips this line on armv7 / armv6 wheels-only installs.
 psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
-
-# 1.8.6 — TOTP two-factor authentication
-pyotp>=2.9.0
-
-# 1.8.8 — Ed25519 keypairs for gateway mesh signing (>=46.0.5 fixes CVE-2026-26007)
-cryptography>=46.0.5
-
-# 1.8.11 — OIDC id_token signature verification (JWKS / RS256). Used only when
-# OIDC is configured; imported lazily so non-OIDC deployments don't require it.
-PyJWT>=2.10.0

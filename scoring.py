@@ -185,17 +185,11 @@ async def ban(ip: str, secs: int = HONEYPOT_BAN_SECS, reason: str = "honeypot"):
     until = now() + secs
     async with state_lock:
         ip_state[ip].banned_until = until
-        _raw_ip = ip_state[ip].last_ip or ip
     if db_queue is not None:
         try:
             db_queue.put_nowait(("ban", (ip, _t.time() + secs, reason, _t.time())))
         except asyncio.QueueFull:
             pass
-        if secs >= HOSTILE_BAN_SECS:
-            try:
-                db_queue.put_nowait(("ip_ban", (_raw_ip, _t.time() + secs, reason, _t.time())))
-            except asyncio.QueueFull:
-                pass
     # Propagate to shared store (best-effort, never blocks)
     try:
         from integrations.redis import _shared_ban_set
@@ -252,13 +246,6 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
                  f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
         except asyncio.QueueFull:
             pass
-        if ban_dur >= HOSTILE_BAN_SECS:
-            try:
-                db_queue.put_nowait(("ip_ban",
-                    (ip, _t.time() + ban_dur,
-                     f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
-            except asyncio.QueueFull:
-                pass
     if triggered:
         # Propagate risk-driven bans to the shared store (cross-instance)
         try:

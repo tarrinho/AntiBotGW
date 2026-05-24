@@ -20,7 +20,6 @@ from state import *    # noqa: F401,F403
 from state import _postgres_available, events_by_cat, by_path_by_cat  # noqa: F401 — underscores/explicit not exported by *
 from helpers import now, slog  # noqa: F401
 from admin.auth import _is_admin_ip  # noqa: F401
-from db.postgres import pg_insert_event  # noqa: F401
 
 
 # ── Timeline: per-minute buckets ───────────────────────────────────────────
@@ -50,9 +49,6 @@ _PASSTHROUGH_REASONS: frozenset = frozenset({
     "authorized-robot",
     "bypass-path",         # BYPASS_PATHS prefix match — allowed, no detection
     "operator-passthrough",# authenticated operator accessing upstream — allowed
-    "operator-self",       # 1.8.10 — operator's own lapsed-session XHR noise on
-                           # admin paths; decoyed but benign, not a block.
-                           # (admin-probe = anonymous recon stays OUT → counted.)
 })
 
 

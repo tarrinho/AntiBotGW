@@ -21,14 +21,6 @@ os.environ.setdefault("DB_PATH", "/tmp/pytest_antibot.db")
 if os.path.exists("/tmp/pytest_antibot.db"):
     os.remove("/tmp/pytest_antibot.db")
 
-# Ensure project root is in sys.path so proxy.py's subpackage imports
-# (admin.oidc, etc.) resolve correctly at collection time — conftest.py
-# also does this, but exec_module below runs at import time and we need
-# this to be set before the call, independent of conftest load ordering.
-_PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PROJ_ROOT not in sys.path:
-    sys.path.insert(0, _PROJ_ROOT)
-
 # Load proxy.py as module
 PROXY_PATH = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
 spec = importlib.util.spec_from_file_location("proxy", PROXY_PATH)
@@ -191,14 +183,13 @@ def test_scoring_signals_have_cost():
 
 # ── 1.5.5 — Promoted hot-reload knobs ─────────────────────────────────────
 def test_15_promoted_knobs_in_hot_reload():
-    """All Tier 1+2+3 knobs must be in _HOT_RELOAD_KNOBS."""
+    """All 14 Tier 1+2+3 knobs must be in _HOT_RELOAD_KNOBS."""
     promoted = [
         "JS_CHALLENGE_TTL", "ENUM_THRESHOLD", "TIMELINE_RETAIN_SECS",
         "SVC_DB_RETENTION_HOURS", "COST_RETAIN_SECS", "LOG_FORMAT",
         "POW_REQUIRED_PATHS", "ALLOWED_METHODS", "ALLOWED_HOSTS",
         "MAX_IDENTITIES", "PRUNE_IDLE_SECS",
         "UPSTREAM_MAX_BODY", "UPSTREAM_MAX_RESP",
-        "HONEYPOT_CLUSTER_THRESHOLD",
     ]
     for k in promoted:
         assert k in proxy._HOT_RELOAD_KNOBS, f"missing knob {k!r}"
@@ -271,134 +262,6 @@ def test_env_precedence_marker():
     else:
         # default: empty set (DB takes precedence)
         assert proxy._ENV_PROVIDED_KNOBS == set()
-
-
-def test_env_provided_knobs_falsy_values_not_pinned():
-    """Falsy env values ("0", "false", "no", "off") must NOT add a bool knob
-    to _ENV_PROVIDED_KNOBS.  Non-bool knobs (int/float/str/list parsers) just
-    need a non-empty env value — their "falsy" concept doesn't apply.
-    Regression test for the bug where "0" (truthy as a Python string) was
-    treated as an env pin, causing disabled-by-test env vars to prevent DB
-    values from overriding them in non-strict mode."""
-    import core.proxy_handler as _cph
-    from integrations.endpoint_policy import _to_bool
-    for k in _cph._ENV_PROVIDED_KNOBS:
-        raw = os.environ.get(k, "")
-        spec = _cph._HOT_RELOAD_KNOBS.get(k)
-        if spec is not None and spec[0] is _to_bool:
-            # Bool knob: must be affirmatively truthy
-            assert _to_bool(raw), (
-                f"_ENV_PROVIDED_KNOBS contains bool knob {k!r} with env value "
-                f"{raw!r} which is falsy — only truthy env values should pin it"
-            )
-        else:
-            # Non-bool knob: any non-empty value is fine
-            assert raw.strip(), (
-                f"_ENV_PROVIDED_KNOBS contains non-bool knob {k!r} with empty "
-                "env value — should not be pinned"
-            )
-
-
-def test_env_knob_is_provided_bool_falsy_returns_false():
-    """_env_knob_is_provided must return False for bool knobs set to "0" / "false".
-    Regression: bare os.environ.get() truthiness treated "0" as truthy, pinning
-    disabled-by-env knobs and preventing DB from re-enabling them."""
-    import core.proxy_handler as _cph
-    from integrations.endpoint_policy import _to_bool
-    # Pick any bool knob from _HOT_RELOAD_KNOBS
-    bool_knobs = [k for k, spec in _cph._HOT_RELOAD_KNOBS.items()
-                  if spec[0] is _to_bool]
-    assert bool_knobs, "Expected at least one bool knob in _HOT_RELOAD_KNOBS"
-    k = bool_knobs[0]
-    for falsy_val in ("0", "false", "no", "off", "False", "NO"):
-        prev = os.environ.pop(k, None)
-        try:
-            os.environ[k] = falsy_val
-            assert not _cph._env_knob_is_provided(k), (
-                f"_env_knob_is_provided({k!r}) returned True for {falsy_val!r} "
-                "— falsy bool env values must not pin the knob"
-            )
-        finally:
-            if prev is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = prev
-
-
-def test_env_knob_is_provided_bool_truthy_returns_true():
-    """_env_knob_is_provided must return True for bool knobs set to "1" / "true"."""
-    import core.proxy_handler as _cph
-    from integrations.endpoint_policy import _to_bool
-    bool_knobs = [k for k, spec in _cph._HOT_RELOAD_KNOBS.items()
-                  if spec[0] is _to_bool]
-    k = bool_knobs[0]
-    for truthy_val in ("1", "true", "yes", "on", "True", "YES"):
-        prev = os.environ.pop(k, None)
-        try:
-            os.environ[k] = truthy_val
-            assert _cph._env_knob_is_provided(k), (
-                f"_env_knob_is_provided({k!r}) returned False for {truthy_val!r} "
-                "— truthy bool env values must pin the knob"
-            )
-        finally:
-            if prev is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = prev
-
-
-def test_env_knob_is_provided_non_bool_string_returns_true():
-    """_env_knob_is_provided must not call _to_bool on non-bool knobs.
-    Regression: calling _to_bool("postgresql://...") raised ValueError and
-    crashed the module at import time when POSTGRES_DSN was set in env."""
-    import core.proxy_handler as _cph
-    from integrations.endpoint_policy import _to_bool
-    # Use POSTGRES_DSN — a str-parser knob that can hold a connection URL
-    k = "POSTGRES_DSN"
-    assert k in _cph._HOT_RELOAD_KNOBS, f"{k} must be in _HOT_RELOAD_KNOBS"
-    spec = _cph._HOT_RELOAD_KNOBS[k]
-    assert spec[0] is not _to_bool, f"{k} must use a non-bool parser"
-    prev = os.environ.pop(k, None)
-    try:
-        conn_str = "postgresql://user:pass@localhost:5432/testdb"
-        os.environ[k] = conn_str
-        # Must not raise — before the fix this raised ValueError
-        result = _cph._env_knob_is_provided(k)
-        assert result is True, (
-            f"_env_knob_is_provided({k!r}) with connection string returned False"
-        )
-    finally:
-        if prev is None:
-            os.environ.pop(k, None)
-        else:
-            os.environ[k] = prev
-
-
-def test_env_knob_is_provided_empty_returns_false():
-    """Empty env value must never pin any knob regardless of parser type."""
-    import core.proxy_handler as _cph
-    for k in list(_cph._HOT_RELOAD_KNOBS)[:5]:
-        prev = os.environ.pop(k, None)
-        try:
-            # No env var set
-            assert not _cph._env_knob_is_provided(k), (
-                f"_env_knob_is_provided({k!r}) returned True with no env var"
-            )
-            # Explicit empty string
-            os.environ[k] = ""
-            assert not _cph._env_knob_is_provided(k), (
-                f"_env_knob_is_provided({k!r}) returned True for empty string"
-            )
-            # Whitespace-only
-            os.environ[k] = "   "
-            assert not _cph._env_knob_is_provided(k), (
-                f"_env_knob_is_provided({k!r}) returned True for whitespace-only"
-            )
-        finally:
-            if prev is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = prev
 
 
 # ── 1.5.5 — config_kv persistence ─────────────────────────────────────────
@@ -1140,8 +1003,6 @@ def test_165_every_knob_persists_round_trip():
         "AI_NO_ASSETS_ENABLED": False, "SESSION_FLOOD_ENABLED": False,
         "UPSTREAM_404_TRACKING_ENABLED": False, "ANUBIS_ENABLED": False,
         "ANUBIS_DIFFICULTY_BOOST": 2,
-        # 1.8.9 — knob added without an entry here; flip to True
-        "ALLOW_PRIVATE_UPSTREAM": True,
         "TURNSTILE_RISK_THRESHOLD": 25.0,
         "RISK_BAN_THRESHOLD": 75, "SOFT_CHALLENGE_SCORE": 6.0,
         "RATE_LIMIT_BURST": 88, "RATE_LIMIT_REFILL": 7.0,
@@ -1221,39 +1082,9 @@ def test_165_every_knob_persists_round_trip():
         "BYPASS_PATHS": ["/static/", "/assets/"],
         "BYPASS_MODE": False,
         "UPSTREAM": "https://test-upstream.example.com",
+        "ALLOW_PRIVATE_UPSTREAM": True,
         "STRICT_VHOST": True,
         "UPSTREAM_REWRITE_BASE": "http://host.docker.internal:8080",
-        "REDIS_ALLOW_LIST": ["172.18.0.0/16", "10.0.0.1/32"],
-        # 1.8.9 — always-on-to-knob conversions
-        "WAF_BODY_ENABLED": False, "WAF_SMUGGLING_ENABLED": False,
-        "WAF_VERB_OVERRIDE_ENABLED": False, "WAF_HEADER_INJECTION_ENABLED": False,
-        "WAF_GRAPHQL_ENABLED": False, "WAF_UPLOAD_ENABLED": False,
-        "WAF_SLOWLORIS_ENABLED": False, "ACCEPT_WILDCARD_CHECK_ENABLED": False,
-        "SESSION_CHURN_ENABLED": False, "JA4H_DENY_ENABLED": False,
-        "HOST_BLOCKING_ENABLED": False, "REQUIRED_HEADERS_ENABLED": False,
-        "JA4_REQUIRED_ENABLED": False, "UPSTREAM_AUTH_FAIL_ENABLED": False,
-        "RATE_LIMIT_IP_ENABLED": False, "RATE_LIMIT_ENABLED": False,
-        "FP_BAN_CHECK_ENABLED": False, "TRAFFIC_THRESHOLD_ENABLED": False,
-        "TLS_FP_BLOCK_ENABLED": False, "JWT_VALIDATION_ENABLED": False,
-        "CUSTOM_RULES_ENABLED": False, "ENDPOINT_RATE_LIMIT_ENABLED": False,
-        "HONEY_CRED_ENABLED": False, "CANARY_PROBE_ENABLED": False, "LLM_HEURISTIC_ENABLED": False,
-        "AUTOMATION_PROBE_ENABLED": False, "INTERACTION_PROBE_ENABLED": False,
-        "COORDINATED_ATTACK_ENABLED": False, "JOURNEY_CHECK_ENABLED": False,
-        # 1.8.10
-        "BOT_DETECTION_ENABLED": False,
-        "TRUST_XFF": "first",
-        "TRUSTED_PROXIES": ["10.0.0.0/8"],
-        # 1.8.11 QW-1/QW-6
-        "HONEYPOT_EXTRA_PATHS": ["/test-extra-trap"],
-        # 1.8.12 — honeypot learning subsystem
-        "HONEYPOT_CLUSTER_THRESHOLD": 5,
-        "BEHAVIORAL_SAMPLE_N": 20,
-        "BEHAVIORAL_COV_THRESHOLD": 0.04,
-        "BEHAVIORAL_R1_THRESHOLD": 0.80,
-        "BEHAVIORAL_BIN_PCT_THRESHOLD": 0.65,
-        "BEHAVIORAL_MAX_INTERVAL_S": 1.5,
-        "BEHAVIORAL_SKIP_INTERVAL_S": 4.0,
-        "SERVICE_OWNER": "secops@example.com",
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)
@@ -1321,17 +1152,8 @@ def test_165_every_knob_persists_round_trip():
         # Restore originals so other tests aren't polluted.
         proxy._ENV_PROVIDED_KNOBS = saved_env_set
         proxy._city_reader = saved_city_reader
-        import sys as _sys_restore
         for k, v in original.items():
             setattr(proxy, k, v)
-            # Also restore all other loaded modules that db_load_config propagated to.
-            for _m in list(_sys_restore.modules.values()):
-                if (_m is not None and _m is not proxy
-                        and hasattr(_m, k)):
-                    try:
-                        setattr(_m, k, v)
-                    except (AttributeError, TypeError):
-                        pass
         # Wipe config_kv so other tests start clean.
         conn = sqlite3.connect(proxy.DB_PATH)
         conn.execute("DELETE FROM config_kv")
@@ -1394,9 +1216,8 @@ def test_165_db_switch_endpoint_registered():
     assert "_postgres_load_module" in src
     # Must persist via config_kv
     assert "set_config" in src
-    # 1.8.7 — hot-swap: no restart; must propagate in-process via sys.modules
-    assert "_propagate_global" in src
-    assert "os._exit" not in src
+    # Must self-exit so docker restarts
+    assert "os._exit(0)" in src
 
 
 def test_165_pg_size_sampled_in_svc_metrics():
@@ -1571,7 +1392,7 @@ def test_167_gw_id_from_domain():
     f = proxy._gw_id_from_domain
     # Typical hostnames.
     assert f("gw-prod.example.com")        == "gw-prod-example-com"
-    assert f("Demo-Tunnel.Trycloudflare.COM") == "demo-tunnel-trycloudflare-com"
+    assert f("Fin-Video.Trycloudflare.COM") == "fin-video-trycloudflare-com"
     assert f("gw.local")                   == "gw-local"
     # Edge: empty / None / pure-punctuation collapses.
     assert f("")          == ""
@@ -1585,8 +1406,8 @@ def test_167_gw_id_from_domain():
     assert 2 <= len(out) <= 63
     assert out.startswith("a" * 60)
     # Result must round-trip through the validator.
-    for d in ["gw-prod.example.com", "demo-tunnel-abc123.trycloudflare.com",
-              "node1.test-env.example.com"]:
+    for d in ["gw-prod.example.com", "fin-video-code-harold.trycloudflare.com",
+              "node1.test-env.cfappsecurity.com"]:
         derived = f(d)
         ok, _ = proxy._gw_validate_id(derived)
         assert ok, f"derived {derived!r} from {d!r} fails validator"

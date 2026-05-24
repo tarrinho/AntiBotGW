@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AppSecGW · Sign in</title>
 <meta name="robots" content="noindex,nofollow">
@@ -17,9 +17,7 @@ h1{font-size:18px;color:#fff;margin-bottom:4px;display:flex;
    align-items:center;gap:8px}
 h1 .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;
          border-radius:10px;font-weight:700}
-h1 .pill.pill-blue{background:var(--blue);color:#fff;}
 .sub{color:var(--dim);font-size:11.5px;margin-bottom:18px}
-.sub strong{color:var(--fg)}
 label{display:block;font-size:10.5px;color:var(--dim);text-transform:uppercase;
       letter-spacing:.5px;font-weight:700;margin-bottom:5px;margin-top:12px}
 input[type=text],input[type=password]{width:100%;background:#0d1117;
@@ -54,81 +52,41 @@ button:disabled{opacity:.5;cursor:not-allowed}
          font-family:inherit;transition:border-color .15s}
 .sso-btn:hover{border-color:var(--blue);color:#fff}
 
-/* 1.6.7 — global portal footer */
+/* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+/* Login page is a vertically-centered flex column — let the form
+   self-center and the footer settle at the bottom of the viewport. */
 body{flex-direction:column}
 .login-card{margin:auto}
-
-/* 1.8.7 — two-step indicator */
-.steps{display:flex;align-items:center;gap:0;margin-bottom:20px}
-.step{width:24px;height:24px;border-radius:50%;border:2px solid var(--line);
-      display:flex;align-items:center;justify-content:center;
-      font-size:11px;font-weight:700;color:var(--dim);flex-shrink:0;
-      transition:border-color .2s,color .2s,background .2s}
-.step.active{border-color:var(--blue);color:var(--blue);background:rgba(88,166,255,.10)}
-.step.done{border-color:var(--green);color:var(--green);background:rgba(63,185,80,.08)}
-.step-line{flex:1;height:2px;background:var(--line);transition:background .2s}
-.step-line.done{background:var(--green)}
-.back-link{display:block;text-align:center;margin-top:12px;font-size:11.5px;
-           color:var(--dim);text-decoration:none}
-.back-link:hover{color:var(--fg)}
-.totp-input-wrap{margin-top:14px}
-#totp-code{font-size:22px;letter-spacing:6px;text-align:center;padding:10px 11px}
 </style></head>
 <body>
-<div class="login-card">
-  <!-- Step indicator -->
-  <div class="steps" id="steps">
-    <span class="step active" id="step1-dot">1</span>
-    <span class="step-line" id="step-line"></span>
-    <span class="step" id="step2-dot">2</span>
-  </div>
+<form class="login-card" id="login-form" autocomplete="on">
+  <h1>AppSecGW <span class="pill">SIGN IN</span></h1>
+  <p class="sub">Sign in to manage gateway controls, agents, and the registry.</p>
 
-  <!-- Step 1: credentials -->
-  <div id="credential-fields">
-    <h1>AppSecGW <span class="pill">SIGN IN</span></h1>
-    <p class="sub">Sign in to manage gateway controls, agents, and the registry.</p>
+  <label for="username">Username</label>
+  <input id="username" name="username" type="text" autocomplete="username"
+         autocapitalize="none" autocorrect="off" spellcheck="false"
+         required>
 
-    <label for="username">Username</label>
-    <input id="username" name="username" type="text" autocomplete="username"
-           autocapitalize="none" autocorrect="off" spellcheck="false" required>
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password"
+         autocomplete="current-password" required>
 
-    <label for="password">Password</label>
-    <input id="password" name="password" type="password"
-           autocomplete="current-password" required>
-
-    <button type="button" id="submit">Sign in</button>
-  </div>
-
-  <!-- Step 2: TOTP -->
-  <div id="totp-step" style="display:none">
-    <h1>AppSecGW <span class="pill pill-blue">2FA</span></h1>
-    <p class="sub" id="totp-sub">Enter the 6-digit code from your authenticator app.</p>
-
-    <div class="totp-input-wrap">
-      <label for="totp-code">Authenticator Code</label>
-      <input id="totp-code" type="text" inputmode="numeric" pattern="[0-9]*"
-             maxlength="8" autocomplete="one-time-code" placeholder="000 000">
-    </div>
-
-    <button type="button" id="totp-submit">Verify</button>
-    <a href="#" id="btn-back" class="back-link">← Use a different account</a>
-  </div>
-
+  <button type="submit" id="submit">Sign in</button>
   <div id="err" class="err"></div>
 
   __OIDC_ERROR__
   __BOOTSTRAP_HINT__
   __OIDC_BUTTON__
-</div>
+
+</form>
 
 <script>
 "use strict";
-const errEl   = document.getElementById("err");
-const btnSign = document.getElementById("submit");
-const btnTotp = document.getElementById("totp-submit");
-
+const errEl = document.getElementById("err");
+const btn   = document.getElementById("submit");
 function safeNext(raw) {
   if (!raw) return null;
   try { const u = new URL(raw, location.origin); return u.origin === location.origin ? u.pathname + u.search + u.hash : null; }
@@ -136,46 +94,10 @@ function safeNext(raw) {
 }
 const next = safeNext(new URLSearchParams(location.search).get("next")) || "/antibot-appsec-gateway/secured/live-feed";
 
-function showErr(msg) { errEl.textContent = msg; errEl.classList.add("show"); }
-function clearErr()   { errEl.classList.remove("show"); }
-
-function gotoStep2(username) {
-  document.getElementById("credential-fields").style.display = "none";
-  document.getElementById("totp-step").style.display = "";
-  document.getElementById("step1-dot").classList.remove("active");
-  document.getElementById("step1-dot").classList.add("done");
-  document.getElementById("step-line").classList.add("done");
-  document.getElementById("step2-dot").classList.add("active");
-  if (username) {
-    document.getElementById("totp-sub").innerHTML =
-      "Signed in as <strong>" + username.replace(/[<>&"]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;",'"':"&quot;"})[c]) + "</strong>. Enter the 6-digit code from your authenticator app.";
-  }
-  clearErr();
-  document.getElementById("totp-code").focus();
-}
-
-function gotoStep1() {
-  document.getElementById("totp-step").style.display = "none";
-  document.getElementById("credential-fields").style.display = "";
-  document.getElementById("step1-dot").classList.add("active");
-  document.getElementById("step1-dot").classList.remove("done");
-  document.getElementById("step-line").classList.remove("done");
-  document.getElementById("step2-dot").classList.remove("active");
-  clearErr();
-  btnSign.disabled = false;
-  document.getElementById("username").focus();
-}
-
-document.getElementById("btn-back").addEventListener("click", (ev) => {
+document.getElementById("login-form").addEventListener("submit", async (ev) => {
   ev.preventDefault();
-  gotoStep1();
-});
-
-let _partialToken = "";
-
-btnSign.addEventListener("click", async () => {
-  clearErr();
-  btnSign.disabled = true;
+  errEl.classList.remove("show");
+  btn.disabled = true;
   const body = new URLSearchParams({
     username: document.getElementById("username").value.trim().toLowerCase(),
     password: document.getElementById("password").value,
@@ -184,62 +106,27 @@ btnSign.addEventListener("click", async () => {
   try {
     const r = await fetch("/antibot-appsec-gateway/login", {
       method: "POST",
-      headers: {"Content-Type": "application/x-www-form-urlencoded"},
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
       body, credentials: "same-origin",
     });
-    let j; try { j = await r.json(); } catch { j = {_error: true}; }
-    if (j._error && r.ok) { showErr("Response parse error"); btnSign.disabled = false; return; }
+    let j; try { j = await r.json(); } catch { j = { _error: true }; }
+    if (j._error && r.ok) { errEl.textContent = "Response parse error"; errEl.classList.add("show"); btn.disabled = false; return; }
     if (!r.ok) {
-      showErr(j.error || ("Sign-in failed (HTTP " + r.status + ")"));
-      btnSign.disabled = false;
-      return;
-    }
-    if (j.step === "totp_required") {
-      _partialToken = j.partial_token || "";
-      gotoStep2(document.getElementById("username").value.trim().toLowerCase());
+      errEl.textContent = j.error || ("Sign-in failed (HTTP " + r.status + ")");
+      errEl.classList.add("show");
+      btn.disabled = false;
       return;
     }
     location.href = safeNext(j.redirect) || next;
   } catch (e) {
-    showErr("Network error: " + e.message);
-    btnSign.disabled = false;
+    errEl.textContent = "Network error: " + e.message;
+    errEl.classList.add("show");
+    btn.disabled = false;
   }
-});
-
-async function submitTotp() {
-  clearErr();
-  btnTotp.disabled = true;
-  const code = document.getElementById("totp-code").value.trim();
-  try {
-    const r2 = await fetch("/antibot-appsec-gateway/login/totp", {
-      method: "POST",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify({partial_token: _partialToken, code}),
-      credentials: "include",
-    });
-    let j2; try { j2 = await r2.json(); } catch { j2 = {_error: true}; }
-    if (j2._error) { showErr("Response parse error"); btnTotp.disabled = false; return; }
-    if (r2.ok) {
-      window.location.href = safeNext(j2.redirect) || next;
-    } else {
-      showErr(j2.error || "Invalid code");
-      btnTotp.disabled = false;
-      document.getElementById("totp-code").select();
-    }
-  } catch (e) {
-    showErr("Network error: " + e.message);
-    btnTotp.disabled = false;
-  }
-}
-
-btnTotp.addEventListener("click", submitTotp);
-document.getElementById("totp-code").addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") { ev.preventDefault(); submitTotp(); }
-});
-document.getElementById("password").addEventListener("keydown", (ev) => {
-  if (ev.key === "Enter") { ev.preventDefault(); btnSign.click(); }
 });
 </script>
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 </body></html>

@@ -5,4 +5,3 @@ from dashboards.service_metrics import * # noqa: F401,F403
 from dashboards.controls import *       # noqa: F401,F403
 from dashboards.analytics import *      # noqa: F401,F403
 from dashboards.siem import *           # noqa: F401,F403
-from dashboards.honeypots import *      # noqa: F401,F403

@@ -10,29 +10,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-# When running under `mutmut run` (python -m mutmut), mutmut/__main__.py is
-# sys.modules['__main__'], NOT 'mutmut.__main__'. Trampoline functions do
-# `from mutmut.__main__ import record_trampoline_hit`, which re-imports the
-# module fresh and hits `set_start_method('fork')` a second time →
-# RuntimeError: context has already been set.
-# Fix: alias __main__ as mutmut.__main__ before pytest discovers the trampolines.
-def _alias_mutmut_main() -> None:
-    main = sys.modules.get("__main__")
-    if main is not None and "mutmut.__main__" not in sys.modules:
-        if hasattr(main, "record_trampoline_hit"):
-            sys.modules["mutmut.__main__"] = main
-_alias_mutmut_main()
-
 # ── 1. Tmp scratch dir for the keys + DB ───────────────────────────────────
 _TMP = tempfile.mkdtemp(prefix="appsecgw-test-")
 os.environ.setdefault("UPSTREAM",          "https://example.com")
 os.environ.setdefault("ADMIN_KEY",         "TEST-KEY-DO-NOT-USE")
 os.environ.setdefault("DB_PATH",           os.path.join(_TMP, "antibot.db"))
 os.environ.setdefault("ALLOWED_HOSTS",     "")
-# 1.8.13 — admin-IP gate is now fail-closed (F-06): an empty allowlist denies
-# ALL admin endpoints. Tests forge sessions + hit /secured/* from 127.0.0.1, so
-# the test allowlist must permit the loopback client (was "" = open before F-06).
-os.environ.setdefault("ADMIN_ALLOWED_IPS", "0.0.0.0/0,::/0")
+os.environ.setdefault("ADMIN_ALLOWED_IPS", "")
 os.environ.setdefault("DEBUG",             "1")  # enables /antibot-appsec-gateway/secured/xff in tests
 
 # Make `import proxy` find the file regardless of where pytest is run from.
@@ -103,19 +87,10 @@ def _wipe_config_kv_between_tests():
             # don't see seeded rows from prior tests (events table is not
             # cleared by db_load_state, so cross-test contamination accumulates).
             conn.execute("DELETE FROM events")
-            # 1.8.6 — wipe bans so _rehydrate_bans() on the next gateway
+            # 1.8.5 — wipe bans so _rehydrate_bans() on the next gateway
             # startup does not import bans written by prior tests.
             try:
                 conn.execute("DELETE FROM bans")
-            except sqlite3.OperationalError:
-                pass
-            # 1.8.13 — wipe ip_bans too. check_ip_ban() reads this table
-            # synchronously on every request; a honeypot/suspicious hit in one
-            # test writes an ip_bans row that then makes EVERY later test's
-            # request from 127.0.0.1 return 'ip-ban' (it was the only ban table
-            # not cleared here, causing in-file detection-test cross-contamination).
-            try:
-                conn.execute("DELETE FROM ip_bans")
             except sqlite3.OperationalError:
                 pass
             conn.commit()
@@ -129,19 +104,6 @@ def _wipe_config_kv_between_tests():
         import proxy as _p
         _p.INJECT_SECURITY_HEADERS = True   # security headers test would fail if False
         _p.BYPASS_MODE = False              # must be False or detection tests are skipped
-        # RISK_BAN_THRESHOLD: config-endpoint integration tests set this to
-        # non-default values (60, 75, …) and the propagation to sys.modules
-        # survives proxy teardown, causing test_accumulated_risk_triggers_ban
-        # to use the wrong threshold for its ceiling calculation.
-        import config as _cfg
-        _default_rbt = 50  # config.py default
-        if getattr(_cfg, "RISK_BAN_THRESHOLD", _default_rbt) != _default_rbt:
-            for _rm in list(sys.modules.values()):
-                if _rm is not None and hasattr(_rm, "RISK_BAN_THRESHOLD"):
-                    try:
-                        setattr(_rm, "RISK_BAN_THRESHOLD", _default_rbt)
-                    except (AttributeError, TypeError):
-                        pass
     except Exception:
         pass
     # Clear VHOSTS after every test. VHOSTS is a module-level dict in vhost.py
@@ -154,81 +116,3 @@ def _wipe_config_kv_between_tests():
         _vh.VHOSTS.clear()
     except Exception:
         pass
-    # 1.8.13 — reset the admin session cache between tests. Tests that forge an
-    # admin session set _SESSION_CACHE_READY=True; left set, it changes how the
-    # NEXT test's UNAUTHENTICATED admin requests are gated (made test_v1811
-    # api08/api09 ui-theme tests fail, but only when co-run after test_v1810 —
-    # a pure cross-file ordering flake, not a product defect). Clearing the cache
-    # + resetting the ready flag isolates every test from forged-session bleed.
-    try:
-        import proxy as _ps
-        _ps._SESSION_CACHE.clear()          # same dict object across modules
-        _ps._SESSION_CACHE_READY = False     # _ProxyModule.__setattr__ propagates
-    except Exception:
-        pass
-    try:
-        import admin.users as _au            # also reset the canonical home
-        _au._SESSION_CACHE.clear()
-        _au._SESSION_CACHE_READY = False
-    except Exception:
-        pass
-    # 1.8.13 — reset the upstream-404 decoy cache between tests. Tests that spin a
-    # local echo upstream (returns 200 for every path) prime this cache with
-    # status=200; it then persists module-globally and makes the admin decoy in a
-    # LATER test return 200 instead of 404 — which broke test_v1811 api08/api09
-    # (unauthenticated admin requests are served the mirrored 404, so its status
-    # leaks the prior test's upstream). Restore the import-time defaults.
-    try:
-        import core.proxy_handler as _cph
-        _cph._upstream_404_cache.update(
-            {"body": None, "ctype": "text/plain; charset=utf-8",
-             "status": 404, "fetched_at": 0.0})
-    except Exception:
-        pass
-
-
-# ── 1.8.11: CSRF auto-attach for the in-process test HTTP client ─────────────
-# The central CSRF gate (core.proxy_handler.protect) now requires a valid
-# X-CSRF-Token header on EVERY state-changing request to the admin namespace —
-# exactly as the live dashboard's fetch() shim attaches it from window.__AGW_CSRF__.
-# To keep the aiohttp TestClient faithful to a real browser, this autouse fixture
-# wraps TestClient.request: for a non-safe method carrying an `agw_session`
-# cookie, it derives the matching token (HMAC(SESSION_KEY, sid)[:32]) and adds
-# the header *only when the test didn't set one*. Tests that set X-CSRF-Token
-# explicitly (including deliberately-wrong values, e.g. CSRF-rejection tests)
-# are left untouched, so negative-path coverage still works.
-@pytest.fixture(autouse=True)
-def _auto_attach_csrf_header():
-    import hashlib as _hl, hmac as _hm
-    try:
-        from aiohttp.test_utils import TestClient
-    except Exception:
-        yield
-        return
-    # NOTE: TestClient.post/get/delete dispatch through TestClient._request
-    # (the underscore coroutine), not the public request(), so we patch that.
-    _orig_request = TestClient._request
-
-    async def _request_with_csrf(self, method, path, *args, **kwargs):
-        try:
-            if str(method).upper() not in ("GET", "HEAD", "OPTIONS", "TRACE"):
-                cookies = kwargs.get("cookies") or {}
-                sess = cookies.get("agw_session", "") if isinstance(cookies, dict) else ""
-                if isinstance(sess, str) and sess.count("|") >= 3:
-                    hdrs = dict(kwargs.get("headers") or {})
-                    if not any(k.lower() == "x-csrf-token" for k in hdrs):
-                        import config as _cfg
-                        sid = sess.split("|")[1]
-                        hdrs["X-CSRF-Token"] = _hm.new(
-                            _cfg.SESSION_KEY, sid.encode(), _hl.sha256
-                        ).hexdigest()[:32]
-                        kwargs["headers"] = hdrs
-        except Exception:
-            pass  # never let the shim break a request
-        return await _orig_request(self, method, path, *args, **kwargs)
-
-    TestClient._request = _request_with_csrf
-    try:
-        yield
-    finally:
-        TestClient._request = _orig_request

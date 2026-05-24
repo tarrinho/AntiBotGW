@@ -102,8 +102,7 @@ def _assert_upstream_public(upstream: str, key: str = "UPSTREAM") -> None:
 
     Prevents accidental or malicious VHOSTS configs from turning the gateway
     into an SSRF vector that leaks internal infrastructure over public tunnels.
-    Skipped when ALLOW_PRIVATE_UPSTREAM=1 (the default). Set =0 in
-    public-cloud deployments to re-arm the guard.
+    Skipped when ALLOW_PRIVATE_UPSTREAM=1 is set in the environment.
     """
     if _cfg.ALLOW_PRIVATE_UPSTREAM:
         return
@@ -149,24 +148,6 @@ def _to_json_list(v: Any) -> list:
         return v
     import json as _json
     return _json.loads(v) if isinstance(v, str) else []
-
-
-def _to_bool(v: Any) -> bool:
-    """String-aware boolean coercion for per-vhost overrides.
-
-    Bare ``bool`` is wrong here: ``bool("false")`` is ``True`` (any non-empty
-    string is truthy), so an override sent as the string ``"false"`` by the
-    policy UI would be stored as ``True`` — silently dropping the change. This
-    parser treats the usual textual forms correctly while passing real bools
-    and numbers through unchanged.
-    """
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return v != 0
-    if v is None:
-        return False
-    return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
 _VHOST_COERCE: Dict[str, Any] = {
@@ -309,51 +290,7 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Upstream limits ───────────────────────────────────────────────────────
     "UPSTREAM_MAX_BODY":             int,
     "UPSTREAM_MAX_RESP":             int,
-    # ── WAF module kill-switches (1.8.9) ──────────────────────────────────────
-    "WAF_BODY_ENABLED":              bool,
-    "WAF_SMUGGLING_ENABLED":         bool,
-    "WAF_GRAPHQL_ENABLED":           bool,
-    "WAF_UPLOAD_ENABLED":            bool,
-    "WAF_VERB_OVERRIDE_ENABLED":     bool,
-    "WAF_HEADER_INJECTION_ENABLED":  bool,
-    "WAF_SLOWLORIS_ENABLED":         bool,
-    "ACCEPT_WILDCARD_CHECK_ENABLED": bool,
-    # ── Probe / interaction detectors (1.8.9) ─────────────────────────────────
-    "HONEY_CRED_ENABLED":            bool,
-    "CANARY_PROBE_ENABLED":          bool,
-    "INTERACTION_PROBE_ENABLED":     bool,
-    "AUTOMATION_PROBE_ENABLED":      bool,
-    "LLM_HEURISTIC_ENABLED":         bool,
-    # ── Session / journey detectors (1.8.9) ───────────────────────────────────
-    "COORDINATED_ATTACK_ENABLED":    bool,
-    "JOURNEY_CHECK_ENABLED":         bool,
-    "SESSION_CHURN_ENABLED":         bool,
-    # ── Network / TLS / JA4 (1.8.9) ──────────────────────────────────────────
-    "TLS_FP_BLOCK_ENABLED":          bool,
-    "JA4H_DENY_ENABLED":             bool,
-    "JA4_REQUIRED_ENABLED":          bool,
-    "HOST_BLOCKING_ENABLED":         bool,
-    # ── Rate limiting / threshold detectors (1.8.9) ───────────────────────────
-    "RATE_LIMIT_ENABLED":            bool,
-    "RATE_LIMIT_IP_ENABLED":         bool,
-    "ENDPOINT_RATE_LIMIT_ENABLED":   bool,
-    "TRAFFIC_THRESHOLD_ENABLED":     bool,
-    "PATH_SWEEP_ENABLED":            bool,
-    # ── Auth / header enforcement (1.8.9) ─────────────────────────────────────
-    "JWT_VALIDATION_ENABLED":        bool,
-    "REQUIRED_HEADERS_ENABLED":      bool,
-    "UPSTREAM_AUTH_FAIL_ENABLED":    bool,
-    "FP_BAN_CHECK_ENABLED":          bool,
-    "CUSTOM_RULES_ENABLED":          bool,
 }
-
-# 1.8.10 — replace every bare ``bool`` coercer with the string-aware ``_to_bool``.
-# The policy UI may send a boolean override as the string "true"/"false"; bare
-# ``bool("false")`` is ``True``, which silently dropped such changes. Done as a
-# post-pass so the table above stays readable.
-for _vk, _vc in list(_VHOST_COERCE.items()):
-    if _vc is bool:
-        _VHOST_COERCE[_vk] = _to_bool
 
 # ── Parse VHOSTS env var ───────────────────────────────────────────────────────
 _VHOSTS_RAW = os.environ.get("VHOSTS", "").strip()

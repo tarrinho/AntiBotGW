@@ -98,7 +98,7 @@ def _extract_fn_body(src: str, fn_name: str) -> str:
 
 
 def _extract_dcl_body(src: str) -> str:
-    idx = src.rfind("DOMContentLoaded")  # 1.8.12: last DOMContentLoaded = chart/init block (sidebar accordion adds an earlier one)
+    idx = src.find("DOMContentLoaded")
     assert idx != -1, "DOMContentLoaded not found in control_center.html"
     end = src.find("});", idx)
     return src[idx:end]
@@ -353,7 +353,7 @@ def test_s26_incident_critical_frozenset_defined():
     assert "_INCIDENT_CRITICAL" in src, (
         "analytics.py: _INCIDENT_CRITICAL frozenset not defined."
     )
-    for reason in ("canary-echo", "honey-cred", "canary-probe-miss"):
+    for reason in ("canary-echo", "honey-cred", "redirect-maze-bot", "canary-probe-miss"):
         assert reason in src, (
             f"analytics.py: '{reason}' not in _INCIDENT_CRITICAL."
         )

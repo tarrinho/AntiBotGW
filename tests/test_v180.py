@@ -86,17 +86,6 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
-def _csrf_hdr(proxy_module, cookie):
-    """X-CSRF-Token header for CSRF-protected admin POSTs (central gate, 1.8.11)."""
-    import hashlib, hmac as _hmac
-    if isinstance(cookie, dict):
-        cookie = next(iter(cookie.values()))
-    sid = cookie.split("|")[1]
-    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(),
-                      hashlib.sha256).hexdigest()[:32]
-    return {"X-CSRF-Token": token}
-
-
 def _seed_events_vhost(proxy_module, rows):
     """Insert (ts, ip, ua, path, method, status, reason, vhost) into events."""
     conn = sqlite3.connect(proxy_module.DB_PATH)
@@ -249,24 +238,15 @@ class TestU2VhostContextVar:
 # ── U3: SSRF guard ────────────────────────────────────────────────────────────
 
 class TestU3SSRFGuard:
-    """_assert_upstream_public must reject private/loopback addresses when the
-    guard is enabled. As of 1.8.x ALLOW_PRIVATE_UPSTREAM defaults to 1 (the guard
-    is opt-in, by operator request — internal upstreams are the norm and the SSRF
-    tradeoff is documented in core/proxy_handler.py), so these tests explicitly
-    enable the guard (ALLOW_PRIVATE_UPSTREAM=0) to exercise its blocking logic."""
+    """_assert_upstream_public must reject private/loopback addresses."""
 
     def _check(self, url):
-        import config as _cfg
         from vhost import _assert_upstream_public
-        _saved = _cfg.ALLOW_PRIVATE_UPSTREAM
-        _cfg.ALLOW_PRIVATE_UPSTREAM = False   # enable the opt-in guard
         try:
             _assert_upstream_public(url)
             return True   # passed (public)
         except SystemExit:
             return False  # blocked (private)
-        finally:
-            _cfg.ALLOW_PRIVATE_UPSTREAM = _saved
 
     def test_public_https_allowed(self):
         assert self._check("https://httpbin.org") is True
@@ -290,15 +270,9 @@ class TestU3SSRFGuard:
         assert self._check("http:///no-host") is False
 
     def test_vhost_set_private_upstream_rejected(self):
-        import config as _cfg
         import vhost as v
-        _saved = _cfg.ALLOW_PRIVATE_UPSTREAM
-        _cfg.ALLOW_PRIVATE_UPSTREAM = False   # enable the opt-in guard
-        try:
-            ok, err = v.vhost_set("attacker.example.com", {"UPSTREAM": "http://10.0.0.1/internal"})
-        finally:
-            _cfg.ALLOW_PRIVATE_UPSTREAM = _saved
-        assert not ok, "vhost_set must reject private UPSTREAM when the guard is enabled"
+        ok, err = v.vhost_set("attacker.example.com", {"UPSTREAM": "http://10.0.0.1/internal"})
+        assert not ok, "vhost_set must reject private UPSTREAM"
         assert "10.0.0.1" in err or "private" in err.lower() or "internal" in err.lower()
 
 
@@ -638,30 +612,15 @@ class TestF5F6GeoVhostFilter:
         )
 
     def test_geo_sql_where_clause_uses_parameterized_query(self, proxy_module):
-        """Vhost filter must NOT format into SQL via f-string — SQL injection guard.
-
-        1.8.8 — geo_data_endpoint now uses the backend-aware db_read_events()
-        helper instead of hardcoded sqlite3.connect+SQL. Vhost is passed as a
-        kwarg, and the helper does the parameterized binding internally
-        (sqlite uses `?`, postgres uses `%s` — both safe).
-
-        Updated assertion: confirm the endpoint passes vhost via the helper
-        and doesn't manually concatenate it into a SQL string.
-        """
+        """Vhost filter must use ? placeholder (not f-string interpolation) — SQL injection guard."""
         import core.proxy_handler as _ph
         src = inspect.getsource(_ph.geo_data_endpoint)
-        # Must call db_read_events with vhost as a keyword argument
-        assert "db_read_events" in src, (
-            "geo_data_endpoint must use db_read_events helper (1.8.8 refactor)"
+        # Must not format vhost directly into SQL string
+        assert 'f"' not in src.split("_geo_vhost_clause")[1][:200] or \
+               "vhost = ?" in src, (
+            "geo SQL clause must use parameterized ? not f-string for vhost value"
         )
-        assert "vhost=" in src, (
-            "geo_data_endpoint must pass vhost as kwarg to db_read_events "
-            "(parameterised binding happens inside the helper)"
-        )
-        # Must NOT do raw f-string SQL with vhost
-        assert 'f"SELECT' not in src and "f'SELECT" not in src, (
-            "geo_data_endpoint must not f-string format SQL — use the helper"
-        )
+        assert "vhost = ?" in src, "geo vhost SQL filter must use parameterized query"
 
 
 # ── F7: agents_data_endpoint vhost filtering ─────────────────────────────────
@@ -857,32 +816,18 @@ class TestF9F10VhostsAPI:
 
     def test_vhosts_post_rejects_private_upstream(self, proxy_module):
         async def _t():
-            import config as _cfg
-            _saved = _cfg.ALLOW_PRIVATE_UPSTREAM
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as client:
-                    # ALLOW_PRIVATE_UPSTREAM is hot-reloadable + persisted now, so
-                    # on_startup can restore it from config_kv. Enable the opt-in
-                    # SSRF guard after startup to exercise the rejection path.
-                    _cfg.ALLOW_PRIVATE_UPSTREAM = False
-                    try:
-                        import vhost as _vh
-                        _vh._cfg.ALLOW_PRIVATE_UPSTREAM = False
-                    except Exception:
-                        pass
-                    try:
-                        cookie = _make_admin_cookie(proxy_module)
-                        r = await client.post(
-                            f"{NS}/vhosts",
-                            json={"hostname": "evil.example.com",
-                                  "UPSTREAM": "http://192.168.1.1/internal"},
-                            cookies={proxy_module._SESSION_COOKIE: cookie},
-                        )
-                        assert r.status in (400, 422, 500), (
-                            f"POST /vhosts with private UPSTREAM must be rejected, got {r.status}"
-                        )
-                    finally:
-                        _cfg.ALLOW_PRIVATE_UPSTREAM = _saved
+                    cookie = _make_admin_cookie(proxy_module)
+                    r = await client.post(
+                        f"{NS}/vhosts",
+                        json={"hostname": "evil.example.com",
+                              "UPSTREAM": "http://192.168.1.1/internal"},
+                        cookies={proxy_module._SESSION_COOKIE: cookie},
+                    )
+                    assert r.status in (400, 422, 500), (
+                        f"POST /vhosts with private UPSTREAM must be rejected, got {r.status}"
+                    )
         _run(_t())
 
 

@@ -469,7 +469,7 @@ async def service_metrics_data_endpoint(request: web.Request):
             row = conn.execute(
                 "SELECT COUNT(*), "
                 "SUM(CASE WHEN reason IN ('ok','allowed','authorized-robot') THEN 1 ELSE 0 END), "
-                "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe','operator-self') THEN 1 ELSE 0 END) "
+                "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe') THEN 1 ELSE 0 END) "
                 "FROM events WHERE ts >= ? AND ts <= ? AND vhost = ?",
                 (_win_start, end_b + bucket_secs, _vhost),
             ).fetchone()
@@ -513,9 +513,7 @@ SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="
 
 
 async def service_dashboard_endpoint(request: web.Request):
-    from db.sqlite import get_ui_theme as _get_theme
-    _theme = _get_theme(DB_PATH)
-    body = SERVICE_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
+    body = SERVICE_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={

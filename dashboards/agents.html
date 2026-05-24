@@ -1,42 +1,33 @@
 <!doctype html>
-<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.13 · Agents</title>
+<title>AppSecGW_1.8.5 · Agents</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
-html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
-html[data-theme="light"] #sidebar{background:#f0f2f4}
-html[data-theme="light"] #topbar{background:#f0f2f4}
-html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
-html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
-html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
-html[data-theme="light"] .card{border-color:var(--line)}
-html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
-html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:var(--bg-hover)}
+#sidebar-footer button.signout:hover{background:#1f2730}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
 #page-content{flex:1;padding:14px}
@@ -49,21 +40,6 @@ body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
-/* -- Sidebar collapse (desktop hide/unhide) -- */
-#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
-#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
-#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
-@media(max-width:600px){#sidebar-toggle{display:none}}
-@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
-/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
-@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
-/* -- Submenu collapse (accordion) -- */
-#sidebar-nav .nav-parent{display:flex;align-items:center}
-#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
-.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -74,14 +50,14 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.metric{font-size:30px;font-weight:600;color:var(--bright);line-height:1}
+.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
 .metric.crit{color:var(--red)}
 .metric.high{color:var(--orange)}
 .metric.med{color:var(--yellow)}
 .metric.low{color:var(--blue)}
 .metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
 table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:var(--bg-elevated);color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
 th.sortable:hover{color:var(--fg,#e6edf3)}
@@ -99,7 +75,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .ban-btn.banned.active{background:rgba(210,153,34,.2);color:#d29922}
 .ban-btn.really-banned.active{background:rgba(248,81,73,.2);color:#f85149}
 .ban-btn.authorized-bot.active{background:rgba(88,166,255,.2);color:var(--blue)}
-.bar{height:10px;background:var(--bg-inset);border-radius:4px;overflow:hidden;display:flex}
+.bar{height:10px;background:#0a0e13;border-radius:4px;overflow:hidden;display:flex}
 .bar>div{height:100%}
 .bar .h{background:#a78bfa}
 .bar .a{background:#5fb3c0}
@@ -112,20 +88,16 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.high{background:#3d2a1a;color:var(--orange)}
 .tag.med{background:#4a3a1a;color:var(--yellow)}
 .tag.low{background:#1a3a4a;color:var(--blue)}
-html[data-theme="light"] .tag.crit{background:#ffebe9;color:#cf222e}
-html[data-theme="light"] .tag.high{background:#fff1e5;color:#bc4c00}
-html[data-theme="light"] .tag.med{background:#fff8c5;color:#9a6700}
-html[data-theme="light"] .tag.low{background:#ddf4ff;color:#0969da}
 .dim{color:var(--dim)}
-.ctrl{background:var(--bg);color:var(--fg);border:1px solid var(--line);
+.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
       border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
 .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
 .ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue)}
-.ctrl-now:hover:not(:disabled){background:rgba(88,166,255,.25)}
+.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
+.ctrl-now:hover:not(:disabled){background:#1c3d5a}
 .foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
 .expand{cursor:pointer;color:var(--blue)}
-.detail{display:none;background:var(--bg-inset);border-left:3px solid var(--orange);padding:8px 12px}
+.detail{display:none;background:#0a0e13;border-left:3px solid var(--orange);padding:8px 12px}
 .detail.show{display:block}
 .path-row{font-family:ui-monospace;font-size:11px;color:var(--dim);padding:2px 0}
 .nav{display:flex;gap:14px;margin-top:8px;font-size:12px}
@@ -135,9 +107,6 @@ html[data-theme="light"] .tag.low{background:#ddf4ff;color:#0969da}
 /* 1.5.4 — click-to-popover for identity details + risk breakdown */
 .cell-click{cursor:pointer;border-bottom:1px dotted var(--blue);position:relative;padding-right:14px}
 .cell-click:hover{color:var(--blue)}
-/* 1.8.6 — score badge click */
-.score-click{cursor:pointer;outline:1px dotted transparent;outline-offset:2px;transition:outline-color .12s}
-.score-click:hover{outline-color:var(--blue);filter:brightness(1.15)}
 /* Persistent ↗ link-icon — signals the value is clickable for a popover. */
 .cell-click::after{
   content:'';display:inline-block;width:10px;height:10px;margin-left:4px;
@@ -159,65 +128,16 @@ html[data-theme="light"] .tag.low{background:#ddf4ff;color:#0969da}
 .popover .kv{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .popover .kv .k{color:var(--dim);text-align:right}
 .popover .kv .v{color:var(--fg);word-break:break-all}
-.popover .rsn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 54px 44px;gap:8px;align-items:center;
+.popover .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:8px;align-items:center;
         padding:3px 0;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11px}
 .popover .rsn:last-child{border-bottom:0}
-.popover .rsn-name{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.popover .rsn-ctrl{color:var(--blue);font-size:10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.popover .rsn-ctrl.dim{color:var(--dim)}
-.popover .rsn-head .rsn-name,.popover .rsn-head .rsn-ctrl,.popover .rsn-head .rsn-val{
-  color:var(--dim);font-weight:600;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px}
-.popover .rsn-bar{height:8px;background:var(--bg-inset);border-radius:3px;overflow:hidden}
+.popover .rsn-name{color:var(--fg)}
+.popover .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
 .popover .rsn-bar>div{height:100%;background:var(--red)}
 .popover .rsn-val{color:var(--red);text-align:right;font-weight:600}
-/* risk-breakdown control column enrichments */
-a.rsn-ctrl{text-decoration:none}
-a.rsn-ctrl:hover{text-decoration:underline}
-.rsn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:#6e7681;vertical-align:middle}
-.rsn-dot.on{background:var(--green)}
-.rsn-dot.off{background:#6e7681}
-.rsn-kv{display:inline-block;font-size:9.5px;background:var(--bg-elevated);color:var(--dim);padding:0 5px;border-radius:3px;margin-left:6px;vertical-align:middle;font-weight:600}
-/* round-3: control cell as flex (dot/link/value), inline quick-toggle, ban header */
-.rsn-ctrl{display:flex;align-items:center;min-width:0}
-.rsn-ctrl-link{color:var(--blue);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:10.5px}
-.rsn-ctrl-link:hover{text-decoration:underline}
-.gw-qd{border:none;padding:0;cursor:pointer;flex-shrink:0}
-.gw-qd:hover{box-shadow:0 0 0 2px rgba(88,166,255,.55)}
-.gw-qd.busy{opacity:.4;cursor:wait}
-.gw-ban-hdr{background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.32);border-radius:6px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.45}
-.gw-ban-line{color:var(--red);font-weight:700;margin-bottom:4px}
-.gw-self{color:var(--yellow);margin-bottom:4px}
-.gw-ban-note{color:var(--dim);margin-bottom:8px}
-.gw-unban{background:var(--red);color:var(--bright);border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
-.gw-unban:hover{filter:brightness(1.12)}
-.gw-unban:disabled{opacity:.55;cursor:default}
-.gw-ban-hdr.gw-cleared{opacity:.6;border-color:var(--green)}
-.rsn-tier{display:inline-block;font-size:8.5px;line-height:1.5;text-transform:uppercase;padding:0 4px;border-radius:3px;margin-left:6px;font-weight:700;vertical-align:middle}
-.rsn-tier.t-info{background:var(--line);color:var(--dim)}
-.rsn-tier.t-soft{background:rgba(210,153,34,.16);color:var(--yellow)}
-.rsn-tier.t-med{background:rgba(219,109,40,.18);color:#e0823a}
-.rsn-tier.t-hard{background:rgba(248,81,73,.16);color:var(--red)}
-.rsn-tier.t-modifier{background:rgba(88,166,255,.14);color:var(--blue)}
 .popover .empty{color:var(--dim);font-style:italic;text-align:center;padding:8px}
-.risk-sig{background:var(--bg);border:1px solid var(--line);border-radius:5px;padding:8px 10px;margin-bottom:6px}
-.risk-sig:last-child{margin-bottom:0}
-.risk-sig .rs-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:3px}
-.risk-sig .rs-name{font-weight:600;font-size:12px;font-family:ui-monospace,Menlo,monospace;color:var(--fg)}
-.risk-sig .rs-score{font-weight:700;font-size:12px;font-family:ui-monospace,Menlo,monospace}
-.risk-sig .rs-desc{font-size:11px;color:var(--dim);margin-bottom:5px}
-.risk-sig .rs-meta{display:flex;gap:14px;font-size:10px;color:var(--dim);margin-bottom:6px;flex-wrap:wrap}
-.risk-sig .rs-meta span b{color:var(--fg)}
-.risk-sig .rs-bar{height:5px;background:#1a1f27;border-radius:3px;overflow:hidden}
-html[data-theme="light"] .risk-sig .rs-bar{background:var(--bg-inset)}
-html[data-theme="light"] .act.authbot{background:rgba(188,140,255,.15);color:#8250df}
-.risk-sig .rs-bar>div{height:100%;border-radius:3px;background:#f85149}
-.risk-sig .rs-sev{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px}
-.risk-sig .rs-cat{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px}
-.risk-sig .rs-divider{height:1px;background:var(--line);margin:6px 0}
-.risk-sig .rs-action{font-size:10px;color:var(--dim);margin-top:6px;padding-top:5px;border-top:1px solid var(--line)}
-.risk-sig .rs-action b{color:var(--fg)}
 .act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
-.act.ban{background:rgba(248,81,73,.15);color:#f85149}.act.hban{background:rgba(163,113,247,.15);color:#a371f7}.act.allow{background:rgba(63,185,80,.15);color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
+.act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
 
 /* column-header tooltip */
 .col-tip-i{font-style:normal;font-weight:400;font-size:9px;
@@ -232,12 +152,6 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
-.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
-.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--bg-hover);margin-bottom:8px}
-.gw-meta .chip{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
-.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
-.gw-row.row-ok{opacity:.6}
-.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
 </style></head>
 <body>
 <style>
@@ -254,44 +168,37 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
 .cat-pill[data-cat="gwmgmt"]{border-color:#e4f0ff;color:#e4f0ff}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
-.cat-pill.active[data-cat="ban"]{background:#f85149;color:var(--bright)}
-.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:var(--bright)}
+.cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
+.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
 .cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
-.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:var(--bg-deep)}
-#vhost-bar{display:none;gap:6px;margin:0 0 6px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;scrollbar-width:thin;padding-bottom:2px}
+.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:#0a1628}
+#vhost-bar{display:none;gap:6px;margin:0 0 6px;flex-wrap:wrap;align-items:center}
 #vhost-bar-label{font-size:11px;color:var(--dim);margin-right:2px}
 .vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #58a6ff;color:#58a6ff;
   background:transparent;cursor:pointer;font-size:12px;font-weight:600;
   transition:background .15s,color .15s;line-height:1.6;max-width:220px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.vhost-pill.active{background:#58a6ff;color:var(--bg-deep)}
+.vhost-pill.active{background:#58a6ff;color:#0a1628}
 </style>
-<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
-<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
-<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
-<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div>
-      <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.13</div>
-    </div>
-    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
+    <div id="sidebar-brand-name">AppSecGW</div>
+    <div id="sidebar-brand-ver">1.8.4</div>
   </div>
   <nav id="sidebar-nav">
-    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub active">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
-    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
+    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -303,9 +210,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Agents <span class="pill" id="live">● LIVE</span></div>
-  <div id="topbar-right">
-    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
-  </div>
+  <div id="topbar-right"></div>
 </div>
 <div id="page-content">
 
@@ -411,7 +316,6 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </table>
   </div>
 
-
 </div>
 
 <div class="foot">refreshes every 3 s · <code id="ts"></code></div>
@@ -427,53 +331,9 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 </div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
-<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
 <script>
-window._applyChartColorsToInstance=function(c,theme){
-  var L=theme==='light',gc=L?'rgba(0,0,0,.08)':'#21262d',tc=L?'#636e7b':'#8b949e',lc=L?'#636e7b':'#c9d1d9',tbg=L?'#ffffff':'#161b22',tbc=L?'#d0d7de':'#30363d',ttc=L?'#1f2328':'#c9d1d9';
-  try{
-    var sc=c.options.scales||{};
-    Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});
-    var p=c.options.plugins||{};
-    if(p.legend&&p.legend.labels)p.legend.labels.color=lc;
-    if(p.tooltip){p.tooltip.backgroundColor=tbg;p.tooltip.borderColor=tbc;p.tooltip.titleColor=ttc;p.tooltip.bodyColor=ttc;}
-    c.update('none');
-  }catch(e){}
-};
-if(typeof Chart!=='undefined'){
-  Chart.register({id:'_gwTheme',afterInit:function(c){
-    window._applyChartColorsToInstance(c,document.documentElement.getAttribute('data-theme')||'dark');
-  }});
-}
-</script>
-<script>
-// Inject X-CSRF-Token automatically for every state-mutating same-origin request.
-(function() {
-  const _orig = window.fetch;
-  function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}
-  window.fetch = function(resource, init) {
-    const m = ((init && init.method) || 'GET').toUpperCase();
-    if (m === 'GET' || m === 'HEAD') return _orig.call(this, resource, init);
-    init = init || {};
-    init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': _agwTok()});
-    const _self = this;
-    return _orig.call(_self, resource, init).then(function(resp){
-      if (resp.status !== 403) return resp;
-      // Stale CSRF token (session rotated, or CDN HttpOnly'd the cookie) —
-      // refresh from the server and retry once so operators never clear cookies.
-      return _orig.call(_self, '/antibot-appsec-gateway/secured/csrf', {credentials:'include'})
-        .then(function(r){ return r.ok ? r.json() : null; })
-        .then(function(j){
-          if (!j || !j.token || j.token === _agwTok()) return resp;
-          window.__AGW_CSRF__ = j.token;
-          init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': j.token});
-          return _orig.call(_self, resource, init);
-        }).catch(function(){ return resp; });
-    });
-  };
-}());
-
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
   if (/^<t[rhd]/i.test((h||'').trimStart())) {
@@ -483,7 +343,7 @@ const _dp = (h) => {
   }
   return DOMPurify.sanitize(h);
 };
-function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--card,#1e1e2e);border:1px solid var(--red,#f85149);color:var(--fg,#e6edf3);padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.25)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
+function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:#1e1e2e;border:1px solid #f85149;color:#e6edf3;padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.5)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
 const _timers=[];
 function bandClass(s){return s>=80?'crit':s>=60?'high':s>=40?'med':'low'}
 
@@ -797,7 +657,7 @@ async function tick(){
           </div>`;
         return `
           <tr>
-            <td><span class="tag score-click ${bandClass(s.stealth_score)}" data-pop="score" data-i="${i}" title="click for score breakdown">${s.stealth_score}</span>${compBar}</td>
+            <td><span class="tag ${bandClass(s.stealth_score)}">${s.stealth_score}</span>${compBar}</td>
             <td>${agBadge}</td>
             <td><b class="cell-click" data-pop="id" data-i="${i}" title="click for full identity details">${escapeHtml((s.id||'').slice(0,12))}</b><div class="dim" style="font-size:10px">${fmtAge(s.first_seen_secs_ago)}</div></td>
             <td title="${escapeHtml(s.ua)}">${escapeHtml((s.ua||'').slice(0,40))}</td>
@@ -908,8 +768,8 @@ async function tick(){
         const r = document.getElementById('d-'+el.dataset.i);
         r.style.display = (r.style.display==='none')?'table-row':'none';
       });
-      // 1.5.4 — click identity / risk / score to open popover
-      tbody.querySelectorAll('.cell-click, .score-click').forEach(el=>{
+      // 1.5.4 — click identity / risk to open popover
+      tbody.querySelectorAll('.cell-click').forEach(el=>{
         el.onclick = (ev)=>{
           const i = +el.dataset.i;
           const s = (window._suspectsList || d.suspects)[i]; if(!s) return;
@@ -1308,7 +1168,7 @@ async function openBucketDetail(bucketEntry, bucketSecs, datasetIndex){
     const body = sections.map(s => {
       const isFocus = s.kind === focusKind;
       const border  = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
-      return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:var(--bg)">
+      return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
         <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
           ${escapeHtml(s.label)} <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
         </h3>
@@ -1436,55 +1296,6 @@ window._gwIdentityPopover = (function(){
     if (s < 86400)return (s/3600).toFixed(1)+'h ago';
     return (s/86400).toFixed(1)+'d ago';
   }
-  function _fmtdur(s){ s=Math.max(0,s|0);
-    if(s>=86400)return (s/86400).toFixed(1)+'d';
-    if(s>=3600)return (s/3600).toFixed(1)+'h';
-    if(s>=60)return Math.round(s/60)+'m';
-    return s+'s'; }
-  // reason → controlling knob map, lazily loaded from the scoring endpoint.
-  // null value = detection signal with no kill-switch (always-on); a reason
-  // absent from the map is not a tunable detection (e.g. a ban outcome).
-  let _knobMap = null;
-  let _knobState = {};
-  let _knobPage = {};
-  let _signalMeta = {};
-  function _loadKnobs(force){
-    if (_knobMap !== null && !force) return Promise.resolve();
-    if (_knobMap === null) _knobMap = {};  // mark in-flight so we don't double-fetch
-    return fetch('/antibot-appsec-gateway/secured/scoring', {credentials:'include'})
-      .then(r => r.ok ? r.json() : null)
-      .then(d => {
-        if (!d) return;
-        // Prefer the full reason→knob map (covers synthetic reasons like
-        // chal-required / pow-required); fall back to weights[].toggle.
-        if (d.signal_knob && typeof d.signal_knob === 'object') {
-          _knobMap = d.signal_knob;
-        } else if (Array.isArray(d.weights)) {
-          const m = {};
-          d.weights.forEach(w => { if (w && w.signal) m[w.signal] = w.toggle || null; });
-          _knobMap = m;
-        }
-        if (d.knob_state  && typeof d.knob_state  === 'object') _knobState  = d.knob_state;
-        if (d.knob_page   && typeof d.knob_page   === 'object') _knobPage   = d.knob_page;
-        if (d.signal_meta && typeof d.signal_meta === 'object') _signalMeta = d.signal_meta;
-      })
-      .catch(() => {});
-  }
-  function _ctrlCell(reason){
-    // {knob, kind, on, display, page, text, dim} for the control column.
-    if (_knobMap && (reason in _knobMap)) {
-      const knob = _knobMap[reason];
-      if (knob) {
-        const st = _knobState[knob] || {};
-        return {knob: knob, kind: st.kind || 'bool', on: !!st.on,
-                display: st.display || '', page: _knobPage[knob] || 'controls',
-                text: knob, dim: false};
-      }
-      return {knob: null, on: null, text: 'always-on', dim: true};  // mandatory gate
-    }
-    return {knob: null, on: null, text: '—', dim: true};
-  }
-  function _reasonMeta(reason){ return _signalMeta[reason] || {}; }
   function normalizeId(raw){
     const bbd = Array.isArray(raw.blocks_breakdown)
       ? raw.blocks_breakdown
@@ -1510,9 +1321,6 @@ window._gwIdentityPopover = (function(){
       tokens:           raw.tokens != null ? raw.tokens : null,
       blocks_breakdown: bbd,
       risk_breakdown:   raw.risk_breakdown || null,
-      components:       raw.components || {},
-      metrics:          raw.metrics    || {},
-      score_source:     raw.score_source || 'stealth',
     };
   }
   function buildIdHtml(d){
@@ -1557,849 +1365,31 @@ window._gwIdentityPopover = (function(){
     const isWeighted = !!d.risk_breakdown;
     const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
     const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
-    const head = breakdown.length
-      ? `<div class="rsn rsn-head">
-           <span class="rsn-name">signal</span>
-           <span class="rsn-ctrl">control</span>
-           <span></span>
-           <span class="rsn-val">${isWeighted?'risk':'hits'}</span></div>`
-      : '';
     const rows = breakdown.length
       ? breakdown.map(([reason, val])=>{
           const pct = (val/total*100).toFixed(0);
-          const ctrl = _ctrlCell(reason);
-          const meta = _reasonMeta(reason);
-          const tier = meta.tier ? `<span class="rsn-tier t-${escapeHtml(meta.tier)}">${escapeHtml(meta.tier)}</span>` : '';
-          const rdesc = meta.desc ? escapeHtml(meta.desc) : escapeHtml(reason);
-          let ctrlHtml;
-          if (ctrl.knob) {
-            const page = (ctrl.page === 'settings') ? 'settings' : 'controls';
-            const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(ctrl.knob);
-            const lnk = `<a class="rsn-ctrl-link" href="${href}" title="${escapeHtml(ctrl.knob)} · open in ${page==='settings'?'Settings':'Controls'}">${escapeHtml(ctrl.knob)}</a>`;
-            if (ctrl.kind === 'bool') {
-              // the dot doubles as a quick-toggle button (disable/enable in place)
-              const qd = `<button class="gw-qd rsn-dot ${ctrl.on?'on':'off'}" data-qd-knob="${escapeHtml(ctrl.knob)}" data-qd-on="${ctrl.on?'1':'0'}" title="${ctrl.on?'Disable':'Enable'} ${escapeHtml(ctrl.knob)} now"></button>`;
-              ctrlHtml = `<span class="rsn-ctrl">${qd}${lnk}</span>`;
-            } else {
-              const vb = ctrl.display ? `<span class="rsn-kv">${escapeHtml(ctrl.display)}</span>` : '';
-              ctrlHtml = `<span class="rsn-ctrl">${lnk}${vb}</span>`;
-            }
-          } else {
-            ctrlHtml = `<span class="rsn-ctrl dim" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>`;
-          }
           return `<div class="rsn">
-            <span class="rsn-name" title="${rdesc}">${escapeHtml(reason)}${tier}</span>
-            ${ctrlHtml}
+            <span class="rsn-name">${escapeHtml(reason)}</span>
             <div class="rsn-bar"><div style="width:${pct}%"></div></div>
             <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
       : `<div class="empty">no contributing signals (score may be from already-decayed events)</div>`;
-    let banHdr = '';
-    if (d.banned_secs > 0) {
-      const really = d.banned_secs > 86400;
-      const topRsn = breakdown.length ? escapeHtml(breakdown[0][0]) : '';
-      banHdr = `<div class="gw-ban-hdr">
-        <div class="gw-ban-line">\ud83d\udd34 ${really?'Really Banned':'Banned'} · ≈${_fmtdur(d.banned_secs)} left${topRsn?` · likely tripped <b>${topRsn}</b>`:''}</div>
-        ${d.is_admin_ip ? `<div class="gw-self">⚠ Looks like an operator session (admin IP) — probably a self-ban from testing.</div>` : ''}
-        <div class="gw-ban-note">Live risk <b>${rs}</b> is the decaying score; the ban is a separate ${really?'extended':'24h'} entry and does <b>not</b> decay with it.</div>
-        <button class="gw-unban" data-unban-id="${escapeHtml(d.id)}" data-unban-ip="${escapeHtml(d.ip)}">Unban this identity</button>
-      </div>`;
-    }
     return `
-      ${banHdr}
       <div class="dim" style="margin-bottom:8px">
         Live risk: <b style="color:var(--red)">${rs}</b> ·
         decays at half-life 1h ·
         ban threshold ≥ 50 (≥100 for NAT)
       </div>
-      ${head}${rows}`;
+      ${rows}`;
   }
-  // Wire interactive actions inside a freshly-rendered risk modal (DOMPurify
-  // strips inline handlers, so we attach them to the live nodes here).
-  function wireRiskActions(container, d){
-    if (!container) return;
-    container.querySelectorAll('.gw-unban').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        const id = btn.getAttribute('data-unban-id') || '';
-        const ip = btn.getAttribute('data-unban-ip') || '';
-        if (!window.confirm('Unban this identity?\n\n' + (id || ip))) return;
-        btn.disabled = true; btn.textContent = 'Unbanning…';
-        const payload = id ? {id:id} : {ip:ip};
-        fetch('/antibot-appsec-gateway/secured/unban', {method:'POST', credentials:'include',
-          headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)})
-          .then(function(r){ return r.ok ? r.json() : null; })
-          .then(function(j){
-            if (j && j.cleared !== undefined){
-              btn.textContent = '✓ Unbanned (' + (j.cleared||0) + ')';
-              const hdr = btn.closest('.gw-ban-hdr'); if (hdr) hdr.classList.add('gw-cleared');
-            } else { btn.textContent = 'Failed'; btn.disabled = false; }
-          })
-          .catch(function(){ btn.textContent = 'Failed'; btn.disabled = false; });
-      });
-    });
-    container.querySelectorAll('.gw-qd').forEach(function(btn){
-      btn.addEventListener('click', function(){
-        const knob = btn.getAttribute('data-qd-knob');
-        const on = btn.getAttribute('data-qd-on') === '1';
-        const next = !on;
-        if (!window.confirm((next?'Enable':'Disable') + ' ' + knob + ' now?')) return;
-        btn.classList.add('busy');
-        const body = {}; body[knob] = next;
-        fetch('/antibot-appsec-gateway/secured/config', {method:'POST', credentials:'include',
-          headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
-          .then(function(r){ return r.ok ? r.json() : null; })
-          .then(function(j){
-            btn.classList.remove('busy');
-            if (j && j.applied && Object.keys(j.applied).length){
-              btn.classList.toggle('on', next); btn.classList.toggle('off', !next);
-              btn.setAttribute('data-qd-on', next?'1':'0');
-              btn.title = (next?'Disable':'Enable') + ' ' + knob + ' now';
-            }
-          })
-          .catch(function(){ btn.classList.remove('busy'); });
-      });
-    });
-  }
-  _loadKnobs();  // warm the reason→control map so it's ready when a modal opens
-  return { normalizeId, buildIdHtml, buildRiskHtml, wireRiskActions,
-           refreshKnobs: function(){ return _loadKnobs(true); },
-           signalKnob: function(){ return _knobMap || {}; },
-           knobPage: function(){ return _knobPage || {}; } };
+  return { normalizeId, buildIdHtml, buildRiskHtml };
 })();
-
-// 1.8.6 — risk signal metadata (mirrors config.py RISK_WEIGHTS)
-const RISK_WEIGHTS_JS = {
-  "honeypot":50,"honeypot-silent":50,"suspicious-path":50,"ai-probe":40,
-  "ai-enumeration":30,"behavior":8,"ua-empty":30,"ua-blocked":20,
-  "ua-non-browser":25,"ai-headers-empty":20,"ua-too-short":15,
-  "ai-headers-incomplete":10,"upstream-404":6,"ai-no-assets":8,
-  "session-flood":10,"host-not-allowed":40,"suspicious-body":40,
-  "bot-trap":50,"canary-echo":80,"session-churn":75,"js-challenge":3,
-  "tls-fingerprint":40,"origin-mismatch":20,"missing-required-header":15,
-  "ua-platform-mismatch":30,"accept-wildcard-html":2,"accept-fp":3,
-  "ja4-required-missing":3,"headers-suspicious":2,"abuseipdb-high":50,
-  "abuseipdb-med":20,"crowdsec-banned":70,"asn-hosting":5,"country-blocked":50,
-  "tor-exit":40,"datacenter-vpn":25,"ua-ai-openai":25,"ua-ai-anthropic":25,
-  "ua-ai-google":25,"ua-ai-perplexity":25,"ua-ai-meta":25,"ua-ai-other":20,
-  "custom-rule-block":50,"body-sqli":50,"body-xss":50,"body-lfi":50,
-  "body-rce":50,"body-ssrf":50,"body-cmd":50,"auth-jwt-invalid":30,
-  "slow-client":10,"botd-detected":30,"tarpit-walk":100,"header-order-fp":8,
-  "ai-ua-ip-mismatch":30,"locale-geo-mismatch":10,"robots-violation":5,
-  "h2-fp":3,"webdriver-detected":30,"coordinated-probe":25,"direct-api-probe":15,
-  "cookie-ghost":20,"lifecycle-miss":12,"referer-ghost":10,"impossible-travel":35,
-  "soft-renderer":25,"webgl-missing":15,"honey-cred":90,
-  "llm-no-subresources":40,"canary-probe-miss":35,"body-critical-injection":80,
-  "method-override-attempt":35,"smuggling-dual-header":90,"smuggling-invalid-te":90,
-  "smuggling-obfuscated-te":90,"smuggling-duplicate-cl":90,"body-xxe":80,
-  "body-proto-pollution":50,"header-ssti":50,"host-header-injection":40,
-  "gql-introspection":20,"gql-batch-abuse":40,"gql-depth-exceeded":30,
-  "upload-dangerous-ext":60,"upload-dangerous-magic":70,"upstream-auth-fail":40,
-  "ja4h-deny":90,"no-interaction":20,"bot-motion":25,"scripted-motion":20,
-  "bot-scroll":15,"scripted-keys":15,"low-entropy-input":15
-};
-const RISK_LABELS_JS = {
-  "honeypot":"Accessed honeypot endpoint","honeypot-silent":"Accessed silent honeypot",
-  "suspicious-path":"Requested known-bad path","ai-probe":"AI/LLM probing pattern",
-  "ai-enumeration":"Path enumeration (scraper)","behavior":"Anomalous behavior pattern",
-  "ua-empty":"No User-Agent header","ua-blocked":"Blocked User-Agent",
-  "ua-non-browser":"Non-browser User-Agent","ai-headers-empty":"Missing expected browser headers",
-  "ua-too-short":"User-Agent suspiciously short","ai-headers-incomplete":"Incomplete browser header set",
-  "upstream-404":"Probing non-existent paths","ai-no-assets":"HTML fetched, no static assets",
-  "session-flood":"Session creation flood","host-not-allowed":"Host header not in allowlist",
-  "suspicious-body":"Request body matched attack pattern","bot-trap":"Triggered bot-trap endpoint",
-  "canary-echo":"Echoed injected canary token","session-churn":"Rapid session cycling",
-  "js-challenge":"Failed JS challenge","tls-fingerprint":"TLS fingerprint matches known bot",
-  "origin-mismatch":"Origin/Referer mismatch","missing-required-header":"Required header absent",
-  "ua-platform-mismatch":"UA platform ≠ TLS/HTTP fingerprint",
-  "accept-wildcard-html":"Accept: */* on HTML request","accept-fp":"Accept header fingerprint mismatch",
-  "abuseipdb-high":"AbuseIPDB high-confidence abuse IP","abuseipdb-med":"AbuseIPDB medium-confidence abuse IP",
-  "crowdsec-banned":"CrowdSec community blocklist hit","asn-hosting":"Hosting/cloud provider ASN",
-  "country-blocked":"Country in blocklist","tor-exit":"Tor exit node",
-  "datacenter-vpn":"Datacenter or VPN IP","ua-ai-openai":"OpenAI crawler UA",
-  "ua-ai-anthropic":"Anthropic crawler UA","ua-ai-google":"Google AI crawler UA",
-  "ua-ai-perplexity":"Perplexity crawler UA","ua-ai-meta":"Meta AI crawler UA",
-  "ua-ai-other":"AI crawler UA (other)","custom-rule-block":"Matched custom rule",
-  "body-sqli":"SQL injection in body","body-xss":"XSS payload in body",
-  "body-lfi":"LFI/path traversal in body","body-rce":"RCE payload in body",
-  "body-ssrf":"SSRF payload in body","body-cmd":"Command injection in body",
-  "auth-jwt-invalid":"Invalid/forged JWT token","slow-client":"Abnormally slow client (Slowloris?)",
-  "botd-detected":"Bot detection library flagged","tarpit-walk":"Walked into tarpit",
-  "header-order-fp":"HTTP header order fingerprint mismatch",
-  "ai-ua-ip-mismatch":"AI UA but IP is residential","locale-geo-mismatch":"Accept-Language ≠ IP geolocation",
-  "robots-violation":"Accessed robots.txt-disallowed path","h2-fp":"HTTP/2 fingerprint mismatch",
-  "webdriver-detected":"WebDriver/automation detected","coordinated-probe":"Coordinated multi-IP probing",
-  "direct-api-probe":"Direct API probe (no browser flow)","cookie-ghost":"Cookie sent but never set by server",
-  "lifecycle-miss":"Request lifecycle anomaly","referer-ghost":"Referer to page never served",
-  "impossible-travel":"Impossible geographic travel speed","soft-renderer":"Software renderer (headless)",
-  "webgl-missing":"WebGL absent (headless indicator)","honey-cred":"Used injected fake credentials",
-  "llm-no-subresources":"HTML fetched, no CSS/JS/images",
-  "canary-probe-miss":"Canary preload never fetched","body-critical-injection":"Critical injection in body",
-  "method-override-attempt":"HTTP method override attempt","smuggling-dual-header":"Request smuggling (dual header)",
-  "smuggling-invalid-te":"Request smuggling (invalid TE)","smuggling-obfuscated-te":"Request smuggling (obfuscated TE)",
-  "smuggling-duplicate-cl":"Request smuggling (duplicate CL)","body-xxe":"XXE injection in body",
-  "body-proto-pollution":"Prototype pollution in body","header-ssti":"SSTI payload in header",
-  "host-header-injection":"Host header injection attempt","gql-introspection":"GraphQL introspection query",
-  "gql-batch-abuse":"GraphQL batch query abuse","gql-depth-exceeded":"GraphQL query depth exceeded",
-  "upload-dangerous-ext":"Dangerous file extension uploaded","upload-dangerous-magic":"Dangerous file magic bytes",
-  "upstream-auth-fail":"Auth failure (credential stuffing)","ja4h-deny":"JA4H fingerprint in deny list",
-  "no-interaction":"No human interaction signals","bot-motion":"Bot-like mouse movement",
-  "scripted-motion":"Scripted/automated mouse movement","bot-scroll":"Bot-like scroll pattern",
-  "scripted-keys":"Scripted keystroke pattern","low-entropy-input":"Low-entropy keyboard input"
-};
-const RISK_BAN_THRESHOLD = 50;
-
-// Block reason labels and descriptions (block_count synthetic score)
-const BLOCK_LABELS_JS = {
-  "admin-ip-blocked":        "Admin endpoint — IP not in allowlist",
-  "internal-probe":          "Admin namespace probe (legacy label)",
-  "admin-probe":             "Admin namespace probe — no session",
-  "operator-self":           "Operator browser — session lapsed",
-  "operator-passthrough":    "Operator dashboard access (authenticated)",
-  "ua-blocked":              "User-Agent explicitly blocked",
-  "ua-empty":                "No User-Agent header",
-  "ua-too-short":            "User-Agent suspiciously short",
-  "ua-non-browser":          "Non-browser User-Agent",
-  "banned":                  "Risk threshold exceeded — hard ban",
-  "banned-silent":           "Risk threshold exceeded — silent ban",
-  "honeypot":                "Honeypot endpoint accessed",
-  "honeypot-silent":         "Silent honeypot accessed",
-  "suspicious-path":         "Known-bad path requested",
-  "bot-trap":                "Bot trap triggered",
-  "canary-echo":             "Canary token echoed back",
-  "ai-probe":                "AI/LLM probing pattern",
-  "ai-enumeration":          "Path enumeration (scraper)",
-  "ai-no-assets":            "HTML-only fetch (no assets)",
-  "ai-headers-empty":        "Missing browser headers",
-  "ai-headers-incomplete":   "Incomplete browser headers",
-  "behavior":                "Anomalous behavior pattern",
-  "session-flood":           "Session creation flood",
-  "rate-limit-ip":           "IP rate limit exceeded",
-  "rate-limit":              "Global rate limit exceeded",
-  "host-not-allowed":        "Host header not in allowlist",
-  "js-challenge":            "JS challenge failed",
-  "tls-fingerprint":         "TLS fingerprint blocked",
-  "origin-mismatch":         "Origin/Referer mismatch",
-  "missing-required-header": "Required header absent",
-  "suspicious-body":         "Attack pattern in request body",
-  "body-sqli":               "SQL injection attempt",
-  "body-xss":                "XSS payload detected",
-  "body-rce":                "RCE payload detected",
-  "body-lfi":                "LFI/path traversal attempt",
-  "body-ssrf":               "SSRF payload detected",
-  "body-cmd":                "Command injection detected",
-  "ua-platform-mismatch":    "UA platform / TLS fingerprint mismatch",
-  "crowdsec-banned":         "CrowdSec community blocklist hit",
-  "abuseipdb-high":          "AbuseIPDB high-confidence abuse",
-  "country-blocked":         "Country in blocklist",
-  "tor-exit":                "Tor exit node",
-  "custom-rule-block":       "Custom operator rule matched",
-  "tarpit-walk":             "Tarpit chain followed",
-  "honey-cred":              "Honeypot credentials submitted",
-  "smuggling-dual-header":   "HTTP request smuggling attempt",
-  "upload-dangerous-ext":    "Dangerous file extension upload",
-  "upstream-auth-fail":      "Auth failure (credential stuffing)",
-  "ja4h-deny":               "JA4H fingerprint in deny list",
-  "no-interaction":          "No human interaction signals",
-  "webdriver-detected":      "WebDriver/automation detected",
-  "chal-required":           "JS challenge issued (interstitial)",
-  "fp-banned":               "Hard fingerprint ban (JA3/JA4 deny list)",
-  "rate-limit-endpoint":     "Per-endpoint rate limit exceeded",
-  "traffic-threshold":       "Traffic volume threshold exceeded",
-  "dlp-cc":                  "DLP: credit card number detected",
-  "dlp-aws":                 "DLP: AWS access key detected",
-  "dlp-jwt":                 "DLP: JWT token in unexpected location",
-  "dlp-private-key":         "DLP: private key pattern detected",
-  "dlp-api-key":             "DLP: API key pattern detected",
-  "dlp-pii-email":           "DLP: email address pattern detected",
-  "dlp-pii-ssn":             "DLP: SSN pattern detected",
-  "labyrinth-jitter":        "Labyrinth timing jitter — automated traversal",
-  "header-canary":           "Response header canary echoed back",
-  "json-canary":             "JSON body canary echoed back",
-  "bypass-path":             "Bypass rule applied",
-};
-const BLOCK_DETAIL_JS = {
-  "admin-ip-blocked": "This IP attempted to access gateway admin or management endpoints, but its address is not in the configured ADMIN_ALLOWED_IPS list. Admin paths require explicit IP-based access control — authentication credentials alone are insufficient. This is normal for scanners and crawlers that probe all paths, including management interfaces.",
-  "ua-blocked": "The User-Agent string matched an entry in the gateway's explicit blocklist. This is a hard block applied before any behavioral analysis — the UA string is associated with a known scanner, malicious tool, or explicitly banned client.",
-  "ua-empty": "The HTTP request arrived with no User-Agent header. The gateway is configured to reject header-less requests because every legitimate browser and API client sends this header unconditionally. This is typically a raw HTTP client, CLI tool, or severely misconfigured automation.",
-  "ua-too-short": "The User-Agent string is abnormally short — fewer characters than any real browser or common library would send. Often a placeholder ('bot', 'test', '-') or truncated value from automation that doesn't bother setting a realistic UA.",
-  "ua-non-browser": "The User-Agent does not match any known browser family. The gateway identified it as a non-browser tool (curl, Python requests, Go HTTP, Scrapy, etc.) and blocked based on policy. This identity was never attempting to browse — it was issuing raw HTTP requests.",
-  "banned": "The identity's accumulated risk score exceeded the ban threshold (50 pts for single IPs, 100 pts for NAT-detected IPs). This is a hard ban applied by the risk engine after multiple scored signals triggered within the decay window. All subsequent requests from this identity are blocked for the ban duration.",
-  "banned-silent": "Same as a hard ban — risk threshold exceeded — but the IP receives normal-looking responses rather than an explicit block page. The 'silent' treatment is used to avoid alerting sophisticated bots that they've been detected, allowing continued passive observation.",
-  "honeypot": "The IP accessed a honeypot endpoint — a fake URL designed to catch automated scanners. The link is present in the HTML but unreachable for legitimate users following normal navigation. This block is applied immediately on first access and is near-conclusive evidence of automation.",
-  "honeypot-silent": "Same as a honeypot block but the response mimics a legitimate page to prevent the scanner from detecting that it was caught. The block is still applied; only the response appearance differs.",
-  "suspicious-path": "A request was made to a path matching a known-bad pattern database (/.env, /wp-admin, /.git, /actuator, /phpinfo, etc.). These paths are never part of legitimate application navigation — their presence indicates an automated vulnerability scanner running through a known-exploit path list.",
-  "bot-trap": "A trap link hidden from human visitors (via CSS or aria attributes) was followed. Legitimate users scrolling and clicking normally never encounter these links. Only bots parsing raw HTML and following all hrefs regardless of visibility trigger this block.",
-  "ai-probe": "Traffic pattern matched AI/LLM scraping heuristics — rapid sequential requests, no asset loading, systematic path coverage, and timing statistics inconsistent with human browsing. The gateway blocked after accumulating enough signal to classify as a scraper.",
-  "ai-enumeration": "The ratio of unique paths to total requests exceeded the enumeration threshold. The client was systematically visiting many distinct URLs relative to its request count — a classic web scraper or sitemap walker signature.",
-  "behavior": "Cumulative behavioral anomaly score exceeded the block threshold. This represents multiple sub-threshold signals that individually wouldn't trigger a block but collectively indicate automation with high confidence.",
-  "session-flood": "New session creation rate from this IP exceeded the configured limit. This pattern is associated with automated account creation, credential stuffing across many accounts, or session token harvesting.",
-  "rate-limit-ip": "The per-IP request rate limit was exceeded. This IP sent too many requests in the configured time window. May be aggressive automation, a misconfigured client, or an intentional flood.",
-  "rate-limit": "The global request rate limit was exceeded. This is a catch-all rate limiter applied when request volume from this identity is too high regardless of IP-specific limits.",
-  "host-not-allowed": "The Host header in the request refers to a domain not in the gateway's allowlist. The gateway only proxies requests for configured domains; other Host values are rejected. This may indicate virtual host scanning or a misconfigured client.",
-  "js-challenge": "The JavaScript proof-of-work challenge was failed, timed out, or not attempted. The gateway issued a challenge page that requires executing JavaScript to generate a valid response token. Bots, headless browsers with JS disabled, and some automated clients fail this.",
-  "tls-fingerprint": "The TLS handshake fingerprint (JA3 hash) matched an entry in the block list. JA3 fingerprints are computed from TLS cipher suites, extensions, and elliptic curves — each TLS library/browser has a distinct fingerprint. This client's fingerprint is associated with a known bot or scanner.",
-  "suspicious-body": "The request body matched an attack heuristic pattern at a confidence level sufficient to block. This may be a partial injection payload, encoded attack string, or a pattern consistent with vulnerability scanning tools.",
-  "crowdsec-banned": "The CrowdSec community blocklist flagged this IP as a known malicious actor. CrowdSec aggregates real-time detections across thousands of deployments; inclusion in this list means the IP has been actively attacking other systems.",
-  "abuseipdb-high": "AbuseIPDB reports this IP with high confidence (score >= 90%) as a known abusive actor based on community reports of hacking attempts, scanning, brute-force attacks, and spam. The high confidence threshold means many independent reporters have flagged this IP.",
-  "country-blocked": "The source country is in the operator's geographic blocklist. This is a policy-level block applied before behavioral analysis.",
-  "tor-exit": "The IP is a known Tor exit node. Tor is frequently used to anonymize malicious activity. The gateway blocked this request based on Tor exit node detection.",
-  "custom-rule-block": "A custom operator-defined rule matched this request. See the Rules dashboard for the specific rule definition and trigger conditions.",
-  "tarpit-walk": "The client followed a chain of deliberately slow recursive redirect links into the gateway's tarpit. Only automated clients following all links mechanically trigger this — the chains are too obscure for human users to encounter.",
-  "honey-cred": "The client submitted credentials injected as a honeypot — fake username/password values embedded in the DOM that are invisible to humans but readable by form-filling automation. This is conclusive proof of automated form interaction.",
-  "webdriver-detected": "Browser automation via WebDriver was detected through JavaScript environment properties exposed by the automation framework (navigator.webdriver, modified chrome APIs, etc.).",
-  "no-interaction": "No human interaction signals (mouse movement, scrolling, keyboard events, focus changes) were detected during the session, and the absence triggered a policy block. Consistent with a headless browser.",
-  "upstream-auth-fail": "The upstream application returned authentication failures at a rate exceeding the credential stuffing threshold. The gateway blocked after detecting a brute-force or credential stuffing pattern.",
-  "ja4h-deny": "The JA4H HTTP fingerprint — derived from the HTTP header ordering, Accept-Language values, and header presence — matched a deny list entry. JA4H is more stable than JA3 across TLS versions and captures HTTP-layer bot signatures.",
-  "chal-required": "The gateway issued a JavaScript proof-of-work challenge to this identity. The block represents the challenge interstitial — the visitor must solve it before continuing. Repeated appearances indicate the challenge is being failed or retried.",
-  "fp-banned": "A hard fingerprint-based ban was applied. The IP's TLS (JA3/JA4) or HTTP fingerprint matched an entry in the deny list, triggering an immediate block without requiring accumulated risk score. More severe than a risk-score ban.",
-  "rate-limit-endpoint": "A per-endpoint rate limit was exceeded. This limit applies to a specific path or endpoint rather than global request rate, typically used to protect high-value endpoints like login, search, or API routes from excessive automated access.",
-  "traffic-threshold": "The total traffic volume from this IP exceeded the configured threshold. Unlike per-request rate limiting, this is a volume-based check across all endpoints within a time window.",
-  "dlp-cc": "A credit card number pattern was detected in the request. The Data Loss Prevention (DLP) engine flagged this to prevent card data exfiltration or testing of payment systems.",
-  "dlp-aws": "An AWS access key pattern was detected in the request body or headers. May indicate credential leakage, a misconfigured client sending keys in requests, or an attacker testing leaked credentials.",
-  "dlp-jwt": "A JWT token was detected being sent in an unexpected location — potentially a leaked or replayed credential being tested against the API.",
-  "dlp-private-key": "A PEM-encoded private key pattern was detected in the request. Possible credential leakage or deliberate exfiltration attempt.",
-  "dlp-api-key": "A generic API key pattern was detected in the request. May indicate credential testing, a misconfigured client, or an attacker using a leaked key.",
-  "dlp-pii-email": "An email address pattern was detected in a location inconsistent with normal application flow. May indicate scraping of user data or testing of enumeration endpoints.",
-  "dlp-pii-ssn": "A Social Security Number (SSN) pattern was detected in the request. Possible data exfiltration, form fuzzing with PII, or testing of identity verification endpoints.",
-  "labyrinth-jitter": "Timing jitter analysis on the client's navigation through the AI Labyrinth indicated automated traversal. The jitter pattern doesn't match human click latency distributions.",
-  "header-canary": "A canary token injected into a response header was echoed back in a subsequent request. This proves the client is reading and replaying response headers — a capability unique to scripted clients.",
-  "json-canary": "A canary token injected into a JSON response body was echoed back by the client. This confirms the client is parsing JSON responses and extracting values — not a passive HTTP client.",
-  "bypass-path": "The request matched a configured bypass rule that exempts this path from normal gateway inspection. This appears in block logs when the bypass interacts with other active rules.",
-  "internal-probe": "Legacy label (pre-1.8.10) for a request to the gateway's own admin namespace (/antibot-appsec-gateway/secured/…) from an allow-listed IP that carried no valid operator session. As of 1.8.10 this is split into 'operator-self' (the operator's own browser after its session lapsed) and 'admin-probe' (anonymous recon); existing 'internal-probe' rows are historical. The request was served the silent 404 decoy — it is not a real block, and these are not bot detections.",
-  "admin-probe": "A request to the gateway admin namespace (/secured/…) from an allow-listed IP with NO valid session cookie — anonymous or external reconnaissance of admin paths. The gateway served the silent 404 decoy (identical to any non-existent upstream path) so the prober learns nothing. Counted as a block so admin-namespace recon is visible in threat metrics.",
-  "operator-self": "The operator's own browser making admin XHRs after its agw_session lapsed server-side (expired, revoked, or evicted from the session cache). Benign self-noise — the dashboard just needs a re-login (the page surfaces a 'session expired' prompt). Excluded from real block counts.",
-  "operator-passthrough": "An authenticated operator successfully reaching the admin dashboard or API. Recorded on the gateway-management timeline for visibility; it is an allowed request, not a block.",
-};
-
-const RISK_CATEGORY_JS = {
-  "honeypot":"HONEYPOT","honeypot-silent":"HONEYPOT","bot-trap":"HONEYPOT",
-  "canary-echo":"HONEYPOT","honey-cred":"HONEYPOT","tarpit-walk":"HONEYPOT",
-  "suspicious-path":"SCANNING","upstream-404":"SCANNING","coordinated-probe":"SCANNING",
-  "direct-api-probe":"SCANNING","robots-violation":"SCANNING",
-  "ai-probe":"SCRAPER","ai-enumeration":"SCRAPER","ai-no-assets":"SCRAPER",
-  "llm-no-subresources":"SCRAPER","canary-probe-miss":"SCRAPER",
-  "body-sqli":"INJECTION","body-xss":"INJECTION","body-lfi":"INJECTION",
-  "body-rce":"INJECTION","body-ssrf":"INJECTION","body-cmd":"INJECTION",
-  "body-xxe":"INJECTION","body-proto-pollution":"INJECTION","header-ssti":"INJECTION",
-  "host-header-injection":"INJECTION","body-critical-injection":"INJECTION",
-  "suspicious-body":"INJECTION",
-  "smuggling-dual-header":"SMUGGLING","smuggling-invalid-te":"SMUGGLING",
-  "smuggling-obfuscated-te":"SMUGGLING","smuggling-duplicate-cl":"SMUGGLING",
-  "method-override-attempt":"EVASION","js-challenge":"EVASION",
-  "ua-empty":"BOT-UA","ua-blocked":"BOT-UA","ua-non-browser":"BOT-UA",
-  "ua-too-short":"BOT-UA","ua-platform-mismatch":"BOT-UA",
-  "ua-ai-openai":"BOT-UA","ua-ai-anthropic":"BOT-UA","ua-ai-google":"BOT-UA",
-  "ua-ai-perplexity":"BOT-UA","ua-ai-meta":"BOT-UA","ua-ai-other":"BOT-UA",
-  "ai-headers-empty":"HEADERS","ai-headers-incomplete":"HEADERS",
-  "missing-required-header":"HEADERS","accept-wildcard-html":"HEADERS",
-  "accept-fp":"HEADERS","origin-mismatch":"HEADERS","headers-suspicious":"HEADERS",
-  "tls-fingerprint":"FINGERPRINT","ja4h-deny":"FINGERPRINT","ja4-required-missing":"FINGERPRINT",
-  "header-order-fp":"FINGERPRINT","h2-fp":"FINGERPRINT","webdriver-detected":"FINGERPRINT",
-  "soft-renderer":"FINGERPRINT","webgl-missing":"FINGERPRINT",
-  "botd-detected":"FINGERPRINT","ai-ua-ip-mismatch":"FINGERPRINT",
-  "abuseipdb-high":"REPUTATION","abuseipdb-med":"REPUTATION","crowdsec-banned":"REPUTATION",
-  "asn-hosting":"NETWORK","tor-exit":"NETWORK","datacenter-vpn":"NETWORK",
-  "country-blocked":"GEO","locale-geo-mismatch":"GEO","impossible-travel":"GEO",
-  "behavior":"BEHAVIOR","session-flood":"BEHAVIOR","session-churn":"BEHAVIOR","slow-client":"BEHAVIOR",
-  "cookie-ghost":"SESSION","lifecycle-miss":"SESSION","referer-ghost":"SESSION",
-  "upstream-auth-fail":"CREDENTIAL","auth-jwt-invalid":"CREDENTIAL",
-  "gql-introspection":"GRAPHQL","gql-batch-abuse":"GRAPHQL","gql-depth-exceeded":"GRAPHQL",
-  "upload-dangerous-ext":"UPLOAD","upload-dangerous-magic":"UPLOAD",
-  "no-interaction":"INTERACTION","bot-motion":"INTERACTION","scripted-motion":"INTERACTION",
-  "bot-scroll":"INTERACTION","scripted-keys":"INTERACTION","low-entropy-input":"INTERACTION",
-  "custom-rule-block":"RULE","host-not-allowed":"CONFIG",
-  "admin-ip-blocked":"ADMIN","internal-probe":"ADMIN","admin-probe":"ADMIN",
-  "operator-self":"ADMIN","operator-passthrough":"ADMIN",
-};
-const RISK_CAT_COLORS = {
-  "HONEYPOT":   ["#f85149","#3d1212"],"INJECTION":  ["#f85149","#3d1212"],
-  "SMUGGLING":  ["#f85149","#3d1212"],"CREDENTIAL": ["#f85149","#3d1212"],
-  "REPUTATION": ["#f85149","#3d1212"],"UPLOAD":     ["#f85149","#3d1212"],
-  "EVASION":    ["#d29922","#2e2010"],"SCRAPER":    ["#d29922","#2e2010"],
-  "BEHAVIOR":   ["#d29922","#2e2010"],"SCANNING":   ["#d29922","#2e2010"],
-  "SESSION":    ["#d29922","#2e2010"],"GRAPHQL":    ["#d29922","#2e2010"],
-  "FINGERPRINT":["#a78bfa","#1e1430"],"BOT-UA":     ["#a78bfa","#1e1430"],
-  "HEADERS":    ["#5fb3c0","#0f1f22"],"NETWORK":    ["#58a6ff","#0d1b2a"],
-  "GEO":        ["#58a6ff","#0d1b2a"],"INTERACTION":["#3fb950","#0f2018"],
-  "RULE":       ["#8b949e","#1c2128"],"CONFIG":     ["#8b949e","#1c2128"],
-  "ADMIN":      ["#58a6ff","#0d1b2a"],
-};
-const RISK_ACTION_JS = {
-  "HONEYPOT":   "Immediate ban recommended — honeypot/trap access is an unambiguous bot signal with no false-positive scenario.",
-  "INJECTION":  "Block and investigate — active exploit attempt in progress. Review upstream logs for impact.",
-  "SMUGGLING":  "Block immediately — HTTP request smuggling is a server-level attack that can poison shared caches or hijack other users' requests.",
-  "CREDENTIAL": "Rate-limit and alert — likely credential stuffing or brute-force. Check upstream auth failure logs.",
-  "SCRAPER":    "Challenge with JS proof-of-work or CAPTCHA — may be a commercial or AI scraper. Verify robots.txt compliance.",
-  "BOT-UA":     "Issue a JS challenge — UA anomaly alone is low-confidence; pair with other signals before hard-blocking.",
-  "FINGERPRINT":"Correlate with behavioral signals — TLS/HTTP fingerprint mismatch is a strong indicator of automation but not conclusive alone.",
-  "REPUTATION": "Trust the external intelligence — block or challenge per your policy. AbuseIPDB/CrowdSec data is community-validated.",
-  "NETWORK":    "Supporting evidence only — hosting/VPN/Tor IPs are commonly used by bots but also by legitimate privacy-conscious users.",
-  "BEHAVIOR":   "Monitor and challenge if multiple behavioral signals are present. Single behavioral anomalies can occur with legitimate clients.",
-  "SESSION":    "Investigate further — session manipulation may indicate automation, session hijacking, or a misconfigured client.",
-  "EVASION":    "Treat as adversarial — active evasion attempts indicate awareness of detection mechanisms and malicious intent.",
-  "GEO":        "Apply your geographic access policy — correlate with other signals before blocking individual IPs.",
-  "INTERACTION":"Issue CAPTCHA or interaction proof — absence of human interaction signals is consistent with headless browser automation.",
-  "GRAPHQL":    "Enable query depth/complexity limits — this may indicate API enumeration, schema extraction, or a DoS attempt.",
-  "UPLOAD":     "Block and review the uploaded file immediately. Check for webshell or malware.",
-  "SCANNING":   "Block if persistent — active enumeration of the attack surface indicates targeted reconnaissance.",
-  "RULE":       "See the Rules dashboard for operator-defined remediation guidance.",
-  "CONFIG":     "Verify gateway configuration — unexpected Host header may indicate virtual host scanning.",
-  "ADMIN":      "Gateway-management traffic, not bot detection. Operator-self / passthrough is benign (re-login if a session lapsed); admin-probe / admin-ip-blocked is reconnaissance of the admin namespace already served a silent 404 decoy — tighten ADMIN_ALLOWED_IPS if it persists from untrusted sources.",
-};
-const RISK_DETAIL_JS = {
-  "honeypot":"A fake URL planted deliberately to catch automated scanners. Legitimate human users never navigate to these endpoints — only bots following link graphs or fuzzing paths will trigger this signal. A single hit is a near-certain indicator of automation.",
-  "honeypot-silent":"Identical to a honeypot but the server responds 200 OK to avoid alerting the scanner that it was caught. The client receives a valid-looking response while the request is silently scored. A single hit is a near-certain indicator of non-human access.",
-  "bot-trap":"A deliberately disguised trap endpoint, rendered invisible to human visitors (CSS display:none, aria-hidden) but visible to scrapers parsing raw HTML. Bots that follow every link regardless of visibility trigger this.",
-  "canary-echo":"The client sent back a canary token injected in a previous response — a unique string embedded so it can only be found by reading and processing the response body. This proves the client is not a passive observer.",
-  "honey-cred":"The client submitted credentials injected as a honeypot in the DOM — fake username/password values that are invisible to humans but readable by form-filling automation. This is absolute proof of automated form interaction.",
-  "tarpit-walk":"The client followed a chain of recursive redirect links designed to trap and exhaust automated crawlers. Each link leads deeper into an intentionally slow URL space. Legitimate users never follow these chains.",
-  "suspicious-path":"The request path matches a known-bad pattern (e.g. /.env, /wp-admin, /actuator, /phpinfo.php) that legitimate application users never access. Common in mass vulnerability scanners and automated attack tools.",
-  "upstream-404":"The upstream server returned 404 for paths this client accessed. Repeated 404 responses indicate systematic probing of paths that do not exist — a hallmark of directory brute-forcing and sitemap enumeration.",
-  "coordinated-probe":"Multiple IPs from the same ASN or subnet are accessing similar paths in a coordinated temporal pattern, suggesting a distributed scanning operation sharing a common task list.",
-  "direct-api-probe":"API endpoints are being accessed directly without the browser navigation flow that normally precedes them (page load → auth → API call). Indicates scripted API access bypassing the frontend.",
-  "robots-violation":"The client accessed a path explicitly disallowed in robots.txt. All legitimate crawlers respect this file; malicious scrapers and vulnerability scanners routinely ignore it.",
-  "ai-probe":"Traffic pattern matches AI/LLM scraping behavior: rapid sequential requests with no static asset loading, systematic path coverage, and request timing inconsistent with human browsing. May be a training data crawler.",
-  "ai-enumeration":"The ratio of unique paths to total requests is abnormally high — the client is systematically visiting many distinct URLs rather than browsing naturally. Classic signature of a web scraper or sitemap walker.",
-  "ai-no-assets":"HTML pages were fetched but no referenced static assets (CSS, JS, images, fonts) were loaded. Every browser automatically fetches subresources; scrapers and LLMs typically do not.",
-  "llm-no-subresources":"An HTML document was fetched but none of its declared subresources (stylesheets, scripts, images) were subsequently requested. This is the standard pattern for LLM/AI content ingestion.",
-  "canary-probe-miss":"A canary resource (JS/CSS/image) was preloaded by the gateway and should always be fetched by a real browser. The client never requested it, indicating it is not executing full browser resource loading.",
-  "body-sqli":"A SQL injection pattern was detected in the request body. The client is attempting to manipulate backend database queries by injecting SQL syntax into input fields or API parameters.",
-  "body-xss":"A cross-site scripting payload was detected in the request body. The client is attempting to inject JavaScript that would execute in other users' browsers.",
-  "body-lfi":"A local file inclusion or path traversal pattern was detected. The client is attempting to read files outside the intended web root using ../.. sequences or absolute paths.",
-  "body-rce":"A remote code execution payload was detected in the request body. The client is attempting to inject system commands or code that would execute on the server.",
-  "body-ssrf":"A server-side request forgery payload was detected. The client is attempting to make the server issue requests to internal services or external resources on its behalf.",
-  "body-cmd":"An OS command injection pattern was detected in the request body — shell metacharacters or command syntax embedded in input fields.",
-  "body-xxe":"An XML External Entity injection payload was detected. The client is attempting to read local files, trigger SSRF, or cause denial-of-service via recursive entity expansion.",
-  "body-proto-pollution":"A prototype pollution payload was detected in the request body — attempting to inject properties into JavaScript object prototypes to alter application behavior.",
-  "header-ssti":"A Server-Side Template Injection payload was detected in a request header. The client is attempting to inject template expressions (e.g., {{7*7}}) to achieve RCE via the template engine.",
-  "host-header-injection":"The Host header contains injection characters or an unexpected value. This technique is used for cache poisoning, password reset link hijacking, or SSRF via the Host header.",
-  "body-critical-injection":"A high-severity multi-category injection payload was detected that bypassed lower-threshold rules. May combine SQLi, RCE, SSTI, or OS command patterns.",
-  "suspicious-body":"The request body matched an attack pattern heuristic at a sub-threshold confidence level. Not a confirmed exploit attempt but suspicious enough to score.",
-  "smuggling-dual-header":"Both Content-Length and Transfer-Encoding headers are present on the same request — the classic HTTP request smuggling setup that exploits CL/TE desynchronization between frontend and backend servers (RFC 9110 §6.3 violation).",
-  "smuggling-invalid-te":"The Transfer-Encoding header is present and syntactically invalid. Used in request smuggling to confuse request boundary parsing in proxies that handle invalid TE differently.",
-  "smuggling-obfuscated-te":"The Transfer-Encoding header is obfuscated (e.g. 'chunKed', tab-prefixed, or space-padded) to bypass WAF inspection while still being processed by the backend parser.",
-  "smuggling-duplicate-cl":"Duplicate Content-Length headers with different values — exploits servers that pick the first vs last CL value to desynchronize request body length parsing.",
-  "method-override-attempt":"The client attempted to override the HTTP method using X-HTTP-Method-Override, X-Method-Override, or _method parameters — a technique to bypass method-based access controls.",
-  "js-challenge":"The client failed, timed out, or produced an incorrect response to the JavaScript proof-of-work challenge. May indicate a headless browser, JS-disabled scraper, or a bot that partially executes JS.",
-  "ua-empty":"The HTTP request arrived with no User-Agent header. Every modern browser and mobile OS sends this header unconditionally. Its absence strongly indicates a raw HTTP client, CLI tool, or misconfigured automation.",
-  "ua-blocked":"The User-Agent string matches an entry in the gateway's explicit blocklist — a known scanner signature, malicious tool, or explicitly banned client.",
-  "ua-non-browser":"The User-Agent string does not match any known browser family (Chrome, Firefox, Safari, Edge, mobile browsers). Typical of curl, Python requests, Scrapy, Go HTTP clients, and similar automation.",
-  "ua-too-short":"The User-Agent string is abnormally short — possibly a truncated, synthetic, or placeholder UA. Unsophisticated bots often send minimal or default UA strings.",
-  "ua-platform-mismatch":"The User-Agent claims one OS/platform but the TLS fingerprint or HTTP/2 settings indicate a different platform. Browsers and their TLS stacks are tightly coupled; this mismatch reveals UA spoofing.",
-  "ua-ai-openai":"The User-Agent is OpenAI's declared crawler (GPTBot, OAI-SearchBot, ChatGPT-User). This is a self-declared AI scraper — allow or block based on your content policy.",
-  "ua-ai-anthropic":"The User-Agent is Anthropic's declared crawler (ClaudeBot, anthropic-ai). This is a self-declared AI scraper — allow or block based on your content policy.",
-  "ua-ai-google":"The User-Agent is Google's AI crawler (Google-Extended, Googlebot-AI). This is a self-declared AI scraper — allow or block based on your content policy.",
-  "ua-ai-perplexity":"The User-Agent is Perplexity AI's crawler. Self-declared AI scrapers can be allowed or blocked independently of general web crawlers.",
-  "ua-ai-meta":"The User-Agent is Meta's AI crawler. Self-declared AI scrapers can be allowed or blocked independently of general web crawlers.",
-  "ua-ai-other":"The User-Agent matches a known AI/LLM crawler not covered by the major-platform categories.",
-  "ai-headers-empty":"The request is missing nearly all standard browser headers that any real browser consistently sends: Accept-Language, Accept-Encoding, sec-ch-ua, sec-fetch-* headers, etc. Consistent with a raw API client.",
-  "ai-headers-incomplete":"Some expected browser headers are present but the complete set is missing or malformed. Real browsers send a consistent, version-correlated header fingerprint; this client's header set doesn't match any known browser.",
-  "missing-required-header":"A header configured as mandatory by the operator's gateway policy is absent. Real browsers and legitimate API clients configured against this application always include this header.",
-  "accept-wildcard-html":"The Accept header on an HTML page request is Accept: */* with no quality values — typical of API clients and curl. Real browsers send structured Accept headers with explicit content-type preferences.",
-  "accept-fp":"The Accept header value doesn't match the expected pattern for the claimed browser. Each browser family has a characteristic Accept string that correlates tightly with its User-Agent version.",
-  "origin-mismatch":"The Origin or Referer header references a URL inconsistent with the observed navigation path — either a forged referrer or direct API access that bypasses the expected page flow.",
-  "headers-suspicious":"One or more headers contain values, ordering, or combinations that are statistically anomalous for any known legitimate client type.",
-  "tls-fingerprint":"The TLS handshake fingerprint (JA3 hash of cipher suites, extensions, and curves) matches a known bot framework, scanner, or automation tool rather than a real browser.",
-  "ja4h-deny":"The JA4H fingerprint — an HTTP header-based fingerprint encoding header names, order, and Accept-Language — matches an entry in the gateway's deny list.",
-  "ja4-required-missing":"The gateway requires a valid JA4 TLS fingerprint for access, but the client's TLS handshake does not produce one. Indicates a non-standard TLS stack.",
-  "header-order-fp":"HTTP headers arrive in an order inconsistent with any known browser. Each browser has a deterministic header insertion order; deviations reveal a non-browser client or intermediate proxy that reorders headers.",
-  "h2-fp":"The HTTP/2 SETTINGS frame values, WINDOW_UPDATE sizes, and pseudo-header order don't match any known browser's HTTP/2 implementation fingerprint.",
-  "webdriver-detected":"Browser automation via WebDriver protocol (Selenium, Playwright, Puppeteer) was detected through JavaScript environment properties: navigator.webdriver, chrome.runtime, or modified DOM APIs.",
-  "soft-renderer":"The browser's WebGL renderer string indicates a software rasterizer (Mesa LLVMpipe, Google SwiftShader, VMware SVGA) rather than real GPU hardware — strong indicator of a virtual/headless browser.",
-  "webgl-missing":"WebGL is absent or returns only software-mode values. All modern browsers on real hardware support WebGL. Its absence is a reliable indicator of a headless, stripped-down, or virtual browser.",
-  "botd-detected":"The integrated bot detection library (BotD or equivalent) independently flagged this client based on its own heuristic analysis of the JavaScript environment and browser behavior.",
-  "ai-ua-ip-mismatch":"The User-Agent claims to be an AI crawler but the IP resolves to a residential ASN — inconsistent, since AI crawlers operate from cloud/datacenter infrastructure. May indicate UA impersonation of a known crawler to appear legitimate.",
-  "abuseipdb-high":"AbuseIPDB reports this IP with high confidence (score >= 90) as a known malicious actor. The score is based on community reports of hacking attempts, scanning, brute-force, and spam from this IP.",
-  "abuseipdb-med":"AbuseIPDB reports this IP with medium confidence as an abusive actor. The score is elevated but below the high-confidence threshold — treat as a supporting signal.",
-  "crowdsec-banned":"This IP is in the CrowdSec community blocklist — a crowd-sourced, real-time threat intelligence feed based on detections across thousands of deployments worldwide.",
-  "asn-hosting":"The source IP belongs to a hosting provider or cloud ASN (AWS, GCP, Azure, DigitalOcean, Hetzner, etc.). Legitimate human users rarely browse from datacenter IPs; bots and scrapers commonly do.",
-  "tor-exit":"The source IP is a known Tor exit node. Tor is frequently used to anonymize automated attacks, credential stuffing, and scraping by routing traffic through volunteer relays.",
-  "datacenter-vpn":"The source IP belongs to a commercial VPN provider or datacenter range. May be used by privacy-conscious legitimate users but is also a common IP rotation technique for bots.",
-  "country-blocked":"The source IP's country is in the gateway operator's geographic blocklist. Access from this country is a policy violation regardless of other signals.",
-  "locale-geo-mismatch":"The Accept-Language header declares a locale inconsistent with the IP's geolocation. A French browser browsing from a Korean IP is a strong indicator of VPN, proxy, or spoofed headers.",
-  "impossible-travel":"The source IP's geolocation changed between requests at a speed physically impossible for a human traveler, indicating IP rotation, VPN switching, or a distributed botnet sharing the same identity.",
-  "behavior":"Request timing or sequencing is statistically anomalous for human browsing — may include machine-like inter-request intervals, constant-speed request patterns, or behavioral variability metrics outside normal human ranges.",
-  "session-flood":"Abnormally high rate of new session creation from this identity. May indicate automated account creation, credential stuffing across many accounts, or session token flooding.",
-  "session-churn":"The client is cycling through sessions at an abnormal rate. Legitimate browsers maintain sessions across navigation; rapid cycling suggests automated token rotation or brute-force across multiple credentials.",
-  "slow-client":"The client reads response data abnormally slowly — similar to Slowloris-style slow-read attacks designed to hold connections open and exhaust server resources.",
-  "cookie-ghost":"The client sent a cookie that the server never set in any response to this identity. The client is injecting or replaying cookies from an external source — a capability unique to scripted clients.",
-  "lifecycle-miss":"A request doesn't fit the expected browser lifecycle: accessing an API endpoint without having fetched the page that would trigger it, or submitting forms without loading them first.",
-  "referer-ghost":"The Referer header claims the client navigated from a page that the server never served to this identity. The client is forging the Referer header or copying requests from another context.",
-  "upstream-auth-fail":"The upstream application returned an authentication failure. Multiple failures from the same identity indicate credential stuffing (trying many username/password pairs) or brute-force attacks.",
-  "auth-jwt-invalid":"A JWT token in the request has an invalid signature, is expired, or has been tampered with. May indicate token replay from an expired session, stolen-token reuse, or active JWT forgery attempts.",
-  "gql-introspection":"A GraphQL introspection query was submitted, attempting to enumerate the full API schema — field names, types, arguments, and relationships. This is typically the first step in targeted API attack reconnaissance.",
-  "gql-batch-abuse":"GraphQL query batching is being abused to send many queries in a single HTTP request, effectively multiplying the request rate and bypassing per-request rate limits.",
-  "gql-depth-exceeded":"A GraphQL query exceeds the configured maximum nesting depth, which can trigger exponential server-side resolver execution — a denial-of-service vector via deeply nested queries.",
-  "upload-dangerous-ext":"A file with a potentially dangerous extension was uploaded (.php, .sh, .jsp, .exe, .aspx, etc.). This may be an attempt to upload a webshell or backdoor for later execution.",
-  "upload-dangerous-magic":"The uploaded file's magic bytes (binary file signature) indicate an executable or dangerous file type regardless of the reported file extension — a common filter bypass technique.",
-  "no-interaction":"No human interaction signals (mouse movement, scrolling, keyboard activity, focus events) were observed during the session. Consistent with a headless browser with interaction simulation disabled.",
-  "bot-motion":"Mouse movement events were observed but follow non-human patterns: perfectly linear paths, superhuman speed, or mechanically regular acceleration curves. Consistent with Playwright/Puppeteer mouse simulation.",
-  "scripted-motion":"Mouse movement follows programmatically generated curves (Bezier-like with constant parameters) rather than the random-walk, variable-speed patterns of human hand movement.",
-  "bot-scroll":"Scroll events were observed but are non-human: instantaneous jumps, perfectly uniform intervals, or fixed-pixel increments inconsistent with trackpad or mouse wheel physics.",
-  "scripted-keys":"Keyboard events were observed but inter-key timing is too regular — fixed millisecond delays between keystrokes indicate scripted input rather than human typing variability.",
-  "low-entropy-input":"Form input has very low Shannon entropy — short, highly predictable, or repetitive values that are statistically inconsistent with human-typed text.",
-};
-
-// 1.8.10 — reason/signal → governing control knob (mirror of core/proxy_handler.py
-// SIGNAL_KNOB; kept in sync by tests/test_v1810_score_controls.py). Used by the
-// score breakdown to show which controls govern an identity's score.
-const SIGNAL_KNOB_JS = {
-  "js-challenge":"JS_CHALLENGE",
-  "bot-trap":"BOT_TRAP_FORMS",
-  "suspicious-body":"BODY_PATTERN_MATCH",
-  "canary-echo":"CANARY_ECHO_DETECTION",
-  "accept-fp":"ACCEPT_FP_ENABLED",
-  "labyrinth-jitter":"LABYRINTH_JITTER_ENABLED",
-  "header-canary":"HEADER_CANARY_ENABLED",
-  "origin-mismatch":"STRICT_ORIGIN",
-  "tls-fingerprint":"TLS_FP_BLOCK_ENABLED",
-  "abuseipdb-high":"ABUSEIPDB_ENABLED",
-  "abuseipdb-med":"ABUSEIPDB_ENABLED",
-  "crowdsec-banned":"CROWDSEC_ENABLED",
-  "asn-hosting":"MAXMIND_ENABLED",
-  "country-blocked":"COUNTRY_BLOCK_ENABLED",
-  "tor-exit":"TOR_BLOCK_ENABLED",
-  "datacenter-vpn":"DC_VPN_BLOCK_ENABLED",
-  "ua-ai-openai":"AI_UA_OPENAI_ENABLED",
-  "ua-ai-anthropic":"AI_UA_ANTHROPIC_ENABLED",
-  "ua-ai-google":"AI_UA_GOOGLE_ENABLED",
-  "ua-ai-perplexity":"AI_UA_PERPLEXITY_ENABLED",
-  "ua-ai-meta":"AI_UA_META_ENABLED",
-  "ua-ai-other":"AI_UA_OTHER_ENABLED",
-  "custom-rule-block":"CUSTOM_RULES_ENABLED",
-  "rate-limit-endpoint":"ENDPOINT_RATE_LIMIT_ENABLED",
-  "body-sqli":"BODY_GROUP_SQLI_ENABLED",
-  "body-xss":"BODY_GROUP_XSS_ENABLED",
-  "body-lfi":"BODY_GROUP_LFI_ENABLED",
-  "body-rce":"BODY_GROUP_RCE_ENABLED",
-  "body-ssrf":"BODY_GROUP_SSRF_ENABLED",
-  "body-cmd":"BODY_GROUP_CMD_ENABLED",
-  "auth-jwt-invalid":"JWT_VALIDATION_ENABLED",
-  "slow-client":"WAF_SLOWLORIS_ENABLED",
-  "botd-detected":"BOTD_ENABLED",
-  "dlp-cc":"DLP_GROUP_CC_ENABLED",
-  "dlp-aws":"DLP_GROUP_AWS_ENABLED",
-  "dlp-jwt":"DLP_GROUP_JWT_ENABLED",
-  "dlp-private-key":"DLP_GROUP_PRIVATE_KEY_ENABLED",
-  "dlp-api-key":"DLP_GROUP_API_KEY_ENABLED",
-  "dlp-pii-email":"DLP_GROUP_PII_EMAIL_ENABLED",
-  "dlp-pii-ssn":"DLP_GROUP_PII_SSN_ENABLED",
-  "tarpit-walk":"LABYRINTH_ENABLED",
-  "header-order-fp":"HEADER_ORDER_FP_ENABLED",
-  "ai-ua-ip-mismatch":"AI_CRAWLER_VERIFY_ENABLED",
-  "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
-  "robots-violation":"ROBOTS_MONITOR_ENABLED",
-  "h2-fp":"H2_FP_ENABLED",
-  "json-canary":"JSON_CANARY_ENABLED",
-  "honeypot":"HONEYPOT_ENABLED",
-  "honeypot-silent":"HONEYPOT_ENABLED",
-  "suspicious-path":"SUSPICIOUS_PATH_ENABLED",
-  "ai-probe":"AI_PROBE_ENABLED",
-  "ua-empty":"UA_FILTER_ENABLED",
-  "ua-blocked":"UA_FILTER_ENABLED",
-  "ua-too-short":"UA_FILTER_ENABLED",
-  "ua-non-browser":"UA_FILTER_ENABLED",
-  "ua-platform-mismatch":"UA_PLATFORM_CHECK_ENABLED",
-  "ai-headers-empty":"HEADER_COMPLETENESS_ENABLED",
-  "ai-headers-incomplete":"HEADER_COMPLETENESS_ENABLED",
-  "behavior":"BEHAVIORAL_CHECK_ENABLED",
-  "ai-enumeration":"AI_ENUMERATION_ENABLED",
-  "ai-no-assets":"AI_NO_ASSETS_ENABLED",
-  "session-flood":"SESSION_FLOOD_ENABLED",
-  "upstream-404":"UPSTREAM_404_TRACKING_ENABLED",
-  "cookie-ghost":"COOKIE_GHOST_ENABLED",
-  "lifecycle-miss":"COOKIE_LIFECYCLE_ENABLED",
-  "referer-ghost":"REFERER_CHAIN_ENABLED",
-  "impossible-travel":"IMPOSSIBLE_TRAVEL_ENABLED",
-  "soft-renderer":"FP_ENRICHMENT_ENABLED",
-  "webgl-missing":"FP_ENRICHMENT_ENABLED",
-  "path-sweep":"PATH_SWEEP_ENABLED",
-  "accept-wildcard-html":"ACCEPT_WILDCARD_CHECK_ENABLED",
-  "body-critical-injection":"WAF_BODY_ENABLED",
-  "body-xxe":"WAF_BODY_ENABLED",
-  "body-proto-pollution":"WAF_BODY_ENABLED",
-  "smuggling-cl-te":"WAF_SMUGGLING_ENABLED",
-  "smuggling-te-cl":"WAF_SMUGGLING_ENABLED",
-  "smuggling-te-te":"WAF_SMUGGLING_ENABLED",
-  "smuggling-invalid-te":"WAF_SMUGGLING_ENABLED",
-  "method-override-attempt":"WAF_VERB_OVERRIDE_ENABLED",
-  "header-ssti":"WAF_HEADER_INJECTION_ENABLED",
-  "host-header-injection":"WAF_HEADER_INJECTION_ENABLED",
-  "gql-introspection":"WAF_GRAPHQL_ENABLED",
-  "gql-batch-abuse":"WAF_GRAPHQL_ENABLED",
-  "gql-depth-exceeded":"WAF_GRAPHQL_ENABLED",
-  "upload-dangerous-ext":"WAF_UPLOAD_ENABLED",
-  "upload-dangerous-magic":"WAF_UPLOAD_ENABLED",
-  "smuggling-dual-header":"WAF_SMUGGLING_ENABLED",
-  "smuggling-obfuscated-te":"WAF_SMUGGLING_ENABLED",
-  "smuggling-duplicate-cl":"WAF_SMUGGLING_ENABLED",
-  "honey-cred":"HONEY_CRED_ENABLED",
-  "canary-probe-miss":"CANARY_PROBE_ENABLED",
-  "llm-no-subresources":"LLM_HEURISTIC_ENABLED",
-  "webdriver-detected":"AUTOMATION_PROBE_ENABLED",
-  "bot-motion":"INTERACTION_PROBE_ENABLED",
-  "no-interaction":"INTERACTION_PROBE_ENABLED",
-  "scripted-motion":"INTERACTION_PROBE_ENABLED",
-  "bot-scroll":"INTERACTION_PROBE_ENABLED",
-  "scripted-keys":"INTERACTION_PROBE_ENABLED",
-  "low-entropy-input":"INTERACTION_PROBE_ENABLED",
-  "coordinated-probe":"COORDINATED_ATTACK_ENABLED",
-  "direct-api-probe":"JOURNEY_CHECK_ENABLED",
-  "session-churn":"SESSION_CHURN_ENABLED",
-  "ja4h-deny":"JA4H_DENY_ENABLED",
-  "host-not-allowed":"HOST_BLOCKING_ENABLED",
-  "missing-required-header":"REQUIRED_HEADERS_ENABLED",
-  "ja4-required-missing":"JA4_REQUIRED_ENABLED",
-  "upstream-auth-fail":"UPSTREAM_AUTH_FAIL_ENABLED",
-  "headers-suspicious":"HEADER_COMPLETENESS_ENABLED",
-  "rate-limit-ip":"RATE_LIMIT_IP_ENABLED",
-  "rate-limit":"RATE_LIMIT_ENABLED",
-  "fp-banned":"FP_BAN_CHECK_ENABLED",
-  "traffic-threshold":"TRAFFIC_THRESHOLD_ENABLED",
-  "chal-required":"JS_CHALLENGE",
-  "pow-required":"POW_REQUIRED_PATHS",
-  "admin-ip-blocked":"ADMIN_ALLOWED_IPS",
-  "banned-silent":"RISK_BAN_THRESHOLD",
-  "banned":"RISK_BAN_THRESHOLD",
-};
-// Cached hot-reload knob state (knob → bool) for the score-breakdown Controls area.
-window._gwKnobState = window._gwKnobState || null;
-async function _gwLoadKnobState(){
-  try {
-    const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
-    if (!r.ok) return;
-    const j = await r.json();
-    window._gwKnobState = j.state || {};
-  } catch(_) {}
-}
-try { _gwLoadKnobState(); } catch(_) {}
-// Build the 'Controls governing this score' section for an identity record.
-function _gwControlsSection(d){
-  const reasons = new Set();
-  (d.blocks_breakdown||[]).forEach(x=>reasons.add(x[0]));
-  (d.risk_breakdown||[]).forEach(x=>reasons.add(x[0]));
-  const knobs = new Map();
-  reasons.forEach(rsn=>{ const k = SIGNAL_KNOB_JS[rsn]; if(k){ if(!knobs.has(k)) knobs.set(k,[]); knobs.get(k).push(rsn); } });
-  if (!knobs.size) {
-    // Reasons present but none map to an operator-toggleable control (e.g.
-    // gateway-management / admin-namespace reasons like internal-probe, or
-    // always-on structural checks). Show the area with an explanation rather
-    // than rendering nothing, so the operator knows why it's empty.
-    return reasons.size ? `<div class="rs-divider"></div>
-      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:12px 0 8px;font-weight:700">Controls governing this score</div>
-      <div class="dim" style="font-size:11px;line-height:1.5">No operator-toggleable control governs this score — its signals are gateway-management / admin-namespace reasons (e.g. <code>internal-probe</code>, <code>admin-probe</code>) or always-on structural checks, not detector knobs.</div>` : '';
-  }
-  const st = window._gwKnobState;
-  const rows = [...knobs.entries()].sort((a,b)=>a[0]<b[0]?-1:1).map(([k,rs])=>{
-    let dot,lbl,col;
-    if (!st || !(k in st)) { dot='\u25CF'; lbl='?'; col='#8b949e'; }
-    else if (st[k])        { dot='\u25CF'; lbl='ON'; col='#3fb950'; }
-    else                   { dot='\u25CB'; lbl='OFF'; col='#f85149'; }
-    return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--line);font-size:11px">
-      <span style="color:${col};flex-shrink:0">${dot}</span>
-      <span style="font-family:ui-monospace,Menlo,monospace;color:var(--fg);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="governs: ${escapeHtml(rs.join(', '))}">${escapeHtml(k)}</span>
-      <span style="color:${col};font-weight:700;flex-shrink:0">${lbl}</span>
-      <a href="/antibot-appsec-gateway/secured/controls" style="margin-left:auto;flex-shrink:0;color:var(--blue);text-decoration:none">\u2192 Controls</a>
-    </div>`;
-  }).join('');
-  const note = !st ? '<div class="dim" style="font-size:10px;margin-top:4px">loading control states\u2026</div>' : '';
-  return `<div class="rs-divider"></div>
-    <div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:12px 0 8px;font-weight:700">Controls governing this score</div>
-    ${rows}${note}
-    <div class="dim" style="font-size:10px;margin-top:6px">Toggle these on the Controls page to change how this identity is scored. \u25CF on \u00B7 \u25CB off</div>`;
-}
-
-// 1.8.6 — stealth score breakdown (agents-only; uses escapeHtml global)
-function buildScoreHtml(d){
-  const score = d.stealth_score != null ? d.stealth_score : 0;
-  const c = d.components, m = d.metrics;
-  const src = d.score_source || 'stealth';
-  const rScore = m.risk_score != null ? m.risk_score : 0;
-  const rb = d.risk_breakdown || [];
-
-  // Score bar — always shown first
-  const scoreColor = score >= 70 ? '#f85149' : score >= 40 ? '#d29922' : '#3fb950';
-  const scoreLabel = score >= 70 ? 'HIGH' : score >= 40 ? 'ELEVATED' : 'LOW';
-  const scoreLabelBg = score >= 70 ? 'rgba(248,81,73,.15)' : score >= 40 ? 'rgba(210,153,34,.15)' : 'rgba(63,185,80,.12)';
-  const scoreHeader = `<div style="margin-bottom:14px">
-    <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:6px">
-      <span style="font-size:28px;font-weight:800;color:${scoreColor};font-family:ui-monospace,Menlo,monospace;line-height:1">${score}</span>
-      <span style="font-size:12px;color:var(--dim);align-self:center">/ 100</span>
-      <span style="font-size:10px;font-weight:700;color:${scoreColor};background:${scoreLabelBg};padding:2px 7px;border-radius:10px;letter-spacing:.4px;align-self:center">${scoreLabel}</span>
-    </div>
-    <div style="height:6px;background:#1f2730;border-radius:3px;overflow:hidden">
-      <div style="width:${score}%;height:100%;background:${scoreColor};border-radius:3px"></div>
-    </div>
-  </div>`;
-
-  let body = '';
-
-  if (src === 'block_count') {
-    // Score is synthetic — derived from block count, no active behavioral signals.
-    // Show: formula, then block reasons (the actual answer to "why was this blocked?").
-    const nBlocks = m.blocked_count != null ? m.blocked_count : (d.blocked || 0);
-    const synthScore = Math.min(100, 30 + Math.min(50, nBlocks * 2));
-    const bd = d.blocks_breakdown || [];
-    const totalBlocks = bd.reduce((a,b)=>a+b[1],0) || nBlocks || 1;
-
-    body += `<div style="font-size:11px;color:var(--dim);margin-bottom:14px;padding:8px 10px;background:var(--bg);border-radius:4px;border-left:2px solid #30363d;line-height:1.6">
-      Score = <code style="color:var(--fg)">30 + min(50, ${nBlocks} blocks × 2) = ${synthScore}</code><br>
-      <span style="font-size:10px">No behavioral risk signals active — score derived from block history only.</span>
-    </div>`;
-
-    if (bd.length) {
-      body += `<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:8px;font-weight:700">Why requests were blocked</div>`;
-      body += bd.slice(0,8).map(([reason,cnt])=>{
-        const label = BLOCK_LABELS_JS[reason] || RISK_LABELS_JS[reason] || reason;
-        const detail = BLOCK_DETAIL_JS[reason] || RISK_DETAIL_JS[reason] || (
-          reason.startsWith('dlp-')       ? `Data Loss Prevention: a ${reason.replace('dlp-','')} pattern detected in the request.` :
-          reason.startsWith('smuggling-') ? `HTTP smuggling attempt (${reason.replace('smuggling-','')} variant).` :
-          reason.startsWith('ua-ai-')     ? `AI/LLM crawler: User-Agent identifies client as ${reason.replace('ua-ai-','')} agent.` :
-          reason.startsWith('ua-')        ? `User-Agent anomaly (${reason.replace('ua-','')}): does not match expected browser patterns.` :
-          reason.startsWith('rate-limit') ? `Rate limit exceeded: request volume surpassed threshold for this scope.` :
-          reason.startsWith('gql-')       ? `GraphQL abuse: query pattern exceeded safety limits.` :
-          reason.startsWith('upload-')    ? `File upload violation: uploaded content matched a dangerous file pattern.` :
-          reason.startsWith('body-')      ? `Attack payload in request body (${reason.replace('body-','')} pattern).` :
-          reason.startsWith('canary-')    ? `Canary token returned — confirms automated HTTP processing.` :
-          `No description registered for "${reason}" — may be a custom rule or gateway-internal action.`
-        );
-        const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
-        const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
-        const sharePct = Math.round(cnt / totalBlocks * 100);
-        return `<div class="risk-sig">
-          <div class="rs-head">
-            <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
-              <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
-              <span class="rs-name">${escapeHtml(reason)}</span>
-            </div>
-            <span class="rs-score" style="color:#d29922;flex-shrink:0">${cnt}×</span>
-          </div>
-          <div class="rs-desc" style="font-weight:600;font-size:11px;color:var(--fg);margin-bottom:4px">${escapeHtml(label)}</div>
-          <div class="rs-desc">${escapeHtml(detail)}</div>
-          <div class="rs-divider"></div>
-          <div class="rs-meta">
-            <span><b>blocks</b> ${cnt}×</span>
-            <span><b>share of total</b> ${sharePct}%</span>
-          </div>
-          <div class="rs-bar" style="margin-top:4px"><div style="width:${sharePct}%;background:#d29922"></div></div>
-        </div>`;
-      }).join('');
-    } else {
-      body += `<div class="dim" style="font-size:11px;padding:8px 0">No block reason detail available.</div>`;
-    }
-
-  } else if (rScore > 0 || rb.length) {
-    // Behavioral risk signals are active — show ban threshold + components + signals.
-    const rPts = c.risk || 0;
-    const banPct = Math.min(100, Math.round(rScore / RISK_BAN_THRESHOLD * 100));
-    const banColor = banPct >= 80 ? '#f85149' : banPct >= 40 ? '#d29922' : '#3fb950';
-
-    body += `<div style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;gap:8px;font-size:11px;margin-bottom:3px">
-        <span style="color:var(--dim);white-space:nowrap">Ban threshold</span>
-        <div style="flex:1;height:5px;background:#30363d;border-radius:3px;overflow:hidden">
-          <div style="width:${banPct}%;height:100%;background:${banColor};border-radius:3px"></div>
-        </div>
-        <span style="color:${banColor};font-size:11px;font-family:ui-monospace,monospace;font-weight:700">${rScore} / ${RISK_BAN_THRESHOLD}</span>
-      </div>
-      <div style="font-size:10px;color:var(--dim)">Risk score — ban triggers at ≥ ${RISK_BAN_THRESHOLD} pts (NAT subnets: ≥ 100)</div>
-    </div>`;
-
-    // Behavioral components — only render non-zero ones
-    const COMPS = [
-      {key:'headers', label:'Headers',     color:'#a78bfa', detail:`avg ${m.avg_header_score!=null?m.avg_header_score:'?'}/7 expected headers`},
-      {key:'assets',  label:'Assets',      color:'#5fb3c0', detail:`${m.html_loads||0} html · ${m.static_loads||0} static fetches`},
-      {key:'enum',    label:'Enumeration', color:'#3fb950', detail:`${m.unique_paths||0} unique paths`},
-      {key:'timing',  label:'Timing',      color:'#d29922', detail:`cv=${m.behavioral_cov!=null?m.behavioral_cov:'n/a'}`},
-      {key:'risk',    label:'Risk pts',    color:'#f85149', detail:`${rScore} ÷ 4 → ${rPts}/15 pts`},
-      {key:'404s',    label:'404 rate',    color:'#ff7b3a', detail:`${m.upstream_404_count||0} upstream 404s`},
-    ];
-    const activeComps = COMPS.filter(({key}) => (c[key]||0) > 0);
-    if (activeComps.length) {
-      body += `<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:8px;font-weight:700">Behavioral signals (% share of score)</div>`;
-      body += activeComps.map(({key,label,color,detail}) => {
-        const pct = Math.round(c[key]||0);
-        return `<div class="rsn">
-          <div><span class="rsn-name">${label}</span>
-            <div class="dim" style="font-size:10px;margin-top:1px">${detail}</div></div>
-          <div class="rsn-bar"><div style="width:${pct}%;background:${color}"></div></div>
-          <span class="rsn-val" style="color:${color}">${pct}%</span>
-        </div>`;
-      }).join('');
-    }
-
-    // Active risk signals
-    if (rb.length) {
-      const rtot = rb.reduce((a,b)=>a+b[1],0)||1;
-      body += `<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin:12px 0 8px;font-weight:700">Active risk signals</div>`;
-      body += rb.slice(0,10).map(([reason,val])=>{
-        const rpct = Math.round(val/rtot*100);
-        const w = RISK_WEIGHTS_JS[reason] || 0;
-        const hits = w > 0 ? Math.max(1, Math.round(val / w)) : '?';
-        const detail = RISK_DETAIL_JS[reason] || RISK_LABELS_JS[reason] || 'No description available.';
-        const cat = RISK_CATEGORY_JS[reason] || 'OTHER';
-        const [catFg, catBg] = RISK_CAT_COLORS[cat] || ['#8b949e','#1c2128'];
-        const action = RISK_ACTION_JS[cat] || 'Monitor this signal.';
-        const sev = w >= 70 ? ['CRITICAL','#f85149','#3d1212'] :
-                    w >= 40 ? ['HIGH',    '#d29922','#2e2010'] :
-                    w >= 15 ? ['MEDIUM',  '#e3b341','#2a2010'] :
-                              ['LOW',     '#8b949e','#1e2228'];
-        const [sevLabel, sevFg, sevBg] = sev;
-        const decayRatio = w > 0 ? val / w : 0;
-        const [decayLabel, decayColor] = decayRatio >= 0.8 ? ['FRESH','#f85149'] :
-                                          decayRatio >= 0.4 ? ['ACTIVE','#d29922'] :
-                                                              ['FADING','#8b949e'];
-        const remaining = Math.max(0, RISK_BAN_THRESHOLD - rScore);
-        const hitsToBan = w > 0 ? Math.ceil(remaining / w) : '∞';
-        return `<div class="risk-sig">
-          <div class="rs-head">
-            <div style="display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:wrap">
-              <span class="rs-cat" style="color:${catFg};background:${catBg}">${cat}</span>
-              <span class="rs-name">${escapeHtml(reason)}</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
-              <span class="rs-sev" style="color:${sevFg};background:${sevBg}">${sevLabel}</span>
-              <span class="rs-score" style="color:#f85149">+${val}</span>
-            </div>
-          </div>
-          <div class="rs-desc">${escapeHtml(detail)}</div>
-          <div class="rs-divider"></div>
-          <div class="rs-meta">
-            <span><b>weight</b> ${w > 0 ? w+' pts/trigger' : 'n/a'}</span>
-            <span><b>triggered</b> ~${hits}×</span>
-            <span><b>decay</b> <span style="color:${decayColor}">${decayLabel}</span></span>
-          </div>
-          <div class="rs-meta" style="margin-top:2px">
-            <span><b>hits to ban</b> ${hitsToBan}× more</span>
-            <span><b>accumulated</b> ${val} pts</span>
-            <span><b>share</b> ${rpct}% of risk</span>
-          </div>
-          <div class="rs-bar" style="margin-top:6px"><div style="width:${rpct}%"></div></div>
-          <div class="rs-action"><b>Recommended:</b> ${escapeHtml(action)}</div>
-        </div>`;
-      }).join('');
-    } else {
-      body += `<div style="margin-top:10px;font-size:11px" class="dim">No active risk signals (may have decayed).</div>`;
-    }
-
-  } else {
-    body = `<div style="font-size:11px;color:var(--dim);padding:8px 0">No active risk or block signals.</div>`;
-  }
-
-  // 1.8.10 — new area: the control knobs that govern this score's signals, with
-  // live ON/OFF state. Wrapped in an id so openPopover can refresh it once the
-  // latest /secured/config state arrives.
-  body += `<div id="gw-score-controls">${_gwControlsSection(d)}</div>`;
-
-  return scoreHeader + body;
-}
 
 function openPopover(kind, s, x, y){
   const d = window._gwIdentityPopover.normalizeId(s);
   let title, body;
-  if      (kind === 'id')    { title = 'Identity details';      body = window._gwIdentityPopover.buildIdHtml(d); }
-  else if (kind === 'risk')  { title = 'Risk score breakdown';  body = window._gwIdentityPopover.buildRiskHtml(d); }
-  else if (kind === 'score') { title = 'Score breakdown';       body = buildScoreHtml(d); } // title shown in pop-title
+  if      (kind === 'id')   { title = 'Identity details';     body = window._gwIdentityPopover.buildIdHtml(d); }
+  else if (kind === 'risk') { title = 'Risk score breakdown'; body = window._gwIdentityPopover.buildRiskHtml(d); }
   else { return; }
   document.getElementById('pop-title').innerHTML =
     `${title} <span class="x" id="pop-close">×</span>`;
@@ -2409,26 +1399,6 @@ function openPopover(kind, s, x, y){
     fetchIpIntel(d.ip).then(html => {
       const node = document.getElementById('ip-intel-section');
       if (node) node.innerHTML = _dp(html);
-    }).catch(() => {});
-  }
-  if (kind === 'risk') {
-    window._gwIdentityPopover.wireRiskActions(document.getElementById('pop-body'), d);
-    // Refresh live control state so the on/off dots are current, then re-render.
-    if (window._gwIdentityPopover.refreshKnobs) {
-      window._gwIdentityPopover.refreshKnobs().then(() => {
-        const pb = document.getElementById('pop-body');
-        if (pb) {
-          pb.innerHTML = _dp(window._gwIdentityPopover.buildRiskHtml(d));
-          window._gwIdentityPopover.wireRiskActions(pb, d);
-        }
-      }).catch(() => {});
-    }
-  }
-  if (kind === 'score') {
-    // refresh control ON/OFF state, then re-render just the Controls area
-    _gwLoadKnobState().then(() => {
-      const node = document.getElementById('gw-score-controls');
-      if (node) node.innerHTML = _dp(_gwControlsSection(d));
     }).catch(() => {});
   }
   POP.style.display = 'block';
@@ -2505,23 +1475,10 @@ async function fetchIpIntel(ip) {
   const refsHtml = refs.map(([name, url]) =>
     `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
         style="color:var(--blue);text-decoration:none;
-               background:var(--bg-inset);border:1px solid var(--line);
+               background:#0a0e13;border:1px solid #21262d;
                padding:2px 8px;border-radius:3px;font-size:11px;
                margin-right:5px;display:inline-block;margin-bottom:4px">
        ${escapeHtml(name)} ↗</a>`).join('');
-  const riskBreakdownHtml = (() => {
-    const bd = it.risk_breakdown || [];
-    if (!bd.length) return '';
-    const tot = bd.reduce((a, b) => a + b[1], 0) || 1;
-    const bars = bd.map(([r, v]) => {
-      const pct = (v / tot * 100).toFixed(0);
-      return `<div class="rsn"><span class="rsn-name">${escapeHtml(r)}</span><div class="rsn-bar"><div style="width:${pct}%"></div></div><span class="rsn-val">+${v}</span></div>`;
-    }).join('');
-    return `<div style="margin-top:10px">
-      <div class="dim" style="font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">Score breakdown · live signals</div>
-      ${bars}
-    </div>`;
-  })();
   return `
     <h3 style="margin:0 0 6px 0">IP intelligence
       <span style="background:${verdictColor};color:#000;font-weight:700;
@@ -2540,7 +1497,6 @@ async function fetchIpIntel(ip) {
       <span class="k">risk</span>        <span class="v">${fmtScore(it.risk_score)}/100</span>
       <span class="k">activity</span>    <span class="v">${it.requests_24h||0} reqs (${it.allowed_24h||0} ok / ${it.blocked_24h||0} blocked)</span>
     </div>
-    ${riskBreakdownHtml}
     <div style="margin-top:10px">
       <div class="dim" style="font-size:10.5px;margin-bottom:4px;text-transform:uppercase;letter-spacing:.4px">External references · cross-check the score</div>
       ${refsHtml}
@@ -2554,40 +1510,38 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
   padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
-  background:var(--card);color:var(--bright);border:1px solid var(--line);
+  background:#161b22;color:#fff;border:1px solid #30363d;
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
-/* 1.8.10 fix — reserve right space so the fixed Health pill + log selector never overlap topbar buttons (e.g. Apply changes) */
-@media(min-width:601px){#topbar{padding-right:280px}}
 #gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
   display:flex;align-items:center;gap:5px;
-  background:var(--card);border:1px solid var(--line);border-radius:14px;
+  background:#161b22;border:1px solid #30363d;border-radius:14px;
   padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
   font-size:10.5px;color:#8b949e;
   box-shadow:0 2px 6px rgba(0,0,0,.3)}
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
-#gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
+#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
 #gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
 .gw-modal-overlay.show{display:flex}
-.gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
   padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
-.gw-modal-card h3{margin:0 0 8px 0;color:var(--bright);font-size:15px;font-weight:700;
+.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
 .gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
-  padding:8px 4px;border-bottom:1px solid var(--bg-hover);align-items:center;font-size:12px}
+  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
 .gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
 .gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
 .gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
 .gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
-.gw-row .val{font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;text-align:right}
+.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
 </style>
 <!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
 <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
@@ -2604,12 +1558,9 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
+      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
-    <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
-      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
-    </div>
     <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
   </div>
 </div>
@@ -2639,73 +1590,24 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.style.borderColor = c.edge;
       pill.textContent = `● GW ${s}/100`;
     } catch(e){
-      pill.style.background = 'rgba(248,81,73,0.12)';
+      pill.style.background = '#3d1a1a';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }
   }
-  const KEY_LABELS = {
-    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
-    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
-  };
-  const KEY_HINTS = {
-    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
-    memory:'Consider restarting the container or increasing container memory limits',
-    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
-    integrations:'Check API keys in Settings → Integration Credentials',
-    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
-    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign'
-  };
-  const STATUS_ORD = {bad:0, warn:1, ok:2};
-  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
-  function fmtUptime(secs){
-    if(!secs) return '?';
-    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
-    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
-  }
   pill.onclick = () => {
     if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    const s = lastData.score|0;
-    const c = colorFor(s);
-    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
-    modalScore.textContent = s;
-    modalScore.style.color = c.fg;
-    const lbl = document.getElementById('gw-score-label');
-    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
-    const bar = document.getElementById('gw-score-bar');
-    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
-    const ver = (lastData.version||'').replace('AppSecGW_','v');
-    const up = fmtUptime(lastData.uptime_secs||0);
-    const db = lastData.db_backend||'?';
-    const rawUp = lastData.upstream||'';
-    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
-    const metaHtml = `<div class="gw-meta">
-      <span class="chip">${escapeHtml(ver)}</span>
-      <span class="chip">${escapeHtml(db)}</span>
-      <span class="chip">↑ ${escapeHtml(up)}</span>
-      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
-    </div>`;
-    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
-      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
-      return sd!==0?sd:(b.weight||0)-(a.weight||0);
-    });
-    const rowsHtml = sorted.map(r=>{
-      const label = KEY_LABELS[r.key]||r.key;
-      const isOk = r.status==='ok';
-      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
-      return `<div class="gw-row${isOk?' row-ok':''}">
-        <span class="key">${escapeHtml(label)}</span>
+    modalScore.textContent = lastData.score|0;
+    modalScore.style.color = colorFor(lastData.score).fg;
+    const rows = (lastData.reasons||[]).map(r => `
+      <div class="gw-row">
+        <span class="key">${escapeHtml(r.key)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
-        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
-        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
+        <span class="det">${escapeHtml(r.detail||'')}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`;
-    }).join('');
-    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
-    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
-    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
-      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
-      <span>checked ${escapeHtml(ageStr)}</span>
+      </div>`).join('');
+    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
+      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
     </div>`);
     modal.classList.add('show');
   };
@@ -2743,10 +1645,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
 
-<!-- Playbook + honey-suggest moved to honeypots.html (1.8.12) -->
 
-
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
   <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -2778,7 +1678,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
       var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
@@ -2806,7 +1706,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:var(--bright);border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>');
         el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
@@ -2817,14 +1717,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession,userRole:_userRole};
 })();
-</script>
-<script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
-var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
-if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
-if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
-fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
-(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->

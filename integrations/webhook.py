@@ -6,7 +6,7 @@ Includes HMAC-SHA-256 signature in X-AppSecGW-Signature when WEBHOOK_SECRET
 is set so the receiver can authenticate the gateway. Cross-instance dedup
 via Redis SETNX when available. Best-effort: failures never block traffic.
 
-1.8.6 — rewrote to use asyncio.Queue worker with exponential backoff and
+1.8.5 — rewrote to use asyncio.Queue worker with exponential backoff and
 circuit breaker instead of fire-and-forget to avoid silent delivery failures.
 
 Extracted from proxy.py as part of Phase 7 modular refactoring.
@@ -64,11 +64,9 @@ def _webhook_event_allowed(event: dict) -> bool:
 
 
 def _webhook_url_safe(url: str) -> bool:
-    """Reject URLs that could SSRF to private/loopback addresses (CWE-918).
-    INT4-05: DNS-resolves hostnames so a private IP behind a public name is caught."""
+    """Reject URLs that could SSRF to private/loopback addresses (CWE-918)."""
     from urllib.parse import urlparse
     import ipaddress
-    import socket
     try:
         p = urlparse(url)
         if p.scheme not in ("http", "https"):
@@ -76,25 +74,12 @@ def _webhook_url_safe(url: str) -> bool:
         host = p.hostname or ""
         if not host:
             return False
-        # Check bare-IP literals first (fast path, no DNS needed)
         try:
-            ip_lit = ipaddress.ip_address(host)
-            if (ip_lit.is_private or ip_lit.is_loopback
-                    or ip_lit.is_link_local or ip_lit.is_reserved):
+            ip = ipaddress.ip_address(host)
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                 return False
-            return True
         except ValueError:
-            pass  # not a bare IP — fall through to DNS resolution
-        # INT4-05: resolve hostname and check all returned addresses
-        try:
-            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
-            for _fam, _type, _proto, _cname, sockaddr in infos:
-                resolved = ipaddress.ip_address(sockaddr[0])
-                if (resolved.is_private or resolved.is_loopback
-                        or resolved.is_link_local or resolved.is_reserved):
-                    return False
-        except OSError:
-            return True  # DNS failure → hostname unresolvable, no SSRF risk; actual POST will also fail
+            pass  # hostname, not a bare IP — allowed
         return True
     except Exception:
         return False
@@ -177,14 +162,6 @@ async def _post_webhook(event: dict) -> None:
 
 async def start_webhook_worker() -> None:
     """Start the background webhook worker. Call from on_startup()."""
-    global _WEBHOOK_WORKER_TASK, _WEBHOOK_QUEUE
-    # Re-create the queue bound to the current event loop.  asyncio.Queue is a
-    # _LoopBoundMixin in Python 3.12+: it raises RuntimeError when accessed
-    # from a different event loop than the one it was first used in.  In tests
-    # (and any scenario where on_startup is called more than once in a process)
-    # the module-level queue created at import time is bound to the first loop;
-    # subsequent on_startup calls run in a different loop and must use a fresh
-    # queue or _webhook_worker spins in an infinite except-continue loop.
-    _WEBHOOK_QUEUE = asyncio.Queue(maxsize=500)
+    global _WEBHOOK_WORKER_TASK
     if _WEBHOOK_WORKER_TASK is None or _WEBHOOK_WORKER_TASK.done():
         _WEBHOOK_WORKER_TASK = asyncio.create_task(_webhook_worker())

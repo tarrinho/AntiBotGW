@@ -45,10 +45,8 @@ def _run(cmd, timeout=60):
 
 
 @pytest.mark.skipif(not _docker_works(), reason="docker not available")
-@pytest.mark.skipif(not (_image_present("appsec-antibot-gw:1.8.10")
-                         or _image_present("appsec-antibot-gw:1.8.6")
-                         or _image_present("appsec-antibot-gw:1.6.5")),
-                     reason="no appsec-antibot-gw image built")
+@pytest.mark.skipif(not _image_present("appsec-antibot-gw:1.6.5"),
+                     reason="appsec-antibot-gw:1.6.5 image not built")
 def test_timescaledb_60s_soak():
     """Spin TimescaleDB + gateway pointed at it, 60 s of traffic,
     assert events in Postgres."""
@@ -114,13 +112,9 @@ def test_timescaledb_60s_soak():
         }
         for k, v in env_kv.items():
             env_args.extend(["-e", f"{k}={v}"])
-        gw_image = ("appsec-antibot-gw:1.8.10"
-                    if _image_present("appsec-antibot-gw:1.8.10")
-                    else "appsec-antibot-gw:1.8.6"
-                    if _image_present("appsec-antibot-gw:1.8.6")
-                    else "appsec-antibot-gw:1.6.5")
         r = _run(["docker", "run", "-d", "--name", GW_NAME,
-                  "--network", NET] + env_args + [gw_image])
+                  "--network", NET] + env_args +
+                  ["appsec-antibot-gw:1.6.5"])
         assert r.returncode == 0, f"gateway start failed: {r.stderr}"
 
         # Wait for gateway readiness — grep its logs.
@@ -128,7 +122,7 @@ def test_timescaledb_60s_soak():
         gw_ready = False
         while time.time() < deadline:
             logs = _run(["docker", "logs", GW_NAME]).stdout
-            if ("postgres backend selected" in logs or "active=postgres" in logs) and "[svc-metrics]" in logs:
+            if "postgres backend selected" in logs and "[svc-metrics]" in logs:
                 gw_ready = True
                 break
             time.sleep(1)
@@ -149,11 +143,10 @@ def test_timescaledb_60s_soak():
                   f"done"], timeout=15)
             sent += 5
             time.sleep(1)
-        assert sent >= 200, f"only sent {sent} requests in 60 s"
+        assert sent >= 250, f"only sent {sent} requests in 60 s"
 
         # Give fire-and-forget pg writes a moment to drain.
-        # Use 10 s to allow thread-pool inserts to flush on ARM64.
-        time.sleep(10)
+        time.sleep(3)
 
         # 6. Confirm rows landed in Postgres (query via docker exec).
         r = _run(["docker", "exec", PG_NAME, "psql",
@@ -170,61 +163,10 @@ def test_timescaledb_60s_soak():
             rows = int(r.stdout.strip())
         except ValueError:
             rows = -1
-
-        # Diagnostic: query gateway's /__db-test from inside the gateway container.
-        db_test = _run(["docker", "exec", GW_NAME, "python3", "-c",
-                        "import urllib.request,json;"
-                        "try:\n"
-                        " req=urllib.request.Request('http://127.0.0.1:8443/antibot-appsec-gateway/secured/__db-test',\n"
-                        "  headers={'Authorization':'Bearer soak-key'});\n"
-                        " r=urllib.request.urlopen(req,timeout=5);\n"
-                        " print(r.read().decode());\n"
-                        "except Exception as e: print('db-test err:',e)"])
-
-        if rows == 0:
-            # Diagnostic: check SQLite event count inside gateway container.
-            sqlite_rows = _run(["docker", "exec", GW_NAME, "python3", "-c",
-                                "import sqlite3,os; db='/data/antibot.db';"
-                                "conn=sqlite3.connect(db) if os.path.exists(db) else None;"
-                                "print(conn.execute('SELECT COUNT(*) FROM events').fetchone()[0]"
-                                " if conn else 'no-db')"])
-            # Diagnostic: test pg_insert_event from inside gateway container.
-            pg_py_diag = _run(["docker", "exec", GW_NAME, "python3", "-c",
-                               "import sys,os; sys.path.insert(0,'/app');"
-                               "os.chdir('/app');"
-                               "from config import DB_BACKEND, POSTGRES_DSN;"
-                               "print('DB_BACKEND=',repr(DB_BACKEND));"
-                               "print('POSTGRES_DSN=',repr(POSTGRES_DSN));"
-                               "import state; state._postgres_available=True;"
-                               "from db.postgres import _get_pool, pg_insert_event;"
-                               "import time;"
-                               "pool=_get_pool();"
-                               "print('pool=',pool);"
-                               "r=pg_insert_event(time.time(),'2.2.2.2','diag','/',200,'diag-exec','tk','','','','rid');"
-                               "print('insert=',r)"])
-            # Diagnostic: direct INSERT to confirm Postgres table accepts writes.
-            _run(["docker", "exec", PG_NAME, "psql",
-                  "-U", "postgres", "-d", PG_DB, "-At", "-c",
-                  "INSERT INTO events (ts,ip,ua,path,status,reason) "
-                  "VALUES (NOW(),'1.2.3.4','diag-ua','/',200,'diag-test')"])
-            rows_after = _run(["docker", "exec", PG_NAME, "psql",
-                               "-U", "postgres", "-d", PG_DB, "-At", "-c",
-                               "SELECT COUNT(*) FROM events"]).stdout.strip()
-            gw_full_logs = _run(["docker", "logs", GW_NAME]).stdout
-            pg_logs = _run(["docker", "logs", "--tail", "50", PG_NAME]).stdout
-            assert False, (
-                f"0 Postgres event rows after 60 s traffic + 10 s drain.\n"
-                f"SQLite events in GW container: {sqlite_rows.stdout.strip()!r}\n"
-                f"pg_insert_event exec diag: {pg_py_diag.stdout!r} err={pg_py_diag.stderr!r}\n"
-                f"GW /__db-test: {db_test.stdout!r}\n"
-                f"Direct psql INSERT — rows after: {rows_after}\n"
-                f"---- GW logs (last 3000) ----\n{gw_full_logs[-3000:]}\n"
-                f"---- PG logs ----\n{pg_logs[-1500:]}")
-
         gw_tail = _run(["docker", "logs", "--tail", "60", GW_NAME]).stdout
-        assert rows >= 50, (
+        assert rows >= 100, (
             f"60 s of traffic produced only {rows} Postgres event rows "
-            f"(expected ≥50). GW tail:\n{gw_tail}")
+            f"(expected ≥100). GW tail:\n{gw_tail}")
 
         # 7. Confirm Timescale hypertable was created on `events`.
         r = _run(["docker", "exec", PG_NAME, "psql",

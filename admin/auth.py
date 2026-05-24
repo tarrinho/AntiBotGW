@@ -106,7 +106,7 @@ if _admin_ips_raw:
         except ValueError as _e:
             print(f"FATAL: invalid ADMIN_ALLOWED_IPS entry {_entry!r} — {_e}",
                   flush=True)
-            raise SystemExit(2) from None
+            raise SystemExit(2)
 
 
 def _internal_authed(request) -> bool:
@@ -135,7 +135,7 @@ def _internal_authed(request) -> bool:
     # current-session indicator in the sessions modal.
     parsed = _session_parse(cookie)
     sid = parsed[1] if parsed else ""
-    # 1.8.6 Week 3 — Task F: idle timeout check (before touch)
+    # 1.8.5 Week 3 — Task F: idle timeout check (before touch)
     from config import SESSION_IDLE_TIMEOUT  # noqa: F401
     from admin.users import _SESSION_TTL  # noqa: F401 — _SESSION_TTL lives in users.py
     if sid and SESSION_IDLE_TIMEOUT > 0:
@@ -143,18 +143,6 @@ def _internal_authed(request) -> bool:
         if cached:
             last_touch = cached.get("_last_touch", cached.get("expires_ts", _t.time()) - _SESSION_TTL)
             if _t.time() - last_touch > SESSION_IDLE_TIMEOUT:
-                _session_revoke(sid, by_username="system")
-                return False
-    # 1.8.6 Week 4 — Task J: session IP binding check
-    from config import BIND_SESSION_TO_IP  # noqa: F401
-    if BIND_SESSION_TO_IP and sid:
-        _cached_for_ip = _SESSION_CACHE.get(sid)
-        if _cached_for_ip:
-            stored_ip = _cached_for_ip.get("source_ip", "")
-            req_ip = get_ip(request)
-            if stored_ip and req_ip and stored_ip != req_ip:
-                slog("session_ip_mismatch", level="warn",
-                     sid=sid[:8], stored_ip=stored_ip, request_ip=req_ip)
                 _session_revoke(sid, by_username="system")
                 return False
     try:
@@ -179,19 +167,12 @@ def _request_username(request) -> str:
 
 def _request_role(request) -> str:
     """Return the role of the session user, or 'admin' for key-only auth."""
-    from admin.users import _user_load, _session_revoke  # lazy: avoid circular import
+    from admin.users import _user_load  # lazy: avoid circular import at module load
     u = request.get("_session_user") if hasattr(request, "get") else None
     if not u:
-        return "admin"  # key-only (admin_key) auth — grants admin by design
+        return "admin"
     user = _user_load(u)
-    if not user:
-        # User deleted after session was issued; revoke defensively (AUTH4-01)
-        sid = request.get("_session_sid") if hasattr(request, "get") else None
-        if sid:
-            _session_revoke(sid, by_username="system")
-        return "viewer"  # fail-closed: deleted user must not get admin
-    role = (user.get("role") or "").strip()
-    return role if role in ("admin", "maintainer", "viewer") else "viewer"
+    return (user or {}).get("role") or "admin"
 
 
 def _role_denied(request, *allowed_roles: str):
@@ -207,12 +188,11 @@ def _role_denied(request, *allowed_roles: str):
 
 
 def _admin_ip_allowed(request) -> bool:
-    """Allowed iff source IP matches one of the configured networks.
-    Fail-closed: returns False when no allowlist is configured (F-06).
-    Set ADMIN_ALLOWED_IPS to at least one CIDR to enable admin access.
-    Uses get_ip() so TRUST_XFF works behind a trusted proxy."""
+    """Allowed iff source IP matches one of the configured networks. Returns
+    True when no allowlist is configured (open by default — admin key still
+    required). Uses get_ip() so TRUST_XFF=last works behind a trusted proxy."""
     if not ADMIN_ALLOWED_NETS:
-        return False
+        return True
     try:
         ip = _ipaddress.ip_address(get_ip(request))
     except (ValueError, TypeError):
