@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/jwt.py — JWT/Bearer signature validation (Tier B).
 

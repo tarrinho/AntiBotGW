@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 db/postgres.py — PostgreSQL / TimescaleDB integration.
 Extracted from proxy.py as part of Phase 2 modular refactoring.

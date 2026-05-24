@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 identity.py — Session cookie + browser fingerprint identity logic.
 Extracted from proxy.py as part of Phase 3 modular refactoring.

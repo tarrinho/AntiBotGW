@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/siem.py — SIEM Security Event Center (1.8.4)
 from collections import defaultdict
 from config import *   # noqa: F401,F403

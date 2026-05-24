@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/controls.py — Phase 8: controls/geo/logs dashboard endpoints
 # Extracted from proxy.py lines 11281–11297
 from config import *   # noqa: F401,F403

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 challenge/js_challenge.py — JS challenge: Turnstile + Anubis cookie gate.
 Extracted from proxy.py as part of Phase 6 modular refactoring.

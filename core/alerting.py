@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """core/alerting.py — Background alerting task for threat_index and ban rate."""
 import asyncio
 import os

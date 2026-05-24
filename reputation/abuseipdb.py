@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 reputation/abuseipdb.py — AbuseIPDB integration (free tier 1000 lookups/day).
 Extracted from proxy.py as part of Phase 5 modular refactoring.

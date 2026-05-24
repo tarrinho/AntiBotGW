@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # admin/settings.py — Phase 8: settings export/import + settings dashboard
 # Extracted from proxy.py lines 11284–11612
 import time as _t       # noqa: F401

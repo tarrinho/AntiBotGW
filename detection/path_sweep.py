@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/path_sweep.py — 1.7.3
 #
 # Post-challenge path-sweep detector.

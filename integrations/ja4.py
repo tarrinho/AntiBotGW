@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/ja4.py — JA4 TLS fingerprint deny-list + auto-deny logic.
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """core/middleware.py — aiohttp middleware layer.
 
 Extracted from proxy.py (Phase 9).  Contains:

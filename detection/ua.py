@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/ua.py — Phase 4 extraction
 # UA_BLOCKLIST, AI_UA_GROUPS, and all AI_UA_*_ENABLED flags live in config.py
 # (populated during Phase 1). This module simply re-exports them so that code

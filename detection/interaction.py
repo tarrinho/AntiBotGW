@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 detection/interaction.py — Client-side interaction behavioural probe (v1.8.6).
 

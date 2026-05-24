@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/honeypots.py — 1.8.12: Honeypots dashboard backend
 # Serves honeypots.html and provides honeypots-data JSON endpoint.
 import time as _t

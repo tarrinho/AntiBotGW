@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 db/ — Database backend package.
 Extracted from proxy.py as part of Phase 2 modular refactoring.

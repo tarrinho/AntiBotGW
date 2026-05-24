@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/headers.py — Phase 4 extraction
 # Header-based bot-signal functions extracted from proxy.py.
 #

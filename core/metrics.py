@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """core/metrics.py — per-minute timeline + cost-buffer helpers.
 
 Extracted from proxy.py (Phase 9).  All symbols here were previously

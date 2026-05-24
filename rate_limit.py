@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 rate_limit.py — Token-bucket rate limiting + background prune loop.
 Extracted from proxy.py as part of Phase 3 modular refactoring.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 config.py — All module-level constants, env vars, and key loading functions.
 Extracted from proxy.py as part of Phase 1 modular refactoring.

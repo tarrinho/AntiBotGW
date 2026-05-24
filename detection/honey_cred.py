@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 detection/honey_cred.py — P1: Semantic honeypot credential injection (1.7.3).
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/paths.py — Phase 4 extraction
 # HONEYPOT_PATHS, SUSPICIOUS_PATH_PATTERNS, is_suspicious_path, HONEY_LINK_HTML,
 # and bot-trap form injection all live here.

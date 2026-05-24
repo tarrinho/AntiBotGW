@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/analytics.py — analytics endpoints
 #
 #   GET /secured/score-distribution    — risk-score histogram across all IpState objects
