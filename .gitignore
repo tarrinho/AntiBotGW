@@ -42,3 +42,8 @@ Thumbs.db
 *.tgz
 dist/
 build/
+
+.env
+.DS_Store
+_seed/*.mmdb
+copy-to-github.sh
