@@ -91,6 +91,14 @@ async def gw_client(fake_upstream, aiohttp_client):
     proxy.metrics["by_reason"].clear()
     proxy.metrics["by_status"].clear()
     proxy.timeline.clear()
+    # M-4: clear ip_bans table so persistent hostile bans from prior tests
+    # don't short-circuit the ip_ban early-return in protect().
+    import sqlite3 as _sq
+    try:
+        with _sq.connect(TEST_DB) as _c:
+            _c.execute("DELETE FROM ip_bans")
+    except Exception:
+        pass
     return client
 
 

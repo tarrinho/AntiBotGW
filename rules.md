@@ -6,6 +6,11 @@ below **before announcing the build as done**. Every finding must be
 fixed (or explicitly classified as pre-existing in the report) before
 the version is considered released.
 
+**Every run of this pipeline MUST end with the Stage 21 status report** — a
+per-stage status table plus the aggregate test totals. This is mandatory output
+on every run, pass or fail; announcing a build "done" without it is a protocol
+violation. See [§21](#21-pipeline-status-report-mandatory).
+
 **Pipeline overview:**
 
 | Step | Type | Gate |
@@ -28,6 +33,7 @@ the version is considered released.
 | 10 | Image CVE scan (Trivy + Aikido) | 0 C / 0 H |
 | 11 | Automated code review | no open H/C |
 | 11a | Secure code review (white-box) | blocking |
+| 11b | Security risk evaluation (STRIDE + accepted-risk register) | 0 unmitigated High |
 | 12 | E2E / Black-box pentest | 0 bypasses |
 | 13 | Documentation | complete |
 | 14 | Multi-arch build + Harbor push | all 3 arches |
@@ -39,8 +45,9 @@ the version is considered released.
 | 18 | Acceptance / UAT | operator sign-off |
 | 19 | Canary deployment gate | 0 new errors in 15 min |
 | 20 | Compliance attestation | all items confirmed |
+| 21 | Pipeline status report | **mandatory final output** (status table + test totals) |
 
-Author: Pedro Tarrinho · Last updated for: 1.8.9
+Author: Pedro Tarrinho · Last updated for: 1.8.12
 
 ---
 
@@ -416,6 +423,53 @@ Read every line of code added or modified in this version. Check for:
 - New external dependencies (must justify)
 - New deps must be in `Dockerfile` AND `requirements.txt` if added
 
+## 11b. Security risk evaluation (blocking)
+
+Tool scans (§9/§10) and code review (§11/§11a) find *defects*. This stage
+evaluates **residual risk** — the security-relevant design decisions and accepted
+trade-offs that are not bugs but still carry exposure. Run it every release; it is
+blocking on any unmitigated High.
+
+### 11b-1. New-surface threat pass (STRIDE-lite)
+
+For **each feature/endpoint added or changed** this version, answer:
+
+| Question | If yes → |
+|----------|----------|
+| New input crosses a trust boundary (request body/header/query/path)? | validated + bounded? injection-tested (§8)? |
+| New auth / session / token / CSRF surface? | constant-time compare · gated · rate-limited? |
+| New data exposed in a response/dashboard/log? | no secrets/PII; attacker-controlled values escaped? |
+| New outbound request (SSRF reach)? | passes `_ssrf_guard_url` / `ALLOW_PRIVATE_UPSTREAM` checked? |
+| New file/DB write or config mutation? | authz-checked · path-constrained · idempotent? |
+| New persistence/poll loop or unbounded structure? | bounded · DoS-amplifier reviewed? |
+
+Any "yes" without a satisfactory control is a finding — fix or record as accepted.
+
+### 11b-2. Accepted-risk register
+
+Maintain a risk table in `validation/<version>.md` §11b. Carry every standing
+accepted risk forward and **re-confirm** it each release (it is not "decided once"):
+
+| ID | Risk | Likelihood | Impact | Mitigation | Decision | Owner | Review-by |
+|----|------|-----------|--------|------------|----------|--------|-----------|
+| R1 | `agw_csrf` cookie JS-readable (HttpOnly off) | … | … | double-submit token + SameSite | accept | Pedro Tarrinho | next release |
+| R2 | `ALLOW_PRIVATE_UPSTREAM` default-allow (SSRF) | … | … | operator-scoped, `_ssrf_guard_url` elsewhere | accept | … | … |
+| R3 | Admin surface hidden via decoy-404 (security-by-obscurity layer) | … | … | admin-IP allowlist is the real gate | accept | … | … |
+
+Rules:
+- Every row needs a named **Owner** and a **Review-by** date (a release tag or
+  calendar date) — no perpetual "accept" without a recheck horizon.
+- A **new** High/Critical residual risk blocks the release unless explicitly
+  accepted by the owner with written rationale.
+- New features that introduce a residual risk add a row here in the same release.
+
+### 11b-3. Pass criterion
+
+Every changed surface has a completed 11b-1 row; the 11b-2 register is current
+(all rows re-confirmed, owners + review dates present); zero unmitigated
+High/Critical residual risks. Record the outcome in `validation/<version>.md` §11b
+and reflect it in the §21 status table.
+
 ## 12. E2E / Black-box pentest
 
 **Testing layer:** This step serves as both the **end-to-end (E2E) test** — exercising the whole
@@ -478,7 +532,23 @@ Each release MUST update:
 5. **`GW-Tests-Full.md`** — full test suite reference (one section per test file).
    Any release that adds, removes, or materially changes a test file MUST update this document:
    - **New file added:** add a section under the correct version heading; add the filename to the Table of Contents row for that version; increment the `Total test files` count in the header and footer.
-   - **Tests changed within a file:** update the affected class row (test count, description).
+   - **Per-table total (MANDATORY):** every per-test-file table MUST be immediately
+     followed by a `**Total: N tests**` line — `N` = sum of the `Tests` column, or
+     the data-row count for one-test-per-row tables. Prose sections (no table)
+     must state the count inline (e.g. "46 tests covering:"). Verify with:
+     ```bash
+     # every test-file section must contain a Total (table) or an inline "N tests"
+     python3 - <<'EOF'
+     import re; t=open('GW-Tests-Full.md').read()
+     for s in re.split(r'(?m)^### ', t)[1:]:
+         h=s.split('\n',1)[0]
+         if not h.strip().startswith('`test_'): continue
+         body=s.split('\n### ',1)[0]
+         assert '**Total:' in body or re.search(r'\b\d+ tests\b', body), f"no total: {h[:40]}"
+     print("all sections carry a test total")
+     EOF
+     ```
+   - **Tests changed within a file:** update the affected class row (test count, description) **and the table's `**Total: N tests**` line**.
    - **File removed or renamed:** remove or update its section and TOC entry; decrement the count.
    - **Version header:** bump `**Version:**` field to match the release being documented.
    - Run this to verify no test file is missing from the document after the update:
@@ -1575,6 +1645,81 @@ docker exec <container> python3 -c "from db.sqlite import prune_old_events; prun
 
 All items above confirmed. Record in `validation/<version>.md` under §20. Any gap must be
 classified: accepted-risk (with owner + review date) or remediated before release.
+
+---
+
+## 21. Pipeline status report (mandatory)
+
+**Every run of this pipeline MUST end by printing (a) a per-stage status table and
+(b) the aggregate test totals — no exceptions, pass or fail.** This is the single
+artifact the operator reads to judge release-readiness. Announcing the build
+"done" without it is a protocol violation. Also append the same table + totals to
+`validation/<version>.md`.
+
+### 21a. Per-stage status table
+
+Render a Markdown table with **one row for every stage 0–20**. Never omit a row —
+a stage that was not run is marked `⏭️ SKIP` with the reason. Status legend:
+`✅ PASS` · `❌ FAIL` · `⏭️ SKIP` (+reason) · `⚠️ KNOWN` (pre-existing, documented).
+
+| # | Stage | Status | Key metric / note |
+|---|-------|--------|-------------------|
+| 0 | Zombie cleanup | ✅ | 0 orphans |
+| 0a | Version consistency | ✅ | 1.8.12 across all files |
+| 1 | Unit | ✅ | 1234 passed |
+| 2 | Functional | ✅ | 38 passed |
+| 3 | Integration | ✅ | 23 passed |
+| 3a | Component | ✅ | 20 passed |
+| 3b | Mutation | ✅ | 712/812 = 87.7% |
+| 5 | Regression | ✅ | no new failures |
+| 6 | Performance | ✅ | p95 within budget |
+| 7 | Secret-leak | ✅ | 0 leaks |
+| 8 | Injection | ✅ | 0 bypasses |
+| 9 | Bandit + Semgrep | ✅ | 0 H / 0 C · 0 findings |
+| 10 | Trivy (×3 arch) | ✅ | 0 C / 0 H / 0 M |
+| 12 | E2E pentest | ✅ | 0 bypasses |
+| 14 | Multi-arch + Harbor | ✅ | amd64 · arm64 · armv7 |
+| 15 | DAST | ✅ | no 5xx / tracebacks |
+| 17 | Dashboard security | ✅ | 0 violations |
+| 20 | Compliance attestation | ⏭️ | operator sign-off pending |
+
+Rules:
+- Every `❌ FAIL` is expanded below the table with the failing test/finding and its
+  fix or classification.
+- Every `⚠️ KNOWN` row links the documented pre-existing issue.
+
+### 21b. Test totals (mandatory)
+
+Immediately below the table, print the aggregate counts taken from the **final
+`pytest` summary line of the full suite run** (not a subset):
+
+```
+Tests:    <collected> collected · <passed> passed · <failed> failed · <skipped> skipped · <xfail> xfail
+Mutation: <killed>/<total> = <pct>%   (gate ≥ 80%)
+Coverage: <pct>%                       (if measured)
+```
+
+- If the suite was run in shards, sum them and state that it was sharded.
+- A release may be announced **only when `failed == 0`**, or when every remaining
+  failure is an explicit `⚠️ KNOWN` with a linked rationale.
+
+### 21c. Verdict line
+
+End with a single verdict line, then the version and the three image digests:
+
+```
+VERDICT: RELEASE-READY ✅   (all gates pass / only documented KNOWNs)
+   — or —
+VERDICT: BLOCKED ❌         (N unresolved FAIL(s): <list>)
+
+version: 1.8.12
+amd64:  sha256:…
+arm64:  sha256:…
+armv7:  sha256:…
+```
+
+**Pass criterion:** the status table (all 0–20 rows) + the totals line + the
+verdict line are present in both the chat output and `validation/<version>.md`.
 
 ---
 

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · Controls</title>
+<title>AppSecGW_1.8.13 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
@@ -392,6 +392,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;pointer-events:auto}
 .stip-hdr{display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:10px 14px 9px;border-bottom:1px solid var(--line);background:#1a2540}
+html[data-theme="light"] .stip-hdr{background:#e1ebfa}
 .stip-hdr-left{display:flex;align-items:center;gap:8px;min-width:0}
 .stip-hdr code{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--blue);
   font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -533,7 +534,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -542,6 +543,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls" class="active">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -584,6 +586,8 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div id="ctrl-scope-strip">
 <div id="vhost-scope-bar" style="margin-bottom:0;background:transparent;border:none;padding:0">
   <span style="color:var(--dim);font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Scope</span>
+  <input id="vhost-sel-search" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:12px;width:120px"
+    oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-sel').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
   <select id="vhost-sel">
     <option value="">Global (all vhosts)</option>
   </select>
@@ -845,6 +849,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
 const url = p => p;   // identity — kept for the ~30 fetch call-sites throughout this file
 // Inject X-CSRF-Token automatically for every state-mutating same-origin request.
@@ -1088,7 +1093,7 @@ let overriddenKnobs = new Set();
 let envPinnedKnobs  = new Set();
 
 function $(id){ return document.getElementById(id); }
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 const _timers=[];
 
 function _buildBotListUI(knobName, raw) {
@@ -1510,6 +1515,8 @@ async function load(){
     // remove options no longer in server list (keep '' = global)
     [..._vhostSel.options].forEach(o => { if (o.value && !fresh.has(o.value)) o.remove(); });
     if (_vhostVal) _vhostSel.value = _vhostVal;
+    const _vss = document.getElementById('vhost-sel-search');
+    if (_vss) _vss.style.display = body.vhosts.length >= 8 ? 'inline-block' : 'none';
   }
   // Update overridden-knobs set and scope-bar widgets
   overriddenKnobs = new Set(body.overridden || []);
@@ -1602,8 +1609,10 @@ async function apply(){
     }
     const _vhostSelA = document.getElementById('vhost-sel');
     const _vhostQA = (_vhostSelA && _vhostSelA.value) ? '?vhost=' + encodeURIComponent(_vhostSelA.value) : '';
+    const _aplCsrf = (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/) || [])[1] || '');
     const r = await fetch(url('/antibot-appsec-gateway/secured/config') + _vhostQA,
-      {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
+      {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':_aplCsrf},
+       credentials:'include', body: JSON.stringify(payload)});
     const body = await r.json();
     const appliedN  = body.applied  ? Object.keys(body.applied).length  : 0;
     const rejectedN = body.rejected ? Object.keys(body.rejected).length : 0;
@@ -1922,21 +1931,37 @@ document.addEventListener('DOMContentLoaded', () => {
           cell.innerHTML = '';
           cell.appendChild(inp);
           inp.focus(); inp.select();
+          inp.oninput = () => {
+            const v = inp.value.trim();
+            const parsed = v.includes('.') ? parseFloat(v) : parseInt(v, 10);
+            if (!Number.isNaN(parsed)) mark(name, parsed);
+          };
           let _thrSaved = false;
           const save = async (commit) => {
             if (_thrSaved) return;
             _thrSaved = true;
             const v = inp.value.trim();
-            if (!commit || v === orig) { loadThresholds(); return; }
+            if (!commit || v === orig) {
+              // cancelled — undo dirty state
+              delete dirty[name];
+              const _n = Object.keys(dirty).length;
+              $('apply').disabled = _n === 0; $('reset').disabled = _n === 0;
+              loadThresholds(); return;
+            }
             // try parse number (int or float)
             const parsed = v.includes('.') ? parseFloat(v) : parseInt(v, 10);
             if (Number.isNaN(parsed)) { showToast('Invalid number','err'); loadThresholds(); return; }
             try {
+              const _tCsrf = (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/) || [])[1] || '');
               const r = await fetch(url('/antibot-appsec-gateway/secured/config'),
-                {method:'POST', headers:{'Content-Type':'application/json'},
-                 body: JSON.stringify({[name]: parsed})});
+                {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':_tCsrf},
+                 credentials:'include', body: JSON.stringify({[name]: parsed})});
               const body = await r.json();
               if (r.ok && body.applied && Object.keys(body.applied).length){
+                serverState[name] = parsed;
+                delete dirty[name];
+                const _n = Object.keys(dirty).length;
+                $('apply').disabled = _n === 0; $('reset').disabled = _n === 0;
                 showToast(name+' = '+parsed,'ok');
               } else {
                 const reasons = body.rejected ? Object.entries(body.rejected).map(([k,v])=>`${k}: ${v}`).join('; ') : 'unknown';
@@ -3775,7 +3800,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.style.borderColor = c.edge;
       pill.textContent = `● GW ${s}/100`;
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }

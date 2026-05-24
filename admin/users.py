@@ -435,11 +435,11 @@ async def login_page_endpoint(request: web.Request):
             .replace("__BOOTSTRAP_HINT__", _bootstrap_hint_html())
             .replace("__OIDC_BUTTON__", oidc_button_html())
             .replace("__OIDC_ERROR__", oidc_error_html))
-    # FE4-06: strict CSP for the login page (no inline scripts needed)
+    # FE4-06: strict CSP for the login page — no inline scripts (F-11)
     csp = (
         "default-src 'none'; "
         "style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; "
         "font-src 'self'; "
         "img-src 'self' data:; "
         "connect-src 'self'; "
@@ -1042,9 +1042,9 @@ def _totp_provisioning_uri(secret: str, username: str) -> str:
     return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="AppSecGW")
 
 
-def _generate_backup_codes() -> list:
+def _generate_backup_codes() -> list:  # F-08: 10 bytes = 80 bits per code
     import secrets as _sec
-    return [_sec.token_hex(4).upper() for _ in range(8)]
+    return [_sec.token_hex(10).upper() for _ in range(8)]
 
 
 async def totp_verify_endpoint(request: web.Request):

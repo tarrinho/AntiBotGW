@@ -207,11 +207,12 @@ def _role_denied(request, *allowed_roles: str):
 
 
 def _admin_ip_allowed(request) -> bool:
-    """Allowed iff source IP matches one of the configured networks. Returns
-    True when no allowlist is configured (open by default — admin key still
-    required). Uses get_ip() so TRUST_XFF=last works behind a trusted proxy."""
+    """Allowed iff source IP matches one of the configured networks.
+    Fail-closed: returns False when no allowlist is configured (F-06).
+    Set ADMIN_ALLOWED_IPS to at least one CIDR to enable admin access.
+    Uses get_ip() so TRUST_XFF works behind a trusted proxy."""
     if not ADMIN_ALLOWED_NETS:
-        return True
+        return False
     try:
         ip = _ipaddress.ip_address(get_ip(request))
     except (ValueError, TypeError):

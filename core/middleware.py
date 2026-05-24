@@ -84,7 +84,8 @@ def _csrf_self_heal(request: web.Request, response) -> None:
     if not parsed:
         return
     _, sid, _ = parsed
-    import hmac as _hmac, hashlib as _hashlib
+    import hmac as _hmac
+    import hashlib as _hashlib
     want = _hmac.new(SESSION_KEY, sid.encode(), _hashlib.sha256).hexdigest()[:32]
 
     # ── Channel 1: re-issue the cookie when missing/stale ────────────────────
@@ -128,9 +129,27 @@ def _inject_csrf_global(request: web.Request, response, token: str) -> None:
         # real injection would be skipped, leaving the global undefined.
         if 'data-agw-csrf' in text or "</head>" not in text:
             return
-        # token is a 32-char hex string; json.dumps gives a safely-quoted JS literal
+        # token is a 32-char hex string; json.dumps gives a safely-quoted JS literal.
+        # 1.8.11: also inject the operator-set SERVICE_OWNER (the org this gateway
+        # protects) and a tiny renderer that appends its name to every
+        # .portal-footer. Read the
+        # value live from config (hot-reload propagates there). json.dumps makes
+        # both values JS-string-safe; the renderer uses textContent (XSS-safe).
         import json as _json
-        tag = '<script data-agw-csrf>window.__AGW_CSRF__=' + _json.dumps(token) + ";</script>"
+        import config as _cfg
+        _owner = getattr(_cfg, "SERVICE_OWNER", "") or ""
+        tag = (
+            '<script data-agw-csrf>window.__AGW_CSRF__=' + _json.dumps(token) +
+            ';window.__AGW_SERVICE_OWNER__=' + _json.dumps(_owner) +
+            ';(function(){var o=window.__AGW_SERVICE_OWNER__;if(!o)return;'
+            'function r(){var fs=document.querySelectorAll("footer.portal-footer");'
+            'for(var i=0;i<fs.length;i++){var f=fs[i];if(f.querySelector(".svc-owner"))continue;'
+            'var s=document.createElement("span");s.className="sep";s.textContent="\\u00b7";'
+            'var e=document.createElement("span");e.className="svc-owner";'
+            'e.textContent=o;f.appendChild(s);f.appendChild(e);}}'
+            'if(document.readyState!=="loading")r();'
+            'else document.addEventListener("DOMContentLoaded",r);})();</script>'
+        )
         response.body = text.replace("</head>", tag + "</head>", 1).encode("utf-8")
     except Exception:
         pass  # never break a response over token injection

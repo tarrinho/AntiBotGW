@@ -5,7 +5,7 @@ import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
-from admin.auth import _internal_authed, _request_username, _role_denied  # noqa: F401
+from admin.auth import _internal_authed, _request_username, _role_denied, _require_csrf  # noqa: F401
 from integrations.redis import _redis  # noqa: F401 — lazy singleton, may be None
 from aiohttp import web
 
@@ -94,6 +94,38 @@ def _gw_derive_pubkey(private_key_b64: str) -> str:
         pub_raw  = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
         return _b64.urlsafe_b64encode(pub_raw).rstrip(b"=").decode("ascii")
     except Exception:
+        return ""
+
+
+def _gw_wrap_private_key(raw_b64: str) -> str:
+    """Encrypt an Ed25519 private key for at-rest storage.
+    Returns 'fernet:<ciphertext>' using Fernet keyed from SESSION_KEY.
+    Falls back to plaintext when the cryptography package is absent (armv7)."""
+    if not raw_b64:
+        return raw_b64
+    try:
+        from cryptography.fernet import Fernet as _Fernet
+        import base64 as _b64x, hashlib as _hs
+        fk = _b64x.urlsafe_b64encode(_hs.sha256(SESSION_KEY + b":mesh-key").digest())
+        return "fernet:" + _Fernet(fk).encrypt(raw_b64.encode()).decode()
+    except ImportError:
+        return raw_b64  # cryptography absent — armv7 single-instance, no mesh signing
+
+
+def _gw_unwrap_private_key(stored: str) -> str:
+    """Decrypt a private key stored by _gw_wrap_private_key.
+    Accepts legacy plaintext rows (no 'fernet:' prefix) for backward compat."""
+    if not stored:
+        return ""
+    if not stored.startswith("fernet:"):
+        return stored  # legacy plaintext row — still usable
+    try:
+        from cryptography.fernet import Fernet as _Fernet, InvalidToken
+        import base64 as _b64x, hashlib as _hs
+        fk = _b64x.urlsafe_b64encode(_hs.sha256(SESSION_KEY + b":mesh-key").digest())
+        return _Fernet(fk).decrypt(stored[7:].encode()).decode()
+    except Exception as _e:
+        slog("gw_key_unwrap_failed", level="error", err=str(_e)[:80])
         return ""
 
 
@@ -200,11 +232,9 @@ def _gw_audit(action: str, gw_id: str, actor: str, **details) -> None:
 
 
 def _gw_actor(request: web.Request) -> str:
-    """Identify the operator behind a registry request. Uses the source
-    IP after TRUSTED_PROXIES filtering — same source the audit log uses
-    everywhere else."""
+    """Identify the operator — authenticated username preferred, IP as fallback."""
     from helpers import get_ip  # noqa: F401
-    return get_ip(request) or "unknown"
+    return _request_username(request) or get_ip(request) or "unknown"
 
 
 def _gw_load_one(gw_id: str, include_private: bool = False) -> dict | None:
@@ -243,6 +273,9 @@ def _gw_row_to_dict(r: dict, include_private: bool = False) -> dict:
     # local row, only return it on explicit detail fetches.
     if not (include_private and out["is_local"]):
         out["private_key"] = None
+    else:
+        # F-04: decrypt before returning to the operator.
+        out["private_key"] = _gw_unwrap_private_key(out.get("private_key") or "")
     return out
 
 
@@ -359,6 +392,7 @@ async def gw_registry_get_endpoint(request: web.Request):
     return web.json_response(row, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_create_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -417,7 +451,7 @@ async def gw_registry_create_endpoint(request: web.Request):
                 status=400, headers={"Cache-Control": "no-store"})
     # Operators registering a remote peer should NOT have its private key
     # — the local gateway only holds private material for the LOCAL row.
-    stored_private = private_key if is_local else None
+    stored_private = _gw_wrap_private_key(private_key) if is_local else None
     n = _t.time()
     args = (gw_id, domain or None, region, env, "active", can_distribute,
             public_key, stored_private, n, None, None, n, n, is_local)
@@ -446,6 +480,7 @@ async def gw_registry_create_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_update_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -506,6 +541,7 @@ async def gw_registry_update_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_can_distribute_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}/can-distribute"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -539,6 +575,7 @@ async def gw_registry_can_distribute_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_auto_apply_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}/auto-apply
 
@@ -581,6 +618,7 @@ async def gw_registry_auto_apply_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_rotate_key_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/{gw_id}/rotate-key"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -598,7 +636,7 @@ async def gw_registry_rotate_key_endpoint(request: web.Request):
         data = {}
     reason = (data.get("reason") or "").strip()[:500]
     private_key, public_key = _gw_generate_keypair()
-    stored_private = private_key if cur.get("is_local") else None
+    stored_private = _gw_wrap_private_key(private_key) if cur.get("is_local") else None
     n = _t.time()
     upd = {"public_key": public_key, "private_key": stored_private,
            "key_rotated_ts": n, "updated_ts": n}
@@ -620,6 +658,7 @@ async def gw_registry_rotate_key_endpoint(request: web.Request):
     return web.json_response(out, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_delete_endpoint(request: web.Request):
     """DELETE <NS>/secured/admin/gw-registry/{gw_id}"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -669,6 +708,7 @@ async def gw_registry_distribution_matrix_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_distribution_rules_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/distribution/rules
     Body: {"rules": [{"source": "gw-a", "target": "gw-b"}, ...]}
@@ -826,6 +866,16 @@ _MESH_SYNC_ELIGIBLE_KEYS = (
     "CROWDSEC_ENABLED", "MAXMIND_ENABLED",
     "ANUBIS_ENABLED",   "BOTD_ENABLED",
 )
+# F-05: secrets that must NOT be auto-published to the Redis mesh hash.
+# These contain API keys / tokens — Redis is an untrusted channel.
+# They can still be enabled for mesh sync in the DB/pending queue, but
+# they must be applied manually via the admin UI, not via Redis broadcast.
+_MESH_REDIS_EXCLUDED_KEYS = frozenset({
+    "TURNSTILE_SECRET",
+    "ABUSEIPDB_KEY",
+    "CROWDSEC_LAPI_KEY",
+    "MAXMIND_LICENSE_KEY",
+})
 _MESH_REDIS_NS = "mesh:offers"          # full key: appsecgw:mesh:offers:<gw_id>
 _MESH_OFFER_TTL_S = 60
 _MESH_LOOP_INTERVAL_S = 30
@@ -971,6 +1021,7 @@ async def mesh_sync_state_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def mesh_sync_toggle_endpoint(request: web.Request):
     """POST <NS>/secured/admin/mesh-sync/{key}/toggle — body {enabled}."""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -995,6 +1046,7 @@ async def mesh_sync_toggle_endpoint(request: web.Request):
         headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def mesh_sync_confirm_endpoint(request: web.Request):
     """POST <NS>/secured/admin/mesh-sync/pending/{id}/confirm — apply
     a pending offer's value to the live integration."""
@@ -1045,6 +1097,7 @@ async def mesh_sync_confirm_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def mesh_sync_reject_endpoint(request: web.Request):
     """POST <NS>/secured/admin/mesh-sync/pending/{id}/reject"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -1116,13 +1169,16 @@ async def _mesh_sync_loop():
                     ).fetchone()
                     _lconn.close()
                     if _lrow and _lrow[0]:
-                        local_private_key = _lrow[0]
+                        local_private_key = _gw_unwrap_private_key(_lrow[0])
                 except Exception:
                     pass
-                # 1. publish own offers, Ed25519-signed
+                # 1. publish own offers, Ed25519-signed.
+                # F-05: exclude API secrets from the Redis hash — Redis is
+                # not an encrypted channel. Secrets must be applied manually.
                 offers = {k: _mesh_sync_get_value(k)
                           for k in _mesh_sync_enabled_set()
-                          if _mesh_sync_get_value(k)}
+                          if _mesh_sync_get_value(k)
+                          and k not in _MESH_REDIS_EXCLUDED_KEYS}
                 key = f"{REDIS_NS}:{_MESH_REDIS_NS}:{src}"
                 if offers:
                     publish = dict(offers)

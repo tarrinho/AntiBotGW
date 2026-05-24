@@ -149,8 +149,24 @@ def _purge_expired_states() -> None:
 
 
 def _redirect_uri(request: web.Request) -> str:
+    """Build the OIDC callback URL. F-07: validate the Host header against
+    ALLOWED_HOSTS (same guard the proxy uses for Location rewrites) to
+    prevent open-redirect via a crafted Host header."""
     scheme = "https" if SESSION_SECURE else request.scheme
-    return f"{scheme}://{request.host}{_CALLBACK_PATH}"
+    req_host = (request.host or "").split(":")[0].lower()
+    # Import lazily to avoid circular; ALLOWED_HOSTS is an empty set when
+    # no restriction is configured — fall through to OIDC_ISSUER hostname.
+    try:
+        import sys as _sys
+        _cph = _sys.modules.get("core.proxy_handler")
+        allowed = getattr(_cph, "ALLOWED_HOSTS", set()) if _cph else set()
+    except Exception:
+        allowed = set()
+    if allowed and req_host not in allowed:
+        # Untrusted Host header — derive host from the OIDC issuer URL.
+        from urllib.parse import urlparse as _urlp
+        req_host = _urlp(OIDC_ISSUER).hostname or req_host
+    return f"{scheme}://{req_host}{_CALLBACK_PATH}"
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────

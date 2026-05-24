@@ -398,6 +398,25 @@ def db_init():
     );
     CREATE INDEX IF NOT EXISTS idx_siem_alert_fired_rule
         ON siem_alert_fired(rule_id, ts DESC);
+
+    -- 1.8.12: confirmed-attacker fingerprints from honeypot/honey-cred hits.
+    -- Every honeypot-silent and honey-cred event writes the requester's
+    -- JA4, UA, and ASN here so the WAF can soft-flag future requests that
+    -- share those attributes before they touch any trap.
+    CREATE TABLE IF NOT EXISTS honey_fingerprints (
+        id        INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts        REAL NOT NULL,
+        track_key TEXT,
+        ip        TEXT NOT NULL,
+        ua        TEXT,
+        ja4       TEXT,
+        asn       TEXT,
+        path      TEXT,
+        reason    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_honey_fp_ts  ON honey_fingerprints(ts);
+    CREATE INDEX IF NOT EXISTS idx_honey_fp_ja4 ON honey_fingerprints(ja4);
+    CREATE INDEX IF NOT EXISTS idx_honey_fp_ip  ON honey_fingerprints(ip);
     """)
     # 1.6.7+ — additive column upgrades driven by the central registry.
     # See `_SCHEMA_MIGRATIONS` above; new releases append entries there.
@@ -643,6 +662,15 @@ async def db_writer_loop():
                             args)
                         try: _pg_mirror_kv("gw_audit_add", args)
                         except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
+                    elif op == "honey_fp_add":
+                        # args = (ts, track_key, ip, ua, ja4, asn, path, reason)
+                        conn.execute(
+                            "INSERT INTO honey_fingerprints "
+                            "(ts, track_key, ip, ua, ja4, asn, path, reason) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            args)
+                        try: _pg_mirror_kv("honey_fp_add", args)
+                        except Exception: pass  # nosec B110 — best-effort Postgres mirror
                     # 1.6.7 — user accounts ───────────────────────────
                     elif op == "user_create":
                         # args = (username, password_hash, role, status,
@@ -1291,6 +1319,7 @@ def _read_events_sql(
     vhost: str = "",
     path_like: str = "",
     reason_like: str = "",
+    reason_in=None,
     ip_exact: str = "",
     order_by: str = "",
     limit: int = 0,
@@ -1323,6 +1352,12 @@ def _read_events_sql(
     if reason_like:
         where.append("LOWER(reason) LIKE ?")
         params.append(f"%{reason_like.lower()}%")
+    if reason_in:
+        # Exact-set match — avoids LIKE prefix bleed (e.g. "honeypot" matching
+        # "honeypot-silent"). Placeholders are count-derived, values bound.
+        _ph = ",".join("?" * len(reason_in))
+        where.append(f"reason IN ({_ph})")  # nosec B608 — placeholders only
+        params.extend(str(x) for x in reason_in)
     if ip_exact:
         where.append("ip = ?")
         params.append(ip_exact)

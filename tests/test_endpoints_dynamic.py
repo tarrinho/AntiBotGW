@@ -186,7 +186,7 @@ class TestAuthGuard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/live-feed")
                     body = await r.text()
-                    assert "AppSecGW_1.8.11 · Live Feed" not in body
+                    assert "AppSecGW_1.8.13 · Live Feed" not in body
         _run(go())
 
     def test_config_unauthenticated_decoy(self, proxy_module):
@@ -1291,9 +1291,12 @@ class TestDetectionPipeline:
                     m = await c.get(NS + "/metrics",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await m.json()
-                    scores = [cl.get("risk_score", 0) for cl in d.get("clients", [])]
-                    assert any(s > 0 for s in scores), \
-                        "SQLi in URL must raise risk_score"
+                    # 1.8.13 — detection now hard-blocks via a silent decoy and
+                    # records the reason (was: soft risk_score on the client). Assert
+                    # the by_reason counter, the observable current behaviour.
+                    byr = d.get("by_reason", {})
+                    assert byr.get("suspicious-path", 0) > 0 or byr.get("body-sqli", 0) > 0, \
+                        f"SQLi in URL must fire suspicious-path/body-sqli; by_reason={byr}"
         _run(go())
 
     def test_lfi_path_detected(self, proxy_module):
@@ -1307,9 +1310,11 @@ class TestDetectionPipeline:
                     m = await c.get(NS + "/metrics",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await m.json()
-                    scores = [cl.get("risk_score", 0) for cl in d.get("clients", [])]
-                    assert any(s > 0 for s in scores), \
-                        "LFI path must raise risk_score"
+                    # 1.8.13 — LFI/traversal path normalises (e.g. /static/../../etc/passwd
+                    # → /etc/passwd) and fires suspicious-path, served as a silent decoy.
+                    byr = d.get("by_reason", {})
+                    assert byr.get("suspicious-path", 0) > 0, \
+                        f"LFI path must fire suspicious-path; by_reason={byr}"
         _run(go())
 
     def test_control_byte_in_path_returns_400(self, proxy_module):
@@ -1341,7 +1346,10 @@ class TestDetectionPipeline:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.request("DELETE", "/api/resource",
                                         headers=_browser_headers())
-                    assert r.status == 405
+                    # 1.8.13 — non-allowlisted methods are blocked via the silent
+                    # decoy (404), not a revealing 405 (WAF "don't fingerprint" policy).
+                    assert r.status in (403, 404, 405), \
+                        f"non-allowlisted DELETE must be blocked, got {r.status}"
         _run(go())
 
     def test_security_headers_on_html_response(self, proxy_module):
@@ -2036,7 +2044,7 @@ class TestControlCenterCharts:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/control-center", headers=_browser_headers())
                     body = await r.text()
-                    assert "AppSecGW_1.8.11 · Control Center" not in body, \
+                    assert "AppSecGW_1.8.13 · Control Center" not in body, \
                         "control-center: unauthenticated request must not return dashboard HTML"
         _run(go())
 

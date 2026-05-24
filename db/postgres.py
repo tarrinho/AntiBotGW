@@ -12,6 +12,7 @@ import sqlite3
 import threading as _threading
 import time as _t
 from contextlib import contextmanager
+from decimal import Decimal as _Decimal
 
 from config import (
     DB_BACKEND,
@@ -239,6 +240,12 @@ def _pg_mirror_kv(op: str, args: tuple) -> bool:
                     cur.execute(
                         "INSERT INTO gw_audit (ts, action, gw_id, actor, details) "
                         "VALUES (%s, %s, %s, %s, %s)", args)
+                elif op == "honey_fp_add":
+                    # args = (ts, track_key, ip, ua, ja4, asn, path, reason)
+                    cur.execute(
+                        "INSERT INTO honey_fingerprints "
+                        "(ts, track_key, ip, ua, ja4, asn, path, reason) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)", args)
                 else:
                     return False
         return True
@@ -856,6 +863,24 @@ def db_init_postgres(max_attempts: int = 12, backoff_s: float = 1.0):
                       );
                       CREATE INDEX IF NOT EXISTS idx_siem_alert_fired_rule
                           ON siem_alert_fired(rule_id, ts DESC);
+
+                      CREATE TABLE IF NOT EXISTS honey_fingerprints (
+                        id        BIGSERIAL PRIMARY KEY,
+                        ts        DOUBLE PRECISION NOT NULL,
+                        track_key TEXT,
+                        ip        TEXT NOT NULL,
+                        ua        TEXT,
+                        ja4       TEXT,
+                        asn       TEXT,
+                        path      TEXT,
+                        reason    TEXT
+                      );
+                      CREATE INDEX IF NOT EXISTS idx_honey_fp_ts
+                          ON honey_fingerprints(ts);
+                      CREATE INDEX IF NOT EXISTS idx_honey_fp_ja4
+                          ON honey_fingerprints(ja4);
+                      CREATE INDEX IF NOT EXISTS idx_honey_fp_ip
+                          ON honey_fingerprints(ip);
                     """)
                     # 1.6.7+ — additive column upgrades from the central
                     # registry. Adds any missing column listed in
@@ -1090,6 +1115,7 @@ def _read_events_pg(
     vhost: str = "",
     path_like: str = "",
     reason_like: str = "",
+    reason_in=None,
     ip_exact: str = "",
     order_by: str = "",
     limit: int = 0,
@@ -1142,6 +1168,12 @@ def _read_events_pg(
     if reason_like:
         where.append("LOWER(reason) LIKE %s")
         params.append(f"%{reason_like.lower()}%")
+    if reason_in:
+        # Exact-set match — avoids LIKE prefix bleed (e.g. "honeypot" matching
+        # "honeypot-silent"). Placeholders are count-derived, values bound.
+        _ph = ",".join(["%s"] * len(reason_in))
+        where.append(f"reason IN ({_ph})")  # nosec B608 — placeholders only
+        params.extend(str(x) for x in reason_in)
     if ip_exact:
         where.append("ip = %s")
         params.append(ip_exact)
@@ -1178,6 +1210,12 @@ def _read_events_pg(
                 for row in cur.fetchall():
                     d = {}
                     for col_name, val in zip(fetched_names, row):
+                        # psycopg returns numeric/EXTRACT(EPOCH …) as Decimal,
+                        # which is not JSON-serializable — coerce to float so
+                        # every db_read_events consumer (attack-playbook,
+                        # honeypots-data, agents, …) can json_response the rows.
+                        if isinstance(val, _Decimal):
+                            val = float(val)
                         d[col_name] = val
                     # Inject empty strings for SQLite-only columns
                     for c in requested:

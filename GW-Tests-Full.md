@@ -1,8 +1,8 @@
 # AppSecGW — Full Test Suite Reference
 
-**Generated:** 2026-05-20  
-**Version:** 1.8.10  
-**Total test files:** 75  
+**Generated:** 2026-05-23  
+**Version:** 1.8.11  
+**Total test files:** 98  
 
 ---
 
@@ -34,6 +34,7 @@
 | v1.8.8 | `test_v188_ed25519_mesh.py`, `test_v188_settings_subnav.py`, `test_performance.py`, `test_v188_backend_aware_reads.py`, `test_v188_session_fixes.py`, `test_v188_startup_fixes.py` |
 | v1.8.9 | `test_live_gw.py`, `test_v189_knob_kill_switches.py` |
 | v1.8.10 | `test_v189_sidebar_collapse.py`, `test_v189_ctrlnav_rail.py`, `test_v189_setnav_rail.py` |
+| v1.8.11 | `test_v1810_attack_playbook.py`, `test_v1811_security.py`, `test_v1811_theme.py` |
 | Cross-version | `test_admin_ip_list.py`, `test_code_review_fixes.py`, `test_control_center.py`, `test_crowdsec_lapi_health.py`, `test_dashboard_charts.py`, `test_dashboard_data.py`, `test_upstream_no_leak.py`, `test_upstream_rewrite.py` |
 
 ---
@@ -167,6 +168,8 @@
 | `test_logs_html_cat_pills_all_present` | `logs.html` has all 5 category pills |
 | *(+50 more in this file)* | Various dashboard structure, authorized-bot, vhost breakdown, panel legend, gwmgmt colour checks |
 
+**Total: 119 tests**
+
 ---
 
 ### `test_critical.py` — Critical path unit tests
@@ -232,6 +235,8 @@
 | `test_1610_should_run_signal_2nd_order_gated` | 2nd-order signals suppressed below threshold |
 | `test_1610_should_run_signal_3rd_order_gated` | 3rd-order signals suppressed below escalation threshold |
 
+**Total: 55 tests**
+
 ---
 
 ### `test_async.py` — Rate-limit buckets, behavioural detector, identity pruning
@@ -250,6 +255,8 @@
 | `test_nat_detection_counts_legit_identities` | Legitimate identities counted in NAT detection |
 | `test_stealth_score_zero_for_no_allowed` | Stealth score is 0 when no allowed traffic |
 | `test_stealth_score_flags_low_header_completeness` | Low header completeness flagged in stealth score |
+
+**Total: 10 tests**
 
 ---
 
@@ -283,6 +290,8 @@
 | `test_sw_js_enabled_returns_javascript` | SW challenge enabled → 200 JS |
 | `test_lifecycle_cookie_injected_in_html_response` | HTML responses get `agw_lc` cookie-setting script |
 
+**Total: 23 tests**
+
 ---
 
 ### `test_functional.py` — Functional startup/config tests
@@ -294,6 +303,8 @@
 | `test_db_load_config_rejects_abuseipdb_enabled_without_key` | `ABUSEIPDB_ENABLED=true` rejected when key absent |
 | `test_db_load_config_rejects_turnstile_enabled_without_creds` | `TURNSTILE_ENABLED=true` rejected when Turnstile creds absent |
 | `test_db_load_config_accepts_abuseipdb_enabled_with_key` | `ABUSEIPDB_ENABLED=true` accepted when key present |
+
+**Total: 3 tests**
 
 ---
 
@@ -339,6 +350,8 @@
 | `TestVhostsAPI` | 10 | Full vhost CRUD, SSRF guard, hostname normalisation |
 | `TestControlCenterCharts` | 12 | Control Center HTML, vhost-stats, vhost-breakdown endpoints |
 
+**Total: 136 tests**
+
 ---
 
 ## v1.4
@@ -381,6 +394,8 @@
 | `test_js_challenge_disabled_passes_through` | JS challenge disabled → fully no-op |
 | `test_body_timeout_constant_is_set` | Slowloris guard constant wired in |
 
+**Total: 31 tests**
+
 ---
 
 ## v1.4.2
@@ -408,6 +423,8 @@
 | `test_required_headers_skip_admin_paths` | Admin paths skip required headers check |
 | `test_required_headers_skip_static_assets` | Static assets skip required headers check |
 | `test_required_headers_multi_all_required` | All headers in multi-header list required |
+
+**Total: 17 tests**
 
 ---
 
@@ -463,6 +480,8 @@
 | `test_config_post_list_fields_apply` | List knobs apply and return valid JSON |
 | `test_config_get_includes_rate_limit_fields` | Config GET includes all rate-limit fields |
 
+**Total: 43 tests**
+
 ---
 
 ## v1.6.5
@@ -482,6 +501,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | Test | Description |
 |------|-------------|
 | `test_timescaledb_60s_soak` | Spins up real TimescaleDB + nginx upstream + gateway (postgres backend), drives ≥ 200 requests over 60 s, asserts ≥ 50 event rows in Postgres and confirms Timescale hypertable created |
+
+**Total: 1 tests**
 
 ---
 
@@ -505,6 +526,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `test_yaxis_min_0_max_100` | Y-axis bounded 0–100 (percentage chart) |
 | `test_formula_includes_missed_bucket` | Block-rate formula accounts for `b.missed` |
 
+**Total: 11 tests**
+
 ---
 
 ## v1.7.3
@@ -520,6 +543,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestLLMHeuristic` | 9 | HTML-only requests trigger signal; mixed requests pass; below min-count passes; cooldown; subresource detection |
 | `TestCanaryProbe` | 10 | Injection before `</head>`, noop conditions, TTL-gated firing, token storage |
 
+**Total: 36 tests**
+
 ### `test_path_sweep.py` — Path sweep detector
 **Version added:** v1.7.3  
 **Type:** Unit
@@ -534,6 +559,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `test_repeated_path_counts_as_one` | Same path many times = 1 distinct path |
 | `test_expired_entries_pruned` | Entries older than window pruned on check |
 | `test_check_on_unknown_key_returns_false` | Unknown key returns `False` safely |
+
+**Total: 8 tests**
 
 ---
 
@@ -551,6 +578,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestGeoPillRegression` | 12 | Existing `#live` pill still present, map container, country section, tick/renderMap/renderAsns order |
 | `TestGeoScrubberCumulativeCorrectness` | 7 | Events entry shape `[ts, lat, lng, kind]`, scrubber cap at 5000, `missed` kind excluded |
 
+**Total: 63 tests**
+
 ---
 
 ## v1.7.9
@@ -565,6 +594,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestPathHitsTotalRows` | 5 | `total_rows` key present; integer; `ips` list present; `total_rows >= len(ips)` |
 | `TestBanUnbanEndpoints` | 8 | Auth guard; ban/unban 200; hard ban 31-day; ban by identity ID; response body contains IP |
 
+**Total: 25 tests**
+
 ---
 
 ## v1.7.10
@@ -577,6 +608,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestAgentsBucketGwmgmt` | 5 | `gwmgmt` key in bucket response; empty when no admin events; reflects admin-namespace events; excludes non-admin paths; required fields per entry |
 | `TestServeMirrored404EmptyCache` | 4 | Post-UPSTREAM-change empty cache: no 500; sensible body; no crash; cache repopulated |
 | `TestPathCategoryConfigToggle` | 5 | `BYPASS_PATHS` and `JS_CHAL_OPEN_PATHS` hot-reload via config POST; auth guard |
+
+**Total: 14 tests**
 
 ---
 
@@ -596,6 +629,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestH5LoginBucketEviction` | 3 | `_login_rate_limit` evicts expired entries; target IP intact after eviction |
 | `TestM2DeadCodeRemoved` | 4 | `_load_signal_order_cache` / `_save_signal_order` have exactly one try/except for mesh import |
 
+**Total: 42 tests**
+
 ### `test_h3_pg_pool.py` — PostgreSQL connection pool
 **Version added:** v1.7.11 (H3 fix)
 
@@ -604,6 +639,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestPgPoolUnit` | 21 | Pool init, stats, ping health, fast path, acquire/release, LIFO order, context manager, timeout error |
 | `TestPgPoolRegression` | 11 | Concurrent acquires never exceed max; consistent after discard; unknown op returns False; no pool → False; pool slot freed on connect failure |
 | `TestPgPoolFunctional` | 12 | `_get_pool` None when no DSN; singleton; stored in state; pool size/timeout env vars; source uses pool (not `pg.connect()`) |
+
+**Total: 44 tests**
 
 ### `test_h4_pg_backend_switch.py` — PostgreSQL backend switch endpoint
 **Version added:** v1.7.11 (H4 fix — live DB backend switching)
@@ -617,6 +654,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestDbSwitchValidation` | 11 | Endpoint callable; rejects non-`{sqlite,postgres}` targets; verifies psycopg loadable; requires DSN for postgres; calls `pg_test_roundtrip()`; calls `_migrate_recent_events`; persists `DB_BACKEND` to `config_kv`; uses `os._exit(0)` for restart; returns JSON before exit; migration stats in response; route registered in router |
 | `TestStartupPostgresPath` | 3 | `on_startup` calls `db_init_postgres()` when `DB_BACKEND=postgres`; `db_init_postgres` called regardless of backend (standby schema); `db_init_postgres` uses `CREATE TABLE IF NOT EXISTS` (idempotent) |
 
+**Total: 48 tests**
+
 ### `test_h5_m2_dynamic.py` — Dynamic tests for H5 + M2
 **Version added:** v1.7.11
 
@@ -627,6 +666,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestH5DynamicAsnPathClusters` | 3 | Old clusters evicted; current minute preserved; empty no-op |
 | `TestH5DynamicLoginBucket` | 4 | Expired entries evicted; blocked IP still blocked; mass eviction doesn't corrupt; expired IP gets fresh window |
 | `TestM2DynamicScoringFunctions` | 6 | `_load_signal_order_cache` / `_save_signal_order` exit cleanly when mesh raises; no infinite retry; source has single import |
+
+**Total: 18 tests**
 
 ### `test_settings_config_functional.py` — Settings export/import + config endpoint
 **Version added:** v1.7.11+  
@@ -647,6 +688,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestVhostPolicyDashboard` | 4 | Auth guard; HTML served; no-store; X-Frame-Options |
 | `TestVhostPolicyDataEndpoint` | 8 | Auth guard; 200; required keys; vhost knobs list; global has upstream; no-store; hostname param; vhosts list |
 | `TestDbConfigExportImport` | 11 | DB_BACKEND in state; default value 'sqlite'; POSTGRES_DSN in state; export XML has both knobs; exported value matches active backend; import DB_BACKEND applied + reflects in GET; import POSTGRES_DSN applied; export after change reflects new value; invalid backend 'mysql' rejected |
+
+**Total: 79 tests**
 
 ---
 
@@ -670,6 +713,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestOnIpToIdentitiesWriteSites` | 4 | All write sites for `last_ip` also maintain index; prune discards from index at eviction |
 | `TestScoringDecayRisk` | 7 | Exponential decay: zero elapsed → no change; one halflife → 50%; `risk_by_reason` decays in lockstep; sub-0.5 entries pruned |
 | `TestDOMPurifyIntegration` | 5 | Every dashboard loads `purify.min.js`; `_dp()` table-context fix; no `onclick` inside `_dp()` calls; session revoke uses `data-attribute` |
+
+**Total: 86 tests**
 
 ---
 
@@ -696,6 +741,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestH3GeoHtmlVhostSelector` | 8 | Uses `v.hostname` (critical bug fix), `v.UPSTREAM` (was `v.upstream`) |
 | `TestSourceLevelGuards` | 8 | Source-level checks: `record()` sets `last_vhost`, event dict/queue tuple includes vhost, endpoints read vhost param |
 
+**Total: 86 tests**
+
 ### `test_vhost_filtering.py` — Vhost-scoped filtering
 **Version added:** v1.8.0
 
@@ -709,6 +756,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestU6ServiceDataVhostFilter` | 4 | `app.vhost_filter` reflects in response; unauthenticated decoy |
 | `TestU7LogsDataVhostFilter` | 5 | `WHERE vhost=?` for `kind=requests`; empty when no match; `kind=gw` ignores vhost (global) |
 | `TestR1SourceGuards` | 7 | Source-level checks: all endpoints have vhost SQL clause; `logs.html` sends `_vhostParam`; `cost-timeline` does NOT send vhost param |
+
+**Total: 35 tests**
 
 ---
 
@@ -731,6 +780,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestLogsMissedPillCSS` | 2 | `logs.html` has CSS for `data-cat="missed"` pill (base + active) |
 | `TestLocationHeaderRewrite` | 9 | Location header rewritten only on 3xx; netloc replaced with gateway; relative URLs unchanged; fragment preserved |
 
+**Total: 11 tests**
+
 ---
 
 ## v1.8.1
@@ -750,6 +801,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestF4AuditLogEndpoint` | 12 | Auth guard; rows/count keys; action/actor filters; limit; since filter; oversized limit capped at 1000 |
 | `TestRSourceGuards` | 12 | Source-level: postgres has `gw_audit_add` case; old-value captured before assignment; config/vhosts/settings-import enqueue audit correctly; no SQL injection in audit log |
 
+**Total: 59 tests**
+
 ### `test_v181_vhost_comparison.py` — Vhost comparison endpoints
 **Version added:** v1.8.1
 
@@ -767,6 +820,8 @@ ARM64 thresholds: ≥ 200 requests sent, ≥ 50 Postgres event rows, 10 s drain 
 | `TestV2VhostSetValidation` | 7 | API rejects invalid hostnames |
 | `TestV3HostnameValidatorSourceGuards` | 4 | Validator always called in `vhost_set()` and env parse loop |
 | `TestConfigVhostWrite` | 5 | POST `/config?vhost=X` writes to vhost, not global; non-overridable key rejected; global unaffected |
+
+**Total: 108 tests**
 
 ---
 
@@ -787,6 +842,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `test_s31–s34` | Geo Country chart canvas, variable, destroy-before-new, CSS hidden |
 | `test_s35–s43` | Threat Donut card, fetch, small-slices grouping into 'other', doughnut type, 30s interval; new chart vars and CSS |
 
+**Total: 118 tests**
+
 ### `test_v182_svc_metrics_db.py` — Service metrics 30-day DB read path
 **Version added:** v1.8.2
 
@@ -797,6 +854,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `TestC_EndpointRouting` | 4 | DB path when range exceeds buffer; memory path for short ranges; current always from memory; retention used in prune |
 | `TestS_StaticQA` | 9 | Closes connection; try/except; avg/max/sum keys; range/bucket query params; uses AVG/MAX; 30-day cap |
 | `TestD_Dynamic` | 6 | 200 authenticated; required keys; DB path with seeded data; no secret keys; `samples_in_buffer` present; no-store |
+
+**Total: 32 tests**
 
 ### `test_livefeed_detector_stats.py` — Live Feed detection methods panel
 **Version added:** v1.8.2 fix  
@@ -809,6 +868,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `test_s3_loadLogLevel_no_url_wrapper` | `loadLogLevel()` fetches `/secured/config` without `url()` wrapper |
 | `test_s4_no_global_url_function_calls` | No remaining `url()` calls with gateway paths |
 | `test_d1–d6` | Dynamic: detector-stats 200; required keys; signals/methods are lists; chal fields; methods shape after hit; no-cache |
+
+**Total: 5 tests**
 
 ---
 
@@ -831,6 +892,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 
 ## v1.8.4
 
+**Total: 50 tests**
+
 ### `test_v184_siem.py` — SIEM Security Event Center
 **Version added:** v1.8.4  
 **Type:** Static + dynamic
@@ -845,6 +908,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 - Severity classification (critical/high/medium/low/info), threat categories (11)
 - Bypass reasons, SIEM routes in `proxy.py`, SIEM imported in dashboards init
 
+**Total: 71 tests**
+
 ### `test_v184_uiux.py` — v1.8.4 UI/UX improvements
 **Version added:** v1.8.4  
 **Type:** Static
@@ -856,6 +921,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `TestP2CAriaToast` | 3 | Toast has `role=status`, `aria-live=polite`, `aria-atomic` |
 | `TestActionErrorReporting` | 6 | Ban/unban catch calls `_gwAlert`; ban has confirm guard; no bare silent catch |
 | `TestNavStructure` | 8 | Service/Agents/SIEM are sub-items; SIEM after Agents; SIEM not last; active class correct per page |
+
+**Total: 26 tests**
 
 ---
 
@@ -873,6 +940,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `TestJSLogic` | 14 | `CARD_SEC` mapping; all 5 section IDs in `SECTIONS` (infra and monitoring removed in v1.8.7); `_switch()`, `_buildNav()`, `_updateBadges()` defined; `window._ctrlNavFilter` and `window._ctrlNavUpdateBadges` exposed; DOMContentLoaded patches `mark()`/`clearDirty()`; `cni-dirty` CSS class; `_switch('detection')` as default |
 | `TestRegressions` | 22 | 6 card IDs preserved (removed: `card-infrastructure`, `card-active-rules`, `card-lists-snap`, `card-ep-policies`, `card-audit-log`); `apply`/`reset`/`hint`/`bypass-bar`/`vhost-sel` IDs preserved; `loadScoring()`/`mark()`/`clearDirty()` still defined; CSS rules for `#ctrl-nav`, `#ctrl-panels`, `ctrl-nav-item`, `cni-dirty` present |
 
+**Total: 48 tests**
+
 ### `test_v185_new_features.py` — v1.8.6 new features
 **Version added:** v1.8.6
 
@@ -883,6 +952,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `TestDetectorHealth` | 5 | `_DETECTOR_HEALTH` dict; `set_detector_health` ok/degraded; `last_check_ts` float; status endpoint includes `detectors` key |
 | `TestDlpPatterns` | 6 | `dlp_patterns` table in db_init; GET/POST/DELETE functions importable; route registered; DB writer handles `dlp_add`/`dlp_toggle`/`dlp_delete` |
 | `TestCredStuffing` | 8 | `auth_failures` on `IpState`; `_auth_fail_global` deque; `AUTH_FAIL_THRESHOLD`/`AUTH_FAIL_WINDOW_SECS`; `_is_auth_path` helper; `AUTH_PATHS` frozenset; `upstream-auth-fail` in `RISK_WEIGHTS`; `CRED_STUFF_GLOBAL_RPS` |
+
+**Total: 34 tests**
 
 ### `test_v185_security.py` — v1.8.6 security features
 **Version added:** v1.8.6
@@ -897,6 +968,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `TestBanRehydration` | 2 | Active bans loaded on startup; expired bans ignored |
 | `TestAuditLog` | 5 | Enqueues event; event types; noop without queue; warn severity for failed login; detail serialised |
 | `TestWebhook` | 8 | URL safe/blocks private; filter drops unsubscribed; empty filter allows all; queue enqueues event; circuit breaker opens after failures; worker skips on no URL; `start_webhook_worker` creates task |
+
+**Total: 49 tests**
 
 ### `test_v185_settings_nav.py` — v1.8.6 nav restructure + OIDC settings
 **Version added:** v1.8.6
@@ -924,6 +997,8 @@ Six new/upgraded charts: Traffic Pipeline, Bot Score Distribution, Vhost Heatmap
 | `test_settings_sso_default_role_select_has_viewer_option` | SSO default-role select includes `viewer` |
 | `test_settings_sso_issuer_field_is_url_type` | OIDC issuer field type is `url` |
 
+**Total: 20 tests**
+
 ### `test_v185_settings_migration.py` — Settings cards migrated from controls to settings
 **Version added:** v1.8.6 · **Updated:** v1.8.7
 
@@ -936,6 +1011,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestSettingsInfraCard` | 8 | `card-infrastructure` in settings.html; absent from controls.html; `INFRA_KNOBS` has 3 keys; `loadInfra()` GETs config; `btn-infra-apply` POSTs; bool knobs with `restart:true` show restart warning; `UPSTREAM_REWRITE_BASE` marked `restart:false`; infra nav section absent from controls `SECTIONS` |
 | `TestSettingsLoggingCard` | 8 | `card-logging` in settings; `LOG_KNOBS` has 3 keys; `loadLogging()` GETs config; `btn-logging-apply` POSTs; `WEBHOOK_EVENT_FILTER` comma-split before POST; `LOG_LEVEL` has 5 options; `LOG_FORMAT` has text/json; logging card absent from controls |
 | `TestControlsCleanup` | 9 | `_settingsCards` Set defined; contains `infrastructure`, `ext-misc`, `external-log`; `DB_BACKEND`/`POSTGRES_DSN` skipped in render loop; `_knobSec` returns null for migrated cards; settings link in external section mentions Credentials; `ext-misc` container removed; `card-infrastructure` absent from `CARD_SEC` map |
+
+**Total: 50 tests**
 
 ### `test_v185_week3_week4.py` — Week 3 & Week 4 feature tests (comprehensive)
 **Version added:** v1.8.6
@@ -955,6 +1032,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestAlerting` | 4 | Threat index computation; zero-requests case; ban rate computation; ban rate excludes allowed |
 | `TestProbeRateLimit` | 4 | Allows under limit; blocks over limit; different IPs independent; window resets |
 
+**Total: 64 tests**
+
 ### `test_v185_week3week4.py` — Week 3+4 features (parallel/earlier file)
 **Version added:** v1.8.6  
 **Note:** Similar coverage to `test_v185_week3_week4.py` but uses top-level functions instead of classes. Covers XXE, prototype pollution, SSTI, host header injection, GraphQL, file upload, password complexity, session limit, circuit breaker, alerting/threat index, probe rate limit.
@@ -962,6 +1041,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 ---
 
 ## v1.8.6
+
+**Total: 49 tests**
 
 ### `test_interaction_probe.py` — Interaction probe detector
 **Version added:** v1.8.6
@@ -977,6 +1058,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestInteractionAnalyze` | 10 | Long window with no events → no-interaction; short window passes; straight line/scroll/keys detected; invalid event types filtered; max events cap; disabled → None; returns tuple; reason is None or string |
 | `TestInteractionConfig` | 10 | `INTERACTION_PROBE_ENABLED` exists; all 6 signals in `RISK_WEIGHTS`; token TTL positive; max events cap positive; report endpoint importable; route registered |
 
+**Total: 51 tests**
+
 ### `test_oidc.py` — OIDC SSO
 **Version added:** v1.8.6  
 **Type:** Static + dynamic (S01–S30, D01–D42)
@@ -987,6 +1070,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestS_OIDCStaticAdditional` (S25–S30) | `_CALLBACK_PATH` uses `ADMIN_NS`; scope in auth params; provision failure → `_redirect_error`; `oidc_login_success` slog; db_queue audit event on success; `OIDC_ISSUER` strips trailing slash |
 | `TestS_OIDCStaticExtra` (S15–S24) | Callback calls `_purge_expired_states`; timeout/aiohttp errors caught; ≥5 redirect error paths; default role env default is `viewer`; redirect error goes to `/login?oidc_error=`; login HTML has OIDC error placeholder and SSO CSS; proxy registers both routes; login page injects OIDC button |
 | `test_d13–d42` (standalone) | OIDC paths in `_ADMIN_LOGIN_SUBPATHS`; config exports OIDC vars; `_VALID_ROLES` exactly `{admin, maintainer, viewer}`; `_safe_username` edge cases |
+
+**Total: 4 tests**
 
 ---
 
@@ -1005,6 +1090,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestSvgQrCodeWhiteBackground` | 8 | White `<rect>` injected inside `<svg>`; covers full SVG; inserted after opening tag; not before tag; uses SVG factory; output is SVG data URL; no Pillow import |
 | `TestTotpUtils` | 6 | `totp_generate_secret` returns base32; `totp_verify` accepts current code; rejects wrong/empty code; `valid_window=1` (±30s); strips whitespace from code |
 
+**Total: 56 tests**
+
 ### `test_v187_new_features.py` — v1.8.7 new features
 **Version added:** v1.8.7
 
@@ -1015,6 +1102,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestLoginTotpFix` | 6 | Credential-fields wrapper present; username/password inside wrapper; TOTP hides credential fields by ID; no `closest('label')`; TOTP step hidden by default |
 | `TestSettingsDbToggle` | 11 | DB track/thumb/lbl-sqlite/lbl-pg elements; `_dbSetTarget` and `_dbToggle` functions defined; `_dbSetTarget` moves thumb, shows/hides pg-fields, gates apply button; apply handler uses `dbTarget` variable; no radio inputs for DB backend |
 | `TestMonitoringMovedToLogs` | 23 | `monitoring` absent from `SECTIONS`; `card-active-rules`/`card-lists-snap`/`card-ep-policies` absent from `CARD_SEC`; `loadActiveRules`/`loadLists` not in controls; their HTML absent from controls; `logs.html` has active-rules/lists-snap/ep-policies cards; `logs.html` defines `loadActiveRules`/`loadLists`; uses `_gwAlert`; refreshes every 7s; fetches detector-stats/lists-snapshot; monitoring cards appear after audit log |
+
+**Total: 57 tests**
 
 ### `test_v187_security.py` — v1.8.7 security fixes
 **Version added:** v1.8.7
@@ -1028,6 +1117,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestPROXY402ClientHostValidation` | 4 | Legitimate Host passes unchanged; attacker-controlled Host falls back to upstream netloc; empty `ALLOWED_HOSTS` = no enforcement; Host with port stripped for comparison |
 | `TestPROXY403PropagateNeverDenylist` | 6 | `PROPAGATE_NEVER` frozenset exists; built-in names in denylist; `SESSION_KEY` propagates for key rotation; `builtins` not propagated; ordinary config knobs still propagate; proxy module class is `proxy_module` |
 
+**Total: 36 tests**
+
 ### `test_v187_settings_vhost_strip.py` — Settings identity strip + vhost badge
 **Version added:** v1.8.7
 
@@ -1038,6 +1129,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestHealthScoreUpstreamField` | 2 | `health_score_endpoint` includes `upstream` key; references `UPSTREAM` module variable |
 | `TestVhostListFormat` | 5 | `/secured/vhosts` returns list; empty when no vhosts; entry has `hostname` key; entry has `UPSTREAM` key; response wrapped in `{"vhosts": [...]}` |
 
+**Total: 29 tests**
+
 ### `test_v187_ux_improvements.py` — v1.8.7 UX improvements
 **Version added:** v1.8.7
 
@@ -1045,6 +1138,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 |-------|-------|-------------|
 | `TestGatewayHealthPillUX` | 15 | `KEY_LABELS` defined and maps `block_rate`/`integrations`; has all 6 keys; `STATUS_ORD` defined; pill `onclick` sorts by `status_ord`; `penalty` CSS class; 5-column grid; `gw-score-bar` element; score bar width set in `onclick`; ok-summary CSS; ok rows filtered to lists; pill text uses `Health N/100`; refresh note near pill; old 4-column grid removed |
 | `TestScoreBreakdownRewrite` | 15 | `buildScoreHtml` defined; score header/color/label variables; score bar in header; block-count shows "Why Blocked" header and formula; empty comp rows not rendered; synthetic-score/stealth-score/bars-pct-contribution removed; risk-score case renders ban-threshold bar and filters to active components; `buildScoreHtml` returns header + body; block-count reason cards show share of total |
+
+**Total: 30 tests**
 
 ### `test_v187_controls_order.py` — Activation-order risk-score gate
 **Version added:** v1.8.7
@@ -1055,6 +1150,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestSignalOrderDefaults` | 31 | Every signal in `SIGNAL_ORDER_DEFAULTS` maps to correct order (1/2/3) matching `config.py` sets — AI-UA signals order 1; SECOND_ORDER_REASONS order 2; ESCALATE_ONLY_REASONS order 3 |
 | `TestBackendConfigConsistency` | 12 | `ESCALATE_ONLY_REASONS` contains body-attack signals; `SECOND_ORDER_REASONS` contains ai-enumeration/direct-api-probe/locale-geo; UA-AI signals not in either gated set |
 | `TestControlsOrderUICopy` | 9 | Panel header "risk-score gate"; order-2 copy mentions `SECOND_ORDER_THRESHOLD`; order-3 copy mentions `ESCALATION_THRESHOLD`; badge tooltips describe gate condition for each order |
+
+**Total: 56 tests**
 
 ### `test_v187_db_switch_hotswap.py` — In-process DB backend hot-swap
 **Version added:** v1.8.7
@@ -1072,6 +1169,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestControlsHtmlUI` | 5 | No `setTimeout(location.reload)`; no `location.reload()`; button label "Yes, switch"; no "Restart required" in modal; no `restart:true` on DB knob |
 | `TestExports` | 2 | `pg_pool_reset` and `_propagate_global` exported/callable |
 
+**Total: 28 tests**
+
 ### `test_v187_db_switch_roundtrip.py` — DB switch endpoint validation + migration
 **Version added:** v1.8.7
 
@@ -1082,6 +1181,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestHotSwapBehavior` | 4 | No `os._exit`; uses `_propagate_global`; returns directly (no `_delayed_exit`); `_propagate_global` called in source |
 | `TestMigrationBehavior` | 3 | Migration runs on switch; migrate called; `decimal.Decimal` cast to float for SQLite binding |
 | `TestConfigKvPersistence` | 3 | `set_config` called for `DB_BACKEND`; `POSTGRES_DSN` queued when DSN provided; config_kv queue checked |
+
+**Total: 18 tests**
 
 ### `test_v187_db_endpoints_dynamic.py` — DB migration-status and switch endpoint contract
 **Version added:** v1.8.7
@@ -1094,6 +1195,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestBgMigrationShape` | 1 | Background migration has required response keys |
 | `TestFullMigrateBackground` | 1 | `_full_migrate_background` sets done flag on completion |
 | `TestBgMigrationCutoff` | 2 | SQLite→Postgres cutoff direction; Postgres→SQLite cutoff logic |
+
+**Total: 20 tests**
 
 ### `test_v188_db_settings_merge.py` — DB backend section merge from Controls → Settings
 **Version added:** v1.8.7 (feature drafted for v1.8.8 label; shipped in v1.8.7 image)
@@ -1111,6 +1214,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestDbPollHelpers` | 4 | `_pollMigOnce` fetches `db-migration-status`; `_startMigPoll` uses `setInterval`; `_startMigPoll` clears interval when not running; guard against double-start via `_migPollTimer` |
 | `TestDbSettingsNoBrowserConfirm` | 1 | No `confirm()` in the DB Backend JS section |
 
+**Total: 48 tests**
+
 ### `test_v188_redis_security.py` — Redis allowlist, HMAC ban-signing, and settings card
 **Version added:** v1.8.7 (feature drafted for v1.8.8 label; shipped in v1.8.7 image)
 
@@ -1124,6 +1229,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestControlsRedisGuard` | 2 | Controls page has Redis section; `REDIS_ALLOW_LIST` referenced |
 | `TestSettingsRedisCard` | 17 | Card element present; status pill/dot/text; URL display; `loadRedis` function defined; reads config endpoint; checks `connected` field; reads `REDIS_ALLOW_LIST` from state; apply posts `REDIS_ALLOW_LIST`; posts to `/secured/config`; `rediss://` TLS check; URL sanitiser; allowlist status element |
 
+**Total: 61 tests**
+
 ### `test_v188_ed25519_mesh.py` — Ed25519 gateway mesh signing + REDIS_REQUIRE_TLS
 **Version added:** v1.8.8
 
@@ -1136,6 +1243,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestGwVerifyOffers` | 10 | Valid sig + correct key → True; tampered value/wrong key/truncated sig/empty sig/invalid key → False; extra/removed field after signing → False (canonical payload); `_sig` excluded from payload; returns bool without raising |
 | `TestMeshSyncLoopSource` | 10 | Loop fetches `private_key` from DB; calls `_gw_sign_offers`; adds `_sig` to publish dict; `trust_map` selects `public_key` column; trust_map is (auto_ok, public_key) tuple; inbound: pops `_sig`; rejects on absent sig (`mesh_sync_no_sig`); rejects on invalid sig; rejects on no pubkey; calls `_gw_verify_offers` |
 
+**Total: 55 tests**
+
 
 ### `test_v188_settings_subnav.py` — Settings page section nav (split-pane layout)
 **Version added:** v1.8.8
@@ -1147,6 +1256,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestSettingsSubnavJS` | 25 | `SECTIONS` constant; `showSection` function; nav click handler; active-link class; hash routing; section mapping complete; `card-*` assignments; no duplicate card mappings; every section has ≥1 card |
 | `TestSettingsSubnavRegression` | 12 | Existing cards intact (9 parametrized: vhosts/users/gw-registry/db/infrastructure/redis/sso/2fa/mesh); identity strip elements intact; no `#main-wrapper`; no page-content padding |
 | Standalone | 6 | `test_d01`–`test_d06`: settings returns 200; has split; has nav; has panels; has card-sec; exposes switch |
+
+**Total: 71 tests**
 
 ---
 
@@ -1166,6 +1277,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `test_perf_p8_full_pipeline_distinct_ips` | Full pipeline with 30 distinct X-Forwarded-For IPs: < 20 s (rate-limit + identity + scoring per new IP) |
 | `test_perf_p9_ip_state_insert_oi` | `ip_state` insert stays O(1): per-op time at n=5 000 must not exceed 3× per-op time at n=100 |
 
+**Total: 9 tests**
+
 ---
 
 ## Cross-version Tests
@@ -1179,6 +1292,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestAdminIPAddRemove` | 19 | Add success/duplicate/invalid/empty/note/overlong-note/single-host/IPv6; remove success/not-present/invalid/leaves-others; update description success/not-present/invalid/truncates |
 | `TestAdminIPsEndpointGaps` | 14 | Full HTTP endpoint coverage: GET cache-control, unauthenticated; POST duplicate/empty; PATCH description/nonexistent/invalid; DELETE nonexistent/invalid/removes/response/no-param |
 | `TestAdminIPEnforcement` | 6 | Blocked IP gets decoy (not real JSON, not 403); allowed IP retains access; empty list = open mode; login visible to allowed IP |
+
+**Total: 50 tests**
 
 ### `test_code_review_fixes.py` — Code review security fixes
 **Version added:** Post-review fixes (multiple releases)
@@ -1196,10 +1311,14 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestD1RecordMethodField` | 5 | `record()` accepts and stores HTTP method; default is `''`; end-to-end method stored in DB |
 | `TestRegressions` | 5 | Cross-fix regression checks: ban uses monotonic; `vhost_stats` has `last_seen_ts`; C1+C2 coexist; SSRF guard intact; allow-rule traffic in `vhost-stats` |
 
+**Total: 39 tests**
+
 ### `test_control_center.py` — Control Center dashboard
 **Version added:** Multiple (S01–S44 static, D01–D13 dynamic)
 
 44 static tests (S01–S44) covering Chart.js local asset, 3 chart canvas IDs, empty states, RPS grid, vhost-stats thead, `hexRgba` helper, `loadTrafficChart` in DOMContentLoaded, 60s interval, destroy-before-new, CSS hidden canvases, signal/geo/risk-score/JS-chal-funnel/top-paths charts, threat tiles, and block-reason/block-timeline endpoints.
+
+**Total: 103 tests**
 
 ### `test_crowdsec_lapi_health.py` — CrowdSec LAPI health probe
 **Version added:** Added alongside CrowdSec integration (exact version unclear)
@@ -1209,15 +1328,21 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestS_Static` | 13 | `_crowdsec_lapi_health` defined; cache dict and TTL; uses `/v1/heartbeat`; returns `reachable`/`version`/`ping_ms` keys; timeout ≥ 2s; handler imports health fn; external endpoint includes `lapi_health`; 404 fallback; not configured → `reachable=None` |
 | Dynamic (`test_d01–d07`) | 7 | Full dynamic tests against running proxy (auth guard, shape verification) |
 
+**Total: 20 tests**
+
 ### `test_dashboard_charts.py` — Dashboard chart QA
 **Version added:** Multiple versions
 
 25 static tests covering: `fill:'origin'` minimum count across dashboards, no gradient backgrounds, no scriptable background functions, solid rgba alpha, agents popover max-height before rect, agents popover `overflow-y:auto`, agents gwmgmt pill active by default, main modal `max-height`, vhost chart orphan guard, category/time axis, `_vhRawData` stored, `onClick` handler, bucket detail panel, `_showVhostBucketDetail()`, toggle on same bucket, share column; service vhost share card, `loadVhostShare()` fetch/escapeHtml/win-toggle/percentage/interval; agents IP intel risk breakdown section, `.rsn` class, `escapeHtml` on reason, embedded in return.
 
+**Total: 47 tests**
+
 ### `test_dashboard_data.py` — Dashboard data API endpoints
 **Version added:** Multiple versions
 
 24 functional tests covering auth guards and response shapes for: metrics, cost-timeline, agents-data, agents-timeline (including `gwmgmt` key in buckets and totals), service-data, logs-data, health-score, detector-stats, geo-data, path-hits (including DB index check and response time under 500ms), whoami, cache-control headers.
+
+**Total: 33 tests**
 
 ### `test_upstream_no_leak.py` — Upstream address leak prevention
 **Version added:** M-SEC-1 security fix
@@ -1226,6 +1351,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 |-------|-------|-------------|
 | `TestS_Static` | 10 | M-SEC-1 block present in source; scrub outside `UPSTREAM_REWRITE_BASE` branch; `_up_netloc` used; `via`/`server` in `_DROP_IF_LEAKS`; `text/` and `application/json` in text content-type check; `_REWRITE_HEADERS`/`_DROP_IF_LEAKS` defined; double-slash normalisation guard |
 | `TestD_Dynamic` | 18 | HTML/JSON/XML/plain-text/JS body scrubbed; binary body unmodified; Location/Content-Location/Link/Via/X-Backend/unknown headers scrubbed; no header leaks; scrub works without `UPSTREAM_REWRITE_BASE`; body replaced with gateway host; double-slash normalised; protocol-relative URLs not collapsed |
+
+**Total: 28 tests**
 
 ### `test_upstream_rewrite.py` — UPSTREAM_REWRITE_BASE feature
 **Version added:** Feature addition (exact version unclear)
@@ -1236,6 +1363,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestStaticRewriteLogic` | 16 | HTML/JSON/XML/plain-text rewrite; multiple occurrences; no match unchanged; empty body; different port not stripped; trailing slash; Location/Content-Location/Link headers; strip to empty suppressed; empty base is noop; CSP violation resolved |
 | `TestDynamicRewriteDisabled` | 2 | Internal URL leaks in body; Location already rewritten to gateway |
 | `TestDynamicRewriteEnabled` | 14 | HTML/JSON/XML/plain-text body stripped; Location on 3xx; Content-Location/Link headers; clean response unaffected; CSP violation resolved; trailing slash; status codes preserved; X-Proxy still injected; different port not stripped |
+
+**Total: 39 tests**
 
 ### `test_custom_rules_fuzzing.py` — Custom rules adversarial fuzzing
 **Version added:** v1.8.7+ (P0.3 improvement)
@@ -1255,6 +1384,8 @@ Cards for DB backend, credentials, infrastructure, and logging moved from `contr
 | `TestFuzz11CountryCondition` | 3 | Country condition with MaxMind disabled (ep version); country no-match; SQLi string as country value |
 | `TestFuzz12QueryCondition` | 3 | Query key present matches (ep version); missing key no-match; missing `value` sub-key no-match |
 
+**Total: 42 tests**
+
 ### `test_component.py` — Full-pipeline component tests
 **Version added:** v1.8.7+ (P1.4 improvement)
 
@@ -1271,6 +1402,8 @@ Spins the complete gateway (on_startup → middleware → handler → on_cleanup
 | `TestComp07UaClassification` | 1 | curl, python-requests, Go-http-client, empty, truncated, Log4Shell, SQLi UAs → no 500 |
 | `TestComp08DetectorInterface` | 6 | `REGISTRY` non-empty after import; all entries satisfy `Detector` protocol; `LlmHeuristicDetector.NAME`/`ENABLED` types; `observe()` no-raise; `check()` returns float; `register()` appends to `REGISTRY` |
 
+**Total: 20 tests**
+
 ### `test_pentest_probes.py` — Automated pentest probes
 **Version added:** v1.8.7+ (P1.5 improvement — automates manual step 12)
 
@@ -1286,6 +1419,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestSec04SqliQuery` | 2 | SQLi in query string → no 500; DB error not in response body |
 | `TestSec06BotUaDetection` | 3 | Scanner UA `python-requests` → no 500; cumulative bot UA requests → restricted (429 or 404); `KNOWN_BOT_UAS` non-empty |
 | `TestSec08VersionDisclosure` | 3 | `1.8.7` version string not in 404 body; `Traceback` not in 404 body; `File "` not in 404 body |
+
+**Total: 24 tests**
 
 **P3.2 additions to `TestProxy4_03_PropagateNever`:** 2 new methods — `test_all_dangerous_builtins_covered` enumerates exec/eval/compile/open/breakpoint/__import__/__builtins__ and asserts all are in `_PROPAGATE_NEVER`; `test_no_dead_entries_in_propagate_never` verifies every entry is a real builtin or proxy attribute (typo guard).
 
@@ -1304,6 +1439,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestConfigKvStompAlert` | 3 | config-kv stomp alert source exists, fires for each collision |
 | Standalone | 27 | Dashboard endpoint static checks for geo-data, logs-data, agents-bucket-detail, metrics, health-score: `db_read_events` calls, column lists, backend-aware dispatch, health endpoint wiring |
 
+**Total: 62 tests**
+
 ---
 
 ### `test_v188_session_fixes.py` — 1.8.8 bug-fix regressions (Redis TLS, DB pin, DSN propagation, geo, settings)
@@ -1320,6 +1457,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestPgStatusTileLiveUpdate` (T01–T03) | 3 | PG status tile `_tip-pg-status-val` updated after successful test; test-success handler updates span; cache updated |
 | Standalone | 3 | Additional DSN hint and masking checks |
 
+**Total: 28 tests**
+
 ---
 
 ### `test_v188_startup_fixes.py` — Container-startup and test-button UX fixes
@@ -1333,6 +1472,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestPgTestNoParamUrl` (U01–U03) | 3 | no-param URL path when password empty + creds saved |
 | `TestPgTestResponseShapes` (R01–R04) | 4 | Both `/db-test` response shapes handled: `j.probe` and `j.postgres` variants |
 | `TestPgTestHttpErrorHandling` (H01–H04) | 4 | Soft HTTP-error branches: 404/403 → warning hint (not crash); network error catch present |
+
+**Total: 17 tests**
 
 ---
 
@@ -1365,6 +1506,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestSCachePoisoning` | — | Cache poisoning via Host/X-Forwarded-Host rejected |
 | `TestTAdminEnumeration` | — | Admin endpoint enumeration returns uniform 404 decoy |
 
+**Total: 20 tests**
+
 *Requires `LIVE_GW_URL` + `LIVE_GW_ADMIN_KEY` env vars; skipped in CI without live gateway.*
 
 ---
@@ -1381,6 +1524,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestSignalKnobMapping` | 29 | Each signal maps to the expected kill-switch knob (parametrized) |
 | `TestKnobDynamic` | 12 | Runtime hot-reload: disable each detector class, confirm signals suppressed; re-enable, confirm restored |
 
+**Total: 61 tests**
+
 ---
 
 ---
@@ -1393,6 +1538,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | (parametrized, 9 dashboards) | 55 | Full-hide toggle + reopen wiring, desktop-gated CSS, `agw_sb_collapsed` restore, submenu accordion carets on the 3 parent groups, GeoMap has no caret, no icon-rail leftovers, restore-before-`#sidebar` ordering, brand version 1.8.10 |
 
+**Total: 55 tests**
+
 ---
 
 ### `test_v189_ctrlnav_rail.py` — Controls-page section icon-rail "second hide"
@@ -1402,6 +1549,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | (module-level) | 6 | `#ctrl-nav` toggle wired to `_ctrlNavToggle`, `agw_ctrlnav_rail` persistence, rail keeps `.cni-icon` / hides `.cni-label` + search, item tooltips, main sidebar hide untouched (no `sb-rail` leak) |
+
+**Total: 6 tests**
 
 ---
 
@@ -1413,6 +1562,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | (module-level) | 6 | `#settings-nav` toggle built in JS + wired, `agw_setnav_rail` persistence, rail keeps `.sni-icon` / hides `.sni-label`, restore-before-`_buildNav` (no flash), main sidebar hide untouched |
 
+**Total: 6 tests**
+
 ---
 
 ### `test_v1810_2fa_status_robust.py` — 2FA card + Health pill session-expiry robustness
@@ -1423,6 +1574,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | (module-level) | 10 | `isAuthFail()` helper covers 401/403/404; `load2fa()` guards `.ok` before `.json()`; Health pill exposes `authErrorHook` + detects 404 auth failure; pill modal explains session expiry |
 
+**Total: 10 tests**
+
 ---
 
 ### `test_v1810_admin_key_strength.py` — Admin key strength (Gate 0b)
@@ -1432,6 +1585,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | (module-level) | 4 | No weak/guessable admin key committed to env/compose/deploy; no committed key < 16 chars; compose uses env-passthrough (`${ADMIN_KEY}`) not a literal; the ≥16-char-random rule is documented in rules.md Gate 0b + MANUAL §0 |
+
+**Total: 4 tests**
 
 ---
 
@@ -1444,6 +1599,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestClassification` | 8 | Legacy `internal-probe` not emitted; unauthenticated → `admin-probe`, authenticated → `operator-self`; IP-blocked still distinct |
 | `TestBlockedConsistency` | 2 | Metrics passthrough emits `operator-self` |
 
+**Total: 10 tests**
+
 ---
 
 ### `test_v1810_csrf_autorefresh.py` — CSRF token auto-refresh + retry-on-403
@@ -1455,6 +1612,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestCsrfEndpoint` | 5 | `GET /secured/csrf` returns `{token}` from the live session HMAC; not `@_require_csrf`; 401 without session; route registered |
 | `TestRetryShim` | 5 | every dashboard's fetch shim refreshes the token + retries once on 403; updates `window.__AGW_CSRF__`; no legacy non-retry shim left |
 
+**Total: 10 tests**
+
 ---
 
 ### `test_v1810_csrf_cookie.py` — CSRF cookie issuance and self-heal
@@ -1464,6 +1623,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | (module-level) | 5 | OIDC/SSO login sets `agw_csrf`; password login sets `agw_csrf`; `protect()` re-issues stale/missing CSRF cookie; `record()` still called in authed branch; CSRF token round-trip |
+
+**Total: 5 tests**
 
 ---
 
@@ -1479,6 +1640,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestProtectMiddleware` | 12 | Protect middleware re-issues CSRF; CSRF check on POST |
 | other | 12 | Edge cases |
 
+**Total: 46 tests**
+
 ---
 
 ### `test_v1810_csrf_shim_coverage.py` — Global `fetch` CSRF shim on all dashboards
@@ -1490,6 +1653,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestShimPresence` | 12 | Shim present on vhost_policy, main, controls, geo, logs, agents, siem, service, settings dashboards |
 | `TestShimBehaviour` | 8 | Shim intercepts POST/PATCH/DELETE; injects `X-CSRF-Token`; GET not intercepted |
 
+**Total: 20 tests**
+
 ---
 
 ### `test_v1810_infra_restart_knobs.py` — Infrastructure restart-required knob UX
@@ -1499,6 +1664,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | `TestInfraRestartKnobs` | 14 | `ALLOW_PRIVATE_UPSTREAM` and `STRICT_VHOST` in `INFRA_KNOBS`; no `data-ikey`; `render_infra` uses pointer cursor not `not-allowed` for restart knobs |
+
+**Total: 14 tests**
 
 ---
 
@@ -1510,6 +1677,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | (module-level) | 6 | Admin reasons (`admin-probe`, `operator-self`, `live-not-loopback`, `chal-required`) have descriptions, labels, and `admin` category with colour + action; legacy `internal-probe` split explained |
 
+**Total: 6 tests**
+
 ---
 
 ### `test_v1810_riskbreakdown_control_column.py` — Risk-score-breakdown "control" column
@@ -1520,6 +1689,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | `TestServerContract` | 6 | `SIGNAL_KNOB` maps reasons to knobs; scoring endpoint emits `toggle` per signal; synthetic reasons mapped; full `SIGNAL_KNOB` exposed |
 | `TestRiskBreakdownColumn` | 5 | Frontend loads knob map from scoring endpoint; column rendered per row |
+
+**Total: 11 tests**
 
 ---
 
@@ -1534,6 +1705,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestControlsDeepLink` | 5 | controls.html `#knob=NAME` deep-link (switch section, scroll, flash); graceful toast when not on page |
 | `TestRound2Improvements` | 6 | synthetic-reason descriptions, settings deep-link, non-bool value display |
 
+**Total: 23 tests**
+
 ---
 
 ### `test_v1810_riskmodal_actions.py` — In-modal ban actions + Top-controls panel
@@ -1546,6 +1719,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestInlineQuickDisable` | 4 | bool control dot is a quick-toggle → `POST /config {knob:!on}` (bool-only) |
 | `TestTopControlsPanel` | 4 | live-feed panel aggregates `by_reason`→control, ranked, page-aware links |
 
+**Total: 13 tests**
+
 ---
 
 ### `test_v1810_score_controls.py` — Score-breakdown "Controls governing this score"
@@ -1555,6 +1730,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | (module-level) | 5 | JS `SIGNAL_KNOB` matches backend; `buildScoreHtml` helpers present; controls area uses live ON/OFF state; score popover refreshes control state |
+
+**Total: 5 tests**
 
 ---
 
@@ -1566,6 +1743,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 |-------|-------|-------------|
 | (module-level) | 6 | Fixed-widget pages reserve right space; reserve is desktop-scoped; inflow pages keep widgets in topbar; collapsed topbar reserves left space |
 
+**Total: 6 tests**
+
 ---
 
 ### `test_v1810_topbar_overlap_dynamic.py` — Topbar overlap fix (headless Chromium)
@@ -1575,6 +1754,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | (parametrized, 5 dashboards) | 15 | `getBoundingClientRect` verifies fixed Health pill + log selector do not overlap topbar buttons/title at 1400px viewport |
+
+**Total: 15 tests**
 
 ---
 
@@ -1588,6 +1769,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestHotReload` | 8 | Round-trip CIDR list; `get_ip()` honours `TRUST_XFF=first/last/none`; private-upstream guard trips with `ALLOW_PRIVATE_UPSTREAM=False` |
 | other | 21 | Settings CSRF shim; controls sidebar removal; edge cases |
 
+**Total: 34 tests**
+
 ---
 
 ### `test_v1810_version_consistency.py` — Version single-source-of-truth (Gate 0a)
@@ -1599,6 +1782,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestVersionCanonical` | 1 | `config.GW_VERSION` is well-formed `AppSecGW_X.Y.Z` |
 | `TestVersionSurfaces` | 6 | `proxy.py`, `docker-compose.yml` image tag + container name, and every served dashboard match `GW_VERSION`; no dashboard shows a different `AppSecGW_X.Y.Z`; no stale second compose image tag |
 
+**Total: 7 tests**
+
 ---
 
 ### `test_v1810_vhost_knob_persist.py` — Per-vhost knob persistence (`_to_bool` coercion)
@@ -1608,6 +1793,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | Class / group | Tests | Description |
 |-------|-------|-------------|
 | (module-level) | 19 | `_to_bool` parses `"true"/"false"/"0"/"1"`; no bare `bool` coercer; `KNOB_META` completeness for WAF_* and 30 other knobs; vhost save/load round-trips bool knobs |
+
+**Total: 19 tests**
 
 ---
 
@@ -1626,6 +1813,8 @@ Replaces the manual §12 pentest checklist from BUILD_VALIDATION.md with automat
 | `TestM4Pow` | 3 | solution below the (non-zero) floor rejected; floor non-zero at default; replay store keyed on token alone |
 | `TestM7SessionCacheRestore` | 1 | `_session_cache_load` restores `source_ip` + last-seen so `BIND_SESSION_TO_IP` / idle-timeout survive restart |
 
+**Total: 20 tests**
+
 Plus `tests/conftest.py` autouse `_auto_attach_csrf_header` — the in-process
 `TestClient` attaches the matching `X-CSRF-Token` for authenticated non-safe
 requests (mirrors the dashboard fetch shim) so the central CSRF gate works
@@ -1633,4 +1822,56 @@ suite-wide without editing every admin-mutation test.
 
 ---
 
-*Total test files: 94 | Approximate total test functions: ~2,514+*
+---
+
+### `test_v1810_attack_playbook.py` — Attack Playbook endpoint + Agents dashboard
+
+**Version added:** v1.8.11 (feature: attack playbook)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| backend (dynamic) | 5 | Attack-playbook endpoint + route registered; seeds honeypot + non-honeypot event; admin cookie session → 200; honeypot-only groups (ai-probe excluded); correct counts/examples; `no-store` header; `mins` clamp |
+| frontend (static) | 2 | `attack-playbook-card` present; `escapeHtml` on examples; interval in `_timers`; `PLAYBOOK_META` covers all 6 reasons; defense control + Controls deep-link |
+
+**Total: 7 tests**
+
+---
+
+### `test_v1811_theme.py` — Day/night theme QA
+
+**Version added:** v1.8.11
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| CSS static (CSS-01..CSS-10) | 10 | `--dim` semicolon fix; `--bright` defined; light-mode overrides; no raw `#fff`; theme toggle button; `_toggleTheme` function; `chart-capable` plugins; `credentials:'include'`; Leaflet tile variables; controls banner + tooltip light overrides |
+| JS static (JS-01..JS-06) | 6 | `_applyChartColorsToInstance`; `_gwTheme` Chart.js plugin; Leaflet `_TILE_LIGHT/_TILE_DARK`; tile-swap on toggle |
+| DB unit (DB-01..DB-04) | 4 | `get_ui_theme` returns dark by default; persists light; rejects invalid; graceful absent-DB fallback |
+| API endpoint (API-01..API-02+) | 5 | GET /secured/ui-theme → `{"theme":"dark"}`; POST sets and persists; round-trip |
+
+**Total: 25 tests**
+
+---
+
+### `test_v1811_service_owner.py` — SERVICE_OWNER feature (1.8.11)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| `TestServiceOwnerKnob` | 4 | global exists; hot-reloadable (str ≤128); env-pin-excluded; present in `/config` state |
+| `TestServiceOwnerSettingsUI` | 3 | Settings → Config card + input + Save mapped to `config` section; Save POSTs `SERVICE_OWNER` |
+| `TestServiceOwnerFooterInjection` | 1 | middleware injects `__AGW_SERVICE_OWNER__` + renders into `.portal-footer` via `textContent` (XSS-safe) |
+
+**Total: 8 tests**
+
+---
+
+### `test_v1812_honeypots_sections.py` — Honeypots dashboard (1.8.12)
+
+| Class / group | Tests | Description |
+|-------|-------|-------------|
+| (module-level) | 6 | Honeypots dashboard sections render; CSRF shim prefers `window.__AGW_CSRF__`; honeypot-learning signals wired |
+
+**Total: 6 tests**
+
+---
+
+*Total test files: 98 | Approximate total test functions: ~2,560+*

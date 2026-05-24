@@ -5,7 +5,7 @@ from config import *   # noqa: F401,F403
 from config import _DASHBOARDS_DIR, _DATA_PATH  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog  # noqa: F401
-from admin.auth import _internal_authed, ADMIN_ALLOWED_ENTRIES, _role_denied, _request_username  # noqa: F401
+from admin.auth import _internal_authed, ADMIN_ALLOWED_ENTRIES, _role_denied, _request_username, _require_csrf  # noqa: F401
 from admin.mesh import _gw_audit, _gw_local_id  # noqa: F401
 from aiohttp import web
 
@@ -37,7 +37,7 @@ async def settings_dashboard_endpoint(request: web.Request):
         })
 
 
-def _settings_build_xml(include_secrets: bool) -> bytes:
+def _settings_build_xml(include_secrets: bool = False) -> bytes:  # include_secrets kept for call-site compat; secrets are never written
     """Serialise current hot-reload state + admin-IPs (and optionally
     secrets) into a self-describing XML document. Kept stdlib-only — no
     external XML deps in the runtime image. Returns UTF-8 encoded bytes."""
@@ -81,14 +81,10 @@ def _settings_build_xml(include_secrets: bool) -> bytes:
             "added_ts": str(ent.get("added_ts") or ""),
         })
 
-    secrets_el = _ET.SubElement(root, "secrets")
-    if include_secrets:
-        for public_name, (global_name, _env) in _SECRET_KEYS.items():
-            v = g.get(global_name) or ""
-            if not v:
-                continue
-            e = _ET.SubElement(secrets_el, "secret", attrib={"name": public_name})
-            e.text = str(v)
+    # F-10: secrets are never written to the export archive in plaintext.
+    # The element is included as an empty container so the XML schema is stable
+    # and operators know which secrets exist; values must be re-entered manually.
+    _ET.SubElement(root, "secrets")
 
     _ET.indent(root, space="  ")
     return _ET.tostring(root, encoding="utf-8", xml_declaration=True)
@@ -105,13 +101,13 @@ def _settings_make_zip(xml_bytes: bytes) -> bytes:
 
 
 async def settings_export_endpoint(request: web.Request):
-    """GET /__settings-export?include_secrets=0|1 — return a ZIP archive
-    containing `appsecgw-config.xml`. Admin-only."""
+    """GET /__settings-export — return a ZIP archive containing
+    `appsecgw-config.xml`. Secrets are never exported (F-10).
+    Admin-only."""
     if denied := _role_denied(request, "admin"):
         return denied
-    include_secrets = (request.query.get("include_secrets") or "0").lower() in ("1", "true", "yes")
     try:
-        xml_bytes = _settings_build_xml(include_secrets=include_secrets)
+        xml_bytes = _settings_build_xml(include_secrets=False)
         zip_bytes = _settings_make_zip(xml_bytes)
     except Exception as e:
         slog("config_export_failed", level="error",
@@ -129,7 +125,6 @@ async def settings_export_endpoint(request: web.Request):
     fname = f"appsecgw-config-{host}-{stamp}.zip"
     slog("config_exported", level="warn",
          rid=request.get("_rid", ""),
-         include_secrets=include_secrets,
          bytes=len(zip_bytes), filename=fname)
     return web.Response(
         body=zip_bytes,
@@ -141,11 +136,12 @@ async def settings_export_endpoint(request: web.Request):
         })
 
 
+@_require_csrf
 async def settings_import_endpoint(request: web.Request):
-    """POST /__settings-import?dry_run=0|1&overwrite_secrets=0|1
+    """POST /__settings-import?dry_run=0|1
     Body: a ZIP archive containing `appsecgw-config.xml` produced by
     `/__settings-export`. Returns a JSON summary { knobs_applied,
-    knobs_rejected, admin_ips_added, secrets_applied, errors[] }.
+    knobs_rejected, admin_ips_added, errors[] }.
 
     Validation runs through the same parser/validator pair used by
     POST /__config so an import can never sidestep bounds-checking. A
@@ -173,7 +169,6 @@ async def settings_import_endpoint(request: web.Request):
         g = {}
 
     dry_run = (request.query.get("dry_run") or "0").lower() in ("1", "true", "yes")
-    overwrite_secrets = (request.query.get("overwrite_secrets") or "0").lower() in ("1", "true", "yes")
 
     # Cap the upload at 1 MiB — config archives are tiny in practice.
     try:
@@ -227,11 +222,9 @@ async def settings_import_endpoint(request: web.Request):
 
     summary = {
         "dry_run": dry_run,
-        "overwrite_secrets": overwrite_secrets,
         "knobs_applied": 0,
         "knobs_rejected": 0,
         "admin_ips_added": 0,
-        "secrets_applied": 0,
         "applied": [],
         "rejected": {},
         "errors": [],
@@ -308,61 +301,22 @@ async def settings_import_endpoint(request: web.Request):
             elif msg != "already exists":
                 summary["errors"].append(f"admin_ip {cidr}: {msg}")
 
-    # ── 3) Secrets (opt-in, replaces existing values when present) ──
-    if overwrite_secrets:
-        secrets_el = root.find("secrets")
-        if secrets_el is not None:
-            for se in secrets_el.findall("secret"):
-                name = se.attrib.get("name") or ""
-                if name not in _SECRET_KEYS:
-                    summary["errors"].append(f"secret {name}: unknown")
-                    continue
-                value = (se.text or "").strip()
-                if not value:
-                    continue
-                # SH-1: SSRF guard on URL-type secrets.
-                try:
-                    from core.proxy_handler import _ssrf_guard_url, _URL_SECRET_GUARDS
-                    if name in _URL_SECRET_GUARDS:
-                        _ssrf_guard_url(value, label=name,
-                                        allow_loopback=_URL_SECRET_GUARDS[name])
-                except ValueError as _ssrf_err:
-                    summary["errors"].append(f"secret {name}: {str(_ssrf_err)[:200]}")
-                    continue
-                except ImportError:
-                    pass
-                if dry_run:
-                    summary["secrets_applied"] += 1
-                    continue
-                global_name, _env = _SECRET_KEYS[name]
-                if g:
-                    g[global_name] = value
-                if db_queue is not None:
-                    try:
-                        db_queue.put_nowait((
-                            "set_secret", (name, value, _t.time()),
-                        ))
-                    except asyncio.QueueFull:
-                        pass
-                summary["secrets_applied"] += 1
-
     actor = _request_username(request)
     slog("config_imported", level="warn",
          rid=request.get("_rid", ""), actor=actor,
          dry_run=dry_run,
          knobs_applied=summary["knobs_applied"],
          knobs_rejected=summary["knobs_rejected"],
-         admin_ips_added=summary["admin_ips_added"],
-         secrets_applied=summary["secrets_applied"])
+         admin_ips_added=summary["admin_ips_added"])
     if not dry_run:
         _gw_audit("settings_import", _gw_local_id(), actor,
                   knobs_applied=summary["knobs_applied"],
                   admin_ips_added=summary["admin_ips_added"],
-                  secrets_applied=summary["secrets_applied"],
                   applied=summary["applied"])
     return web.json_response(summary, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def vhosts_endpoint(request: web.Request):
     """GET /__vhosts  — list all vhost entries.
        POST /__vhosts — add or update a vhost entry.

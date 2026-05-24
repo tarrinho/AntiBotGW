@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.11 — entry point only.
+Anti-bot reverse proxy v1.8.13 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -64,7 +64,7 @@ from detection.canary import (  # noqa: F401
 )
 from detection.honey_cred import inject_honey_creds, lookup_honey_key  # noqa: F401
 import detection.llm_heuristic as _llm_heuristic  # noqa: F401
-from core.proxy_handler import honey_probe_endpoint  # noqa: F401
+from core.proxy_handler import honey_probe_endpoint, honey_suggest_endpoint  # noqa: F401
 from detection.automation import automation_report_endpoint  # noqa: F401
 from detection.fp_enrichment import (  # noqa: F401
     fp_report_endpoint, _fp_token_for, _is_soft_renderer, _inject_fp_probe,
@@ -137,6 +137,7 @@ from reputation.tor import _tor_refresh_loop  # noqa: F401
 from integrations.ja4 import _refresh_ja4_denylist_loop  # noqa: F401
 from integrations.redis import _shared_init  # noqa: F401
 from dashboards.agents import _stealth_score  # noqa: F401 — tests access proxy._stealth_score
+from dashboards.honeypots import honeypots_dashboard_endpoint, honeypots_data_endpoint  # noqa: F401
 from core.proxy_handler import (  # noqa: F401
     _origin_check_failed, _missing_required_header,
     _fetch_upstream_404, _periodic_404_refresh_loop, _upstream_404_cache,
@@ -294,7 +295,7 @@ def _startup_admin_users_sessions():
         if ADMIN_KEY_FROM_ENV:
             _bootstrap_pw_line = "   pass: see your ADMIN_KEY env var"
         else:
-            _bootstrap_pw_line = f"   pass: {INTERNAL_KEY[:4]}***  (read {_KEY_FILE})"
+            _bootstrap_pw_line = f"   pass: (read {_KEY_FILE})"
         print(f"  ║ {_bootstrap_pw_line:<57}║")
         print("  ║   then change the password in Settings → Users           ║")
         print("  ╚══════════════════════════════════════════════════════════╝",
@@ -348,6 +349,9 @@ async def _startup_integrations_and_tasks():
     if AI_CRAWLER_VERIFY_ENABLED:
         asyncio.create_task(_refresh_ai_crawler_ranges())
     _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
+    # 1.8.12 — pre-load confirmed-attacker JA4 fingerprints into the cross-reference cache
+    from core.proxy_handler import _load_honey_fp_cache as _lhfc
+    asyncio.create_task(_lhfc())
 
 
 def _startup_detector_health():
@@ -494,6 +498,10 @@ def make_app() -> web.Application:
         ("agents",            "GET",    agents_dashboard_endpoint,             True),
         ("agents-data",       "GET",    agents_data_endpoint,                  True),
         ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),
+        ("attack-playbook",   "GET",    attack_playbook_endpoint,              True),
+        ("honey-suggest",     "GET",    honey_suggest_endpoint,                True),
+        ("honeypots",         "GET",    honeypots_dashboard_endpoint,          True),
+        ("honeypots-data",    "GET",    honeypots_data_endpoint,               True),
         ("service",           "GET",    service_dashboard_endpoint,            True),
         ("service-data",      "GET",    service_metrics_data_endpoint,         True),
         ("controls",          "GET",    controls_dashboard_endpoint,           True),
@@ -711,7 +719,7 @@ def _admin_ip_allowed(request) -> bool:
     from helpers import get_ip as _get_ip_helper
     nets = globals().get("ADMIN_ALLOWED_NETS", [])
     if not nets:
-        return True
+        return False  # F-06: fail-closed when no allowlist is configured
     try:
         ip = _ipa.ip_address(_get_ip_helper(request))
     except (ValueError, TypeError):
@@ -1073,7 +1081,7 @@ if __name__ == "__main__":
     if ADMIN_KEY_FROM_ENV:
         key_line = "supplied via ADMIN_KEY env"
     else:
-        key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
+        key_line = "auto-generated; read /data/.admin_key"
     print("  ╔══════════════════════════════════════════════════════════╗")
     print(f"  ║ {GW_VERSION:<10}     →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")

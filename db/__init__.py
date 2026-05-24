@@ -55,12 +55,18 @@ def db_read_events(
     vhost: str = "",
     path_like: str = "",
     reason_like: str = "",
+    reason_in=None,
     ip_exact: str = "",
     order_by: str = "",
     limit: int = 0,
     offset: int = 0,
 ):
-    """Backend-aware event reader. See module docstring above for details."""
+    """Backend-aware event reader. See module docstring above for details.
+
+    `reason_like` is a substring (LIKE) match; `reason_in` is an exact-set
+    match (`reason IN (...)`). Use `reason_in` when reasons share a prefix
+    (e.g. "honeypot" vs "honeypot-silent") to avoid LIKE bleed.
+    """
     from db.sqlite import _read_events_sql
     # Resolve backend lazily — DB_BACKEND lives on core.proxy_handler and is
     # mutated by db_switch_endpoint. _postgres_available comes from state.
@@ -78,6 +84,7 @@ def db_read_events(
                 start_ts, end_ts,
                 columns=columns, vhost=vhost,
                 path_like=path_like, reason_like=reason_like,
+                reason_in=reason_in,
                 ip_exact=ip_exact, order_by=order_by,
                 limit=limit, offset=offset,
             )
@@ -91,9 +98,23 @@ def db_read_events(
         start_ts, end_ts,
         columns=columns, vhost=vhost,
         path_like=path_like, reason_like=reason_like,
+        reason_in=reason_in,
         ip_exact=ip_exact, order_by=order_by,
         limit=limit, offset=offset,
     )
+
+
+async def db_read_events_async(*args, **kwargs):
+    """Async wrapper for db_read_events — runs the synchronous SQLite/Postgres
+    read in a thread-pool executor so a large dashboard query (e.g. the 50k-row
+    honeypot scan, every 30 s per open dashboard) never blocks the aiohttp event
+    loop and stalls concurrent requests. Same signature/return as db_read_events.
+    (Improvement #3: get blocking DB I/O off the event loop.)"""
+    import asyncio
+    import functools
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, functools.partial(db_read_events, *args, **kwargs))
 
 
 # 1.8.8 — per-backend write-health probe.  Returns:
@@ -108,7 +129,8 @@ def db_read_events(
 # Used by /db-test to surface silent dual-write breakage in the popup.
 def db_health_snapshot() -> dict:
     """Probe both backends for write health. See module docstring."""
-    import sys as _sys, time as _t
+    import sys as _sys
+    import time as _t
     from db.sqlite import _events_health_sql
     out = {
         "sqlite":   _events_health_sql(),

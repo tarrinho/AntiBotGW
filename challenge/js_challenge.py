@@ -269,18 +269,18 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
       const nonce = parts[0];
       const blob = new Blob([`
         const nonce="${nonce}", prefix="${prefix}";
-        let i=0;
-        while(true){
-          const candidate=i.toString(36);
-          const msg=nonce+candidate;
-          // Use SubtleCrypto for SHA-256
-          crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg)).then(buf=>{
+        const enc=new TextEncoder();
+        async function solve(){
+          let i=0;
+          while(true){
+            const candidate=i.toString(36);
+            const buf=await crypto.subtle.digest('SHA-256',enc.encode(nonce+candidate));
             const hex=Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-            if(hex.startsWith(prefix)){ postMessage(candidate); }
-          });
-          i++;
-          if(i%5000===0){ /* yield */ }
+            if(hex.startsWith(prefix)){ postMessage(candidate); return; }
+            i++;
+          }
         }
+        solve();
       `], {type:'application/javascript'});
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);

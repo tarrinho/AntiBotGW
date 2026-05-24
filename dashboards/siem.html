@@ -1,10 +1,10 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · SIEM</title>
+<title>AppSecGW_1.8.13 · SIEM</title>
 <style>
 :root{
-  --bg:var(--bg);--card:var(--card);--line:var(--line);--fg:#c9d1d9;--dim:#8b949e;
+  --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
   --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
   --purple:#bc8cff;--orange:#ff7b3a;
   --sev-crit:#ff4444;--sev-high:#ff7b3a;--sev-med:#d29922;
@@ -120,6 +120,18 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
   font-family:ui-monospace}
 .fire-ok{background:#1a2e1a;color:var(--green)}
 .fire-alert{background:#3a1a1a;color:var(--sev-crit)}
+/* light-theme overrides for dark severity/banner backgrounds (dark defaults above stay dark) */
+html[data-theme="light"] .sev-critical{background:#ffebe9;color:#cf222e}
+html[data-theme="light"] .sev-high{background:#fff1e5;color:#bc4c00}
+html[data-theme="light"] .sev-medium{background:#fff8c5;color:#9a6700}
+html[data-theme="light"] .sev-low{background:#ddf4ff;color:#0969da}
+html[data-theme="light"] .sev-info{background:#eaeef2;color:#57606a}
+html[data-theme="light"] .btn:hover{background:var(--bg-hover)}
+html[data-theme="light"] #err-banner{background:#ffebe9;color:#cf222e}
+html[data-theme="light"] .alert-banner{background:#fff8c5;color:#9a6700}
+html[data-theme="light"] #sse-banner{background:#ffebe9;color:#cf222e}
+html[data-theme="light"] .fire-ok{background:#e6f6ec;color:#1a7f37}
+html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
 /* ── Threat index bar ── */
 #threat-bar-wrap{margin-top:8px}
 #threat-bar-track{height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden}
@@ -241,7 +253,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -250,6 +262,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub active">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -283,6 +296,8 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
     <button class="btn btn-sm active" data-mins="60" onclick="_setMins(this)">1h</button>
     <button class="btn btn-sm" data-mins="360" onclick="_setMins(this)">6h</button>
     <button class="btn btn-sm" data-mins="1440" onclick="_setMins(this)">24h</button>
+    <input id="vhost-filter-search" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:12px;width:120px"
+      oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-filter').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
     <select class="ctrl" id="vhost-filter" onchange="_onVhostChange()">
       <option value="">All vhosts</option>
     </select>
@@ -488,7 +503,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 </div>
 
 <div class="portal-footer">
-  AppSecGW_1.8.11 <span class="sep">|</span>
+  AppSecGW_1.8.13 <span class="sep">|</span>
   SIEM Security Event Center <span class="sep">|</span>
   <span id="footer-ts" class="dim"></span>
 </div>
@@ -520,6 +535,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 </div>
 
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
 window._applyChartColorsToInstance=function(c,theme){
   var L=theme==='light',gc=L?'rgba(0,0,0,.08)':'#21262d',tc=L?'#636e7b':'#8b949e',lc=L?'#636e7b':'#c9d1d9',tbg=L?'#ffffff':'#161b22',tbc=L?'#d0d7de':'#30363d',ttc=L?'#1f2328':'#c9d1d9';
@@ -542,12 +558,7 @@ if(typeof Chart!=='undefined'){
 <script>
 'use strict';
 
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replace(/[&<>"'`/]/g, function(c) {
-    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c];
-  });
-}
+
 
 var _timers = [];
 var _sse = null;
@@ -782,6 +793,8 @@ function _repopulateVhosts(vhosts) {
   sel.innerHTML = '<option value="">All vhosts</option>';
   vhosts.forEach(function(v) { var o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); });
   if (prev && vhosts.indexOf(prev) !== -1) sel.value = prev;
+  var _vfs = document.getElementById('vhost-filter-search');
+  if (_vfs) { _vfs.style.display = vhosts.length >= 8 ? 'inline-block' : 'none'; _vfs.value = ''; }
 }
 
 // ── CSV export ────────────────────────────────────────────────────────────────
@@ -1057,7 +1070,7 @@ function _updateKPIs(stats, threatIndex) {
   var winLabel = selectedMins < 60 ? 'Last '+selectedMins+'m'
     : (selectedMins===60 ? 'Last 1h' : (selectedMins===360 ? 'Last 6h' : 'Last 24h'));
   document.getElementById('kpi-window').textContent = winLabel;
-  document.title = 'AppSecGW_1.8.11 · SIEM · ' + winLabel;
+  document.title = 'AppSecGW_1.8.13 · SIEM · ' + winLabel;
   var fill = document.getElementById('threat-bar-fill');
   fill.style.width = threatIndex + '%';
   fill.style.background = threatIndex>=75 ? '#ff4444' : threatIndex>=50 ? '#ff7b3a'
