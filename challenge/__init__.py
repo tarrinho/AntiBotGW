@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # challenge/__init__.py — Phase 6
 # Re-exports everything from all challenge sub-modules so callers can do
 # `from challenge import *` and get the full surface.

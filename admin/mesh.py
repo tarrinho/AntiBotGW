@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # admin/mesh.py — Phase 8: gateway registry + mesh-sync
 # Extracted from proxy.py lines 11914–13539
 import base64 as _b64  # noqa: F401

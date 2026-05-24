@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/redis.py — Optional Redis-backed shared state across N instances.
 

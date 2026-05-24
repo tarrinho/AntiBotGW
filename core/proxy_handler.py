@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """core/proxy_handler.py — main proxy handler + gateway admin endpoints.
 
 Extracted from proxy.py (Phase 9).  Contains:
@@ -2906,6 +2908,25 @@ async def protect(request: web.Request, handler):
         else:
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
+            # 1.8.13: honour honeypot + suspicious-path detection even when
+            # the client cannot pass the JS challenge — probing /.env or
+            # /wp-login.php is still a hostile signal regardless of challenge
+            # state. Record + ban before returning chal-required so events
+            # are captured on challenge-first deployments (pt4.tech, jtsl.pt).
+            if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
+                _hp_tk, _hp_sid, _hp_fp, _, _ = get_identity(request)
+                await update_risk_and_maybe_ban(_hp_tk, "honeypot-silent", ip)
+                return await _silent_decoy_response(
+                    ip, ua, request.path, "honeypot-silent",
+                    track_key=_hp_tk, sid=_hp_sid, fp=_hp_fp,
+                    ja4=_request_ja4(request), request_id=rid)
+            if vc('SUSPICIOUS_PATH_ENABLED') and is_suspicious_path(request.path_qs):
+                _sp_tk, _sp_sid, _sp_fp, _, _ = get_identity(request)
+                await update_risk_and_maybe_ban(_sp_tk, "suspicious-path", ip)
+                return await _silent_decoy_response(
+                    ip, ua, request.path, "suspicious-path",
+                    track_key=_sp_tk, sid=_sp_sid, fp=_sp_fp,
+                    ja4=_request_ja4(request), request_id=rid)
             return await _silent_decoy_response(ip, ua, request.path,
                                                 "chal-required",
                                                 ja4=_request_ja4(request), request_id=rid)

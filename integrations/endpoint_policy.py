@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/endpoint_policy.py — Per-endpoint policy engine + custom rules.
 

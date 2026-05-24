@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 helpers.py — Pure utility functions used across the proxy.
 Extracted from proxy.py as part of Phase 1 modular refactoring.

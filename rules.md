@@ -305,9 +305,9 @@ docker build --platform linux/arm/v7 -f Dockerfile.armv7 \
 **Pass criterion:** All three builds exit 0 with no layer errors.
 
 ### 14c. Tag and push to Harbor
-Registry: `harbor.tools.pt4.tech.com/antibotappsecgw/antibotappsecgw`
+Registry: `harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw`
 ```
-HARBOR=harbor.tools.pt4.tech.com/antibotappsecgw/antibotappsecgw
+HARBOR=harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw
 VER=<version>
 
 docker tag appsec-antibot-gw:${VER}-amd64 ${HARBOR}:${VER}-amd64

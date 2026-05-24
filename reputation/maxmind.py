@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 reputation/maxmind.py — MaxMind GeoLite2 ASN/City lookups + AI-crawler range
                         verification + locale/geo consistency check.

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 scoring.py — Risk scoring, ban management, and signal-order helpers.
 Extracted from proxy.py as part of Phase 5 modular refactoring.

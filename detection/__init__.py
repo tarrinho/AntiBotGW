@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/__init__.py — Phase 4
 # Re-exports everything from all detection sub-modules so callers can do
 # `from detection import *` and get the full surface.

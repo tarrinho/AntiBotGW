@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/canary.py — Phase 4 extraction
 # Canary token injection/scanning, BotD reporter, tarpit link injection,
 # and honey-link injection extracted from proxy.py (lines 10049–10239).

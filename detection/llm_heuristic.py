@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 detection/llm_heuristic.py — P3: LLM tool-call timing / no-subresource heuristic (1.7.3).
 

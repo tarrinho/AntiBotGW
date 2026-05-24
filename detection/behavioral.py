@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/behavioral.py — Phase 4 extraction
 # behavioral_check() extracted from proxy.py (line 4051).
 # Uses state.state_lock + state.ip_state, both from state.py.

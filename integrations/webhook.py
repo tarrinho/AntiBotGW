@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/webhook.py — Webhook fan-out (operator awareness across N gateways).
 

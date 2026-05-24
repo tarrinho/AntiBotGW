@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # admin/users.py — Phase 8: dashboard user accounts + session management
 # Extracted from proxy.py lines 11621–13155 area
 import base64 as _b64  # noqa: F401

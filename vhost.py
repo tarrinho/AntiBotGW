@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """
 vhost.py — Per-inbound-domain config overrides (Option C multi-vhost).
 

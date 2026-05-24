@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/service_metrics.py — Phase 8: service metrics sampling + dashboard
 # Extracted from proxy.py lines 2341–2604, 11154–11317
 import time as _t  # noqa: F401 — used in _sample_service_metrics_loop

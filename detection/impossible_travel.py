@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/impossible_travel.py — 1.7.2
 #
 # impossible-travel: the same session is used from geographically implausible

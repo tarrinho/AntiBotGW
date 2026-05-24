@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # admin/auth.py — Phase 8: admin IP allowlist + internal-auth helpers
 # Extracted from proxy.py lines 167–360
 import asyncio

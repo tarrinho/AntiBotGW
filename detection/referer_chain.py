@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/referer_chain.py — 1.7.2
 #
 # referer-ghost: the client sends a Referer that claims to be a page under

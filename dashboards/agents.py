@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/agents.py — Phase 8: stealth-agent analytics dashboard
 # Extracted from proxy.py lines 10853–11150
 import time as _t       # noqa: F401

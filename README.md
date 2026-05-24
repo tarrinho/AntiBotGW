@@ -1070,8 +1070,8 @@ UPSTREAM=https://your-app ALLOWED_HOSTS=www.example.com ./myip.sh --apply
 ### Pull from Harbor
 
 ```bash
-docker login harbor.tools.pt4.tech.com
-docker pull  harbor.tools.pt4.tech.com/antibotappsecgw/antibotappsecgw:1.3
+docker login harbor.tools.pt4.tech
+docker pull  harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw:1.3
 ```
 
 ---
@@ -1230,7 +1230,13 @@ All owned by UID 65532 (`nonroot`).
 
 ## License
 
-Internal — see project owner.
+This project is licensed under the Apache License 2.0.
+
+You are free to use, modify, and distribute this software, including for commercial purposes, under the terms of the license.
+
+This software is provided "as is", without warranty of any kind, express or implied. The authors are not liable for any damages or issues resulting from its use.
+
+See the [LICENSE](LICENSE) file for full details.
 
 ## Author
 

@@ -520,7 +520,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.5\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.13\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -5836,4 +5836,87 @@ def test_strict_vhost_guard_requires_vhosts_non_empty():
     assert "VHOSTS" in guard, (
         "STRICT_VHOST guard must check 'VHOSTS' (non-empty) before rejecting — "
         "single-upstream deployments with no vhosts must not be broken by STRICT_VHOST=1"
+    )
+
+
+# ── 1.8.13 honeypot-before-challenge-gate fix ─────────────────────────────
+# Root cause: honeypot/suspicious-path detection ran AFTER the JS challenge
+# gate. Challenge-blocked requests returned 'chal-required' before honeypot
+# detection fired → honeypot events never recorded on challenge-first
+# deployments (pt4.tech, jtsl.pt, any site with JS_CHALLENGE=1).
+# Fix: proxy_handler.py intercepts honeypot/suspicious-path paths inside
+# the chal-required early-return branch so events are captured regardless
+# of challenge state.
+
+def _find_chal_gate_block(src: str) -> str:
+    """Return the text of the JS-challenge gate's non-HTML early-return block
+    (the `else:` branch after the auto-mint path that emits 'chal-required').
+    Anchored by _js_challenge_required to skip earlier occurrences."""
+    gate_idx = src.find("_js_challenge_required(request)")
+    assert gate_idx != -1, "proxy_handler.py: _js_challenge_required gate not found"
+    # Find the chal-required emit inside or after the gate (~5000 char window)
+    window = src[gate_idx:gate_idx + 5000]
+    emit_idx = window.find('"chal-required"')
+    assert emit_idx != -1, "proxy_handler.py: chal-required not found after gate"
+    # Return the 1500 chars before the emit within that window
+    return window[max(0, emit_idx - 1500):emit_idx]
+
+
+def test_honeypot_check_precedes_chal_required():
+    """proxy_handler.py: the chal-required early-return branch must check
+    HONEYPOT_ENABLED before returning chal-required so that bots probing
+    honeypot paths (/.env, /wp-login.php) are always recorded even on
+    challenge-first deployments (pt4.tech, jtsl.pt, etc.)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    before = _find_chal_gate_block(src)
+    assert "HONEYPOT_ENABLED" in before, (
+        "proxy_handler.py: chal-required early-return must check HONEYPOT_ENABLED "
+        "before emitting chal-required — honeypot events are lost on challenge-first "
+        "deployments (pt4.tech, jtsl.pt) without this check"
+    )
+
+
+def test_suspicious_path_check_precedes_chal_required():
+    """proxy_handler.py: the chal-required early-return branch must check
+    SUSPICIOUS_PATH_ENABLED before returning chal-required."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    before = _find_chal_gate_block(src)
+    assert "SUSPICIOUS_PATH_ENABLED" in before, (
+        "proxy_handler.py: chal-required early-return must check SUSPICIOUS_PATH_ENABLED "
+        "before emitting chal-required — suspicious-path events are lost on "
+        "challenge-first deployments without this check"
+    )
+
+
+def test_honeypot_early_intercept_calls_update_risk():
+    """proxy_handler.py: the early honeypot intercept in the chal-required
+    branch must call update_risk_and_maybe_ban so banning also triggers."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    before = _find_chal_gate_block(src)
+    assert "update_risk_and_maybe_ban" in before, (
+        "proxy_handler.py: early honeypot intercept must call update_risk_and_maybe_ban "
+        "to trigger ban logic, not just log the event"
+    )
+
+
+def test_demo_script_warns_trust_xff():
+    """demo-attack-traffic.py must warn that TRUST_XFF=none (default since
+    1.8.13) silently ignores XFF spoofing, causing all events to land on
+    the runner's real IP."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "demo-attack-traffic.py").read_text()
+    assert "TRUST_XFF" in src, (
+        "demo-attack-traffic.py must warn that TRUST_XFF=none breaks XFF spoofing"
+    )
+
+
+def test_attack_demo_warns_trust_xff():
+    """attack_demo.py must warn that TRUST_XFF=none breaks XFF spoofing."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "attack_demo.py").read_text()
+    assert "TRUST_XFF" in src, (
+        "attack_demo.py must warn that TRUST_XFF=none breaks XFF spoofing"
     )

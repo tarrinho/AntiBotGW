@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 # detection/automation.py — 1.7.1: lightweight browser automation probe
 #
 # Injects a tiny inline <script> that checks navigator.webdriver and related

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright (c) 2026 Pedro Tarrinho
 """detection/graphql.py — GraphQL introspection, batch, and depth protection."""
 import json
 import re
