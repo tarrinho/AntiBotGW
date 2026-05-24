@@ -12,7 +12,7 @@ import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent / "dashboards"
 REAL = ["main", "controls", "settings", "agents", "siem",
-        "geo", "service", "logs", "vhost_policy"]
+        "geo", "service", "logs", "vhost_policy", "control_center"]
 PARENTS = ["control-center", "controls", "settings"]
 
 
@@ -89,7 +89,7 @@ def test_no_rail_or_icon_markup(name):
 @pytest.mark.parametrize("name", REAL)
 def test_brand_version_current(name):
     h = _html(name)
-    assert '<div id="sidebar-brand-ver">1.8.11</div>' in h, \
+    assert '<div id="sidebar-brand-ver">1.8.12</div>' in h, \
         f"{name}: brand version not 1.8.10"
 
 

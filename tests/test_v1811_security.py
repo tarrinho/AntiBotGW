@@ -300,7 +300,7 @@ class TestM7SessionCacheRestore:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Follow-up — UPSTREAM_MAX_RESP editable in Settings + 413 on oversize response
+# Follow-up — UPSTREAM_MAX_RESP editable in Controls + 413 on oversize response
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestUpstreamMaxRespUX:
@@ -308,17 +308,19 @@ class TestUpstreamMaxRespUX:
         assert "UPSTREAM_MAX_RESP" in proxy_handler._HOT_RELOAD_KNOBS
         assert "UPSTREAM_MAX_BODY" in proxy_handler._HOT_RELOAD_KNOBS
 
-    def test_settings_ui_exposes_max_resp_fields(self):
-        """Both upstream size caps must be editable in Settings → Infrastructure
-        (they were hot-reloadable but not surfaced, so operators couldn't raise
-        the cap to serve large downloads)."""
-        s = open(os.path.join(os.path.dirname(__file__), "..", "dashboards",
-                              "settings.html"), encoding="utf-8").read()
-        assert "{key:'UPSTREAM_MAX_RESP', kind:'number'" in s, \
-            "UPSTREAM_MAX_RESP must be an editable Infrastructure field"
-        assert "{key:'UPSTREAM_MAX_BODY', kind:'number'" in s
-        assert "k.kind === 'number'" in s, \
-            "Infrastructure card must render the integer ('number') field kind"
+    def test_controls_ui_exposes_max_resp_fields(self):
+        """Both upstream size caps must be editable in Controls → Thresholds
+        (surfaced via thresholds_endpoint SPECS + KNOB_META, not Settings)."""
+        import inspect as _ins
+        src = _ins.getsource(proxy_handler.thresholds_endpoint)
+        assert "UPSTREAM_MAX_BODY" in src, \
+            "UPSTREAM_MAX_BODY must be in thresholds_endpoint SPECS"
+        assert "UPSTREAM_MAX_RESP" in src, \
+            "UPSTREAM_MAX_RESP must be in thresholds_endpoint SPECS"
+        c = open(os.path.join(os.path.dirname(__file__), "..", "dashboards",
+                              "controls.html"), encoding="utf-8").read()
+        assert "UPSTREAM_MAX_BODY" in c
+        assert "UPSTREAM_MAX_RESP" in c
 
     def test_oversize_upstream_response_returns_413(self):
         """An upstream response exceeding UPSTREAM_MAX_RESP must return 413

@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · Logs</title>
+<title>AppSecGW_1.8.13 · Logs</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
@@ -181,7 +181,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -190,6 +190,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -345,9 +346,10 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 </section>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 <script>
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
   if (/^<t[rhd]/i.test((h||'').trimStart())) {
@@ -874,7 +876,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.style.borderColor = c.edge;
       pill.textContent = `● GW ${s}/100`;
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }

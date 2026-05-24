@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · GeoMap</title>
+<title>AppSecGW_1.8.13 · GeoMap</title>
 <link rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
@@ -98,6 +98,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .legend{position:absolute;bottom:12px;right:12px;background:rgba(22,27,34,.92);
         padding:8px 12px;border:1px solid var(--line);border-radius:6px;font-size:11px;
         color:var(--fg);z-index:1000;line-height:1.6}
+html[data-theme="light"] .legend{background:rgba(255,255,255,.92)}
 .legend .dot{display:inline-block;width:11px;height:11px;border-radius:50%;margin-right:6px;vertical-align:middle}
 .legend .square{display:inline-block;width:10px;height:10px;margin-right:6px;vertical-align:middle;background:var(--purple)}
 .legend .triangle{display:inline-block;width:0;height:0;margin-right:6px;vertical-align:middle;
@@ -105,6 +106,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
 .dim{color:var(--dim)}
 .notice{background:#3d2a1a;border:1px solid #5b3f1f;color:#e6c068;padding:10px 14px;border-radius:6px;margin-top:12px;font-size:12px;display:none}
+html[data-theme="light"] .notice{background:#fff8c5;border-color:#d4a72c;color:#9a6700}
 .notice.show{display:block}
 .split{display:grid;grid-template-columns:1fr 360px;gap:14px;align-items:start;margin-top:14px}
 @media(max-width:980px){.split{grid-template-columns:1fr}}
@@ -148,7 +150,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
 /* 1.8.0 — vhost selector pill strip */
-#vhost-bar{display:none;gap:6px;margin:0 0 10px;flex-wrap:wrap;align-items:center}
+#vhost-bar{display:none;gap:6px;margin:0 0 10px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;scrollbar-width:thin;padding-bottom:2px}
 #vhost-bar-label{font-size:11px;color:var(--dim);margin-right:2px}
 .vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #58a6ff;color:#58a6ff;
   background:transparent;cursor:pointer;font-size:12px;font-weight:600;
@@ -181,7 +183,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -190,6 +192,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo" class="active">GeoMap</a>
@@ -331,12 +334,13 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 <div class="foot">refreshes every 30 s · <code id="ts"></code></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin=""></script>
 <script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 <script>
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 window._vhostParam=function(){var v=sessionStorage.getItem('gw_vhost')||'';return v?'&vhost='+encodeURIComponent(v):'';};
 document.addEventListener('DOMContentLoaded',function(){
   Promise.all([
@@ -1070,7 +1074,7 @@ window.addEventListener('pagehide', () => _timers.forEach(clearInterval)); // FE
       <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
-    <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
+    <div style="height:5px;background:var(--bg-hover);border-radius:3px;margin:4px 0 10px;overflow:hidden">
       <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
     </div>
     <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
@@ -1102,7 +1106,7 @@ window.addEventListener('pagehide', () => _timers.forEach(clearInterval)); // FE
       pill.style.borderColor = c.edge;
       pill.textContent = `● GW ${s}/100`;
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }

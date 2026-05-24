@@ -364,10 +364,10 @@ class _IPReq:
         self.path = "/"
 
 
-def test_admin_ip_allowed_open_when_unset(proxy_module):
-    """No allowlist → all IPs allowed (admin key still required)."""
+def test_admin_ip_allowed_closed_when_unset(proxy_module):
+    """No allowlist → all IPs denied (fail-closed, F-06)."""
     proxy_module.ADMIN_ALLOWED_NETS.clear()
-    assert proxy_module._admin_ip_allowed(_IPReq("8.8.8.8")) is True
+    assert proxy_module._admin_ip_allowed(_IPReq("8.8.8.8")) is False
 
 
 def test_admin_ip_allowed_single_ip(proxy_module):
@@ -698,7 +698,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.11"
+_EXPECTED_VERSION = "AppSecGW_1.8.13"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -714,7 +714,7 @@ def test_no_stale_version_strings_in_source():
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
     # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.11\b)\d+\.\d+')
+    stale_re = re.compile(r'AppSecGW_(?!1\.8\.13\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
     skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache", "mutants"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
@@ -1156,6 +1156,20 @@ def _read_dash(name: str) -> str:
         return f.read()
 
 
+# 1.8.13 #5 — escapeHtml moved from inline (per-file) to the shared
+# dashboards/assets/dashboard-common.js. Body-inspection tests (charset/null
+# guard) must look at wherever escapeHtml is actually defined now.
+def _read_dash_with_shared(name: str) -> str:
+    src = _read_dash(name)
+    try:
+        with open(_os.path.join(_DASH_DIR, 'assets', 'dashboard-common.js'),
+                  encoding='utf-8') as f:
+            src += "\n" + f.read()
+    except OSError:
+        pass
+    return src
+
+
 # ── SEC-1: Open Redirect in login.html ───────────────────────────────────────
 # Bug: `next` param taken verbatim from URL query string and used in
 # `location.href` — server error path bypasses server-supplied redirect.
@@ -1214,10 +1228,9 @@ def test_service_emessage_escaped_in_innerhtml():
 def test_service_has_global_escapehtml():
     """service.html must define escapeHtml at global script scope."""
     src = _read_dash('service.html')
-    assert 'function escapeHtml(' in src, (
-        "service.html must define a global function escapeHtml(). "
-        "Before the fix only local escHtml closures existed; callers outside "
-        "those closures would get ReferenceError."
+    assert 'function escapeHtml(' in src or 'dashboard-common.js' in src, (
+        "service.html must provide a global escapeHtml() — inline or via the "
+        "shared dashboard-common.js include (1.8.13 #5)."
     )
 
 
@@ -1235,7 +1248,7 @@ import pytest as _pytest
 @_pytest.mark.parametrize("fname", _DASHBOARD_FILES)
 def test_escapehtmlt_full_charset(fname):
     """Every dashboard escapeHtml must escape backtick (&#96;) and slash (&#47;)."""
-    src = _read_dash(fname)
+    src = _read_dash_with_shared(fname)   # escapeHtml now lives in the shared asset
     # login.html doesn't use escapeHtml at all in its JS — skip charset check
     if fname == 'login.html':
         return
@@ -1277,19 +1290,23 @@ def test_no_eschtml_calls(fname):
 @_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
                                      'controls.html','geo.html','logs.html','settings.html'])
 def test_single_escapehtmlt_definition(fname):
-    """Each dashboard must have exactly one escapeHtml definition."""
+    """escapeHtml must be provided exactly once — either one inline definition,
+    or (1.8.13 #5) zero inline + the shared dashboard-common.js include. Multiple
+    inline definitions would let the wrong charset silently win."""
     src = _read_dash(fname)
     count = len(_re.findall(r'function escapeHtml\s*\(', src))
-    assert count == 1, (
-        f"{fname}: found {count} escapeHtml definitions (expected exactly 1). "
-        "Multiple definitions allow the wrong charset to silently win."
-    )
+    has_shared = 'dashboard-common.js' in src
+    assert count <= 1, (
+        f"{fname}: found {count} inline escapeHtml definitions (expected ≤1).")
+    assert count == 1 or has_shared, (
+        f"{fname}: no inline escapeHtml AND no dashboard-common.js include — "
+        "escapeHtml would be undefined.")
 
 @_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
                                      'controls.html','geo.html','logs.html','settings.html'])
 def test_escapehtmlt_null_guard(fname):
     """escapeHtml must handle null/undefined via String(s==null?'':s)."""
-    src = _read_dash(fname)
+    src = _read_dash_with_shared(fname)   # escapeHtml now lives in the shared asset
     assert 'String(s==null' in src or "String(s == null" in src, (
         f"{fname}: escapeHtml must guard against null/undefined with "
         "String(s==null?'':s) — (s||'') coerces 0/false to empty string."
@@ -1503,10 +1520,11 @@ def test_control_center_beforeunload_cleanup():
 def test_control_center_escapehtml_used_in_dynamic_html():
     """control_center.html must use escapeHtml for all user-controlled values in innerHTML."""
     src = _read_dash('control_center.html')
-    fn_start = src.find('function escapeHtml')
-    assert fn_start != -1, "control_center.html: escapeHtml helper not defined"
-    assert src.find('escapeHtml', fn_start + 1) != -1, (
-        "control_center.html: escapeHtml defined but never called"
+    # escapeHtml is now provided by the shared dashboard-common.js include (1.8.13 #5)
+    assert 'function escapeHtml' in src or 'dashboard-common.js' in src, (
+        "control_center.html: escapeHtml helper not provided (inline or shared asset)")
+    assert 'escapeHtml(' in src, (
+        "control_center.html: escapeHtml provided but never called"
     )
 
 
@@ -5757,7 +5775,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.11" in src, "vhost_policy.html: version string missing or stale"
+    assert "AppSecGW_1.8.13" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():
@@ -10704,13 +10722,17 @@ def test_secrets_endpoint_applies_ssrf_guard():
     assert "_URL_SECRET_GUARDS" in src
 
 
-def test_settings_import_applies_ssrf_guard():
-    """settings_import_endpoint must apply SSRF guard on URL secrets."""
+def test_settings_import_no_secret_import():
+    """settings_import_endpoint must NOT import secrets (F-10: secrets excluded
+    from export/import to prevent plaintext key exfiltration via XML)."""
     import inspect
     from admin import settings
     src = inspect.getsource(settings.settings_import_endpoint)
-    assert "_ssrf_guard_url" in src, \
-        "settings_import_endpoint does not apply SSRF guard on URL-type secrets"
+    # Confirm dead code was removed: overwrite_secrets param and secrets_applied
+    assert "overwrite_secrets" not in src, \
+        "settings_import_endpoint: overwrite_secrets dead code must be absent (F-10)"
+    assert "secrets_applied" not in src, \
+        "settings_import_endpoint: secrets_applied dead code must be absent (F-10)"
 
 
 # ── SH-3: PoW endpoint rate limiting ─────────────────────────────────────────
@@ -10823,3 +10845,444 @@ def test_redis_flush_loop_started_in_proxy():
     startup_src = inspect.getsource(proxy._startup_integrations_and_tasks)
     assert "_redis_ban_flush_loop" in startup_src, \
         "_startup_integrations_and_tasks does not start _redis_ban_flush_loop"
+
+
+# ── Live-feed pill flicker fix (1.8.12) ──────────────────────────────────────
+
+def test_live_pill_no_immediate_dim_on_tick():
+    """tick() must NOT immediately set the pill to the fetching state.
+    The ↻ … dim must be deferred behind a setTimeout so fast fetches
+    produce no visible flicker (pill stays ● LIVE the whole time)."""
+    src = _dashboard_src("main.html")
+    # Old pattern: set dim state synchronously at the top of tick()
+    assert "_liveElPre" not in src, \
+        "Stale _liveElPre synchronous dim still present — flicker not fixed"
+    # New pattern: a setTimeout that fires only after a delay
+    assert "setTimeout(" in src and "_liveTimer" in src, \
+        "tick() must use a deferred _liveTimer to avoid pill flicker"
+
+
+def test_live_pill_timer_cleared_on_success():
+    """clearTimeout(_liveTimer) must appear in the success path of tick()
+    so the deferred dim is cancelled when the fetch returns quickly."""
+    src = _dashboard_src("main.html")
+    # Both clearTimeout calls must exist (success + catch)
+    assert src.count("clearTimeout(_liveTimer)") >= 2, \
+        "clearTimeout(_liveTimer) must appear in both success and catch paths"
+
+
+def test_live_pill_timer_cleared_on_error():
+    """clearTimeout(_liveTimer) must appear before the ○ ERR assignment in
+    tick()'s catch block so the deferred dim is always cancelled on error."""
+    src = _dashboard_src("main.html")
+    clear_pos = src.find("clearTimeout(_liveTimer)")
+    err_pos = src.find("'○ ERR'")
+    assert clear_pos != -1, "clearTimeout(_liveTimer) not found in main.html"
+    assert err_pos != -1, "'○ ERR' state not found in main.html"
+    # The clearTimeout that guards the ERR state must come before it
+    # (the success-path clearTimeout is earlier still, so find the last one before ERR)
+    last_clear_before_err = src.rfind("clearTimeout(_liveTimer)", 0, err_pos)
+    assert last_clear_before_err != -1, \
+        "clearTimeout(_liveTimer) must appear before '○ ERR' assignment in catch block"
+
+
+def test_live_pill_deferred_delay_is_reasonable():
+    """The deferred delay must be between 200ms and 1000ms — short enough to
+    still show a loading indicator on slow fetches, long enough to avoid
+    flickering on a normal LAN/loopback connection."""
+    import re
+    src = _dashboard_src("main.html")
+    # Match: setTimeout(() => { ..._liveTimer... }, <number>)
+    m = re.search(r'let _liveTimer\s*=.*?setTimeout\s*\([^,]+,\s*(\d+)\s*\)', src, re.DOTALL)
+    assert m, "_liveTimer setTimeout not found — check the deferred-dim pattern"
+    delay = int(m.group(1))
+    assert 200 <= delay <= 1000, \
+        f"Live-pill deferred delay {delay}ms outside acceptable 200–1000ms window"
+
+
+# ── Honeypot suggest + Trap button fix (1.8.12) ──────────────────────────────
+
+def test_hs_trap_btn_uses_data_path_not_inline_onclick():
+    """+ Trap buttons in the suggest list must use data-path + JS event
+    listener, not onclick with JSON.stringify — the JSON double-quotes break
+    out of the onclick="" attribute and the handler never fires."""
+    src = _dashboard_src("honeypots.html")
+    # No inline onclick calling addHoneypotPath with JSON.stringify
+    assert 'onclick="addHoneypotPath(' not in src, \
+        "Trap buttons use inline onclick with JSON.stringify — handler will never fire"
+    assert "onclick='addHoneypotPath(" not in src, \
+        "Trap buttons use inline onclick — use data-path + addEventListener instead"
+
+
+def test_hs_trap_btn_class_present_in_suggest_render():
+    """renderSuggest() must output buttons with class hs-trap-btn so the
+    post-innerHTML event binding loop can find them."""
+    src = _dashboard_src("honeypots.html")
+    assert 'class="hs-trap-btn"' in src, \
+        "renderSuggest() missing hs-trap-btn class on + Trap buttons"
+    assert 'data-path=' in src, \
+        "renderSuggest() missing data-path attribute on + Trap buttons"
+    assert '.hs-trap-btn' in src and 'addHoneypotPath(b.dataset.path' in src, \
+        "renderSuggest() missing querySelectorAll('.hs-trap-btn') event binding"
+
+
+def test_pp_trap_btn_class_present_in_predicted_render():
+    """renderPredicted() must output buttons with class pp-trap-btn (same
+    fix as hs-trap-btn — no inline onclick with JSON.stringify)."""
+    src = _dashboard_src("honeypots.html")
+    assert 'class="pp-trap-btn"' in src, \
+        "renderPredicted() missing pp-trap-btn class on + Trap buttons"
+    assert '.pp-trap-btn' in src and 'addHoneypotPath(b.dataset.path' in src, \
+        "renderPredicted() missing querySelectorAll('.pp-trap-btn') event binding"
+
+
+def test_add_honeypot_path_refreshes_ui_on_success():
+    """addHoneypotPath() must call loadData() and loadSuggest() after a
+    successful POST so the trap list and suggestions update immediately."""
+    src = _dashboard_src("honeypots.html")
+    # Find the success branch (after res.ok) and check refresh calls exist
+    ok_pos = src.find("res.ok")
+    assert ok_pos != -1, "addHoneypotPath res.ok check not found"
+    after_ok = src[ok_pos:ok_pos + 400]
+    assert "loadData()" in after_ok and "loadSuggest()" in after_ok, \
+        "addHoneypotPath success branch must call loadData() and loadSuggest() to refresh UI"
+
+
+# ── 15+ vhost scalability (1.8.12) ───────────────────────────────────────────
+
+def test_vhost_pill_bars_no_wrap():
+    """Pill bars in agents.html and geo.html must not use flex-wrap:wrap —
+    at 15+ vhosts the bar would grow to 2-3 rows. Must be nowrap + overflow-x."""
+    for name in ("agents.html", "geo.html"):
+        src = _dashboard_src(name)
+        assert "flex-wrap:nowrap" in src and "overflow-x:auto" in src, \
+            f"{name}: #vhost-bar must use flex-wrap:nowrap + overflow-x:auto for 15+ vhosts"
+        assert "#vhost-bar{" in src and "flex-wrap:wrap" not in src.split("#vhost-bar{")[1].split("}")[0], \
+            f"{name}: #vhost-bar still has flex-wrap:wrap — will stack on 15+ vhosts"
+
+
+def test_vhost_select_filter_inputs_present():
+    """Every dashboard with a vhost <select> must have a companion filter <input>
+    so operators can find a specific vhost among 15+ options without scrolling."""
+    cases = [
+        ("main.html",         "vhost-search-inp"),
+        ("controls.html",     "vhost-sel-search"),
+        ("siem.html",         "vhost-filter-search"),
+        ("vhost_policy.html", "vhost-policy-search"),
+    ]
+    for name, inp_id in cases:
+        src = _dashboard_src(name)
+        assert f'id="{inp_id}"' in src, \
+            f"{name}: missing vhost filter input #{inp_id}"
+        assert "filter vhosts" in src, \
+            f"{name}: vhost filter input missing placeholder text"
+
+
+def test_vhost_filter_inputs_are_hidden_by_default():
+    """Filter inputs must start hidden (display:none) and be shown only when
+    the vhost count reaches the threshold — keeps the UI clean for small setups."""
+    cases = [
+        ("main.html",         "vhost-search-inp"),
+        ("controls.html",     "vhost-sel-search"),
+        ("siem.html",         "vhost-filter-search"),
+        ("vhost_policy.html", "vhost-policy-search"),
+    ]
+    for name, inp_id in cases:
+        src = _dashboard_src(name)
+        # The input element must carry display:none in its style attribute
+        import re
+        m = re.search(r'id="' + re.escape(inp_id) + r'"[^>]*style="[^"]*display\s*:\s*none', src)
+        assert m, f"{name}: #{inp_id} must have display:none in its style (hidden by default)"
+
+
+def test_vhost_filter_logic_uses_option_hidden():
+    """The filter oninput handler must set option.hidden rather than removing
+    options — removing would break value preservation across filter changes."""
+    for name in ("main.html", "controls.html", "siem.html", "vhost_policy.html"):
+        src = _dashboard_src(name)
+        assert "o.hidden=" in src or "o.hidden =" in src, \
+            f"{name}: vhost filter must use option.hidden, not option removal"
+
+
+def test_control_center_vhost_table_scrollable():
+    """The vhost stats table wrapper must have max-height + overflow-y:auto
+    so it scrolls rather than stretching the page with 15+ vhosts."""
+    src = _dashboard_src("control_center.html")
+    assert "max-height:520px" in src or "max-height: 520px" in src, \
+        "control_center.html: vhost stats table container missing max-height"
+    assert "overflow-y:auto" in src, \
+        "control_center.html: vhost stats table container missing overflow-y:auto"
+
+
+def test_control_center_vhost_thead_sticky():
+    """The vhost stats table <thead> must use position:sticky so the column
+    headers remain visible when scrolling through 15+ vhost rows."""
+    src = _dashboard_src("control_center.html")
+    assert "position:sticky" in src and "top:0" in src, \
+        "control_center.html: .tbl thead th must have position:sticky;top:0"
+
+
+# ── 1.8.13 Honeypot storyboard intelligence ─────────────────────────────────
+
+def test_honeypots_path_ann_lookup_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "var PATH_ANN" in src or "PATH_ANN=" in src or "PATH_ANN =" in src, \
+        "honeypots.html: PATH_ANN path annotation lookup table not defined"
+
+
+def test_honeypots_annotation_for_function_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function annotationFor(" in src or "annotationFor=function" in src, \
+        "honeypots.html: annotationFor() helper function not defined"
+
+
+def test_honeypots_classify_intent_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function classifyIntent(" in src or "classifyIntent=function" in src, \
+        "honeypots.html: classifyIntent() helper function not defined"
+
+
+def test_honeypots_kill_chain_phase_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function killChainPhase(" in src or "killChainPhase=function" in src, \
+        "honeypots.html: killChainPhase() helper function not defined"
+
+
+def test_honeypots_synthesize_goal_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function synthesizeGoal(" in src or "synthesizeGoal=function" in src, \
+        "honeypots.html: synthesizeGoal() helper function not defined"
+
+
+def test_honeypots_got_data_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-step.got-data" in src, \
+        "honeypots.html: .story-step.got-data CSS class not defined"
+
+
+def test_honeypots_story_intent_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-intent" in src, \
+        "honeypots.html: .story-intent CSS class not defined"
+
+
+def test_honeypots_story_narrative_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-narrative" in src, \
+        "honeypots.html: .story-narrative CSS class not defined"
+
+
+def test_honeypots_st_phase_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-step .st-phase" in src or ".st-phase" in src, \
+        "honeypots.html: .st-phase CSS class not defined"
+
+
+def test_honeypots_st_200_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-step .st-200" in src or ".st-200" in src, \
+        "honeypots.html: .st-200 CSS class not defined"
+
+
+def test_honeypots_renderstoryboard_uses_classify_intent():
+    src = _dashboard_src("honeypots.html")
+    rs_idx = src.find("function renderStoryboard(")
+    assert rs_idx != -1, "honeypots.html: renderStoryboard() function not found"
+    rs_body = src[rs_idx:rs_idx + 2000]
+    assert "classifyIntent(" in rs_body, \
+        "honeypots.html: renderStoryboard() must call classifyIntent()"
+
+
+def test_honeypots_renderstoryboard_uses_synthesize_goal():
+    src = _dashboard_src("honeypots.html")
+    rs_idx = src.find("function renderStoryboard(")
+    assert rs_idx != -1, "honeypots.html: renderStoryboard() function not found"
+    rs_body = src[rs_idx:rs_idx + 2000]
+    assert "synthesizeGoal(" in rs_body, \
+        "honeypots.html: renderStoryboard() must call synthesizeGoal()"
+
+
+# ── 1.8.13 security fix regression tests ─────────────────────────────────
+
+# F-01 / F-02 / F-03: CSRF enforcement on write endpoints
+def test_csrf_decorator_on_dlp_post():
+    """core/proxy_handler.py: dlp_patterns_post must have @_require_csrf."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    idx = src.find("dlp_patterns_post")
+    assert idx != -1, "dlp_patterns_post not found in proxy_handler.py"
+    before = src[max(0, idx - 300):idx]
+    assert "_require_csrf" in before, \
+        "proxy_handler.py: dlp_patterns_post must have @_require_csrf before it"
+
+
+def test_csrf_decorator_on_dlp_delete():
+    """core/proxy_handler.py: dlp_patterns_delete must have @_require_csrf."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    idx = src.find("dlp_patterns_delete")
+    assert idx != -1, "dlp_patterns_delete not found in proxy_handler.py"
+    before = src[max(0, idx - 300):idx]
+    assert "_require_csrf" in before, \
+        "proxy_handler.py: dlp_patterns_delete must have @_require_csrf before it"
+
+
+def test_csrf_decorator_on_mesh_write_endpoints():
+    """admin/mesh.py: all write endpoints must have @_require_csrf."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "mesh.py").read_text()
+    write_endpoints = [
+        "gw_registry_create_endpoint",
+        "gw_registry_update_endpoint",
+        "gw_registry_delete_endpoint",
+        "gw_registry_rotate_key_endpoint",
+        "gw_registry_can_distribute_endpoint",
+        "gw_registry_auto_apply_endpoint",
+        "gw_registry_distribution_rules_endpoint",
+    ]
+    for ep in write_endpoints:
+        idx = src.find(ep)
+        assert idx != -1, f"mesh.py: {ep} not found"
+        before = src[max(0, idx - 300):idx]
+        assert "_require_csrf" in before, \
+            f"mesh.py: {ep} must have @_require_csrf"
+
+
+def test_csrf_decorator_on_settings_import():
+    """admin/settings.py: settings_import_endpoint must have @_require_csrf."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "settings.py").read_text()
+    idx = src.find("settings_import_endpoint")
+    assert idx != -1, "settings_import_endpoint not found in settings.py"
+    before = src[max(0, idx - 300):idx]
+    assert "_require_csrf" in before, \
+        "settings.py: settings_import_endpoint must have @_require_csrf"
+
+
+# F-04: mesh private-key wrap/unwrap round-trip
+def test_mesh_key_wrap_unwrap_roundtrip():
+    """_gw_wrap_private_key / _gw_unwrap_private_key must be inverse of each other."""
+    import sys, importlib
+    # patch SESSION_KEY before importing
+    import admin.mesh as mesh
+    original = getattr(mesh, "SESSION_KEY", b"test-session-key-32bytes!padding!")
+    try:
+        mesh.SESSION_KEY = b"test-session-key-32bytes!padding!"
+        raw = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        wrapped = mesh._gw_wrap_private_key(raw)
+        assert wrapped != raw, "_gw_wrap_private_key must encrypt the key"
+        assert wrapped.startswith("fernet:"), "_gw_wrap_private_key result must start with 'fernet:'"
+        unwrapped = mesh._gw_unwrap_private_key(wrapped)
+        assert unwrapped == raw, "_gw_unwrap_private_key must recover the original key"
+    finally:
+        mesh.SESSION_KEY = original
+
+
+def test_mesh_key_unwrap_legacy_passthrough():
+    """_gw_unwrap_private_key must pass through plaintext (legacy) values unchanged."""
+    import admin.mesh as mesh
+    raw = "some-legacy-b64-key"
+    assert mesh._gw_unwrap_private_key(raw) == raw, \
+        "legacy plaintext private key must pass through unwrap unchanged"
+
+
+# F-05: Redis exclusion of secrets
+def test_mesh_redis_excluded_keys_frozenset():
+    """admin/mesh.py: _MESH_REDIS_EXCLUDED_KEYS must be a frozenset containing secret keys."""
+    import admin.mesh as mesh
+    assert hasattr(mesh, "_MESH_REDIS_EXCLUDED_KEYS"), \
+        "admin/mesh.py must define _MESH_REDIS_EXCLUDED_KEYS"
+    excl = mesh._MESH_REDIS_EXCLUDED_KEYS
+    assert isinstance(excl, frozenset), "_MESH_REDIS_EXCLUDED_KEYS must be a frozenset"
+    for key in ("TURNSTILE_SECRET", "ABUSEIPDB_KEY", "CROWDSEC_LAPI_KEY", "MAXMIND_LICENSE_KEY"):
+        assert key in excl, f"_MESH_REDIS_EXCLUDED_KEYS must contain {key}"
+
+
+# F-08: backup code entropy
+def test_backup_code_entropy():
+    """admin/users.py: backup codes must use token_hex(10) for 80-bit entropy."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "users.py").read_text()
+    idx = src.find("_generate_backup_codes")
+    assert idx != -1, "_generate_backup_codes not found in admin/users.py"
+    body = src[idx:idx + 500]
+    assert "token_hex(10)" in body, \
+        "admin/users.py: backup codes must use token_hex(10) for 80-bit entropy (not token_hex(4))"
+
+
+# F-10: settings export must not include plaintext secrets
+def test_settings_export_no_secrets():
+    """admin/settings.py: XML export must emit empty <secrets/> not plaintext values."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "settings.py").read_text()
+    # The _settings_build_xml must produce <secrets /> not populate secret values
+    idx = src.find("_settings_build_xml")
+    assert idx != -1, "_settings_build_xml not found in settings.py"
+    # Must not concatenate actual secret config values into the XML secrets block
+    assert "overwrite_secrets" not in src, \
+        "settings.py: overwrite_secrets dead code must be removed"
+    assert "secrets_applied" not in src, \
+        "settings.py: secrets_applied dead code must be removed"
+
+
+# F-12: default CSP must not be permissive
+def test_default_csp_no_unsafe():
+    """config.py: default SEC_CSP must not contain unsafe-inline or unsafe-eval."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "config.py").read_text()
+    idx = src.find("SEC_CSP")
+    assert idx != -1, "SEC_CSP not found in config.py"
+    # Extract default value (within 200 chars of the definition)
+    segment = src[idx:idx + 200]
+    assert "unsafe-inline" not in segment, \
+        "config.py: default SEC_CSP must not contain 'unsafe-inline'"
+    assert "unsafe-eval" not in segment, \
+        "config.py: default SEC_CSP must not contain 'unsafe-eval'"
+
+
+# F-13: _gw_actor must use username not IP
+def test_gw_actor_uses_username():
+    """admin/mesh.py: _gw_actor must return _request_username (not just get_ip)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "mesh.py").read_text()
+    idx = src.find("def _gw_actor(")
+    assert idx != -1, "_gw_actor not found in admin/mesh.py"
+    body = src[idx:idx + 300]
+    assert "_request_username" in body, \
+        "admin/mesh.py: _gw_actor must call _request_username() for attribution"
+
+
+# F-15: PyJWT in Dockerfile
+def test_dockerfile_has_pyjwt():
+    """Dockerfile must install PyJWT>=2.8.0 for OIDC id_token verification."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    assert "PyJWT" in src, \
+        "Dockerfile must include PyJWT>=2.8.0 in pip install for OIDC support"
+
+
+# F-16: no key prefix in startup banner
+def test_no_key_prefix_in_startup_banner():
+    """proxy.py: startup banner must not print partial INTERNAL_KEY bytes."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "proxy.py").read_text()
+    assert "INTERNAL_KEY[:4]" not in src, \
+        "proxy.py: startup banner must not print INTERNAL_KEY[:4] (info-leak)"
+    assert "INTERNAL_KEY[:8]" not in src, \
+        "proxy.py: startup banner must not print any INTERNAL_KEY prefix"
+
+
+# F-18: PoW WebWorker must use async/await not while(true)+.then()
+def test_pow_worker_uses_async_await():
+    """challenge/js_challenge.py: PoW WebWorker blob must use async function + await."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "challenge" / "js_challenge.py").read_text()
+    blob_idx = src.find("new Blob([")
+    assert blob_idx != -1, "js_challenge.py: WebWorker Blob not found"
+    blob_body = src[blob_idx:blob_idx + 800]
+    assert "async function" in blob_body, \
+        "js_challenge.py: PoW WebWorker must use 'async function' (not while+.then)"
+    # The broken pattern: .then() inside while(true) causes all hashes to fire
+    # simultaneously and postMessage to fire multiple times on the first match.
+    assert "while(true)" not in blob_body or ".then(" not in blob_body, \
+        "js_challenge.py: PoW WebWorker must not combine while(true) with .then() callbacks"

@@ -191,13 +191,14 @@ def test_scoring_signals_have_cost():
 
 # ── 1.5.5 — Promoted hot-reload knobs ─────────────────────────────────────
 def test_15_promoted_knobs_in_hot_reload():
-    """All 14 Tier 1+2+3 knobs must be in _HOT_RELOAD_KNOBS."""
+    """All Tier 1+2+3 knobs must be in _HOT_RELOAD_KNOBS."""
     promoted = [
         "JS_CHALLENGE_TTL", "ENUM_THRESHOLD", "TIMELINE_RETAIN_SECS",
         "SVC_DB_RETENTION_HOURS", "COST_RETAIN_SECS", "LOG_FORMAT",
         "POW_REQUIRED_PATHS", "ALLOWED_METHODS", "ALLOWED_HOSTS",
         "MAX_IDENTITIES", "PRUNE_IDLE_SECS",
         "UPSTREAM_MAX_BODY", "UPSTREAM_MAX_RESP",
+        "HONEYPOT_CLUSTER_THRESHOLD",
     ]
     for k in promoted:
         assert k in proxy._HOT_RELOAD_KNOBS, f"missing knob {k!r}"
@@ -1244,12 +1245,15 @@ def test_165_every_knob_persists_round_trip():
         "TRUSTED_PROXIES": ["10.0.0.0/8"],
         # 1.8.11 QW-1/QW-6
         "HONEYPOT_EXTRA_PATHS": ["/test-extra-trap"],
+        # 1.8.12 — honeypot learning subsystem
+        "HONEYPOT_CLUSTER_THRESHOLD": 5,
         "BEHAVIORAL_SAMPLE_N": 20,
         "BEHAVIORAL_COV_THRESHOLD": 0.04,
         "BEHAVIORAL_R1_THRESHOLD": 0.80,
         "BEHAVIORAL_BIN_PCT_THRESHOLD": 0.65,
         "BEHAVIORAL_MAX_INTERVAL_S": 1.5,
         "BEHAVIORAL_SKIP_INTERVAL_S": 4.0,
+        "SERVICE_OWNER": "secops@example.com",
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)

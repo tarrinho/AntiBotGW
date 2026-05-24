@@ -262,15 +262,22 @@ def test_s12_ja4_drawer_open_class():
 
 def test_s13_escape_html_defined_globally():
     src = _html()
-    assert "function escapeHtml(" in src, (
-        "siem.html: escapeHtml() function not defined. "
+    assert "function escapeHtml(" in src or "dashboard-common.js" in src, (
+        "siem.html: escapeHtml() not provided (inline or shared dashboard-common.js). "
         "Required to prevent stored XSS from attacker-controlled event fields."
     )
-    idx = src.find("function escapeHtml(")
-    fn_body = src[idx:idx + 400]
+    # escapeHtml now lives in the shared dashboard-common.js (1.8.13 #5);
+    # inspect its body there if not defined inline.
+    if "function escapeHtml(" in src:
+        idx = src.find("function escapeHtml(")
+        fn_body = src[idx:idx + 400]
+    else:
+        import pathlib
+        fn_body = (pathlib.Path(__file__).resolve().parent.parent /
+                   "dashboards" / "assets" / "dashboard-common.js").read_text(encoding="utf-8")
     for entity in ("&amp;", "&lt;", "&gt;", "&quot;"):
         assert entity in fn_body, (
-            f"siem.html: escapeHtml() does not map to '{entity}'. "
+            f"siem escapeHtml() does not map to '{entity}'. "
             "All HTML-significant characters must be escaped."
         )
 

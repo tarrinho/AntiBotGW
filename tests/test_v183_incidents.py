@@ -98,7 +98,7 @@ def _extract_fn_body(src: str, fn_name: str) -> str:
 
 
 def _extract_dcl_body(src: str) -> str:
-    idx = src.find("DOMContentLoaded")
+    idx = src.rfind("DOMContentLoaded")  # 1.8.12: last DOMContentLoaded = chart/init block (sidebar accordion adds an earlier one)
     assert idx != -1, "DOMContentLoaded not found in control_center.html"
     end = src.find("});", idx)
     return src[idx:end]

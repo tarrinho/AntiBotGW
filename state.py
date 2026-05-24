@@ -248,6 +248,12 @@ _canary_tokens: dict = {}
 # (asn:int|None, path_prefix:str, minute:int) → set of identity strings
 _asn_path_clusters: dict = {}
 
+# ── 1.8.12: Honeypot path clustering ─────────────────────────────────────
+# (path:str, 5-min-bucket:int) → set of source IPs
+# Fires "coordinated-honeypot" when N distinct IPs hit the same trap path
+# within the same 5-minute window.
+_honeypot_ip_clusters: dict = {}
+
 # ── Admin session management ───────────────────────────────────────────────
 # 1.6.7 — last-seen-ts per signed-in user. Bumped on every cookie-
 # authenticated request inside `_internal_authed`.

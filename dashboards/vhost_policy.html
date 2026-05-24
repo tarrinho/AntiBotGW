@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · Vhost Policy</title>
+<title>AppSecGW_1.8.13 · Vhost Policy</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
@@ -99,6 +99,7 @@ select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding
 .ov-ctrl{flex:0 0 auto;display:flex;align-items:center}
 .btn-remove{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 8px;font-size:13px;border-radius:4px;cursor:pointer;line-height:1;flex-shrink:0}
 .btn-remove:hover{background:#1a0a0a;border-color:var(--red);color:var(--red)}
+html[data-theme="light"] .btn-remove:hover{background:#ffebe9}
 .empty-state{text-align:center;padding:40px 20px;color:var(--dim)}
 .empty-state .icon{font-size:32px;margin-bottom:12px}
 .empty-state p{margin:4px 0;font-size:13px}
@@ -119,6 +120,7 @@ select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding
 .picker-item .pi-global{font-size:11px;color:var(--dim)}
 #gw-alert{display:none;position:fixed;bottom:20px;right:20px;background:#1a2733;border:1px solid var(--blue);color:var(--fg);padding:10px 16px;border-radius:6px;font-size:13px;z-index:2000;max-width:360px}
 .unsaved-bar{display:none;align-items:center;gap:12px;padding:10px 16px;background:#1a2710;border:1px solid var(--green);border-radius:8px;margin-bottom:14px}
+html[data-theme="light"] .unsaved-bar{background:#e6f6ec}
 .unsaved-bar.visible{display:flex}
 .unsaved-bar span{flex:1;font-size:12.5px;color:var(--green)}
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
@@ -134,7 +136,7 @@ select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -143,6 +145,7 @@ select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub active">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -170,6 +173,8 @@ select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding
 
 <div class="scope-bar" id="scope-bar">
   <label>Inbound hostname:</label>
+  <input id="vhost-policy-search" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none;background:var(--bg,#0d1117);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);border-radius:4px;padding:3px 8px;font-size:12px;width:130px"
+    oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-select').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
   <select id="vhost-select">
     <option value="">— select a vhost —</option>
   </select>
@@ -223,6 +228,7 @@ select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding
 <div id="gw-alert"></div>
 <script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
 'use strict';
 var ADMIN_NS = '/antibot-appsec-gateway/secured';
@@ -387,11 +393,7 @@ var KNOB_META = {
   UPSTREAM_REWRITE_BASE:         {g:'Routing',           t:'str'}
 };
 
-function escapeHtml(s){
-  return String(s==null?'':s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-    .replace(/"/g,'&quot;').replace(/'/g,'&#39;').replace(/\//g,'&#x2F;');
-}
+
 
 var _alertTimer;
 function _gwAlert(msg,color){
@@ -621,6 +623,7 @@ function _loadData(hostname){
       var statsMap={};(sd.stats||[]).forEach(function(s){if(s.hostname)statsMap[s.hostname]=s.last_seen_ts||0;});
       var sel=document.getElementById('vhost-select');
       while(sel.options.length>1) sel.remove(1);
+      var _visCount=0;
       (d.vhosts||[]).forEach(function(vh){
         var age=statsMap[vh]>0?(_now-statsMap[vh]):Infinity;
         if(age>=300&&!_pinned.has(vh)) return;
@@ -628,7 +631,10 @@ function _loadData(hostname){
         opt.value=opt.textContent=vh;
         if(vh===hostname) opt.selected=true;
         sel.appendChild(opt);
+        _visCount++;
       });
+      var _vps=document.getElementById('vhost-policy-search');
+      if(_vps){_vps.style.display=_visCount>=8?'inline-block':'none';_vps.value='';}
       if(!hostname){
         var _vis=[];
         for(var _i=1;_i<sel.options.length;_i++) _vis.push(sel.options[_i].value);
@@ -745,7 +751,7 @@ document.getElementById('vhost-select').addEventListener('change',function(){
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
 
 <script>
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 (function(){
   var _userRole='admin',_username='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){

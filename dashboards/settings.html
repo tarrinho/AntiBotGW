@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · Settings</title>
+<title>AppSecGW_1.8.13 · Settings</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
@@ -116,6 +116,8 @@ button.danger{background:var(--red)}
 .banner{background:#1a2733;border-left:3px solid var(--blue);padding:10px 14px;
         border-radius:5px;color:var(--dim);font-size:12px;margin-bottom:14px}
 .banner code{background:var(--bg);color:var(--fg);padding:1px 5px;border-radius:3px}
+.cfg-info{cursor:help;color:var(--dim);font-size:13px;font-weight:400;vertical-align:baseline}
+.cfg-info:hover,.cfg-info:focus{color:var(--blue);outline:none}
 .result{margin-top:14px;padding:10px 12px;border-radius:6px;font-size:11.5px;
         font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap;
         max-height:240px;overflow:auto;border:1px solid var(--line);
@@ -180,6 +182,7 @@ button.danger{background:var(--red)}
 .gw-matrix-tbl td.cell.on{background:rgba(63,185,80,.20);color:var(--green);font-weight:700}
 .gw-matrix-tbl td.cell:hover{outline:1px solid var(--blue)}
 .gw-matrix-tbl td.cell.disabled{cursor:not-allowed;color:#3a4048;background:#1c1f24}
+html[data-theme="light"] .gw-matrix-tbl td.cell.disabled{background:var(--bg-inset);color:var(--dim)}
 .gw-matrix-tbl td.cell.asym{box-shadow:inset 0 0 0 2px var(--yellow)}
 .gw-matrix-tbl tr.gw-row-local th{color:var(--yellow)}
 
@@ -221,7 +224,7 @@ button.danger{background:var(--red)}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -230,6 +233,7 @@ button.danger{background:var(--red)}
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -1106,7 +1110,7 @@ document.addEventListener('DOMContentLoaded', function(){
     <span id="redis-status-pill"
           style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
                  padding:3px 10px;border-radius:10px;font-weight:600;
-                 background:#1a2420;color:var(--dim);border:1px solid var(--line)">
+                 background:var(--bg-inset);color:var(--dim);border:1px solid var(--line)">
       <span id="redis-status-dot">●</span>
       <span id="redis-status-text">checking…</span>
     </span>
@@ -1141,17 +1145,27 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
-<div class="banner">
-  Export and import the gateway's hot-reload configuration as a zipped XML file.
-  Includes every knob from <code>/antibot-appsec-gateway/secured/config</code> plus the admin-IP allowlist.
-  Secrets are excluded by default — tick the box to include them and store the
-  archive somewhere safe.
+<!-- ── Service owner (1.8.11) ─────────────────────────────────── -->
+<div class="card" id="card-service-owner">
+  <h2>Service owner</h2>
+  <p class="desc">
+    The organisation this gateway protects — its name is shown in every dashboard
+    footer. Stored in the gateway DB (<code>config_kv</code>, mirrored to Postgres)
+    and hot-reloaded — no restart. Leave empty for no footer note.
+  </p>
+  <div class="row-controls">
+    <input type="text" id="svc-owner-input" maxlength="128"
+           placeholder="e.g. Acme Security Team"
+           style="flex:1;min-width:220px;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:inherit;font-size:12.5px">
+    <button id="btn-svc-owner-save">Save</button>
+    <span class="foot" id="svc-owner-status"></span>
+  </div>
 </div>
 
 <div class="row">
   <!-- ── Export ───────────────────────────────────────────────── -->
   <div class="card" id="card-export">
-    <h2>Export configuration</h2>
+    <h2>Export configuration <span class="cfg-info" tabindex="0" role="img" aria-label="About export" title="Export and import the gateway's hot-reload configuration as a zipped XML file. Includes every knob from /antibot-appsec-gateway/secured/config plus the admin-IP allowlist. Secrets are excluded by default — tick the box to include them and store the archive somewhere safe.">&#9432;</span></h2>
     <p class="desc">
       Download a ZIP archive containing <code>appsecgw-config.xml</code> with
       all hot-reload knobs and the admin-IP allowlist. The file is named
@@ -1172,7 +1186,7 @@ document.addEventListener('DOMContentLoaded', function(){
 
   <!-- ── Import ───────────────────────────────────────────────── -->
   <div class="card" id="card-import">
-    <h2>Import configuration</h2>
+    <h2>Import configuration <span class="cfg-info" tabindex="0" role="img" aria-label="About import" title="Export and import the gateway's hot-reload configuration as a zipped XML file. Includes every knob from /antibot-appsec-gateway/secured/config plus the admin-IP allowlist. Secrets are excluded by default — tick the box to include them and store the archive somewhere safe.">&#9432;</span></h2>
     <p class="desc">
       Upload a previously-exported ZIP. Knobs validate against the same rules
       as <code>POST /antibot-appsec-gateway/secured/config</code>; env-pinned values are skipped. Admin IPs
@@ -1210,6 +1224,7 @@ document.addEventListener('DOMContentLoaded', function(){
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
 // Inject X-CSRF-Token automatically for every state-mutating same-origin request.
 (function() {
@@ -1357,6 +1372,7 @@ const toast = (msg, kind) => {
     'card-storage':       'infra',
     'card-credentials':   'infra',
     'card-logging':       'infra',
+    'card-service-owner': 'config',
     'card-export':        'config',
     'card-import':        'config',
   };
@@ -1577,7 +1593,7 @@ $("btn-import").addEventListener("click", async () => {
 
 // ── 1.6.7 — Gateway Registry ─────────────────────────────────────────
 const GW_BASE = "/antibot-appsec-gateway/secured/admin/gw-registry";
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--card,#1e1e2e);border:1px solid var(--red,#f85149);color:var(--fg,#e6edf3);padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.25)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
 const _timers=[];
 const fmtAge = (epoch) => {
@@ -1640,6 +1656,8 @@ function showSimpleModal(innerHtml) {
     box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:-apple-system,'SF Pro',ui-sans-serif">
     ${innerHtml}</div>`);
   m.style.display = "flex";
+  // _dp strips inline onclick; bind any [data-close] (and legacy ×) close controls.
+  m.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSimpleModal));
 }
 function closeSimpleModal() {
   const m = document.getElementById("simple-modal");
@@ -2393,7 +2411,7 @@ async function openSessionsModal(username) {
     <h3 style="margin:0 0 8px 0;color:var(--bright)">
       Sessions — ${escapeHtml(username)}
       <span style="float:right;cursor:pointer;color:var(--dim);font-size:18px"
-            onclick="closeSimpleModal()">×</span>
+            data-close="1">×</span>
     </h3>
     <p class="desc" style="margin-bottom:10px">
       Every successful login mints a server-side session bound to the
@@ -2832,7 +2850,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   // can call window._gwPillAuthError() to flip the pill here.
   function _setAuthError(){
     authError = true; lastData = null;
-    pill.style.background  = '#3d1a1a';
+    pill.style.background  = 'rgba(248,81,73,0.12)';
     pill.style.color       = '#f85149';
     pill.style.borderColor = '#f85149';
     pill.textContent       = '● ⚠ sign in';
@@ -2846,7 +2864,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     try {
       r = await fetch('/antibot-appsec-gateway/secured/health-score', {credentials:'include'});
     } catch(e){
-      pill.style.background='#3d1a1a'; pill.style.color='#f85149'; pill.style.borderColor='#f85149';
+      pill.style.background='rgba(248,81,73,0.12)'; pill.style.color='#f85149'; pill.style.borderColor='#f85149';
       pill.textContent='● Health  ERR';
       pill.title='Could not reach the gateway (network error). Refreshes every 15 s.';
       return;
@@ -3249,10 +3267,6 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     {key:'UPSTREAM_REWRITE_BASE', kind:'text', restart:false,
      ph:'e.g. http://host.docker.internal:8093',
      desc:'Strip this base URL from response bodies and Location/Link headers. Fixes CSP violations when upstream embeds its own hostname. Hot-reloadable.'},
-    {key:'UPSTREAM_MAX_RESP', kind:'number', restart:false, ph:'8388608',
-     desc:'Max upstream RESPONSE body the gateway will relay, in bytes. Larger responses return 502 ("upstream response too large"). Raise this to serve large downloads (APKs, media). Default 8388608 (8 MiB).'},
-    {key:'UPSTREAM_MAX_BODY', kind:'number', restart:false, ph:'2097152',
-     desc:'Max REQUEST body the gateway accepts and forwards, in bytes. Default 2097152 (2 MiB). Keep WAF_BODY_SCAN_BYTES ≥ this so the body WAF scans the whole request.'},
     {key:'TRUST_XFF', kind:'select', options:['none','first','last'], restart:false,
      desc:'Which X-Forwarded-For hop to trust for client IP resolution. "none" (default) ignores XFF entirely. "first" trusts the leftmost entry (only safe when the front proxy strips/rewrites XFF). "last" trusts the rightmost entry added by the trusted proxy. Requires TRUSTED_PROXIES to be set.'},
     {key:'TRUSTED_PROXIES', kind:'list', restart:false,
@@ -3298,7 +3312,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       }
       if (k.kind === 'text') {
         const ro = k.restart ? 'disabled style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
-                             : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" oninput="_infraChange('${_esc(k.key)}',this.value)"`;
+                             : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" data-iset="${_esc(k.key)}"`;
         return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
@@ -3309,7 +3323,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         const mib = (val && !isNaN(val)) ? ' (~' + (Math.round(val/1048576*10)/10) + ' MiB)' : '';
         const ro = k.restart
           ? 'disabled style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
-          : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" oninput="_infraChange('${_esc(k.key)}',this.value)"`;
+          : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" data-iset="${_esc(k.key)}"`;
         return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}<span style="color:var(--dim);font-weight:400">${mib}</span>${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
@@ -3321,7 +3335,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           `<option value="${_esc(o)}"${o===(val||'')?' selected':''}>${_esc(o)}</option>`
         ).join('');
         const roDis = k.restart ? 'disabled ' : '';
-        const roEvt = k.restart ? '' : `onchange="_infraChange('${_esc(k.key)}',this.value)"`;
+        const roEvt = k.restart ? '' : `data-iset="${_esc(k.key)}"`;
         return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
@@ -3332,7 +3346,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       if (k.kind === 'list') {
         const dispVal = Array.isArray(val) ? val.join(', ') : (val||'');
         const ro = k.restart ? 'disabled style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
-                             : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" oninput="_infraChange('${_esc(k.key)}',this.value)"`;
+                             : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" data-iset="${_esc(k.key)}"`;
         return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
@@ -3343,6 +3357,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     }).join(''));
     box.querySelectorAll('[data-ikey]').forEach(el => {
       el.addEventListener('click', () => window._infraToggle(el.dataset.ikey, el));
+    });
+    // _dp (DOMPurify) strips inline oninput/onchange — bind text/number/select/list here.
+    box.querySelectorAll('[data-iset]').forEach(el => {
+      const fire = () => window._infraChange(el.dataset.iset, el.value);
+      el.addEventListener('input', fire);
+      el.addEventListener('change', fire);
     });
     $('btn-infra-apply').disabled = true;
     $('btn-infra-reset').disabled = true;
@@ -3383,6 +3403,45 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   $('btn-infra-reset').addEventListener('click', () => loadInfra());
 
   loadInfra();
+
+  // ── Service owner (1.8.11) — footer note, stored in config_kv ──────
+  async function loadServiceOwner(){
+    const inp = $('svc-owner-input');
+    if (!inp) return;
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = d.state || d;
+      inp.value = st.SERVICE_OWNER || '';
+    } catch(e) { /* leave blank */ }
+  }
+  const _ownBtn = $('btn-svc-owner-save');
+  if (_ownBtn) {
+    _ownBtn.addEventListener('click', async () => {
+      const inp = $('svc-owner-input');
+      const st  = $('svc-owner-status');
+      const val = (inp.value || '').trim();
+      _ownBtn.disabled = true;
+      try {
+        const _c = (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '');
+        const r = await fetch('/antibot-appsec-gateway/secured/config',
+          {method:'POST', credentials:'include',
+           headers:{'Content-Type':'application/json','X-CSRF-Token':_c},
+           body: JSON.stringify({SERVICE_OWNER: val})});
+        const d = await r.json();
+        if (r.ok && d.applied && ('SERVICE_OWNER' in d.applied)) {
+          if (st) st.textContent = 'Saved — reload dashboards to see the footer update.';
+          toast('Service owner saved', 'ok');
+        } else {
+          if (st) st.textContent = 'Rejected: ' + JSON.stringify(d.rejected || {});
+          toast('Save rejected', 'err');
+        }
+      } catch(e) { if (st) st.textContent = 'Network error: ' + e.message; toast('Network error','err'); }
+      finally { _ownBtn.disabled = false; }
+    });
+    loadServiceOwner();
+  }
 
   // Deep-link: #knob=NAME (from the Risk-breakdown control link) → scroll to the
   // Infrastructure knob (or the Admin-IPs card for ADMIN_ALLOWED_IPS) + flash.
@@ -3882,7 +3941,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     if (!el) return;
     if (!mig || (!mig.running && !mig.done)) { el.innerHTML = ''; return; }
     const pct = mig.pct != null ? mig.pct : (mig.total > 0 ? +(mig.copied/mig.total*100).toFixed(1) : 0);
-    const col = mig.error ? 'var(--red)' : mig.running ? '#79c0ff' : 'var(--green)';
+    const col = mig.error ? 'var(--red)' : mig.running ? 'var(--blue)' : 'var(--green)';
     const lbl = mig.error
       ? `Migration error: ${String(mig.error).slice(0,80)}`
       : mig.running
@@ -4273,7 +4332,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}</div>
           <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
           <select style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-size:12px"
-                  onchange="_logChange('${_esc(k.key)}',this.value)">${opts}</select>
+                  data-lset="${_esc(k.key)}">${opts}</select>
         </div>`;
       }
       return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
@@ -4281,9 +4340,15 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
         <input type="text" value="${_esc(val)}" placeholder="${_esc(k.ph||'')}"
                style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
-               oninput="_logChange('${_esc(k.key)}',this.value)">
+               data-lset="${_esc(k.key)}">
       </div>`;
     }).join(''));
+    // _dp (DOMPurify) strips inline oninput/onchange — bind here.
+    box.querySelectorAll('[data-lset]').forEach(el => {
+      const fire = () => window._logChange(el.dataset.lset, el.value);
+      el.addEventListener('input', fire);
+      el.addEventListener('change', fire);
+    });
     $('btn-logging-apply').disabled=true; $('btn-logging-reset').disabled=true;
   }
 
@@ -4347,13 +4412,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       const txt  = $('redis-status-text');
       if(!redisUrl){
         dot.style.color='var(--dim)'; txt.textContent='disabled — REDIS_URL not set';
-        pill.style.background='#1a1a2a'; pill.style.borderColor='var(--line)';
+        pill.style.background='var(--bg-inset)'; pill.style.borderColor='var(--line)';
       } else if(connected){
         dot.style.color='var(--green)'; txt.textContent='connected';
-        pill.style.background='#152015'; pill.style.borderColor='var(--green)';
+        pill.style.background='rgba(63,185,80,0.12)'; pill.style.borderColor='var(--green)';
       } else {
         dot.style.color='var(--red)'; txt.textContent='unreachable';
-        pill.style.background='#251515'; pill.style.borderColor='var(--red)';
+        pill.style.background='rgba(248,81,73,0.12)'; pill.style.borderColor='var(--red)';
       }
       $('redis-url-display').textContent = redisUrl ? _sanitiseUrl(redisUrl) : '';
 
@@ -4371,7 +4436,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         flags.push({ok:false, label:'No allowlist — Docker isolation only'});
       $('redis-sec-flags').innerHTML = flags.map(f=>
         `<span style="font-size:10.5px;padding:2px 8px;border-radius:4px;
-          background:${f.ok?'#152015':'#251515'};
+          background:${f.ok?'rgba(63,185,80,0.12)':'rgba(210,153,34,0.12)'};
           color:${f.ok?'var(--green)':'var(--yellow)'};
           border:1px solid ${f.ok?'var(--green)':'var(--yellow)'}">${f.label}</span>`
       ).join('');

@@ -118,6 +118,7 @@ nav{padding:6px 0}
 <div class="toast" id="toast"></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
 // Inject X-CSRF-Token automatically for every state-mutating same-origin request.
 (function() {
@@ -153,7 +154,7 @@ const _dp = h => {
   }
   return DOMPurify.sanitize(h);
 };
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 function $(id){return document.getElementById(id)}
 
 const META = {

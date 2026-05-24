@@ -6,6 +6,56 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.8.13] — 2026-05-24
+
+### Added
+
+- **Honeypot learning subsystem** (`config.py`, `core/proxy_handler.py`,
+  `dashboards/honeypots.py` + `honeypots.html`): two new risk signals —
+  `coordinated-honeypot` (N distinct IPs hit the same trap path within a 5-min
+  window → `HONEYPOT_CLUSTER_THRESHOLD`) and `honey-fp-match` (JA4 matches a
+  confirmed-attacker fingerprint cache) — plus a **Honeypots dashboard**. Both
+  signals are gated by `HONEYPOT_ENABLED`.
+
+### Changed
+
+- **Config page: Export/Import banner → inline ⓘ tooltips**
+  (`dashboards/settings.html`): the standalone explanatory banner was removed;
+  the same guidance (zipped XML, all hot-reload knobs + admin-IP allowlist,
+  secrets excluded unless ticked) is now an `&#9432;` info tooltip on each of the
+  Export and Import card headers.
+- **Service-owner footer note** now shows the bare organisation name (was
+  "Operated by &lt;owner&gt;").
+
+### Fixed
+
+- **Honeypot signals had no kill-switch knob** (`SIGNAL_KNOB`): `coordinated-honeypot`
+  and `honey-fp-match` were in `RISK_WEIGHTS` but unmapped in `SIGNAL_KNOB`; both
+  now map to `HONEYPOT_ENABLED` (every risk-weight signal is toggleable again).
+- **`honeypots.html` CSRF shim**: its token reads now prefer `window.__AGW_CSRF__`
+  before the cookie (matches every other dashboard; CDN-proof).
+- **DB-migration status row colour** (`_renderMigStatusRow`): running state restored
+  to `var(--blue)` (was a hardcoded hex), so it adapts to the light theme.
+
+### Tests
+
+- New `tests/test_v1812_honeypots_sections.py` (Honeypots dashboard) and
+  `tests/test_v1811_service_owner.py` (8) added to the suite + `GW-Tests-Full.md`.
+- Fixed brittle source-inspection anchors: `_extract_dcl_body` now targets the
+  chart/init `DOMContentLoaded` (the sidebar-accordion script adds an earlier one)
+  in `test_v182_charts` / `test_v183_incidents` / `test_control_center`; the
+  CSRF-negative test `b09` sends an explicit empty `X-CSRF-Token` so the conftest
+  auto-CSRF shim leaves it alone.
+
+### Validation
+
+- See `validation/1.8.13.md`. Full suite: real failures triaged + fixed; remaining
+  combined-run failures confirmed as cross-module-pollution flakes (pass in
+  isolation). Bandit 0 H/C · Semgrep 1 documented FP (CSV `_csv_safe`) · Trivy
+  0 CRITICAL/HIGH on amd64 · arm64 · armv7.
+
+---
+
 ## [1.8.11] — 2026-05-22
 
 Security-hardening release. Fixes the priority findings from a full security
@@ -62,6 +112,20 @@ review of the codebase (no functional/UI changes).
 - New runtime dependency **PyJWT** (`requirements.txt`) — used only for OIDC
   id_token verification; imported lazily so non-OIDC deployments don't need it.
 - `ALLOW_PRIVATE_UPSTREAM` default `1` → `0` (see M2).
+- **`SERVICE_OWNER` config knob (new)** (`config.py`, `core/proxy_handler.py`,
+  `core/middleware.py`, `dashboards/settings.html`): the organisation this gateway
+  protects, editable in **Settings → Config**, persisted to `config_kv` (SQLite +
+  Postgres, via the hot-reload `set_config` path) and re-applied on startup. Its
+  name is rendered as a segment in every dashboard footer — injected
+  `window.__AGW_SERVICE_OWNER__` + a `textContent` renderer (XSS-safe); empty =
+  no note. Hot-reloadable; env value is only the cold-start default (UI/DB wins,
+  `_ENV_PIN_EXCLUDE`). QA: `tests/test_v1811_service_owner.py` (8 tests).
+- **`UPSTREAM_MAX_BODY` default 2 MiB → 4 MiB** (`core/proxy_handler.py`): raised to
+  better accommodate API payloads and form uploads without operator tuning. Still
+  overridable via env var.
+- **`UPSTREAM_MAX_RESP` default 8 MiB → 17 MiB** (`core/proxy_handler.py`): raised to
+  serve larger assets (PDFs, APKs, media) without hitting the cap. Still overridable
+  via env var.
 - **Oversize upstream response → `413` (was `502`)** (`core/proxy_handler.py`): a
   response body exceeding `UPSTREAM_MAX_RESP` now returns **413 Content Too Large**
   instead of 502, so it is distinguishable from a genuine upstream/gateway failure.
@@ -73,6 +137,18 @@ review of the codebase (no functional/UI changes).
 
 ### Fixed
 
+- **Controls dashboard Apply Changes button never enabled for threshold edits**
+  (`dashboards/controls.html`): the `thresholds-rich` click-to-edit section used
+  a direct-POST path that bypassed `mark()` entirely, so editing any threshold
+  value never set the dirty state that enables the Apply/Reset buttons. Fixed by
+  wiring `oninput` on every generated threshold input to `mark(name, parsed)`.
+  Cancel and post-save paths also update the dirty count correctly. The inline
+  save and `apply()` now both attach `X-CSRF-Token` + `credentials:'include'`.
+- **Dead `setInterval` fallback in Agents dashboard** (`dashboards/agents.html`):
+  an `if (typeof _timers !== 'undefined') … else setInterval(…)` guard around the
+  `loadPlaybook` interval was triggering a false positive in the Stage-1 timer-leak
+  test (the bare `else` branch appeared as an untracked setInterval). Replaced with
+  a direct `_timers.push(…)` — `_timers` is always defined.
 - **Light-theme contrast across all 11 dashboards** (`dashboards/*.html`): many
   components hardcoded dark hex (`#0d1117`, `#161b22`, `#0e2c4a`, `#3d1f1f`, …)
   instead of theme variables, so they stayed black with low-contrast text when
@@ -185,6 +261,11 @@ review of the codebase (no functional/UI changes).
   `_shared_ban_set` enqueues + logs on failure, `_redis_ban_flush_loop` async
   coroutine, flushed/failed log events, exponential backoff, proxy.py startup wiring.
   `886 unit` total (test_pure.py) + 121 (test_critical.py) = **1007 total**.
+- **Functional test fixture isolates M-4 ip_bans state** (`tests/test_functional.py`
+  `gw_client`): the fixture teardown now clears the persistent `ip_bans` SQLite table
+  so hostile bans written by one test cannot trigger the ip-ban early-return in
+  `protect()` for the next test (shared-DB state pollution, found during 1.8.11 test
+  run with M-4 active). **38/38 functional tests pass**.
 
 ---
 

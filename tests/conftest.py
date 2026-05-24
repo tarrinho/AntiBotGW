@@ -29,7 +29,10 @@ os.environ.setdefault("UPSTREAM",          "https://example.com")
 os.environ.setdefault("ADMIN_KEY",         "TEST-KEY-DO-NOT-USE")
 os.environ.setdefault("DB_PATH",           os.path.join(_TMP, "antibot.db"))
 os.environ.setdefault("ALLOWED_HOSTS",     "")
-os.environ.setdefault("ADMIN_ALLOWED_IPS", "")
+# 1.8.13 — admin-IP gate is now fail-closed (F-06): an empty allowlist denies
+# ALL admin endpoints. Tests forge sessions + hit /secured/* from 127.0.0.1, so
+# the test allowlist must permit the loopback client (was "" = open before F-06).
+os.environ.setdefault("ADMIN_ALLOWED_IPS", "0.0.0.0/0,::/0")
 os.environ.setdefault("DEBUG",             "1")  # enables /antibot-appsec-gateway/secured/xff in tests
 
 # Make `import proxy` find the file regardless of where pytest is run from.
@@ -106,6 +109,15 @@ def _wipe_config_kv_between_tests():
                 conn.execute("DELETE FROM bans")
             except sqlite3.OperationalError:
                 pass
+            # 1.8.13 — wipe ip_bans too. check_ip_ban() reads this table
+            # synchronously on every request; a honeypot/suspicious hit in one
+            # test writes an ip_bans row that then makes EVERY later test's
+            # request from 127.0.0.1 return 'ip-ban' (it was the only ban table
+            # not cleared here, causing in-file detection-test cross-contamination).
+            try:
+                conn.execute("DELETE FROM ip_bans")
+            except sqlite3.OperationalError:
+                pass
             conn.commit()
             conn.close()
         except sqlite3.OperationalError:
@@ -140,6 +152,37 @@ def _wipe_config_kv_between_tests():
     try:
         import vhost as _vh
         _vh.VHOSTS.clear()
+    except Exception:
+        pass
+    # 1.8.13 — reset the admin session cache between tests. Tests that forge an
+    # admin session set _SESSION_CACHE_READY=True; left set, it changes how the
+    # NEXT test's UNAUTHENTICATED admin requests are gated (made test_v1811
+    # api08/api09 ui-theme tests fail, but only when co-run after test_v1810 —
+    # a pure cross-file ordering flake, not a product defect). Clearing the cache
+    # + resetting the ready flag isolates every test from forged-session bleed.
+    try:
+        import proxy as _ps
+        _ps._SESSION_CACHE.clear()          # same dict object across modules
+        _ps._SESSION_CACHE_READY = False     # _ProxyModule.__setattr__ propagates
+    except Exception:
+        pass
+    try:
+        import admin.users as _au            # also reset the canonical home
+        _au._SESSION_CACHE.clear()
+        _au._SESSION_CACHE_READY = False
+    except Exception:
+        pass
+    # 1.8.13 — reset the upstream-404 decoy cache between tests. Tests that spin a
+    # local echo upstream (returns 200 for every path) prime this cache with
+    # status=200; it then persists module-globally and makes the admin decoy in a
+    # LATER test return 200 instead of 404 — which broke test_v1811 api08/api09
+    # (unauthenticated admin requests are served the mirrored 404, so its status
+    # leaks the prior test's upstream). Restore the import-time defaults.
+    try:
+        import core.proxy_handler as _cph
+        _cph._upstream_404_cache.update(
+            {"body": None, "ctype": "text/plain; charset=utf-8",
+             "status": 404, "fetched_at": 0.0})
     except Exception:
         pass
 

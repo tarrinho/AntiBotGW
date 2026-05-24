@@ -112,6 +112,16 @@ async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
     ip_state.clear()
     ip_buckets.clear()
     ip_new_sessions.clear()
+    # 1.8.12 M-4 — also clear ip_bans (persistent SQLite hostile-ban table)
+    # so that a prior test's hostile ban doesn't block requests here.
+    # Same cleanup that gw_client fixture does in test_functional.py.
+    import sqlite3 as _sq_cr
+    from config import DB_PATH as _DB_PATH_CR
+    try:
+        with _sq_cr.connect(_DB_PATH_CR) as _c_cr:
+            _c_cr.execute("DELETE FROM ip_bans")
+    except Exception:
+        pass
     try:
         yield client
     finally:

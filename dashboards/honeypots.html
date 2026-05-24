@@ -1,0 +1,1043 @@
+<!doctype html>
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AppSecGW_1.8.13 · Honeypots</title>
+<style>
+:root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
+     background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
+/* ── Sidebar ── */
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px;display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
+#sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
+#sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
+#sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
+#sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
+#sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
+#sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
+/* ── Main area ── */
+#main-area{flex:1;min-width:0;display:flex;flex-direction:column}
+/* ── Topbar ── */
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+#page-content{flex:1;padding:14px}
+/* ── Cards / grid ── */
+h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
+.grid{display:grid;gap:14px;margin-top:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+/* ── Summary strip ── */
+#summary-strip{display:flex;gap:14px;flex-wrap:wrap;margin-top:14px}
+.sum-pill{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px 16px;flex:1;min-width:120px}
+.sum-pill h3{font-size:10px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--dim);margin-bottom:6px}
+.sum-pill .val{font-size:28px;font-weight:700;color:var(--bright);line-height:1}
+.sum-pill .sub{font-size:11px;color:var(--dim);margin-top:3px}
+/* ── Tables ── */
+table{width:100%;border-collapse:collapse;font-size:12px}
+table th{background:var(--bg-elevated);color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;font-size:10px}
+table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
+table tr:last-child td{border-bottom:0}
+table tbody tr:hover{background:rgba(255,255,255,.03)}
+/* ── Buttons ── */
+.btn{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;transition:background .1s,border-color .1s}
+.btn:hover{background:#2d333b;border-color:#58a6ff;color:var(--bright)}
+.btn.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue);font-weight:600}
+.btn-sm{font-size:10px;padding:2px 8px}
+/* ── Portal footer ── */
+.portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
+.portal-footer .sep{margin:0 8px;color:var(--line)}
+/* ── Misc ── */
+.dim{color:var(--dim)}
+.mono{font-family:ui-monospace,Menlo,monospace}
+/* ── Sidebar collapse (desktop) ── */
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
+/* ── Submenu collapse (accordion) ── */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.sub.sub-hidden{display:none}
+/* ── Mobile ── */
+@media(max-width:600px){
+  #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
+  #sidebar.mob-open{transform:translateX(0)}
+  #mob-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:199}
+  #mob-overlay.mob-open{display:block}
+  #mob-menu{display:flex!important}
+  #main-area{margin-left:0}
+  #summary-strip{flex-direction:column}
+}
+@media(min-width:601px){#mob-menu{display:none!important}}
+/* ── Time range selector ── */
+.range-bar{display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+/* ── Hourly chart container ── */
+#hourly-chart-wrap{position:relative;height:180px}
+/* ── Trap paths list ── */
+#trap-paths-list{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.8;color:var(--fg);padding:4px 0}
+#trap-paths-list .trap-path{padding:2px 0;border-bottom:1px solid var(--line)}
+#trap-paths-list .trap-path:last-child{border-bottom:0}
+html[data-theme="light"] .btn:hover{background:var(--bg-hover);border-color:var(--blue)}
+/* ── Section tab bar ── */
+.hp-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-top:16px;border-bottom:1px solid var(--line)}
+.hp-tab{background:none;border:none;border-bottom:2px solid transparent;color:var(--dim);cursor:pointer;font:inherit;font-size:12.5px;font-weight:600;padding:8px 12px;margin-bottom:-1px;display:flex;align-items:center;gap:6px}
+.hp-tab:hover{color:var(--fg)}
+.hp-tab.active{color:var(--bright);border-bottom-color:var(--blue)}
+.hp-tab .cnt{font-size:10px;background:var(--bg-elevated);color:var(--dim);border-radius:8px;padding:0 6px;font-weight:700;min-width:18px;text-align:center}
+.hp-tab.active .cnt{background:rgba(88,166,255,.15);color:var(--blue)}
+.hp-section{display:none}
+.hp-section.active{display:block}
+/* ── Trap effectiveness bars ── */
+.te-row{display:grid;grid-template-columns:1fr 110px 54px;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line)}
+.te-row:last-child{border-bottom:0}
+.te-path{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.te-bar{height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden}
+.te-bar>div{height:100%;background:var(--orange);border-radius:4px;min-width:2px}
+.te-hits{text-align:right;font-size:11px;color:var(--yellow);font-weight:700;font-family:ui-monospace,Menlo,monospace}
+/* ── Attacker storyboard ── */
+.story{border:1px solid var(--line);border-radius:6px;margin-bottom:10px;overflow:hidden}
+.story-hdr{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;background:var(--bg-elevated)}
+.story-hdr:hover{background:var(--bg-hover)}
+.story-caret{color:var(--dim);font-size:10px;transition:transform .1s}
+.story.open .story-caret{transform:rotate(90deg)}
+.story-ip{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--fg);font-size:12px}
+.story-meta{margin-left:auto;display:flex;gap:8px;align-items:center;font-size:10px;color:var(--dim)}
+.story-scan{background:#1f4e79;color:#58a6ff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}
+html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
+.story-steps{padding:6px 12px 10px;display:none}
+.story.open .story-steps{display:block}
+.story-step{display:flex;gap:8px;align-items:baseline;font-family:ui-monospace,Menlo,monospace;font-size:11px;padding:2px 0;position:relative;padding-left:16px}
+.story-step::before{content:"";position:absolute;left:4px;top:7px;width:6px;height:6px;border-radius:50%;background:var(--orange)}
+.story-step .st-t{color:var(--dim);font-size:10px;white-space:nowrap}
+.story-step .st-m{color:var(--purple)}
+.story-step .st-p{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.story-step .st-r{color:var(--dim);font-size:10px;white-space:nowrap}
+.story-step .st-phase{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap;align-self:center;flex-shrink:0}
+.story-step .st-200{font-size:9px;font-weight:700;padding:1px 4px;border-radius:3px;background:rgba(63,185,80,.15);color:#3fb950;white-space:nowrap;align-self:center;flex-shrink:0}
+.story-intent{display:inline-block;font-size:9px;font-weight:700;padding:1px 7px;border-radius:3px;white-space:nowrap;flex-shrink:0}
+.story-narrative{font-size:11px;color:var(--dim);line-height:1.6;padding:6px 0 8px;margin-bottom:4px;border-bottom:1px solid var(--line)}
+.story-step.got-data{background:rgba(63,185,80,.06);border-radius:3px}
+.story-step.got-data::before{background:#3fb950}
+/* ── Scanner-tool leaderboard ── */
+.scan-lb-row{display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid var(--line)}
+.scan-lb-row:last-child{border-bottom:0}
+.scan-name{font-weight:700;color:var(--fg);font-size:12px;min-width:104px;font-family:ui-monospace,Menlo,monospace}
+.scan-lb-bar{flex:1;height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden}
+.scan-lb-bar>div{height:100%;background:var(--blue);border-radius:4px;min-width:2px}
+.scan-cnt{font-size:11px;color:var(--blue);font-weight:700;white-space:nowrap}
+</style>
+</head>
+<body>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">&#9776;</button>
+<div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
+<div id="sidebar">
+  <div id="sidebar-brand">
+    <div>
+      <div id="sidebar-brand-name">AppSecGW</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
+  </div>
+  <nav id="sidebar-nav">
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
+    <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
+    <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub active">Honeypots</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
+    <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
+  </nav>
+  <div id="sidebar-footer">
+    <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;">My Account</a>
+    <form method="post" action="/antibot-appsec-gateway/logout" style="margin:0">
+      <button type="submit" class="signout" onclick="return confirm('Sign out and return to the login page?');">Sign out</button>
+    </form>
+  </div>
+</div>
+<div id="main-area">
+<div id="topbar">
+  <div id="topbar-title">🍯 Honeypots</div>
+  <div id="topbar-right">
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
+  </div>
+</div>
+<div id="page-content">
+
+<!-- 1. Summary strip -->
+<div id="summary-strip">
+  <div class="sum-pill">
+    <h3>Total hits (<span id="sum-window">24h</span>)</h3>
+    <div class="val" id="sum-total">—</div>
+    <div class="sub">honeypot &amp; trap events</div>
+  </div>
+  <div class="sum-pill">
+    <h3>Unique IPs caught</h3>
+    <div class="val" id="sum-ips">—</div>
+    <div class="sub">distinct source IPs</div>
+  </div>
+  <div class="sum-pill">
+    <h3>Active traps</h3>
+    <div class="val" id="sum-traps">—</div>
+    <div class="sub">configured trap paths</div>
+  </div>
+  <div class="sum-pill">
+    <h3>Top technique</h3>
+    <div class="val" id="sum-top-technique" style="font-size:15px;word-break:break-all">—</div>
+    <div class="sub" id="sum-top-technique-count"></div>
+  </div>
+</div>
+
+<!-- Section tabs -->
+<div class="hp-tabs">
+  <button class="hp-tab active" data-sec="overview" onclick="_hpTab(this)">📊 Overview</button>
+  <button class="hp-tab" data-sec="traps" onclick="_hpTab(this)">🪤 Traps <span class="cnt" id="tab-cnt-traps">0</span></button>
+  <button class="hp-tab" data-sec="attackers" onclick="_hpTab(this)">🎯 Attackers <span class="cnt" id="tab-cnt-attackers">0</span></button>
+  <button class="hp-tab" data-sec="intel" onclick="_hpTab(this)">🔍 Threat intel</button>
+</div>
+
+<!-- ═══ OVERVIEW ═══ -->
+<div class="hp-section active" data-sec="overview">
+  <div class="range-bar" style="margin-bottom:10px">
+    <span class="dim" style="font-size:11px;margin-right:4px">Window:</span>
+    <button class="btn btn-sm" data-mins="60" onclick="_setHpMins(this)">1h</button>
+    <button class="btn btn-sm" data-mins="180" onclick="_setHpMins(this)">3h</button>
+    <button class="btn btn-sm active" data-mins="1440" onclick="_setHpMins(this)">1d</button>
+    <button class="btn btn-sm" data-mins="10080" onclick="_setHpMins(this)">7d</button>
+    <button class="btn btn-sm" data-mins="43200" onclick="_setHpMins(this)">30d</button>
+  </div>
+  <div class="grid">
+    <div class="card">
+      <h2>Honeypot hits — <span id="hp-chart-window">last 24 h</span></h2>
+      <div id="hourly-chart-wrap"><canvas id="hourly-chart"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ TRAPS ═══ -->
+<div class="hp-section" data-sec="traps">
+  <div class="grid">
+    <!-- Trap effectiveness (NEW) -->
+    <div class="card">
+      <h2>🎯 Trap effectiveness — top trap paths by hits
+        <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">which traps are actually catching traffic</span></h2>
+      <div id="trap-eff-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+    </div>
+
+    <!-- Active trap paths -->
+    <div class="card">
+      <h2>Active trap paths <span class="dim" id="trap-count-label" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
+      <div id="trap-paths-list"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+    </div>
+
+    <!-- Honeypot path suggestions -->
+    <div class="card" id="honey-suggest-card">
+      <h2>💡 Honeypot path suggestions
+        <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">frequently probed paths not yet in the trap set · last 7 days</span></h2>
+      <div id="honey-suggest-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ATTACKERS ═══ -->
+<div class="hp-section" data-sec="attackers">
+  <div class="grid">
+    <!-- Attacker storyboard (NEW) -->
+    <div class="card">
+      <h2>🎬 Attacker storyboard — per-IP attack journeys
+        <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">click an attacker to replay how they probed you, step by step</span></h2>
+      <div id="storyboard-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+    </div>
+
+    <!-- Top caught IPs table -->
+    <div class="card">
+      <h2>Top caught IPs</h2>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr><th>IP</th><th>Hits</th><th>Techniques</th><th>Last seen</th></tr>
+          </thead>
+          <tbody id="top-ips-body">
+            <tr><td colspan="4" class="dim" style="padding:8px">loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ THREAT INTEL ═══ -->
+<div class="hp-section" data-sec="intel">
+  <div class="grid">
+    <!-- Attack Playbook -->
+    <div class="card" id="attack-playbook-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <h2 style="margin:0">🍯 Attack playbook — how the caught attacks work
+          <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">honeypot &amp; trap hits, grouped by technique</span>
+        </h2>
+        <div class="range-bar">
+          <span class="dim" style="font-size:11px">Window:</span>
+          <button class="btn btn-sm" data-mins="15" onclick="_setPlaybookMins(this)">15m</button>
+          <button class="btn btn-sm" data-mins="60" onclick="_setPlaybookMins(this)">1h</button>
+          <button class="btn btn-sm" data-mins="360" onclick="_setPlaybookMins(this)">6h</button>
+          <button class="btn btn-sm btn-sm active" data-mins="1440" id="playbook-btn-1440" onclick="_setPlaybookMins(this)">24h</button>
+          <button class="btn btn-sm" data-mins="10080" onclick="_setPlaybookMins(this)">7d</button>
+        </div>
+      </div>
+      <div id="playbook-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+    </div>
+
+    <!-- Scanner-tool leaderboard (NEW) -->
+    <div class="card">
+      <h2>🔍 Scanner tools detected
+        <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">IPs fingerprinted to a known scanner by their trap-path signature</span></h2>
+      <div id="scanner-lb-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="scanner-hits-body" style="margin-top:10px"></div>
+    </div>
+
+    <!-- Predicted next probes (NEW) -->
+    <div class="card" id="predicted-probes-card">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <h2 style="margin:0">🔮 Predicted next probes
+          <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">signature paths a fingerprinted scanner hasn't hit yet — trap them ahead of the scan</span>
+        </h2>
+        <button class="btn btn-sm" id="pp-trap-all" onclick="trapAllPredicted(this)" style="display:none">+ Trap all</button>
+      </div>
+      <div id="predicted-probes-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
+
+</div><!-- /page-content -->
+</div><!-- /main-area -->
+
+<!-- My Account modal -->
+<div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
+  <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <b>My Account</b>
+      <button onclick="document.getElementById('acct-modal').style.display='none'" style="background:none;border:none;color:var(--fg);cursor:pointer;font-size:18px">&#x2715;</button>
+    </div>
+    <div id="acct-body"></div>
+  </div>
+</div>
+
+<script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
+<script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+<script>
+window._applyChartColorsToInstance=function(c,theme){
+  var L=theme==='light',gc=L?'rgba(0,0,0,.08)':'#21262d',tc=L?'#636e7b':'#8b949e',lc=L?'#636e7b':'#c9d1d9',tbg=L?'#ffffff':'#161b22',tbc=L?'#d0d7de':'#30363d',ttc=L?'#1f2328':'#c9d1d9';
+  try{
+    var sc=c.options.scales||{};
+    Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});
+    var p=c.options.plugins||{};
+    if(p.legend&&p.legend.labels)p.legend.labels.color=lc;
+    if(p.tooltip){p.tooltip.backgroundColor=tbg;p.tooltip.borderColor=tbc;p.tooltip.titleColor=ttc;p.tooltip.bodyColor=ttc;}
+    c.update('none');
+  }catch(e){}
+};
+if(typeof Chart!=='undefined'){
+  Chart.register({id:'_gwTheme',afterInit:function(c){
+    window._applyChartColorsToInstance(c,document.documentElement.getAttribute('data-theme')||'dark');
+  }});
+}
+</script>
+<script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
+<script>
+'use strict';
+
+
+const _dp = (h) => {
+  if (typeof DOMPurify === "undefined") return h;
+  if (/^<t[rhd]/i.test((h||'').trimStart())) {
+    const _s = DOMPurify.sanitize('<table><tbody>' + h + '</tbody></table>');
+    const _e = document.createElement('div'); _e.innerHTML = _s;
+    return (_e.querySelector('tbody') || _e).innerHTML;
+  }
+  return DOMPurify.sanitize(h);
+};
+function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--card,#1e1e2e);border:1px solid var(--red,#f85149);color:var(--fg,#e6edf3);padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.25)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
+
+var _timers = [];
+window.addEventListener('beforeunload', function() {
+  _timers.forEach(function(t) { clearInterval(t); });
+});
+
+// ── Hourly chart setup ─────────────────────────────────────────────────────
+var _hourlyChart = null;
+(function(){
+  var ctx = document.getElementById('hourly-chart');
+  if (!ctx || typeof Chart === 'undefined') return;
+  _hourlyChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [{
+        label: 'Hits',
+        data: [],
+        backgroundColor: '#ff7b3a',
+        borderColor: '#ff7b3a',
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { mode: 'index', intersect: false }
+      },
+      scales: {
+        x: {
+          grid: { color: '#21262d' },
+          ticks: { color: '#8b949e', maxTicksLimit: 12 }
+        },
+        y: {
+          grid: { color: '#21262d' },
+          ticks: { color: '#8b949e', precision: 0 },
+          beginAtZero: true
+        }
+      }
+    }
+  });
+})();
+
+// ── Overview time-window selector (1h / 3h / 1d / 7d / 30d) ──────────────────
+var _hpMins = 1440;
+var _HP_WIN_LABEL  = {60:'1h', 180:'3h', 1440:'24h', 10080:'7d', 43200:'30d'};
+var _HP_WIN_PHRASE = {60:'last hour', 180:'last 3 hours', 1440:'last 24 h', 10080:'last 7 days', 43200:'last 30 days'};
+window._setHpMins = function(btn){
+  _hpMins = parseInt(btn.getAttribute('data-mins'), 10) || 1440;
+  var bar = btn.parentNode;
+  if (bar) bar.querySelectorAll('.btn').forEach(function(b){ b.classList.toggle('active', b === btn); });
+  loadData();
+};
+
+// ── Data fetching ──────────────────────────────────────────────────────────
+async function loadData() {
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/honeypots-data?mins=' + _hpMins, {credentials:'include', cache:'no-store'});
+    if (!r.ok) return;
+    const d = await r.json();
+
+    // Window labels (track the selected range)
+    var _wl = _HP_WIN_LABEL[_hpMins] || (_hpMins + 'm');
+    var _swEl = document.getElementById('sum-window'); if (_swEl) _swEl.textContent = _wl;
+    var _cwEl = document.getElementById('hp-chart-window'); if (_cwEl) _cwEl.textContent = _HP_WIN_PHRASE[_hpMins] || ('last ' + _wl);
+
+    // Summary strip
+    document.getElementById('sum-total').textContent = d.total != null ? d.total.toLocaleString() : '0';
+    document.getElementById('sum-ips').textContent = d.unique_ips != null ? d.unique_ips.toLocaleString() : '0';
+    document.getElementById('sum-traps').textContent = d.active_trap_paths ? d.active_trap_paths.length.toLocaleString() : '0';
+
+    // Top technique
+    const bt = d.by_technique || {};
+    const topEntry = Object.entries(bt).sort((a,b) => b[1]-a[1])[0];
+    if (topEntry) {
+      document.getElementById('sum-top-technique').textContent = topEntry[0];
+      document.getElementById('sum-top-technique-count').textContent = topEntry[1].toLocaleString() + ' hits';
+    } else {
+      document.getElementById('sum-top-technique').textContent = '—';
+      document.getElementById('sum-top-technique-count').textContent = '';
+    }
+
+    // Hits-per-bucket chart — backend returns adaptive `series` of {t, count}
+    // (bucket size scales with the window: 5-min … daily).
+    const _ser = d.series || d.hourly;   // d.hourly = legacy fallback
+    if (_hourlyChart && _ser) {
+      const span = _ser.length > 1 ? (_ser[1].t || _ser[1].hour_ts) - (_ser[0].t || _ser[0].hour_ts) : 3600;
+      const labels = _ser.map(b => {
+        const dt = new Date((b.t || b.hour_ts) * 1000);
+        return span >= 86400
+          ? (dt.getMonth() + 1) + '/' + dt.getDate()
+          : dt.getHours().toString().padStart(2, '0') + ':' + dt.getMinutes().toString().padStart(2, '0');
+      });
+      _hourlyChart.data.labels = labels;
+      _hourlyChart.data.datasets[0].data = _ser.map(b => b.count);
+      _hourlyChart.update();
+    }
+
+    // Top caught IPs table
+    const tbody = document.getElementById('top-ips-body');
+    if (tbody) {
+      if (!d.top_ips || !d.top_ips.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="dim" style="padding:8px">No honeypot/trap catches in this window.</td></tr>';
+      } else {
+        tbody.innerHTML = _dp(d.top_ips.map(row => {
+          const lastSeen = row.last_ts ? _relTime(row.last_ts) : '—';
+          const techniques = (row.reasons || []).map(r => escapeHtml(r)).join(', ');
+          return '<tr>'
+            + '<td>' + escapeHtml(row.ip) + '</td>'
+            + '<td style="color:var(--yellow);font-weight:700">' + escapeHtml(String(row.count)) + '</td>'
+            + '<td>' + techniques + '</td>'
+            + '<td style="color:var(--dim)">' + escapeHtml(lastSeen) + '</td>'
+            + '</tr>';
+        }).join(''));
+      }
+    }
+
+    // Active trap paths
+    const trapList = document.getElementById('trap-paths-list');
+    const trapCountLabel = document.getElementById('trap-count-label');
+    if (trapList) {
+      const paths = d.active_trap_paths || [];
+      if (trapCountLabel) trapCountLabel.textContent = '(' + paths.length + ' paths)';
+      if (!paths.length) {
+        trapList.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">No custom trap paths — using built-in honeypot paths.</div>';
+      } else {
+        trapList.innerHTML = paths.map(p => '<div class="trap-path">' + escapeHtml(p) + '</div>').join('');
+      }
+    }
+
+    // New panels: trap effectiveness + attacker storyboard + tab counts
+    renderTrapEffectiveness(d.trap_effectiveness);
+    renderStoryboard(d.attackers);
+    const ttC = document.getElementById('tab-cnt-traps');
+    if (ttC) ttC.textContent = (d.active_trap_paths || []).length;
+    const taC = document.getElementById('tab-cnt-attackers');
+    if (taC) taC.textContent = (d.attackers || []).length;
+
+  } catch(e) {
+    console.warn('honeypots-data error:', e);
+  }
+}
+
+function _relTime(ts) {
+  const age = Math.round(Date.now() / 1000 - ts);
+  if (age < 5) return 'just now';
+  if (age < 60) return age + 's ago';
+  if (age < 3600) return Math.round(age / 60) + 'm ago';
+  if (age < 86400) return Math.round(age / 3600) + 'h ago';
+  return Math.round(age / 86400) + 'd ago';
+}
+
+// ── Attack Playbook ────────────────────────────────────────────────────────
+const PLAYBOOK_META = {
+  "honeypot":          {icon:"🍯", what:"Hidden trap URL planted in the HTML but unreachable by normal navigation — only bots crawling every link hit it."},
+  "honeypot-silent":   {icon:"🍯", what:"Same trap as honeypot, but the response looks legitimate so the scanner never learns it was caught."},
+  "bot-trap":          {icon:"🪤", what:"A form field hidden from humans (CSS/aria) that only DOM-parsing automation fills in."},
+  "honey-cred":        {icon:"🔑", what:"Fake credentials planted invisibly in the page — submitting them proves automated form-filling."},
+  "canary-echo":       {icon:"🐤", what:"A canary token planted in a response that the client echoed back — proves it parses and replays content."},
+  "canary-probe-miss": {icon:"🐤", what:"Client failed/avoided the canary probe in a way only non-browsers do."},
+};
+
+// SIGNAL_KNOB_JS — maps reason codes to their config knob names.
+const SIGNAL_KNOB_JS = {
+  "honeypot":"HONEYPOT_ENABLED",
+  "honeypot-silent":"HONEYPOT_ENABLED",
+  "bot-trap":"BOT_TRAP_FORMS",
+  "honey-cred":"HONEY_CRED_ENABLED",
+  "canary-echo":"CANARY_ECHO_DETECTION",
+  "canary-probe-miss":"CANARY_PROBE_ENABLED",
+};
+
+window._gwKnobState = window._gwKnobState || null;
+async function _gwLoadKnobState(){
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+    if (!r.ok) return;
+    const j = await r.json();
+    window._gwKnobState = j.state || {};
+  } catch(_) {}
+}
+try { _gwLoadKnobState(); } catch(_) {}
+
+var _playbookMins = 1440;
+function _setPlaybookMins(btn) {
+  _playbookMins = parseInt(btn.getAttribute('data-mins'), 10) || 1440;
+  document.querySelectorAll('#attack-playbook-card .btn-sm').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  loadPlaybook();
+}
+
+function knobRow(reason) {
+  const k = SIGNAL_KNOB_JS[reason];
+  if (!k) return '';
+  const st = window._gwKnobState;
+  let dot, lbl, col;
+  if (!st || !(k in st)) { dot='●'; lbl='?'; col='#8b949e'; }
+  else if (st[k])        { dot='●'; lbl='ON'; col='#3fb950'; }
+  else                   { dot='○'; lbl='OFF'; col='#f85149'; }
+  return `<div style="margin-top:6px;font-size:11px"><span style="color:var(--dim)">Defense:</span> `
+    + `<span style="color:${col}">${dot}</span> `
+    + `<span style="font-family:ui-monospace,Menlo,monospace">${escapeHtml(k)}</span> `
+    + `<span style="color:${col};font-weight:700">${lbl}</span> `
+    + `<a href="/antibot-appsec-gateway/secured/controls" style="color:var(--blue);text-decoration:none;margin-left:6px">→ Controls</a></div>`;
+}
+
+const scannerBody = document.getElementById('scanner-hits-body');
+function renderScannerHits(hits){
+  if (!scannerBody) return;
+  if (!hits || !hits.length){ scannerBody.innerHTML = ''; return; }
+  scannerBody.innerHTML = '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);margin:8px 0 4px">Scanner fingerprint matches</div>'
+    + hits.map(h =>
+      `<div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-top:1px solid var(--line)">`
+      + `<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(h.ip)}</span>`
+      + `<span class="story-scan">${escapeHtml(h.scanner)}</span>`
+      + `<span style="color:var(--dim);font-size:10px;white-space:nowrap">${escapeHtml((h.matched||[]).join(', '))}</span>`
+      + `</div>`
+    ).join('');
+}
+
+const playbookBody = document.getElementById('playbook-body');
+function renderPlaybook(d){
+  const gs = (d && d.groups) || [];
+  renderScannerHits((d && d.scanner_hits) || []);
+  renderScannerTools((d && d.scanner_hits) || []);
+  renderPredictedProbes((d && d.predicted_probes) || []);
+  if (!gs.length){ playbookBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">No honeypot/trap hits in this window. 🎉</div>'; return; }
+  playbookBody.innerHTML = _dp(gs.map(g => {
+    const meta = PLAYBOOK_META[g.reason] || {icon:'⚠', what:'Trap/honeypot catch.'};
+    const ex = (g.examples||[]).map(e =>
+      `<div style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--fg);padding:2px 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">`
+      + `<span style="color:var(--dim)">${escapeHtml(e.method)}</span> ${escapeHtml(e.path)}</div>`
+    ).join('') || '<div class="dim" style="font-size:11px">—</div>';
+    const cnt = g.count + (g.capped ? '+' : '');
+    return `<div style="border:1px solid var(--line);border-radius:6px;padding:10px 12px;margin-bottom:10px;background:var(--bg)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px">
+        <span style="font-size:15px">${meta.icon}</span>
+        <span style="font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--fg)">${escapeHtml(g.reason)}</span>
+        <span style="margin-left:auto;font-size:11px;color:#d29922;font-weight:700">${cnt} hit${g.count===1?'':'s'}</span>
+      </div>
+      <div style="font-size:11.5px;color:var(--dim);line-height:1.5;margin-bottom:6px"><b style="color:var(--fg)">What:</b> ${escapeHtml(meta.what)}</div>
+      <div style="font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);margin-bottom:2px">Caught — distinct requests</div>
+      ${ex}
+      ${knobRow(g.reason)}
+    </div>`;
+  }).join(''));
+}
+
+async function loadPlaybook(){
+  try {
+    if (typeof _gwLoadKnobState === 'function') { try { await _gwLoadKnobState(); } catch(_){} }
+    const r = await fetch('/antibot-appsec-gateway/secured/attack-playbook?mins=' + _playbookMins, {credentials:'include', cache:'no-store'});
+    if (!r.ok){ playbookBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Could not load attack playbook (HTTP ' + r.status + ').</div>'; return; }
+    renderPlaybook(await r.json());
+  } catch(e){ playbookBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Error: ' + escapeHtml(String(e)) + '</div>'; }
+}
+
+// ── Honeypot path suggestions ──────────────────────────────────────────────
+const sBody = document.getElementById('honey-suggest-body');
+function renderSuggest(d){
+  const cands = (d && d.candidates) || [];
+  const trapCount = (d && d.current_trap_count) || 0;
+  if (!cands.length){
+    sBody.innerHTML = `<div class="dim" style="font-size:11px;padding:6px 0">No high-frequency untrapped paths found in the last 7 days. Trap set has ${escapeHtml(String(trapCount))} paths.</div>`;
+    return;
+  }
+  sBody.innerHTML = `<div style="font-size:11px;color:var(--dim);margin-bottom:8px">Active trap set: <b style="color:var(--fg)">${escapeHtml(String(trapCount))}</b> paths. Below: frequently probed paths not yet trapped — click <b>+ Trap</b> to add.</div>`
+    + cands.map(c => {
+      const safePath = escapeHtml(c.path);
+      return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)">`
+        + `<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${safePath}</span>`
+        + `<span style="font-size:11px;color:#d29922;white-space:nowrap">${escapeHtml(String(c.hits))} hits</span>`
+        + `<button class="hs-trap-btn" data-path="${safePath}" style="font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--blue);background:none;color:var(--blue);cursor:pointer;white-space:nowrap">+ Trap</button>`
+        + `</div>`;
+    }).join('');
+  sBody.querySelectorAll('.hs-trap-btn').forEach(function(b){
+    b.addEventListener('click', function(){ addHoneypotPath(b.dataset.path, b); });
+  });
+}
+
+async function loadSuggest(){
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/honey-suggest', {credentials:'include', cache:'no-store'});
+    if (!r.ok){ sBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Could not load suggestions (HTTP ' + r.status + ').</div>'; return; }
+    renderSuggest(await r.json());
+  } catch(e){ sBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Error: ' + escapeHtml(String(e)) + '</div>'; }
+}
+
+window.addHoneypotPath = async function(path, btn){
+  btn.disabled = true; btn.textContent = '…';
+  try {
+    const cfgR = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include', cache:'no-store'});
+    const cfg = cfgR.ok ? await cfgR.json() : {};
+    let extra = (cfg.state && cfg.state.HONEYPOT_EXTRA_PATHS) || [];
+    if (!Array.isArray(extra)) extra = [];
+    if (!extra.includes(path)) extra.push(path);
+    const csrf = (typeof _agwTok === 'function') ? _agwTok() : (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '');
+    const res = await fetch('/antibot-appsec-gateway/secured/config', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json','X-CSRF-Token': csrf},
+      body: JSON.stringify({HONEYPOT_EXTRA_PATHS: extra})
+    });
+    if (res.ok){
+      btn.textContent = '✓ Added'; btn.style.color='#3fb950'; btn.style.borderColor='#3fb950';
+      setTimeout(function(){ loadData(); loadSuggest(); }, 600);
+    } else { btn.textContent = 'Error'; btn.disabled = false; }
+  } catch(e){ btn.textContent = 'Error'; btn.disabled = false; }
+};
+
+// ── Section tabs ───────────────────────────────────────────────────────────
+window._hpTab = function(btn){
+  var sec = btn.getAttribute('data-sec');
+  document.querySelectorAll('.hp-tab').forEach(function(t){t.classList.toggle('active', t===btn);});
+  document.querySelectorAll('.hp-section').forEach(function(s){s.classList.toggle('active', s.getAttribute('data-sec')===sec);});
+  try { localStorage.setItem('agw_hp_sec', sec); } catch(e){}
+};
+(function(){ try { var s=localStorage.getItem('agw_hp_sec'); if(s){var b=document.querySelector('.hp-tab[data-sec="'+s+'"]'); if(b)window._hpTab(b);} } catch(e){} })();
+
+// ── Trap effectiveness ─────────────────────────────────────────────────────
+function renderTrapEffectiveness(list){
+  var el = document.getElementById('trap-eff-body'); if(!el) return;
+  list = list || [];
+  if(!list.length){ el.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">No trap hits in this window.</div>'; return; }
+  var max = Math.max.apply(null, list.map(function(t){return t.hits;})) || 1;
+  el.innerHTML = _dp(list.map(function(t){
+    var pct = Math.round(t.hits/max*100);
+    return '<div class="te-row">'
+      + '<span class="te-path" title="'+escapeHtml(t.path)+'">'+escapeHtml(t.path)+'</span>'
+      + '<span class="te-bar"><div style="width:'+pct+'%"></div></span>'
+      + '<span class="te-hits">'+escapeHtml(String(t.hits))+'</span>'
+      + '</div>';
+  }).join(''));
+}
+
+// ── Path annotation lookup ─────────────────────────────────────────────────
+var PATH_ANN = {
+  '/.env':'Environment file — DB creds, API keys, secrets',
+  '/.env.local':'Local env overrides — same secrets risk as .env',
+  '/.env.production':'Production secrets file',
+  '/.git/config':'Git config — leaks remote URLs and credentials',
+  '/.git/HEAD':'Confirms git repo is exposed on web',
+  '/.git/FETCH_HEAD':'Git fetch history',
+  '/wp-login.php':'WordPress admin login — credential brute-force target',
+  '/wp-admin':'WordPress admin panel',
+  '/wp-admin/':'WordPress admin panel',
+  '/wp-admin/admin-ajax.php':'WordPress AJAX — enumeration and injection vector',
+  '/xmlrpc.php':'WordPress XML-RPC — amplification and bruteforce vector',
+  '/phpmyadmin':'phpMyAdmin — database web admin panel',
+  '/phpmyadmin/':'phpMyAdmin — database web admin panel',
+  '/pma/':'phpMyAdmin shortcut path',
+  '/adminer':'Adminer — lightweight DB web admin',
+  '/adminer.php':'Adminer — lightweight DB web admin',
+  '/manager/html':'Tomcat Manager — remote code execution via deploy',
+  '/jmx-console':'JBoss JMX console — remote code execution',
+  '/solr/':'Apache Solr search admin panel',
+  '/jenkins':'Jenkins CI — unauthenticated RCE target',
+  '/actuator':'Spring Boot Actuator — management API',
+  '/actuator/env':'Dumps all env vars including secrets',
+  '/actuator/restart':'Restarts the application remotely',
+  '/actuator/heapdump':'JVM heap dump — credential extraction',
+  '/graphql':'GraphQL — introspection and injection target',
+  '/swagger.json':'Full API spec — all endpoints exposed',
+  '/swagger-ui':'Swagger UI — interactive API explorer',
+  '/api-docs':'API documentation — endpoint enumeration',
+  '/config.php':'PHP config — database credentials',
+  '/configuration.php':'Joomla config — credentials exposure',
+  '/web.config':'IIS config — secrets and auth settings',
+  '/settings.py':'Django settings — DB credentials and secret key',
+  '/database.yml':'Rails DB config — credentials exposure',
+  '/backup.zip':'Site backup archive — source code and data',
+  '/backup.sql':'Database SQL dump',
+  '/db.sql':'Database SQL dump',
+  '/.htaccess':'Apache config — auth rules and rewrite directives',
+  '/robots.txt':'Robots exclusion — used to discover hidden paths',
+  '/sitemap.xml':'Sitemap — complete URL list for crawling',
+  '/.DS_Store':'macOS dir metadata — leaks directory structure',
+  '/etc/passwd':'Unix password file — local file inclusion attempt',
+  '/proc/self/environ':'Process environment — LFI credential extraction',
+  '/server-status':'Apache mod_status — active connections disclosure',
+  '/server-info':'Apache server config disclosure',
+  '/shell.php':'PHP web shell',
+  '/cmd.php':'PHP command execution endpoint',
+  '/upload':'File upload endpoint — RCE via malicious file',
+  '/uploads/':'Uploaded files directory — execution possible',
+  '/cgi-bin/':'CGI scripts — ShellShock and command injection target',
+  '/console':'Developer or admin console',
+  '/login':'Login form — credential brute-force target',
+  '/signin':'Sign-in form — credential brute-force target',
+  '/heapdump':'JVM heap dump — credential extraction',
+  '/crossdomain.xml':'Flash/Silverlight cross-domain policy',
+};
+function annotationFor(path){
+  if(PATH_ANN[path]) return PATH_ANN[path];
+  var lp=path.toLowerCase();
+  var keys=Object.keys(PATH_ANN);
+  for(var i=0;i<keys.length;i++){
+    if(lp===keys[i].toLowerCase()) return PATH_ANN[keys[i]];
+  }
+  return '';
+}
+
+// ── Attacker intent classifier ─────────────────────────────────────────────
+function classifyIntent(steps){
+  var paths=steps.map(function(s){return (s.path||'').toLowerCase();});
+  var reasons=steps.map(function(s){return s.reason||'';});
+  var has=function(kws){return kws.some(function(k){return paths.some(function(p){return p.indexOf(k)!==-1;});});};
+  var hasR=function(r){return reasons.indexOf(r)!==-1;};
+  if(has(['wp-login','wp-admin','xmlrpc','wp-content','wp-includes']))
+    return {label:'WordPress Takeover',color:'#bc8cff',icon:'🔓'};
+  if(has(['.env','config.php','database.yml','settings.py','web.config','configuration.php']))
+    return {label:'Credential Harvesting',color:'#f85149',icon:'🔑'};
+  if(has(['.git','backup.zip','backup.sql','db.sql']))
+    return {label:'Source Code Exfiltration',color:'#ff7b3a',icon:'📦'};
+  if(has(['phpmyadmin','pma/','adminer','manager/html','jmx-console','solr','/jenkins','/console']))
+    return {label:'Admin Panel Access',color:'#d29922',icon:'⚙️'};
+  if(has(['actuator','heapdump','server-status','server-info','/trace']))
+    return {label:'Management API Abuse',color:'#ff7b3a',icon:'🔧'};
+  if(has(['/shell','/cmd','cgi-bin','/upload','etc/passwd','proc/self']))
+    return {label:'Remote Code Execution',color:'#f85149',icon:'💥'};
+  if(has(['graphql','swagger','api-docs']))
+    return {label:'API Enumeration',color:'#58a6ff',icon:'🔍'};
+  if(has(['/login','/signin','/auth']))
+    return {label:'Credential Brute-Force',color:'#d29922',icon:'🔨'};
+  if(hasR('honey-cred')||hasR('bot-trap'))
+    return {label:'Automated Form-Filling',color:'#bc8cff',icon:'🤖'};
+  if(steps.length>=6)
+    return {label:'Path Enumeration',color:'#58a6ff',icon:'🔎'};
+  return {label:'Reconnaissance',color:'#8b949e',icon:'👁️'};
+}
+
+// ── Kill-chain phase classifier ────────────────────────────────────────────
+function killChainPhase(step){
+  var p=(step.path||'').toLowerCase();
+  if(['.env','.git','backup','db.sql','heapdump','passwd','proc/self','dump'].some(function(k){return p.indexOf(k)!==-1;}))
+    return {phase:'Exfil.',color:'#f85149'};
+  if(['login','signin','wp-login','admin','phpmyadmin','manager','jmx','console','shell','cmd','/upload'].some(function(k){return p.indexOf(k)!==-1;}))
+    return {phase:'Access',color:'#d29922'};
+  if(['actuator','swagger','graphql','api-docs','server-status','server-info','robots','sitemap','config','metrics','health','/api/'].some(function(k){return p.indexOf(k)!==-1;}))
+    return {phase:'Discovery',color:'#bc8cff'};
+  return {phase:'Recon',color:'#58a6ff'};
+}
+
+// ── Goal narrative synthesis ───────────────────────────────────────────────
+function synthesizeGoal(a, intent){
+  var steps=a.steps||[];
+  var got200=steps.filter(function(s){return s.status===200;});
+  var techniques=(a.reasons||[]).length;
+  var parts=[];
+  parts.push('Probed '+steps.length+' path'+(steps.length===1?'':'s')+' using '+(techniques||1)+' technique'+(techniques===1?'':'s')+'.');
+  if(got200.length) parts.push('Got '+got200.length+' HTTP 200 response'+(got200.length===1?'':'s')+' — attacker received data.');
+  parts.push('Likely goal: '+escapeHtml(intent.label)+'.');
+  var notable=steps.filter(function(s){var lp=(s.path||'').toLowerCase();return lp.indexOf('.env')!==-1||lp.indexOf('.git')!==-1||lp.indexOf('phpmyadmin')!==-1||lp.indexOf('wp-login')!==-1||lp.indexOf('actuator')!==-1||lp.indexOf('passwd')!==-1||lp.indexOf('heapdump')!==-1;}).slice(0,3).map(function(s){return escapeHtml(s.path);});
+  if(notable.length) parts.push('Notable paths: '+notable.join(', ')+'.');
+  return parts.join(' ');
+}
+
+// ── Attacker storyboard ────────────────────────────────────────────────────
+window._storyToggle = function(el){ var s=el.closest('.story'); if(s) s.classList.toggle('open'); };
+function renderStoryboard(attackers){
+  var el = document.getElementById('storyboard-body'); if(!el) return;
+  attackers = attackers || [];
+  if(!attackers.length){ el.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">No attacker journeys in this window.</div>'; return; }
+  el.innerHTML = _dp(attackers.map(function(a, idx){
+    var intent = classifyIntent(a.steps||[]);
+    var narrative = synthesizeGoal(a, intent);
+    var steps = (a.steps||[]).map(function(s){
+      var phase = killChainPhase(s);
+      var ann = annotationFor(s.path||'');
+      var pathTitle = escapeHtml(s.path) + (ann ? ' — ' + ann : '');
+      var gotData = s.status === 200;
+      return '<div class="story-step'+(gotData?' got-data':'')+'">'
+        + '<span class="st-t">'+escapeHtml(_relTime(s.ts))+'</span>'
+        + '<span class="st-m">'+escapeHtml(s.method||'GET')+'</span>'
+        + '<span class="st-p" title="'+pathTitle+'">'+escapeHtml(s.path||'/')+'</span>'
+        + (gotData?'<span class="st-200" title="HTTP 200 — attacker received data">200</span>':'')
+        + '<span class="st-phase" style="background:'+phase.color+'22;color:'+phase.color+'">'+escapeHtml(phase.phase)+'</span>'
+        + '<span class="st-r">'+escapeHtml(s.reason||'')+'</span>'
+        + '</div>';
+    }).join('') || '<div class="dim" style="font-size:11px">—</div>';
+    var techniques = (a.reasons||[]).length;
+    var open = idx===0 ? ' open' : '';
+    return '<div class="story'+open+'">'
+      + '<div class="story-hdr">'
+      +   '<span class="story-caret">▸</span>'
+      +   '<span class="story-ip">'+escapeHtml(a.ip)+'</span>'
+      +   '<span class="story-intent" style="background:'+intent.color+'22;color:'+intent.color+'">'+intent.icon+' '+escapeHtml(intent.label)+'</span>'
+      +   '<span class="story-meta">'
+      +     '<span style="color:var(--yellow);font-weight:700">'+escapeHtml(String(a.count))+' hits</span>'
+      +     '<span>'+techniques+' technique'+(techniques===1?'':'s')+'</span>'
+      +     '<span>'+escapeHtml(_relTime(a.last_ts))+'</span>'
+      +   '</span>'
+      + '</div>'
+      + '<div class="story-steps"><div class="story-narrative">'+narrative+'</div>'+steps+'</div>'
+      + '</div>';
+  }).join(''));
+  // _dp (DOMPurify) strips inline onclick, so bind the expand/collapse here.
+  el.querySelectorAll('.story-hdr').forEach(function(h){
+    h.addEventListener('click', function(){ window._storyToggle(h); });
+  });
+}
+
+// ── Scanner-tool leaderboard (derived from attack-playbook scanner_hits) ────
+function renderScannerTools(hits){
+  var el = document.getElementById('scanner-lb-body'); if(!el) return;
+  hits = hits || [];
+  var tally = {};
+  hits.forEach(function(h){ var n=h.scanner||'unknown'; tally[n]=(tally[n]||0)+1; });
+  var rows = Object.keys(tally).map(function(k){return {name:k,ips:tally[k]};}).sort(function(a,b){return b.ips-a.ips;});
+  if(!rows.length){ el.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">No IP matched a known scanner signature in this window.</div>'; return; }
+  var max = Math.max.apply(null, rows.map(function(r){return r.ips;})) || 1;
+  el.innerHTML = rows.map(function(r){
+    var pct = Math.round(r.ips/max*100);
+    return '<div class="scan-lb-row">'
+      + '<span class="scan-name">'+escapeHtml(r.name)+'</span>'
+      + '<span class="scan-lb-bar"><div style="width:'+pct+'%"></div></span>'
+      + '<span class="scan-cnt">'+escapeHtml(String(r.ips))+' IP'+(r.ips===1?'':'s')+'</span>'
+      + '</div>';
+  }).join('');
+}
+
+// ── Predicted next probes (signature-completion trapping) ───────────────────
+var _lastPredicted = [];
+function renderPredictedProbes(list){
+  var el = document.getElementById('predicted-probes-body'); if(!el) return;
+  list = list || [];
+  _lastPredicted = list;
+  var allBtn = document.getElementById('pp-trap-all');
+  if(!list.length){
+    if(allBtn) allBtn.style.display='none';
+    el.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">No predicted probes — no scanner fingerprinted in this window yet.</div>';
+    return;
+  }
+  if(allBtn) allBtn.style.display='';
+  el.innerHTML = _dp(list.map(function(p){
+    var tools = (p.tools||[]).map(function(t){
+      return '<span class="story-scan">'+escapeHtml(t)+'</span>';
+    }).join(' ');
+    return '<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-top:1px solid var(--line)">'
+      + '<span style="font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--fg);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escapeHtml(p.path)+'">'+escapeHtml(p.path)+'</span>'
+      + tools
+      + '<button class="pp-trap-btn" data-path="'+escapeHtml(p.path)+'" style="font-size:11px;padding:2px 8px;border-radius:4px;border:1px solid var(--blue);background:none;color:var(--blue);cursor:pointer;white-space:nowrap">+ Trap</button>'
+      + '</div>';
+  }).join(''));
+  el.querySelectorAll('.pp-trap-btn').forEach(function(b){
+    b.addEventListener('click', function(){ addHoneypotPath(b.dataset.path, b); });
+  });
+}
+
+window.trapAllPredicted = async function(btn){
+  if(!_lastPredicted.length) return;
+  btn.disabled = true; var orig = btn.textContent; btn.textContent = '…';
+  try {
+    var cfgR = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include', cache:'no-store'});
+    var cfg = cfgR.ok ? await cfgR.json() : {};
+    var extra = (cfg.state && cfg.state.HONEYPOT_EXTRA_PATHS) || [];
+    if(!Array.isArray(extra)) extra = [];
+    _lastPredicted.forEach(function(p){ if(extra.indexOf(p.path)===-1) extra.push(p.path); });
+    var csrf = (typeof _agwTok==='function') ? _agwTok() : (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '');
+    var res = await fetch('/antibot-appsec-gateway/secured/config', {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+      body: JSON.stringify({HONEYPOT_EXTRA_PATHS: extra})
+    });
+    if(res.ok){ btn.textContent = '✓ Trapped '+_lastPredicted.length; btn.style.color='#3fb950'; btn.style.borderColor='#3fb950'; setTimeout(function(){loadPlaybook();loadSuggest();}, 600); }
+    else { btn.textContent = orig; btn.disabled = false; }
+  } catch(e){ btn.textContent = orig; btn.disabled = false; }
+};
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+loadData();
+loadPlaybook();
+loadSuggest();
+_timers.push(setInterval(loadData, 30000));
+_timers.push(setInterval(loadPlaybook, 30000));
+_timers.push(setInterval(loadSuggest, 120000));
+</script>
+
+<!-- My Account modal JS -->
+<script>
+(function(){
+  var _userRole='admin',_username='';
+  fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
+    if(!d)return;
+    _userRole=(d.user&&d.user.role)||'admin';
+    _username=d.username||'';
+    window._acct.userRole=_userRole;
+    var ns=document.getElementById('nav-settings');
+    if(ns&&_userRole!=='admin')ns.style.display='none';
+    if(_userRole==='viewer')document.body.dataset.viewerRole='1';
+  }).catch(function(){});
+  function _openAcctModal(){document.getElementById('acct-modal').style.display='flex';_acctLoadBody();}
+  function _acctLoadBody(){
+    var b=document.getElementById('acct-body');
+    b.innerHTML='<div style="color:var(--dim)">Loading…</div>';
+    fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.json();}).then(function(d){
+      var u=d.user||{};
+      b.innerHTML=_dp('<div style="margin-bottom:12px;font-size:13px"><span style="color:var(--dim)">Signed in as</span> <b>'+escapeHtml(d.username||'')+'</b> <span style="margin-left:8px;padding:2px 6px;border-radius:3px;font-size:10px;text-transform:uppercase;background:var(--line);color:var(--fg)">'+escapeHtml(u.role||'')+'</span></div>'+
+        '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
+        '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
+        '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
+        '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
+      var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
+      _acctLoadSessions();
+    }).catch(function(){document.getElementById('acct-body').innerHTML='<div style="color:var(--red)">Failed to load.</div>';});
+  }
+  function _acctChangePw(){
+    var curPw=(document.getElementById('acct-pw-cur')||{}).value||'';
+    var pw=(document.getElementById('acct-pw-new')||{}).value||'';
+    var msg=document.getElementById('acct-pw-msg');
+    if(!curPw){if(msg)msg.textContent='Current password required';return;}
+    if(pw.length<8){if(msg)msg.textContent='Min 8 chars';return;}
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username),{method:'PATCH',credentials:'include',headers:{'Content-Type':'application/json'},body:JSON.stringify({current_password:curPw,password:pw})})
+      .then(function(r){return r.json();}).then(function(d){
+        if(msg)msg.textContent=d.error?'Error: '+d.error:'✓ Password updated';
+        if(!d.error){var ic=document.getElementById('acct-pw-cur');if(ic)ic.value='';var i=document.getElementById('acct-pw-new');if(i)i.value='';}
+      }).catch(function(){if(msg)msg.textContent='Request failed';});
+  }
+  function _acctLoadSessions(){
+    var el=document.getElementById('acct-sessions');if(!el)return;
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username)+'/sessions',{credentials:'include'})
+      .then(function(r){return r.json();}).then(function(d){
+        var sessions=(d.sessions||[]).filter(function(s){return s.status==='active';});
+        var curSid=d.current_sid||'';
+        if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
+        el.innerHTML='<table style="width:100%;font-size:11px"><thead><tr><th style="text-align:left;padding:3px 6px;color:var(--dim)">Session</th><th style="text-align:left;padding:3px 6px;color:var(--dim)">Created</th><th></th></tr></thead><tbody>'
+          +sessions.map(function(s){
+            var isCur=s.sid===curSid;
+            return '<tr><td style="padding:3px 6px;font-family:ui-monospace">'+(isCur?'<b>':'')+(s.sid||'').slice(-8)+(isCur?' (current)</b>':'')+'</td>'
+              +'<td style="padding:3px 6px;color:var(--dim)">'+(s.created_at?new Date(s.created_at*1000).toLocaleString():'—')+'</td>'
+              +'<td style="padding:3px 6px"><button data-revoke-sid="'+escapeHtml(s.sid||'')+'" style="font-size:10px;padding:1px 7px;border-radius:3px;border:1px solid var(--red);background:none;color:var(--red);cursor:pointer">Revoke</button></td></tr>';
+          }).join('')+'</tbody></table>';
+        el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
+      }).catch(function(){el.innerHTML='<div style="color:var(--red);font-size:12px">Failed to load sessions.</div>';});
+  }
+  function _acctRevokeSession(sid){
+    fetch('/antibot-appsec-gateway/secured/admin/users/'+encodeURIComponent(_username)+'/sessions/'+encodeURIComponent(sid)+'/revoke',{method:'POST',credentials:'include'})
+      .then(function(r){return r.json();}).then(function(d){if(d.self_revoke){window.location='/antibot-appsec-gateway/login';return;}_acctLoadSessions();}).catch(function(){});
+  }
+  window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession,userRole:_userRole};
+})();
+</script>
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
+</script>
+</body></html>

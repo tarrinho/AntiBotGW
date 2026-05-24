@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · Agents</title>
+<title>AppSecGW_1.8.13 · Agents</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
@@ -112,6 +112,10 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.high{background:#3d2a1a;color:var(--orange)}
 .tag.med{background:#4a3a1a;color:var(--yellow)}
 .tag.low{background:#1a3a4a;color:var(--blue)}
+html[data-theme="light"] .tag.crit{background:#ffebe9;color:#cf222e}
+html[data-theme="light"] .tag.high{background:#fff1e5;color:#bc4c00}
+html[data-theme="light"] .tag.med{background:#fff8c5;color:#9a6700}
+html[data-theme="light"] .tag.low{background:#ddf4ff;color:#0969da}
 .dim{color:var(--dim)}
 .ctrl{background:var(--bg);color:var(--fg);border:1px solid var(--line);
       border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit}
@@ -204,6 +208,8 @@ a.rsn-ctrl:hover{text-decoration:underline}
 .risk-sig .rs-meta{display:flex;gap:14px;font-size:10px;color:var(--dim);margin-bottom:6px;flex-wrap:wrap}
 .risk-sig .rs-meta span b{color:var(--fg)}
 .risk-sig .rs-bar{height:5px;background:#1a1f27;border-radius:3px;overflow:hidden}
+html[data-theme="light"] .risk-sig .rs-bar{background:var(--bg-inset)}
+html[data-theme="light"] .act.authbot{background:rgba(188,140,255,.15);color:#8250df}
 .risk-sig .rs-bar>div{height:100%;border-radius:3px;background:#f85149}
 .risk-sig .rs-sev{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px}
 .risk-sig .rs-cat{font-size:9px;font-weight:700;padding:1px 5px;border-radius:3px;letter-spacing:.4px}
@@ -253,7 +259,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
 .cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:var(--bg-deep)}
-#vhost-bar{display:none;gap:6px;margin:0 0 6px;flex-wrap:wrap;align-items:center}
+#vhost-bar{display:none;gap:6px;margin:0 0 6px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;scrollbar-width:thin;padding-bottom:2px}
 #vhost-bar-label{font-size:11px;color:var(--dim);margin-right:2px}
 .vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #58a6ff;color:#58a6ff;
   background:transparent;cursor:pointer;font-size:12px;font-weight:600;
@@ -270,7 +276,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -279,6 +285,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub active">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -404,6 +411,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </table>
   </div>
 
+
 </div>
 
 <div class="foot">refreshes every 3 s · <code id="ts"></code></div>
@@ -419,6 +427,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 </div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
 <script>
 window._applyChartColorsToInstance=function(c,theme){
@@ -464,7 +473,7 @@ if(typeof Chart!=='undefined'){
     });
   };
 }());
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
   if (/^<t[rhd]/i.test((h||'').trimStart())) {
@@ -2630,7 +2639,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.style.borderColor = c.edge;
       pill.textContent = `● GW ${s}/100`;
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }
@@ -2733,6 +2742,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 })();
 </script>
 <!-- /1.6.5 GW status pill + log-level combo -->
+
+<!-- Playbook + honey-suggest moved to honeypots.html (1.8.12) -->
 
 
 <footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>

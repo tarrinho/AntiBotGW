@@ -105,7 +105,7 @@ from config import _DATA_PATH, _POW_KEY_FILE, _SESS_KEY_FILE  # noqa: F401
 from config import check_always_body, check_verb_override, check_smuggling  # noqa: F401
 from config import (check_xxe_body, check_proto_pollution, check_header_ssti,  # noqa: F401
                     check_host_header_injection, check_file_upload)  # noqa: F401
-from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING, events_by_cat, by_path_by_cat  # noqa: F401
+from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _honeypot_ip_clusters, _GW_LOG_RING, events_by_cat, by_path_by_cat  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
 from admin.mesh import _gw_local_id  # noqa: F401
 from dashboards.service_metrics import _disk_usage  # noqa: F401
@@ -127,6 +127,12 @@ from db.sqlite import _refresh_integration_state  # noqa: F401
 _PROBE_RL: dict = {}   # ip → [window_start, count]
 PROBE_RL_LIMIT  = 20
 PROBE_RL_WINDOW = 10.0
+
+# ── 1.8.12: Honeypot fingerprint cross-reference cache ────────────────────────
+# Loaded from honey_fingerprints DB table at startup; updated on every new hit.
+# Contains JA4 hashes of confirmed-attacker identities (honeypot-silent / honey-cred).
+# Used to apply a soft risk bump to future requests sharing the same TLS fingerprint.
+_honey_fp_ja4_cache: set = set()
 
 # SH-3 — PoW issue endpoint rate limiter + idempotent cache.
 # Prevents CPU exhaustion from rapid challenge-farming (each challenge
@@ -198,6 +204,7 @@ async def dlp_patterns_get(request: web.Request):
                                   headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def dlp_patterns_post(request: web.Request):
     """POST /secured/dlp-patterns — add a new DLP pattern."""
     if not _internal_authed(request):
@@ -231,6 +238,7 @@ async def dlp_patterns_post(request: web.Request):
                                   headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def dlp_patterns_delete(request: web.Request):
     """DELETE /secured/dlp-patterns?id=<id> — delete a DLP pattern."""
     if not _internal_authed(request):
@@ -362,8 +370,8 @@ HOP_BY_HOP_RESPONSE = {
     "te", "trailer", "trailers", "upgrade",
 }
 
-UPSTREAM_MAX_BODY = int(os.environ.get("UPSTREAM_MAX_BODY", str(2 * 1024 * 1024)))  # 2 MiB
-UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(8 * 1024 * 1024)))  # 8 MiB
+UPSTREAM_MAX_BODY = int(os.environ.get("UPSTREAM_MAX_BODY", str(4 * 1024 * 1024)))  # 4 MiB
+UPSTREAM_MAX_RESP = int(os.environ.get("UPSTREAM_MAX_RESP", str(17 * 1024 * 1024)))  # 17 MiB
 
 # 1.8.11 (H1): if the WAF body-scan window is smaller than the body we accept
 # and forward, an attacker can hide a payload past the scanned prefix. Warn so
@@ -1424,11 +1432,11 @@ async def thresholds_endpoint(request: web.Request):
         ("POW_CHAL_THRESHOLD",          0,   100000, "lower-is-stricter",
          "Risk score at or above which JS challenge embeds a PoW puzzle (0 = never)"),
         ("UPSTREAM_MAX_BODY",  1024, 1073741824, "lower-is-stricter",
-         "Max request body forwarded to upstream (bytes). Default 2 MiB. "
+         "Max request body forwarded to upstream (bytes). Default 4194304 (4 MiB). "
          "Keep WAF_BODY_SCAN_BYTES >= this to avoid a WAF bypass."),
         ("UPSTREAM_MAX_RESP",  1024, 1073741824, "lower-is-stricter",
-         "Max upstream response body buffered (bytes). Default 8 MiB. "
-         "Responses over this limit return 413 to the client."),
+         "Max upstream response body buffered (bytes). Default 17825792 (17 MiB). "
+         "Responses exceeding this limit return 413 to the client."),
     ]
     g = globals()
     out = []
@@ -2257,7 +2265,9 @@ def _upstream_safe_to_reload(v: str) -> bool:
     # Inline private-IP guard so the check honours the LOCAL flag, not
     # vhost._cfg.ALLOW_PRIVATE_UPSTREAM (a separate module-level copy).
     try:
-        import urllib.parse as _up, socket as _sock, ipaddress as _ipa
+        import urllib.parse as _up
+        import socket as _sock
+        import ipaddress as _ipa
         from vhost import _PRIVATE_NETS
         _host = _up.urlparse(v).hostname
         if not _host:
@@ -2293,7 +2303,9 @@ def _ssrf_guard_url(url: str, label: str = "", allow_loopback: bool = False) -> 
     """
     if globals().get("ALLOW_PRIVATE_UPSTREAM"):
         return
-    import urllib.parse as _up2, socket as _sock2, ipaddress as _ipa2
+    import urllib.parse as _up2
+    import socket as _sock2
+    import ipaddress as _ipa2
     from vhost import _PRIVATE_NETS as _PN
     parsed = _up2.urlparse(url)
     host = parsed.hostname
@@ -2467,6 +2479,7 @@ _HOT_RELOAD_KNOBS = {
     # until the container restarts.
     "STRICT_VHOST":            (_to_bool, None),
     "UPSTREAM_REWRITE_BASE":   (str, lambda v: len(v) <= 2048 and (v == "" or v.startswith(("http://", "https://")))),
+    "SERVICE_OWNER":          (str, lambda v: len(v) <= 128),
     "DB_BACKEND":             (str, lambda v: v in ("sqlite", "postgres")),
     "POSTGRES_DSN":           (str, lambda v: len(v) <= 1024),
     # 1.6.5 — escalation threshold (cost gate for expensive / 3rd-order detectors)
@@ -2547,6 +2560,8 @@ _HOT_RELOAD_KNOBS = {
     # Stored as the *extra* paths only; the post-apply hook below merges
     # them into HONEYPOT_PATHS so the live detection set is updated.
     "HONEYPOT_EXTRA_PATHS": (_to_path_list, None),
+    # 1.8.12 — honeypot learning subsystem knobs
+    "HONEYPOT_CLUSTER_THRESHOLD": (int, lambda v: 2 <= v <= 100),
     # 1.8.11 QW-6 — behavioral detector thresholds
     "BEHAVIORAL_SAMPLE_N":          (int,   lambda v: 4 <= v <= 100),
     "BEHAVIORAL_COV_THRESHOLD":     (float, lambda v: 0.0 < v <= 1.0),
@@ -2581,7 +2596,7 @@ _HOT_RELOAD_KNOBS = {
 _NOT_PERSIST_KNOBS: frozenset = frozenset({"BYPASS_MODE"})
 
 _ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE", "UPSTREAM",
-                    "ALLOW_PRIVATE_UPSTREAM"}
+                    "ALLOW_PRIVATE_UPSTREAM", "SERVICE_OWNER"}
 
 
 def _env_knob_is_provided(k: str) -> bool:
@@ -2698,7 +2713,8 @@ async def csrf_endpoint(request: web.Request):
     if not sid:
         return web.json_response({"error": "auth"}, status=401,
                                  headers={"Cache-Control": "no-store"})
-    import hmac as _hm_c, hashlib as _hh_c
+    import hmac as _hm_c
+    import hashlib as _hh_c
     token = _hm_c.new(SESSION_KEY, sid.encode(), _hh_c.sha256).hexdigest()[:32]
     return web.json_response({"token": token}, headers={"Cache-Control": "no-store"})
 
@@ -3704,10 +3720,40 @@ async def protect(request: web.Request, handler):
                      request_id=rid, method=request.method)
         return resp
 
+    # 1.8.12 F3 — Honey fingerprint cross-reference: soft-flag requests whose JA4
+    # TLS fingerprint matches a previously confirmed attacker (honeypot-silent /
+    # honey-cred hit). Low weight (15) — it's a soft signal, not a ban on its own.
+    if _honey_fp_ja4_cache and ja4 and ja4 in _honey_fp_ja4_cache:
+        await update_risk_and_maybe_ban(track_key, "honey-fp-match", ip)
+
     # 2. Honeypot → risk_score += 50 (potential ban). Silent decoy regardless.
     #    Threshold-based: at NAT-like IPs, requires accumulated badness.
     if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
         await update_risk_and_maybe_ban(track_key, "honeypot-silent", ip)
+        # 1.8.12 F2 — Cross-identity clustering: N distinct IPs on same trap path
+        # within a 5-minute window → coordinated scan signal on the latest hitter.
+        _hp_bucket = int(_t.time() / 300)
+        _hp_ck = (request.path, _hp_bucket)
+        _hp_cluster = _honeypot_ip_clusters.setdefault(_hp_ck, set())
+        _hp_cluster.add(ip)
+        if len(_hp_cluster) >= vc('HONEYPOT_CLUSTER_THRESHOLD'):
+            await update_risk_and_maybe_ban(track_key, "coordinated-honeypot", ip)
+        if len(_honeypot_ip_clusters) > 5000:
+            _hp_now_bucket = int(_t.time() / 300)
+            for _hp_k in list(_honeypot_ip_clusters):
+                if _hp_k[1] < _hp_now_bucket - 3:
+                    _honeypot_ip_clusters.pop(_hp_k, None)
+        # 1.8.12 F3 — Persist attacker fingerprint for cross-reference.
+        if db_queue is not None:
+            _hp_asn = locals().get("asn", "") or ""
+            try:
+                db_queue.put_nowait(("honey_fp_add",
+                    (_t.time(), track_key, ip, ua, ja4 or "", str(_hp_asn),
+                     request.path, "honeypot-silent")))
+            except Exception:
+                pass
+        if ja4:
+            _honey_fp_ja4_cache.add(ja4)
         return await _silent_decoy_response(
             ip, ua, path, "honeypot-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
@@ -4220,6 +4266,17 @@ async def honey_probe_endpoint(request: web.Request):
                 # Ban the requester's own identity, NOT the issued-for identity.
                 req_identity = request.get("_track_key") or get_identity(request)[0]
                 await update_risk_and_maybe_ban(req_identity, "honey-cred", ip)
+                # 1.8.12 F3 — Persist attacker fingerprint; cross-reference future requests.
+                _hc_ja4 = _request_ja4(request)
+                if db_queue is not None:
+                    try:
+                        db_queue.put_nowait(("honey_fp_add",
+                            (_t.time(), req_identity, ip, ua, _hc_ja4 or "", "",
+                             request.path, "honey-cred")))
+                    except Exception:
+                        pass
+                if _hc_ja4:
+                    _honey_fp_ja4_cache.add(_hc_ja4)
     # Bland 200 response — never 403/404, would tell the agent its probe failed
     return web.Response(
         status=200,
@@ -5644,6 +5701,191 @@ async def bulk_unban_endpoint(request: web.Request):
     )
 
 
+# ── 1.8.12: Honeypot learning subsystem ──────────────────────────────────────
+
+async def _load_honey_fp_cache() -> None:
+    """Load confirmed-attacker JA4 fingerprints from honey_fingerprints table
+    into the in-process cache at startup. Best-effort; failures are non-fatal."""
+    try:
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBPATH
+        conn = _sq.connect(_DBPATH)
+        rows = conn.execute(
+            "SELECT DISTINCT ja4 FROM honey_fingerprints "
+            "WHERE ja4 IS NOT NULL AND ja4 != ''"
+        ).fetchall()
+        conn.close()
+        for (j,) in rows:
+            if j:
+                _honey_fp_ja4_cache.add(j)
+        if _honey_fp_ja4_cache:
+            slog("honey_fp_cache_loaded", count=len(_honey_fp_ja4_cache))
+    except Exception:
+        pass
+
+
+# Known scanner probe sequences. If an IP's honeypot hits cover ≥2 of a
+# scanner's signature paths, we label it in the Attack Playbook view.
+_SCANNER_SEQUENCES: dict = {
+    "nuclei":         {"/.git/config", "/.git/HEAD", "/phpinfo.php",
+                       "/.env", "/actuator/health", "/server-status"},
+    "wpscan":         {"/wp-login.php", "/wp-json/wp/v2/users",
+                       "/xmlrpc.php", "/wp-includes/", "/wp-admin/"},
+    "spring-boot":    {"/actuator/env", "/actuator/health",
+                       "/actuator/mappings", "/actuator/beans"},
+    "dirbuster":      {"/.htaccess", "/.htpasswd", "/backup.sql",
+                       "/config.php", "/db.sql", "/dump.sql"},
+    "generic-recon":  {"/phpmyadmin/", "/manager/html", "/console/",
+                       "/admin.php", "/administrator/", "/cpanel/"},
+}
+
+# 1.8.11 — Attack Playbook: honeypot/trap catches grouped by technique, for the
+# educational panel at the bottom of the Agents dashboard.
+_PLAYBOOK_REASONS = [
+    "honeypot", "honeypot-silent", "bot-trap",
+    "honey-cred", "canary-echo", "canary-probe-miss",
+]
+_PLAYBOOK_REASON_SET = frozenset(_PLAYBOOK_REASONS)
+_PLAYBOOK_ROW_CAP = 6000   # whole-query cap across all reasons
+
+
+async def attack_playbook_endpoint(request: web.Request):
+    """GET /secured/attack-playbook?mins=1440 — honeypot/trap hits grouped by
+    technique, each with example caught requests (METHOD path). Read-only
+    teaching view; auth enforced by the admin dispatch gate."""
+    from collections import defaultdict as _dd
+    try:
+        mins = int(request.query.get("mins", "1440"))
+    except (TypeError, ValueError):
+        mins = 1440
+    mins = max(5, min(mins, 10080))   # 5 min … 7 days
+    now = _t.time()
+    start = now - mins * 60
+
+    # Single exact-set query (reason IN …) — avoids the LIKE prefix bleed where
+    # "honeypot" also matched "honeypot-silent", and the per-reason round-trips.
+    try:
+        rows = await db_read_events_async(   # #3: off the event loop
+            start, now,
+            columns=["ts", "ip", "method", "path", "reason"],
+            reason_in=_PLAYBOOK_REASONS, order_by="ts DESC",
+            limit=_PLAYBOOK_ROW_CAP,
+        )
+    except Exception:
+        rows = []
+    capped = len(rows) >= _PLAYBOOK_ROW_CAP
+
+    groups_by_reason: dict = {}
+    ip_paths: dict = _dd(set)   # full per-IP path set (all rows, for scanner match)
+    for r in rows:
+        rs = r.get("reason")
+        if rs not in _PLAYBOOK_REASON_SET:   # belt-and-suspenders vs SQL filter
+            continue
+        m = (r.get("method") or "GET").upper()
+        p = (r.get("path") or "/")[:200]
+        ip = r.get("ip", "")
+        if ip and p:
+            ip_paths[ip].add(p)
+        g = groups_by_reason.get(rs)
+        if g is None:                        # first row is newest (ts DESC)
+            g = groups_by_reason[rs] = {
+                "reason": rs, "count": 0, "capped": capped,
+                "examples": [], "last_ts": r.get("ts", 0), "_seen": set(),
+            }
+        g["count"] += 1
+        if (m, p) not in g["_seen"] and len(g["examples"]) < 6:
+            g["_seen"].add((m, p))
+            g["examples"].append({"method": m, "path": p,
+                                  "ip": ip, "ts": r.get("ts", 0)})
+    groups = []
+    for g in groups_by_reason.values():
+        g.pop("_seen", None)
+        groups.append(g)
+    groups.sort(key=lambda g: -g["count"])
+
+    # 1.8.12 F4 — Probe sequence analysis: detect known scanner tools by matching
+    # each IP's *complete* honeypot path set against signature path sets.
+    scanner_hits = []
+    for sip, spaths in ip_paths.items():
+        for sname, ssigs in _SCANNER_SEQUENCES.items():
+            matched = sorted(spaths & ssigs)
+            if len(matched) >= 2:
+                scanner_hits.append({"ip": sip, "scanner": sname,
+                                     "matched": matched})
+
+    # 1.8.12 F5 — Predicted next probes: once a tool is fingerprinted, the
+    # signature paths it has NOT hit yet are what it will likely request next.
+    # Surface them (minus paths already trapped) so the operator can trap ahead
+    # of the scan. A path implied by more tools ranks higher.
+    try:
+        _active_traps = set(vc("HONEYPOT_PATHS") or [])
+    except Exception:
+        _active_traps = set()
+    _pred: dict = {}
+    for _sh in scanner_hits:
+        _remaining = _SCANNER_SEQUENCES.get(_sh["scanner"], set()) - ip_paths.get(_sh["ip"], set())
+        for _p in _remaining:
+            if _p in _active_traps:
+                continue
+            _pred.setdefault(_p, set()).add(_sh["scanner"])
+    predicted_probes = sorted(
+        ({"path": p, "tools": sorted(t)} for p, t in _pred.items()),
+        key=lambda x: (-len(x["tools"]), x["path"]))
+
+    return web.json_response(
+        {"groups": groups, "scanner_hits": scanner_hits,
+         "predicted_probes": predicted_probes,
+         "mins": mins, "ts": int(now)},
+        headers={"Cache-Control": "no-store"})
+
+
+async def honey_suggest_endpoint(request: web.Request):
+    """1.8.12 F1 — GET /secured/honey-suggest?mins=10080&limit=20&min_hits=3
+    Returns the top-N paths frequently probed by scanners (any event type)
+    that are NOT already in the active honeypot trap set. Operators can
+    one-click promote a suggestion into HONEYPOT_EXTRA_PATHS via the UI."""
+    import time as _ht
+    try:
+        mins  = max(60, min(int(request.query.get("mins",  "10080")), 43200))
+        limit = max(5,  min(int(request.query.get("limit", "20")),    100))
+        min_hits = max(1, min(int(request.query.get("min_hits", "3")), 1000))
+    except (TypeError, ValueError):
+        mins, limit, min_hits = 10080, 20, 3
+
+    now_ts = _ht.time()
+    start_ts = now_ts - mins * 60
+    current_traps = vc("HONEYPOT_PATHS") | set()   # copy
+
+    candidates: list = []
+    try:
+        import sqlite3 as _sq
+        from config import DB_PATH as _DBPATH
+        conn = _sq.connect(_DBPATH)
+        rows = conn.execute(
+            "SELECT path, COUNT(*) AS n FROM events "
+            "WHERE ts >= ? AND path != '' "
+            "GROUP BY path ORDER BY n DESC LIMIT 500",
+            (start_ts,),
+        ).fetchall()
+        conn.close()
+        for path_val, cnt in rows:
+            if not path_val or path_val in current_traps:
+                continue
+            if cnt < min_hits:
+                break
+            candidates.append({"path": path_val, "hits": cnt})
+            if len(candidates) >= limit:
+                break
+    except Exception as _e:
+        slog("honey_suggest_error", level="warn", error=str(_e))
+
+    return web.json_response(
+        {"candidates": candidates, "current_trap_count": len(current_traps),
+         "mins": mins, "ts": int(now_ts)},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 # Each entry annotated with the runtime-toggle knob (if any) that
 # controls whether the detector runs. UI uses this to render a switch
 # next to the weight, merging the old "Toggles" and "Bot scoring
@@ -5705,6 +5947,9 @@ SIGNAL_KNOB = {
     # 1.5.4: 11 new per-detector kill-switches
     "honeypot":           "HONEYPOT_ENABLED",
     "honeypot-silent":    "HONEYPOT_ENABLED",
+    # 1.8.12 — honeypot learning subsystem (both gated by HONEYPOT_ENABLED)
+    "coordinated-honeypot": "HONEYPOT_ENABLED",
+    "honey-fp-match":       "HONEYPOT_ENABLED",
     "suspicious-path":    "SUSPICIOUS_PATH_ENABLED",
     "ai-probe":           "AI_PROBE_ENABLED",
     "ua-empty":           "UA_FILTER_ENABLED",
@@ -6543,8 +6788,8 @@ async def geo_drill_endpoint(request: web.Request):
 
     try:
         # 1.8.8 — backend-aware read (was sqlite3.connect(DB_PATH) hardcoded)
-        from db import db_read_events
-        rows = db_read_events(
+        from db import db_read_events_async
+        rows = await db_read_events_async(   # #3: off the event loop
             start_epoch, end_epoch,
             columns=["ip", "ua", "path", "reason", "ts"],
             limit=200000,
@@ -6680,7 +6925,7 @@ async def logs_data_endpoint(request: web.Request):
             # (method/ip_type) without paginating multiple SQL queries.
             sql_cap = max(limit * 4, 1000) if (method_filter != "all" or
                                                  iptype_filter != "all") else limit
-            rows = db_read_events(
+            rows = await db_read_events_async(   # #3: off the event loop
                 0, 0,  # no time bound — latest N rows
                 columns=["id", "ts", "ip", "ua", "path", "status", "reason"],
                 vhost=vhost_filter,
@@ -6986,8 +7231,8 @@ async def agents_bucket_detail_endpoint(request: web.Request):
         # SQLite queries (was: sqlite3.connect(DB_PATH) hardcoded × 3 with
         # different WHERE clauses). One bucket window is typically ~60s wide
         # so row count is bounded.
-        from db import db_read_events
-        all_rows = db_read_events(
+        from db import db_read_events_async
+        all_rows = await db_read_events_async(   # #3: off the event loop
             t, end,
             columns=["ip", "ua", "path", "reason", "status"],
             limit=60000,

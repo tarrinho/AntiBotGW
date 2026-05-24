@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.11"
+GW_VERSION = "AppSecGW_1.8.13"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -865,6 +865,9 @@ RISK_WEIGHTS = {
     "bot-scroll":              15,
     "scripted-keys":           15,
     "low-entropy-input":       15,
+    # 1.8.12 — honeypot learning subsystem
+    "coordinated-honeypot":    30,   # N IPs hit same trap path in 5-min window
+    "honey-fp-match":          15,   # JA4 matches a confirmed-attacker fingerprint
 }
 
 # ── 1.8.6 — Credential stuffing detection config ─────────────────────────────
@@ -1014,6 +1017,9 @@ def _to_bool_default_true(v):
     return s in ("1", "true", "yes", "on")
 
 HONEYPOT_ENABLED          = _to_bool_default_true(os.environ.get("HONEYPOT_ENABLED", "1"))
+# Minimum distinct source IPs hitting the same trap path in a 5-minute window
+# before a "coordinated-honeypot" risk bump fires on each new hitter.
+HONEYPOT_CLUSTER_THRESHOLD = int(os.environ.get("HONEYPOT_CLUSTER_THRESHOLD", "3"))
 SUSPICIOUS_PATH_ENABLED   = _to_bool_default_true(os.environ.get("SUSPICIOUS_PATH_ENABLED", "1"))
 AI_PROBE_ENABLED          = _to_bool_default_true(os.environ.get("AI_PROBE_ENABLED", "1"))
 UA_FILTER_ENABLED         = _to_bool_default_true(os.environ.get("UA_FILTER_ENABLED", "1"))
@@ -1046,7 +1052,8 @@ SECURITY_HEADERS: dict = {
         "magnetometer=(), microphone=(), payment=(), usb=()"),
     "Strict-Transport-Security": os.environ.get("SEC_HSTS",
         "max-age=31536000; includeSubDomains"),
-    "Content-Security-Policy":   os.environ.get("SEC_CSP", ""),
+    "Content-Security-Policy":   os.environ.get("SEC_CSP",
+        "upgrade-insecure-requests; frame-ancestors 'self'"),
     "Cross-Origin-Opener-Policy":   os.environ.get("SEC_COOP", "same-origin"),
     "Cross-Origin-Resource-Policy": os.environ.get("SEC_CORP", "same-site"),
 }
@@ -1055,6 +1062,11 @@ SECURITY_HEADERS: dict = {
 # relative paths so images/links load through the proxy and satisfy the CSP).
 # Example: UPSTREAM_REWRITE_BASE=http://host.docker.internal:8093
 UPSTREAM_REWRITE_BASE: str = os.environ.get("UPSTREAM_REWRITE_BASE", "").rstrip("/")
+
+# 1.8.11 — operator-set service owner, shown in the dashboard footer notes.
+# Hot-reloadable + persisted to config_kv (SQLite + Postgres). Empty = no note.
+# Set via Settings → Config; env var is only the cold-start default (UI wins).
+SERVICE_OWNER: str = os.environ.get("SERVICE_OWNER", "").strip()
 
 BODY_TIMEOUT           = float(os.environ.get("BODY_TIMEOUT",           "30"))
 SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S",   "120"))
@@ -1129,12 +1141,12 @@ JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
 # ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────────
 # 1.8.11 security fix (H1): the body inspectors used to scan only the first
 # 64 KiB of the request body while the proxy accepts and forwards up to
-# UPSTREAM_MAX_BODY (2 MiB by default). An attacker could prepend 64 KiB of
+# UPSTREAM_MAX_BODY (4 MiB by default). An attacker could prepend 64 KiB of
 # padding and smuggle any SQLi/XSS/RCE/XXE/GraphQL payload past the entire WAF.
 # WAF_BODY_SCAN_BYTES now defaults to the full accepted body so there is no
 # unscanned tail. Keep this >= UPSTREAM_MAX_BODY; lowering it re-opens the
 # padding bypass (a startup check in proxy.py warns if it is smaller).
-WAF_BODY_SCAN_BYTES = int(os.environ.get("WAF_BODY_SCAN_BYTES", str(2 * 1024 * 1024)))
+WAF_BODY_SCAN_BYTES = int(os.environ.get("WAF_BODY_SCAN_BYTES", str(4 * 1024 * 1024)))
 BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
 SUSPICIOUS_BODY_PATTERNS = (
     # Legacy catch-all set kept for backwards compatibility with the

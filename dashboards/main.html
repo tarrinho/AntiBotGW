@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.11 · Live Feed</title>
+<title>AppSecGW_1.8.13 · Live Feed</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
       --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
@@ -46,8 +46,11 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 #topbar-right{display:flex;align-items:center;gap:8px}
 #vhost-select{background:var(--card);border:1px solid var(--line);color:var(--fg);
   border-radius:5px;padding:4px 10px;font-size:12px;font-family:inherit;cursor:pointer;
-  display:none;max-width:260px}
+  display:none;max-width:220px}
 #vhost-select:focus{outline:none;border-color:var(--blue)}
+#vhost-search-inp{display:none;background:var(--card);border:1px solid var(--line);color:var(--fg);
+  border-radius:5px;padding:4px 8px;font-size:12px;font-family:inherit;width:110px}
+#vhost-search-inp:focus{outline:none;border-color:var(--blue)}
 /* ── Page content ── */
 #page-content{flex:1;padding:14px}
 .btn-unban{background:var(--yellow);color:#000;border:none;padding:3px 9px;
@@ -105,6 +108,15 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
 .tag.authorized-robot{background:#2d1a4a;color:#bc8cff}
 .tag.gwmgmt-tag{background:#0d2340;color:#e4f0ff}
+/* light-theme tag overrides — pale bg + darker fg (dark defaults above stay dark) */
+html[data-theme="light"] .tag.OK{background:#e6f6ec;color:#1a7f37}
+html[data-theme="light"] .tag.banned,html[data-theme="light"] .tag.ua-blocked,html[data-theme="light"] .tag.ua-empty,html[data-theme="light"] .tag.ua-too-short,html[data-theme="light"] .tag.ua-non-browser{background:#fff8c5;color:#9a6700}
+html[data-theme="light"] .tag.really-banned,html[data-theme="light"] .tag.rate-limit{background:#ffebe9;color:#cf222e}
+html[data-theme="light"] .tag.honeypot,html[data-theme="light"] .tag.pow-required,html[data-theme="light"] .tag.ai-probe,html[data-theme="light"] .tag.ai-headers-incomplete,html[data-theme="light"] .tag.ai-headers-empty,html[data-theme="light"] .tag.banned-silent,html[data-theme="light"] .tag.honeypot-silent,html[data-theme="light"] .tag.authorized-robot{background:#f3e8ff;color:#8250df}
+html[data-theme="light"] .tag.behavior{background:#ddf4ff;color:#0e7490}
+html[data-theme="light"] .tag.ai-enumeration,html[data-theme="light"] .tag.ai-no-assets{background:#ffeff7;color:#bf3989}
+html[data-theme="light"] .tag.gwmgmt-tag{background:#ddf4ff;color:#0969da}
+html[data-theme="light"] .act.authbot{background:rgba(188,140,255,.15);color:#8250df}
 .info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
   border-radius:50%;border:1px solid var(--dim);color:var(--dim);font-size:9px;font-weight:700;
   cursor:default;margin-left:6px;vertical-align:middle;line-height:1;font-style:normal;
@@ -312,7 +324,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.11</div>
+      <div id="sidebar-brand-ver">1.8.13</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -321,6 +333,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub active">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
     <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
@@ -340,6 +353,8 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <div id="topbar">
     <div id="topbar-title">Live Feed <span class="pill" id="live">● LIVE</span></div>
     <div id="topbar-right">
+      <input id="vhost-search-inp" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none"
+        oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-select').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
       <select id="vhost-select">
         <option value="">All vhosts</option>
       </select>
@@ -540,7 +555,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         Apply
       </button>
       <button id="rps-disable"
-              style="background:#30363d;color:var(--fg);border:none;padding:7px 12px;border-radius:5px;cursor:pointer">
+              style="background:var(--bg-hover);color:var(--fg);border:none;padding:7px 12px;border-radius:5px;cursor:pointer">
         Disable
       </button>
     </div>
@@ -808,6 +823,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <div class="foot">refreshes every 2s · <code id="ts"></code></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
 <script>
 window._applyChartColorsToInstance=function(c,theme){
@@ -879,6 +895,8 @@ function _syncVhostSelect() {
     [].slice.call(sel.options).forEach(function(o){if(o.value&&!fresh.has(o.value))o.remove();});
     if(cur) sel.value=cur;
     sel.style.display='block';
+    var _si=document.getElementById('vhost-search-inp');
+    if(_si) _si.style.display=allHosts.length>=8?'inline-block':'none';
   });
 }
 document.addEventListener('DOMContentLoaded', function() {
@@ -1506,9 +1524,11 @@ function refreshControls() {
 refreshControls();
 
 async function tick() {
-  // M2 — show fetching state so user knows the page is live
-  const _liveElPre = document.getElementById('live');
-  if (_liveElPre) { _liveElPre.textContent = '↻ …'; _liveElPre.style.background = 'var(--dim)'; }
+  // M2 — show fetching state only if fetch is slow (>400ms); avoids flicker on fast connections
+  const _liveEl0 = document.getElementById('live');
+  let _liveTimer = _liveEl0 ? setTimeout(() => {
+    _liveEl0.textContent = '↻ …'; _liveEl0.style.background = 'var(--dim)';
+  }, 400) : null;
   try {
     const params = new URLSearchParams({
       range:  getRangeMin().toString(),
@@ -1521,6 +1541,7 @@ async function tick() {
     if (_activeCats.length && _activeCats.length < 5) params.set('cats', _activeCats.join(','));
     const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString() + window._vhostParam(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
+    clearTimeout(_liveTimer);
     const _liveEl = document.getElementById('live');
     _liveEl.style.background='var(--green)';
     _liveEl.textContent='● LIVE';
@@ -1732,6 +1753,7 @@ async function tick() {
 
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch (err) {
+    clearTimeout(_liveTimer);
     const _errEl = document.getElementById('live');
     _errEl.style.background='var(--red)';
     _errEl.textContent='○ ERR';
@@ -1740,7 +1762,7 @@ async function tick() {
     document.getElementById('stale-banner').classList.add('show');
   }
 }
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 function _gwAlert(msg){var d=document.createElement('div');d.textContent=msg;d.style.cssText='position:fixed;top:16px;right:16px;z-index:99999;background:var(--card,#161b22);border:1px solid var(--red,#f85149);color:var(--fg,#c9d1d9);padding:10px 16px;border-radius:6px;font-size:13px;max-width:360px;word-break:break-word';document.body.appendChild(d);setTimeout(()=>d.remove(),7000);}
 const _timers=[];
 function _cidrContains(cidr, ip){
@@ -3204,7 +3226,7 @@ function colorFor(score){
       pill.style.borderColor = c.edge;
       pill.textContent = `● Health ${s}/100`;
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }
@@ -3743,16 +3765,18 @@ function colorFor(score){
   }
 
   function _quickActions(rec) {
-    var ip = rec.ip;
+    // NOTE: inline onclick= is stripped by _dp (DOMPurify); use data-attrs +
+    // delegated listeners bound after _dp(rows) is inserted (see _renderLeaderboard).
+    var ip = escapeHtml(rec.ip);
     var btns = '';
     if (!rec.is_banned) {
-      btns += '<button onclick="_attackerBan(' + JSON.stringify(ip) + ',86400)" title="IP ban 24h" '
+      btns += '<button class="qa-btn" data-qa="ban" data-ip="' + ip + '" title="IP ban 24h" '
         + 'style="font-size:9px;padding:2px 5px;background:rgba(248,81,73,0.15);color:var(--red);border:1px solid var(--red);border-radius:3px;cursor:pointer;white-space:nowrap">Ban</button> ';
     } else {
-      btns += '<button onclick="_attackerUnban(' + JSON.stringify(ip) + ')" title="Unban" '
+      btns += '<button class="qa-btn" data-qa="unban" data-ip="' + ip + '" title="Unban" '
         + 'style="font-size:9px;padding:2px 5px;background:rgba(63,185,80,0.15);color:var(--green);border:1px solid var(--green);border-radius:3px;cursor:pointer;white-space:nowrap">Unban</button> ';
     }
-    btns += '<button onclick="_attackerChallenge(' + JSON.stringify(ip) + ')" title="Force challenge" '
+    btns += '<button class="qa-btn" data-qa="chal" data-ip="' + ip + '" title="Force challenge" '
       + 'style="font-size:9px;padding:2px 5px;background:rgba(210,153,34,0.15);color:var(--yellow);border:1px solid var(--yellow);border-radius:3px;cursor:pointer;white-space:nowrap">Chal</button> ';
     return btns;
   }
@@ -3776,7 +3800,7 @@ function colorFor(score){
       var flag = rec.flag || '';
 
       return '<tr style="border-bottom:1px solid var(--line)">'
-        + '<td style="padding:4px 6px;white-space:nowrap"><span style="font:700 11px ui-monospace,Menlo,monospace;cursor:pointer" title="Click to copy" onclick="navigator.clipboard&&navigator.clipboard.writeText(' + JSON.stringify(rec.ip) + ')">'
+        + '<td style="padding:4px 6px;white-space:nowrap"><span class="ip-copy" data-ip="' + escapeHtml(rec.ip) + '" style="font:700 11px ui-monospace,Menlo,monospace;cursor:pointer" title="Click to copy">'
         + escapeHtml(rec.ip) + '</span></td>'
         + '<td style="padding:4px 6px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(orgDisplay) + '">'
         + escapeHtml(orgDisplay) + hostingBadge + '</td>'
@@ -3794,6 +3818,20 @@ function colorFor(score){
         + '</tr>';
     }).join('');
     tbody.innerHTML = _dp(rows);
+    // _dp (DOMPurify) strips inline onclick — bind the quick-actions + copy here.
+    tbody.querySelectorAll('.qa-btn').forEach(function(b){
+      b.addEventListener('click', function(){
+        var ip = b.dataset.ip, a = b.dataset.qa;
+        if (a === 'ban') _attackerBan(ip, 86400);
+        else if (a === 'unban') _attackerUnban(ip);
+        else if (a === 'chal') _attackerChallenge(ip);
+      });
+    });
+    tbody.querySelectorAll('.ip-copy').forEach(function(s){
+      s.addEventListener('click', function(){
+        if (navigator.clipboard) navigator.clipboard.writeText(s.dataset.ip);
+      });
+    });
   }
 
   function loadTopAttackers() {
