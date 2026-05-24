@@ -113,16 +113,6 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
-def _csrf_hdr(proxy_module, cookie):
-    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
-    import hashlib, hmac as _hmac
-    if isinstance(cookie, dict):
-        cookie = next(iter(cookie.values()))
-    sid = cookie.split("|")[1]
-    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
-    return {"X-CSRF-Token": token}
-
-
 def _audit_rows(proxy_module, action=None):
     """Query gw_audit table directly; optionally filter by action."""
     conn = sqlite3.connect(proxy_module.DB_PATH)
@@ -181,25 +171,10 @@ def _make_config_zip(knobs: dict) -> bytes:
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_table():
-    import sys, proxy as _p
+    import proxy as _p
     _wipe_audit(_p)
-    # Snapshot hot-reloadable knobs that config-endpoint tests modify so they
-    # don't leak into later tests (config_endpoint propagates to all modules).
-    import config as _cfg
-    _snap = {k: getattr(_cfg, k) for k in dir(_cfg)
-             if not k.startswith("_") and isinstance(getattr(_cfg, k), (int, float, bool, str, list))}
     yield
     _wipe_audit(_p)
-    # Restore snapshotted config values across all loaded modules.
-    for k, v in _snap.items():
-        if getattr(_cfg, k, None) != v:
-            setattr(_cfg, k, v)
-            for _m in list(sys.modules.values()):
-                if _m is not None and _m is not _cfg and hasattr(_m, k):
-                    try:
-                        setattr(_m, k, v)
-                    except (AttributeError, TypeError):
-                        pass
 
 
 # ── U1: gw_audit table schema ─────────────────────────────────────────────────
@@ -415,8 +390,7 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 75},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie},
-                                     headers=_csrf_hdr(proxy_module, cookie))
+                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
                     assert "RISK_BAN_THRESHOLD" in d.get("applied", {}), \
@@ -434,8 +408,7 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 30},
-                                 cookies={proxy_module._SESSION_COOKIE: cookie},
-                                 headers=_csrf_hdr(proxy_module, cookie))
+                                 cookies={proxy_module._SESSION_COOKIE: cookie})
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
                     assert rows, "expected audit row"
@@ -450,8 +423,7 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 42},
-                                 cookies={proxy_module._SESSION_COOKIE: cookie},
-                                 headers=_csrf_hdr(proxy_module, cookie))
+                                 cookies={proxy_module._SESSION_COOKIE: cookie})
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
                     assert rows, "expected at least one config_change audit row"
@@ -470,8 +442,7 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RATE_LIMIT_BURST": 25, "IP_BURST": 40},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie},
-                                     headers=_csrf_hdr(proxy_module, cookie))
+                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     n_applied = len((await r.json()).get("applied", {}))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
@@ -487,8 +458,7 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"TOTALLY_FAKE_KNOB_XYZ_999": True},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie},
-                                     headers=_csrf_hdr(proxy_module, cookie))
+                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert "TOTALLY_FAKE_KNOB_XYZ_999" in d.get("rejected", {}), \
                         "precondition: unknown knob must be rejected"
@@ -516,7 +486,6 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "audit-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
-                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200, f"POST /vhosts returned {r.status}"
@@ -536,7 +505,6 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "actor-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
-                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -557,7 +525,6 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "detail-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
-                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -581,7 +548,6 @@ class TestF2VhostsEndpointAudit:
                     r = await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "del-audit.example.com"},
-                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200, f"DELETE /vhosts returned {r.status}"
@@ -600,7 +566,6 @@ class TestF2VhostsEndpointAudit:
                     await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "delactor.example.com"},
-                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -620,7 +585,6 @@ class TestF2VhostsEndpointAudit:
                     await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "deldetail.example.com"},
-                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)

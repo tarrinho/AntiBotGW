@@ -739,7 +739,7 @@ class TestP4SharedHttpSession:
     def test_webhook_source_uses_get_session(self):
         """webhook delivery must use _get_session() (shared session reuse)."""
         import integrations.webhook as wh
-        # 1.8.6: delivery moved to _webhook_worker (queue+retry); _get_session()
+        # 1.8.5: delivery moved to _webhook_worker (queue+retry); _get_session()
         # is still called there — check the worker instead of _post_webhook.
         worker_src = inspect.getsource(wh._webhook_worker)
         post_src = inspect.getsource(wh._post_webhook)

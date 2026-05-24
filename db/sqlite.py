@@ -79,17 +79,6 @@ _SCHEMA_MIGRATIONS: list[tuple[str, str, str | None, str | None]] = [
     ("gw_registry", "auto_apply",      "INTEGER NOT NULL DEFAULT 0",    "INTEGER NOT NULL DEFAULT 0"),
     # 1.8.0 — per-event vhost hostname for multi-vhost dashboard filtering
     ("events",      "vhost",           "TEXT DEFAULT ''",               "TEXT DEFAULT ''"),
-    # 1.8.6 — TOTP two-factor authentication columns for users table
-    ("users",       "totp_secret",     "TEXT",                          "TEXT"),
-    ("users",       "totp_enabled",    "INTEGER DEFAULT 0",             "INTEGER DEFAULT 0"),
-    ("users",       "totp_backup_codes", "TEXT",                        "TEXT"),
-    # 1.8.5 — SSO-provisioned users start in 'pending' status until an admin
-    # authorises them. sso_source records the identity provider (e.g. 'oidc').
-    ("users",       "sso_source",      "TEXT",                          "TEXT"),
-    # 1.8.5 — IdP subject claim (sub) bound on first SSO login. Used to
-    # detect username-collision attacks: an attacker cannot create a local
-    # account named 'admin' and then log in as that user via SSO.
-    ("users",       "oidc_sub",        "TEXT",                          "TEXT"),
 ]
 
 
@@ -167,18 +156,6 @@ def db_init():
         reason        TEXT,
         ts            REAL
     );
-
-    -- 1.8.12 M-4 — IP-keyed ban table that survives SESSION_KEY rotation.
-    -- Hostile/long-duration bans (>= HOSTILE_BAN_SECS) are mirrored here
-    -- keyed by raw client IP, not by track_key.  protect() checks this table
-    -- before identity derivation so a rotated key cannot free a hostile ban.
-    CREATE TABLE IF NOT EXISTS ip_bans (
-        ip            TEXT PRIMARY KEY,
-        banned_until  REAL NOT NULL,
-        reason        TEXT,
-        ts            REAL NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_ip_bans_until ON ip_bans(banned_until);
 
     CREATE TABLE IF NOT EXISTS admin_ips (
         cidr        TEXT PRIMARY KEY,
@@ -349,19 +326,7 @@ def db_init():
     );
     CREATE INDEX IF NOT EXISTS idx_signal_orders_gw ON signal_orders(gw_id);
 
-    -- 1.8.6: DLP pattern versioning — operator-managed regex library.
-    CREATE TABLE IF NOT EXISTS dlp_patterns (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-        name      TEXT NOT NULL,
-        pattern   TEXT NOT NULL,
-        severity  TEXT NOT NULL DEFAULT 'high',
-        enabled   INTEGER NOT NULL DEFAULT 1,
-        added_ts  REAL,
-        added_by  TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_dlp_name ON dlp_patterns(name);
-
-    -- 1.8.6: structured audit log for admin operations.
+    -- 1.8.5: structured audit log for admin operations.
     CREATE TABLE IF NOT EXISTS audit_events (
         id          INTEGER PRIMARY KEY AUTOINCREMENT,
         ts          REAL NOT NULL,
@@ -376,47 +341,6 @@ def db_init():
     CREATE INDEX IF NOT EXISTS idx_audit_ts         ON audit_events(ts);
     CREATE INDEX IF NOT EXISTS idx_audit_event_type ON audit_events(event_type);
     CREATE INDEX IF NOT EXISTS idx_audit_actor      ON audit_events(actor);
-
-    -- 1.8.6: server-side SIEM alert rules and fire history.
-    CREATE TABLE IF NOT EXISTS siem_alert_rules (
-        id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        metric        TEXT NOT NULL,
-        op            TEXT NOT NULL CHECK(op IN ('>','>=','<','<=')),
-        threshold     REAL NOT NULL,
-        label         TEXT NOT NULL DEFAULT '',
-        enabled       INTEGER NOT NULL DEFAULT 1,
-        created_ts    REAL NOT NULL,
-        created_by    TEXT,
-        last_fired_ts REAL DEFAULT 0,
-        cooldown_s    INTEGER NOT NULL DEFAULT 300
-    );
-    CREATE TABLE IF NOT EXISTS siem_alert_fired (
-        id       INTEGER PRIMARY KEY AUTOINCREMENT,
-        rule_id  INTEGER NOT NULL REFERENCES siem_alert_rules(id) ON DELETE CASCADE,
-        ts       REAL NOT NULL,
-        value    REAL NOT NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_siem_alert_fired_rule
-        ON siem_alert_fired(rule_id, ts DESC);
-
-    -- 1.8.12: confirmed-attacker fingerprints from honeypot/honey-cred hits.
-    -- Every honeypot-silent and honey-cred event writes the requester's
-    -- JA4, UA, and ASN here so the WAF can soft-flag future requests that
-    -- share those attributes before they touch any trap.
-    CREATE TABLE IF NOT EXISTS honey_fingerprints (
-        id        INTEGER PRIMARY KEY AUTOINCREMENT,
-        ts        REAL NOT NULL,
-        track_key TEXT,
-        ip        TEXT NOT NULL,
-        ua        TEXT,
-        ja4       TEXT,
-        asn       TEXT,
-        path      TEXT,
-        reason    TEXT
-    );
-    CREATE INDEX IF NOT EXISTS idx_honey_fp_ts  ON honey_fingerprints(ts);
-    CREATE INDEX IF NOT EXISTS idx_honey_fp_ja4 ON honey_fingerprints(ja4);
-    CREATE INDEX IF NOT EXISTS idx_honey_fp_ip  ON honey_fingerprints(ip);
     """)
     # 1.6.7+ — additive column upgrades driven by the central registry.
     # See `_SCHEMA_MIGRATIONS` above; new releases append entries there.
@@ -516,18 +440,6 @@ async def db_writer_loop():
                           ON CONFLICT(ip) DO UPDATE SET banned_until=excluded.banned_until,
                                                         reason=excluded.reason, ts=excluded.ts
                         """, args)
-                    elif op == "ip_ban":
-                        # 1.8.12 M-4 — args = (ip, banned_until, reason, ts)
-                        conn.execute("""
-                          INSERT INTO ip_bans (ip,banned_until,reason,ts) VALUES (?,?,?,?)
-                          ON CONFLICT(ip) DO UPDATE SET
-                            banned_until=CASE WHEN excluded.banned_until > banned_until
-                                              THEN excluded.banned_until ELSE banned_until END,
-                            reason=excluded.reason, ts=excluded.ts
-                        """, args)
-                    elif op == "ip_ban_del":
-                        # args = (ip,)
-                        conn.execute("DELETE FROM ip_bans WHERE ip = ?", args)
                     elif op == "svc_metric":
                         # args is a tuple of values matching the column order.
                         # 1.6.5: appended pg_db_bytes + pg_events_rows
@@ -662,15 +574,6 @@ async def db_writer_loop():
                             args)
                         try: _pg_mirror_kv("gw_audit_add", args)
                         except Exception: pass  # nosec B110 — best-effort Postgres mirror; SQLite is source of truth
-                    elif op == "honey_fp_add":
-                        # args = (ts, track_key, ip, ua, ja4, asn, path, reason)
-                        conn.execute(
-                            "INSERT INTO honey_fingerprints "
-                            "(ts, track_key, ip, ua, ja4, asn, path, reason) "
-                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                            args)
-                        try: _pg_mirror_kv("honey_fp_add", args)
-                        except Exception: pass  # nosec B110 — best-effort Postgres mirror
                     # 1.6.7 — user accounts ───────────────────────────
                     elif op == "user_create":
                         # args = (username, password_hash, role, status,
@@ -685,19 +588,10 @@ async def db_writer_loop():
                         # args = (username, {col: val, ...})
                         username, fields = args
                         if fields:
-                            _USER_MUTABLE = frozenset({
-                                "password_hash", "role", "status",
-                                "totp_secret", "totp_enabled", "totp_backup_codes",
-                                "oidc_sub", "sso_source",
-                                "updated_ts",
-                            })
-                            bad = set(fields) - _USER_MUTABLE
-                            if bad:
-                                raise ValueError(f"user_update: unknown columns {bad}")
                             cols   = ", ".join(f"{k}=?" for k in fields)
                             params = list(fields.values()) + [username]
                             conn.execute(
-                                f"UPDATE users SET {cols} WHERE username=?",  # nosec B608 — cols validated against _USER_MUTABLE
+                                f"UPDATE users SET {cols} WHERE username=?",  # nosec B608
                                 params)
                     elif op == "user_delete":
                         # args = (username,)
@@ -754,23 +648,7 @@ async def db_writer_loop():
                             "UPDATE gw_sync_pending "
                             "SET status = ?, confirmed_ts = ? WHERE id = ?",
                             (args[1], args[2], args[0]))
-                    # 1.8.6 — DLP pattern CRUD ───────────────────────
-                    elif op == "dlp_add":
-                        # args = (name, pattern, severity, added_ts, added_by)
-                        conn.execute(
-                            "INSERT OR IGNORE INTO dlp_patterns "
-                            "(name, pattern, severity, added_ts, added_by) "
-                            "VALUES (?, ?, ?, ?, ?)",
-                            args)
-                    elif op == "dlp_toggle":
-                        # args = (enabled, id)
-                        conn.execute(
-                            "UPDATE dlp_patterns SET enabled=? WHERE id=?",
-                            args)
-                    elif op == "dlp_delete":
-                        # args = (id,)
-                        conn.execute("DELETE FROM dlp_patterns WHERE id=?", args)
-                    # 1.8.6 — admin audit log ─────────────────────────
+                    # 1.8.5 — admin audit log ─────────────────────────
                     elif op == "audit_log":
                         ts, event_type, actor, target, ip, detail_json, session_id, severity = args
                         conn.execute(
@@ -778,30 +656,6 @@ async def db_writer_loop():
                             "(ts, event_type, actor, target, ip, detail, session_id, severity) "
                             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (ts, event_type, actor, target, ip, detail_json, session_id, severity))
-                    # 1.8.6 — SIEM server-side alert rules ────────────
-                    elif op == "siem_alert_rule_add":
-                        # args = (metric, op, threshold, label, created_ts, created_by, cooldown_s)
-                        conn.execute(
-                            "INSERT INTO siem_alert_rules "
-                            "(metric, op, threshold, label, created_ts, created_by, cooldown_s) "
-                            "VALUES (?,?,?,?,?,?,?)",
-                            args)
-                    elif op == "siem_alert_rule_del":
-                        # args = (id,)
-                        conn.execute("DELETE FROM siem_alert_rules WHERE id = ?", args)
-                    elif op == "siem_alert_fired":
-                        # args = (rule_id, ts, value)
-                        conn.execute(
-                            "INSERT INTO siem_alert_fired (rule_id, ts, value) VALUES (?,?,?)",
-                            args)
-                        conn.execute(
-                            "UPDATE siem_alert_rules SET last_fired_ts = ? WHERE id = ?",
-                            (args[1], args[0]))
-                    elif op == "siem_alert_toggle":
-                        # args = (enabled, id)
-                        conn.execute(
-                            "UPDATE siem_alert_rules SET enabled = ? WHERE id = ?",
-                            args)
                 except Exception as e:
                     slog("db_write_failed", level="error", error=str(e), op=op)
             try:
@@ -827,10 +681,6 @@ async def db_writer_loop():
                     pass    # readers active, skip this cycle
                 last_vacuum = now_ts
         except asyncio.CancelledError:
-            try:
-                conn.close()
-            except Exception:
-                pass
             break
         except Exception as e:
             slog("db_loop_error", level="error", error=str(e))
@@ -855,12 +705,6 @@ _SECRET_KEYS = {
     "CROWDSEC_LAPI_URL":   ("CROWDSEC_LAPI_URL",   "CROWDSEC_LAPI_URL"),
     "CROWDSEC_LAPI_KEY":   ("CROWDSEC_API_KEY",    "CROWDSEC_LAPI_KEY"),
     "MAXMIND_LICENSE_KEY": ("MAXMIND_LICENSE_KEY", "MAXMIND_LICENSE_KEY"),
-    "OIDC_ISSUER":        ("OIDC_ISSUER",        "OIDC_ISSUER"),
-    "OIDC_CLIENT_ID":     ("OIDC_CLIENT_ID",      "OIDC_CLIENT_ID"),
-    "OIDC_CLIENT_SECRET": ("OIDC_CLIENT_SECRET",  "OIDC_CLIENT_SECRET"),
-    "OIDC_DEFAULT_ROLE":  ("OIDC_DEFAULT_ROLE",   "OIDC_DEFAULT_ROLE"),
-    "OIDC_SCOPES":        ("OIDC_SCOPES",         "OIDC_SCOPES"),
-    "POSTGRES_DSN":       ("POSTGRES_DSN",        "POSTGRES_DSN"),
 }
 
 
@@ -883,16 +727,12 @@ def _refresh_integration_state(proxy_globals: dict) -> None:
         g["TURNSTILE_ENABLED"] = True
     g["ABUSEIPDB_ENABLED"] = bool(g.get("ABUSEIPDB_KEY"))
     g["CROWDSEC_ENABLED"]  = bool(g.get("CROWDSEC_LAPI_URL") and g.get("CROWDSEC_API_KEY"))
-    g["OIDC_ENABLED"] = bool(
-        g.get("OIDC_ISSUER") and g.get("OIDC_CLIENT_ID") and g.get("OIDC_CLIENT_SECRET")
-    )
     # Propagate secrets AND derived flags to all loaded modules so that:
     #   • db_load_config validators (which read proxy_handler globals) see the
     #     real credential values before validating ABUSEIPDB_ENABLED et al.
     #   • _read_hot_reload_state() in proxy_handler returns the live values,
     #     not the config.py defaults — fixes Controls showing stale state.
     _propagate = {
-        "POSTGRES_DSN":        g.get("POSTGRES_DSN", ""),
         "ABUSEIPDB_KEY":       g.get("ABUSEIPDB_KEY", ""),
         "ABUSEIPDB_ENABLED":   g["ABUSEIPDB_ENABLED"],
         "TURNSTILE_SITEKEY":   g.get("TURNSTILE_SITEKEY", ""),
@@ -902,12 +742,6 @@ def _refresh_integration_state(proxy_globals: dict) -> None:
         "CROWDSEC_LAPI_URL":   g.get("CROWDSEC_LAPI_URL", ""),
         "CROWDSEC_API_KEY":    g.get("CROWDSEC_API_KEY", ""),
         "CROWDSEC_ENABLED":    g["CROWDSEC_ENABLED"],
-        "OIDC_ISSUER":        g.get("OIDC_ISSUER", ""),
-        "OIDC_CLIENT_ID":     g.get("OIDC_CLIENT_ID", ""),
-        "OIDC_CLIENT_SECRET": g.get("OIDC_CLIENT_SECRET", ""),
-        "OIDC_DEFAULT_ROLE":  g.get("OIDC_DEFAULT_ROLE", "viewer"),
-        "OIDC_SCOPES":        g.get("OIDC_SCOPES", "openid profile email"),
-        "OIDC_ENABLED":       g["OIDC_ENABLED"],
     }
     for _rs_m in list(_sys_rs.modules.values()):
         if _rs_m is None or _rs_m is _sys_rs.modules.get("db.sqlite"):
@@ -929,15 +763,7 @@ def db_load_secrets(proxy_globals: dict) -> None:
 
     Phase 2 note: `proxy_globals` must be the caller's globals() dict
     (i.e. proxy.py's module namespace) so secrets land in the right
-    module. When called from proxy.py the caller passes globals().
-
-    1.8.8 — also **propagate** each loaded secret across sys.modules. The
-    historical bug: db_load_secrets would set `proxy.POSTGRES_DSN` but
-    leave `core.proxy_handler.POSTGRES_DSN` and `db.postgres.POSTGRES_DSN`
-    at their import-time empty value. /db-test then returned dsn_masked=""
-    and the popup said "no saved DSN" even though the DB had the value.
-    Mirrors the patch already in `secrets_endpoint` and `db_switch_endpoint`.
-    """
+    module. When called from proxy.py the caller passes globals()."""
     try:
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
@@ -948,7 +774,6 @@ def db_load_secrets(proxy_globals: dict) -> None:
         return
     g = proxy_globals
     applied, env_pinned = 0, 0
-    loaded: list[tuple[str, str]] = []  # (global_name, value) to propagate
     for r in rows:
         public_name = r["key"]
         if public_name not in _SECRET_KEYS:
@@ -959,30 +784,11 @@ def db_load_secrets(proxy_globals: dict) -> None:
             env_pinned += 1
             continue
         g[global_name] = r["value"]
-        loaded.append((global_name, r["value"]))
         applied += 1
-    # 1.8.8 — propagate each loaded secret to every module that already has
-    # the same name bound. Critical for POSTGRES_DSN, which is referenced by
-    # `core.proxy_handler` (the /db-test handler reads it for `dsn_masked`)
-    # and `db.postgres` (pg_test_roundtrip + the migration helpers). Without
-    # this step, the popup's "Load DSN" returns "no saved DSN" because the
-    # only module that got the new value was proxy.py.
-    import sys as _sys
-    for global_name, value in loaded:
-        for _m in list(_sys.modules.values()):
-            if _m is None:
-                continue
-            if hasattr(_m, global_name):
-                try:
-                    setattr(_m, global_name, value)
-                except (AttributeError, TypeError):
-                    pass
     # Re-derive "configured" / "enabled" markers
     _refresh_integration_state(proxy_globals)
     if applied or env_pinned:
-        slog("db_secrets_loaded", level="info",
-             applied=applied, env_pinned=env_pinned,
-             propagated=len(loaded))
+        slog("db_secrets_loaded", level="info", applied=applied, env_pinned=env_pinned)
 
 
 def db_load_config(proxy_globals: dict) -> None:
@@ -1035,31 +841,12 @@ def db_load_config(proxy_globals: dict) -> None:
                     _ph.__dict__[_cred] = g[_cred]
                 except TypeError:
                     pass
-    applied, skipped, env_pinned, secret_skipped = 0, 0, 0, 0
+    applied, skipped, env_pinned = 0, 0, 0
     for r in rows:
         key = r["key"]
         spec = _HOT_RELOAD_KNOBS.get(key)
         if spec is None:
             skipped += 1
-            continue
-        # 1.8.8 — secrets are owned by db_load_secrets (which reads
-        # secrets_kv). If a key is in BOTH _HOT_RELOAD_KNOBS and
-        # _SECRET_KEYS (notably POSTGRES_DSN), config_kv must NOT be
-        # allowed to overwrite the secret value. Historical bug:
-        # /db-switch wrote DSN to config_kv too, and if the in-memory
-        # DSN happened to be empty at that moment, the empty got
-        # persisted and silently stomped the real DSN on every restart.
-        if key in _SECRET_KEYS:
-            secret_skipped += 1
-            # Emit a per-collision WARN so operators can see (a) which
-            # secret keys have a stomper row in config_kv and (b) the
-            # length of the would-be-applied value (0 == the stomp case).
-            slog("config_kv_stomp_blocked", level="warn",
-                 key=key,
-                 stomper_value_len=len(r["value"] or ""),
-                 note="config_kv has a row for this key but it is also a "
-                      "secret; the secrets_kv value (loaded by db_load_secrets) "
-                      "wins. Consider DELETE FROM config_kv WHERE key='" + key + "'.")
             continue
         # 1.5.5 — env wins. If the operator explicitly set this knob in the
         # container env, treat that as authoritative (GitOps determinism).
@@ -1075,18 +862,6 @@ def db_load_config(proxy_globals: dict) -> None:
                 skipped += 1
                 continue
             g[key] = value
-            # Propagate to all loaded modules so request handlers (e.g.
-            # core.proxy_handler) that hold their own copy of the global
-            # see the DB-loaded value immediately — mirrors what the
-            # hot-reload POST handler does at runtime.
-            import sys as _sys_dbc
-            for _hr_m in list(_sys_dbc.modules.values()):
-                if (_hr_m is not None and _hr_m is not g
-                        and hasattr(_hr_m, key)):
-                    try:
-                        setattr(_hr_m, key, value)
-                    except (AttributeError, TypeError):
-                        pass
             applied += 1
         except (ValueError, TypeError, json.JSONDecodeError) as e:
             slog("db_config_parse_err", level="warn", key=key, error=str(e))
@@ -1098,24 +873,9 @@ def db_load_config(proxy_globals: dict) -> None:
         g["JS_CHAL_REQUIRE_JA4"] = False
         slog("db_config_ja4_forced_off", level="warn",
              reason="incompatible with TURNSTILE_ENABLED")
-    if applied or skipped or env_pinned or secret_skipped:
+    if applied or skipped or env_pinned:
         slog("db_config_loaded", level="info",
-             applied=applied, skipped=skipped, env_pinned=env_pinned,
-             secret_skipped=secret_skipped)
-
-
-def get_ui_theme(db_path: str) -> str:
-    """Read the persisted UI theme preference from config_kv. Returns 'dark' or 'light'."""
-    try:
-        conn = sqlite3.connect(db_path, timeout=2)
-        row = conn.execute("SELECT value FROM config_kv WHERE key='ui_theme'").fetchone()
-        conn.close()
-        if row:
-            val = json.loads(row[0])
-            return val if val in ("dark", "light") else "dark"
-    except Exception:
-        pass
-    return "dark"
+             applied=applied, skipped=skipped, env_pinned=env_pinned)
 
 
 def db_load_state() -> None:
@@ -1256,151 +1016,3 @@ def _rehydrate_bans() -> int:
     except Exception as e:
         slog("bans_rehydrate_failed", level="warn", err=str(e)[:200])
     return count
-
-
-def check_ip_ban(ip: str) -> float:
-    """1.8.12 M-4 — Synchronous point-lookup in ip_bans.
-    Returns banned_until epoch (> now) or 0.0 if not banned / table absent.
-    Called from protect() before identity derivation so key rotation can never
-    free a hostile ban.  Uses a short-lived connection — no shared state."""
-    if not ip:
-        return 0.0
-    n = time.time()
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=0.1)
-        row = conn.execute(
-            "SELECT banned_until FROM ip_bans WHERE ip=? AND banned_until > ?",
-            (ip, n)).fetchone()
-        conn.close()
-        return float(row[0]) if row else 0.0
-    except Exception:
-        return 0.0
-
-
-def prune_ip_bans() -> int:
-    """Remove expired ip_bans rows. Called from _prune_state_loop."""
-    n = time.time()
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        cur = conn.execute("DELETE FROM ip_bans WHERE banned_until <= ?", (n,))
-        count = cur.rowcount
-        conn.commit()
-        conn.close()
-        return count
-    except Exception:
-        return 0
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# 1.8.8 — backend-aware event reader (sqlite side).
-# Called via db.db_read_events() dispatcher when DB_BACKEND=sqlite or when
-# postgres is configured but unavailable.
-# ────────────────────────────────────────────────────────────────────────────
-
-_VALID_EVENT_COLUMNS = frozenset({
-    "id", "ts", "ip", "ua", "path", "method", "status", "reason", "vhost",
-})
-
-_VALID_ORDER_BY = {
-    "ts": " ORDER BY ts ASC",
-    "ts asc": " ORDER BY ts ASC",
-    "ts desc": " ORDER BY ts DESC",
-    "id": " ORDER BY id ASC",
-    "id asc": " ORDER BY id ASC",
-    "id desc": " ORDER BY id DESC",
-}
-
-
-def _read_events_sql(
-    start_ts: float,
-    end_ts: float,
-    *,
-    columns=None,
-    vhost: str = "",
-    path_like: str = "",
-    reason_like: str = "",
-    reason_in=None,
-    ip_exact: str = "",
-    order_by: str = "",
-    limit: int = 0,
-    offset: int = 0,
-) -> list:
-    """SQLite implementation of db_read_events. Returns list of dicts.
-    `ts` is epoch float (REAL column, returned as-is).
-
-    start_ts=0 or end_ts=0 means "no bound on that side" — used by the
-    logs endpoint to grab the latest N rows without a time range.
-    """
-    cols = list(columns) if columns else ["ts", "ip", "reason"]
-    for c in cols:
-        if c not in _VALID_EVENT_COLUMNS:
-            raise ValueError(f"invalid event column: {c!r}")
-    where = []
-    params: list = []
-    if start_ts and start_ts > 0:
-        where.append("ts >= ?")
-        params.append(float(start_ts))
-    if end_ts and end_ts > 0:
-        where.append("ts <= ?")
-        params.append(float(end_ts))
-    if vhost:
-        where.append("vhost = ?")
-        params.append(vhost)
-    if path_like:
-        where.append("LOWER(path) LIKE ?")
-        params.append(f"%{path_like.lower()}%")
-    if reason_like:
-        where.append("LOWER(reason) LIKE ?")
-        params.append(f"%{reason_like.lower()}%")
-    if reason_in:
-        # Exact-set match — avoids LIKE prefix bleed (e.g. "honeypot" matching
-        # "honeypot-silent"). Placeholders are count-derived, values bound.
-        _ph = ",".join("?" * len(reason_in))
-        where.append(f"reason IN ({_ph})")  # nosec B608 — placeholders only
-        params.extend(str(x) for x in reason_in)
-    if ip_exact:
-        where.append("ip = ?")
-        params.append(ip_exact)
-    order_clause = ""
-    if order_by:
-        ob = order_by.strip().lower()
-        if ob not in _VALID_ORDER_BY:
-            raise ValueError(f"invalid order_by: {order_by!r}")
-        order_clause = _VALID_ORDER_BY[ob]
-    limit_clause = ""
-    if limit and limit > 0:
-        limit_clause = f" LIMIT {int(limit)}"
-        if offset and offset > 0:
-            limit_clause += f" OFFSET {int(offset)}"
-    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
-    sql = (  # nosec B608 — cols/order/limit are whitelisted; values parameterized
-        f"SELECT {','.join(cols)} FROM events"
-        f"{where_sql}{order_clause}{limit_clause}"
-    )
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        return [dict(r) for r in conn.execute(sql, params)]
-    finally:
-        conn.close()
-
-
-def _events_health_sql() -> dict:
-    """SQLite events-table health probe — count + last_event_ts.
-
-    Best-effort: returns ok=False with no counts if the DB or table is missing.
-    Used by db.db_health_snapshot() to surface write-lag in the dashboard."""
-    out = {"last_event_ts": None, "events_rows": 0, "ok": False}
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        try:
-            r = conn.execute("SELECT COUNT(*), MAX(ts) FROM events").fetchone()
-            if r:
-                out["events_rows"]   = int(r[0] or 0)
-                out["last_event_ts"] = float(r[1]) if r[1] is not None else None
-            out["ok"] = True
-        finally:
-            conn.close()
-    except Exception as e:
-        out["error"] = f"{type(e).__name__}: {str(e)[:120]}"
-    return out

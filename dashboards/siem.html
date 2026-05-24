@@ -1,51 +1,43 @@
 <!doctype html>
-<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.13 · SIEM</title>
+<title>AppSecGW_1.8.5 · SIEM</title>
 <style>
 :root{
   --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
   --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
   --purple:#bc8cff;--orange:#ff7b3a;
   --sev-crit:#ff4444;--sev-high:#ff7b3a;--sev-med:#d29922;
-  --sev-low:#58a6ff;--sev-info:#8b949e;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
-html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
-html[data-theme="light"] #sidebar{background:#f0f2f4}
-html[data-theme="light"] #topbar{background:#f0f2f4}
-html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
-html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
-html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
-html[data-theme="light"] .card{border-color:var(--line)}
-html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
-html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}
+  --sev-low:#58a6ff;--sev-info:#8b949e;
+}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);
   display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;
   font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;
   overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
+#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;
   display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;
   padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:var(--bg-hover)}
+#sidebar-footer button.signout:hover{background:#1f2730}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 #topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;
+  padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;
   gap:8px;white-space:nowrap}
 #topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 #page-content{flex:1;padding:14px}
@@ -56,13 +48,13 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;
 .row2{display:grid;grid-template-columns:2fr 1fr;gap:14px}
 .row-half{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.metric{font-size:30px;font-weight:600;color:var(--bright);line-height:1}
+.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
 .metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
 /* ── KPI row ── */
 #kpi-row{display:grid;grid-template-columns:repeat(5,1fr);gap:14px}
 /* ── Tables ── */
 table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:var(--bg-elevated);color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
   text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:top}
@@ -77,73 +69,48 @@ table tbody tr:hover{background:rgba(255,255,255,.03);cursor:pointer}
 .sev-low{background:#0e2040;color:var(--sev-low)}
 .sev-info{background:#1a1a1a;color:var(--sev-info)}
 /* ── Controls ── */
-.btn{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);border-radius:5px;
+.btn{background:#21262d;color:var(--fg);border:1px solid var(--line);border-radius:5px;
   padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;
   transition:background .1s,border-color .1s}
-.btn:hover{background:#2d333b;border-color:#58a6ff;color:var(--bright)}
-.btn.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue);font-weight:600}
+.btn:hover{background:#2d333b;border-color:#58a6ff;color:#fff}
+.btn.active{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff;font-weight:600}
 .btn-sm{font-size:10px;padding:2px 8px}
-select.ctrl{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
+select.ctrl{background:#21262d;color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:4px 6px;font-size:11px;cursor:pointer;font-family:inherit}
 select.ctrl:focus{outline:none;border-color:var(--blue)}
-/* ── Banners ── */
+/* ── Error / alert banners ── */
 #err-banner{display:none;background:#3d1010;border:1px solid var(--red);color:#ff9999;
   border-radius:6px;padding:8px 12px;margin-bottom:10px;font-size:12px}
 #alert-banners{display:flex;flex-direction:column;gap:6px;margin-bottom:10px}
 .alert-banner{background:#1e1a06;border:1px solid var(--yellow);color:var(--yellow);
   border-radius:6px;padding:7px 12px;font-size:12px;font-family:ui-monospace}
-#sse-banner{display:none;background:#1a0a0a;border:1px solid var(--sev-crit);
-  color:var(--sev-crit);border-radius:6px;padding:7px 12px;font-size:12px;
-  font-family:ui-monospace;margin-bottom:10px;max-height:120px;overflow-y:auto}
 /* ── Alert rules panel ── */
 #alert-rules-panel{display:none;background:var(--card);border:1px solid var(--line);
   border-radius:8px;padding:14px;margin-bottom:14px}
 #alert-rules-panel h2{margin-bottom:10px}
-.tab-bar{display:flex;gap:2px;margin-bottom:12px;border-bottom:1px solid var(--line);padding-bottom:8px}
-.tab-btn{background:none;border:none;color:var(--dim);cursor:pointer;font:inherit;
-  font-size:12px;padding:4px 12px;border-radius:4px}
-.tab-btn:hover{color:var(--fg);background:var(--bg-hover)}
-.tab-btn.active{color:var(--bright);background:rgba(88,166,255,.15);font-weight:600}
-.tab-pane{display:none}
-.tab-pane.active{display:block}
 .rules-table-wrap{overflow-x:auto;margin-bottom:10px}
 #rule-add-form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;
   border-top:1px solid var(--line);padding-top:10px;margin-top:4px}
 #rule-add-form label{font-size:11px;color:var(--dim);display:flex;flex-direction:column;gap:3px}
 #rule-add-form input,#rule-add-form select{
-  background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
-  border-radius:4px;padding:4px 7px;font-size:11px;font-family:inherit}
-.srv-form-label{font-size:11px;color:var(--dim);display:flex;flex-direction:column;gap:3px}
-.srv-form-input{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
+  background:#21262d;color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:4px 7px;font-size:11px;font-family:inherit}
 .fire-badge{font-size:10px;font-weight:700;padding:1px 6px;border-radius:3px;
   font-family:ui-monospace}
 .fire-ok{background:#1a2e1a;color:var(--green)}
 .fire-alert{background:#3a1a1a;color:var(--sev-crit)}
-/* light-theme overrides for dark severity/banner backgrounds (dark defaults above stay dark) */
-html[data-theme="light"] .sev-critical{background:#ffebe9;color:#cf222e}
-html[data-theme="light"] .sev-high{background:#fff1e5;color:#bc4c00}
-html[data-theme="light"] .sev-medium{background:#fff8c5;color:#9a6700}
-html[data-theme="light"] .sev-low{background:#ddf4ff;color:#0969da}
-html[data-theme="light"] .sev-info{background:#eaeef2;color:#57606a}
-html[data-theme="light"] .btn:hover{background:var(--bg-hover)}
-html[data-theme="light"] #err-banner{background:#ffebe9;color:#cf222e}
-html[data-theme="light"] .alert-banner{background:#fff8c5;color:#9a6700}
-html[data-theme="light"] #sse-banner{background:#ffebe9;color:#cf222e}
-html[data-theme="light"] .fire-ok{background:#e6f6ec;color:#1a7f37}
-html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
 /* ── Threat index bar ── */
 #threat-bar-wrap{margin-top:8px}
-#threat-bar-track{height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden}
+#threat-bar-track{height:8px;background:#0a0e13;border-radius:4px;overflow:hidden}
 #threat-bar-fill{height:100%;border-radius:4px;transition:width .4s,background .4s}
 /* ── Live badge ── */
 #badge-live{font-size:10px;padding:2px 8px;border-radius:10px;font-weight:700;
   background:var(--green);color:#000;cursor:help;transition:background .2s}
-#badge-live.alert{background:var(--sev-crit);color:var(--bright)}
+#badge-live.alert{background:var(--sev-crit);color:#fff}
 /* ── Vhost badge ── */
-#vhost-badge{display:none;background:rgba(88,166,255,.15);border:1px solid rgba(88,166,255,.5);color:var(--blue);
+#vhost-badge{display:none;background:#0e2c4a;border:1px solid #1f5fa6;color:#79c0ff;
   border-radius:12px;padding:2px 10px;font-size:11px;cursor:pointer}
-#vhost-badge:hover{background:rgba(88,166,255,.25)}
+#vhost-badge:hover{background:#1c3d5a}
 /* ── Event feed filters ── */
 #feed-filters{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
 .sev-pill{padding:2px 10px;border-radius:12px;border:1.5px solid transparent;
@@ -153,38 +120,30 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
 .sev-pill[data-sev="medium"]{border-color:var(--sev-med);color:var(--sev-med)}
 .sev-pill[data-sev="low"]{border-color:var(--sev-low);color:var(--sev-low)}
 .sev-pill[data-sev="info"]{border-color:var(--sev-info);color:var(--sev-info)}
-.sev-pill.active[data-sev="critical"]{background:var(--sev-crit);color:var(--bright)}
+.sev-pill.active[data-sev="critical"]{background:var(--sev-crit);color:#fff}
 .sev-pill.active[data-sev="high"]{background:var(--sev-high);color:#000}
 .sev-pill.active[data-sev="medium"]{background:var(--sev-med);color:#000}
 .sev-pill.active[data-sev="low"]{background:var(--sev-low);color:#000}
 .sev-pill.active[data-sev="info"]{background:var(--sev-info);color:#000}
-#feed-reason-filter{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
+#feed-reason-filter{background:#21262d;color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:3px 7px;font-size:11px;font-family:inherit;min-width:120px}
 #feed-wrap{max-height:340px;overflow-y:auto}
-/* ── Cluster panel ── */
-#cluster-wrap{max-height:200px;overflow-y:auto}
-/* ── Dossier drawer ── */
-#dossier-drawer{position:fixed;top:0;right:0;height:100vh;width:480px;
+/* ── JA4 drawer ── */
+#ja4-drawer{position:fixed;top:0;right:0;height:100vh;width:380px;
   background:var(--card);border-left:1px solid var(--line);z-index:300;
   display:flex;flex-direction:column;transform:translateX(100%);
   transition:transform .25s ease;box-shadow:-4px 0 24px rgba(0,0,0,.5)}
-#dossier-drawer.open{transform:translateX(0)}
-#dossier-header{display:flex;align-items:center;justify-content:space-between;
-  padding:14px 16px;border-bottom:1px solid var(--line);gap:8px}
-#dossier-header h3{font-size:13px;font-weight:600;color:var(--bright);font-family:ui-monospace}
-#dossier-close{background:none;border:none;color:var(--dim);cursor:pointer;
+#ja4-drawer.open{transform:translateX(0)}
+#ja4-drawer-header{display:flex;align-items:center;justify-content:space-between;
+  padding:14px 16px;border-bottom:1px solid var(--line)}
+#ja4-drawer-header h3{font-size:13px;font-weight:600;color:#fff}
+#ja4-drawer-close{background:none;border:none;color:var(--dim);cursor:pointer;
   font-size:18px;line-height:1;padding:2px 6px}
-#dossier-close:hover{color:var(--red)}
-#dossier-tabs{display:flex;gap:0;border-bottom:1px solid var(--line)}
-.dtab{background:none;border:none;border-bottom:2px solid transparent;
-  color:var(--dim);cursor:pointer;font:inherit;font-size:12px;
-  padding:8px 14px;transition:color .1s,border-color .1s}
-.dtab:hover{color:var(--fg)}
-.dtab.active{color:var(--blue);border-bottom-color:var(--blue)}
-#dossier-body{padding:14px 16px;overflow-y:auto;flex:1;font-size:12px}
-.dkv{display:grid;grid-template-columns:120px 1fr;gap:4px 8px;font-size:12px;margin-bottom:12px}
-.dkv .dk{color:var(--dim);font-size:11px}
-.dkv .dv{font-family:ui-monospace;word-break:break-all}
+#ja4-drawer-close:hover{color:var(--red)}
+#ja4-drawer-body{padding:14px 16px;overflow-y:auto;flex:1;font-size:12px}
+#ja4-code{font-family:ui-monospace;font-size:12px;color:var(--purple);
+  background:#0a0f16;border:1px solid var(--line);border-radius:4px;
+  padding:6px 10px;margin:6px 0 10px;word-break:break-all}
 /* ── Misc ── */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);
   text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
@@ -205,70 +164,35 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
   #mob-overlay.mob-open{display:block}
   #mob-menu{display:flex!important}
   #kpi-row{grid-template-columns:repeat(2,1fr)}
-  #dossier-drawer{width:100%}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
-/* -- Sidebar collapse (desktop hide/unhide) -- */
-#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
-#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
-#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
-@media(max-width:600px){#sidebar-toggle{display:none}}
-@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
-/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
-@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
-/* -- Submenu collapse (accordion) -- */
-#sidebar-nav .nav-parent{display:flex;align-items:center}
-#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
-.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
-#sidebar-nav a.sub.sub-hidden{display:none}
-/* ── JA4 pivot drawer ── */
-#ja4-drawer{position:fixed;top:0;right:0;height:100vh;width:440px;
-  background:var(--card);border-left:1px solid var(--line);
-  transform:translateX(100%);transition:transform .25s ease;
-  z-index:900;display:flex;flex-direction:column;overflow:hidden}
-#ja4-drawer.open{transform:translateX(0)}
-#ja4-drawer-header{display:flex;align-items:center;justify-content:space-between;
-  padding:14px 16px;border-bottom:1px solid var(--line)}
-#ja4-drawer-header h3{font-size:13px;font-weight:600;color:var(--bright);font-family:ui-monospace}
-#ja4-drawer-close{background:none;border:none;color:var(--dim);cursor:pointer;font-size:16px;line-height:1}
-#ja4-drawer-close:hover{color:var(--red)}
-#ja4-drawer-body{padding:14px 16px;overflow-y:auto;flex:1;font-size:12px}
 </style>
 </head>
 <body>
 <button id="mob-menu"
   onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')"
   aria-label="Menu"
-  style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);
+  style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;
     border:1px solid var(--line);color:var(--fg);padding:8px 11px;border-radius:5px;
     cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">&#9776;</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
-<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
-<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
-<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div>
-      <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.13</div>
-    </div>
-    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
+    <div id="sidebar-brand-name">AppSecGW</div>
+    <div id="sidebar-brand-ver">1.8.4</div>
   </div>
   <nav id="sidebar-nav">
-    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub active">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
-    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
+    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
+    <a href="/antibot-appsec-gateway/secured/settings">Settings</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;">My Account</a>
@@ -284,20 +208,16 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
   <div id="topbar-title">
     Security Event Center
     <span id="badge-live">&#9679; LIVE</span>
-    <span id="sse-dot" title="SSE stream"
-      style="width:8px;height:8px;border-radius:50%;background:#555;display:inline-block;
-             margin-left:2px;transition:background .3s"></span>
   </div>
   <div id="topbar-right">
-    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">&#x1F319;</button>
+    <!-- Alert rules toggle -->
     <button class="btn btn-sm" id="btn-rules" onclick="_toggleRulesPanel()">&#9889; Alert Rules (<span id="rules-count">0</span>)</button>
-    <button class="btn btn-sm" onclick="_exportCsv()">&#8659; Export CSV</button>
+    <!-- Time range -->
     <button class="btn btn-sm" data-mins="15" onclick="_setMins(this)">15m</button>
     <button class="btn btn-sm active" data-mins="60" onclick="_setMins(this)">1h</button>
     <button class="btn btn-sm" data-mins="360" onclick="_setMins(this)">6h</button>
     <button class="btn btn-sm" data-mins="1440" onclick="_setMins(this)">24h</button>
-    <input id="vhost-filter-search" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:12px;width:120px"
-      oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-filter').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
+    <!-- Vhost filter -->
     <select class="ctrl" id="vhost-filter" onchange="_onVhostChange()">
       <option value="">All vhosts</option>
     </select>
@@ -306,95 +226,47 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
 </div>
 
 <div id="page-content">
+
 <div id="err-banner"></div>
-<div id="sse-banner"></div>
 <div id="alert-banners"></div>
 
-<!-- Alert rules panel -->
+<!-- Alert rules panel (collapsible) -->
 <div id="alert-rules-panel">
   <h2>&#9889; Alert Rules</h2>
-  <div class="tab-bar">
-    <button class="tab-btn active" onclick="_rulesTab('client')">Client-side</button>
-    <button class="tab-btn" onclick="_rulesTab('server')">Server-side (DB)</button>
-    <button class="tab-btn" onclick="_rulesTab('history')">Fire History</button>
+  <div class="rules-table-wrap">
+    <table id="rules-table">
+      <thead><tr>
+        <th>Metric</th><th>Op</th><th>Threshold</th><th>Label</th>
+        <th>Status</th><th>Actions</th>
+      </tr></thead>
+      <tbody id="rules-tbody"></tbody>
+    </table>
   </div>
-
-  <div id="tab-client" class="tab-pane active">
-    <div class="rules-table-wrap">
-      <table id="rules-table">
-        <thead><tr><th>Metric</th><th>Op</th><th>Threshold</th><th>Label</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody id="rules-tbody"></tbody>
-      </table>
-    </div>
-    <div id="rule-add-form">
-      <label>Metric
-        <select id="rule-metric" class="ctrl">
-          <option value="block_pct">Block %</option>
-          <option value="bans">Active Bans</option>
-          <option value="bypasses">Bypasses</option>
-          <option value="threat_index">Threat Index</option>
-        </select>
-      </label>
-      <label>Operator
-        <select id="rule-op" class="ctrl">
-          <option value="gt">&gt;</option><option value="gte">&gt;=</option>
-          <option value="lt">&lt;</option><option value="lte">&lt;=</option>
-        </select>
-      </label>
-      <label>Threshold <input id="rule-thresh" type="number" min="0" max="100000" value="10" style="width:80px"></label>
-      <label>Label <input id="rule-label" type="text" placeholder="My alert" style="width:140px"></label>
-      <button class="btn" onclick="_addRule()" style="align-self:flex-end">Add Rule</button>
-    </div>
-  </div>
-
-  <div id="tab-server" class="tab-pane">
-    <div class="rules-table-wrap">
-      <table id="srules-table">
-        <thead><tr><th>Metric</th><th>Op</th><th>Threshold</th><th>Label</th><th>Cooldown</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody id="srules-tbody"></tbody>
-      </table>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;
-        border-top:1px solid var(--line);padding-top:10px;margin-top:4px">
-      <label class="srv-form-label">Metric
-        <select id="srule-metric" class="ctrl">
-          <option value="block_pct">Block %</option>
-          <option value="blocked">Blocked Count</option>
-          <option value="bans">Active Bans</option>
-          <option value="threat_index">Threat Index</option>
-          <option value="crit_count">Critical Count</option>
-          <option value="high_count">High Count</option>
-        </select>
-      </label>
-      <label class="srv-form-label">Operator
-        <select id="srule-op" class="ctrl">
-          <option value=">">&gt;</option><option value=">=">&gt;=</option>
-          <option value="<">&lt;</option><option value="<=">&lt;=</option>
-        </select>
-      </label>
-      <label class="srv-form-label">Threshold
-        <input id="srule-thresh" type="number" min="0" max="100000" value="10"
-          class="srv-form-input" style="width:80px">
-      </label>
-      <label class="srv-form-label">Label
-        <input id="srule-label" type="text" placeholder="High threat alert"
-          class="srv-form-input" style="width:140px">
-      </label>
-      <label class="srv-form-label">Cooldown (s)
-        <input id="srule-cooldown" type="number" min="0" max="86400" value="300"
-          class="srv-form-input" style="width:70px">
-      </label>
-      <button class="btn" onclick="_addServerRule()" style="align-self:flex-end">Add Server Rule</button>
-    </div>
-  </div>
-
-  <div id="tab-history" class="tab-pane">
-    <div class="rules-table-wrap">
-      <table id="history-table">
-        <thead><tr><th>Time</th><th>Rule</th><th>Value</th></tr></thead>
-        <tbody id="history-tbody"></tbody>
-      </table>
-    </div>
+  <div id="rule-add-form">
+    <label>Metric
+      <select id="rule-metric" class="ctrl">
+        <option value="block_pct">Block %</option>
+        <option value="bans">Active Bans</option>
+        <option value="bypasses">Bypasses</option>
+        <option value="threat_index">Threat Index</option>
+      </select>
+    </label>
+    <label>Operator
+      <select id="rule-op" class="ctrl">
+        <option value="gt">&gt;</option>
+        <option value="gte">&gt;=</option>
+        <option value="lt">&lt;</option>
+        <option value="lte">&lt;=</option>
+      </select>
+    </label>
+    <label>Threshold
+      <input id="rule-thresh" type="number" min="0" max="100000" value="10"
+        style="width:80px">
+    </label>
+    <label>Label
+      <input id="rule-label" type="text" placeholder="My alert" style="width:140px">
+    </label>
+    <button class="btn" onclick="_addRule()" style="align-self:flex-end">Add Rule</button>
   </div>
 </div>
 
@@ -429,19 +301,23 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
   </div>
 </div>
 
-<!-- Timeline + Donut -->
+<!-- Traffic timeline + Threat donut -->
 <div class="row2 grid">
   <div class="card">
     <h2>Traffic Timeline</h2>
-    <div style="position:relative;height:220px"><canvas id="chart-timeline"></canvas></div>
+    <div style="position:relative;height:220px">
+      <canvas id="chart-timeline"></canvas>
+    </div>
   </div>
   <div class="card">
     <h2>Threat Categories</h2>
-    <div style="position:relative;height:220px"><canvas id="chart-donut"></canvas></div>
+    <div style="position:relative;height:220px">
+      <canvas id="chart-donut"></canvas>
+    </div>
   </div>
 </div>
 
-<!-- Live Feed + Top Attackers -->
+<!-- Live Event Feed + Top Attackers -->
 <div class="row-half grid">
   <div class="card">
     <h2>Live Event Feed</h2>
@@ -456,7 +332,10 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
     </div>
     <div id="feed-wrap">
       <table>
-        <thead><tr><th>Time</th><th>Sev</th><th>IP</th><th>Reason</th><th>Path</th><th>Score</th></tr></thead>
+        <thead><tr>
+          <th>Time</th><th>Sev</th><th>IP</th><th>Reason</th>
+          <th>Path</th><th>Score</th>
+        </tr></thead>
         <tbody id="feed-tbody"></tbody>
       </table>
     </div>
@@ -465,106 +344,68 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
     <h2>Top Attackers</h2>
     <div style="max-height:380px;overflow-y:auto">
       <table>
-        <thead><tr><th>IP</th><th>Risk</th><th>Req</th><th>Blocked</th><th>Top Reason</th><th>Status</th></tr></thead>
+        <thead><tr>
+          <th>IP</th><th>Risk</th><th>Req</th><th>Blocked</th>
+          <th>Top Reason</th><th>Status</th>
+        </tr></thead>
         <tbody id="ips-tbody"></tbody>
       </table>
     </div>
   </div>
 </div>
 
-<!-- Signals + Severity -->
+<!-- Detection Signal bars + Severity Distribution -->
 <div class="row-half grid">
   <div class="card">
     <h2>Detection Signals</h2>
-    <div style="position:relative;height:220px"><canvas id="chart-signals"></canvas></div>
+    <div style="position:relative;height:220px">
+      <canvas id="chart-signals"></canvas>
+    </div>
   </div>
   <div class="card">
     <h2>Severity Distribution</h2>
-    <div style="position:relative;height:220px"><canvas id="chart-sev"></canvas></div>
-  </div>
-</div>
-
-<!-- Coordinated Attack Clusters -->
-<div class="grid">
-  <div class="card">
-    <h2>&#128268; Coordinated Attack Clusters
-      <span id="cluster-count" style="font-size:11px;font-weight:400;color:var(--dim);
-        text-transform:none;letter-spacing:0">(0 active)</span>
-    </h2>
-    <div id="cluster-wrap">
-      <table>
-        <thead><tr><th>ASN</th><th>Path Prefix</th><th>Minute</th><th>Cluster Size</th></tr></thead>
-        <tbody id="cluster-tbody">
-          <tr><td colspan="4" class="dim" style="text-align:center;padding:12px">No coordinated clusters detected</td></tr>
-        </tbody>
-      </table>
+    <div style="position:relative;height:220px">
+      <canvas id="chart-sev"></canvas>
     </div>
   </div>
 </div>
 
 <div class="portal-footer">
-  AppSecGW_1.8.13 <span class="sep">|</span>
+  AppSecGW 1.8.4 <span class="sep">|</span>
   SIEM Security Event Center <span class="sep">|</span>
   <span id="footer-ts" class="dim"></span>
 </div>
+
 </div><!-- /page-content -->
 </div><!-- /main-area -->
 
-<!-- Attacker Dossier Drawer -->
+<!-- JA4 Pivot Drawer -->
 <div id="ja4-drawer">
   <div id="ja4-drawer-header">
-    <h3 id="ja4-drawer-fp">—</h3>
+    <h3>JA4 Fingerprint Pivot</h3>
     <button id="ja4-drawer-close" onclick="_closeDrawer()">&#10005;</button>
   </div>
-  <div id="ja4-drawer-body"></div>
-</div>
-<div id="dossier-drawer">
-  <div id="dossier-header">
-    <h3 id="dossier-ip">—</h3>
-    <button id="dossier-close" onclick="_closeDossier()">&#10005;</button>
-  </div>
-  <div id="dossier-tabs">
-    <button class="dtab active" onclick="_dossierTab('overview')">Overview</button>
-    <button class="dtab" onclick="_dossierTab('events')">Events</button>
-    <button class="dtab" onclick="_dossierTab('ja4')">JA4 Pivot</button>
-    <button class="dtab" onclick="_dossierTab('clusters')">Clusters</button>
-  </div>
-  <div id="dossier-body">
-    <p class="dim" style="font-size:11px">Click an IP row to open the dossier.</p>
+  <div id="ja4-drawer-body">
+    <p class="dim" style="font-size:11px">Click an IP row to pivot by JA4 fingerprint.</p>
   </div>
 </div>
 
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
-<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
-<script>
-window._applyChartColorsToInstance=function(c,theme){
-  var L=theme==='light',gc=L?'rgba(0,0,0,.08)':'#21262d',tc=L?'#636e7b':'#8b949e',lc=L?'#636e7b':'#c9d1d9',tbg=L?'#ffffff':'#161b22',tbc=L?'#d0d7de':'#30363d',ttc=L?'#1f2328':'#c9d1d9';
-  try{
-    var sc=c.options.scales||{};
-    Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});
-    var p=c.options.plugins||{};
-    if(p.legend&&p.legend.labels)p.legend.labels.color=lc;
-    if(p.tooltip){p.tooltip.backgroundColor=tbg;p.tooltip.borderColor=tbc;p.tooltip.titleColor=ttc;p.tooltip.bodyColor=ttc;}
-    c.update('none');
-  }catch(e){}
-};
-if(typeof Chart!=='undefined'){
-  Chart.register({id:'_gwTheme',afterInit:function(c){
-    window._applyChartColorsToInstance(c,document.documentElement.getAttribute('data-theme')||'dark');
-  }});
-}
-</script>
-<script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 <script>
 'use strict';
 
+// ── XSS safety ───────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/[&<>"'`/]/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c];
+  });
+}
 
-
+// ── Timer registry ────────────────────────────────────────────────────────────
 var _timers = [];
-var _sse = null;
 window.addEventListener('beforeunload', function() {
   _timers.forEach(function(t) { clearInterval(t); });
-  if (_sse) { try { _sse.close(); } catch(e) {} }
 });
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -574,39 +415,61 @@ var lastVhostList = '';
 var lastTopIps = [];
 var _lastStats = {total:0, blocked:0, allowed:0, bans:0, bypasses:0};
 var _lastThreatIndex = 0;
-var _lastFiringRules = [];
-var _lastDossierData = null;
-var _currentDossierTab = 'overview';
 
-// ── Client-side alert rules ───────────────────────────────────────────────────
+// ── Alert rules ───────────────────────────────────────────────────────────────
 var _rules = JSON.parse(localStorage.getItem('gw_siem_rules') || '[]');
 
-function _saveRules() { localStorage.setItem('gw_siem_rules', JSON.stringify(_rules)); }
-function _rulesCount() { return _rules.filter(function(r) { return r.enabled; }).length; }
-function _updateRulesCount() { document.getElementById('rules-count').textContent = _rulesCount(); }
+function _saveRules() {
+  localStorage.setItem('gw_siem_rules', JSON.stringify(_rules));
+}
+
+function _rulesCount() {
+  return _rules.filter(function(r) { return r.enabled; }).length;
+}
+
+function _updateRulesCount() {
+  document.getElementById('rules-count').textContent = _rulesCount();
+}
+
 function _toggleRulesPanel() {
   var p = document.getElementById('alert-rules-panel');
   p.style.display = p.style.display === 'block' ? 'none' : 'block';
-  if (p.style.display === 'block') _loadServerRules();
 }
+
 function _addRule() {
   var metric = document.getElementById('rule-metric').value;
   var op = document.getElementById('rule-op').value;
   var thresh = parseFloat(document.getElementById('rule-thresh').value) || 0;
   var label = document.getElementById('rule-label').value.trim() || metric + ' ' + op + ' ' + thresh;
-  _rules.push({id: Date.now(), metric: metric, op: op, threshold: thresh, label: label, enabled: true});
-  _saveRules(); _renderRulesTable(); _updateRulesCount();
+  _rules.push({
+    id: Date.now(),
+    metric: metric,
+    op: op,
+    threshold: thresh,
+    label: label,
+    enabled: true
+  });
+  _saveRules();
+  _renderRulesTable();
+  _updateRulesCount();
   document.getElementById('rule-label').value = '';
 }
+
 function _deleteRule(id) {
   _rules = _rules.filter(function(r) { return r.id !== id; });
-  _saveRules(); _renderRulesTable(); _updateRulesCount();
+  _saveRules();
+  _renderRulesTable();
+  _updateRulesCount();
 }
+
 function _toggleRule(id) {
   var r = _rules.find(function(r) { return r.id === id; });
   if (r) r.enabled = !r.enabled;
-  _saveRules(); _renderRulesTable(); _updateRulesCount();
+  _saveRules();
+  _renderRulesTable();
+  _updateRulesCount();
 }
+
 function _ruleValue(metric, stats, threatIndex) {
   if (metric === 'block_pct') return stats.total > 0 ? stats.blocked / stats.total * 100 : 0;
   if (metric === 'bans') return stats.bans;
@@ -614,6 +477,7 @@ function _ruleValue(metric, stats, threatIndex) {
   if (metric === 'threat_index') return threatIndex;
   return 0;
 }
+
 function _evalRule(r, stats, threatIndex) {
   if (!r.enabled) return false;
   var val = _ruleValue(r.metric, stats, threatIndex);
@@ -623,11 +487,13 @@ function _evalRule(r, stats, threatIndex) {
   if (r.op === 'lte') return val <= r.threshold;
   return false;
 }
+
 function _metricLabel(m) {
-  return {block_pct:'Block %',bans:'Active Bans',bypasses:'Bypasses',threat_index:'Threat Index',
-          blocked:'Blocked',crit_count:'Critical Count',high_count:'High Count'}[m] || m;
+  return {block_pct:'Block %',bans:'Active Bans',bypasses:'Bypasses',threat_index:'Threat Index'}[m] || m;
 }
-function _opLabel(o) { return {gt:'>',gte:'>=',lt:'<',lte:'<='}[o] || o; }
+function _opLabel(o) {
+  return {gt:'>',gte:'>=',lt:'<',lte:'<='}[o] || o;
+}
 
 function _renderRulesTable() {
   var tb = document.getElementById('rules-tbody');
@@ -645,13 +511,14 @@ function _renderRulesTable() {
       + '<td>' + escapeHtml(r.label) + '</td>'
       + '<td>' + statusHtml + '</td>'
       + '<td style="white-space:nowrap">'
-      + '<button class="btn btn-sm" onclick="_toggleRule(' + r.id + ')">'
-      + (r.enabled ? 'Disable' : 'Enable') + '</button> '
-      + '<button class="btn btn-sm" style="color:var(--red)" onclick="_deleteRule(' + r.id + ')">Del</button>'
+      +   '<button class="btn btn-sm" onclick="_toggleRule(' + r.id + ')">'
+      +     (r.enabled ? 'Disable' : 'Enable') + '</button> '
+      +   '<button class="btn btn-sm" style="color:var(--red)" onclick="_deleteRule(' + r.id + ')">Del</button>'
       + '</td></tr>';
   });
   tb.innerHTML = html;
 }
+
 function _evaluateRules(stats, threatIndex) {
   var banners = document.getElementById('alert-banners');
   var badge = document.getElementById('badge-live');
@@ -659,7 +526,8 @@ function _evaluateRules(stats, threatIndex) {
   var anyFiring = false;
   _rules.forEach(function(r) {
     if (!r.enabled) return;
-    if (_evalRule(r, stats, threatIndex)) {
+    var firing = _evalRule(r, stats, threatIndex);
+    if (firing) {
       anyFiring = true;
       var val = _ruleValue(r.metric, stats, threatIndex).toFixed(1);
       html += '<div class="alert-banner">&#9889; [ALERT] '
@@ -668,103 +536,14 @@ function _evaluateRules(stats, threatIndex) {
         + ' &mdash; ' + escapeHtml(r.label) + '</div>';
     }
   });
-  _lastFiringRules.forEach(function(r) {
-    anyFiring = true;
-    html += '<div class="alert-banner" style="border-color:var(--sev-crit)">'
-      + '&#128680; [SERVER ALERT] ' + escapeHtml(_metricLabel(r.metric)) + ' '
-      + escapeHtml(r.value) + ' ' + escapeHtml(r.op) + ' ' + escapeHtml(r.threshold)
-      + ' &mdash; ' + escapeHtml(r.label) + '</div>';
-  });
   banners.innerHTML = html;
-  if (anyFiring) { badge.textContent = '⚡ ALERT'; badge.classList.add('alert'); }
-  else { badge.textContent = '● LIVE'; badge.classList.remove('alert'); }
-}
-
-// ── Server-side rules ─────────────────────────────────────────────────────────
-function _loadServerRules() {
-  fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {credentials:'include'})
-    .then(function(r) { return r.ok ? r.json() : null; })
-    .then(function(d) {
-      if (!d) return;
-      _renderServerRulesTable(d.rules || [], d.history || []);
-    }).catch(function() {});
-}
-function _renderServerRulesTable(rules, history) {
-  var tb = document.getElementById('srules-tbody');
-  if (!tb) return;
-  var html = '';
-  rules.forEach(function(r) {
-    var firing = _lastFiringRules.some(function(f) { return f.id === r.id; });
-    var st = firing ? '<span class="fire-badge fire-alert">&#9940; FIRING</span>'
-                    : '<span class="fire-badge fire-ok">&#9711; OK</span>';
-    html += '<tr>'
-      + '<td class="mono">' + escapeHtml(_metricLabel(r.metric)) + '</td>'
-      + '<td class="mono">' + escapeHtml(r.op) + '</td>'
-      + '<td class="mono">' + escapeHtml(r.threshold) + '</td>'
-      + '<td>' + escapeHtml(r.label || '—') + '</td>'
-      + '<td class="mono">' + escapeHtml(r.cooldown_s) + 's</td>'
-      + '<td>' + st + '</td>'
-      + '<td style="white-space:nowrap">'
-      + '<button class="btn btn-sm" onclick="_toggleServerRule(' + r.id + ',' + (r.enabled ? 0 : 1) + ')">'
-      + (r.enabled ? 'Disable' : 'Enable') + '</button> '
-      + '<button class="btn btn-sm" style="color:var(--red)" onclick="_deleteServerRule(' + r.id + ')">Del</button>'
-      + '</td></tr>';
-  });
-  if (!html) html = '<tr><td colspan="7" class="dim" style="text-align:center;padding:12px">No server-side rules</td></tr>';
-  tb.innerHTML = html;
-  var htb = document.getElementById('history-tbody');
-  if (!htb) return;
-  var hh = '';
-  history.forEach(function(h) {
-    hh += '<tr><td class="mono">' + escapeHtml(_fmtTs(h.ts)) + '</td>'
-      + '<td>' + escapeHtml(h.label || 'rule #' + h.rule_id) + '</td>'
-      + '<td class="mono">' + escapeHtml((+h.value).toFixed(2)) + '</td></tr>';
-  });
-  if (!hh) hh = '<tr><td colspan="3" class="dim" style="text-align:center;padding:12px">No fires recorded</td></tr>';
-  htb.innerHTML = hh;
-}
-function _addServerRule() {
-  var payload = {
-    metric:     document.getElementById('srule-metric').value,
-    op:         document.getElementById('srule-op').value,
-    threshold:  parseFloat(document.getElementById('srule-thresh').value) || 0,
-    label:      document.getElementById('srule-label').value.trim(),
-    cooldown_s: parseInt(document.getElementById('srule-cooldown').value, 10) || 300,
-  };
-  fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {
-    method:'POST', credentials:'include',
-    headers:{'Content-Type':'application/json',
-             'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')},
-    body:JSON.stringify(payload),
-  }).then(function(r) { return r.json(); })
-    .then(function(d) {
-      if (d.ok) { _loadServerRules(); document.getElementById('srule-label').value = ''; }
-      else alert('Error: ' + (d.error || 'unknown'));
-    }).catch(function(e) { alert('Error: ' + e.message); });
-}
-function _deleteServerRule(id) {
-  if (!confirm('Delete this server rule?')) return;
-  fetch('/antibot-appsec-gateway/secured/siem-alert-rules?id=' + id,
-        {method:'DELETE', credentials:'include',
-         headers:{'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')}})
-    .then(function() { _loadServerRules(); });
-}
-function _toggleServerRule(id, newEnabled) {
-  fetch('/antibot-appsec-gateway/secured/siem-alert-rules', {
-    method:'PATCH', credentials:'include',
-    headers:{'Content-Type':'application/json',
-             'X-CSRF-Token': (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'')},
-    body:JSON.stringify({id:id, enabled:newEnabled}),
-  }).then(function() { _loadServerRules(); });
-}
-function _rulesTab(name) {
-  var names = ['client','server','history'];
-  document.querySelectorAll('.tab-pane').forEach(function(p) { p.classList.remove('active'); });
-  document.getElementById('tab-' + name).classList.add('active');
-  document.querySelectorAll('.tab-btn').forEach(function(b, i) {
-    b.classList.toggle('active', names[i] === name);
-  });
-  if (name === 'server' || name === 'history') _loadServerRules();
+  if (anyFiring) {
+    badge.textContent = '⚡ ALERT';
+    badge.classList.add('alert');
+  } else {
+    badge.textContent = '● LIVE';
+    badge.classList.remove('alert');
+  }
 }
 
 // ── Time range ────────────────────────────────────────────────────────────────
@@ -777,13 +556,29 @@ function _setMins(btn) {
 }
 
 // ── Vhost filter ──────────────────────────────────────────────────────────────
-function _onVhostChange() { selectedVhost = document.getElementById('vhost-filter').value; _updateVhostBadge(); tick(); }
-function _clearVhost() { selectedVhost = ''; document.getElementById('vhost-filter').value = ''; _updateVhostBadge(); tick(); }
+function _onVhostChange() {
+  selectedVhost = document.getElementById('vhost-filter').value;
+  _updateVhostBadge();
+  tick();
+}
+
+function _clearVhost() {
+  selectedVhost = '';
+  document.getElementById('vhost-filter').value = '';
+  _updateVhostBadge();
+  tick();
+}
+
 function _updateVhostBadge() {
   var badge = document.getElementById('vhost-badge');
-  if (selectedVhost) { badge.style.display='inline-block'; badge.textContent='Filtered: '+selectedVhost+' ✕'; }
-  else { badge.style.display='none'; }
+  if (selectedVhost) {
+    badge.style.display = 'inline-block';
+    badge.textContent = 'Filtered: ' + selectedVhost + ' ✕';
+  } else {
+    badge.style.display = 'none';
+  }
 }
+
 function _repopulateVhosts(vhosts) {
   var key = JSON.stringify(vhosts);
   if (key === lastVhostList) return;
@@ -791,73 +586,117 @@ function _repopulateVhosts(vhosts) {
   var sel = document.getElementById('vhost-filter');
   var prev = sel.value;
   sel.innerHTML = '<option value="">All vhosts</option>';
-  vhosts.forEach(function(v) { var o=document.createElement('option'); o.value=v; o.textContent=v; sel.appendChild(o); });
-  if (prev && vhosts.indexOf(prev) !== -1) sel.value = prev;
-  var _vfs = document.getElementById('vhost-filter-search');
-  if (_vfs) { _vfs.style.display = vhosts.length >= 8 ? 'inline-block' : 'none'; _vfs.value = ''; }
-}
-
-// ── CSV export ────────────────────────────────────────────────────────────────
-function _exportCsv() {
-  var url = '/antibot-appsec-gateway/secured/siem-export?mins=' + selectedMins
-    + (selectedVhost ? '&vhost=' + encodeURIComponent(selectedVhost) : '');
-  var a = document.createElement('a');
-  a.href = url; a.download = 'siem-events.csv';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  vhosts.forEach(function(v) {
+    var o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    sel.appendChild(o);
+  });
+  // Preserve previous selection if still available
+  if (prev && vhosts.indexOf(prev) !== -1) {
+    sel.value = prev;
+  }
 }
 
 // ── Charts ────────────────────────────────────────────────────────────────────
-var _chartTimeline=null, _chartDonut=null, _chartSignals=null, _chartSev=null;
-var _DONUT_COLORS=['#f85149','#ff7b3a','#d29922','#58a6ff','#bc8cff','#3fb950','#4dc4c4','#c77dff','#ff4d4d','#8b949e','#e6af4b'];
+var _chartTimeline = null;
+var _chartDonut = null;
+var _chartSignals = null;
+var _chartSev = null;
+
+var _DONUT_COLORS = [
+  '#f85149','#ff7b3a','#d29922','#58a6ff','#bc8cff',
+  '#3fb950','#4dc4c4','#c77dff','#ff4d4d','#8b949e','#e6af4b'
+];
+
 function _initCharts() {
-  _chartTimeline = new Chart(document.getElementById('chart-timeline').getContext('2d'), {
-    type:'bar',
-    data:{labels:[],datasets:[
-      {label:'Blocked',data:[],backgroundColor:'rgba(248,81,73,.7)',stack:'s'},
-      {label:'Missed', data:[],backgroundColor:'rgba(210,153,34,.5)',stack:'s'},
-      {label:'Allowed',data:[],backgroundColor:'rgba(63,185,80,.5)', stack:'s'},
-    ]},
-    options:{responsive:true,maintainAspectRatio:false,
+  var tCtx = document.getElementById('chart-timeline').getContext('2d');
+  _chartTimeline = new Chart(tCtx, {
+    type: 'bar',
+    data: {
+      labels: [],
+      datasets: [
+        {label:'Blocked', data:[], backgroundColor:'rgba(248,81,73,.7)', stack:'s'},
+        {label:'Missed', data:[], backgroundColor:'rgba(210,153,34,.5)', stack:'s'},
+        {label:'Allowed', data:[], backgroundColor:'rgba(63,185,80,.5)', stack:'s'},
+      ]
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
       plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}}},
-      scales:{x:{stacked:true,ticks:{color:'#8b949e',font:{size:9},maxTicksLimit:12},grid:{color:'rgba(48,54,61,.5)'}},
-              y:{stacked:true,ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}}}}
+      scales:{
+        x:{stacked:true,ticks:{color:'#8b949e',font:{size:9},maxTicksLimit:12},
+           grid:{color:'rgba(48,54,61,.5)'}},
+        y:{stacked:true,ticks:{color:'#8b949e',font:{size:10}},
+           grid:{color:'rgba(48,54,61,.5)'}}
+      }
+    }
   });
-  _chartDonut = new Chart(document.getElementById('chart-donut').getContext('2d'), {
-    type:'doughnut',
-    data:{labels:[],datasets:[{data:[],backgroundColor:_DONUT_COLORS,borderWidth:1,borderColor:'#161b22'}]},
-    options:{responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{position:'right',labels:{color:'#8b949e',font:{size:10},boxWidth:10,padding:8}}}}
+
+  var dCtx = document.getElementById('chart-donut').getContext('2d');
+  _chartDonut = new Chart(dCtx, {
+    type: 'doughnut',
+    data: {labels:[], datasets:[{data:[],backgroundColor:_DONUT_COLORS,borderWidth:1,borderColor:'#161b22'}]},
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{position:'right',labels:{color:'#8b949e',font:{size:10},boxWidth:10,padding:8}},
+      }
+    }
   });
-  _chartSignals = new Chart(document.getElementById('chart-signals').getContext('2d'), {
-    type:'bar',
-    data:{labels:[],datasets:[{data:[],backgroundColor:'rgba(88,166,255,.65)',borderRadius:3}]},
-    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+
+  var sCtx = document.getElementById('chart-signals').getContext('2d');
+  _chartSignals = new Chart(sCtx, {
+    type: 'bar',
+    data: {labels:[], datasets:[{data:[],backgroundColor:'rgba(88,166,255,.65)',borderRadius:3}]},
+    options: {
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{display:false}},
-      scales:{x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}},
-              y:{ticks:{color:'#c9d1d9',font:{size:10,family:'ui-monospace,Menlo,monospace'}},grid:{display:false}}}}
+      scales:{
+        x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}},
+        y:{ticks:{color:'#c9d1d9',font:{size:10,family:'ui-monospace,Menlo,monospace'}},
+           grid:{display:false}}
+      }
+    }
   });
-  _chartSev = new Chart(document.getElementById('chart-sev').getContext('2d'), {
-    type:'bar',
-    data:{labels:['Critical','High','Medium','Low','Info'],
-      datasets:[{data:[0,0,0,0,0],backgroundColor:['#ff4444','#ff7b3a','#d29922','#58a6ff','#8b949e'],borderRadius:3}]},
-    options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
+
+  var sevCtx = document.getElementById('chart-sev').getContext('2d');
+  _chartSev = new Chart(sevCtx, {
+    type: 'bar',
+    data: {
+      labels: ['Critical','High','Medium','Low','Info'],
+      datasets: [{
+        data: [0,0,0,0,0],
+        backgroundColor: ['#ff4444','#ff7b3a','#d29922','#58a6ff','#8b949e'],
+        borderRadius: 3
+      }]
+    },
+    options: {
+      indexAxis:'y', responsive:true, maintainAspectRatio:false,
       plugins:{legend:{display:false}},
-      scales:{x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}},
-              y:{ticks:{color:'#c9d1d9',font:{size:11}},grid:{display:false}}}}
+      scales:{
+        x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}},
+        y:{ticks:{color:'#c9d1d9',font:{size:11}},grid:{display:false}}
+      }
+    }
   });
 }
 
 // ── Render helpers ────────────────────────────────────────────────────────────
 function _fmtTime(ts) {
-  return new Date(ts*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+  var d = new Date(ts * 1000);
+  return d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit',second:'2-digit'});
 }
+
 function _fmtTs(ts) {
-  return new Date(ts*1000).toLocaleString('en-GB',
-    {hour:'2-digit',minute:'2-digit',second:'2-digit',day:'2-digit',month:'2-digit'}).replace(',','');
+  var d = new Date(ts * 1000);
+  return d.toLocaleString('en-GB',{hour:'2-digit',minute:'2-digit',second:'2-digit',
+    day:'2-digit',month:'2-digit'}).replace(',','');
 }
 
 var _activeSevFilters = {critical:true,high:true,medium:true,low:true,info:true};
 var _feedReasonFilter = '';
+
 document.querySelectorAll('.sev-pill').forEach(function(btn) {
   btn.addEventListener('click', function() {
     var sev = btn.getAttribute('data-sev');
@@ -872,28 +711,33 @@ document.getElementById('feed-reason-filter').addEventListener('input', function
 });
 
 var _cachedEvents = [];
-function _renderFeedFromCache() { _renderFeed(_cachedEvents); }
+function _renderFeedFromCache() {
+  _renderFeed(_cachedEvents);
+}
+
 function _renderFeed(evts) {
   _cachedEvents = evts;
   var rfilt = _feedReasonFilter;
-  var html = ''; var shown = 0;
+  var html = '';
+  var shown = 0;
   for (var i = 0; i < evts.length && shown < 80; i++) {
     var ev = evts[i];
     if (!_activeSevFilters[ev.sev]) continue;
     if (rfilt && ev.reason.toLowerCase().indexOf(rfilt) === -1) continue;
     shown++;
-    html += '<tr onclick="_openDossier(' + escapeHtml(JSON.stringify(ev.ip||'')) + ')">'
+    html += '<tr>'
       + '<td class="mono" style="white-space:nowrap">' + escapeHtml(_fmtTime(ev.ts)) + '</td>'
       + '<td><span class="sev sev-' + escapeHtml(ev.sev) + '">' + escapeHtml(ev.sev) + '</span></td>'
       + '<td class="mono trunc" title="' + escapeHtml(ev.ip) + '">' + escapeHtml(ev.ip) + '</td>'
       + '<td class="mono trunc" style="color:var(--yellow)" title="' + escapeHtml(ev.reason) + '">'
-      + (ev.reason ? escapeHtml(ev.reason) : '<span class="dim">ok</span>') + '</td>'
+      +   (ev.reason ? escapeHtml(ev.reason) : '<span class="dim">ok</span>') + '</td>'
       + '<td class="mono trunc" title="' + escapeHtml(ev.path) + '">' + escapeHtml(ev.path) + '</td>'
-      + '<td class="mono">' + escapeHtml(ev.score||0) + '</td>'
+      + '<td class="mono">' + escapeHtml(ev.score || 0) + '</td>'
       + '</tr>';
   }
   document.getElementById('feed-tbody').innerHTML = html;
 }
+
 function _renderTopIps(ips) {
   lastTopIps = ips;
   var html = '';
@@ -901,162 +745,61 @@ function _renderTopIps(ips) {
     var banHtml = row.banned
       ? '<span style="color:var(--red);font-weight:700">BANNED</span>'
       : '<span style="color:var(--green)">ok</span>';
-    html += '<tr onclick="_openDossier(' + escapeHtml(JSON.stringify(row.ip||'')) + ')">'
+    html += '<tr onclick="_openDrawer(' + JSON.stringify(escapeHtml(row.ja4 || '')) + ',this)">'
       + '<td class="mono trunc" title="' + escapeHtml(row.ip) + '">' + escapeHtml(row.ip) + '</td>'
       + '<td class="mono" style="color:var(--orange)">' + escapeHtml(Math.round(row.risk_score)) + '</td>'
       + '<td class="mono">' + escapeHtml(row.requests) + '</td>'
       + '<td class="mono" style="color:var(--red)">' + escapeHtml(row.blocked) + '</td>'
       + '<td class="mono trunc" style="color:var(--yellow)" title="' + escapeHtml(row.top_reason) + '">'
-      + escapeHtml(row.top_reason||'—') + '</td>'
+      +   escapeHtml(row.top_reason || '—') + '</td>'
       + '<td>' + banHtml + '</td>'
       + '</tr>';
   });
   document.getElementById('ips-tbody').innerHTML = html;
 }
 
-// ── Cluster panel ─────────────────────────────────────────────────────────────
-function _renderClusters(clusters) {
-  var tb = document.getElementById('cluster-tbody');
-  var ct = document.getElementById('cluster-count');
-  if (!clusters || !clusters.length) {
-    tb.innerHTML = '<tr><td colspan="4" class="dim" style="text-align:center;padding:12px">No coordinated clusters detected</td></tr>';
-    ct.textContent = '(0 active)'; return;
+// ── JA4 Pivot Drawer ──────────────────────────────────────────────────────────
+function _openDrawer(ja4, rowEl) {
+  var drawer = document.getElementById('ja4-drawer');
+  var body   = document.getElementById('ja4-drawer-body');
+
+  if (!ja4) {
+    body.innerHTML = '<p class="dim" style="font-size:12px;margin-top:8px">No JA4 fingerprint available for this IP.</p>';
+    drawer.classList.add('open');
+    return;
   }
-  ct.textContent = '(' + clusters.length + ' active)';
-  var html = '';
-  clusters.forEach(function(c) {
+
+  var matches = lastTopIps.filter(function(ip) { return (ip.ja4 || '') === ja4; });
+  var html = '<p style="font-size:11px;color:var(--dim);margin-bottom:4px">Fingerprint:</p>'
+    + '<div id="ja4-code">' + escapeHtml(ja4) + '</div>'
+    + '<p style="font-size:11px;color:var(--dim);margin-bottom:8px">'
+    + escapeHtml(matches.length) + ' IP(s) share this fingerprint</p>'
+    + '<table><thead><tr><th>IP</th><th>Risk</th><th>Req</th><th>Blocked</th></tr></thead><tbody>';
+  matches.forEach(function(m) {
     html += '<tr>'
-      + '<td class="mono">' + escapeHtml(c.asn||'—') + '</td>'
-      + '<td class="mono">' + escapeHtml(c.prefix||'—') + '</td>'
-      + '<td class="mono">' + escapeHtml(c.minute||'—') + '</td>'
-      + '<td class="mono" style="color:var(--orange);font-weight:700">' + escapeHtml(c.size) + '</td>'
+      + '<td class="mono">' + escapeHtml(m.ip) + '</td>'
+      + '<td class="mono">' + escapeHtml(Math.round(m.risk_score)) + '</td>'
+      + '<td class="mono">' + escapeHtml(m.requests) + '</td>'
+      + '<td class="mono" style="color:var(--red)">' + escapeHtml(m.blocked) + '</td>'
       + '</tr>';
   });
-  tb.innerHTML = html;
+  html += '</tbody></table>';
+  body.innerHTML = html;
+  drawer.classList.add('open');
 }
 
-// ── Attacker Dossier ──────────────────────────────────────────────────────────
-function _openDossier(ip) {
-  if (!ip) return;
-  document.getElementById('dossier-ip').textContent = ip;
-  document.getElementById('dossier-body').innerHTML =
-    '<p class="dim" style="font-size:11px;padding:12px">Loading…</p>';
-  document.getElementById('dossier-drawer').classList.add('open');
-  _currentDossierTab = 'overview';
-  _setActiveDtab('overview');
-  fetch('/antibot-appsec-gateway/secured/siem-dossier?ip=' + encodeURIComponent(ip), {credentials:'include'})
-    .then(function(r) { return r.ok ? r.json() : null; })
-    .then(function(d) {
-      if (!d) { document.getElementById('dossier-body').innerHTML = '<p class="dim">Error.</p>'; return; }
-      _lastDossierData = d;
-      _renderDossierTab('overview');
-    }).catch(function() {
-      document.getElementById('dossier-body').innerHTML = '<p class="dim">Error loading dossier.</p>';
-    });
+function _closeDrawer() {
+  document.getElementById('ja4-drawer').classList.remove('open');
 }
-function _closeDossier() { document.getElementById('dossier-drawer').classList.remove('open'); }
-function _setActiveDtab(name) {
-  var names = ['overview','events','ja4','clusters'];
-  document.querySelectorAll('.dtab').forEach(function(b,i) { b.classList.toggle('active', names[i]===name); });
-}
-function _dossierTab(name) {
-  _currentDossierTab = name;
-  _setActiveDtab(name);
-  if (_lastDossierData) _renderDossierTab(name);
-}
-function _renderDossierTab(name) {
-  var d = _lastDossierData;
-  if (!d) return;
-  var body = document.getElementById('dossier-body');
-  if (name === 'overview') {
-    var bannedStr = d.banned
-      ? '<span style="color:var(--red);font-weight:700">YES'+(d.ban_expires>0?' ('+Math.round(d.ban_expires)+'s left)':'')+'</span>'
-      : '<span style="color:var(--green)">No</span>';
-    body.innerHTML = '<div class="dkv">'
-      + '<span class="dk">Requests</span><span class="dv">'+escapeHtml(d.requests)+'</span>'
-      + '<span class="dk">Blocked</span><span class="dv" style="color:var(--red)">'+escapeHtml(d.blocked)+'</span>'
-      + '<span class="dk">Allowed</span><span class="dv" style="color:var(--green)">'+escapeHtml(d.allowed)+'</span>'
-      + '<span class="dk">Risk Score</span><span class="dv" style="color:var(--orange)">'+escapeHtml(Math.round(d.risk_score))+'</span>'
-      + '<span class="dk">Banned</span><span class="dv">'+bannedStr+'</span>'
-      + '<span class="dk">Last Path</span><span class="dv trunc" style="max-width:280px">'+escapeHtml(d.last_path||'—')+'</span>'
-      + '<span class="dk">JA4</span><span class="dv" style="color:var(--purple)">'+escapeHtml(d.last_ja4||'—')+'</span>'
-      + '<span class="dk">User-Agent</span><span class="dv trunc" style="max-width:280px">'+escapeHtml(d.last_ua||'—')+'</span>'
-      + '</div>'
-      + '<p style="font-size:11px;color:var(--dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Top Reasons</p>'
-      + '<table><thead><tr><th>Reason</th><th>Count</th></tr></thead><tbody>'
-      + (d.reasons||[]).slice(0,10).map(function(r) {
-          return '<tr><td class="mono" style="color:var(--yellow)">'+escapeHtml(r[0])+'</td>'
-               + '<td class="mono">'+escapeHtml(r[1])+'</td></tr>';
-        }).join('')
-      + '</tbody></table>';
-  } else if (name === 'events') {
-    var eh = '<table><thead><tr><th>Time</th><th>Sev</th><th>Path</th><th>Reason</th><th>Status</th></tr></thead><tbody>';
-    (d.recent_events||[]).slice(0,40).forEach(function(ev) {
-      eh += '<tr>'
-        + '<td class="mono" style="white-space:nowrap">'+escapeHtml(_fmtTime(ev.ts))+'</td>'
-        + '<td><span class="sev sev-'+escapeHtml(ev.sev)+'">'+escapeHtml(ev.sev)+'</span></td>'
-        + '<td class="mono trunc">'+escapeHtml(ev.path)+'</td>'
-        + '<td class="mono" style="color:var(--yellow)">'+escapeHtml(ev.reason||'ok')+'</td>'
-        + '<td class="mono">'+escapeHtml(ev.status)+'</td></tr>';
-    });
-    body.innerHTML = eh + '</tbody></table>';
-  } else if (name === 'ja4') {
-    var peers = d.ja4_peers||[];
-    body.innerHTML = '<p style="font-size:11px;color:var(--dim);margin-bottom:4px">Fingerprint:</p>'
-      + '<div style="font-family:ui-monospace;font-size:12px;color:var(--purple);background:var(--bg-deep);'
-      + 'border:1px solid var(--line);border-radius:4px;padding:6px 10px;margin:6px 0 10px;word-break:break-all">'
-      + escapeHtml(d.last_ja4||'(none)') + '</div>'
-      + '<p style="font-size:11px;color:var(--dim);margin-bottom:8px">' + escapeHtml(peers.length) + ' other IP(s) share this fingerprint</p>'
-      + '<table><thead><tr><th>Peer IP</th></tr></thead><tbody>'
-      + peers.map(function(p) { return '<tr><td class="mono">'+escapeHtml(p)+'</td></tr>'; }).join('')
-      + '</tbody></table>';
-  } else if (name === 'clusters') {
-    var cls = d.clusters||[];
-    if (!cls.length) { body.innerHTML = '<p class="dim" style="font-size:12px;margin-top:8px">This IP is not part of any active cluster.</p>'; return; }
-    var ch = '<table><thead><tr><th>ASN</th><th>Prefix</th><th>Minute</th><th>Size</th></tr></thead><tbody>';
-    cls.forEach(function(c) {
-      ch += '<tr><td class="mono">'+escapeHtml(c.asn||'—')+'</td><td class="mono">'+escapeHtml(c.prefix||'—')+'</td>'
-          + '<td class="mono">'+escapeHtml(c.minute||'—')+'</td>'
-          + '<td class="mono" style="color:var(--orange)">'+escapeHtml(c.size)+'</td></tr>';
-    });
-    body.innerHTML = ch + '</tbody></table>';
-  }
-}
+
+// Close drawer when clicking outside (but not on a table row)
 document.addEventListener('click', function(e) {
-  var drawer = document.getElementById('dossier-drawer');
+  var drawer = document.getElementById('ja4-drawer');
   if (!drawer.classList.contains('open')) return;
   if (drawer.contains(e.target)) return;
   if (e.target.closest('tr[onclick]')) return;
-  _closeDossier();
+  _closeDrawer();
 });
-
-// ── SSE real-time push ────────────────────────────────────────────────────────
-var _sseMsgs = [];
-var _sseHideTimer = null;
-function _startSSE() {
-  if (_sse) { try { _sse.close(); } catch(e) {} }
-  _sse = new EventSource('/antibot-appsec-gateway/secured/siem-stream');
-  var dot = document.getElementById('sse-dot');
-  _sse.onopen  = function() { dot.style.background = 'var(--green)'; };
-  _sse.onerror = function() { dot.style.background = '#555'; };
-  _sse.addEventListener('alert', function(e) {
-    try {
-      var ev = JSON.parse(e.data);
-      var msg = '[' + _fmtTime(ev.ts) + '] ' + escapeHtml(ev.sev.toUpperCase())
-              + ' ' + escapeHtml(ev.ip) + ' — ' + escapeHtml(ev.reason)
-              + (ev.path ? ' ' + escapeHtml(ev.path) : '');
-      _sseMsgs.unshift(msg);
-      if (_sseMsgs.length > 5) _sseMsgs.pop();
-      var banner = document.getElementById('sse-banner');
-      banner.style.display = 'block';
-      banner.innerHTML = _sseMsgs.join('<br>');
-      clearTimeout(_sseHideTimer);
-      _sseHideTimer = setTimeout(function() {
-        banner.style.display = 'none'; _sseMsgs = [];
-      }, 8000);
-    } catch(err) {}
-  });
-}
 
 // ── KPI update ────────────────────────────────────────────────────────────────
 function _updateKPIs(stats, threatIndex) {
@@ -1065,46 +808,64 @@ function _updateKPIs(stats, threatIndex) {
   document.getElementById('kpi-bans').textContent     = stats.bans;
   document.getElementById('kpi-bypasses').textContent = stats.bypasses;
   document.getElementById('kpi-threat').textContent   = threatIndex;
-  var pct = stats.total > 0 ? (stats.blocked/stats.total*100).toFixed(1) : '0.0';
+
+  var pct = stats.total > 0 ? (stats.blocked / stats.total * 100).toFixed(1) : '0.0';
   document.getElementById('kpi-block-pct').textContent = pct + '% blocked';
-  var winLabel = selectedMins < 60 ? 'Last '+selectedMins+'m'
-    : (selectedMins===60 ? 'Last 1h' : (selectedMins===360 ? 'Last 6h' : 'Last 24h'));
+
+  // Window label
+  var winLabel = selectedMins < 60
+    ? 'Last ' + selectedMins + 'm'
+    : (selectedMins === 60 ? 'Last 1h' : (selectedMins === 360 ? 'Last 6h' : 'Last 24h'));
   document.getElementById('kpi-window').textContent = winLabel;
-  document.title = 'AppSecGW_1.8.13 · SIEM · ' + winLabel;
+  document.title = 'AppSecGW_1.8.5 · SIEM · ' + winLabel;
+
+  // Threat bar colour
   var fill = document.getElementById('threat-bar-fill');
   fill.style.width = threatIndex + '%';
-  fill.style.background = threatIndex>=75 ? '#ff4444' : threatIndex>=50 ? '#ff7b3a'
-    : threatIndex>=25 ? '#d29922' : '#3fb950';
+  fill.style.background = threatIndex >= 75 ? '#ff4444'
+    : threatIndex >= 50 ? '#ff7b3a'
+    : threatIndex >= 25 ? '#d29922' : '#3fb950';
 }
 
-// ── Chart updaters ────────────────────────────────────────────────────────────
+// ── Timeline chart update ─────────────────────────────────────────────────────
 function _updateTimeline(tl) {
-  var labels=[],blk=[],byp=[],alw=[];
+  var labels = [], blk = [], byp = [], alw = [];
   tl.forEach(function(b) {
-    labels.push(new Date(b.t*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
-    blk.push(b.blocked||0); byp.push(b.missed||0); alw.push(b.allowed||0);
+    var d = new Date(b.t * 1000);
+    labels.push(d.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}));
+    blk.push(b.blocked || 0);
+    byp.push(b.missed || 0);
+    alw.push(b.allowed || 0);
   });
-  _chartTimeline.data.labels=labels;
-  _chartTimeline.data.datasets[0].data=blk;
-  _chartTimeline.data.datasets[1].data=byp;
-  _chartTimeline.data.datasets[2].data=alw;
+  _chartTimeline.data.labels = labels;
+  _chartTimeline.data.datasets[0].data = blk;
+  _chartTimeline.data.datasets[1].data = byp;
+  _chartTimeline.data.datasets[2].data = alw;
   _chartTimeline.update('none');
 }
+
+// ── Donut chart update ────────────────────────────────────────────────────────
 function _updateDonut(cats) {
-  _chartDonut.data.labels=cats.map(function(c){return c.cat;});
-  _chartDonut.data.datasets[0].data=cats.map(function(c){return c.count;});
+  _chartDonut.data.labels = cats.map(function(c) { return c.cat; });
+  _chartDonut.data.datasets[0].data = cats.map(function(c) { return c.count; });
   _chartDonut.update('none');
 }
+
+// ── Signals chart update ──────────────────────────────────────────────────────
 function _updateSignals(byReason) {
-  var top=byReason.slice(0,15);
-  _chartSignals.data.labels=top.map(function(r){return r.reason;});
-  _chartSignals.data.datasets[0].data=top.map(function(r){return r.count;});
+  var top = byReason.slice(0, 15);
+  _chartSignals.data.labels  = top.map(function(r) { return r.reason; });
+  _chartSignals.data.datasets[0].data = top.map(function(r) { return r.count; });
   _chartSignals.update('none');
 }
+
+// ── Severity chart update ─────────────────────────────────────────────────────
 function _updateSevChart(evts) {
-  var c={critical:0,high:0,medium:0,low:0,info:0};
-  evts.forEach(function(e){c[e.sev]=(c[e.sev]||0)+1;});
-  _chartSev.data.datasets[0].data=[c.critical,c.high,c.medium,c.low,c.info];
+  var counts = {critical:0, high:0, medium:0, low:0, info:0};
+  evts.forEach(function(e) { counts[e.sev] = (counts[e.sev] || 0) + 1; });
+  _chartSev.data.datasets[0].data = [
+    counts.critical, counts.high, counts.medium, counts.low, counts.info
+  ];
   _chartSev.update('none');
 }
 
@@ -1112,48 +873,54 @@ function _updateSevChart(evts) {
 function tick() {
   var url = '/antibot-appsec-gateway/secured/siem-data?mins=' + selectedMins
     + (selectedVhost ? '&vhost=' + encodeURIComponent(selectedVhost) : '');
-  fetch(url, {credentials:'include'})
+
+  fetch(url, {credentials:'same-origin'})
     .then(function(r) {
-      if (r.status===401||r.status===403) { window.location.href='/antibot-appsec-gateway/secured/login'; return null; }
-      if (!r.ok) throw new Error('HTTP '+r.status);
+      if (r.status === 401 || r.status === 403) {
+        window.location.href = '/antibot-appsec-gateway/secured/login';
+        return null;
+      }
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       return r.json();
     })
     .then(function(d) {
       if (!d) return;
-      document.getElementById('err-banner').style.display = 'none';
-      _repopulateVhosts(d.vhosts||[]);
-      _lastStats       = d.stats;
-      _lastThreatIndex = d.threat_index;
-      _lastFiringRules = d.firing_rules||[];
+      var errBanner = document.getElementById('err-banner');
+      errBanner.style.display = 'none';
+
+      // Vhost repopulation
+      _repopulateVhosts(d.vhosts || []);
+
+      // KPIs
+      _lastStats        = d.stats;
+      _lastThreatIndex  = d.threat_index;
       _updateKPIs(d.stats, d.threat_index);
+
+      // Alert rules evaluation
       _renderRulesTable();
       _evaluateRules(d.stats, d.threat_index);
-      _updateTimeline(d.timeline||[]);
-      _updateDonut(d.threat_cats||[]);
-      _updateSignals(d.by_reason||[]);
-      _renderFeed(d.events||[]);
-      _updateSevChart(d.events||[]);
-      _renderTopIps(d.top_ips||[]);
-      _renderClusters(d.clusters||[]);
+
+      // Charts
+      _updateTimeline(d.timeline || []);
+      _updateDonut(d.threat_cats || []);
+      _updateSignals(d.by_reason || []);
+
+      // Events
+      _renderFeed(d.events || []);
+      _updateSevChart(d.events || []);
+
+      // Top IPs
+      _renderTopIps(d.top_ips || []);
+
+      // Footer timestamp
       document.getElementById('footer-ts').textContent =
-        'Updated ' + new Date(d.ts*1000).toLocaleTimeString();
+        'Updated ' + new Date(d.ts * 1000).toLocaleTimeString();
     })
     .catch(function(e) {
-      var b=document.getElementById('err-banner');
-      b.style.display='block'; b.textContent='Fetch error: '+e.message;
+      var errBanner = document.getElementById('err-banner');
+      errBanner.style.display = 'block';
+      errBanner.textContent = 'Fetch error: ' + e.message;
     });
-}
-
-// ── JA4 pivot drawer ──────────────────────────────────────────────────────────
-function _openDrawer(ja4) {
-  var d = document.getElementById('ja4-drawer');
-  var lbl = document.getElementById('ja4-drawer-fp');
-  if (lbl) lbl.textContent = ja4 || '—';
-  if (d) d.classList.add('open');
-}
-function _closeDrawer() {
-  var d = document.getElementById('ja4-drawer');
-  if (d) d.classList.remove('open');
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -1163,16 +930,7 @@ document.addEventListener('DOMContentLoaded', function() {
   _updateRulesCount();
   tick();
   _timers.push(setInterval(tick, 5000));
-  _startSSE();
 });
-</script>
-<script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
-var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
-if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
-if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
-fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
-(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
 </script>
 </body>
 </html>

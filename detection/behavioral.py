@@ -4,30 +4,23 @@
 
 from collections import defaultdict
 
-from config import (
-    BEHAVIORAL_CHECK_ENABLED,
-    BEHAVIORAL_SAMPLE_N,
-    BEHAVIORAL_COV_THRESHOLD,
-    BEHAVIORAL_R1_THRESHOLD,
-    BEHAVIORAL_BIN_PCT_THRESHOLD,
-    BEHAVIORAL_MAX_INTERVAL_S,
-    BEHAVIORAL_SKIP_INTERVAL_S,
-)
+from config import BEHAVIORAL_CHECK_ENABLED
 from state import state_lock, ip_state
 
 
 async def behavioral_check(ip: str) -> tuple[bool, str]:
     """M5: stronger bot timing detection. Three orthogonal tests; any one
-    triggers. Tests look at the last BEHAVIORAL_SAMPLE_N request intervals.
+    triggers. Tests look at the last 16 request intervals.
 
-      1. Coefficient of variation σ/μ < BEHAVIORAL_COV_THRESHOLD  (near-deterministic)
-      2. Autocorrelation lag-1 > BEHAVIORAL_R1_THRESHOLD  (bot loops incl. jitter)
-      3. Same-bin majority: > BEHAVIORAL_BIN_PCT_THRESHOLD of intervals in one
-         50-ms bin (quantised sleep loops)
+      1. Coefficient of variation σ/μ < 0.05  (near-deterministic spacing)
+      2. Autocorrelation lag-1 > 0.85 (each interval mirrors the previous one;
+         common with sleep-based bot loops including jittered ones)
+      3. Same-bin majority: >70% of intervals fall in a single 50-ms bin
+         (sleep loops with quantised jitter)
     """
     async with state_lock:
         s = ip_state[ip]
-        N = BEHAVIORAL_SAMPLE_N
+        N = 16
         if len(s.request_times) < N:
             return False, ""
         recent = list(s.request_times)[-N:]
@@ -35,7 +28,7 @@ async def behavioral_check(ip: str) -> tuple[bool, str]:
         if not intervals or any(iv <= 0 for iv in intervals):
             return False, ""
         mean_iv = sum(intervals) / len(intervals)
-        if mean_iv > BEHAVIORAL_SKIP_INTERVAL_S:
+        if mean_iv > 5.0:
             # Slow human-paced clicks — don't bother analysing.
             return False, ""
         var = sum((iv - mean_iv) ** 2 for iv in intervals) / len(intervals)
@@ -55,11 +48,11 @@ async def behavioral_check(ip: str) -> tuple[bool, str]:
             bins[int(iv * 1000) // 50] += 1
         max_bin_pct = max(bins.values()) / len(intervals)
 
-        if cov < BEHAVIORAL_COV_THRESHOLD and mean_iv < BEHAVIORAL_MAX_INTERVAL_S:
+        if cov < 0.05 and mean_iv < 2.0:
             return True, f"timing too regular (σ/μ={cov:.3f}, μ={mean_iv*1000:.1f}ms)"
-        if r1 > BEHAVIORAL_R1_THRESHOLD and mean_iv < BEHAVIORAL_MAX_INTERVAL_S:
+        if r1 > 0.85 and mean_iv < 2.0:
             return True, f"autocorrelated intervals (r₁={r1:.2f})"
-        if max_bin_pct > BEHAVIORAL_BIN_PCT_THRESHOLD:
+        if max_bin_pct > 0.70:
             return True, f"quantised intervals ({max_bin_pct*100:.0f}% in one 50ms bin)"
     return False, ""
 

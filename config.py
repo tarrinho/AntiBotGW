@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.13"
+GW_VERSION = "AppSecGW_1.8.5"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -47,12 +47,9 @@ except Exception as _e:
     print(f"FATAL: invalid UPSTREAM={_upstream_raw!r} — {_e}", flush=True)
     raise SystemExit(2)
 UPSTREAM        = _upstream_raw.rstrip("/")
-# Permit upstream URLs that resolve to RFC-1918 / loopback addresses
-# (e.g. host.docker.internal, 192.168.x.x). Default OFF — the SSRF guard is
-# ON by default (1.8.11, fail-closed), so an admin cannot repoint UPSTREAM at
-# cloud metadata (169.254.169.254) or internal services. Set
-# ALLOW_PRIVATE_UPSTREAM=1 for compose deployments that legitimately use an
-# internal upstream (host.docker.internal / 192.168.x.x / a sidecar service).
+# Set ALLOW_PRIVATE_UPSTREAM=1 to permit upstream URLs that resolve to
+# RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x).
+# Only enable in trusted internal deployments — disables the SSRF guard.
 ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() == "1"
 # STRICT_VHOST: when at least one vhost is registered, reject inbound hosts that
 # are not in the vhost table (502). Default ON. Has no effect when VHOSTS is empty
@@ -177,18 +174,8 @@ _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)
 POW_VALID_SECS    = 300     # 5 minutes
-BEHAVIOR_WINDOW   = 30      # retained for backwards compat — not used by behavioral.py
-BEHAVIOR_MAX_REGULAR = 8    # retained for backwards compat — not used by behavioral.py
-
-# 1.8.11 QW-6 — expose actual behavioral detection thresholds as env vars.
-# behavioral.py uses statistical analysis on the last N request intervals;
-# these constants map directly to the three orthogonal tests it runs.
-BEHAVIORAL_SAMPLE_N         = int(os.environ.get("BEHAVIORAL_SAMPLE_N",    "16"))   # last N intervals to analyse
-BEHAVIORAL_COV_THRESHOLD    = float(os.environ.get("BEHAVIORAL_COV_THRESHOLD", "0.05"))  # σ/μ below this → too regular
-BEHAVIORAL_R1_THRESHOLD     = float(os.environ.get("BEHAVIORAL_R1_THRESHOLD",  "0.85"))  # lag-1 autocorrelation above this → bot
-BEHAVIORAL_BIN_PCT_THRESHOLD= float(os.environ.get("BEHAVIORAL_BIN_PCT",       "0.70"))  # % of intervals in one 50ms bin above this → bot
-BEHAVIORAL_MAX_INTERVAL_S   = float(os.environ.get("BEHAVIORAL_MAX_INTERVAL",  "2.0"))   # μ above this → skip (too slow for bot)
-BEHAVIORAL_SKIP_INTERVAL_S  = float(os.environ.get("BEHAVIORAL_SKIP_INTERVAL", "5.0"))   # individual interval above this → skip entire sample
+BEHAVIOR_WINDOW   = 30      # seconds
+BEHAVIOR_MAX_REGULAR = 8    # >N requests with σ<10ms → bot
 
 # 1.6.7 — runtime-key directory.
 # Container (Dockerfile symlinks /app/.X_key → /data/.X_key on build) keeps
@@ -201,7 +188,7 @@ def _resolve_key_dir() -> str:
         d = os.path.expanduser(env_dir)
         try:
             os.makedirs(d, mode=0o700, exist_ok=True)
-            try: os.chmod(d, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+            try: os.chmod(d, 0o700)
             except OSError: pass  # nosec B110 — chmod is best-effort hardening; dir already writable
             return d
         except OSError as _e:
@@ -318,22 +305,6 @@ HONEYPOT_PATHS = {
     "/api/_debug/dump", "/api/v0/admin",
     "/staff/dashboard.json", "/.crawler-trap/secrets",
 }
-
-# 1.8.11 QW-1 — operator-injectable extra honeypot trap paths.
-# HONEYPOT_EXTRA_PATHS: comma-separated or JSON-array of path strings, e.g.
-#   HONEYPOT_EXTRA_PATHS='["/my-secret-admin","/legacy/backdoor.php"]'
-# Merged into HONEYPOT_PATHS at startup; also hot-reloadable via /__config.
-_honeypot_extra_raw = os.environ.get("HONEYPOT_EXTRA_PATHS", "").strip()
-HONEYPOT_EXTRA_PATHS: list = []
-if _honeypot_extra_raw:
-    try:
-        _extra = json.loads(_honeypot_extra_raw) if _honeypot_extra_raw.startswith("[") \
-            else [p.strip() for p in _honeypot_extra_raw.split(",") if p.strip()]
-        if isinstance(_extra, list):
-            HONEYPOT_EXTRA_PATHS = [str(p) for p in _extra if p]
-            HONEYPOT_PATHS = HONEYPOT_PATHS | set(HONEYPOT_EXTRA_PATHS)
-    except Exception:
-        pass
 
 # Path PATTERNS (regex) that indicate file-hunting / CTF reconnaissance.
 SUSPICIOUS_PATH_PATTERNS = (
@@ -477,10 +448,6 @@ JA4_DENY_LIST: set = {
     e.strip() for e in os.environ.get("JA4_DENY_LIST", "").split(",")
     if e.strip()
 }
-# 1.8.6 — JA4H HTTP fingerprint deny-list
-JA4H_DENY_LIST: frozenset = frozenset(
-    s.strip() for s in os.environ.get("JA4H_DENY_LIST", "").split(",") if s.strip()
-)
 JA4_AUTODENY_THRESHOLD = int(os.environ.get("JA4_AUTODENY_THRESHOLD", "3"))
 JA4_AUTODENY_WINDOW_S  = int(os.environ.get("JA4_AUTODENY_WINDOW_S",  "86400"))
 _ja4_trusted_raw = os.environ.get("JA4_TRUSTED_PEERS", "").strip()
@@ -643,28 +610,6 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(
 REDIS_URL          = os.environ.get("REDIS_URL", "").strip()
 REDIS_NS           = os.environ.get("REDIS_NS", "appsecgw").strip() or "appsecgw"
 REDIS_TIMEOUT      = float(os.environ.get("REDIS_TIMEOUT", "0.5"))
-# 1.8.8 — TLS enforcement. When true (default) the gateway refuses to connect
-# to Redis unless REDIS_URL uses the rediss:// scheme. Set REDIS_REQUIRE_TLS=false
-# only in isolated dev/test environments where network-level encryption is not
-# available (e.g. localhost loopback, Docker-internal network).
-REDIS_REQUIRE_TLS: bool = os.environ.get("REDIS_REQUIRE_TLS", "true").strip().lower() not in ("0", "false", "no")
-
-# 1.8.8 — IP/CIDR allowlist for Redis connections. When non-empty the gateway
-# refuses to connect to a Redis host whose resolved IP is not in this list.
-# Empty = no restriction (single-host deployments where Docker network isolation
-# is the only enforcement layer).
-_redis_allow_raw = os.environ.get("REDIS_ALLOW_LIST", "").strip()
-REDIS_ALLOW_LIST: list = []   # list of normalised CIDR strings; populated below
-if _redis_allow_raw:
-    import ipaddress as _ip
-    for _ra_entry in _redis_allow_raw.split(","):
-        _ra_entry = _ra_entry.strip()
-        if _ra_entry:
-            try:
-                REDIS_ALLOW_LIST.append(str(_ip.ip_network(_ra_entry, strict=False)))
-            except ValueError:
-                print(f"WARN: invalid REDIS_ALLOW_LIST entry {_ra_entry!r} — ignoring",
-                      flush=True)
 
 # ── Webhook fan-out ────────────────────────────────────────────────────────
 WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").strip()
@@ -698,9 +643,6 @@ if _trusted_proxies_raw:
         except ValueError as _e2:
             print(f"FATAL: invalid TRUSTED_PROXIES entry {_e!r} — {_e2}", flush=True)
             raise SystemExit(2)
-# Normalised CIDR strings — hot-reload stores/reads this form; TRUSTED_PROXIES_NETS
-# holds the parsed ip_network objects and is updated in tandem by proxy_handler.
-TRUSTED_PROXIES: list = [str(n) for n in TRUSTED_PROXIES_NETS]
 
 # ── Structured logging + request correlation IDs ─────────────────────────
 LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").lower()
@@ -724,20 +666,11 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/sw.js",
     # 1.7.3 — AI-agent detection probes (public, no auth required)
     "/probe",
+    "/maze",
     "/canary-probe/",
-    # 1.8.5 — interaction-report must be public: bot-detection JS posts here
-    # before any session exists. Missing entry caused silent bot-detect failure.
-    "/interaction-report",
-    # 1.8.9 — favicon assets: injected into every HTML response so browsers
-    # fetch them without a session cookie.
-    "/favicon.ico",
-    "/apple-touch-icon.png",
-    "/favicon.svg",
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout",
-                         "/auth/oidc/login", "/auth/oidc/callback",
-                         # 1.8.5 — TOTP step: missing entry blocked 2FA entirely
-                         "/login/totp")
+                         "/auth/oidc/login", "/auth/oidc/callback")
 
 # High-frequency read-only polling endpoints that must not flood the events
 # buffer — recording them every 2–15 s displaces real traffic events.
@@ -836,16 +769,17 @@ RISK_WEIGHTS = {
     "webgl-missing":         15,
     # 1.7.3 — AI-agent specific signals
     "honey-cred":            90,   # P1: fake credential used
+    "redirect-maze-bot":     55,   # P2: maze completed too fast
     "llm-no-subresources":   40,   # P3: HTML fetched without CSS/JS/images
     "canary-probe-miss":     35,   # P4: preload probe never fetched
-    # 1.8.6 — new signals
+    # 1.8.5 — new signals
     "body-critical-injection": 80,
     "method-override-attempt": 35,
     "smuggling-dual-header":   90,
     "smuggling-invalid-te":    90,
     "smuggling-obfuscated-te": 90,
     "smuggling-duplicate-cl":  90,
-    # 1.8.6 Week 3/4 — new detection signals
+    # 1.8.5 Week 3/4 — new detection signals
     "body-xxe":                80,
     "body-proto-pollution":    50,
     "header-ssti":             50,
@@ -855,30 +789,7 @@ RISK_WEIGHTS = {
     "gql-depth-exceeded":      30,
     "upload-dangerous-ext":    60,
     "upload-dangerous-magic":  70,
-    # 1.8.6 — credential stuffing + JA4H signals
-    "upstream-auth-fail":      40,
-    "ja4h-deny":               90,
-    # 1.8.6 — client-side interaction probe
-    "no-interaction":          20,
-    "bot-motion":              25,
-    "scripted-motion":         20,
-    "bot-scroll":              15,
-    "scripted-keys":           15,
-    "low-entropy-input":       15,
-    # 1.8.12 — honeypot learning subsystem
-    "coordinated-honeypot":    30,   # N IPs hit same trap path in 5-min window
-    "honey-fp-match":          15,   # JA4 matches a confirmed-attacker fingerprint
 }
-
-# ── 1.8.6 — Credential stuffing detection config ─────────────────────────────
-AUTH_PATHS: frozenset = frozenset(
-    p.strip() for p in
-    os.environ.get("AUTH_PATHS", "/login,/signin,/auth,/api/auth,/api/login").split(",")
-    if p.strip()
-)
-AUTH_FAIL_THRESHOLD: int  = int(os.environ.get("AUTH_FAIL_THRESHOLD", "5"))
-AUTH_FAIL_WINDOW_SECS: int = int(os.environ.get("AUTH_FAIL_WINDOW_SECS", "300"))
-CRED_STUFF_GLOBAL_RPS: float = float(os.environ.get("CRED_STUFF_GLOBAL_RPS", "5.0"))
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
 ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "30"))
@@ -933,6 +844,15 @@ PATH_SWEEP_THRESHOLD    = int(os.environ.get("PATH_SWEEP_THRESHOLD",    "40"))  
 HONEY_CRED_ENABLED = os.environ.get("HONEY_CRED_ENABLED", "1") in ("1", "true", "yes")
 HONEY_CRED_SCORE   = float(os.environ.get("HONEY_CRED_SCORE", "90"))
 
+# ── 1.7.3 — P2: risk-gated redirect maze ─────────────────────────────────────
+# For identities above threshold, serve a chain of signed redirects.
+# Agents follow all steps in milliseconds; humans show normal latency.
+REDIRECT_MAZE_ENABLED   = os.environ.get("REDIRECT_MAZE_ENABLED",   "0") in ("1", "true", "yes")
+REDIRECT_MAZE_THRESHOLD = float(os.environ.get("REDIRECT_MAZE_THRESHOLD", "20"))  # risk score
+REDIRECT_MAZE_DEPTH     = int(os.environ.get("REDIRECT_MAZE_DEPTH",     "4"))     # redirect steps
+REDIRECT_MAZE_MIN_MS    = float(os.environ.get("REDIRECT_MAZE_MIN_MS",  "800"))   # ms a human needs
+REDIRECT_MAZE_SCORE     = float(os.environ.get("REDIRECT_MAZE_SCORE",   "55"))
+
 # ── 1.7.3 — P3: LLM no-subresource heuristic ────────────────────────────────
 # Real browsers load CSS/JS/images for every HTML page. AI agents fetch only
 # HTML. Track ratio: if N HTML pages fetched with zero sub-resources → LLM.
@@ -952,9 +872,6 @@ CANARY_PROBE_SCORE      = float(os.environ.get("CANARY_PROBE_SCORE",      "20"))
 
 # ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
 FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")
-
-# ── 1.8.6 — client-side interaction probe (mouse/scroll/keystroke entropy) ───
-INTERACTION_PROBE_ENABLED = os.environ.get("INTERACTION_PROBE_ENABLED", "1") in ("1", "true", "yes")
 
 # ── 1.7.2 — service worker challenge ────────────────────────────────────────
 SW_CHALLENGE_ENABLED = os.environ.get("SW_CHALLENGE_ENABLED", "0") in ("1", "true", "yes")
@@ -1017,9 +934,6 @@ def _to_bool_default_true(v):
     return s in ("1", "true", "yes", "on")
 
 HONEYPOT_ENABLED          = _to_bool_default_true(os.environ.get("HONEYPOT_ENABLED", "1"))
-# Minimum distinct source IPs hitting the same trap path in a 5-minute window
-# before a "coordinated-honeypot" risk bump fires on each new hitter.
-HONEYPOT_CLUSTER_THRESHOLD = int(os.environ.get("HONEYPOT_CLUSTER_THRESHOLD", "3"))
 SUSPICIOUS_PATH_ENABLED   = _to_bool_default_true(os.environ.get("SUSPICIOUS_PATH_ENABLED", "1"))
 AI_PROBE_ENABLED          = _to_bool_default_true(os.environ.get("AI_PROBE_ENABLED", "1"))
 UA_FILTER_ENABLED         = _to_bool_default_true(os.environ.get("UA_FILTER_ENABLED", "1"))
@@ -1052,8 +966,7 @@ SECURITY_HEADERS: dict = {
         "magnetometer=(), microphone=(), payment=(), usb=()"),
     "Strict-Transport-Security": os.environ.get("SEC_HSTS",
         "max-age=31536000; includeSubDomains"),
-    "Content-Security-Policy":   os.environ.get("SEC_CSP",
-        "upgrade-insecure-requests; frame-ancestors 'self'"),
+    "Content-Security-Policy":   os.environ.get("SEC_CSP", ""),
     "Cross-Origin-Opener-Policy":   os.environ.get("SEC_COOP", "same-origin"),
     "Cross-Origin-Resource-Policy": os.environ.get("SEC_CORP", "same-site"),
 }
@@ -1062,11 +975,6 @@ SECURITY_HEADERS: dict = {
 # relative paths so images/links load through the proxy and satisfy the CSP).
 # Example: UPSTREAM_REWRITE_BASE=http://host.docker.internal:8093
 UPSTREAM_REWRITE_BASE: str = os.environ.get("UPSTREAM_REWRITE_BASE", "").rstrip("/")
-
-# 1.8.11 — operator-set service owner, shown in the dashboard footer notes.
-# Hot-reloadable + persisted to config_kv (SQLite + Postgres). Empty = no note.
-# Set via Settings → Config; env var is only the cold-start default (UI wins).
-SERVICE_OWNER: str = os.environ.get("SERVICE_OWNER", "").strip()
 
 BODY_TIMEOUT           = float(os.environ.get("BODY_TIMEOUT",           "30"))
 SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S",   "120"))
@@ -1084,7 +992,7 @@ JWT_REQUIRED_ISSUER  = os.environ.get("JWT_REQUIRED_ISSUER", "").strip()
 JWT_REQUIRED_AUDIENCE = os.environ.get("JWT_REQUIRED_AUDIENCE", "").strip()
 JWT_LEEWAY_SECS      = int(os.environ.get("JWT_LEEWAY_SECS", "30"))
 
-# ── 1.8.6 — OIDC / Keycloak SSO ─────────────────────────────────────────────
+# ── 1.8.5 — OIDC / Keycloak SSO ─────────────────────────────────────────────
 OIDC_ISSUER        = os.environ.get("OIDC_ISSUER", "").rstrip("/")
 OIDC_CLIENT_ID     = os.environ.get("OIDC_CLIENT_ID", "").strip()
 OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
@@ -1139,14 +1047,6 @@ JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
                       if p.strip()]
 
 # ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────────
-# 1.8.11 security fix (H1): the body inspectors used to scan only the first
-# 64 KiB of the request body while the proxy accepts and forwards up to
-# UPSTREAM_MAX_BODY (4 MiB by default). An attacker could prepend 64 KiB of
-# padding and smuggle any SQLi/XSS/RCE/XXE/GraphQL payload past the entire WAF.
-# WAF_BODY_SCAN_BYTES now defaults to the full accepted body so there is no
-# unscanned tail. Keep this >= UPSTREAM_MAX_BODY; lowering it re-opens the
-# padding bypass (a startup check in proxy.py warns if it is smaller).
-WAF_BODY_SCAN_BYTES = int(os.environ.get("WAF_BODY_SCAN_BYTES", str(4 * 1024 * 1024)))
 BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
 SUSPICIOUS_BODY_PATTERNS = (
     # Legacy catch-all set kept for backwards compatibility with the
@@ -1282,7 +1182,7 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
                                   "text/plain", "text/xml", "application/xml")):
         return False
-    sample = body[:WAF_BODY_SCAN_BYTES]
+    sample = body[:65536]
     if "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
@@ -1298,7 +1198,7 @@ def match_body_group(body: bytes, ctype: str):
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
                                   "text/plain", "text/xml", "application/xml")):
         return None
-    sample = body[:WAF_BODY_SCAN_BYTES]
+    sample = body[:65536]
     if "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
@@ -1318,35 +1218,7 @@ def match_body_group(body: bytes, ctype: str):
                 return grp
     return None
 
-# ── 1.8.9 — WAF always-on knobs ─────────────────────────────────────────────
-# All default ON. Set to 0 in .env or toggle live via /__controls to suppress
-# false positives without a container restart.
-WAF_BODY_ENABLED          = os.environ.get("WAF_BODY_ENABLED",          "1") in ("1", "true", "yes")
-WAF_SMUGGLING_ENABLED     = os.environ.get("WAF_SMUGGLING_ENABLED",     "1") in ("1", "true", "yes")
-WAF_VERB_OVERRIDE_ENABLED = os.environ.get("WAF_VERB_OVERRIDE_ENABLED", "1") in ("1", "true", "yes")
-WAF_HEADER_INJECTION_ENABLED = os.environ.get("WAF_HEADER_INJECTION_ENABLED", "1") in ("1", "true", "yes")
-WAF_GRAPHQL_ENABLED       = os.environ.get("WAF_GRAPHQL_ENABLED",       "1") in ("1", "true", "yes")
-WAF_UPLOAD_ENABLED        = os.environ.get("WAF_UPLOAD_ENABLED",        "1") in ("1", "true", "yes")
-WAF_SLOWLORIS_ENABLED     = os.environ.get("WAF_SLOWLORIS_ENABLED",     "1") in ("1", "true", "yes")
-ACCEPT_WILDCARD_CHECK_ENABLED = os.environ.get("ACCEPT_WILDCARD_CHECK_ENABLED", "1") in ("1", "true", "yes")
-
-# ── 1.8.9 — Additional kill-switches (previously structural / always-on) ────
-SESSION_CHURN_ENABLED        = os.environ.get("SESSION_CHURN_ENABLED",        "1") in ("1", "true", "yes")
-JA4H_DENY_ENABLED            = os.environ.get("JA4H_DENY_ENABLED",            "1") in ("1", "true", "yes")
-HOST_BLOCKING_ENABLED        = os.environ.get("HOST_BLOCKING_ENABLED",        "1") in ("1", "true", "yes")
-REQUIRED_HEADERS_ENABLED     = os.environ.get("REQUIRED_HEADERS_ENABLED",     "1") in ("1", "true", "yes")
-JA4_REQUIRED_ENABLED         = os.environ.get("JA4_REQUIRED_ENABLED",         "1") in ("1", "true", "yes")
-UPSTREAM_AUTH_FAIL_ENABLED   = os.environ.get("UPSTREAM_AUTH_FAIL_ENABLED",   "1") in ("1", "true", "yes")
-RATE_LIMIT_IP_ENABLED        = os.environ.get("RATE_LIMIT_IP_ENABLED",        "1") in ("1", "true", "yes")
-RATE_LIMIT_ENABLED           = os.environ.get("RATE_LIMIT_ENABLED",           "1") in ("1", "true", "yes")
-FP_BAN_CHECK_ENABLED         = os.environ.get("FP_BAN_CHECK_ENABLED",         "1") in ("1", "true", "yes")
-TRAFFIC_THRESHOLD_ENABLED    = os.environ.get("TRAFFIC_THRESHOLD_ENABLED",    "1") in ("1", "true", "yes")
-TLS_FP_BLOCK_ENABLED         = os.environ.get("TLS_FP_BLOCK_ENABLED",         "1") in ("1", "true", "yes")
-JWT_VALIDATION_ENABLED       = os.environ.get("JWT_VALIDATION_ENABLED",       "1") in ("1", "true", "yes")
-CUSTOM_RULES_ENABLED         = os.environ.get("CUSTOM_RULES_ENABLED",         "1") in ("1", "true", "yes")
-ENDPOINT_RATE_LIMIT_ENABLED  = os.environ.get("ENDPOINT_RATE_LIMIT_ENABLED",  "1") in ("1", "true", "yes")
-
-# 1.8.6 — ungated critical patterns: fire regardless of escalation score.
+# 1.8.5 — ungated critical patterns: fire regardless of escalation score.
 _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)\bunion[ +/*]+(all[ +/*]+)?select\b"),
     re.compile(rb"(?i)\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)"),
@@ -1359,7 +1231,7 @@ _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)/proc/self/(environ|cmdline|exe)\b"),
     re.compile(rb"(?i)[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id)\b"),
     re.compile(rb"(?i)\b(/bin/sh|/bin/bash|/usr/bin/python)\b"),
-    # 1.8.6 Week 3 — XXE patterns (any content-type)
+    # 1.8.5 Week 3 — XXE patterns (any content-type)
     re.compile(rb"(?i)<!ENTITY\b"),
     re.compile(rb"(?i)<!DOCTYPE[^>]*\["),
     re.compile(rb"(?i)SYSTEM\s+[\"'](file|http|ftp|php|expect|data)://"),
@@ -1375,7 +1247,7 @@ def check_always_body(body: bytes, ctype: str) -> bool:
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
                                   "text/plain", "text/xml", "application/xml")):
         return False
-    sample = body[:WAF_BODY_SCAN_BYTES]
+    sample = body[:65536]
     if "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
         sample = unquote_to_bytes(sample)
@@ -1532,7 +1404,7 @@ def dlp_redact(body: bytes, hits) -> bytes:
     return out
 
 
-# ── 1.8.6 (Week 3) — New detection signals ───────────────────────────────────
+# ── 1.8.5 (Week 3) — New detection signals ───────────────────────────────────
 
 # ── Task A: XXE Detection (2.2) ───────────────────────────────────────────────
 
@@ -1552,7 +1424,7 @@ def check_xxe_body(body: bytes, ctype: str) -> bool:
     is_xml = any(t in cl for t in ("xml", "text/html")) or body[:5] in (b"<?xml", b"<!DOC")
     if not is_xml:
         return False
-    sample = body[:WAF_BODY_SCAN_BYTES]
+    sample = body[:65536]
     return any(p.search(sample) for p in _XXE_RE)
 
 
@@ -1581,7 +1453,7 @@ def check_proto_pollution(body: bytes, ctype: str) -> bool:
     """Detect prototype pollution in JSON bodies (or via regex fallback)."""
     if not body:
         return False
-    sample = body[:WAF_BODY_SCAN_BYTES]
+    sample = body[:65536]
     cl = ctype.lower()
     # Try JSON parse for application/json
     if "application/json" in cl:
@@ -1732,10 +1604,3 @@ METRICS_ALLOWED_IPS_RAW  = os.environ.get("METRICS_ALLOWED_IPS", "")
 
 MAX_ADMIN_SESSIONS  = int(os.environ.get("MAX_ADMIN_SESSIONS", "5"))
 SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
-
-# ── 1.8.6 — TOTP two-factor authentication ───────────────────────────────────
-REQUIRE_2FA: bool = os.environ.get("REQUIRE_2FA", "0") not in ("", "0", "false", "False", "no")
-
-# ── Session IP binding (Task J) ───────────────────────────────────────────────
-# Default OFF — too disruptive for users behind NAT/VPN
-BIND_SESSION_TO_IP = os.environ.get("BIND_SESSION_TO_IP", "0") in ("1", "true", "yes")

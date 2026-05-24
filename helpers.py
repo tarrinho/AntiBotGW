@@ -91,12 +91,6 @@ def _peer_is_trusted_proxy(remote: str) -> bool:
     return any(ip in net for net in TRUSTED_PROXIES_NETS)
 
 
-# 1.8.8 — one-shot log de-dup for `xff_ignored_proxy_untrusted` warnings.
-# Without this, every request from an untrusted-but-private peer would
-# spam the log. Set is bounded to ~256 unique peers before reset.
-_XFF_UNTRUSTED_PEERS_WARNED: set = set()
-
-
 def get_ip(request) -> str:
     """
     TRUST_XFF=first  → vulnerable: attacker-controlled (default, for bypass demos)
@@ -106,41 +100,12 @@ def get_ip(request) -> str:
     1.5.4 — XFF is now ONLY honoured when the immediate peer is in
     TRUSTED_PROXIES (otherwise we fall back to the raw socket IP, ignoring
     any client-supplied X-Forwarded-For header).
-
-    1.8.8 — when XFF is present but the peer is **private** RFC1918 AND
-    not in TRUSTED_PROXIES, slog `xff_ignored_proxy_untrusted` once per
-    peer. Catches the operator misconfiguration where a sidecar (e.g.
-    cloudflared on the Docker bridge) is forwarding traffic with XFF but
-    the gateway doesn't recognise it as trusted, so every event gets
-    recorded with the bridge gateway IP and dashboards lose all geo.
     """
     xff = request.headers.get("X-Forwarded-For")
-    remote = request.remote or ""
-    if xff and TRUST_XFF != "none" and _peer_is_trusted_proxy(remote):
+    if xff and TRUST_XFF != "none" and _peer_is_trusted_proxy(request.remote or ""):
         parts = [p.strip() for p in xff.split(",")]
         return parts[0] if TRUST_XFF == "first" else parts[-1]
-    # 1.8.8 — alert path: XFF present but peer untrusted. Only fire for
-    # private-range peers (RFC1918) since seeing this from a public IP is
-    # a normal proxy-spoofing rejection, not a misconfig.
-    if xff and TRUST_XFF != "none" and remote and remote not in _XFF_UNTRUSTED_PEERS_WARNED:
-        try:
-            import ipaddress as _ipa
-            ip = _ipa.ip_address(remote)
-            if ip.is_private:
-                if len(_XFF_UNTRUSTED_PEERS_WARNED) >= 256:
-                    _XFF_UNTRUSTED_PEERS_WARNED.clear()
-                _XFF_UNTRUSTED_PEERS_WARNED.add(remote)
-                slog("xff_ignored_proxy_untrusted",
-                     level="warn",
-                     peer=remote,
-                     xff_sample=xff[:80],
-                     hint=("Peer is RFC1918 (likely a Docker sidecar) but not in "
-                           "TRUSTED_PROXIES; XFF will be ignored and all events "
-                           "will record this peer IP. Add the peer's subnet to "
-                           "TRUSTED_PROXIES to fix."))
-        except (ValueError, TypeError):
-            pass  # nosec B110 — non-IP remote (unix socket?); silently skip
-    return remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
+    return request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
 
 
 def _is_admin_path(p: str) -> bool:

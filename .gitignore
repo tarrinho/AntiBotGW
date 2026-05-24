@@ -42,17 +42,3 @@ Thumbs.db
 *.tgz
 dist/
 build/
-
-# ── Internal / operator-specific files (contain infra details) ──────────
-# sbom files embed private registry URLs (pt4.tech, >harbor<)
-sbom/*.json
-# Temporary dev/fix scripts
-fix_theme_v*.py
-# Stray SQLite files (runtime state)
-gw.db
-gw.sqlite
-# Internal analysis and compatibility docs
-analysis.result.md
-import_export_files_compatibility.md
-# Claude session data and settings
-.claude/

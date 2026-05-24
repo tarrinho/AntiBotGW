@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.8.13 — entry point only.
+Anti-bot reverse proxy v1.8.4 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -63,13 +63,15 @@ from detection.canary import (  # noqa: F401
     inject_canary_probe, canary_probe_endpoint, check_canary_probe,
 )
 from detection.honey_cred import inject_honey_creds, lookup_honey_key  # noqa: F401
+from detection.redirect_maze import (  # noqa: F401
+    should_maze, make_maze_entry, redirect_maze_endpoint,
+)
 import detection.llm_heuristic as _llm_heuristic  # noqa: F401
-from core.proxy_handler import honey_probe_endpoint, honey_suggest_endpoint  # noqa: F401
+from core.proxy_handler import honey_probe_endpoint  # noqa: F401
 from detection.automation import automation_report_endpoint  # noqa: F401
 from detection.fp_enrichment import (  # noqa: F401
     fp_report_endpoint, _fp_token_for, _is_soft_renderer, _inject_fp_probe,
 )
-from detection.interaction import interaction_report_endpoint  # noqa: F401
 from challenge.js_challenge import sw_js_endpoint  # noqa: F401
 from detection.cookie_lifecycle import (  # noqa: F401
     cookie_ghost_check, record_gateway_cookie_set, record_html_served,
@@ -111,7 +113,7 @@ from challenge.js_challenge import (  # noqa: F401
 )
 from detection.paths import _inject_bot_trap  # noqa: F401
 from config import _HOSTILE_REASONS  # noqa: F401
-from integrations.redis import _redis, _shared_ban_set, _shared_ban_get, _redis_ban_flush_loop  # noqa: F401
+from integrations.redis import _redis, _shared_ban_set, _shared_ban_get  # noqa: F401
 from integrations.ja4 import _observe_ja4_ban  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
 from detection.canary import _scan_request_for_canary  # noqa: F401
@@ -137,7 +139,6 @@ from reputation.tor import _tor_refresh_loop  # noqa: F401
 from integrations.ja4 import _refresh_ja4_denylist_loop  # noqa: F401
 from integrations.redis import _shared_init  # noqa: F401
 from dashboards.agents import _stealth_score  # noqa: F401 — tests access proxy._stealth_score
-from dashboards.honeypots import honeypots_dashboard_endpoint, honeypots_data_endpoint  # noqa: F401
 from core.proxy_handler import (  # noqa: F401
     _origin_check_failed, _missing_required_header,
     _fetch_upstream_404, _periodic_404_refresh_loop, _upstream_404_cache,
@@ -157,25 +158,12 @@ from admin.mesh import (  # noqa: F401 — gateway registry private symbols
 import sys as _sys_proxy
 import types as _types_proxy
 
-# PROXY4-03: names that must never propagate to submodules.
-# Builtin names are excluded here as belt-and-suspenders; the builtins module
-# itself is already excluded by the "!= builtins" guard below.
-# NOTE: SESSION_KEY / ADMIN_KEY are intentionally NOT in this set — they must
-# propagate so that in-process key rotation reaches all submodules.
-_PROPAGATE_NEVER = frozenset({
-    "open", "exec", "eval", "compile", "breakpoint",
-    "__builtins__", "__import__",
-})
-
 class _ProxyModule(_types_proxy.ModuleType):
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
-        if name in _PROPAGATE_NEVER:
-            return
         for _m in list(_sys_proxy.modules.values()):
             if (_m is not None
                     and _m is not _sys_proxy.modules.get(__name__)
-                    and getattr(_m, "__name__", None) != "builtins"
                     and hasattr(_m, name)):
                 try:
                     setattr(_m, name, value)
@@ -187,73 +175,66 @@ if _this_proxy_mod is not None:
     _this_proxy_mod.__class__ = _ProxyModule
 
 
-# ── Startup helpers (called in order from on_startup) ──────────────────────────
+# ── Startup / cleanup ──────────────────────────���──────────────────────────────
 
-def _startup_db_and_state():
-    """Step 1: sync UPSTREAM, init SQLite schema, hydrate in-process state."""
+async def on_startup(app):
+    """Initialise SQLite DB + spawn the async writer + load saved state."""
+    global db_queue, db_writer_task, prune_task, service_metrics_task
+    # Sync UPSTREAM to core.proxy_handler so startup functions (_fetch_upstream_404,
+    # proxy(), etc.) see any value set by tests or hot-reload, not the import-time snapshot.
     import core.proxy_handler as _cph
     _cph.UPSTREAM = UPSTREAM
     db_init()
     db_load_state()
-
-
-def _startup_maxmind_propagate():
-    """Step 2: load MaxMind readers BEFORE db_load_config so country-block
-    validators see live readers. Propagate to all loaded modules immediately."""
+    # 1.6.5 — initialise MaxMind FIRST so that knob validators which gate on
+    # `_city_reader is not None` (notably COUNTRY_BLOCK_ENABLED) see the
+    # readers as loaded when db_load_config applies persisted values.
+    # Previously the load order was reversed, which caused
+    # COUNTRY_BLOCK_ENABLED=true to be silently rejected on restart and
+    # snap back to false even though the DB held the right value.
     _init_maxmind()
+    # Propagate MaxMind state to all loaded modules so proxy_handler (which
+    # got MAXMIND_ENABLED=False at import time via `from reputation.maxmind
+    # import *`) sees the live True value before db_load_config validators run.
     import sys as _sys_mm
     import reputation.maxmind as _mm_mod
-    for _attr in ("MAXMIND_ENABLED", "MAXMIND_CITY_ENABLED", "_asn_reader", "_city_reader"):
-        _val = getattr(_mm_mod, _attr, None)
-        for _m in list(_sys_mm.modules.values()):
-            if _m is not None and _m is not _mm_mod and hasattr(_m, _attr):
+    for _mm_attr in ("MAXMIND_ENABLED", "MAXMIND_CITY_ENABLED", "_asn_reader", "_city_reader"):
+        _mm_val = getattr(_mm_mod, _mm_attr, None)
+        for _mm_m in list(_sys_mm.modules.values()):
+            if _mm_m is not None and _mm_m is not _mm_mod and hasattr(_mm_m, _mm_attr):
                 try:
-                    setattr(_m, _attr, _val)
+                    setattr(_mm_m, _mm_attr, _mm_val)
                 except (AttributeError, TypeError):
                     pass
-
-
-def _startup_postgres_schema():
-    """Step 4 (optional): migrate standby Postgres so operators can switch
-    backends live on the Controls dashboard without a manual migration step.
-    Must run AFTER _startup_secrets_and_config (Step 3) so that a
-    POSTGRES_DSN persisted in SQLite secrets_kv is already loaded into the
-    proxy.py namespace before the guard below fires."""
-    if not POSTGRES_DSN:
-        return
-    from db.postgres import _postgres_load_module as _pg_load_check
-    if _pg_load_check() is not None:
-        import state as _state_pg
-        import sys as _sys_pg
-        _state_pg._postgres_available = True
-        for _m in list(_sys_pg.modules.values()):
-            if _m is not None and hasattr(_m, '_postgres_available'):
-                try:
-                    setattr(_m, '_postgres_available', True)
-                except (AttributeError, TypeError):
-                    pass
-    if db_init_postgres():
-        print(f"[db-pg] event store ready (active={DB_BACKEND})", flush=True)
-    else:
-        print("[db-pg] init failed — events will only land in the "
-              "active backend (SQLite) until a fresh restart", flush=True)
-
-
-def _startup_secrets_and_config():
-    """Step 3: load secrets BEFORE config so credential-gated knob validators
-    (ABUSEIPDB_ENABLED, TURNSTILE_ENABLED) see live API keys. Also populates
-    POSTGRES_DSN from SQLite secrets_kv so Step 4 (_startup_postgres_schema)
-    can connect even when the env var was not set at deploy time."""
+    # 1.6.5 — initialise the Postgres event store schema whenever
+    # POSTGRES_DSN is configured. Even when SQLite is the active backend,
+    # the standby Postgres has its schema ready so the operator can flip
+    # the switch on the Controls dashboard without first running migrate
+    # commands. Best-effort: a misconfigured DSN logs a warning but the
+    # gateway boots fine.
+    if POSTGRES_DSN and _postgres_available:
+        if db_init_postgres():
+            print(f"[db-pg] event store ready (active={DB_BACKEND})",
+                  flush=True)
+        else:
+            print("[db-pg] init failed — events will only land in the "
+                  "active backend (SQLite) until a fresh restart", flush=True)
+    # Secrets first: credential-gated knob validators (e.g. ABUSEIPDB_ENABLED,
+    # TURNSTILE_ENABLED) read globals() of core.proxy_handler to check whether
+    # the matching API key is present. Loading secrets first + propagating via
+    # _refresh_integration_state ensures those values are in every module
+    # namespace before db_load_config runs its validators.
     db_load_secrets()
+    # 1.5.5 — load DB-persisted hot-reload knobs over env defaults so live
+    # changes pushed via /__config survive restart.
     db_load_config()
+    # 1.6.10 — load per-gateway signal activation-order overrides from DB.
     _load_signal_order_cache()
-
-
-def _startup_db_queue():
-    """Step 5: create async DB write queue, propagate to all modules,
-    spawn writer task, rehydrate bans, start ip_state LRU eviction."""
-    global db_queue, db_writer_task
     db_queue = asyncio.Queue(maxsize=10000)
+    # Push the live Queue into every loaded module that has a db_queue
+    # attribute (submodules did `from state import *` which cached
+    # db_queue=None at import time; in tests on_startup is called multiple
+    # times so we propagate unconditionally, not just when value is None).
     import sys as _sys
     for _m in list(_sys.modules.values()):
         if _m is not None and hasattr(_m, 'db_queue'):
@@ -262,23 +243,31 @@ def _startup_db_queue():
             except (AttributeError, TypeError):
                 pass
     db_writer_task = asyncio.create_task(db_writer_loop())
+    # 1.8.5 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
     from db.sqlite import _rehydrate_bans
     _rehydrate_bans()
+    # 1.8.5 — start ip_state LRU eviction loop.
     from state import _ip_state_evict_loop as _evict_loop
     import state as _state_mod
     _state_mod._ip_state_eviction_task = asyncio.create_task(_evict_loop())
-
-
-def _startup_admin_users_sessions():
-    """Step 6: load admin IP list, bootstrap admin user, restore session cache,
-    print first-login banner and integration status lines."""
+    # 1.8.5 — start webhook worker with retry + circuit breaker.
+    from integrations.webhook import start_webhook_worker
+    await start_webhook_worker()
     db_load_admin_ips()
     print(f"[admin-ips] {len(ADMIN_ALLOWED_ENTRIES)} entries loaded "
           f"({sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='env')} env, "
           f"{sum(1 for e in ADMIN_ALLOWED_ENTRIES if e['source']=='manual')} manual)")
+    # 1.6.7 — bootstrap an `admin` user from INTERNAL_KEY on first boot
+    # so the dashboard login works out of the box.
     _user_bootstrap()
     print(f"[users] {_user_count()} dashboard user(s) registered", flush=True)
+    # 1.6.7 — load the active sessions cache from `user_sessions`.
     _session_cache_load()
+    # 1.6.7 — print first-time login instructions to the container log so
+    # an operator running `docker compose up -d` can see how to sign in
+    # without having to dig the auto-generated key out of /data. The
+    # message disappears once any user has actually logged in (same
+    # condition as the login-page bootstrap hint).
     try:
         conn = sqlite3.connect(DB_PATH)
         seen = conn.execute(
@@ -295,7 +284,7 @@ def _startup_admin_users_sessions():
         if ADMIN_KEY_FROM_ENV:
             _bootstrap_pw_line = "   pass: see your ADMIN_KEY env var"
         else:
-            _bootstrap_pw_line = f"   pass: (read {_KEY_FILE})"
+            _bootstrap_pw_line = f"   pass: {INTERNAL_KEY[:4]}***  (read {_KEY_FILE})"
         print(f"  ║ {_bootstrap_pw_line:<57}║")
         print("  ║   then change the password in Settings → Users           ║")
         print("  ╚══════════════════════════════════════════════════════════╝",
@@ -307,6 +296,37 @@ def _startup_admin_users_sessions():
     if CROWDSEC_ENABLED:
         print(f"[crowdsec] active — LAPI {CROWDSEC_LAPI_URL}, "
               f"cache {CROWDSEC_CACHE_SECS}s", flush=True)
+    # 1.5.4: prime upstream 404 cache so blocked admin requests mirror it
+    if await _fetch_upstream_404():
+        print(f"[upstream-404] cached: status={_upstream_404_cache['status']} "
+              f"size={len(_upstream_404_cache['body'])}b "
+              f"ctype={_upstream_404_cache['ctype'][:40]}", flush=True)
+    else:
+        print("[upstream-404] WARN: prime fetch failed; will retry hourly. "
+              "Falling back to plain 'Not Found' until refreshed.", flush=True)
+    asyncio.create_task(_periodic_404_refresh_loop())
+    prune_task = asyncio.create_task(_prune_state_loop())
+    service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
+    # 1.8.5 Week 4 — Task K: alerting thresholds background task
+    from core.alerting import _alerting_loop
+    asyncio.create_task(_alerting_loop())
+    # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
+    # MAXMIND_LICENSE_KEY is set; checks daily, refreshes when >30d old).
+    asyncio.create_task(_maxmind_refresh_loop())
+    # 1.6.0 — Tor exit-list weekly refresh (no-op until TOR_BLOCK_ENABLED=1).
+    asyncio.create_task(_tor_refresh_loop())
+    # 1.5.0: optional shared-state connect. Failures degrade to no-op so
+    # an unreachable Redis never prevents the gateway from coming up.
+    await _shared_init()
+    # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
+    asyncio.create_task(_refresh_ja4_denylist_loop())
+    # 1.6.10 — fetch AI crawler IP ranges (OpenAI gptbot-ranges.txt) at startup;
+    # refreshes every 24 h. No-op when AI_CRAWLER_VERIFY_ENABLED=0.
+    if AI_CRAWLER_VERIFY_ENABLED:
+        asyncio.create_task(_refresh_ai_crawler_ranges())
+    # 1.6.7 — mesh-sync of integration secrets (no-op without REDIS_URL).
+    global _mesh_sync_task
+    _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
     print(f"[db] persistence active → {DB_PATH}")
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
@@ -321,69 +341,6 @@ def _startup_admin_users_sessions():
     elif JS_CHALLENGE and TURNSTILE_ENABLED:
         print("[js-challenge] active (Turnstile-backed cookie gate)",
               flush=True)
-
-
-async def _startup_integrations_and_tasks():
-    """Step 7: start webhook worker, prime upstream 404, spawn all periodic
-    background tasks (refresh loops, alerting, Redis, mesh-sync)."""
-    global prune_task, service_metrics_task, _mesh_sync_task
-    from integrations.webhook import start_webhook_worker
-    await start_webhook_worker()
-    if await _fetch_upstream_404():
-        print(f"[upstream-404] cached: status={_upstream_404_cache['status']} "
-              f"size={len(_upstream_404_cache['body'])}b "
-              f"ctype={_upstream_404_cache['ctype'][:40]}", flush=True)
-    else:
-        print("[upstream-404] WARN: prime fetch failed; will retry hourly. "
-              "Falling back to plain 'Not Found' until refreshed.", flush=True)
-    asyncio.create_task(_periodic_404_refresh_loop())
-    prune_task = asyncio.create_task(_prune_state_loop())
-    service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
-    from core.alerting import _alerting_loop
-    asyncio.create_task(_alerting_loop())
-    asyncio.create_task(_maxmind_refresh_loop())
-    asyncio.create_task(_tor_refresh_loop())
-    await _shared_init()
-    asyncio.create_task(_redis_ban_flush_loop())
-    asyncio.create_task(_refresh_ja4_denylist_loop())
-    if AI_CRAWLER_VERIFY_ENABLED:
-        asyncio.create_task(_refresh_ai_crawler_ranges())
-    _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
-    # 1.8.12 — pre-load confirmed-attacker JA4 fingerprints into the cross-reference cache
-    from core.proxy_handler import _load_honey_fp_cache as _lhfc
-    asyncio.create_task(_lhfc())
-
-
-def _startup_detector_health():
-    """Step 8: register live detector health after all integrations are ready."""
-    from state import set_detector_health
-    set_detector_health("maxmind_asn",  MAXMIND_ENABLED, None if MAXMIND_ENABLED else "GeoLite2-ASN not loaded")
-    set_detector_health("maxmind_city", MAXMIND_CITY_ENABLED, None if MAXMIND_CITY_ENABLED else "GeoLite2-City not loaded")
-    set_detector_health("abuseipdb",    ABUSEIPDB_ENABLED, None if ABUSEIPDB_ENABLED else "ABUSEIPDB_KEY not configured")
-    set_detector_health("crowdsec",     CROWDSEC_ENABLED, None if CROWDSEC_ENABLED else "CROWDSEC credentials not configured")
-    set_detector_health("tor_block",    TOR_BLOCK_ENABLED)
-    set_detector_health("impossible_travel", IMPOSSIBLE_TRAVEL_ENABLED)
-    set_detector_health("fp_enrichment", FP_ENRICHMENT_ENABLED)
-    set_detector_health("graphql",      GQL_ENABLED)
-    set_detector_health("upload_scan",  UPLOAD_SCAN_ENABLED)
-    set_detector_health("dlp",          DLP_ENABLED)
-
-
-# ── Startup / cleanup ──────────────────────────────────────────────────────────
-
-async def on_startup(app):
-    """Initialise the gateway in 8 ordered steps — see _startup_* helpers."""
-    global db_queue, db_writer_task, prune_task, service_metrics_task
-    _startup_db_and_state()          # 1. DB schema + state hydration
-    _startup_maxmind_propagate()     # 2. MaxMind readers (must precede config load)
-    _startup_secrets_and_config()    # 3. Secrets → config → signal order
-    _startup_postgres_schema()       # 4. Postgres schema — runs AFTER secrets so
-                                     #    POSTGRES_DSN persisted in SQLite is loaded
-                                     #    before the `if not POSTGRES_DSN` guard fires
-    _startup_db_queue()              # 5. Async write queue + writer task
-    _startup_admin_users_sessions()  # 6. Admin IPs, users, sessions, banner
-    await _startup_integrations_and_tasks()  # 7. Webhook, 404 cache, background tasks
-    _startup_detector_health()       # 8. Detector health registry
 
 
 async def on_cleanup(app):
@@ -438,13 +395,12 @@ def make_app() -> web.Application:
         ("automation-report",  "POST", automation_report_endpoint,    False),
         # 1.7.2 — canvas/WebGL fingerprint report + Service Worker
         ("fp-report",          "POST", fp_report_endpoint,            False),
-        # 1.8.6 — interaction probe (mouse/scroll/keystroke entropy)
-        ("interaction-report", "POST", interaction_report_endpoint,   False),
         ("sw.js",              "GET",  sw_js_endpoint,                False),
         # 1.6.9 — AI Labyrinth tarpit (public; HMAC-gated internally)
         ("tarpit/{token}",     "GET",  tarpit_endpoint,               False),
         # 1.7.3 — AI-agent detection probes (public, no auth)
         ("probe",                       "GET", honey_probe_endpoint,      False),
+        ("maze",                        "GET", redirect_maze_endpoint,    False),
         ("canary-probe/{token}",        "GET", canary_probe_endpoint,     False),
         # ── secured (admin-IP + admin-key gated) ────────────────
         ("status",            "GET",    status_endpoint,                       True),
@@ -453,9 +409,6 @@ def make_app() -> web.Application:
         ("metrics",           "GET",    metrics_endpoint,                      True),
         ("unban",             "GET",    unban_endpoint,                        True),
         ("unban",             "POST",   unban_endpoint,                        True),
-        # 1.8.11 QW-3 — bulk unban by reason glob / ASN
-        ("bans",              "DELETE", bulk_unban_endpoint,                   True),
-        ("bans",              "POST",   bulk_unban_endpoint,                   True),
         ("ban",               "GET",    ban_endpoint,                          True),
         ("ban",               "POST",   ban_endpoint,                          True),
         ("scoring",           "GET",    scoring_endpoint,                      True),
@@ -474,7 +427,6 @@ def make_app() -> web.Application:
         ("lists-snapshot",    "GET",    lists_snapshot_endpoint,               True),
         ("db-test",           "GET",    db_test_endpoint,                      True),
         ("db-switch",         "POST",   db_switch_endpoint,                    True),
-        ("db-migration-status", "GET",  db_migration_status_endpoint,          True),
         ("disk-stats",        "GET",    disk_stats_endpoint,                   True),
         ("db-vacuum",         "POST",   db_vacuum_endpoint,                    True),
         ("maxmind-fetch",     "POST",   maxmind_fetch_endpoint,                True),
@@ -492,21 +444,12 @@ def make_app() -> web.Application:
         ("secrets",           "DELETE", secrets_endpoint,                      True),
         ("config",            "GET",    config_endpoint,                       True),
         ("config",            "POST",   config_endpoint,                       True),
-        ("csrf",              "GET",    csrf_endpoint,                         True),
-        ("ui-theme",          "GET",    ui_theme_endpoint,                     True),
-        ("ui-theme",          "POST",   ui_theme_endpoint,                     True),
         ("agents",            "GET",    agents_dashboard_endpoint,             True),
         ("agents-data",       "GET",    agents_data_endpoint,                  True),
         ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),
-        ("attack-playbook",   "GET",    attack_playbook_endpoint,              True),
-        ("honey-suggest",     "GET",    honey_suggest_endpoint,                True),
-        ("honeypots",         "GET",    honeypots_dashboard_endpoint,          True),
-        ("honeypots-data",    "GET",    honeypots_data_endpoint,               True),
         ("service",           "GET",    service_dashboard_endpoint,            True),
         ("service-data",      "GET",    service_metrics_data_endpoint,         True),
         ("controls",          "GET",    controls_dashboard_endpoint,           True),
-        ("controls-test-a",   "GET",    controls_test_a_endpoint,              True),
-        ("controls-test-b",   "GET",    controls_test_b_endpoint,              True),
         ("settings",          "GET",    settings_dashboard_endpoint,           True),
         ("settings-export",   "GET",    settings_export_endpoint,              True),
         ("settings-import",   "POST",   settings_import_endpoint,              True),
@@ -537,16 +480,6 @@ def make_app() -> web.Application:
         # ── 1.8.4 — SIEM Security Event Center ──────────────────────────
         ("siem",                     "GET",    siem_dashboard_endpoint,               True),
         ("siem-data",                "GET",    siem_data_endpoint,                    True),
-        # ── 1.8.6 — SIEM advanced features ──────────────────────────────
-        ("siem-stream",              "GET",    siem_stream_endpoint,                  True),
-        ("siem-alert-rules",         "GET",    siem_alert_rules_endpoint,             True),
-        ("siem-alert-rules",         "POST",   siem_alert_rules_endpoint,             True),
-        ("siem-alert-rules",         "DELETE", siem_alert_rules_endpoint,             True),
-        ("siem-alert-rules",         "PATCH",  siem_alert_rules_endpoint,             True),
-        ("siem-dossier",             "GET",    siem_dossier_endpoint,                 True),
-        ("siem-export",              "GET",    siem_export_endpoint,                  True),
-        # 1.8.11 QW-4 — audit log export (CSV / JSON)
-        ("audit-log-export",         "GET",    audit_log_export_endpoint,             True),
     ]
 
     _METHOD_MAP = {
@@ -582,17 +515,7 @@ def make_app() -> web.Application:
     app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
     app.router.add_post (PUBLIC + "/logout", logout_endpoint)
-    # 1.8.6 — TOTP two-factor authentication
-    app.router.add_post (PUBLIC + "/login/totp",    totp_verify_endpoint)
-    app.router.add_get  (SEC    + "/2fa-status",    totp_status_endpoint)
-    app.router.add_get  (SEC    + "/2fa-setup",     totp_setup_endpoint)
-    app.router.add_post (SEC    + "/2fa-confirm",   totp_confirm_endpoint)
-    app.router.add_post (SEC    + "/2fa-disable",   totp_disable_endpoint)
-    # 1.8.6 — DLP pattern CRUD
-    app.router.add_get   (SEC + "/dlp-patterns",  dlp_patterns_get)
-    app.router.add_post  (SEC + "/dlp-patterns",  dlp_patterns_post)
-    app.router.add_delete(SEC + "/dlp-patterns",  dlp_patterns_delete)
-    # 1.8.6 — OIDC/Keycloak SSO (both public — no session cookie before login)
+    # 1.8.5 — OIDC/Keycloak SSO (both public — no session cookie before login)
     app.router.add_get  (PUBLIC + "/auth/oidc/login",    oidc_login_endpoint)
     app.router.add_get  (PUBLIC + "/auth/oidc/callback", oidc_callback_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
@@ -619,29 +542,6 @@ def make_app() -> web.Application:
     async def _live_stub(_r):
         return web.Response(text="ok", content_type="text/plain")
     app.router.add_get(PUBLIC + "/live", _live_stub)
-
-    # Favicon — read once at startup; closures hold the cached bytes so
-    # every request is served from memory with zero disk I/O.
-    _STATIC_DIR      = _DASHBOARDS_DIR / "static"
-    _favicon_bytes   = (_STATIC_DIR / "favicon.ico").read_bytes()
-    _apple_bytes     = (_STATIC_DIR / "apple-touch-icon.png").read_bytes()
-    _favicon_svg_b   = (_STATIC_DIR / "favicon.svg").read_bytes()
-
-    async def _favicon_handler(_r):
-        return web.Response(body=_favicon_bytes, content_type="image/x-icon",
-                            headers={"Cache-Control": "public, max-age=86400"})
-
-    async def _apple_touch_icon_handler(_r):
-        return web.Response(body=_apple_bytes, content_type="image/png",
-                            headers={"Cache-Control": "public, max-age=86400"})
-
-    async def _favicon_svg_handler(_r):
-        return web.Response(body=_favicon_svg_b, content_type="image/svg+xml",
-                            headers={"Cache-Control": "public, max-age=86400"})
-
-    app.router.add_get(PUBLIC + "/favicon.ico",        _favicon_handler)
-    app.router.add_get(PUBLIC + "/apple-touch-icon.png", _apple_touch_icon_handler)
-    app.router.add_get(PUBLIC + "/favicon.svg",        _favicon_svg_handler)
 
     # 1.6.10 — robots.txt: served before the catch-all proxy so the gateway
     # controls the content regardless of what the upstream serves at /robots.txt.
@@ -719,7 +619,7 @@ def _admin_ip_allowed(request) -> bool:
     from helpers import get_ip as _get_ip_helper
     nets = globals().get("ADMIN_ALLOWED_NETS", [])
     if not nets:
-        return False  # F-06: fail-closed when no allowlist is configured
+        return True
     try:
         ip = _ipa.ip_address(_get_ip_helper(request))
     except (ValueError, TypeError):
@@ -785,6 +685,7 @@ def _eval_custom_rules(request, ip: str):
     ua = (request.headers.get("User-Agent") or "")
     ua_lower = ua.lower()
     headers = request.headers
+    query = getattr(request, "query", {}) or {}
     for rule in rules:
         cond = rule.get("if") or {}
         ok = True
@@ -836,10 +737,7 @@ def _eval_custom_rules(request, ip: str):
 def _verify_jwt_hs256(token: str) -> tuple:
     """_verify_jwt_hs256 reading JWT_* constants from proxy globals."""
     import base64 as _b64
-    import hashlib
-    import hmac as _hmac
-    import json
-    import time as _t
+    import hashlib, hmac as _hmac, json, time as _t
     g = globals()
     secret = g.get("JWT_HMAC_SECRET", "")
     req_iss = g.get("JWT_REQUIRED_ISSUER", "")
@@ -1081,8 +979,8 @@ if __name__ == "__main__":
     if ADMIN_KEY_FROM_ENV:
         key_line = "supplied via ADMIN_KEY env"
     else:
-        key_line = "auto-generated; read /data/.admin_key"
-    print("  ╔══════════════════════════════════════════════════════════╗")
+        key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
+    print(f"  ╔══════════════════════════════════════════════════════════╗")
     print(f"  ║ {GW_VERSION:<10}     →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
     _ns_line = f"Admin namespace: {ADMIN_NS}"
@@ -1097,15 +995,7 @@ if __name__ == "__main__":
         nets = ", ".join(str(n) for n in ADMIN_ALLOWED_NETS)[:46]
         print(f"  ║ Admin IPs: {nets:<46}║")
     else:
-        print("  ║ Admin IPs: any (set ADMIN_ALLOWED_IPS to restrict)    ║")
-    print("  ╚══════════════════════════════════════════════════════════╝")
-    if not ADMIN_ALLOWED_NETS:
-        import sys as _sys
-        print(
-            "\n[SECURITY WARNING] ADMIN_ALLOWED_IPS is not set.\n"
-            "  The admin dashboard is reachable from any IP address.\n"
-            "  Set ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1 before deploying to production.\n",
-            file=_sys.stderr, flush=True,
-        )
+        print(f"  ║ Admin IPs: any (set ADMIN_ALLOWED_IPS to restrict)    ║")
+    print(f"  ╚══════════════════════════════════════════════════════════╝")
     web.run_app(make_app(), host=LISTEN_HOST, port=LISTEN_PORT, print=None,
                 keepalive_timeout=HEADERS_TIMEOUT)

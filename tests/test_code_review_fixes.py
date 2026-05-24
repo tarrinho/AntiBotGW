@@ -395,15 +395,6 @@ class TestS1LoginGetRedirectValidation:
 class TestS2Ipv4MappedIpv6SsrfGuard:
     """_assert_upstream_public must reject IPv4-mapped IPv6 private addresses."""
 
-    @pytest.fixture(autouse=True)
-    def _force_guard_on(self):
-        """Ensure the SSRF guard is active regardless of ALLOW_PRIVATE_UPSTREAM default."""
-        import config as _cfg
-        saved = _cfg.ALLOW_PRIVATE_UPSTREAM
-        _cfg.ALLOW_PRIVATE_UPSTREAM = False
-        yield
-        _cfg.ALLOW_PRIVATE_UPSTREAM = saved
-
     def _check_raises(self, addr):
         """Return True if the address is blocked (SystemExit raised), False if allowed."""
         import socket
@@ -1225,19 +1216,13 @@ class TestRegressions:
     def test_ssrf_guard_still_blocks_plain_private_ipv4_after_fix(self):
         """S-2 fix must not break the existing plain IPv4 private-address check."""
         import socket
-        import config as _cfg
         import vhost
-        saved = _cfg.ALLOW_PRIVATE_UPSTREAM
-        _cfg.ALLOW_PRIVATE_UPSTREAM = False
-        try:
-            with mock.patch.object(
-                socket, "getaddrinfo",
-                return_value=[(None, None, None, None, ("192.168.0.1", 0))]
-            ):
-                with pytest.raises(SystemExit):
-                    vhost._assert_upstream_public("http://host.example.com")
-        finally:
-            _cfg.ALLOW_PRIVATE_UPSTREAM = saved
+        with mock.patch.object(
+            socket, "getaddrinfo",
+            return_value=[(None, None, None, None, ("192.168.0.1", 0))]
+        ):
+            with pytest.raises(SystemExit):
+                vhost._assert_upstream_public("http://host.example.com")
 
     def test_custom_allow_then_vhost_stats_sees_traffic(self, proxy_module):
         """V-2 + V-4 combined: allow-rule traffic increments allowed_1h in vhost-stats."""

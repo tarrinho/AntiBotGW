@@ -1,6 +1,6 @@
 # AppSecGW — Operational Runbook
 
-**Version**: 1.8.7  
+**Version**: 1.8.4  
 **Author**: Pedro Tarrinho
 
 ---
@@ -13,7 +13,6 @@
 4. [Tune knobs (hot-reload)](#4-tune-knobs-hot-reload)
 5. [Admin login](#5-admin-login)
 6. [Rotate keys](#6-rotate-keys)
-0. [Production security checklist](#0-production-security-checklist)
 7. [Unban an identity](#7-unban-an-identity)
 8. [AI-agent detection (v1.7.3)](#8-ai-agent-detection-v173)
 9. [DLP redaction](#9-dlp-redaction)
@@ -25,33 +24,6 @@
 15. [SIEM Security Event Center (v1.8.4)](#15-siem-security-event-center-v184)
 16. [Tear down](#16-tear-down)
 17. [Environment variable reference](#17-environment-variable-reference)
-
----
-
-## 0. Production security checklist
-
-Run through this before exposing the gateway to the internet. Items marked **REQUIRED** will leave the deployment insecure if skipped.
-
-| # | Item | Variable / action | Status |
-|---|------|-------------------|--------|
-| 1 | **REQUIRED** — Restrict admin dashboard to known IPs | `ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1` | If unset, gateway logs `[SECURITY WARNING]` on every boot |
-| 2 | **REQUIRED** — Set trusted proxy CIDRs | `TRUSTED_PROXIES=<load-balancer-cidr>` | Without this, `TRUST_XFF` falls back to `"none"` and client IP detection is disabled |
-| 3 | **REQUIRED** — Mount writable data volume | `-e APPSECGW_KEY_DIR=/data -v /srv/gw:/data` | Keys stored in read-only image dir will be lost on restart |
-| 4 | **REQUIRED** — Admin key / bootstrap password = **≥16-char random** secret | Generate: `python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(16)))"` → set as `ADMIN_KEY`/`INTERNAL_KEY`; rotate again via Settings → Users after first login | Never use a guessable/dictionary key. Default `INTERNAL_KEY` is printed in plaintext to container logs. A short or word-based key is brute-forceable through the login form. |
-| 5 | Enable 2FA for all admin accounts | Settings → Users → TOTP | Admin session cookie is valid until expiry; 2FA limits blast radius of stolen cookie |
-| 6 | Set `ALLOWED_HOSTS` | `ALLOWED_HOSTS=your-domain.com` | Without it the Host header is not validated against an allowlist |
-| 7 | Set `UPSTREAM` to internal address only | `UPSTREAM=http://app:3000` (not a public URL) | The upstream itself should be internal. **1.8.11: the SSRF guard is ON by default** (`ALLOW_PRIVATE_UPSTREAM=0`) — `UPSTREAM`/vhost upstreams that resolve to loopback/RFC-1918 are **rejected**. If your compose stack legitimately uses an internal upstream (`app:3000`, `host.docker.internal`, `192.168.x.x`), set `ALLOW_PRIVATE_UPSTREAM=1`. |
-| 8 | Review `CUSTOM_RULES` on upgrade | Controls → Endpoint Policies | Custom rules are evaluated before all detection signals |
-| 9 | OIDC: ensure the issuer JWKS is reachable | `OIDC_ISSUER=https://kc/realms/<r>` | **1.8.11**: the id_token signature is verified against `<OIDC_ISSUER>/protocol/openid-connect/certs` (RS256/ES\*; `none`/HS\* rejected). The gateway must be able to reach that JWKS endpoint, and `OIDC_ISSUER`/`OIDC_CLIENT_ID` must match the token `iss`/`aud`. Requires the `PyJWT` dependency (bundled in the image). |
-| 10 | If raising `UPSTREAM_MAX_BODY`, raise `WAF_BODY_SCAN_BYTES` too | `WAF_BODY_SCAN_BYTES=<bytes>` | **1.8.11**: the body WAF scans `WAF_BODY_SCAN_BYTES` (default 2 MiB). If it is below `UPSTREAM_MAX_BODY`, a payload past the scan window bypasses the WAF — a startup warning fires. |
-
-> **How to verify #1:** If `ADMIN_ALLOWED_IPS` is unset the startup banner prints:
-> ```
-> [SECURITY WARNING] ADMIN_ALLOWED_IPS is not set.
->   The admin dashboard is reachable from any IP address.
->   Set ADMIN_ALLOWED_IPS=<your-ip>/32,127.0.0.1 before deploying to production.
-> ```
-> This line goes to **stderr**. Check with `docker logs appsecgw 2>&1 | grep SECURITY`.
 
 ---
 
@@ -159,7 +131,7 @@ docker exec -it appsecgw sqlite3 /data/antibot.db \
 
 ## 4. Tune knobs (hot-reload)
 
-All hot-reloadable knobs take effect immediately — no restart needed. Changes are persisted in the `config_kv` SQLite table and survive restarts. **ENV wins over DB**: if a knob is set via container env, it cannot be overridden at runtime — **except** the env-pin-excluded knobs (`TURNSTILE_ENABLED`, `JS_CHALLENGE`, `UPSTREAM`, `ALLOW_PRIVATE_UPSTREAM`), where the env value is only the cold-start default and runtime changes are allowed and persist (DB-wins on restart). As of 1.8.10, `TRUST_XFF`, `TRUSTED_PROXIES`, and `ALLOW_PRIVATE_UPSTREAM` are hot-reloadable from **Settings → Infrastructure** (no restart). A knob shown read-only in Settings with a `REQUIRES RESTART` badge is not hot-reloadable; one shown with a 🔒 / env-pinned note was fixed via container env.
+All hot-reloadable knobs take effect immediately — no restart needed. Changes are persisted in the `config_kv` SQLite table and survive restarts. **ENV wins over DB**: if a knob is set via container env, it cannot be overridden at runtime.
 
 ### Via admin dashboard (Controls tab)
 
@@ -201,23 +173,6 @@ curl -s -b jar -X POST http://localhost:8080/antibot-appsec-gateway/secured/conf
 | Lower LLM heuristic page count | `LLM_HTML_MIN_COUNT` | 3 (default 5) |
 | Lower canary-probe page count | `CANARY_PROBE_MIN_HTML` | 2 (default 3) |
 
-### Find which control caused a block (1.8.10)
-
-You don't have to guess which knob to tune. On the **Live Feed** (or **Agents**),
-click an identity's risk score → the **Risk score breakdown** modal lists every
-reason that fired with a **Control** column showing the exact knob that provokes
-it, a live **on/off dot** (or value for thresholds/lists), and a **severity**
-badge. Click the control name to jump straight to it (Controls or Settings,
-scrolled + highlighted), or click its **dot to disable that detection in place**
-(confirm → applied immediately). The live-feed **Top controls by blocks** panel
-ranks controls by how many blocks they caused — the fastest way to spot an
-over-aggressive detector banning legitimate users.
-
-> Reasons map to controls via the server-side `SIGNAL_KNOB` table, surfaced by
-> `GET /secured/scoring` (`signal_knob` / `knob_state` / `knob_page` /
-> `signal_meta`). Admin-gate reasons (`admin-probe`, `operator-self`) show
-> "always-on" — there is no toggle (admin auth is mandatory).
-
 ---
 
 ## 5. Admin login
@@ -244,28 +199,6 @@ curl -s -c jar -X POST http://localhost:8080/antibot-appsec-gateway/login \
 # All subsequent admin requests use -b jar
 curl -s -b jar http://localhost:8080/antibot-appsec-gateway/secured/control-center
 ```
-
-### CSRF token for state-mutating API calls (1.8.10)
-
-State-mutating requests (`POST`/`PATCH`/`DELETE` to `/secured/...`) require an
-`X-CSRF-Token` header = the `agw_csrf` cookie value (`HMAC(SESSION_KEY, sid)`).
-The dashboard JS handles this automatically and **self-heals** a stale token: on
-any `403` it re-fetches `GET /secured/csrf` and retries once — so operators never
-have to clear cookies, even behind a CDN (e.g. Cloudflare) that rewrites the
-cookie to `HttpOnly`. When **scripting** the admin API, send the header
-explicitly:
-
-```bash
-# Fetch the current CSRF token (JSON; works regardless of cookie HttpOnly)
-TOK=$(curl -s -b jar http://localhost:8080/antibot-appsec-gateway/secured/csrf \
-  | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
-curl -s -b jar -X POST http://localhost:8080/antibot-appsec-gateway/secured/config \
-  -H "X-CSRF-Token: $TOK" -H 'Content-Type: application/json' -d '{"JS_CHALLENGE":"1"}'
-```
-
-> Symptom `{"error":"CSRF token invalid"}` on a valid session usually means a
-> stale token; in the browser it self-heals on the next request. If it persists,
-> the session itself lapsed — re-login.
 
 ### Override the bootstrap password
 
@@ -303,19 +236,13 @@ curl -s -b jar -X POST \
 
 Controls tab → **Banned identities** section → click **Unban** next to the row.
 
-**From the risk breakdown (1.8.10):** on the Live Feed / Agents, click a banned
-identity's risk score → the modal shows a ban header ("Banned ≈Xh left; the live
-risk decayed but the ban is a separate entry") and an **Unban this identity**
-button. If the identity is an admin IP, a **self-ban guard** banner warns it is
-"likely a self-ban from testing" — handy when you ban yourself with curl/replay.
-
 ### Via API
 
 ```bash
 # Unban by identity hash
 curl -s -b jar -X POST http://localhost:8080/antibot-appsec-gateway/secured/unban \
   -H 'Content-Type: application/json' \
-  -d '{"id": "<identity-hash>"}'        # or {"ip": "1.2.3.4"} | {"all": true}
+  -d '{"identity": "<identity-hash>"}'
 ```
 
 Identity hashes appear in the event log (`identity` field) and in the agents dashboard drill-down.
@@ -499,7 +426,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.8.7
+  appsec-antibot-gw:1.8.4
 ```
 
 ### Manage at runtime (Settings UI)
@@ -873,115 +800,8 @@ docker compose down -v  # also removes named volumes
 | Variable | Default | Description |
 |---|---|---|
 | `LISTEN_PORT` | `8080` | Port the gateway listens on |
-| `TRUST_XFF` | `"none"` | `"none"` (default, fail-closed) · `"first"` · `"last"` — trust the named XFF hop; requires `TRUSTED_PROXIES` to be set or the proxy check fails closed |
+| `TRUST_XFF` | `""` | `"last"` — trust the last `X-Forwarded-For` hop from `TRUSTED_PROXIES` |
 | `TRUSTED_PROXIES` | `""` | CIDR list of trusted reverse proxies (e.g. `10.0.0.0/8,172.16.0.0/12`) |
-
----
-
-### X-Forwarded-For and Trusted Proxies — configuration guide
-
-#### How it works
-
-Every incoming request has two IP addresses:
-
-- **Socket peer** (`request.remote`) — the TCP connection source. This is always real and cannot be spoofed.
-- **`X-Forwarded-For` header** — added/appended by each reverse proxy in the chain. This **can be forged** by a client unless the gateway validates who is allowed to inject it.
-
-The gateway uses `TRUST_XFF` and `TRUSTED_PROXIES` together to decide which IP to use for risk scoring, geo lookups, admin-IP allowlist checks, and event recording:
-
-```
-Client → [Reverse Proxy / CDN] → [cloudflared / Docker bridge] → AppSecGW → Upstream
-          adds XFF: <real-ip>      peer visible to gateway
-```
-
-The gateway only honours the `X-Forwarded-For` header when **both** conditions are true:
-
-1. `TRUST_XFF` is set to `"first"` or `"last"` (not the default `"none"`)
-2. The **immediate TCP peer** (the IP that opened the socket to the gateway) is listed in `TRUSTED_PROXIES`
-
-If either condition fails the XFF header is ignored and the raw socket peer is used as the client IP.
-
-#### `TRUST_XFF` modes
-
-| Mode | Which XFF hop is used | When to use |
-|---|---|---|
-| `none` | XFF ignored entirely — raw socket peer used | Gateway exposed directly to the internet with no reverse proxy |
-| `first` | Leftmost entry in `X-Forwarded-For` | **Insecure unless paired with `TRUSTED_PROXIES`** — a client can prepend any IP. Only use when the front proxy strips/rewrites XFF before forwarding. |
-| `last` | Rightmost entry in `X-Forwarded-For` | **Correct for most deployments.** Each proxy appends the address it received the connection from. The rightmost entry is the IP the last trusted proxy saw — closest to the real client without being client-controlled. |
-
-> **Rule of thumb:** use `TRUST_XFF=last` unless your CDN/load balancer explicitly documents that it puts the real client IP as the **first** entry and strips any client-supplied values.
-
-#### `TRUSTED_PROXIES`
-
-Comma-separated list of CIDRs. Only peers whose IP falls inside one of these networks are allowed to supply an `X-Forwarded-For` header that the gateway will trust.
-
-**Fail-closed:** if `TRUSTED_PROXIES` is empty the gateway ignores all XFF headers regardless of `TRUST_XFF`. This prevents a spoofed-XFF bypass on deployments that have no reverse proxy.
-
-#### Common deployment scenarios
-
-**1. Cloudflare tunnel (`cloudflared`) in the same Docker Compose stack**
-
-`cloudflared` connects from the Docker bridge (`172.18.0.0/16` by default). It injects the real visitor IP as the last `X-Forwarded-For` entry.
-
-```env
-TRUST_XFF=last
-TRUSTED_PROXIES=172.18.0.0/16
-```
-
-Verify the bridge subnet with:
-```bash
-docker network inspect antibot-net --format '{{.IPAM.Config}}'
-```
-
-**2. Cloudflare tunnel running on the host (not in Docker)**
-
-`cloudflared` connects from loopback (`127.0.0.1`):
-
-```env
-TRUST_XFF=last
-TRUSTED_PROXIES=127.0.0.1/32
-```
-
-**3. Load balancer / nginx in front (same private network)**
-
-```env
-TRUST_XFF=last
-TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
-```
-
-**4. Multiple hops (CDN → internal LB → gateway)**
-
-Add all intermediate proxy CIDRs. The gateway only checks the **immediate peer** against `TRUSTED_PROXIES`; it does not walk the full XFF chain.
-
-```env
-TRUST_XFF=last
-TRUSTED_PROXIES=10.10.0.5/32,10.10.0.6/32
-```
-
-**5. No reverse proxy (gateway exposed directly)**
-
-```env
-TRUST_XFF=none
-# TRUSTED_PROXIES not needed
-```
-
-#### Warning: misconfiguration detection (v1.8.8)
-
-When `TRUST_XFF` is `first` or `last` but a **private-range** (RFC1918) peer sends XFF without being in `TRUSTED_PROXIES`, the gateway logs a one-shot warning:
-
-```json
-{"event":"xff_ignored_proxy_untrusted","peer":"172.18.0.1","hint":"Peer is RFC1918 (likely a Docker sidecar) but not in TRUSTED_PROXIES; XFF will be ignored and all events will record this peer IP. Add the peer's subnet to TRUSTED_PROXIES to fix."}
-```
-
-This surfaces the most common misconfiguration: a sidecar (e.g. `cloudflared`, an nginx container) is forwarding traffic with XFF but the gateway doesn't recognise it as trusted — so every event in the dashboard shows the Docker bridge IP instead of the real visitor IP.
-
-#### Security note
-
-Never add `0.0.0.0/0` to `TRUSTED_PROXIES`. Doing so allows any host to inject an arbitrary `X-Forwarded-For` header, letting an attacker impersonate any IP for ban evasion, risk-score bypass, and admin-allowlist bypass.
-
-The gateway always **overwrites** the `X-Forwarded-For` header it sends to the upstream with the gateway-computed real client IP, so the upstream cannot be manipulated by a client-supplied XFF value even if the gateway is misconfigured.
-
----
 
 ### Virtual hosts — v1.8.4
 
@@ -1042,8 +862,3 @@ The gateway always **overwrites** the `X-Forwarded-For` header it sends to the u
 | `TURNSTILE_SECRET` | Cloudflare Turnstile secret |
 | `WEBHOOK_URL` | Outbound webhook for ban/DLP events |
 | `WEBHOOK_SECRET` | HMAC secret for webhook payloads |
-| `OIDC_ISSUER` | Keycloak realm base URL (e.g. `https://kc.example.com/realms/myrealm`) — enables SSO login button |
-| `OIDC_CLIENT_ID` | Keycloak client ID |
-| `OIDC_CLIENT_SECRET` | Keycloak client secret |
-| `OIDC_DEFAULT_ROLE` | Role assigned to new SSO users on first login (default `viewer`) |
-| `OIDC_SCOPES` | Space-separated OIDC scopes (default `openid profile email`) |

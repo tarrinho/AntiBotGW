@@ -101,15 +101,6 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
-def _csrf_hdr(proxy_module, cookie):
-    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
-    import hashlib, hmac as _hmac
-    if isinstance(cookie, dict):
-        cookie = next(iter(cookie.values()))
-    sid = cookie.split("|")[1]
-    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
-    return {"X-CSRF-Token": token}
-
 def _browser_headers(extra=None):
     h = {
         "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
@@ -186,7 +177,7 @@ class TestAuthGuard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/live-feed")
                     body = await r.text()
-                    assert "AppSecGW_1.8.13 · Live Feed" not in body
+                    assert "AppSecGW_1.8.5 · Live Feed" not in body
         _run(go())
 
     def test_config_unauthenticated_decoy(self, proxy_module):
@@ -454,7 +445,6 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 60},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -468,7 +458,6 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"TOTALLY_FAKE_KNOB_ZZZZZ": "value"},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert r.status == 200
@@ -483,7 +472,6 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"ADMIN_KEY": "should-be-rejected"},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert "ADMIN_KEY" in str(d.get("rejected", {}))
@@ -739,7 +727,6 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"signal": "suspicious-path", "order": 1},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -755,7 +742,6 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"signal": "suspicious-path", "order": 99},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -767,7 +753,6 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"order": 2},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -874,7 +859,6 @@ class TestBanUnbanLifecycle:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/ban?ip=10.10.10.10&secs=3600&reason=test",
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -889,7 +873,6 @@ class TestBanUnbanLifecycle:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/ban?secs=3600&reason=test",
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -901,7 +884,6 @@ class TestBanUnbanLifecycle:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/unban",
                                      json={"all": True},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -928,11 +910,9 @@ class TestBanUnbanLifecycle:
                     await c.get("/some-page", headers=_browser_headers(
                         {"X-Forwarded-For": "7.7.7.7"}))
                     await c.post(NS + "/ban?ip=7.7.7.7&secs=3600&reason=test",
-                                 headers=_csrf_hdr(proxy_module, cookie),
                                  cookies={proxy_module._SESSION_COOKIE: cookie})
                     r = await c.post(NS + "/unban",
                                      json={"ip": "7.7.7.7"},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
         _run(go())
@@ -1291,12 +1271,9 @@ class TestDetectionPipeline:
                     m = await c.get(NS + "/metrics",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await m.json()
-                    # 1.8.13 — detection now hard-blocks via a silent decoy and
-                    # records the reason (was: soft risk_score on the client). Assert
-                    # the by_reason counter, the observable current behaviour.
-                    byr = d.get("by_reason", {})
-                    assert byr.get("suspicious-path", 0) > 0 or byr.get("body-sqli", 0) > 0, \
-                        f"SQLi in URL must fire suspicious-path/body-sqli; by_reason={byr}"
+                    scores = [cl.get("risk_score", 0) for cl in d.get("clients", [])]
+                    assert any(s > 0 for s in scores), \
+                        "SQLi in URL must raise risk_score"
         _run(go())
 
     def test_lfi_path_detected(self, proxy_module):
@@ -1310,11 +1287,9 @@ class TestDetectionPipeline:
                     m = await c.get(NS + "/metrics",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await m.json()
-                    # 1.8.13 — LFI/traversal path normalises (e.g. /static/../../etc/passwd
-                    # → /etc/passwd) and fires suspicious-path, served as a silent decoy.
-                    byr = d.get("by_reason", {})
-                    assert byr.get("suspicious-path", 0) > 0, \
-                        f"LFI path must fire suspicious-path; by_reason={byr}"
+                    scores = [cl.get("risk_score", 0) for cl in d.get("clients", [])]
+                    assert any(s > 0 for s in scores), \
+                        "LFI path must raise risk_score"
         _run(go())
 
     def test_control_byte_in_path_returns_400(self, proxy_module):
@@ -1346,10 +1321,7 @@ class TestDetectionPipeline:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.request("DELETE", "/api/resource",
                                         headers=_browser_headers())
-                    # 1.8.13 — non-allowlisted methods are blocked via the silent
-                    # decoy (404), not a revealing 405 (WAF "don't fingerprint" policy).
-                    assert r.status in (403, 404, 405), \
-                        f"non-allowlisted DELETE must be blocked, got {r.status}"
+                    assert r.status == 405
         _run(go())
 
     def test_security_headers_on_html_response(self, proxy_module):
@@ -1506,7 +1478,6 @@ class TestAdminIPsEndpoint:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "192.0.2.0/24",
                                            "description": "test-block"},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -1524,12 +1495,10 @@ class TestAdminIPsEndpoint:
                     r1 = await c.post(NS + "/admin-ips",
                                       json={"cidr": "127.0.0.0/8",
                                             "description": "loopback-test"},
-                                      headers=_csrf_hdr(proxy_module, cookie),
                                       cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r1.status == 200
                     # Now delete it
                     r = await c.delete(NS + "/admin-ips?cidr=127.0.0.0/8",
-                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -1711,7 +1680,6 @@ class TestAdminIPsValidation:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "not-a-valid-cidr",
                                            "description": "test"},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # Must reject with 400 or return ok=False
                     if r.status == 200:
@@ -1785,7 +1753,6 @@ class TestVhostsAPI:
                                          json={"hostname": "test.example.com",
                                                "UPSTREAM": up,
                                                "UA_FILTER_ENABLED": True},
-                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, f"POST /vhosts: expected 200, got {r.status}"
                     d = await r.json()
@@ -1808,7 +1775,6 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.post(NS + "/vhosts",
                                      json={"UPSTREAM": up},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     if r.status == 200:
                         d = await r.json()
@@ -1827,7 +1793,6 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.post(NS + "/vhosts",
                                      json={"hostname": "test.example.com"},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     if r.status == 200:
                         d = await r.json()
@@ -1842,50 +1807,34 @@ class TestVhostsAPI:
     def test_post_private_ip_upstream_blocked(self, proxy_module):
         """Adding an UPSTREAM that resolves to a private/RFC-1918 address must
         be rejected to prevent SSRF through the public tunnel."""
-        import config as _cfg
-        _saved = _cfg.ALLOW_PRIVATE_UPSTREAM
-        _cfg.ALLOW_PRIVATE_UPSTREAM = False
-        try:
-            async def go():
-                async with _spin_upstream() as up:
-                    async with _spin_proxy(proxy_module, up) as c:
-                        # ALLOW_PRIVATE_UPSTREAM is hot-reloadable + persisted now,
-                        # so on_startup's db_load_config can restore it from
-                        # config_kv. Re-assert the guard ON after startup.
-                        _cfg.ALLOW_PRIVATE_UPSTREAM = False
-                        try:
-                            import vhost as _vh
-                            _vh._cfg.ALLOW_PRIVATE_UPSTREAM = False
-                        except Exception:
-                            pass
-                        cookie = self._cookie(proxy_module)
-                        private_upstreams = [
-                            "http://127.0.0.1:9999",
-                            "http://192.168.1.1",
-                            "http://10.0.0.1:8080",
-                            "http://172.16.0.1",
-                        ]
-                        for priv in private_upstreams:
-                            r = await c.post(
-                                NS + "/vhosts",
-                                json={"hostname": "evil.test.com", "UPSTREAM": priv},
-                                headers=_csrf_hdr(proxy_module, cookie),
-                                cookies={proxy_module._SESSION_COOKIE: cookie},
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = self._cookie(proxy_module)
+                    private_upstreams = [
+                        "http://127.0.0.1:9999",
+                        "http://192.168.1.1",
+                        "http://10.0.0.1:8080",
+                        "http://172.16.0.1",
+                    ]
+                    for priv in private_upstreams:
+                        r = await c.post(
+                            NS + "/vhosts",
+                            json={"hostname": "evil.test.com", "UPSTREAM": priv},
+                            cookies={proxy_module._SESSION_COOKIE: cookie},
+                        )
+                        if r.status == 200:
+                            d = await r.json()
+                            assert d.get("ok") is False, (
+                                f"POST /vhosts with private UPSTREAM {priv!r} must "
+                                f"return ok=False (SSRF guard); got {d}"
                             )
-                            if r.status == 200:
-                                d = await r.json()
-                                assert d.get("ok") is False, (
-                                    f"POST /vhosts with private UPSTREAM {priv!r} must "
-                                    f"return ok=False (SSRF guard); got {d}"
-                                )
-                            else:
-                                assert r.status in (400, 422), (
-                                    f"POST /vhosts with private UPSTREAM {priv!r}: "
-                                    f"unexpected status {r.status}"
-                                )
-            _run(go())
-        finally:
-            _cfg.ALLOW_PRIVATE_UPSTREAM = _saved
+                        else:
+                            assert r.status in (400, 422), (
+                                f"POST /vhosts with private UPSTREAM {priv!r}: "
+                                f"unexpected status {r.status}"
+                            )
+        _run(go())
 
     # ── DELETE: removes an existing entry ────────────────────────────────────
     def test_delete_vhost(self, proxy_module):
@@ -1898,12 +1847,10 @@ class TestVhostsAPI:
                     with _patch("vhost._assert_upstream_public"):
                         await c.post(NS + "/vhosts",
                                      json={"hostname": "del.example.com", "UPSTREAM": up},
-                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # Then delete
                     r = await c.delete(NS + "/vhosts",
                                        json={"hostname": "del.example.com"},
-                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"DELETE /vhosts: expected 200, got {r.status}"
@@ -1933,7 +1880,6 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.delete(NS + "/vhosts",
                                        json={"hostname": "nope.example.com"},
-                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"DELETE /vhosts non-existent: expected 200, got {r.status}"
@@ -1958,7 +1904,6 @@ class TestVhostsAPI:
                         r = await c.post(NS + "/vhosts",
                                          json={"hostname": "UPPER.Example.COM",
                                                "UPSTREAM": up},
-                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, f"POST /vhosts lowercase: expected 200, got {r.status}"
                     d = await r.json()
@@ -1988,7 +1933,6 @@ class TestVhostsAPI:
                         r = await c.post(NS + "/vhosts",
                                          json={"hostname": "alias.example.com",
                                                "upstream": up},
-                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"POST /vhosts with lowercase 'upstream': expected 200, got {r.status}"
@@ -2044,7 +1988,7 @@ class TestControlCenterCharts:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/control-center", headers=_browser_headers())
                     body = await r.text()
-                    assert "AppSecGW_1.8.13 · Control Center" not in body, \
+                    assert "AppSecGW_1.8.5 · Control Center" not in body, \
                         "control-center: unauthenticated request must not return dashboard HTML"
         _run(go())
 

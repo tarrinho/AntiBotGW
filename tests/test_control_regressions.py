@@ -112,16 +112,6 @@ async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
     ip_state.clear()
     ip_buckets.clear()
     ip_new_sessions.clear()
-    # 1.8.12 M-4 — also clear ip_bans (persistent SQLite hostile-ban table)
-    # so that a prior test's hostile ban doesn't block requests here.
-    # Same cleanup that gw_client fixture does in test_functional.py.
-    import sqlite3 as _sq_cr
-    from config import DB_PATH as _DB_PATH_CR
-    try:
-        with _sq_cr.connect(_DB_PATH_CR) as _c_cr:
-            _c_cr.execute("DELETE FROM ip_bans")
-    except Exception:
-        pass
     try:
         yield client
     finally:
@@ -200,18 +190,6 @@ def _admin_cookie(proxy_module):
     }
     proxy_module._SESSION_CACHE_READY = True
     return {proxy_module._SESSION_COOKIE: proxy_module._session_sign("admin", sid=sid)}
-
-
-def _csrf_hdr(proxy_module, cookies):
-    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
-    import hashlib, hmac as _hmac
-    if isinstance(cookies, dict):
-        cookie = next(iter(cookies.values()))
-    else:
-        cookie = cookies
-    sid = cookie.split("|")[1]
-    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
-    return {"X-CSRF-Token": token}
 
 
 # ── V8: bare Mozilla UA must NOT reach upstream on API paths ─────────────
@@ -804,12 +782,10 @@ def test_v147_config_post_applies_and_rejects(proxy_module):
                     "SESSION_KEY":           "00" * 32,    # not on whitelist
                 }
                 try:
-                    _ck = _admin_cookie(proxy_module)
                     r = await client.post("/antibot-appsec-gateway/secured/config",
                         data=_json.dumps(payload),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck)},
-                        cookies=_ck)
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module))
                     assert r.status == 200
                     body = _json.loads(await r.text())
                     # Applied
@@ -1072,8 +1048,7 @@ def test_defense_threshold_soft_persists_via_config_post(proxy_module):
                 cookie = _admin_cookie(proxy_module)
                 r = await client.post("/antibot-appsec-gateway/secured/config",
                     data=_json.dumps({"SOFT_CHALLENGE_SCORE": 7}),
-                    headers={"Content-Type": "application/json",
-                             **_csrf_hdr(proxy_module, cookie)},
+                    headers={"Content-Type": "application/json"},
                     cookies=cookie)
                 assert r.status == 200
                 body = _json.loads(await r.text())
@@ -1103,8 +1078,7 @@ def test_defense_threshold_ban_persists_via_config_post(proxy_module):
                 cookie = _admin_cookie(proxy_module)
                 r = await client.post("/antibot-appsec-gateway/secured/config",
                     data=_json.dumps({"RISK_BAN_THRESHOLD": 60}),
-                    headers={"Content-Type": "application/json",
-                             **_csrf_hdr(proxy_module, cookie)},
+                    headers={"Content-Type": "application/json"},
                     cookies=cookie)
                 assert r.status == 200
                 body = _json.loads(await r.text())
@@ -1312,9 +1286,8 @@ def test_bypass_paths_hot_reload_via_config_endpoint(proxy_module):
                 r_cfg = await client.post(
                     "/antibot-appsec-gateway/secured/config",
                     data=_json.dumps({"BYPASS_PATHS": ["/uploads/"]}),
-                    headers={"Content-Type": "application/json",
-                             **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                    cookies=_ck,
+                    headers={"Content-Type": "application/json"},
+                    cookies=_admin_cookie(proxy_module),
                 )
                 assert r_cfg.status == 200
                 cfg_body = _json.loads(await r_cfg.text())
@@ -1353,9 +1326,8 @@ def test_config_post_rate_limit_burst_applies(proxy_module):
                     r = await client.post(
                         "/antibot-appsec-gateway/secured/config",
                         data=_json.dumps({"RATE_LIMIT_BURST": 25}),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200
                     text = await r.text()
@@ -1381,9 +1353,8 @@ def test_config_post_rate_limit_refill_applies(proxy_module):
                     r = await client.post(
                         "/antibot-appsec-gateway/secured/config",
                         data=_json.dumps({"RATE_LIMIT_REFILL": 5.0}),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200
                     body = _json.loads(await r.text())
@@ -1408,9 +1379,8 @@ def test_config_post_ip_burst_and_refill_apply(proxy_module):
                     r = await client.post(
                         "/antibot-appsec-gateway/secured/config",
                         data=_json.dumps({"IP_BURST": 30, "IP_REFILL": 4.0}),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200
                     body = _json.loads(await r.text())
@@ -1442,9 +1412,8 @@ def test_config_post_custom_rules_ip_cidr_response_is_valid_json(proxy_module):
                     r = await client.post(
                         "/antibot-appsec-gateway/secured/config",
                         data=_json.dumps({"CUSTOM_RULES": rules}),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200, f"expected 200, got {r.status}"
                     text = await r.text()
@@ -1481,9 +1450,8 @@ def test_config_post_out_of_bounds_numeric_rejected(proxy_module):
                         "RATE_LIMIT_REFILL": 0.0,        # below min>0
                         "IP_BURST":          999999999,  # above max
                     }),
-                    headers={"Content-Type": "application/json",
-                             **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                    cookies=_ck,
+                    headers={"Content-Type": "application/json"},
+                    cookies=_admin_cookie(proxy_module),
                 )
                 assert r.status == 200
                 body = _json.loads(await r.text())
@@ -1510,9 +1478,8 @@ def test_config_post_unknown_knob_rejected(proxy_module):
                             "SECRET_KEY":       "hacked",
                             "__PROTO__":        "injection",
                         }),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200
                     body = _json.loads(await r.text())
@@ -1541,9 +1508,8 @@ def test_config_post_hostile_ban_secs_applies(proxy_module):
                         "/antibot-appsec-gateway/secured/config",
                         data=_json.dumps({"HOSTILE_BAN_SECS": 3600,
                                           "REALLY_BAN_SECS": 86400}),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200
                     body = _json.loads(await r.text())
@@ -1570,13 +1536,11 @@ def test_config_post_bool_fields_apply(proxy_module):
                              "DLP_ENABLED", "TARPIT_ENABLED"):
                     pre = getattr(proxy_module, knob)
                     try:
-                        _ck = _admin_cookie(proxy_module)
                         r = await client.post(
                             "/antibot-appsec-gateway/secured/config",
                             data=_json.dumps({knob: not pre}),
-                            headers={"Content-Type": "application/json",
-                                     **_csrf_hdr(proxy_module, _ck)},
-                            cookies=_ck,
+                            headers={"Content-Type": "application/json"},
+                            cookies=_admin_cookie(proxy_module),
                         )
                         assert r.status == 200, f"{knob}: expected 200"
                         body = _json.loads(await r.text())
@@ -1608,9 +1572,8 @@ def test_config_post_list_fields_apply(proxy_module):
                             "JA4_DENY_LIST":    ["t13d1517h2_8daaf6152771_b0da82dd1658"],
                             "JWT_VALIDATE_PATHS": ["/api/private/*"],
                         }),
-                        headers={"Content-Type": "application/json",
-                                 **_csrf_hdr(proxy_module, _ck := _admin_cookie(proxy_module))},
-                        cookies=_ck,
+                        headers={"Content-Type": "application/json"},
+                        cookies=_admin_cookie(proxy_module),
                     )
                     assert r.status == 200
                     body = _json.loads(await r.text())

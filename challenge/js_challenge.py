@@ -269,18 +269,18 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
       const nonce = parts[0];
       const blob = new Blob([`
         const nonce="${nonce}", prefix="${prefix}";
-        const enc=new TextEncoder();
-        async function solve(){
-          let i=0;
-          while(true){
-            const candidate=i.toString(36);
-            const buf=await crypto.subtle.digest('SHA-256',enc.encode(nonce+candidate));
+        let i=0;
+        while(true){
+          const candidate=i.toString(36);
+          const msg=nonce+candidate;
+          // Use SubtleCrypto for SHA-256
+          crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg)).then(buf=>{
             const hex=Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-            if(hex.startsWith(prefix)){ postMessage(candidate); return; }
-            i++;
-          }
+            if(hex.startsWith(prefix)){ postMessage(candidate); }
+          });
+          i++;
+          if(i%5000===0){ /* yield */ }
         }
-        solve();
       `], {type:'application/javascript'});
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);
@@ -376,17 +376,6 @@ def _serve_js_challenge(request: web.Request, pow_challenge: str = ""):
             .replace('"__TURNSTILE_KEY__"', ts_key_json)
             .replace('"__POW_CHALLENGE__"', pow_chal_json)
             .replace('__SW_ENABLED__',      sw_enabled_json))
-    # DET4-03: bind probe token to session identity, not IP
-    from detection.interaction import _inject_interaction_probe
-    from identity import get_identity as _get_id_for_probe
-    try:
-        _probe_id, *_ = _get_id_for_probe(request)
-    except Exception:
-        try:
-            _probe_id = get_ip(request)
-        except Exception:
-            _probe_id = ""
-    html = _inject_interaction_probe(html, _probe_id)
     # R7: plant a canary on the challenge page too — the LLM summariser
     # reads the gateway's HTML before it ever reaches upstream content.
     headers = {

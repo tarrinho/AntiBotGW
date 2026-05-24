@@ -50,10 +50,8 @@ async def _observe_ja4_ban(ja4: str) -> None:
             await asyncio.wait_for(_redis.expire(key, JA4_AUTODENY_WINDOW_S),
                                     timeout=REDIS_TIMEOUT)
             if int(n) >= JA4_AUTODENY_THRESHOLD:
-                # Use a sorted set (score = epoch) so entries age out automatically.
-                # The refresh loop prunes entries older than JA4_AUTODENY_WINDOW_S.
                 await asyncio.wait_for(
-                    _redis.zadd(f"{REDIS_NS}:ja4-denylist", {ja4: _t.time()}),
+                    _redis.sadd(f"{REDIS_NS}:ja4-denylist", ja4),
                     timeout=REDIS_TIMEOUT)
                 if ja4 not in JA4_DENY_LIST:
                     JA4_DENY_LIST.add(ja4)
@@ -84,13 +82,8 @@ async def _refresh_ja4_denylist_loop():
             await asyncio.sleep(30)
             if _redis is None:
                 continue
-            # Read live entries (score >= now - window) and prune expired ones.
-            min_score = _t.time() - JA4_AUTODENY_WINDOW_S
-            await asyncio.wait_for(
-                _redis.zremrangebyscore(f"{REDIS_NS}:ja4-denylist", 0, min_score),
-                timeout=REDIS_TIMEOUT)
             shared = await asyncio.wait_for(
-                _redis.zrangebyscore(f"{REDIS_NS}:ja4-denylist", min_score, "+inf"),
+                _redis.smembers(f"{REDIS_NS}:ja4-denylist"),
                 timeout=REDIS_TIMEOUT)
             new = {j for j in shared if j and j not in JA4_DENY_LIST}
             if new:
@@ -106,7 +99,7 @@ async def _refresh_ja4_denylist_loop():
 def _ja4_peer_trusted(request) -> bool:
     """True if the kernel-observed peer IP may inject the JA4 header."""
     if not JA4_TRUSTED_NETS:
-        return False  # no pinned nets — deny by default; set JA4_TRUSTED_NETS to enable
+        return True   # operator did not pin — trust all (firewall assumed)
     import ipaddress as _ipaddress
     try:
         ip = _ipaddress.ip_address(request.remote or "")

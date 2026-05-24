@@ -46,7 +46,7 @@
 
 services:
   appsec-timescaledb:
-    image: timescale/timescaledb:latest-pg16@sha256:51eb3bcdfc41f481c797026813d9d457fb5cbc8ea370a65640d8cda13a4040c1
+    image: timescale/timescaledb:latest-pg16
     container_name: appsec-timescaledb
     restart: unless-stopped
     environment:
@@ -103,8 +103,8 @@ services:
       retries:  5
 
   appsec-antibot-gw:
-    image: appsec-antibot-gw:1.8.13
-    container_name: appsec-antibot-gw1.8.13
+    image: appsec-antibot-gw:1.8.5
+    container_name: appsec-antibot-gw1.8.5
     restart: unless-stopped
     depends_on:
       appsec-timescaledb:
@@ -152,11 +152,6 @@ services:
       # in .env to point elsewhere (e.g. managed Redis cloud).
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@appsecgw-redis:6379}
 
-      # ── 1.8.8 — Redis TLS enforcement ────────────────────────────────
-      # REDIS_REQUIRE_TLS defaults to true. Set false for local dev where
-      # the bundled Redis sidecar uses plain redis:// (no TLS).
-      REDIS_REQUIRE_TLS: ${REDIS_REQUIRE_TLS:-false}
-
       # ── 1.6.8 — CrowdSec (community blocklist) ───────────────────────
       # Default URL is the bundled sidecar. The bouncer key has to be
       # generated post-up (see compose header) — operator pastes it into
@@ -169,10 +164,7 @@ services:
       # via /__controls — the Timescale sidecar above is always running so
       # the switch is one click + ~2 s container restart, no migration step
       # required (events accumulate fresh in the chosen backend).
-      # Leave DB_BACKEND empty so the gateway restores the DB-persisted backend
-      # (postgres/sqlite) across restarts. Set DB_BACKEND=sqlite or =postgres in
-      # .env only when you want env to override the operator's last UI choice.
-      DB_BACKEND:   ${DB_BACKEND:-}
+      DB_BACKEND:   ${DB_BACKEND:-sqlite}
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-appsec}:${POSTGRES_PASSWORD}@appsec-timescaledb:5432/${POSTGRES_DB:-appsec}
 
       # ── Logging ──────────────────────────────────────────────────────
@@ -188,7 +180,7 @@ services:
 
     read_only: true
     tmpfs:
-      - /tmp:size=64m,mode=1777,nosuid,nodev,noexec
+      - /tmp:size=16m,mode=1777,nosuid,nodev,noexec
     cap_drop:
       - ALL
     security_opt:

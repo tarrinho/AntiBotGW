@@ -262,22 +262,15 @@ def test_s12_ja4_drawer_open_class():
 
 def test_s13_escape_html_defined_globally():
     src = _html()
-    assert "function escapeHtml(" in src or "dashboard-common.js" in src, (
-        "siem.html: escapeHtml() not provided (inline or shared dashboard-common.js). "
+    assert "function escapeHtml(" in src, (
+        "siem.html: escapeHtml() function not defined. "
         "Required to prevent stored XSS from attacker-controlled event fields."
     )
-    # escapeHtml now lives in the shared dashboard-common.js (1.8.13 #5);
-    # inspect its body there if not defined inline.
-    if "function escapeHtml(" in src:
-        idx = src.find("function escapeHtml(")
-        fn_body = src[idx:idx + 400]
-    else:
-        import pathlib
-        fn_body = (pathlib.Path(__file__).resolve().parent.parent /
-                   "dashboards" / "assets" / "dashboard-common.js").read_text(encoding="utf-8")
+    idx = src.find("function escapeHtml(")
+    fn_body = src[idx:idx + 400]
     for entity in ("&amp;", "&lt;", "&gt;", "&quot;"):
         assert entity in fn_body, (
-            f"siem escapeHtml() does not map to '{entity}'. "
+            f"siem.html: escapeHtml() does not map to '{entity}'. "
             "All HTML-significant characters must be escaped."
         )
 
@@ -419,17 +412,13 @@ def test_s26_escape_html_in_render_top_ips():
 
 def test_s27_tick_interval_in_timers_dcl():
     src = _html()
-    # 1.8.10 — the shared sidebar accordion adds its own DOMContentLoaded listener
-    # near the top of every dashboard, so we can't assume the first one wires the
-    # tick. Locate the timer-tracked tick directly, then confirm it sits inside a
-    # DOMContentLoaded listener (so it's cleaned up on navigation).
-    idx = src.find("_timers.push(setInterval(tick")
-    assert idx != -1, (
-        "siem.html: tick() setInterval not pushed to _timers. "
+    dcl_idx = src.find("DOMContentLoaded")
+    assert dcl_idx != -1, "siem.html: DOMContentLoaded listener not found."
+    dcl_end = src.find("});", dcl_idx)
+    dcl = src[dcl_idx:dcl_end]
+    assert "_timers.push(setInterval(tick" in dcl, (
+        "siem.html: tick() setInterval not pushed to _timers in DOMContentLoaded. "
         "The interval will leak on navigation without cleanup."
-    )
-    assert src.rfind("DOMContentLoaded", 0, idx) != -1, (
-        "siem.html: tick() timer must be wired inside a DOMContentLoaded listener."
     )
 
 
@@ -465,7 +454,7 @@ def test_s30_badge_live_present():
 
 def test_s31_sev_critical_members():
     src = _siem_src()
-    for reason in ("canary-echo", "honey-cred",
+    for reason in ("canary-echo", "honey-cred", "redirect-maze-bot",
                    "canary-probe-miss", "honeypot", "honeypot-silent"):
         assert reason in src, (
             f"siem.py: '{reason}' missing from _SEV_CRITICAL."
@@ -555,6 +544,7 @@ def test_s41_threat_cat_canary():
     fn = ns["_threat_cat"]
     assert fn("canary-echo") == "Canary"
     assert fn("canary-probe-miss") == "Canary"
+    assert fn("redirect-maze-bot") == "Canary"
 
 
 def test_s42_threat_cat_bot_scraper():

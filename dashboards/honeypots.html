@@ -352,7 +352,8 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 </div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
-<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
+<script src="/antibot-appsec-gateway/assets/dashboard-common.js"></script>
+
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
 <script>
 window._applyChartColorsToInstance=function(c,theme){
@@ -475,12 +476,13 @@ async function loadData() {
     // (bucket size scales with the window: 5-min … daily).
     const _ser = d.series || d.hourly;   // d.hourly = legacy fallback
     if (_hourlyChart && _ser) {
-      const span = _ser.length > 1 ? (_ser[1].t || _ser[1].hour_ts) - (_ser[0].t || _ser[0].hour_ts) : 3600;
+      const span = d.bucket_secs || (_ser.length > 1 ? (_ser[1].t || _ser[1].hour_ts) - (_ser[0].t || _ser[0].hour_ts) : 3600);
+      const _hm = dt => dt.getHours().toString().padStart(2,'0') + ':' + dt.getMinutes().toString().padStart(2,'0');
       const labels = _ser.map(b => {
         const dt = new Date((b.t || b.hour_ts) * 1000);
-        return span >= 86400
-          ? (dt.getMonth() + 1) + '/' + dt.getDate()
-          : dt.getHours().toString().padStart(2, '0') + ':' + dt.getMinutes().toString().padStart(2, '0');
+        if (span >= 86400)   return (dt.getMonth() + 1) + '/' + dt.getDate();      // daily → MM/DD
+        if (_hpMins > 1440)  return dt.getDate() + ' ' + _hm(dt);                  // multi-day → DD HH:MM
+        return _hm(dt);                                                            // intraday → HH:MM
       });
       _hourlyChart.data.labels = labels;
       _hourlyChart.data.datasets[0].data = _ser.map(b => b.count);

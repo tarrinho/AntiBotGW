@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<html lang="en"><head><meta charset="utf-8">
 <title>AppSecGW · Center Control</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
@@ -9,7 +9,7 @@ body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 a{color:var(--blue);text-decoration:none}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
 #sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
@@ -26,7 +26,7 @@ a{color:var(--blue);text-decoration:none}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
 #topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
@@ -47,14 +47,14 @@ main{max-width:1200px;margin:0 auto}
 .stat.red .value{color:var(--red)}
 .stat.blue .value{color:var(--blue)}
 .tbl{width:100%;border-collapse:collapse;font-size:12px}
-.tbl thead th{text-align:left;padding:6px 8px;background:var(--bg);color:var(--dim);
+.tbl thead th{text-align:left;padding:6px 8px;background:#0d1117;color:var(--dim);
               font-size:10px;text-transform:uppercase;letter-spacing:.5px;font-weight:600;
               border-bottom:1px solid var(--line)}
 .tbl thead th.r{text-align:right}
-.tbl tbody td{padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+.tbl tbody td{padding:6px 8px;border-bottom:1px solid #1f2730;vertical-align:middle}
 .tbl tbody td.mono{font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .tbl tbody td.r{text-align:right;font-family:ui-monospace,Menlo,monospace}
-.tbl tbody tr:hover td{background:var(--bg-hover)}
+.tbl tbody tr:hover td{background:#1a2030}
 .tag{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;font-family:-apple-system}
 .tag-green{background:rgba(63,185,80,.15);color:var(--green)}
 .tag-red{background:rgba(248,81,73,.15);color:var(--red)}
@@ -88,20 +88,19 @@ button.btn-sm.danger:hover{border-color:var(--red);color:var(--red)}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.13</div>
+    <div id="sidebar-brand-ver">1.8.4</div>
   </div>
   <nav id="sidebar-nav">
     <a href="/antibot-appsec-gateway/secured/control-center" class="active">Center Control</a>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
+    <a href="/antibot-appsec-gateway/secured/service">Service</a>
     <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
+    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
     <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
-    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -187,11 +186,10 @@ button.btn-sm.danger:hover{border-color:var(--red);color:var(--red)}
   </div>
 </div>
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
 
-<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
-
+function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
 
 const _timers=[];
 
@@ -253,7 +251,7 @@ function loadVhostStats(){
       var statusDot,statusLabel,statusColor,statusTitle;
       if(age<300){statusDot='●';statusLabel='Active';statusColor='var(--green)';statusTitle='Last seen '+Math.round(age)+'s ago';}
       else if(age<1800){statusDot='◌';statusLabel='Idle';statusColor='var(--yellow)';statusTitle='Last seen '+Math.round(age/60)+'m ago';}
-      else{statusDot='○';statusLabel='Configured';statusColor='#79c0ff';statusTitle='No recent traffic — manually configured';}
+      else{statusDot='○';statusLabel='Configured';statusColor='var(--blue)';statusTitle='No recent traffic — manually configured';}
       return '<tr>'+
         '<td style="white-space:nowrap" title="'+escapeHtml(statusTitle)+'">'+
           '<span style="color:'+statusColor+';font-size:13px">'+statusDot+'</span>'+
@@ -300,7 +298,7 @@ function loadVhosts(){
           '<td><span class="upstream-pill" title="'+escapeHtml(v.UPSTREAM||'(global upstream)')+'">'+escapeHtml(v.UPSTREAM||'(global upstream)')+'</span></td>'+
           '<td class="r"><span class="tag '+(overrideCount>0?'tag-green':'tag-dim')+'">'+overrideCount+' override'+(overrideCount!==1?'s':'')+'</span></td>'+
           '<td class="r">'+
-            '<a href="/antibot-appsec-gateway/secured/vhost-policy?hostname='+encodeURIComponent(v.hostname)+'" class="btn-sm" style="font-size:10.5px;padding:2px 8px;background:var(--bg);border:1px solid var(--line);color:var(--dim);border-radius:4px;text-decoration:none;display:inline-block">Edit policy</a>'+
+            '<a href="/antibot-appsec-gateway/secured/vhost-policy?hostname='+encodeURIComponent(v.hostname)+'" class="btn-sm" style="font-size:10.5px;padding:2px 8px;background:#0d1117;border:1px solid var(--line);color:var(--dim);border-radius:4px;text-decoration:none;display:inline-block">Edit policy</a>'+
           '</td>'+
           '</tr>';
       }).join('');

@@ -91,14 +91,6 @@ async def gw_client(fake_upstream, aiohttp_client):
     proxy.metrics["by_reason"].clear()
     proxy.metrics["by_status"].clear()
     proxy.timeline.clear()
-    # M-4: clear ip_bans table so persistent hostile bans from prior tests
-    # don't short-circuit the ip_ban early-return in protect().
-    import sqlite3 as _sq
-    try:
-        with _sq.connect(TEST_DB) as _c:
-            _c.execute("DELETE FROM ip_bans")
-    except Exception:
-        pass
     return client
 
 
@@ -185,17 +177,6 @@ def _admin_cookie():
     return {proxy._SESSION_COOKIE: proxy._session_sign("admin", sid=sid)}
 
 
-def _csrf_hdr(cookies=None):
-    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
-    import hashlib, hmac as _hmac
-    cookie = cookies.get(proxy._SESSION_COOKIE, "") if cookies else ""
-    if not cookie:
-        return {}
-    sid = cookie.split("|")[1]
-    token = _hmac.new(proxy.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
-    return {"X-CSRF-Token": token}
-
-
 @pytest.mark.asyncio
 async def test_admin_no_cookie(gw_client):
     """No session cookie → silent decoy (404, not a 401/403 leak)."""
@@ -247,12 +228,10 @@ async def test_live_probe(gw_client):
 async def test_config_post_persists(gw_client):
     """POST /antibot-appsec-gateway/secured/config writes to config_kv table."""
     import sqlite3
-    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"RISK_BAN_THRESHOLD": 42, "ENUM_THRESHOLD": 250},
-        headers=_csrf_hdr(_ck),
-        cookies=_ck,
+        cookies=_admin_cookie(),
     )
     body = await resp.json()
     assert resp.status == 200
@@ -269,12 +248,10 @@ async def test_config_post_persists(gw_client):
 @pytest.mark.asyncio
 async def test_config_rejects_unknown(gw_client):
     """POST /antibot-appsec-gateway/secured/config rejects keys not in _HOT_RELOAD_KNOBS."""
-    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"BOGUS_KNOB": 1},
-        headers=_csrf_hdr(_ck),
-        cookies=_ck,
+        cookies=_admin_cookie(),
     )
     body = await resp.json()
     assert "BOGUS_KNOB" in body["rejected"]
@@ -283,12 +260,10 @@ async def test_config_rejects_unknown(gw_client):
 @pytest.mark.asyncio
 async def test_config_validator_rejects_out_of_range(gw_client):
     """Out-of-range values must hit the validator."""
-    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"RISK_BAN_THRESHOLD": 0},     # below min
-        headers=_csrf_hdr(_ck),
-        cookies=_ck,
+        cookies=_admin_cookie(),
     )
     body = await resp.json()
     assert "RISK_BAN_THRESHOLD" in body["rejected"]
@@ -619,12 +594,10 @@ async def test_bypass_mode_not_written_to_db(gw_client):
     """Setting BYPASS_MODE via the config endpoint must NOT persist it to config_kv."""
     import sqlite3
 
-    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"BYPASS_MODE": True},
-        headers=_csrf_hdr(_ck),
-        cookies=_ck,
+        cookies=_admin_cookie(),
     )
     assert resp.status == 200
     body = await resp.json()
