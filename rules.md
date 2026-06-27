@@ -535,6 +535,8 @@ Each release MUST update:
      --print-to-pdf-no-header file:///abs/path/to/report.html
    ```
    Author: Pedro Tarrinho. Reports must NOT reference any AI tooling.
+   **All embedded screenshots MUST be light mode** (the documentation screenshot
+   standard — see §15 Step 1); retake any dark-mode capture before embedding.
    **Both files are published** (in the `copy-to-github.sh` MANIFEST as of 1.9.7)
    and must stay sanitised — generic targets/paths only, no customer name,
    internal registry host, admin key, or live tunnel URL. Enforced by
