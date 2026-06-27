@@ -1516,7 +1516,12 @@ DYNAMIC_SIGNALS = [
 async def check():
     async with async_playwright() as p:
         browser  = await p.chromium.launch()
-        ctx      = await browser.new_context()
+        # MANDATORY: every screenshot is captured in LIGHT mode (documentation
+        # standard — see §13). The dashboard theme reads localStorage 'agw-theme'
+        # first, then prefers-color-scheme; set BOTH so the capture is
+        # deterministically light regardless of the host OS theme.
+        ctx      = await browser.new_context(color_scheme="light")
+        await ctx.add_init_script("try{localStorage.setItem('agw-theme','light')}catch(e){}")
         await ctx.add_cookies([
             {"name": "agw_session", "value": SESSION, "domain": BASE.split("//")[1], "path": "/"},
             {"name": "agw_csrf",    "value": CSRF,    "domain": BASE.split("//")[1], "path": "/"},
@@ -1601,6 +1606,14 @@ python3 scripts/dashboard_check.py
 | Zero JS console errors | `console.error` and `pageerror` events = 0 |
 
 **Pass criterion:** All pages × all 3 viewports = PASS. Screenshots saved to `screenshots/` for visual review.
+
+> **Screenshot standard (MANDATORY):** every screenshot/printscreen — for `screenshots/`,
+> `report.html`, the manual, or any document — MUST be captured in **light mode**.
+> Set both signals before navigating: Playwright `color_scheme="light"` **and**
+> `localStorage 'agw-theme' = 'light'` (add_init_script, so it lands before the
+> page's inline theme script runs). For headless Chromium/Selenium captures, set
+> `localStorage.setItem('agw-theme','light')` on the origin then reload. Dark-mode
+> captures must be retaken before they are committed or embedded in any doc.
 
 #### Step 2 — Lighthouse: mobile score + accessibility
 
