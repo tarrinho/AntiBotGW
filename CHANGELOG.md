@@ -56,6 +56,14 @@ Author: Pedro Tarrinho
   `vhost_delete`), making `site.com`, `site.com:80` and `site.com:443` one vhost
   while non-default ports (e.g. `:8008`) stay distinct. (`vhost._strip_default_port`)
 
+### Documentation
+- **Refreshed stale markdown docs to 1.9.8.** `README.md` (6 stale `1.8.15`
+  banners/examples), `CONTROLS.md` (was 1.7.3 — now **regenerated** from the live
+  155-control set), and `analysis.result.md` (was a 1.7.8 review — refreshed).
+  `IMPROVEMENTS.md` (1.8.9) and `threatmodel.md` (1.6.7) gained explicit
+  "historical snapshot / point-in-time" markers. Screenshots standard: all
+  captures are now **light mode** (codified in rules.md §15/§13).
+
 ### Tests
 - `tests/test_v198_vhost_port_aware.py` — 16 tests: default-off host-only
   behaviour, distinct `host:port` vhosts, portless all-ports fallback, exact

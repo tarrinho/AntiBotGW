@@ -112,6 +112,26 @@ grep -nE 'image:|container_name:' docker-compose.yml | grep appsec-antibot-gw
 grep -rhoE 'AntiBotWaf_GW_[0-9]+\.[0-9]+\.[0-9]+' dashboards/*.html | sort | uniq -c
 ```
 
+**Documentation version freshness (MANDATORY).** Markdown docs must not lag the
+release. Run:
+```bash
+pytest tests/test_v198_doc_version_freshness.py -q
+```
+This enforces: (1) "living" docs — `README.md`, `MANUAL.md`, `CONTROLS.md`,
+`analysis.result.md`, `manual/README.md` — carry the current GW version in every
+version banner/example (image tags, `**Version**:`, `AntiBotWaf_GW_X`,
+`Architecture (X)`); (2) intentionally historical docs (`IMPROVEMENTS.md`,
+`threatmodel.md`) carry a "point-in-time / historical snapshot" marker; (3) no
+doc references a gateway version newer than current. `bump-version.sh` does NOT
+cover all of these prose banners — this test is the backstop. `CONTROLS.md` is
+**regenerated** from the live control set on each release, not hand-edited.
+Historical files exempt by design: `CHANGELOG.md` (version history),
+`validation/<ver>.md` (per-release records), `GW-Tests-Full.md` (per-test
+"version added" tags), and `import_export_files_compatibility.md` (export-schema
+version, not the gateway version).
+
+**Pass criterion:** 100 % green. Any stale banner is blocking.
+
 ---
 
 ## 0b. Admin key strength (≥16-char random)
