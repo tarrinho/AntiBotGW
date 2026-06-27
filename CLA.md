@@ -1,6 +1,6 @@
 # Contributor License Agreement (CLA)
 
-**Project:** AppSecGW (anti-bot-proxy)
+**Project:** AntiBot/WAF GW (anti-bot-proxy)
 **Project Maintainer / Licensor:** Pedro Tarrinho (<tarrinho@gmail.com>)
 
 Thank you for contributing. To keep the project's licensing clean and to allow

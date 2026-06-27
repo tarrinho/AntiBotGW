@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/analytics.py — analytics endpoints
 #
 #   GET /secured/score-distribution    — risk-score histogram across all IpState objects
@@ -16,6 +14,7 @@ import time as _t
 from collections import defaultdict, deque
 
 from config import *   # noqa: F401,F403
+from db import open_conn
 from config import _DATA_PATH  # noqa: F401
 from state import *    # noqa: F401,F403
 from helpers import now  # noqa: F401
@@ -50,7 +49,7 @@ async def score_distribution_endpoint(request: web.Request):
             "100+":   0,
         }
         async with state_lock:
-            scores = [s.risk_score for s in ip_state.values()]
+            scores = [s.risk_score for s in list(ip_state.values())]
 
         for score in scores:
             if score == 0:
@@ -120,7 +119,7 @@ async def traffic_pipeline_endpoint(request: web.Request):
         # We need the set of IPs currently in the "bypassed" band (allowed but score >= SOFT_CHALLENGE_SCORE)
         async with state_lock:
             bypassed_ips: set = set()
-            for s in ip_state.values():
+            for s in list(ip_state.values()):
                 if (SOFT_CHALLENGE_SCORE > 0
                         and SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD
                         and s.last_ip):
@@ -145,7 +144,7 @@ async def traffic_pipeline_endpoint(request: web.Request):
         # Fill DB data for older ranges not in memory
         if start_b < in_mem_oldest:
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = open_conn()
                 conn.row_factory = sqlite3.Row
                 for row in conn.execute(
                     "SELECT bucket_minute, total, allowed, blocked, missed "
@@ -227,24 +226,45 @@ async def vhost_heatmap_endpoint(request: web.Request):
         vhost_totals:   dict = {}  # vhost → [{"total":0,"blocked":0}] × n_buckets
         vhosts_ordered: list = []
 
+        # 1.9.1 iter-17: backend-branch the per-vhost block-rate heatmap
+        # read. PG mode wraps the bounds in to_timestamp() and projects
+        # ts → epoch for the slot bucket arithmetic.
+        from db import active_backend as _active_vh
+        _be_vh = _active_vh()
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             conn.row_factory = sqlite3.Row
 
-            # All events rows in window, grouped by vhost + bucket
             _PASSTHROUGH = {"", "ok", "operator-passthrough", "bypass-path",
                             "authorized-robot", "bypass-mode"}
+            if _be_vh == "postgres":
+                _sql_vh = (
+                    "SELECT vhost, "
+                    "  CAST(EXTRACT(EPOCH FROM ts) / ? AS INTEGER) * ? AS slot, "
+                    "  COUNT(*) AS total, "
+                    "  SUM(CASE WHEN reason IS NOT NULL AND reason != '' "
+                    "           AND LOWER(reason) NOT IN "
+                    "           ('ok','authorized-robot','operator-passthrough','bypass-path','bypass-mode') "
+                    "      THEN 1 ELSE 0 END) AS blocked "
+                    "FROM events "
+                    "WHERE ts >= to_timestamp(?) AND ts <= to_timestamp(?) AND vhost != '' "
+                    "GROUP BY vhost, slot"
+                )
+            else:
+                _sql_vh = (
+                    "SELECT vhost, "
+                    "  CAST(ts / ? AS INTEGER) * ? AS slot, "
+                    "  COUNT(*) AS total, "
+                    "  SUM(CASE WHEN reason IS NOT NULL AND reason != '' "
+                    "           AND LOWER(reason) NOT IN "
+                    "           ('ok','authorized-robot','operator-passthrough','bypass-path','bypass-mode') "
+                    "      THEN 1 ELSE 0 END) AS blocked "
+                    "FROM events "
+                    "WHERE ts >= ? AND ts <= ? AND vhost != '' "
+                    "GROUP BY vhost, slot"
+                )
             rows = conn.execute(
-                "SELECT vhost, "
-                "  CAST(ts / ? AS INTEGER) * ? AS slot, "
-                "  COUNT(*) AS total, "
-                "  SUM(CASE WHEN reason IS NOT NULL AND reason != '' "
-                "           AND LOWER(reason) NOT IN "
-                "           ('ok','authorized-robot','operator-passthrough','bypass-path','bypass-mode') "
-                "      THEN 1 ELSE 0 END) AS blocked "
-                "FROM events "
-                "WHERE ts >= ? AND ts <= ? AND vhost != '' "
-                "GROUP BY vhost, slot",
+                _sql_vh,
                 (bucket_secs, bucket_secs, start_b, end_b + bucket_secs),
             ).fetchall()
             conn.close()
@@ -397,24 +417,37 @@ async def security_incidents_endpoint(request: web.Request):
         # Snapshot ip → max risk_score from in-memory state
         async with state_lock:
             ip_risk: dict = {}
-            for s in ip_state.values():
+            for s in list(ip_state.values()):
                 ip = s.last_ip
                 if ip:
                     ip_risk[ip] = max(ip_risk.get(ip, 0.0), s.risk_score)
 
         # Fetch matching events from DB
+        # 1.9.1 iter-17: backend-branch for PG TIMESTAMPTZ. Project ts
+        # back to epoch float so the consumer's `float(row["ts"])` keeps
+        # working unchanged on both backends.
+        from db import active_backend as _active_inc
+        _be_inc = _active_inc()
         events_out: list = []
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(_INCIDENT_ALL))
-            rows = conn.execute(
-                f"SELECT ts, ip, ua, path, method, status, reason, vhost "
-                f"FROM events "
-                f"WHERE ts >= ? AND reason IN ({placeholders}) "
-                f"ORDER BY ts DESC LIMIT ?",
-                (since, *_INCIDENT_ALL, limit),
-            ).fetchall()
+            if _be_inc == "postgres":
+                _sql_inc = (
+                    f"SELECT EXTRACT(EPOCH FROM ts) AS ts, ip, ua, path, method, status, reason, vhost "
+                    f"FROM events "
+                    f"WHERE ts >= to_timestamp(?) AND reason IN ({placeholders}) "
+                    f"ORDER BY ts DESC LIMIT ?"
+                )
+            else:
+                _sql_inc = (
+                    f"SELECT ts, ip, ua, path, method, status, reason, vhost "
+                    f"FROM events "
+                    f"WHERE ts >= ? AND reason IN ({placeholders}) "
+                    f"ORDER BY ts DESC LIMIT ?"
+                )
+            rows = conn.execute(_sql_inc, (since, *_INCIDENT_ALL, limit)).fetchall()
             conn.close()
 
             for row in rows:
@@ -479,7 +512,7 @@ async def risk_percentiles_endpoint(request: web.Request):
 
         async with state_lock:
             scores = [
-                s.risk_score for s in ip_state.values()
+                s.risk_score for s in list(ip_state.values())
                 if s.risk_score >= min_score
             ]
 
@@ -617,13 +650,28 @@ async def ban_events_endpoint(request: web.Request):
 
         in_mem_oldest = int(_t.time()) - TIMELINE_RETAIN_SECS
         if start_b < in_mem_oldest:
+            # 1.9.1 iter-17: ban-event timeline aggregator. Same PG branch
+            # pattern as the rest of this file; ts projected to epoch so
+            # _slot(int(row["ts"])) keeps working unchanged.
+            from db import active_backend as _active_bt
+            _be_bt = _active_bt()
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = open_conn()
                 conn.row_factory = sqlite3.Row
                 placeholders = ",".join("?" * len(_ALL_BAN_EVENT_REASONS))
+                if _be_bt == "postgres":
+                    _sql_bt = (
+                        f"SELECT EXTRACT(EPOCH FROM ts) AS ts, reason FROM events "
+                        f"WHERE ts >= to_timestamp(?) AND ts < to_timestamp(?) "
+                        f"AND reason IN ({placeholders})"
+                    )
+                else:
+                    _sql_bt = (
+                        f"SELECT ts, reason FROM events "
+                        f"WHERE ts >= ? AND ts < ? AND reason IN ({placeholders})"
+                    )
                 rows = conn.execute(
-                    f"SELECT ts, reason FROM events "
-                    f"WHERE ts >= ? AND ts < ? AND reason IN ({placeholders})",
+                    _sql_bt,
                     (start_b, in_mem_oldest, *_ALL_BAN_EVENT_REASONS),
                 ).fetchall()
                 conn.close()
@@ -654,12 +702,12 @@ async def ban_events_endpoint(request: web.Request):
 
         chal_issued = metrics.get("by_reason", {}).get("chal-required", 0)
         async with state_lock:
-            n_chal_ips     = sum(1 for s in ip_state.values()
+            n_chal_ips     = sum(1 for s in list(ip_state.values())
                                  if s.blocks_by_reason.get("chal-required", 0) > 0)
-            n_chal_allowed = sum(1 for s in ip_state.values()
+            n_chal_allowed = sum(1 for s in list(ip_state.values())
                                  if s.blocks_by_reason.get("chal-required", 0) > 0
                                  and s.allowed_count > 0)
-            n_still_banned = sum(1 for s in ip_state.values()
+            n_still_banned = sum(1 for s in list(ip_state.values())
                                  if s.blocks_by_reason.get("chal-required", 0) > 0
                                  and s.banned_until > _t.monotonic())
 
@@ -714,7 +762,7 @@ async def top_attackers_endpoint(request: web.Request):
 
         async with state_lock:
             ip_agg: dict = {}
-            for _tk, s in ip_state.items():
+            for _tk, s in list(ip_state.items()):
                 ip = s.last_ip
                 if not ip:
                     continue
@@ -778,7 +826,7 @@ async def top_attackers_endpoint(request: web.Request):
         ip_list = [r["ip"] for r in top_ips]
         abuse_scores: dict = {}
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(ip_list))
             for row in conn.execute(
@@ -793,27 +841,52 @@ async def top_attackers_endpoint(request: web.Request):
         sparklines: dict = {ip: [0] * 24 for ip in ip_list}
         now_epoch = int(_t.time())
         sparkline_start = now_epoch - 86400
+        # 1.9.1 iter-16: PG-mode fix. events.ts is TIMESTAMPTZ on Postgres,
+        # so the SQLite-style `WHERE ts >= ?` with an epoch int raises
+        # "operator does not exist: timestamp with time zone >= integer".
+        # Mirror the helpers in db/postgres.py: wrap the epoch in
+        # `to_timestamp(?)` for the WHERE bound and project the column
+        # back to epoch with `EXTRACT(EPOCH FROM ts)` so the hour-bucket
+        # arithmetic below stays unchanged. SQLite path is byte-identical
+        # to the pre-fix behaviour.
         try:
-            conn = sqlite3.connect(DB_PATH)
+            from db import active_backend as _active
+            _be = _active()
+        except Exception:
+            _be = "sqlite"
+        try:
+            conn = open_conn()
+            # Cross-backend: assigning sqlite3.Row makes the PG wrapper
+            # switch its cursor to psycopg.dict_row so `row["ip"]` keeps
+            # working on both backends without separate read paths.
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(ip_list))
-            rows = conn.execute(
-                f"SELECT ip, ts FROM events "
-                f"WHERE ts >= ? AND ip IN ({placeholders})",
-                (sparkline_start, *ip_list),
-            ).fetchall()
+            if _be == "postgres":
+                sql = (
+                    f"SELECT ip, EXTRACT(EPOCH FROM ts) AS ts FROM events "
+                    f"WHERE ts >= to_timestamp(?) AND ip IN ({placeholders})"
+                )
+            else:
+                sql = (
+                    f"SELECT ip, ts FROM events "
+                    f"WHERE ts >= ? AND ip IN ({placeholders})"
+                )
+            rows = conn.execute(sql, (sparkline_start, *ip_list)).fetchall()
             conn.close()
+            # PG dict_row → dict; SQLite Row → mapping. Both support [...].
             for row in rows:
                 ip = row["ip"]
                 if ip in sparklines:
-                    hour_idx = min(23, int((int(row["ts"]) - sparkline_start) // 3600))
+                    ts_val = row["ts"]
+                    # PG returns Decimal from EXTRACT — coerce to float first.
+                    hour_idx = min(23, int((float(ts_val) - sparkline_start) // 3600))
                     sparklines[ip][hour_idx] = sparklines[ip][hour_idx] + 1
         except Exception:
             pass
 
         ban_expiry: dict = {}
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(ip_list))
             for row in conn.execute(

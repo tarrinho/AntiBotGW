@@ -1,34 +1,45 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
+<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Vhost Policy</title>
+<title>AntiBotWaf_GW_1.9.8 · Vhost Policy</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}html[data-theme="light"] .ov-row:hover{background:rgba(0,0,0,.03)!important}html[data-theme="light"] .scope-badge{background:#e8f4fd!important;color:var(--blue)!important}html[data-theme="light"] #gw-alert{background:#e8f4fd!important;border-color:var(--blue)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 a{color:var(--blue);text-decoration:none}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:#1f2730}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
 #page-content{flex:1;padding:14px}
@@ -41,6 +52,21 @@ a{color:var(--blue);text-decoration:none}
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* -- Sidebar collapse (desktop hide/unhide) -- */
+#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
+/* -- Submenu collapse (accordion) -- */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -50,22 +76,23 @@ a{color:var(--blue);text-decoration:none}
 main{padding:0;max-width:1100px;margin:0 auto}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px 16px;margin-bottom:14px}
 .card h2{margin:0 0 10px 0;font-size:13.5px;font-weight:600;color:var(--fg);padding-bottom:6px;border-bottom:1px solid var(--line)}
-button{background:var(--blue);color:#fff;border:none;padding:8px 16px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
-button.secondary{background:#30363d;color:var(--fg)}
+button{background:var(--blue);color:var(--bright);border:none;padding:8px 16px;border-radius:5px;font-size:13px;font-weight:600;cursor:pointer}
+button.secondary{background:var(--line);color:var(--fg)}
 button.danger{background:var(--red)}
 button:disabled{opacity:.4;cursor:not-allowed}
-select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-size:13px;cursor:pointer}
-.num-inp{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;width:130px;text-align:right}
-.text-inp{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;width:100%;min-height:48px;resize:vertical}
-.switch{position:relative;width:42px;height:22px;background:#30363d;border-radius:11px;cursor:pointer;transition:background .15s;flex-shrink:0}
+select{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-size:13px;cursor:pointer}
+.num-inp{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;width:130px;text-align:right}
+.text-inp{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:5px 8px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px;width:100%;min-height:48px;resize:vertical}
+.switch{position:relative;width:42px;height:22px;background:var(--line);border-radius:11px;cursor:pointer;transition:background .15s;flex-shrink:0}
 .switch::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
 .switch.on{background:var(--green)}
+.switch.danger.on{background:var(--red)}
 .switch.on::after{left:22px}
 .scope-bar{display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:12px 16px;background:var(--card);border:1px solid var(--line);border-radius:8px;flex-wrap:wrap}
 .scope-bar label{font-size:12px;color:var(--dim);white-space:nowrap}
 #vhost-select{min-width:220px}
 .scope-badge{font-size:11px;padding:3px 10px;border-radius:10px;background:#1a2733;color:var(--blue);border:1px solid var(--blue);white-space:nowrap}
-.ov-row{display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid #1f2730;transition:background .1s}
+.ov-row{display:flex;align-items:center;gap:14px;padding:9px 0;border-bottom:1px solid var(--bg-hover);transition:background .1s}
 .ov-row:last-child{border-bottom:none}
 .ov-row:hover{background:#1a1f27}
 .ov-row.dirty{background:rgba(46,160,67,.07)}
@@ -75,6 +102,7 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 .ov-ctrl{flex:0 0 auto;display:flex;align-items:center}
 .btn-remove{background:none;border:1px solid var(--line);color:var(--dim);padding:4px 8px;font-size:13px;border-radius:4px;cursor:pointer;line-height:1;flex-shrink:0}
 .btn-remove:hover{background:#1a0a0a;border-color:var(--red);color:var(--red)}
+html[data-theme="light"] .btn-remove:hover{background:#ffebe9}
 .empty-state{text-align:center;padding:40px 20px;color:var(--dim)}
 .empty-state .icon{font-size:32px;margin-bottom:12px}
 .empty-state p{margin:4px 0;font-size:13px}
@@ -85,40 +113,76 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 .modal-header b{font-size:14px}
 .modal-close{background:none;border:none;color:var(--dim);font-size:18px;cursor:pointer;padding:0;line-height:1}
 .modal-search{padding:10px 14px;border-bottom:1px solid var(--line)}
-.modal-search input{width:100%;background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:13px}
+.modal-search input{width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-size:13px}
 .modal-body{overflow-y:auto;flex:1;padding:6px 0}
 .picker-group{padding:4px 14px 2px 14px;font-size:10px;font-weight:700;color:var(--dim);text-transform:uppercase;letter-spacing:.05em;margin-top:8px}
 .picker-item{padding:8px 14px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;border-radius:4px;margin:0 4px}
-.picker-item:hover{background:#1f2730}
+.picker-item:hover{background:var(--bg-hover)}
 .picker-item.already{opacity:.4;cursor:not-allowed}
 .picker-item .pi-name{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--fg)}
 .picker-item .pi-global{font-size:11px;color:var(--dim)}
 #gw-alert{display:none;position:fixed;bottom:20px;right:20px;background:#1a2733;border:1px solid var(--blue);color:var(--fg);padding:10px 16px;border-radius:6px;font-size:13px;z-index:2000;max-width:360px}
 .unsaved-bar{display:none;align-items:center;gap:12px;padding:10px 16px;background:#1a2710;border:1px solid var(--green);border-radius:8px;margin-bottom:14px}
+html[data-theme="light"] .unsaved-bar{background:#e6f6ec}
 .unsaved-bar.visible{display:flex}
 .unsaved-bar span{flex:1;font-size:12.5px;color:var(--green)}
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+/* 1.8.14 — Security posture presets */
+.posture-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.posture-card{background:var(--bg,#0d1117);border:1px solid var(--line);border-radius:8px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.posture-head{display:flex;align-items:center;gap:8px}
+.posture-badge{font-size:10px;font-weight:700;letter-spacing:.5px;padding:3px 8px;border-radius:3px;color:#000}
+.posture-badge.p-lax{background:#79c0ff}
+.posture-badge.p-balanced{background:#3fb950}
+.posture-badge.p-strict{background:#d29922}
+.posture-badge.p-paranoid{background:#f85149}
+.posture-title{font-size:13px;font-weight:600;color:var(--fg)}
+.posture-when{font-size:11.5px;color:var(--dim);line-height:1.5}
+.posture-traits{font-size:11.5px;line-height:1.65}
+.posture-traits .t-on{color:var(--green)}
+.posture-traits .t-off{color:var(--dim);text-decoration:line-through}
+.posture-traits .t-num{color:var(--fg);font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:3px}
+.posture-actions{display:flex;gap:8px;margin-top:auto;padding-top:4px}
+.posture-preview,.posture-apply{font-size:11.5px;padding:5px 12px;border-radius:4px;cursor:pointer;border:1px solid var(--line);background:var(--card);color:var(--fg);font-weight:600}
+.posture-preview:hover{background:var(--bg-hover,#21262d)}
+.posture-apply{background:transparent;border-color:var(--blue);color:var(--blue)}
+.posture-apply:not(:disabled):hover{background:rgba(121,192,255,.12)}
+.posture-apply:disabled{opacity:.4;cursor:not-allowed}
+.posture-diff-row{display:grid;grid-template-columns:170px 1fr 1fr;gap:10px;padding:3px 0;border-bottom:1px solid var(--line,#30363d)}
+.posture-diff-row .dk{color:var(--blue)}
+.posture-diff-row .dv-old{color:var(--dim);text-decoration:line-through}
+.posture-diff-row .dv-new{color:var(--green);font-weight:600}
 </style></head><body>
-<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<!-- 1.9.2 UX — shared progress bar + escapeHtml. Loaded synchronously so
+     the fetch/XHR hook is installed BEFORE the inline CSRF wrapper runs. -->
+<script src="/antibot-appsec-gateway/assets/dashboard-common.js"></script>
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div>
+      <div id="sidebar-brand-name">AntiBot/WAF GW</div>
+      <div id="sidebar-brand-ver">1.9.8</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
   <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/service">Service</a>
-    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub active">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct&&window._acct.openModal();return false;">My Account</a>
@@ -130,7 +194,9 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Vhost Policy</div>
-  <div id="topbar-right"></div>
+  <div id="topbar-right">
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">&#x1F319;</button>
+  </div>
 </div>
 <div id="page-content">
 
@@ -138,6 +204,8 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 
 <div class="scope-bar" id="scope-bar">
   <label>Inbound hostname:</label>
+  <input id="vhost-policy-search" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none;background:var(--bg,#0d1117);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);border-radius:4px;padding:3px 8px;font-size:12px;width:130px"
+    oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-select').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
   <select id="vhost-select">
     <option value="">— select a vhost —</option>
   </select>
@@ -159,6 +227,150 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
       <div style="font-size:13px;font-weight:600;color:var(--fg)" id="bot-detection-label">Enabled</div>
       <div style="font-size:11px;color:var(--dim);margin-top:2px">When disabled, all heuristic detectors are skipped for this vhost. Existing bans and rate limits still apply.</div>
     </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:14px;padding:10px 0 4px;border-top:1px solid var(--line);margin-top:10px">
+    <div id="vhost-bypass-switch" class="switch danger" data-knob="BYPASS_MODE" data-type="bool" style="flex-shrink:0"></div>
+    <div>
+      <div style="font-size:13px;font-weight:600;color:var(--fg)" id="vhost-bypass-label">Active</div>
+      <div style="font-size:11px;color:var(--dim);margin-top:2px">Disable ALL gateway protections for this vhost — when on, every request is proxied straight through with no detection, ban enforcement, or rate limiting. Persists across restarts (per-vhost policy). For trusted/internal vhosts or maintenance windows. The global emergency bypass (Controls) overrides this everywhere.</div>
+    </div>
+  </div>
+</div>
+
+<!-- 1.8.14 — Security posture presets.
+     Some vhosts (public marketing, blogs) need to lean LAX to avoid false
+     positives on diverse legit traffic. Others (login, payment, admin)
+     need to lean STRICT to make brute-force / scraping expensive. The
+     three presets give a one-click jump across the spectrum; an operator
+     can still tweak individual knobs afterwards. -->
+<div class="card" id="card-posture" style="display:none">
+  <h2>Security posture</h2>
+  <p class="desc" style="margin:0 0 14px">
+    Pre-baked profiles to move this vhost along the lax ↔ strict axis.
+    Each profile sets a curated bundle of knobs; only the deltas vs. the
+    current effective config are applied. Click <b>Preview</b> to see
+    exactly what would change before applying.
+  </p>
+  <div id="posture-current" style="font-size:12px;color:var(--dim);margin-bottom:10px"></div>
+  <!-- 1.9.1 iter-14 — profile-impact radar. All 4 profiles overlaid on
+       5 axes; bigger polygon = more aggressive posture. Lets operators
+       see at a glance which profile they want before reading the card
+       descriptions. SVG is rendered by _renderProfileRadar() at the same
+       time _renderPostureCard() fires (when a hostname is selected). -->
+  <div id="posture-radar-wrap" style="text-align:center;margin:6px 0 18px">
+    <svg id="posture-radar" width="380" height="280" viewBox="0 0 380 280"
+         style="max-width:100%;height:auto"></svg>
+    <div style="font-size:11px;color:var(--dim);margin-top:4px">
+      Profile impact across 5 dimensions — larger polygon = more aggressive
+      posture; smaller polygon = more permissive. The four overlays let an
+      operator pick the trade-off they want before reading each card.
+    </div>
+  </div>
+  <div class="posture-grid">
+    <div class="posture-card" data-posture="lax">
+      <div class="posture-head">
+        <span class="posture-badge p-lax">LAX</span>
+        <span class="posture-title">Permissive</span>
+      </div>
+      <div class="posture-when">
+        <b>When:</b> public marketing, blogs, anything where blocking a
+        real user costs more than letting a bot through.
+      </div>
+      <div class="posture-traits">
+        <div class="t-on">✓ Honeypot &amp; suspicious-path detection (cheap, no UX cost)</div>
+        <div class="t-off">✗ UA filter / platform-check (lots of legit oddballs)</div>
+        <div class="t-off">✗ JS challenge / Turnstile (user friction)</div>
+        <div class="t-off">✗ Country block</div>
+        <div class="t-num">Risk-ban threshold <b>80</b> · Burst <b>50</b> · Refill <b>20/s</b></div>
+        <div class="t-num">Ban <b>1 h</b> / Really-Ban <b>1 d</b></div>
+      </div>
+      <div class="posture-actions">
+        <button class="posture-preview" data-posture="lax">Preview</button>
+        <button class="posture-apply" data-posture="lax" disabled>Apply</button>
+      </div>
+    </div>
+
+    <div class="posture-card" data-posture="balanced">
+      <div class="posture-head">
+        <span class="posture-badge p-balanced">BALANCED</span>
+        <span class="posture-title">Default production</span>
+      </div>
+      <div class="posture-when">
+        <b>When:</b> typical web apps, mixed authenticated/anonymous
+        traffic. Recommended default unless you have a specific reason
+        to lean lax or strict.
+      </div>
+      <div class="posture-traits">
+        <div class="t-on">✓ Bot detection · UA filter · platform check</div>
+        <div class="t-on">✓ Honeypot · suspicious paths</div>
+        <div class="t-off">✗ JS challenge / Turnstile (only when under attack)</div>
+        <div class="t-num">Risk-ban threshold <b>50</b> · Burst <b>20</b> · Refill <b>5/s</b></div>
+        <div class="t-num">Ban <b>1 d</b> / Really-Ban <b>30 d</b></div>
+      </div>
+      <div class="posture-actions">
+        <button class="posture-preview" data-posture="balanced">Preview</button>
+        <button class="posture-apply" data-posture="balanced" disabled>Apply</button>
+      </div>
+    </div>
+
+    <div class="posture-card" data-posture="strict">
+      <div class="posture-head">
+        <span class="posture-badge p-strict">STRICT</span>
+        <span class="posture-title">High-value endpoint</span>
+      </div>
+      <div class="posture-when">
+        <b>When:</b> ordinary admin areas, internal tools, anywhere a
+        single successful bot request is expensive but you still want
+        humans through without an extra captcha.
+      </div>
+      <div class="posture-traits">
+        <div class="t-on">✓ Everything in Balanced</div>
+        <div class="t-on">✓ JS challenge (raise bot cost; humans pay once per session)</div>
+        <div class="t-on">✓ Country block (enable only after configuring deny/allow list)</div>
+        <div class="t-num">Risk-ban threshold <b>30</b> · Burst <b>10</b> · Refill <b>2/s</b></div>
+        <div class="t-num">PoW @ <b>15</b> · Escalation @ <b>15</b> · Enum @ <b>100</b></div>
+        <div class="t-num">Ban <b>1 d</b> / Really-Ban <b>30 d</b></div>
+      </div>
+      <div class="posture-actions">
+        <button class="posture-preview" data-posture="strict">Preview</button>
+        <button class="posture-apply" data-posture="strict" disabled>Apply</button>
+      </div>
+    </div>
+
+    <!-- 1.9.1 iter-13: fourth preset for the very high-stakes endpoints.
+         Operators of /login, /payment, /admin should pick this knowingly —
+         it adds visible user friction (Turnstile + tightest thresholds)
+         in exchange for making automated abuse essentially uneconomical. -->
+    <div class="posture-card" data-posture="paranoid">
+      <div class="posture-head">
+        <span class="posture-badge p-paranoid">PARANOID</span>
+        <span class="posture-title">Login &middot; payment &middot; root admin</span>
+      </div>
+      <div class="posture-when">
+        <b>When:</b> the single most valuable endpoints on the system —
+        credential entry, money transfer, root admin. Acceptable to add
+        a Turnstile checkbox to every visitor to keep automated abuse
+        essentially uneconomical.
+      </div>
+      <div class="posture-traits">
+        <div class="t-on">✓ Everything in Strict</div>
+        <div class="t-on">✓ Turnstile (every visitor gets a captcha until they prove human)</div>
+        <div class="t-on">✓ Behavioural + coordinated-attack + path-sweep detectors all on</div>
+        <div class="t-num">Risk-ban threshold <b>15</b> · Burst <b>5</b> · Refill <b>1/s</b></div>
+        <div class="t-num">PoW @ <b>5</b> · Turnstile-risk @ <b>10</b> · Enum @ <b>30</b></div>
+        <div class="t-num">JA4-autodeny @ <b>1</b> · Cookie-ghost @ <b>1</b> · Circuit @ <b>3</b></div>
+        <div class="t-num">Ban <b>1 d</b> / Really-Ban <b>30 d</b></div>
+      </div>
+      <div class="posture-actions">
+        <button class="posture-preview" data-posture="paranoid">Preview</button>
+        <button class="posture-apply" data-posture="paranoid" disabled>Apply</button>
+      </div>
+    </div>
+  </div>
+  <div id="posture-diff" style="display:none;margin-top:14px;padding:11px 14px;background:var(--bg,#0d1117);border:1px solid var(--line,#30363d);border-radius:6px;font-size:12px">
+    <div style="font-weight:600;color:var(--fg);margin-bottom:6px" id="posture-diff-title">Changes that would apply</div>
+    <div id="posture-diff-rows" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px"></div>
+    <div id="posture-diff-empty" style="display:none;color:var(--green);font-style:italic">This vhost already matches the profile — nothing to change.</div>
   </div>
 </div>
 
@@ -189,7 +401,9 @@ select{background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6
 </div>
 
 <div id="gw-alert"></div>
+<script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script>
 'use strict';
 var ADMIN_NS = '/antibot-appsec-gateway/secured';
@@ -199,6 +413,7 @@ var _globalVals = {};
 var _overrides  = {};
 var _pending    = {};
 var _vhostKnobs = [];
+var _allVhostSummary = {};
 
 var KNOB_META = {
   UPSTREAM:                      {g:'Routing',           t:'str'},
@@ -261,6 +476,7 @@ var KNOB_META = {
   GLOBAL_RPS_LIMIT:              {g:'Rate Limiting',     t:'int'},
   HOSTILE_BAN_SECS:              {g:'Ban Durations',     t:'int'},
   REALLY_BAN_SECS:               {g:'Ban Durations',     t:'int'},
+  BAN_SCOPE:                     {g:'Ban Durations',     t:'str'},
   CANARY_TTL_S:                  {g:'Ban Durations',     t:'int'},
   SESSION_CHURN_WINDOW_S:        {g:'Ban Durations',     t:'int'},
   SESSION_CHURN_MAX:             {g:'Ban Durations',     t:'int'},
@@ -284,6 +500,13 @@ var KNOB_META = {
   BODY_GROUP_RCE_ENABLED:        {g:'Body Scanners',     t:'bool'},
   BODY_GROUP_SSRF_ENABLED:       {g:'Body Scanners',     t:'bool'},
   BODY_GROUP_CMD_ENABLED:        {g:'Body Scanners',     t:'bool'},
+  BLOCK_RESPONSE_MODE:           {g:'Tarpit / Labyrinth',t:'str'},
+  ALLOW_BYPASS_SECS:             {g:'Tarpit / Labyrinth',t:'int'},
+  UPSTREAM_TIMEOUT_SECS:         {g:'Routing',t:'int'},
+  UPSTREAM_CONNECT_TIMEOUT_SECS: {g:'Routing',t:'int'},
+  CIRCUIT_FAIL_THRESHOLD:        {g:'Routing',t:'int'},
+  CIRCUIT_OPEN_SECS:             {g:'Routing',t:'int'},
+  CIRCUIT_HALF_OPEN_MAX:         {g:'Routing',t:'int'},
   TARPIT_ENABLED:                {g:'Tarpit / Labyrinth',t:'bool'},
   TARPIT_DELAY_MS:               {g:'Tarpit / Labyrinth',t:'int'},
   LABYRINTH_ENABLED:             {g:'Tarpit / Labyrinth',t:'bool'},
@@ -291,6 +514,10 @@ var KNOB_META = {
   LABYRINTH_MAX_DEPTH:           {g:'Tarpit / Labyrinth',t:'int'},
   LABYRINTH_LINKS_PER:           {g:'Tarpit / Labyrinth',t:'int'},
   LABYRINTH_JITTER_ENABLED:      {g:'Tarpit / Labyrinth',t:'bool'},
+  REDIRECT_MAZE_ENABLED:         {g:'Tarpit / Labyrinth',t:'bool'},
+  REDIRECT_MAZE_THRESHOLD:       {g:'Tarpit / Labyrinth',t:'float'},
+  REDIRECT_MAZE_DEPTH:           {g:'Tarpit / Labyrinth',t:'int'},
+  REDIRECT_MAZE_MIN_MS:          {g:'Tarpit / Labyrinth',t:'int'},
   JWT_VALIDATE_PATHS:            {g:'JWT',               t:'list'},
   JWT_REQUIRED_ISSUER:           {g:'JWT',               t:'str'},
   JWT_REQUIRED_AUDIENCE:         {g:'JWT',               t:'str'},
@@ -314,22 +541,68 @@ var KNOB_META = {
   MAXMIND_ENABLED:               {g:'Integrations',      t:'bool'},
   TURNSTILE_ENABLED:             {g:'Integrations',      t:'bool'},
   STRICT_ORIGIN:                 {g:'Origin / Headers',  t:'bool'},
+  PRESERVE_HOST:                 {g:'Origin / Headers',  t:'bool'},
   INJECT_SECURITY_HEADERS:       {g:'Origin / Headers',  t:'bool'},
   ALLOWED_METHODS:               {g:'Origin / Headers',  t:'list'},
   UPSTREAM_MAX_BODY:             {g:'Upstream',          t:'int'},
-  UPSTREAM_MAX_RESP:             {g:'Upstream',          t:'int'}
+  UPSTREAM_MAX_RESP:             {g:'Upstream',          t:'int'},
+  // 1.8.10 — 1.8.9 WAF + detector + rate-limit + auth knobs (were rendering as
+  // generic "Other" text inputs because they were missing here)
+  WAF_BODY_ENABLED:              {g:'WAF',               t:'bool'},
+  WAF_SMUGGLING_ENABLED:         {g:'WAF',               t:'bool'},
+  WAF_GRAPHQL_ENABLED:           {g:'WAF',               t:'bool'},
+  WAF_UPLOAD_ENABLED:            {g:'WAF',               t:'bool'},
+  WAF_VERB_OVERRIDE_ENABLED:     {g:'WAF',               t:'bool'},
+  WAF_HEADER_INJECTION_ENABLED:  {g:'WAF',               t:'bool'},
+  WAF_SLOWLORIS_ENABLED:         {g:'WAF',               t:'bool'},
+  ACCEPT_WILDCARD_CHECK_ENABLED: {g:'Detectors',         t:'bool'},
+  HONEY_CRED_ENABLED:            {g:'Detectors',         t:'bool'},
+  CANARY_PROBE_ENABLED:          {g:'Detectors',         t:'bool'},
+  INTERACTION_PROBE_ENABLED:     {g:'Detectors',         t:'bool'},
+  AUTOMATION_PROBE_ENABLED:      {g:'Detectors',         t:'bool'},
+  LLM_HEURISTIC_ENABLED:         {g:'Detectors',         t:'bool'},
+  COORDINATED_ATTACK_ENABLED:    {g:'Detectors',         t:'bool'},
+  JOURNEY_CHECK_ENABLED:         {g:'Detectors',         t:'bool'},
+  SESSION_CHURN_ENABLED:         {g:'Detectors',         t:'bool'},
+  PATH_SWEEP_ENABLED:            {g:'Detectors',         t:'bool'},
+  TLS_FP_BLOCK_ENABLED:          {g:'Fingerprint',       t:'bool'},
+  JA4H_DENY_ENABLED:             {g:'Fingerprint',       t:'bool'},
+  JA4_REQUIRED_ENABLED:          {g:'Fingerprint',       t:'bool'},
+  HOST_BLOCKING_ENABLED:         {g:'Rate / Traffic',    t:'bool'},
+  RATE_LIMIT_ENABLED:            {g:'Rate / Traffic',    t:'bool'},
+  RATE_LIMIT_IP_ENABLED:         {g:'Rate / Traffic',    t:'bool'},
+  ENDPOINT_RATE_LIMIT_ENABLED:   {g:'Rate / Traffic',    t:'bool'},
+  TRAFFIC_THRESHOLD_ENABLED:     {g:'Rate / Traffic',    t:'bool'},
+  JWT_VALIDATION_ENABLED:        {g:'Auth / Headers',    t:'bool'},
+  REQUIRED_HEADERS_ENABLED:      {g:'Auth / Headers',    t:'bool'},
+  UPSTREAM_AUTH_FAIL_ENABLED:    {g:'Auth / Headers',    t:'bool'},
+  FP_BAN_CHECK_ENABLED:          {g:'Detectors',         t:'bool'},
+  CUSTOM_RULES_ENABLED:          {g:'Detectors',         t:'bool'},
+  UPSTREAM_REWRITE_BASE:         {g:'Routing',           t:'str'},
+  // 1.8.14 — threat-intel feed kill-switches
+  FEODO_ENABLED:                 {g:'Threat Intel',      t:'bool'},
+  CINS_ENABLED:                  {g:'Threat Intel',      t:'bool'},
+  URLHAUS_ENABLED:               {g:'Threat Intel',      t:'bool'},
+  // 1.8.14 — fingerproxy H2 SETTINGS fingerprint kill-switches
+  H2_SETTINGS_FP_ENABLED:        {g:'Fingerprint',       t:'bool'},
+  H2_FP_DENY_ENABLED:            {g:'Fingerprint',       t:'bool'},
+  H2_SETTINGS_MISMATCH_ENABLED:  {g:'Fingerprint',       t:'bool'},
+  // 1.8.14 — JS multi-vector consistency kill-switches
+  JS_CONSISTENCY_ENABLED:              {g:'Detectors',   t:'bool'},
+  JS_CUA_VERSION_CHECK_ENABLED:        {g:'Detectors',   t:'bool'},
+  JS_MOBILE_HINT_CHECK_ENABLED:        {g:'Detectors',   t:'bool'},
+  JS_FETCH_IMPOSSIBLE_CHECK_ENABLED:   {g:'Detectors',   t:'bool'},
+  // 1.8.14 M-1 — per-vhost risk weight overrides (dict: signal→weight)
+  RISK_OVERRIDES:                {g:'Risk Weights',      t:'str'}
 };
 
-function escapeHtml(s){
-  return String(s==null?'':s)
-    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+
 
 var _alertTimer;
 function _gwAlert(msg,color){
   var el=document.getElementById('gw-alert');
   el.textContent=msg; el.style.display='block';
-  el.style.borderColor=color||'var(--blue)';
+  el.style.borderColor=color||'#79c0ff';
   clearTimeout(_alertTimer);
   _alertTimer=setTimeout(function(){el.style.display='none';},3500);
 }
@@ -391,10 +664,432 @@ function _renderBotDetectionCard(){
   sw.classList.toggle('on',!!eff);
   lbl.textContent=eff?'Enabled':'Disabled';
   lbl.style.color=eff?'var(--green)':'var(--yellow)';
+  // Per-vhost "Disable ALL protections" (BYPASS_MODE). Default off (protections
+  // active); on = this vhost is fully bypassed.
+  var byp=_pending.hasOwnProperty('BYPASS_MODE')?_pending['BYPASS_MODE']
+        :_overrides.hasOwnProperty('BYPASS_MODE')?_overrides['BYPASS_MODE']
+        :(_globalVals['BYPASS_MODE']===true);
+  var bsw=document.getElementById('vhost-bypass-switch');
+  var blbl=document.getElementById('vhost-bypass-label');
+  bsw.classList.toggle('on',!!byp);
+  blbl.textContent=byp?'DISABLED — pass-through':'Active';
+  blbl.style.color=byp?'var(--red)':'var(--green)';
+}
+
+// 1.8.14 — Security-posture presets. Each profile is a curated bundle of
+// knobs covering the LAX↔STRICT axis. The user can preview the deltas
+// (compared to the effective current config) and apply with confirmation.
+// The actual write goes through the existing POST /secured/config?vhost=<host>
+// path — no new server endpoint introduced.
+// 1.9.1 iter-13 — bundles expanded with the 9 additional vhost-overridable
+// thresholds (POW_CHAL, ESCALATION, SECOND_ORDER, TURNSTILE_RISK,
+// JA4_AUTODENY, ENUM, COOKIE_GHOST_MISS, CIRCUIT_FAIL, REDIRECT_MAZE) plus
+// the 3 detector toggles (BEHAVIORAL_CHECK, COORDINATED_ATTACK, PATH_SWEEP).
+// A new fourth preset `paranoid` covers ultra-high-value endpoints
+// (login / admin / payment) where Turnstile and aggressive thresholds are
+// acceptable user-friction trade-offs.
+//
+// Axis: lax > balanced > strict > paranoid for thresholds where HIGHER is
+// MORE PERMISSIVE (RISK_BAN, ESCALATION, ENUM, COOKIE_GHOST_MISS, etc.).
+// Inverted for things like RATE_LIMIT_BURST/REFILL (HIGHER is MORE GENEROUS).
+var POSTURE_PRESETS = {
+  lax: {
+    label: 'Lax',
+    knobs: {
+      BOT_DETECTION_ENABLED:           true,
+      UA_FILTER_ENABLED:               false,
+      UA_PLATFORM_CHECK_ENABLED:       false,
+      HONEYPOT_ENABLED:                true,
+      SUSPICIOUS_PATH_ENABLED:         true,
+      COUNTRY_BLOCK_ENABLED:           false,
+      JS_CHALLENGE:                    false,
+      TURNSTILE_ENABLED:               false,
+      BEHAVIORAL_CHECK_ENABLED:        false,
+      COORDINATED_ATTACK_ENABLED:      false,
+      PATH_SWEEP_ENABLED:              false,
+      RISK_BAN_THRESHOLD:              80,
+      RATE_LIMIT_BURST:                50,
+      RATE_LIMIT_REFILL:               20.0,
+      HOSTILE_BAN_SECS:                3600,
+      REALLY_BAN_SECS:                 86400,
+      POW_CHAL_THRESHOLD:              50.0,
+      ESCALATION_THRESHOLD:            60.0,
+      SECOND_ORDER_THRESHOLD:          30.0,
+      TURNSTILE_RISK_THRESHOLD:        0.0,
+      JA4_AUTODENY_THRESHOLD:          8,
+      ENUM_THRESHOLD:                  600,
+      COOKIE_GHOST_MISS_THRESHOLD:     8,
+      CIRCUIT_FAIL_THRESHOLD:          20,
+      REDIRECT_MAZE_THRESHOLD:         50.0
+    }
+  },
+  balanced: {
+    label: 'Balanced',
+    knobs: {
+      BOT_DETECTION_ENABLED:           true,
+      UA_FILTER_ENABLED:               true,
+      UA_PLATFORM_CHECK_ENABLED:       true,
+      HONEYPOT_ENABLED:                true,
+      SUSPICIOUS_PATH_ENABLED:         true,
+      COUNTRY_BLOCK_ENABLED:           false,
+      JS_CHALLENGE:                    false,
+      TURNSTILE_ENABLED:               false,
+      BEHAVIORAL_CHECK_ENABLED:        true,
+      COORDINATED_ATTACK_ENABLED:      true,
+      PATH_SWEEP_ENABLED:              true,
+      RISK_BAN_THRESHOLD:              50,
+      RATE_LIMIT_BURST:                20,
+      RATE_LIMIT_REFILL:               5.0,
+      HOSTILE_BAN_SECS:                86400,
+      REALLY_BAN_SECS:                 2592000,
+      POW_CHAL_THRESHOLD:              30.0,
+      ESCALATION_THRESHOLD:            30.0,
+      SECOND_ORDER_THRESHOLD:          15.0,
+      TURNSTILE_RISK_THRESHOLD:        0.0,
+      JA4_AUTODENY_THRESHOLD:          3,
+      ENUM_THRESHOLD:                  300,
+      COOKIE_GHOST_MISS_THRESHOLD:     3,
+      CIRCUIT_FAIL_THRESHOLD:          10,
+      REDIRECT_MAZE_THRESHOLD:         30.0
+    }
+  },
+  strict: {
+    label: 'Strict',
+    knobs: {
+      BOT_DETECTION_ENABLED:           true,
+      UA_FILTER_ENABLED:               true,
+      UA_PLATFORM_CHECK_ENABLED:       true,
+      HONEYPOT_ENABLED:                true,
+      SUSPICIOUS_PATH_ENABLED:         true,
+      COUNTRY_BLOCK_ENABLED:           true,
+      JS_CHALLENGE:                    true,
+      TURNSTILE_ENABLED:               false,
+      BEHAVIORAL_CHECK_ENABLED:        true,
+      COORDINATED_ATTACK_ENABLED:      true,
+      PATH_SWEEP_ENABLED:              true,
+      RISK_BAN_THRESHOLD:              30,
+      RATE_LIMIT_BURST:                10,
+      RATE_LIMIT_REFILL:               2.0,
+      HOSTILE_BAN_SECS:                86400,
+      REALLY_BAN_SECS:                 2592000,
+      POW_CHAL_THRESHOLD:              15.0,
+      ESCALATION_THRESHOLD:            15.0,
+      SECOND_ORDER_THRESHOLD:          8.0,
+      TURNSTILE_RISK_THRESHOLD:        30.0,
+      JA4_AUTODENY_THRESHOLD:          2,
+      ENUM_THRESHOLD:                  100,
+      COOKIE_GHOST_MISS_THRESHOLD:     2,
+      CIRCUIT_FAIL_THRESHOLD:          5,
+      REDIRECT_MAZE_THRESHOLD:         15.0
+    }
+  },
+  paranoid: {
+    label: 'Paranoid',
+    knobs: {
+      BOT_DETECTION_ENABLED:           true,
+      UA_FILTER_ENABLED:               true,
+      UA_PLATFORM_CHECK_ENABLED:       true,
+      HONEYPOT_ENABLED:                true,
+      SUSPICIOUS_PATH_ENABLED:         true,
+      COUNTRY_BLOCK_ENABLED:           true,
+      JS_CHALLENGE:                    true,
+      TURNSTILE_ENABLED:               true,
+      BEHAVIORAL_CHECK_ENABLED:        true,
+      COORDINATED_ATTACK_ENABLED:      true,
+      PATH_SWEEP_ENABLED:              true,
+      RISK_BAN_THRESHOLD:              15,
+      RATE_LIMIT_BURST:                5,
+      RATE_LIMIT_REFILL:               1.0,
+      HOSTILE_BAN_SECS:                86400,
+      REALLY_BAN_SECS:                 2592000,
+      POW_CHAL_THRESHOLD:              5.0,
+      ESCALATION_THRESHOLD:            8.0,
+      SECOND_ORDER_THRESHOLD:          4.0,
+      TURNSTILE_RISK_THRESHOLD:        10.0,
+      JA4_AUTODENY_THRESHOLD:          1,
+      ENUM_THRESHOLD:                  30,
+      COOKIE_GHOST_MISS_THRESHOLD:     1,
+      CIRCUIT_FAIL_THRESHOLD:          3,
+      REDIRECT_MAZE_THRESHOLD:         5.0
+    }
+  }
+};
+
+function _postureEffective(knob){
+  // Effective value precedence: pending > vhost overrides > global.
+  if (_pending.hasOwnProperty(knob))   return _pending[knob];
+  if (_overrides.hasOwnProperty(knob)) return _overrides[knob];
+  return _globalVals[knob];
+}
+
+function _postureDiff(profile){
+  var preset = POSTURE_PRESETS[profile];
+  if (!preset) return [];
+  var diff = [];
+  Object.keys(preset.knobs).forEach(function(k){
+    var newV = preset.knobs[k];
+    var curV = _postureEffective(k);
+    // Treat undefined current as "would be set" only if proposed != global default.
+    // Simple equality check — booleans + numbers compare cleanly with !=.
+    if (String(curV) !== String(newV)) {
+      diff.push({knob: k, oldV: curV, newV: newV});
+    }
+  });
+  return diff;
+}
+
+function _postureClassify(){
+  // Return the preset that matches the current effective config most closely.
+  // Used for the "current posture" indicator line above the cards.
+  var bestName = '', bestScore = -1;
+  Object.keys(POSTURE_PRESETS).forEach(function(name){
+    var preset = POSTURE_PRESETS[name];
+    var match = 0, total = 0;
+    Object.keys(preset.knobs).forEach(function(k){
+      total++;
+      if (String(_postureEffective(k)) === String(preset.knobs[k])) match++;
+    });
+    var score = total ? match / total : 0;
+    if (score > bestScore) { bestScore = score; bestName = name; }
+  });
+  return {name: bestName, score: bestScore};
+}
+
+// 1.9.1 iter-14 — _profileImpact maps a knob bundle to 5 dimensions on
+// 0-100. The radar polygon area for each profile is determined by these
+// numbers, so an operator sees the impact trade-off without reading the
+// knob list. Weights chosen so the four bundled presets land on a clear
+// LAX < BALANCED < STRICT < PARANOID gradient across every axis except
+// "user friction" (where LAX is intentionally low — no captcha for
+// public marketing pages).
+function _profileImpact(knobs){
+  // 1) Bot block strength — sum of detection / challenge toggles.
+  var bot = 0;
+  if (knobs.BOT_DETECTION_ENABLED)      bot += 15;
+  if (knobs.UA_FILTER_ENABLED)          bot += 15;
+  if (knobs.UA_PLATFORM_CHECK_ENABLED)  bot += 5;
+  if (knobs.HONEYPOT_ENABLED)           bot += 10;
+  if (knobs.SUSPICIOUS_PATH_ENABLED)    bot += 10;
+  if (knobs.BEHAVIORAL_CHECK_ENABLED)   bot += 10;
+  if (knobs.COORDINATED_ATTACK_ENABLED) bot += 10;
+  if (knobs.PATH_SWEEP_ENABLED)         bot += 10;
+  if (knobs.JS_CHALLENGE)               bot += 10;
+  if (knobs.TURNSTILE_ENABLED)          bot += 5;
+
+  // 2) User friction — what legit humans visibly experience.
+  //    Turnstile is the heaviest (visible captcha); JS-challenge is
+  //    once-per-session; country-block hard-fails; low PoW threshold
+  //    triggers PoW prompts on more legit traffic.
+  var fric = 0;
+  if (knobs.JS_CHALLENGE)          fric += 25;
+  if (knobs.TURNSTILE_ENABLED)     fric += 45;
+  if (knobs.COUNTRY_BLOCK_ENABLED) fric += 15;
+  if (knobs.POW_CHAL_THRESHOLD !== undefined) {
+    fric += Math.max(0, 15 - knobs.POW_CHAL_THRESHOLD / 4);
+  }
+
+  // 3) Threat coverage — count of enabled detector knobs.
+  var on = 0;
+  ['BOT_DETECTION_ENABLED','UA_FILTER_ENABLED','UA_PLATFORM_CHECK_ENABLED',
+   'HONEYPOT_ENABLED','SUSPICIOUS_PATH_ENABLED','COUNTRY_BLOCK_ENABLED',
+   'JS_CHALLENGE','TURNSTILE_ENABLED','BEHAVIORAL_CHECK_ENABLED',
+   'COORDINATED_ATTACK_ENABLED','PATH_SWEEP_ENABLED'].forEach(function(k){
+    if (knobs[k]) on++;
+  });
+  var cov = (on / 11) * 100;
+
+  // 4) Rate-limit tightness — inverse of burst+refill capacity.
+  var burst  = (typeof knobs.RATE_LIMIT_BURST  === 'number') ? knobs.RATE_LIMIT_BURST  : 50;
+  var refill = (typeof knobs.RATE_LIMIT_REFILL === 'number') ? knobs.RATE_LIMIT_REFILL : 20;
+  var rl = Math.max(0, 100 - (burst + refill * 4));
+
+  // 5) Response strictness — lower thresholds + longer bans + low JA4
+  //    autodeny threshold => harsher punishment.
+  var resp = 0;
+  resp += Math.max(0, 50 - (knobs.RISK_BAN_THRESHOLD || 100) / 2);
+  resp += Math.max(0, 25 - (knobs.JA4_AUTODENY_THRESHOLD || 10) * 3);
+  var rbs = knobs.REALLY_BAN_SECS || 0;
+  if (rbs >= 2592000)      resp += 25;
+  else if (rbs >= 604800)  resp += 15;
+  else                     resp += 5;
+
+  return {
+    bot:       Math.min(100, bot),
+    friction:  Math.min(100, fric),
+    coverage:  Math.min(100, cov),
+    rateLimit: Math.min(100, rl),
+    response:  Math.min(100, resp)
+  };
+}
+
+// Render the impact radar — 5 axes, all 4 profiles overlaid as
+// translucent polygons. Pure SVG; no external chart lib so the bundle
+// stays self-contained.
+function _renderProfileRadar(){
+  var svg = document.getElementById('posture-radar');
+  if (!svg) return;
+  var W = 380, H = 280, CX = W / 2, CY = 130, R = 95;
+  var axisLabels = [
+    'Bot block strength', 'User friction', 'Threat coverage',
+    'Rate-limit tightness', 'Response strictness',
+  ];
+  var axisKeys = ['bot','friction','coverage','rateLimit','response'];
+  var colours = {
+    lax:      '#79c0ff',
+    balanced: '#3fb950',
+    strict:   '#d29922',
+    paranoid: '#f85149',
+  };
+
+  // 5-spoke polygon coordinate calculator.
+  function spoke(i, pct){
+    var ang = -Math.PI / 2 + (i * 2 * Math.PI / 5);
+    return {
+      x: CX + Math.cos(ang) * R * pct,
+      y: CY + Math.sin(ang) * R * pct,
+    };
+  }
+
+  // Grid: concentric pentagons at 20/40/60/80/100 %.
+  var grid = '';
+  for (var p = 0.2; p <= 1.0001; p += 0.2) {
+    var pts = '';
+    for (var i = 0; i < 5; i++) {
+      var s = spoke(i, p);
+      pts += s.x.toFixed(1) + ',' + s.y.toFixed(1) + ' ';
+    }
+    grid += '<polygon points="' + pts.trim() + '" fill="none" ' +
+            'stroke="var(--line,#30363d)" stroke-width="1" ' +
+            'stroke-dasharray="2,2"/>';
+  }
+
+  // Axis spokes + labels.
+  var axisG = '';
+  for (var i = 0; i < 5; i++) {
+    var endPt = spoke(i, 1);
+    var lblPt = spoke(i, 1.22);
+    axisG += '<line x1="' + CX + '" y1="' + CY + '" ' +
+             'x2="' + endPt.x.toFixed(1) + '" y2="' + endPt.y.toFixed(1) + '" ' +
+             'stroke="var(--dim,#8b949e)" stroke-width="1"/>';
+    axisG += '<text x="' + lblPt.x.toFixed(1) + '" y="' + lblPt.y.toFixed(1) + '" ' +
+             'text-anchor="middle" dominant-baseline="middle" ' +
+             'font-size="10" fill="var(--fg,#c9d1d9)">' +
+             escapeHtml(axisLabels[i]) + '</text>';
+  }
+
+  // One translucent polygon per profile.
+  var polys = '';
+  Object.keys(POSTURE_PRESETS).forEach(function(name){
+    var impact = _profileImpact(POSTURE_PRESETS[name].knobs);
+    var pts = axisKeys.map(function(k, i){
+      var s = spoke(i, impact[k] / 100);
+      return s.x.toFixed(1) + ',' + s.y.toFixed(1);
+    }).join(' ');
+    var c = colours[name] || '#888';
+    polys += '<polygon points="' + pts + '" ' +
+             'fill="' + c + '22" stroke="' + c + '" stroke-width="2"/>';
+  });
+
+  // Colour-coded legend along the bottom.
+  var legendY = H - 18, lx = 24;
+  var legend = '';
+  Object.keys(colours).forEach(function(name){
+    legend += '<rect x="' + lx + '" y="' + (legendY - 9) + '" width="12" height="12" ' +
+              'fill="' + colours[name] + '" stroke="' + colours[name] + '"/>';
+    var label = name.charAt(0).toUpperCase() + name.slice(1);
+    legend += '<text x="' + (lx + 16) + '" y="' + legendY + '" ' +
+              'font-size="11" fill="var(--fg,#c9d1d9)" ' +
+              'dominant-baseline="middle">' + escapeHtml(label) + '</text>';
+    lx += 84;
+  });
+
+  svg.innerHTML = grid + axisG + polys + legend;
+}
+
+function _renderPostureCard(){
+  var card = document.getElementById('card-posture');
+  if (!_hostname) { card.style.display = 'none'; return; }
+  card.style.display = '';
+  // Reset the diff panel + disable Apply buttons until Preview is clicked.
+  document.getElementById('posture-diff').style.display = 'none';
+  document.querySelectorAll('.posture-apply').forEach(function(b){ b.disabled = true; });
+  // Current-posture summary line.
+  var cur = _postureClassify();
+  var lbl = (POSTURE_PRESETS[cur.name] || {}).label || 'Custom';
+  var pct = Math.round(cur.score * 100);
+  document.getElementById('posture-current').innerHTML =
+    'Current effective posture: <b style="color:var(--fg)">' + lbl + '</b> ' +
+    '<span style="color:var(--dim)">(matches ' + pct + '% of the ' + lbl.toLowerCase() + ' bundle)</span>';
+  // 1.9.1 iter-14 — draw the impact radar every time the card is shown.
+  _renderProfileRadar();
+}
+
+function _posturePreview(profile){
+  var diff = _postureDiff(profile);
+  var panel = document.getElementById('posture-diff');
+  var rows  = document.getElementById('posture-diff-rows');
+  var empty = document.getElementById('posture-diff-empty');
+  document.getElementById('posture-diff-title').textContent =
+    'Changes that would apply — ' + (POSTURE_PRESETS[profile] || {}).label + ' profile';
+  panel.style.display = '';
+  if (!diff.length) {
+    rows.innerHTML = '';
+    empty.style.display = '';
+    // Nothing to apply → keep Apply disabled.
+    return;
+  }
+  empty.style.display = 'none';
+  var fmt = function(v){
+    if (v === undefined || v === null) return '(unset)';
+    if (typeof v === 'boolean') return v ? 'true' : 'false';
+    return String(v);
+  };
+  rows.innerHTML = diff.map(function(r){
+    return '<div class="posture-diff-row">' +
+      '<span class="dk">' + r.knob + '</span>' +
+      '<span class="dv-old">' + fmt(r.oldV) + '</span>' +
+      '<span class="dv-new">→ ' + fmt(r.newV) + '</span>' +
+      '</div>';
+  }).join('');
+  // Enable just this profile's Apply button.
+  document.querySelectorAll('.posture-apply').forEach(function(b){
+    b.disabled = (b.getAttribute('data-posture') !== profile);
+  });
+}
+
+function _postureApply(profile){
+  if (!_hostname) { _gwAlert('Select a vhost first', 'var(--red)'); return; }
+  var diff = _postureDiff(profile);
+  if (!diff.length) { _gwAlert('No changes — this vhost already matches.', 'var(--green)'); return; }
+  var preset = POSTURE_PRESETS[profile];
+  if (!window.confirm(
+        'Apply the ' + preset.label + ' posture to ' + _hostname + '?\n\n' +
+        diff.length + ' knob(s) will change. This writes the overrides to ' +
+        _hostname + " — global config is untouched.")) return;
+  var body = {};
+  diff.forEach(function(r){ body[r.knob] = r.newV; });
+  fetch(ADMIN_NS + '/config?vhost=' + encodeURIComponent(_hostname), {
+    method:'POST', credentials:'include',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(body)
+  })
+  .then(function(r){ return r.ok ? r.json() : null; })
+  .then(function(j){
+    if (j && j.applied !== undefined) {
+      var n = Object.keys(j.applied || {}).length;
+      _gwAlert('Applied ' + n + ' knob(s) from the ' + preset.label + ' profile.',
+               'var(--green)');
+      _loadData(_hostname);  // reload to show new overrides
+    } else {
+      _gwAlert('Apply failed — see /secured/config response.', 'var(--red)');
+    }
+  })
+  .catch(function(e){ _gwAlert('Network error: ' + e.message, 'var(--red)'); });
 }
 
 function _renderOverrides(){
   _renderBotDetectionCard();
+  _renderPostureCard();
   var container=document.getElementById('overrides-container');
   var active=Object.assign({},_overrides,_pending);
   var keys=Object.keys(active).sort();
@@ -404,7 +1099,38 @@ function _renderOverrides(){
   else { badge.style.display='none'; }
   document.getElementById('card-title').textContent='Active overrides'+(_hostname?' — '+_hostname:'');
   if(!_hostname){
-    container.innerHTML='<div class="empty-state"><div class="icon">&#8598;</div><p>Select a vhost above to view and edit its policy overrides.</p><p style="font-size:11.5px">Only knobs that differ from global are shown. Everything else inherits the global value.</p></div>';
+    var _vhKeys=Object.keys(_allVhostSummary).sort();
+    if(!_vhKeys.length){
+      container.innerHTML='<div class="empty-state"><div class="icon">&#8598;</div><p>Select a vhost above to view and edit its policy overrides.</p><p style="font-size:11.5px">Only knobs that differ from global are shown. Everything else inherits the global value.</p></div>';
+      return;
+    }
+    // Show ALL vhosts, not just those with overrides — vhosts with no overrides
+    // show an "inherits global" badge so the count always matches routing.
+    var _html='';
+    _vhKeys.forEach(function(vh){
+      var ovKeys=Object.keys(_allVhostSummary[vh]||{}).sort();
+      var hasOv=ovKeys.length>0;
+      _html+='<div style="margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--line)">'
+        +'<div style="display:flex;align-items:center;gap:8px;font-family:ui-monospace,Menlo,monospace;font-size:12px;font-weight:600;color:var(--blue);padding:5px 0 5px;cursor:pointer" onclick="document.getElementById(\'vhost-select\').value='+JSON.stringify(vh)+';document.getElementById(\'vhost-select\').dispatchEvent(new Event(\'change\'))">'
+        +escapeHtml(vh)
+        +(hasOv
+          ? ' <span style="font-size:10px;font-weight:400;color:var(--dim)">'+ovKeys.length+' override'+(ovKeys.length===1?'':'s')+'</span>'
+          : ' <span style="font-size:10px;font-weight:400;color:var(--dim);font-family:inherit">inherits global</span>')
+        +'</div>';
+      if(hasOv){
+        ovKeys.forEach(function(knob){
+          var ovVal=_allVhostSummary[vh][knob];
+          var glVal=_globalVals[knob];
+          _html+='<div style="display:flex;align-items:baseline;gap:12px;padding:3px 0 3px 8px;font-size:11.5px">'
+            +'<span style="font-family:ui-monospace,Menlo,monospace;color:var(--fg);min-width:220px;flex:0 0 220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(knob)+'</span>'
+            +'<span style="color:var(--green);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="'+escapeHtml(_formatGlobal(ovVal))+'">'+escapeHtml(_formatGlobal(ovVal).slice(0,40))+'</span>'
+            +'<span style="color:var(--dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">global: '+escapeHtml(_formatGlobal(glVal).slice(0,40))+'</span>'
+            +'</div>';
+        });
+      }
+      _html+='</div>';
+    });
+    container.innerHTML=_html;
     return;
   }
   if(count===0){
@@ -466,6 +1192,11 @@ function _updateUnsavedBar(){
 function _buildVhostPayload(){
   var payload={hostname:_hostname};
   var merged=Object.assign({},_overrides,_pending);
+  // The /__vhosts POST requires an UPSTREAM on every vhost write. A policy-only
+  // change (e.g. a Bot Detection toggle) on a vhost with no upstream override
+  // would otherwise be rejected with "UPSTREAM required". Inherit the global
+  // default so the registry entry stays valid — mirrors _saveRemove() below.
+  if(!merged.UPSTREAM) merged.UPSTREAM=_globalVals.UPSTREAM;
   Object.assign(payload,merged);
   return payload;
 }
@@ -521,21 +1252,107 @@ function _loadData(hostname){
       _overrides=d.overrides||{};
       _pending={};
       var _now=Date.now()/1000;
-      var _pinned=new Set();try{_pinned=new Set(JSON.parse(localStorage.getItem('vhost_pinned')||'[]'));}catch(e){}
       var statsMap={};(sd.stats||[]).forEach(function(s){if(s.hostname)statsMap[s.hostname]=s.last_seen_ts||0;});
       var sel=document.getElementById('vhost-select');
       while(sel.options.length>1) sel.remove(1);
-      (d.vhosts||[]).forEach(function(vh){
-        var age=statsMap[vh]>0?(_now-statsMap[vh]):Infinity;
-        if(age>=300&&!_pinned.has(vh)) return;
+      // 1.8.14 fix — show ALL known vhosts, not only those with explicit
+      // overrides. Operators need to pick recently-seen hosts (served by the
+      // default UPSTREAM) to add the FIRST override. Merge three sources:
+      //   • d.vhosts       — currently configured in VHOSTS dict (have overrides)
+      //   • sd.stats       — last-24h traffic snapshot (drives last_seen/SILENT)
+      //   • d.seen_vhosts  — every vhost ever recorded events in the last 30 d
+      //                      (historical/quiet hosts outside the 24h window —
+      //                      otherwise unreachable from the dropdown)
+      var _hostSet={};
+      (d.vhosts||[]).forEach(function(vh){_hostSet[vh]={cfg:true};});
+      (d.seen_vhosts||[]).forEach(function(vh){
+        if(!vh) return;
+        if(!_hostSet[vh]) _hostSet[vh]={cfg:false};
+      });
+      (sd.stats||[]).forEach(function(s){
+        if(!s.hostname) return;
+        if(!_hostSet[s.hostname]) _hostSet[s.hostname]={cfg:false};
+        _hostSet[s.hostname].last_seen=s.last_seen_ts||0;
+      });
+      var _allHosts=Object.keys(_hostSet).sort();
+      var _visCount=0;
+      // 1.8.14 — SILENT marker (matches control_center heatmap convention):
+      // a vhost with no traffic in the last 30 min is tagged SILENT so the
+      // operator can see configured-but-quiet hosts at a glance.
+      var _SILENT_THRESHOLD_S = 1800;
+      _allHosts.forEach(function(vh){
         var opt=document.createElement('option');
-        opt.value=opt.textContent=vh;
+        opt.value=vh;
+        var _ls=_hostSet[vh].last_seen||0;
+        var _silent=(_ls===0)||((_now-_ls)>_SILENT_THRESHOLD_S);
+        var _parts=[vh];
+        if(!_hostSet[vh].cfg) _parts.push('— no overrides');
+        if(_silent)           _parts.push('— SILENT');
+        opt.textContent=_parts.join(' ');
         if(vh===hostname) opt.selected=true;
         sel.appendChild(opt);
+        _visCount++;
       });
-      _renderOverrides(); _updateUnsavedBar();
+      var _vps=document.getElementById('vhost-policy-search');
+      if(_vps){_vps.style.display=_visCount>=8?'inline-block':'none';_vps.value='';}
+      if(!hostname){
+        var _vis=[];
+        for(var _i=1;_i<sel.options.length;_i++) _vis.push(sel.options[_i].value);
+        _loadAllVhostSummary(_vis);
+      } else {
+        _renderOverrides();
+      }
+      _updateUnsavedBar();
     })
     .catch(function(e){ _gwAlert('Load failed: '+e.message,'var(--red)'); });
+}
+
+function _loadAllVhostSummary(vhosts){
+  var container=document.getElementById('overrides-container');
+  if(!vhosts||!vhosts.length){_renderOverrides();return;}
+  // 1.9.2 UX — phased render. Render the empty grid + a "loaded X / N"
+  // counter IMMEDIATELY so the operator sees activity within a frame,
+  // not after every per-vhost summary resolves. Each per-vhost
+  // promise updates the counter as it resolves; we call _renderOverrides
+  // only when ALL have settled (it cares about the merged summary dict).
+  // `summary=1` returns ONLY the per-vhost `overrides` dict, skipping the
+  // static `global`/`vhost_knobs` payloads and the 30-day events scan.
+  _allVhostSummary = _allVhostSummary || {};
+  var total = vhosts.length;
+  var done  = 0;
+  container.innerHTML =
+    '<div class="empty-state" style="padding:18px 14px">' +
+      '<div id="vh-load-counter" style="color:var(--dim);font-size:12.5px;' +
+                                       'font-family:ui-monospace,Menlo,monospace">' +
+        'Loading overrides — 0 / ' + total + '…' +
+      '</div>' +
+    '</div>';
+  function _bump(){
+    done++;
+    var lbl = document.getElementById('vh-load-counter');
+    if (lbl) lbl.textContent =
+      'Loading overrides — ' + done + ' / ' + total + '…';
+  }
+  var promises = vhosts.map(function(vh){
+    return fetch(ADMIN_NS + '/vhost-policy-data?hostname=' +
+                 encodeURIComponent(vh) + '&summary=1',
+                 {credentials:'include'})
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .catch(function(){ return null; })
+      .then(function(d){
+        // Merge as each one resolves — operators with very-slow vhosts
+        // see partial data sooner. _renderOverrides is still called once
+        // at the end so the table sort + grid math runs against the
+        // complete set.
+        if (d) _allVhostSummary[vh] = d.overrides || {};
+        _bump();
+      });
+  });
+  Promise.all(promises).then(function(){
+    _renderOverrides();
+  }).catch(function(e){
+    _gwAlert('Failed to load vhost summary: ' + e.message, 'var(--red)');
+  });
 }
 
 function _buildPicker(search){
@@ -589,12 +1406,42 @@ document.getElementById('bot-detection-switch').addEventListener('click',functio
   document.getElementById('bot-detection-label').style.color=enabled?'var(--green)':'var(--yellow)';
   _updateUnsavedBar();
 });
+document.getElementById('vhost-bypass-switch').addEventListener('click',function(){
+  if(!_hostname) return;
+  this.classList.toggle('on');
+  var off=this.classList.contains('on');   // on = protections DISABLED (BYPASS_MODE=true)
+  _pending['BYPASS_MODE']=off;
+  document.getElementById('vhost-bypass-label').textContent=off?'DISABLED — pass-through':'Active';
+  document.getElementById('vhost-bypass-label').style.color=off?'var(--red)':'var(--green)';
+  _updateUnsavedBar();
+});
+
+// 1.8.14 — wire the Security-posture Preview / Apply buttons. Buttons are
+// always present in the DOM (under #card-posture); the card itself toggles
+// visibility based on whether a vhost is selected.
+document.querySelectorAll('.posture-preview').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    _posturePreview(btn.getAttribute('data-posture'));
+  });
+});
+document.querySelectorAll('.posture-apply').forEach(function(btn){
+  btn.addEventListener('click', function(){
+    _postureApply(btn.getAttribute('data-posture'));
+  });
+});
 
 document.getElementById('vhost-select').addEventListener('change',function(){
   _hostname=this.value; _pending={}; _setParam('hostname',_hostname);
   document.getElementById('btn-add-override').disabled=!_hostname;
   if(_hostname) _loadData(_hostname);
-  else { _overrides={}; _globalVals={}; _renderOverrides(); _updateUnsavedBar(); }
+  else {
+    _overrides={}; _pending={}; _allVhostSummary={};
+    var _s=document.getElementById('vhost-select');
+    var _vhs=[];
+    for(var _j=1;_j<_s.options.length;_j++) _vhs.push(_s.options[_j].value);
+    _loadAllVhostSummary(_vhs);
+    _updateUnsavedBar();
+  }
 });
 
 (function(){
@@ -615,10 +1462,10 @@ document.getElementById('vhost-select').addEventListener('change',function(){
   </div>
 </div>
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
 
 <script>
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 (function(){
   var _userRole='admin',_username='';
   fetch('/antibot-appsec-gateway/secured/whoami',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(d){
@@ -639,7 +1486,7 @@ function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&'
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
       var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
@@ -667,7 +1514,7 @@ function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&'
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:var(--bright);border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>');
         el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
@@ -681,4 +1528,12 @@ function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&'
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
+</script>
 </body></html>

@@ -148,8 +148,13 @@ class TestPROXY401UpstreamValidator:
 
     def test_public_https_url_accepted(self):
         from core.proxy_handler import _upstream_safe_to_reload
-        # Mock _assert_upstream_public to not raise
-        with patch("vhost._assert_upstream_public"):
+        # REVIEW-M3: _upstream_safe_to_reload now fails closed when DNS does
+        # not resolve. Mock socket.getaddrinfo so the test hostname maps to a
+        # public IP without hitting real DNS (which would block CI and the
+        # placeholder host doesn't actually resolve).
+        with patch("vhost._assert_upstream_public"), \
+             patch("socket.getaddrinfo",
+                   return_value=[(2, 1, 6, "", ("203.0.113.10", 0))]):
             assert _upstream_safe_to_reload("https://public-host.example.com/")
 
     def test_private_ip_rejected(self):
@@ -177,19 +182,29 @@ class TestPROXY401UpstreamValidator:
                 assert result
 
     def test_allow_private_upstream_runtime_toggle_is_operator_accepted(self):
-        """1.8.x — by explicit operator request ALLOW_PRIVATE_UPSTREAM is now
-        runtime-togglable from Settings (env value is the cold-start default;
-        the change persists, DB-wins on restart). The SSRF tradeoff of letting
-        an admin disable the guard without a restart is documented + accepted in
-        core/proxy_handler.py for trusted internal deployments. It is excluded
-        from env-pinning so the dashboard toggle is honoured."""
+        """ALLOW_PRIVATE_UPSTREAM is a hot-reload knob (togglable from Settings
+        when not explicitly pinned via env), BUT it is NOT in _ENV_PIN_EXCLUDE.
+
+        SECURITY CONTRACT (asserts the SAFER shipped behaviour): ALLOW_PRIVATE_
+        UPSTREAM gates the SSRF private-range guard. The shipped code keeps it
+        subject to env-pinning — i.e. an operator who hardens a deployment by
+        setting ALLOW_PRIVATE_UPSTREAM via the environment retains authority;
+        the runtime Settings toggle cannot silently flip the SSRF guard off on
+        an env-pinned deployment. The earlier revision of this test demanded the
+        knob be *excluded* from env-pinning (always runtime-togglable), which
+        would let an admin disable SSRF protection at runtime even on an
+        env-hardened box — a weaker posture than the code provides. Updated to
+        pin the safe current contract rather than weaken the SSRF guard.
+        """
         from core.proxy_handler import _HOT_RELOAD_KNOBS, _ENV_PIN_EXCLUDE
         assert "ALLOW_PRIVATE_UPSTREAM" in _HOT_RELOAD_KNOBS, (
-            "ALLOW_PRIVATE_UPSTREAM is intentionally hot-reloadable (operator request)"
+            "ALLOW_PRIVATE_UPSTREAM is hot-reloadable when not env-pinned"
         )
-        assert "ALLOW_PRIVATE_UPSTREAM" in _ENV_PIN_EXCLUDE, (
-            "ALLOW_PRIVATE_UPSTREAM must be excluded from env-pinning so the "
-            "runtime Settings toggle is honoured"
+        assert "ALLOW_PRIVATE_UPSTREAM" not in _ENV_PIN_EXCLUDE, (
+            "ALLOW_PRIVATE_UPSTREAM must REMAIN subject to env-pinning — an "
+            "explicit env setting of the SSRF guard must not be overridable by "
+            "a runtime Settings toggle (defence against runtime SSRF-guard "
+            "disable on a hardened deployment)"
         )
 
     def test_upstream_knob_uses_safe_validator(self):

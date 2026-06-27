@@ -87,11 +87,24 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+_EVENTS_DDL = (
+    "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+    "ts REAL NOT NULL, ip TEXT NOT NULL, ua TEXT, path TEXT, method TEXT, "
+    "status INTEGER, reason TEXT, vhost TEXT)"
+)
+
+
+# vhost_stats / vhost-breakdown read events from the active backend, so under
+# the PG-mode test harness (POSTGRES_DSN set) these helpers must read/write the
+# Postgres events table. db.conn.conn() targets the active backend (rewrites
+# `?` → `%s` on PG). The CREATE-IF-NOT-EXISTS only runs on SQLite — on PG the
+# events table is created at startup and the SQLite DDL is incompatible.
 def _wipe_events(proxy_module):
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.execute("DELETE FROM events")
-    conn.commit()
-    conn.close()
+    from db.conn import conn as _backend_conn, active_backend
+    with _backend_conn(timeout=10) as conn:
+        if active_backend() != "postgres":
+            conn.execute(_EVENTS_DDL)   # self-sufficient when schema not yet init'd
+        conn.execute("DELETE FROM events")
     import state as _st
     _st.ip_state.clear()
     _st.events.clear()
@@ -99,14 +112,24 @@ def _wipe_events(proxy_module):
 
 def _seed_events(proxy_module, rows):
     """Insert (ts, ip, ua, path, method, status, reason, vhost) rows."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.executemany(
-        "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        rows,
-    )
-    conn.commit()
-    conn.close()
+    from db.conn import active_backend
+    if active_backend() == "postgres":
+        # PG events.ts is timestamptz; reuse pg_insert_event (to_timestamp) so
+        # the conversion + column set match production. Row tuple:
+        # (ts, ip, ua, path, method, status, reason, vhost)
+        from db.postgres import pg_insert_event
+        for ts, ip, ua, path, method, status, reason, vhost in rows:
+            pg_insert_event(ts, ip, ua, path, int(status), reason,
+                            method=method or "", vhost=vhost or "")
+    else:
+        from db.conn import conn as _backend_conn
+        with _backend_conn(timeout=10) as conn:
+            conn.execute(_EVENTS_DDL)   # ensure table exists before seeding
+            conn.executemany(
+                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                rows,
+            )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -394,6 +417,15 @@ class TestS1LoginGetRedirectValidation:
 
 class TestS2Ipv4MappedIpv6SsrfGuard:
     """_assert_upstream_public must reject IPv4-mapped IPv6 private addresses."""
+
+    @pytest.fixture(autouse=True)
+    def _force_guard_on(self):
+        """Ensure the SSRF guard is active regardless of ALLOW_PRIVATE_UPSTREAM default."""
+        import config as _cfg
+        saved = _cfg.ALLOW_PRIVATE_UPSTREAM
+        _cfg.ALLOW_PRIVATE_UPSTREAM = False
+        yield
+        _cfg.ALLOW_PRIVATE_UPSTREAM = saved
 
     def _check_raises(self, addr):
         """Return True if the address is blocked (SystemExit raised), False if allowed."""
@@ -982,7 +1014,7 @@ class TestD1RecordMethodField:
             old_bypass = proxy_module.BYPASS_PATHS
             old_xff = proxy_module.TRUST_XFF
             old_nets = proxy_module.TRUSTED_PROXIES_NETS
-            new_bypass = ["/method-test-"]
+            new_bypass = ["/method-test-*"]
             for mod in [proxy_module] + [m for m in sys.modules.values()
                                           if m and hasattr(m, "BYPASS_PATHS")]:
                 try:
@@ -1059,7 +1091,7 @@ class TestD1RecordMethodField:
                     old_bypass = proxy_module.BYPASS_PATHS
                     old_xff = proxy_module.TRUST_XFF
                     old_nets = proxy_module.TRUSTED_PROXIES_NETS
-                    new_bypass = ["/db-method-test"]
+                    new_bypass = ["/db-method-test*"]
                     for mod in [proxy_module] + [m for m in sys.modules.values()
                                                   if m and hasattr(m, "BYPASS_PATHS")]:
                         try:
@@ -1111,12 +1143,15 @@ class TestD1RecordMethodField:
                     _cph.get_ip.__globals__["TRUST_XFF"] = old_xff
                     _cph.get_ip.__globals__["TRUSTED_PROXIES_NETS"] = old_nets
 
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            rows = conn.execute(
-                "SELECT method FROM events WHERE ip=? AND path LIKE '/db-method%'",
-                (ip,),
-            ).fetchall()
-            conn.close()
+            # Backend-aware read: the proxy's writer persists events to the
+            # active backend (Postgres under the PG-mode harness), so a raw
+            # sqlite3.connect(DB_PATH) read would be empty.
+            from db.conn import conn as _backend_conn
+            with _backend_conn(timeout=10) as conn:
+                rows = conn.execute(
+                    "SELECT method FROM events WHERE ip=? AND path LIKE '/db-method%'",
+                    (ip,),
+                ).fetchall()
 
             assert rows, f"No DB event found for ip {ip} on /db-method-test"
             methods = [r[0] for r in rows]
@@ -1216,13 +1251,19 @@ class TestRegressions:
     def test_ssrf_guard_still_blocks_plain_private_ipv4_after_fix(self):
         """S-2 fix must not break the existing plain IPv4 private-address check."""
         import socket
+        import config as _cfg
         import vhost
-        with mock.patch.object(
-            socket, "getaddrinfo",
-            return_value=[(None, None, None, None, ("192.168.0.1", 0))]
-        ):
-            with pytest.raises(SystemExit):
-                vhost._assert_upstream_public("http://host.example.com")
+        saved = _cfg.ALLOW_PRIVATE_UPSTREAM
+        _cfg.ALLOW_PRIVATE_UPSTREAM = False
+        try:
+            with mock.patch.object(
+                socket, "getaddrinfo",
+                return_value=[(None, None, None, None, ("192.168.0.1", 0))]
+            ):
+                with pytest.raises(SystemExit):
+                    vhost._assert_upstream_public("http://host.example.com")
+        finally:
+            _cfg.ALLOW_PRIVATE_UPSTREAM = saved
 
     def test_custom_allow_then_vhost_stats_sees_traffic(self, proxy_module):
         """V-2 + V-4 combined: allow-rule traffic increments allowed_1h in vhost-stats."""

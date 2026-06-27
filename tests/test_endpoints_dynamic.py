@@ -101,6 +101,15 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
 def _browser_headers(extra=None):
     h = {
         "User-Agent":      "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
@@ -122,19 +131,33 @@ def _run(coro):
 
 
 def _seed_events(proxy_module, rows):
-    """Insert (ts, ip, ua, path, status, reason) tuples into the DB."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS events "
-        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-        "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
-    )
-    conn.executemany(
-        "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
-        rows,
-    )
-    conn.commit()
-    conn.close()
+    """Insert (ts, ip, ua, path, status, reason) tuples into the DB.
+
+    Backend-aware: the dashboard endpoints read events from the active backend,
+    so under the PG-mode harness (POSTGRES_DSN set) the rows must land in
+    Postgres. db.conn.conn() targets the active backend; the CREATE only runs on
+    SQLite (the PG events table is created at startup and the SQLite DDL is
+    incompatible).
+    """
+    from db.conn import active_backend
+    if active_backend() == "postgres":
+        # PG events.ts is timestamptz; reuse pg_insert_event (to_timestamp).
+        # Row tuple: (ts, ip, ua, path, status, reason)
+        from db.postgres import pg_insert_event
+        for ts, ip, ua, path, status, reason in rows:
+            pg_insert_event(ts, ip, ua, path, int(status), reason)
+    else:
+        from db.conn import conn as _backend_conn
+        with _backend_conn(timeout=10) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS events "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+                "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
+            )
+            conn.executemany(
+                "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
+                rows,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -177,7 +200,7 @@ class TestAuthGuard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/live-feed")
                     body = await r.text()
-                    assert "AppSecGW_1.8.5 · Live Feed" not in body
+                    assert "AntiBotWaf_GW_1.9.8 · Live Feed" not in body
         _run(go())
 
     def test_config_unauthenticated_decoy(self, proxy_module):
@@ -445,6 +468,7 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 60},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -458,6 +482,7 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"TOTALLY_FAKE_KNOB_ZZZZZ": "value"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert r.status == 200
@@ -472,6 +497,7 @@ class TestConfigEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"ADMIN_KEY": "should-be-rejected"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await r.json()
                     assert "ADMIN_KEY" in str(d.get("rejected", {}))
@@ -727,6 +753,7 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"signal": "suspicious-path", "order": 1},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -742,6 +769,7 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"signal": "suspicious-path", "order": 99},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -753,6 +781,7 @@ class TestSignalOrdersEndpoint:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/signal-orders",
                                      json={"order": 2},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -859,6 +888,7 @@ class TestBanUnbanLifecycle:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/ban?ip=10.10.10.10&secs=3600&reason=test",
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -873,6 +903,7 @@ class TestBanUnbanLifecycle:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/ban?secs=3600&reason=test",
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 400
         _run(go())
@@ -884,6 +915,7 @@ class TestBanUnbanLifecycle:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/unban",
                                      json={"all": True},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -910,9 +942,11 @@ class TestBanUnbanLifecycle:
                     await c.get("/some-page", headers=_browser_headers(
                         {"X-Forwarded-For": "7.7.7.7"}))
                     await c.post(NS + "/ban?ip=7.7.7.7&secs=3600&reason=test",
+                                 headers=_csrf_hdr(proxy_module, cookie),
                                  cookies={proxy_module._SESSION_COOKIE: cookie})
                     r = await c.post(NS + "/unban",
                                      json={"ip": "7.7.7.7"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
         _run(go())
@@ -968,7 +1002,7 @@ class TestDashboardHtmlPages:
     def _check_html(self, status, ct, body):
         assert status == 200, f"expected 200, got {status}"
         assert "text/html" in ct, f"expected text/html, got {ct}"
-        assert "AppSecGW" in body or "<!DOCTYPE" in body or "<html" in body
+        assert "AntiBot/WAF GW" in body or "<!DOCTYPE" in body or "<html" in body
 
     def test_dashboard_html(self, proxy_module):
         async def go():
@@ -1271,9 +1305,12 @@ class TestDetectionPipeline:
                     m = await c.get(NS + "/metrics",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await m.json()
-                    scores = [cl.get("risk_score", 0) for cl in d.get("clients", [])]
-                    assert any(s > 0 for s in scores), \
-                        "SQLi in URL must raise risk_score"
+                    # 1.8.13 — detection now hard-blocks via a silent decoy and
+                    # records the reason (was: soft risk_score on the client). Assert
+                    # the by_reason counter, the observable current behaviour.
+                    byr = d.get("by_reason", {})
+                    assert byr.get("suspicious-path", 0) > 0 or byr.get("body-sqli", 0) > 0, \
+                        f"SQLi in URL must fire suspicious-path/body-sqli; by_reason={byr}"
         _run(go())
 
     def test_lfi_path_detected(self, proxy_module):
@@ -1287,9 +1324,11 @@ class TestDetectionPipeline:
                     m = await c.get(NS + "/metrics",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
                     d = await m.json()
-                    scores = [cl.get("risk_score", 0) for cl in d.get("clients", [])]
-                    assert any(s > 0 for s in scores), \
-                        "LFI path must raise risk_score"
+                    # 1.8.13 — LFI/traversal path normalises (e.g. /static/../../etc/passwd
+                    # → /etc/passwd) and fires suspicious-path, served as a silent decoy.
+                    byr = d.get("by_reason", {})
+                    assert byr.get("suspicious-path", 0) > 0, \
+                        f"LFI path must fire suspicious-path; by_reason={byr}"
         _run(go())
 
     def test_control_byte_in_path_returns_400(self, proxy_module):
@@ -1315,24 +1354,48 @@ class TestDetectionPipeline:
                         "XSS payload must not appear unescaped in response"
         _run(go())
 
-    def test_method_allowlist_delete_blocked(self, proxy_module):
+    def test_method_allowlist_trace_blocked(self, proxy_module):
+        # 1.8.14 iter-20 — default widened to include PUT/PATCH/DELETE so REST
+        # APIs work out of the box. TRACE remains blocked (not in default).
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
-                    r = await c.request("DELETE", "/api/resource",
+                    r = await c.request("TRACE", "/api/resource",
                                         headers=_browser_headers())
-                    assert r.status == 405
+                    assert r.status in (403, 404, 405), \
+                        f"non-allowlisted TRACE must be blocked, got {r.status}"
         _run(go())
 
     def test_security_headers_on_html_response(self, proxy_module):
+        """Security headers (X-Frame-Options, X-Content-Type-Options,
+        Referrer-Policy) must be set on gateway-controlled HTML — login,
+        dashboards, etc. — not on arbitrary upstream responses (upstreams
+        may legitimately set their own CSP / framing policy).
+
+        1.9.0 — the legacy check against the echo upstream's '/html' was
+        always testing the wrong surface: the test echo server doesn't
+        emit security headers, and the proxy is a transparent reverse
+        proxy that doesn't inject on upstream pass-through. Anchor the
+        check on /antibot-appsec-gateway/login where the gateway fully
+        controls the response."""
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
-                    r = await c.get("/html", headers=_browser_headers())
-                    if r.status == 200 and "text/html" in r.headers.get("Content-Type", ""):
-                        for hdr in ("X-Frame-Options", "X-Content-Type-Options",
-                                    "Referrer-Policy"):
-                            assert hdr in r.headers, f"missing security header: {hdr}"
+                    r = await c.get("/antibot-appsec-gateway/login",
+                                    headers=_browser_headers())
+                    assert r.status == 200, (
+                        f"login page must return 200, got {r.status}"
+                    )
+                    ctype = r.headers.get("Content-Type", "")
+                    assert "text/html" in ctype, (
+                        f"login page must be HTML, got Content-Type={ctype!r}"
+                    )
+                    for hdr in ("X-Frame-Options", "X-Content-Type-Options",
+                                "Referrer-Policy"):
+                        assert hdr in r.headers, (
+                            f"gateway-controlled HTML (login) is missing "
+                            f"security header: {hdr}"
+                        )
         _run(go())
 
 
@@ -1478,6 +1541,7 @@ class TestAdminIPsEndpoint:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "192.0.2.0/24",
                                            "description": "test-block"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -1495,10 +1559,12 @@ class TestAdminIPsEndpoint:
                     r1 = await c.post(NS + "/admin-ips",
                                       json={"cidr": "127.0.0.0/8",
                                             "description": "loopback-test"},
+                                      headers=_csrf_hdr(proxy_module, cookie),
                                       cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r1.status == 200
                     # Now delete it
                     r = await c.delete(NS + "/admin-ips?cidr=127.0.0.0/8",
+                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -1586,7 +1652,7 @@ class TestProxyPassthrough:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get("/api/resource", headers=_browser_headers())
                     if r.status == 200:
-                        assert r.headers.get("X-Proxy", "").startswith("AppSecGW")
+                        assert r.headers.get("X-Proxy", "").startswith("AntiBotWaf_GW_")
         _run(go())
 
     def test_admin_path_not_forwarded_to_upstream(self, proxy_module):
@@ -1680,6 +1746,7 @@ class TestAdminIPsValidation:
                     r = await c.post(NS + "/admin-ips",
                                      json={"cidr": "not-a-valid-cidr",
                                            "description": "test"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # Must reject with 400 or return ok=False
                     if r.status == 200:
@@ -1703,10 +1770,33 @@ class TestVhostsAPI:
     NOTE: Tests that POST a new vhost patch vhost._assert_upstream_public to
     a no-op so the test echo server (127.0.0.1) is accepted as an UPSTREAM.
     The guard itself is tested separately in test_post_private_ip_upstream_blocked.
+
+    1.9.0 — POST-then-GET tests must allowlist 127.0.0.1 before the GET:
+    1.8.15 introduced an implicit host-allowlist via the VHOSTS dict. Adding
+    a vhost like "test.example.com" silently enables host-enforcement, after
+    which the test runner's own Host:127.0.0.1 request gets a decoy 200
+    (reason='host-not-allowed') and the JSON parse fails. _allowlist_local()
+    pins 127.0.0.1 into ALLOWED_HOSTS so the in-process GET survives.
     """
 
     def _cookie(self, proxy_module):
         return _make_admin_cookie(proxy_module)
+
+    def _allowlist_local(self, proxy_module):
+        """Add 127.0.0.1 to the live ALLOWED_HOSTS set so the in-process
+        TestClient (which always connects from 127.0.0.1) survives the
+        1.8.15 implicit-vhost-allowlist enforcement once we add a vhost."""
+        try:
+            proxy_module.ALLOWED_HOSTS.add("127.0.0.1")
+        except Exception:
+            pass
+        # Propagate to core.proxy_handler — _host_allowed reads its own
+        # module-level binding, not proxy_module's.
+        try:
+            import core.proxy_handler as _cph
+            _cph.ALLOWED_HOSTS.add("127.0.0.1")
+        except Exception:
+            pass
 
     # ── GET: returns JSON with vhosts key ────────────────────────────────────
     def test_get_returns_json_structure(self, proxy_module):
@@ -1745,6 +1835,7 @@ class TestVhostsAPI:
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
+                    self._allowlist_local(proxy_module)
                     cookie = self._cookie(proxy_module)
                     # Patch the private-IP guard so the test echo server (127.0.0.1)
                     # is accepted — the guard itself is tested separately.
@@ -1753,6 +1844,7 @@ class TestVhostsAPI:
                                          json={"hostname": "test.example.com",
                                                "UPSTREAM": up,
                                                "UA_FILTER_ENABLED": True},
+                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, f"POST /vhosts: expected 200, got {r.status}"
                     d = await r.json()
@@ -1775,6 +1867,7 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.post(NS + "/vhosts",
                                      json={"UPSTREAM": up},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     if r.status == 200:
                         d = await r.json()
@@ -1793,6 +1886,7 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.post(NS + "/vhosts",
                                      json={"hostname": "test.example.com"},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     if r.status == 200:
                         d = await r.json()
@@ -1807,34 +1901,50 @@ class TestVhostsAPI:
     def test_post_private_ip_upstream_blocked(self, proxy_module):
         """Adding an UPSTREAM that resolves to a private/RFC-1918 address must
         be rejected to prevent SSRF through the public tunnel."""
-        async def go():
-            async with _spin_upstream() as up:
-                async with _spin_proxy(proxy_module, up) as c:
-                    cookie = self._cookie(proxy_module)
-                    private_upstreams = [
-                        "http://127.0.0.1:9999",
-                        "http://192.168.1.1",
-                        "http://10.0.0.1:8080",
-                        "http://172.16.0.1",
-                    ]
-                    for priv in private_upstreams:
-                        r = await c.post(
-                            NS + "/vhosts",
-                            json={"hostname": "evil.test.com", "UPSTREAM": priv},
-                            cookies={proxy_module._SESSION_COOKIE: cookie},
-                        )
-                        if r.status == 200:
-                            d = await r.json()
-                            assert d.get("ok") is False, (
-                                f"POST /vhosts with private UPSTREAM {priv!r} must "
-                                f"return ok=False (SSRF guard); got {d}"
+        import config as _cfg
+        _saved = _cfg.ALLOW_PRIVATE_UPSTREAM
+        _cfg.ALLOW_PRIVATE_UPSTREAM = False
+        try:
+            async def go():
+                async with _spin_upstream() as up:
+                    async with _spin_proxy(proxy_module, up) as c:
+                        # ALLOW_PRIVATE_UPSTREAM is hot-reloadable + persisted now,
+                        # so on_startup's db_load_config can restore it from
+                        # config_kv. Re-assert the guard ON after startup.
+                        _cfg.ALLOW_PRIVATE_UPSTREAM = False
+                        try:
+                            import vhost as _vh
+                            _vh._cfg.ALLOW_PRIVATE_UPSTREAM = False
+                        except Exception:
+                            pass
+                        cookie = self._cookie(proxy_module)
+                        private_upstreams = [
+                            "http://127.0.0.1:9999",
+                            "http://192.168.1.1",
+                            "http://10.0.0.1:8080",
+                            "http://172.16.0.1",
+                        ]
+                        for priv in private_upstreams:
+                            r = await c.post(
+                                NS + "/vhosts",
+                                json={"hostname": "evil.test.com", "UPSTREAM": priv},
+                                headers=_csrf_hdr(proxy_module, cookie),
+                                cookies={proxy_module._SESSION_COOKIE: cookie},
                             )
-                        else:
-                            assert r.status in (400, 422), (
-                                f"POST /vhosts with private UPSTREAM {priv!r}: "
-                                f"unexpected status {r.status}"
-                            )
-        _run(go())
+                            if r.status == 200:
+                                d = await r.json()
+                                assert d.get("ok") is False, (
+                                    f"POST /vhosts with private UPSTREAM {priv!r} must "
+                                    f"return ok=False (SSRF guard); got {d}"
+                                )
+                            else:
+                                assert r.status in (400, 422), (
+                                    f"POST /vhosts with private UPSTREAM {priv!r}: "
+                                    f"unexpected status {r.status}"
+                                )
+            _run(go())
+        finally:
+            _cfg.ALLOW_PRIVATE_UPSTREAM = _saved
 
     # ── DELETE: removes an existing entry ────────────────────────────────────
     def test_delete_vhost(self, proxy_module):
@@ -1842,15 +1952,18 @@ class TestVhostsAPI:
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
+                    self._allowlist_local(proxy_module)
                     cookie = self._cookie(proxy_module)
                     # Add first (patch guard so localhost upstream is accepted)
                     with _patch("vhost._assert_upstream_public"):
                         await c.post(NS + "/vhosts",
                                      json={"hostname": "del.example.com", "UPSTREAM": up},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # Then delete
                     r = await c.delete(NS + "/vhosts",
                                        json={"hostname": "del.example.com"},
+                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"DELETE /vhosts: expected 200, got {r.status}"
@@ -1880,6 +1993,7 @@ class TestVhostsAPI:
                     cookie = self._cookie(proxy_module)
                     r = await c.delete(NS + "/vhosts",
                                        json={"hostname": "nope.example.com"},
+                                       headers=_csrf_hdr(proxy_module, cookie),
                                        cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"DELETE /vhosts non-existent: expected 200, got {r.status}"
@@ -1899,11 +2013,13 @@ class TestVhostsAPI:
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
+                    self._allowlist_local(proxy_module)
                     cookie = self._cookie(proxy_module)
                     with _patch("vhost._assert_upstream_public"):
                         r = await c.post(NS + "/vhosts",
                                          json={"hostname": "UPPER.Example.COM",
                                                "UPSTREAM": up},
+                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, f"POST /vhosts lowercase: expected 200, got {r.status}"
                     d = await r.json()
@@ -1928,11 +2044,13 @@ class TestVhostsAPI:
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
+                    self._allowlist_local(proxy_module)
                     cookie = self._cookie(proxy_module)
                     with _patch("vhost._assert_upstream_public"):
                         r = await c.post(NS + "/vhosts",
                                          json={"hostname": "alias.example.com",
                                                "upstream": up},
+                                         headers=_csrf_hdr(proxy_module, cookie),
                                          cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200, (
                         f"POST /vhosts with lowercase 'upstream': expected 200, got {r.status}"
@@ -1988,7 +2106,7 @@ class TestControlCenterCharts:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/control-center", headers=_browser_headers())
                     body = await r.text()
-                    assert "AppSecGW_1.8.5 · Control Center" not in body, \
+                    assert "AntiBotWaf_GW_1.9.8 · Control Center" not in body, \
                         "control-center: unauthenticated request must not return dashboard HTML"
         _run(go())
 
@@ -2067,6 +2185,13 @@ class TestControlCenterCharts:
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
+                    # Backend-aware empty-DB precondition: in PG-only mode the
+                    # events table lives in Postgres (not the per-test SQLite
+                    # file the conftest wipes), so clear it here to establish the
+                    # "empty DB" precondition this test asserts.
+                    from db.conn import conn as _backend_conn
+                    with _backend_conn(timeout=10) as _wc:
+                        _wc.execute("DELETE FROM events")
                     cookie = self._cookie(proxy_module)
                     r = await c.get(NS + "/vhost-stats",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
@@ -2082,21 +2207,29 @@ class TestControlCenterCharts:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     now = _time.time()
-                    conn = sqlite3.connect(proxy_module.DB_PATH)
-                    conn.execute(
-                        "CREATE TABLE IF NOT EXISTS events "
-                        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-                        "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
-                    )
-                    conn.executemany(
-                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
-                        [
-                            (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "shop.example.com"),
-                            (now - 60, "1.2.3.4", "ua", "/", 200, "banned-silent",        "shop.example.com"),
-                        ],
-                    )
-                    conn.commit()
-                    conn.close()
+                    # Backend-aware seed (vhost-stats reads the active backend).
+                    _seed_rows = [
+                        (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "shop.example.com"),
+                        (now - 60, "1.2.3.4", "ua", "/", 200, "banned-silent",        "shop.example.com"),
+                    ]
+                    from db.conn import active_backend
+                    if active_backend() == "postgres":
+                        # PG events.ts is timestamptz; use pg_insert_event (to_timestamp).
+                        from db.postgres import pg_insert_event
+                        for ts, ip, ua, path, status, reason, vhost in _seed_rows:
+                            pg_insert_event(ts, ip, ua, path, int(status), reason, vhost=vhost)
+                    else:
+                        from db.conn import conn as _backend_conn
+                        with _backend_conn(timeout=10) as conn:
+                            conn.execute(
+                                "CREATE TABLE IF NOT EXISTS events "
+                                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+                                "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
+                            )
+                            conn.executemany(
+                                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
+                                _seed_rows,
+                            )
                     cookie = self._cookie(proxy_module)
                     r = await c.get(NS + "/vhost-stats",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
@@ -2150,18 +2283,24 @@ class TestControlCenterCharts:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     now = _time.time()
-                    conn = sqlite3.connect(proxy_module.DB_PATH)
-                    conn.execute(
-                        "CREATE TABLE IF NOT EXISTS events "
-                        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-                        "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
-                    )
-                    conn.execute(
-                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
-                        (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "api.example.com"),
-                    )
-                    conn.commit()
-                    conn.close()
+                    # Backend-aware seed (vhost-breakdown reads the active backend).
+                    from db.conn import active_backend
+                    if active_backend() == "postgres":
+                        from db.postgres import pg_insert_event
+                        pg_insert_event(now - 60, "1.2.3.4", "ua", "/", 200,
+                                        "operator-passthrough", vhost="api.example.com")
+                    else:
+                        from db.conn import conn as _backend_conn
+                        with _backend_conn(timeout=10) as conn:
+                            conn.execute(
+                                "CREATE TABLE IF NOT EXISTS events "
+                                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+                                "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
+                            )
+                            conn.execute(
+                                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
+                                (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "api.example.com"),
+                            )
                     cookie = self._cookie(proxy_module)
                     r = await c.get(NS + "/vhost-breakdown?range=120&bucket=60",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})

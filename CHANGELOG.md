@@ -1,8 +1,1702 @@
-# Changelog — AppSecGW (appsec-antibot-gw)
+# Changelog — AntiBot/WAF GW (appsec-antibot-gw)
 
 All notable changes are documented here. Format: new features → fixes → security → tests → validation.
 
 Author: Pedro Tarrinho
+
+---
+
+## [1.9.8] — port-aware virtual hosts
+
+### Added
+- **Port-aware virtual hosts (`VHOST_PORT_AWARE`).** The vhost identity can now
+  include the inbound `Host` **port**, so `challenges.site.com:8008` and
+  `challenges.site.com:8009` are **distinct vhosts** — each with its own
+  upstream, per-vhost policy, statistics, and ban scope. Default **off** (the
+  port is stripped, host-only keying — the historical behaviour); opt-in and
+  hot-reloadable via Controls / `POST /secured/config`.
+  - **Why:** CTFd serves *dynamic challenges* as separate instances on the
+    **same hostname but different ports**. Host-only keying collapsed every
+    challenge into one vhost, making per-instance upstream/policy/ban-scope
+    impossible — port-aware keying is required to front per-instance CTFd
+    dynamic challenges from one gateway.
+  - **Lookup precedence:** exact `host:port` → portless `host` (an all-ports
+    fallback) → `*.parent[:port]` wildcards. A portless entry
+    (`challenges.site.com`) catches any port without an exact `host:port` entry.
+  - **Scope of change is small** — the vhost key is derived in one place
+    (`vhost.set_vhost`) and consumed as an opaque string everywhere downstream
+    (`events.vhost`, dashboards, per-vhost bans `ip_bans_vhost`, RPS windows),
+    so they become port-distinct automatically with no schema change.
+  - `_validate_vhost_hostname` accepts an optional `:PORT` (1-65535) suffix when
+    the knob is on (the `VHOSTS` env, the Settings add form, and `/secured/vhosts`
+    all accept `host:port`); rejects it otherwise.
+  - **Deployment note:** the gateway binds a single `LISTEN_PORT` and tells the
+    ports apart purely from the `Host` header — the front (CDN / reverse proxy)
+    must forward the original `host:port` (or `X-Forwarded-Host`).
+  - (`config.py` `VHOST_PORT_AWARE`, `vhost.py` `set_vhost`/`_resolve_vhost_entry`/
+    `_validate_vhost_hostname`, `core/proxy_handler.py` `_HOT_RELOAD_KNOBS`.)
+
+### Fixed
+- **Default ports (`:80`/`:443`) are normalised to portless in port-aware mode.**
+  Browsers and reverse proxies (incl. Cloudflare) send `Host: site.com` — no
+  port — for default-port traffic, so a port-aware vhost keyed `site.com:443`
+  previously never matched. `:80`/`:443` now collapse to portless at every
+  key-forming site (`set_vhost`, env/file config load, `vhost_set`,
+  `vhost_delete`), making `site.com`, `site.com:80` and `site.com:443` one vhost
+  while non-default ports (e.g. `:8008`) stay distinct. (`vhost._strip_default_port`)
+
+### Tests
+- `tests/test_v198_vhost_port_aware.py` — 16 tests: default-off host-only
+  behaviour, distinct `host:port` vhosts, portless all-ports fallback, exact
+  `host:port` wins over portless, wildcard matching ±port, hostname validation
+  (accept `:PORT` only when aware), `vhost_set` CRUD, and (iteration) the four
+  default-port normalisation cases (`:80`/`:443` → portless on match/store/delete;
+  `:8008` stays distinct). Added `VHOST_PORT_AWARE` to the `test_165` every-knob
+  round-trip.
+
+---
+
+## [1.9.7] — 2026-06-23 — fast startup (deferred state rehydrate)
+
+### Performance
+- **Gateway accepts connections in ~3 s instead of ~60 s after a restart.** On a
+  large Postgres deployment, `on_startup` blocked aiohttp from serving while it
+  rehydrated dashboard state synchronously — measured on a 1.18M-request /
+  19,469-client / 8M-event store: ~17 s of full-table aggregate scans in
+  `db_load_state` plus a ~35 s **unbounded** `ORDER BY ts DESC LIMIT 250` across
+  every chunk of the Timescale `events` hypertable. Because the server doesn't
+  accept until `on_startup` returns, a Cloudflare-fronted origin returned a
+  `502` for the whole window on every upgrade. The cosmetic rehydrate
+  (`db_load_state` + `_rehydrate_timeline` + `_rehydrate_events`) now runs in a
+  **background task after the server is accepting**, offloaded to a thread
+  executor (`run_in_executor`) so the slow blocking DB reads never stall the
+  event loop. Dashboards fill in within a few seconds of serving.
+  (`proxy.py`, `db/sqlite.py`; `tests/test_v197_deferred_rehydrate.py`.)
+- **Security path unaffected.** `_rehydrate_bans()` stays **synchronous** (runs
+  before the server accepts) so a banned IP can never slip through the warm-up
+  window. `db_load_state` gained a `clear_first` param: the deferred (merge)
+  path calls it with `clear_first=False` so it never wipes `ip_state` or
+  downgrades an already-active in-memory ban from the (possibly staler) clients
+  table. Tests keep the synchronous path (`OFFLINE_BG_TASKS`) with
+  `clear_first=True` for cross-test isolation.
+
+### Detection (built-but-unwired features activated)
+- **Ed25519 mesh signing (replaces the symmetric-HMAC model).** Gateway mesh
+  offers are now signed with a real Ed25519 private key and verified by peers
+  using only the public key — a peer can no longer forge another gateway's
+  offers (the old model shared an HMAC secret out-of-band). New
+  `_gw_sign_offers`/`_gw_verify_offers`/`_canonical_offer_bytes`; `_gw_generate_keypair`
+  /`_gw_derive_pubkey` now produce real Ed25519 keys. `_mesh_sync_loop` signs on
+  publish (attaches `_sig`) and, on ingress, **only applies offers from a
+  registered peer whose signature verifies against its registered public key**
+  (logs `mesh_sync_no_sig`/`mesh_sync_no_pubkey`/`mesh_sync_sig_invalid` and
+  skips otherwise). **BREAKING for existing mesh deployments:** old HMAC-derived
+  keypairs won't verify — all mesh nodes must upgrade together and regenerate
+  keypairs. Single-node deployments are unaffected. Degrades gracefully (no
+  signing) when `cryptography` is absent (armv7). (`admin/mesh.py`.)
+- **WAF kill-switches wired (operator control over the whole WAF layer).** The
+  request-smuggling, verb-override, header-injection (SSTI / host-header),
+  body-WAF (XXE / proto-pollution / critical-injection), file-upload, GraphQL,
+  slowloris, interaction-probe, and per-identity rate-limit detections were all
+  built and acting but **not gated by their `*_ENABLED` kill-switches** (so an
+  operator couldn't disable a layer) and the signals weren't mapped in
+  `SIGNAL_KNOB` (dashboard showed them as always-on). Added the gates
+  (`WAF_SMUGGLING/VERB_OVERRIDE/HEADER_INJECTION/BODY/UPLOAD/GRAPHQL/SLOWLORIS_ENABLED`,
+  `RATE_LIMIT_ENABLED`, all default-on, per-vhost overridable) and mapped every
+  WAF/interaction signal in `SIGNAL_KNOB`. (`core/proxy_handler.py`.)
+- **Threat-intel feeds now enforced.** `reputation.feeds.feeds_check()` was
+  defined and its refresh loops ran, but it was **never called** in the request
+  path — `feodo-c2`/`cins-rogue`/`urlhaus-malware` were dead. Wired into the
+  detector pipeline (in-process set lookup; self-gates on
+  `FEODO/CINS/URLHAUS_ENABLED`, all default-off; skips private IPs) + mapped in
+  `SIGNAL_KNOB`/`_REASON_METHOD`/latency/descriptions. (`core/proxy_handler.py`.)
+- **JS-consistency signals now enforced.** `js_consistency_signals()` (Sec-CH-UA /
+  Sec-Fetch coherence → `js-cua-version-mismatch`/`js-mobile-hint-mismatch`/
+  `js-fetch-impossible`) was defined but never called; wired + mapped. Gated on
+  `JS_CONSISTENCY_ENABLED`. (`core/proxy_handler.py`.)
+- **H2 SETTINGS fingerprint now enforced.** `h2fp_signals()`
+  (`h2-settings-deny`/`h2-settings-mismatch`) was defined but never called; wired
+  + mapped. Gated on `H2_SETTINGS_FP_ENABLED` (default off; needs the fingerproxy
+  sidecar). (`core/proxy_handler.py`.)
+
+### Security
+- **2FA-at-login bypass closed (HIGH).** `login_submit` minted a full session
+  immediately after password verification, ignoring the user's `totp_enabled`
+  flag — a user who had enrolled TOTP could authenticate with the password
+  alone. Login now issues an unpredictable, server-stored `partial_token`
+  (`secrets.token_urlsafe`, not an enumerable HMAC) for 2FA users and requires a
+  second POST to `/login/totp` carrying that token + the TOTP (or a one-time
+  backup) code before any session is minted. New `totp_verify_endpoint`
+  (timing-safe token + code compare, backup-code consumption, IP rate-limited).
+  (`admin/users.py`, `proxy.py`.)
+- **UPSTREAM hot-reload SSRF guard restored (HIGH).** The `UPSTREAM`
+  hot-reload knob validated only scheme + length via a bare lambda — an admin
+  (or same-origin XSS hitting `/__config`) could repoint the upstream at
+  `169.254.169.254` / `127.0.0.1` / an RFC-1918 host. Re-wired the validator to
+  `_upstream_safe_to_reload`, which resolves the host and rejects
+  private/loopback/link-local/cloud-metadata ranges (subject to
+  `ALLOW_PRIVATE_UPSTREAM`). (`core/proxy_handler.py`.)
+- **Session absolute timeout enforced.** `_session_verify` now rejects a session
+  more than `SESSION_ABSOLUTE_TIMEOUT` (default 8 h) past its `created_ts`, even
+  if the sliding `expires_ts` keeps getting refreshed; `created_ts` is persisted
+  and rehydrated so the clock survives a restart (legacy rows with `created_ts=0`
+  are not rejected). (`admin/users.py`.)
+- **OIDC hardening.** Expired `id_token` now rejected via a strict `exp` re-check
+  (PyJWT's `leeway` had allowed tokens up to 30 s past expiry; nbf/iat skew
+  tolerance retained). Added `_OIDC_STATE_MAX` (500) cap: `/auth/oidc/login`
+  purges expired states then returns 503 at the cap, blocking unauthenticated
+  state-spray memory exhaustion. (`admin/oidc.py`.)
+- **Honey-cred probe.** Now IP rate-limited (`_probe_rate_limit_ok`) and bans the
+  **requester's** own identity — previously it banned the identity the honey key
+  was *issued to*, so an attacker who scraped a leaked key from a victim's HTML
+  could get that victim banned by probing it. (`core/proxy_handler.py`.)
+- **RFC-7239 `Forwarded` + `X-Forwarded-Prefix` stripped** from inbound requests
+  (same spoof surface as the `X-Forwarded-*` family). (`core/proxy_handler.py`.)
+- **SSRF guard fails closed on DNS failure.** `_ssrf_guard_url` raised nothing
+  (let the URL through) on `gaierror`; now raises so an unresolvable host can't
+  dodge the private-range check at config-write time. (`core/proxy_handler.py`.)
+- **Per-vhost `ALLOWED_METHODS` now enforced.** The Layer-0 / post-WebSocket
+  method checks read the global set; switched to `vc("ALLOWED_METHODS")` so a
+  per-vhost override actually applies. (`core/proxy_handler.py`.)
+- **Admin-probe label no longer forgeable.** The admin-namespace 404 classifier
+  emitted a catch-all `internal-probe`; split into an HMAC-validated
+  `operator-self` (valid signed session) vs `admin-probe` (unauthenticated
+  recon) so a scanner can't dodge the recon count by presenting any cookie.
+  (`core/proxy_handler.py`.)
+- **Per-session random CSRF nonce.** The `agw_csrf` token was
+  `HMAC(SESSION_KEY, sid)` — derivable for every session from one secret.
+  `_session_create` now mints an independent `secrets.token_urlsafe(24)` nonce,
+  stored in the session cache + persisted (rehydrated on restart);
+  `_csrf_token_valid` and the middleware self-heal/`__AGW_CSRF__` injection
+  compare against it. Backward-compatible: sessions minted before the change
+  (or a cold cache in the boot window) fall back to the legacy HMAC, so existing
+  cookies keep working. (`admin/users.py`, `admin/auth.py`, `core/middleware.py`.)
+
+### Fixed
+- **Kill-switch wiring gaps (`SIGNAL_KNOB`).** 19 emitted detection signals
+  (probe/session/rate-limit/host/header/ja4/journey/coordinated/fp families +
+  `redirect-maze-bot`) had real, vhost-coercible, hot-reloadable `*_ENABLED`
+  knobs but were unmapped in `SIGNAL_KNOB`, so the dashboard kill-switch UI +
+  riskbreakdown `knob_state` reported them as always-on and the per-vhost
+  override showed no controlling knob. Mapped in both `SIGNAL_KNOB` copies;
+  `redirect-maze-bot` also gained its `_HOT_RELOAD_KNOBS` entry
+  (`REDIRECT_MAZE_ENABLED`), `SIGNAL_LABELS`, and description tuple (mirrors
+  `tarpit-walk`). Metadata only — enforcement stays the inline `if <KNOB>:` in
+  each detector. (`core/proxy_handler.py`.)
+- **Postgres correctness fixes** (all 500/data-loss on PG-only deployments;
+  SQLite was unaffected):
+  - `/secured/path-hits` 500'd on any match — `EXTRACT(EPOCH FROM ts)` returns
+    `Decimal` on PG, breaking `round(now - ts, 1)`. Cast to `::float8`.
+  - vhost-breakdown + signal-timeline charts silently dropped final-bucket
+    events — PG `CAST(numeric AS INTEGER)` rounds half-up vs SQLite/Python
+    truncation. Wrapped the slot math in `FLOOR(...)`. (`admin/settings.py`.)
+  - Service-metrics history 500'd on PG — 2-arg `ROUND(AVG(col), 2)` has no
+    `round(double precision, integer)` overload. Cast `AVG` to `numeric`.
+    (`dashboards/service_metrics.py`.)
+- **Shared upstream session now uses `DummyCookieJar`.** The 1.9.5 app-wide
+  pooled `ClientSession` kept a default cookie jar, so an upstream `Set-Cookie`
+  from one proxied request could persist into another (cross-request cookie
+  leak). Cookies are forwarded via headers, so the shared session must not keep
+  a jar. (`core/proxy_handler.py`.)
+- **Logout clears the `agw_csrf` cookie** (was only clearing the session
+  cookie), so a stale CSRF token can't survive into a re-login.
+  (`admin/users.py`.)
+- **`GET /__config` exposes an `env_pinned` list** so the dashboard can render
+  env-locked knobs read-only instead of bouncing off env-pin on Apply.
+  Removed dead `_escalate`/`_second_order` locals in `protect()`.
+  (`core/proxy_handler.py`.)
+- **`test_164` cross-test flake fixed.** `test_v187_db_switch_hotswap.py` set `POSTGRES_DSN` at module-import time, leaking it process-globally and flipping `test_164_db_backend_default_sqlite` into PG mode; removed the import-time env set. Default suite now 1185/0. (`tests/`.)
+- **PG-mode stale-test debt.** Updated ~75 tests across 39 files that asserted
+  renamed internals or pre-refactor contracts to the current behaviour (verified
+  against source; no security control weakened, no test skipped/trivialised).
+- **`geo.html` load-status pill test pinned the old static label.** Updated
+  `test_geo_html_load_status_ready_text` to the 1.9.5 progress-pill behaviour
+  (`Loading N%` → `Ready`, re-armed on every fetch); the literal `Loading Ready`
+  no longer exists. (`tests/test_pure.py`.)
+
+### Fixed
+- **Light/dark theme is now a true single server-side master.** Every dashboard
+  already baked `config_kv['ui_theme']` into `<html data-theme>` on first paint,
+  but the toggle's persist call (`POST /antibot-appsec-gateway/secured/ui-theme`)
+  had **no registered endpoint** — the request 405'd and was swallowed by the
+  toggle's `.catch()`, so the choice only ever lived in the local browser's
+  `localStorage` (per-browser, never synced; a fresh browser fell back to a
+  dark/OS-preference split between baked and un-baked pages). Built the
+  `ui_theme_endpoint` (GET → current master; POST `{"theme":"dark"|"light"}` →
+  persists synchronously to `config_kv['ui_theme']`, 400 on invalid, role-gated)
+  and registered `GET`/`POST /secured/ui-theme`. Now toggling on ANY page sets
+  the master that ALL 11 dashboards reflect on their next load — across browsers
+  and devices. Also gave the `main.html` chart-loading overlay a light-mode
+  override (it was hardcoded `rgba(13,17,23,0.55)` and stayed dark in day theme).
+  (`admin/settings.py`, `db/sqlite.py` `set_ui_theme`, `proxy.py`,
+  `dashboards/main.html`; `tests/test_v1811_theme.py` — api01–10, incl. an
+  all-dashboards master-reflection test.)
+- **Persistent IP ban now shows as "Banned" in the dashboard (was "allowed").**
+  The raw-IP ban (`ip_bans` table, checked via `check_ip_ban_cached` — survives
+  session-cookie / fingerprint rotation) is independent of the in-memory identity
+  ban (`s.banned_until`). An IP in the hostile pool whose identity risk had since
+  decayed below threshold rendered a green **allowed** badge in the reason-details
+  popup and the ALLOWED/BLOCKED/MISSED tabs — even though every request was being
+  silent-decoyed (the ban *was* enforced; only the label was wrong). The clients
+  dump (`metrics_endpoint`) now exposes an `ip_banned` flag (probed only for
+  not-already-identity-banned clients, via the TTL ban cache); the dashboard
+  treats it as banned in `_clientCats`, the reason-details status, and the
+  client-detail status line. Added the missing `ip-ban` entry to `REASON_INFO`
+  (was "tier INFO, weight 0, No description available"). (`core/proxy_handler.py`,
+  `dashboards/main.html`; `tests/test_v197_ip_ban_status.py`.)
+
+### Operator features (P2 — built-but-unwired backlog completed)
+- **Attack Playbook backend.** The Honeypots dashboard's Attack-Playbook +
+  honey-suggest cards fetched `/secured/attack-playbook` and
+  `/secured/honey-suggest`, but neither endpoint existed (the cards rendered
+  "HTTP 404"). Built `attack_playbook_endpoint` (honeypot-family catches grouped
+  by exact reason with capped distinct examples + `last_ts`/`capped`; scanner-tool
+  fingerprinting from the **full per-IP path set** — nuclei/nikto/wpscan/sqlmap/
+  feroxbuster signatures, ≥2 hits → fingerprint; signature-completion
+  `predicted_probes` minus already-trapped paths) and `honey_suggest_endpoint`
+  (frequently-probed 4xx paths not yet trapped, last 7 days). Both read the
+  `vhost` query param (lowercased) and push it into the DB read so the dashboard
+  vhost selector actually filters; routes registered in `proxy.py`.
+  (`core/proxy_handler.py`, `proxy.py`; `tests/test_v1810_attack_playbook.py`,
+  `tests/test_v1813_honeypot_vhost_filter.py`.)
+- **`PRESERVE_HOST` knob.** Opt-in (default False, per-vhost, hot-reloadable):
+  when set, the forward path skips Host/Origin/Referer rewriting and passes the
+  client's original Host to upstream (X-Forwarded-Host always carries the client
+  host regardless). Gated in both the HTTP and WebSocket forward paths.
+  (`config.py`, `core/proxy_handler.py`, `vhost.py`;
+  `tests/test_v1814_preserve_host_qa.py`.)
+- **VACUUM history + concurrency guards.** Each SQLite VACUUM now records a
+  `gw_audit` row (`action='db_vacuum'`, saved_bytes/duration_ms/ok) and the
+  response + `GET /secured/db-vacuum-history` return the last 5 runs (newest
+  first, via the new `_vacuum_history` helper). `db_vacuum_endpoint` now refuses
+  with **409** while a background migration is in flight (`_BG_MIGRATION`, set by
+  `proxy._resume_pending_bg_migration`) or a concurrent VACUUM holds
+  `_DB_VACUUM_LOCK`; the run is single-flighted under the lock.
+  (`core/proxy_handler.py`, `proxy.py`; `tests/test_v1815_vacuum_history.py`.)
+- **`BLOCK_RESPONSE_MODE="404"` now serves the upstream 404 body** instead of
+  falling through to the homepage decoy. The silent-decoy responder branches
+  api/admin → JSON 404, `"404"` → cached upstream-404 body (primed via
+  `_fetch_upstream_404`), else homepage. (`core/proxy_handler.py`;
+  `tests/test_v1815_block_response_mode_qa.py`.)
+
+---
+
+## [1.9.6] — 2026-06-20 — dashboard responsiveness (/__metrics response cache)
+
+### Performance
+- **`/__metrics` short-TTL response cache.** Every open dashboard polls this
+  endpoint ~every 2 s, and a full computation iterates all `ip_state` + events +
+  a **synchronous** timeline DB query — all on the single event loop, so two
+  near-simultaneous loads (e.g. clicking between two pages) stalled the UI while
+  the second waited for the first to finish. The endpoint now serves a cached
+  JSON result for ~1 s (keyed by the full query string; admin-only, so no
+  per-user data), so rapid/concurrent identical requests reuse a recent result
+  instead of recomputing on the loop. TTL is env-configurable
+  (`METRICS_RESP_TTL`, default `1.0`; tests set `0`). Cache is bounded FIFO.
+  (`core/proxy_handler.py`; `tests/test_v196_metrics_cache.py`.)
+- Read-only/display path only — no change to detection, scoring, banning, or
+  proxying. At most ~1 s data staleness on a dashboard that already polls at 2 s.
+
+### Fixed
+- **`/secured/logs-data` returned 500 on Postgres-only deployments.** `r["ts"]`
+  is a `TIMESTAMPTZ` `datetime` on PG (not JSON-serializable), so the Logs
+  dashboard's data endpoint 500'd. Added a `_epoch()` coercion helper
+  (datetime→epoch float, SQLite REAL passthrough, null-safe) on the ts output.
+  Found while running the full PG-mode suite. (`core/proxy_handler.py`;
+  `tests/test_v196_pg_datetime_and_writer.py`.)
+- **`db_writer_loop` crashed with `task_done() called too many times` on
+  shutdown/cancellation.** `batch` was assigned inside the `try`, so a
+  `CancelledError` during `await db_queue.get()` left a stale prior-iteration
+  batch that the `finally` re-`task_done()`'d. Reset `batch = []` before the
+  `try` in both writer-loop variants. Cleaner production shutdown; also un-stuck
+  5 PG-mode test files that this defect was hard-crashing. (`db/sqlite.py`.)
+- **Dashboard background flipped dark↔light when navigating between pages.** Only
+  5 of 11 dashboards baked the persisted UI theme into the served `<html>` tag;
+  the other 6 (main, agents, siem, geo, logs, control_center) shipped without
+  `data-theme`, so their `<head>` init script fell back to the OS
+  `prefers-color-scheme` — flipping the theme between the two groups when the
+  saved choice differed from the OS setting. Added one shared helper
+  `db.sqlite.inject_theme(html, db_path)` and routed every dashboard through it
+  (the previously-broken 6 now inject; honeypots refactored to the helper too).
+  A source-scan guard test fails if any dashboard HTML is ever served raw.
+  (`db/sqlite.py`, `core/proxy_handler.py`, `dashboards/{agents,siem,honeypots}.py`;
+  `tests/test_v196_dashboard_theme_injection.py`.)
+- **Service page "7 days" window showed only ~1 day (PG-only deployments).**
+  `db/sqlite.py::db_load_state()` rehydrated the in-memory `SERVICE_METRICS_HISTORY`
+  buffer at boot from the **local SQLite file** (its hard-coded
+  `conn = _sqlite_connect(DB_PATH)`). In PG-only mode the db-writer mirrors
+  `svc_metric` rows to Postgres and never touches local SQLite, so that file is
+  frozen at the pre-cutover state — rehydrating from it loaded **stale samples
+  with old timestamps**. Those made the deque's oldest entry look weeks old,
+  which fooled `service_metrics_data_endpoint`'s `start_b < _buf_oldest`
+  heuristic into taking the in-memory path (stale gap + most-recent live
+  samples) instead of the backend-aware DB path — so long windows rendered only
+  the most-recent ~1 day even though Postgres held the full history (observed on
+  pt4.tech: 9 days in PG, 1 day shown). Fixed by rehydrating through
+  `open_conn()` (backend-aware, the same pattern `_rehydrate_timeline` already
+  uses), so PG-only deployments load a **contiguous recent buffer from
+  Postgres**. SQLite-only deployments are unaffected (`open_conn()` returns the
+  same file). Buffer is cleared before rehydration (repeat-`on_startup` safety)
+  and still bounded by `SERVICE_METRICS_RETENTION`. The last read path in
+  `db_load_state` that wasn't made backend-aware in 1.9.1 iter-18.
+
+### Tests
+- `tests/test_v196_metrics_cache.py` — `/__metrics` short-TTL response cache.
+- `tests/test_v195_svc_rehydrate_backend_aware.py` (**7 tests**) — the
+  svc_metrics rehydration reads through `open_conn()` (not the local-SQLite
+  `conn`), closes its connection in `finally`, clears the deque first, keeps the
+  `LIMIT SERVICE_METRICS_RETENTION` bound, swallows boot errors with the
+  `db_svc_metrics_not_loaded` slog, and (belt-and-braces) no `conn.execute(…
+  svc_metrics …)` remains on the local-SQLite connection anywhere in
+  `db_load_state`.
+
+## [1.9.5] — 2026-06-19 — hot-path performance (shared upstream pool + ban-lookup cache)
+
+### Changed (performance)
+
+- **#1 — Shared, connection-pooled upstream `ClientSession`.** `proxy()` previously opened a brand-new `ClientSession` (and `TCPConnector`) on **every** forwarded request — a fresh TCP connect + TLS handshake per request, no keep-alive. Now a single app-lifetime session with a pooled `TCPConnector` (`UPSTREAM_POOL_LIMIT`=200, `UPSTREAM_KEEPALIVE_SECS`=30) is created lazily on first use and reused across all requests; closed in `on_cleanup`. **Measured (local HTTP backend): upstream-forward latency −86% (0.816→0.111 ms/req), throughput 7.4× (1.2k→9.0k req/s).** Larger still for HTTPS/remote upstreams (eliminates the per-request TLS handshake).
+- **#3 — TTL cache for the per-request IP-ban lookup.** `check_ip_ban()`/`check_ip_ban_vhost()` each opened a short-lived SQLite connection + point query on the event loop for every non-admin request. New `check_ip_ban_cached()`/`check_ip_ban_vhost_cached()` serve hot IPs from memory (`BAN_CACHE_TTL_SECS`=5); the db-writer **invalidates the cache on every ban insert/delete**, so a fresh ban is enforced immediately (the TTL only ever delays a *negative* result, and this lookup is defence-in-depth — identity + risk bans still apply). **Measured: 120.3 → 0.21 µs/call (575×), ~120 µs of blocking disk I/O removed per request.**
+
+Combined, the two changes remove a fixed **~0.83 ms/request** independent of the rest of the pipeline → roughly **−30–45% end-to-end latency / ~1.5–1.8× throughput** for a local-upstream deployment.
+
+### Tests
+
+- `tests/test_v195_perf_session_and_bancache.py` (**10 tests**) — shared session reuse + pooled connector + recreate-after-close + `on_cleanup` wiring + `proxy()` no longer per-request; ban cache hit/miss/negative-TTL/expired-ban-reread/invalidation/vhost + writer invalidates all 4 ban ops.
+
+### Fixed (iteration — Postgres timestamp comparison in filtered metrics — 2026-06-19)
+
+- **`/secured/metrics` and `/secured/cost-timeline` with `?path=` / `?vhost=` filters threw `operator does not exist: timestamp with time zone >= integer` on Postgres.** The filtered-timeline branch in `metrics_endpoint` (`core/proxy_handler.py:5605-5617`) was running `WHERE ts >= ? AND ts <= ?` against the `events` table without backend-branching. On SQLite `events.ts` is `REAL` (epoch float) so the raw bind works; on Postgres `events.ts` is `TIMESTAMPTZ` and psycopg routes the float through as integer/numeric, which PG can't compare. The outer `try/except Exception` swallowed the error and silently fell through to *unfiltered* data — operator still got a dashboard, but their path/vhost drill-down filter was a no-op. Visible in the TimescaleDB container logs as repeated `STATEMENT: SELECT ts, path, reason FROM events WHERE ts >= $1 AND ts <= $2 AND vhost = $3 ORDER BY ts` ERROR lines. Fixed by backend-branching the SQL: PG variant wraps the epoch bounds with `to_timestamp(?)` and projects `EXTRACT(EPOCH FROM ts) AS ts` (the projection is critical — without it, the downstream `int(row["ts"])` raises `TypeError` because psycopg returns TIMESTAMPTZ as a Python `datetime`). Same pattern as the sibling `/secured/scoring` block one screen up.
+
+### Tests (iteration)
+
+- `tests/test_v195_metrics_path_filter_pg_ts.py` (**6 tests**) — both structural (no inline unbranched `ts >= ?` against events without a nearby `to_timestamp(?)` PG branch) and `metrics_endpoint`-specific (backend check present, PG uses `to_timestamp` for both bounds + `EXTRACT(EPOCH FROM ts) AS ts` projection, SQLite path unchanged, SELECT uses the `_ts_col` interpolation variable so a future "simplify back to one query" PR fails the test).
+
+---
+
+## [1.9.4] — 2026-06-17 — in-memory hardening + dashboard UX + restart-resilient charts
+
+### Security
+- **Audit-log evasion via malformed UTF-8 (fuzzing-found).** A request carrying
+  lone surrogates / invalid UTF-8 in UA or path made psycopg raise
+  `UnicodeEncodeError`, which silently DROPPED the event (and the client upsert)
+  from the Postgres store — letting an attacker keep their requests out of the PG
+  audit log / SIEM. `db/postgres.py::_pg_safe` now replaces un-encodable code
+  points at both PG-write entry points (`pg_insert_event`, `_pg_dispatch_op`);
+  the row is stored instead of dropped. (`tests/test_v194_pg_surrogate_sanitize.py`.)
+
+### Added
+- **`by_path` / `by_ja4` cardinality cap (FIFO, 2048).** `metrics["by_path"]`,
+  `by_path_by_cat[*]` and `metrics["by_ja4"]` are client-controllable and were
+  unbounded — a path-enumeration / TLS-churn flood could grow them until the
+  process was OOM-killed. `core/metrics.py::_bump_capped` now evicts oldest-first.
+- **Chart loading overlay** on the Live Feed dashboard — spinner over each chart
+  until first paint (no more blank-canvas-on-load); failsafe sweep after 8 s.
+
+### Fixed
+- **Live Feed timeline survives a gateway restart.** `db.sqlite::_rehydrate_timeline`
+  repopulates the in-memory minute-bucket dict from the (backend-aware) `timeline`
+  table at startup; the recent window no longer renders blank after a restart even
+  though events were always safe in the DB.
+- **Controls page load** — `loadBans()` uses `/metrics?view=bans` (server skips the
+  full per-identity dump + timeline build), cutting the 4 s-refresh cost from
+  O(all-identities) to O(banned).
+- **Defense Thresholds slider** — 0-value knob draggable again; click-track-to-set.
+- **PG "still starting" (SQLSTATE 57P03)** classified as a self-healing transient —
+  calm log instead of a stack trace; bounded startup retry.
+- **Backend-aware persistence banner** — PG-only mode no longer prints the local
+  SQLite path as if it were the live store.
+- **Login theme `<script>` CSP nonce** — was blocked by `script-src 'nonce-…'`.
+
+### Tests
+- `test_v194_inmem_bounds_rehydrate.py` (cap + rehydrate), `test_v193_metrics_bans_view.py`,
+  `test_v193_pg_starting_classifier.py`; de-staled OIDC + vhost_stats + geo tests after
+  the module refactor.
+
+---
+
+## [1.9.3] — 2026-06-12 — config_kv backend self-heal + release roll-up
+
+Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and closes the last loose end.
+
+### Changed
+
+- **Settings "Database backend" toggle no longer flashes "SQLite" on load.** It now starts in a neutral loading state (grey track, hidden thumb, ⏳ hourglass, both labels dimmed) and only reveals the real backend once `loadDb()` resolves — so Postgres deployments never momentarily show SQLite. (`dashboards/settings.html`; `tests/test_v193_db_backend_loading_hourglass.py`, 5 tests.)
+
+### Fixed
+
+- **Stale `config_kv` `DB_BACKEND="sqlite"` row no longer lingers.** iter-23 made `POSTGRES_DSN` authoritative by forcing the *runtime* backend to postgres, but the stale persisted *row* survived — so the `db_backend_forced_pg_by_dsn` warning recurred on every boot and any UI reading the persisted value could still show "sqlite". `db/sqlite.py::db_load_config` now **self-heals the row**: after coercing, it rewrites the `config_kv` `DB_BACKEND` value to `postgres` (backend-aware synchronous `UPDATE`, logged as `db_backend_row_self_healed`). No manual `DELETE FROM config_kv` needed; the warning stops after the first boot on this build. Best-effort — a write failure never blocks boot (the runtime backend is already correct).
+
+### Rolled up from 1.9.2 (now shipped under 1.9.3)
+
+- **iter-21** — Postgres auto-recovery watchdog (re-enables PG without a restart once it's reachable again after a failure).
+- **iter-22** — `/secured/db-test` hang fix (Timescale `COUNT(*)` → planner estimate; blocking probes offloaded to a thread executor + bounded).
+- **iter-23** — `POSTGRES_DSN` authority (persisted `sqlite` can't override) + boot SQLite→Postgres event gap back-fill (crash-safe, idempotent).
+
+### Tests
+
+- `tests/test_v192_pg_authority_and_backfill.py` — +1 guard (`test_db_load_config_self_heals_stale_backend_row`) for the row rewrite (8 total in file).
+- `tests/test_v189_sidebar_collapse.py` — brand-version anchor bumped 1.9.2 → 1.9.3.
+
+---
+
+## [1.9.2 iter-23] — 2026-06-12 — POSTGRES_DSN authority + boot gap back-fill
+
+### Fixed
+
+- **`POSTGRES_DSN` set but gateway silently ran on SQLite.** For `DB_BACKEND`, a persisted `config_kv` value overrode the env (by design, so the dashboard backend-switch survives restart) — but a *stale* persisted `DB_BACKEND="sqlite"` (from an earlier SQLite run or a pre-PG-only-migration switch) then kept the gateway on SQLite **even with a healthy Postgres and a DSN set**. Result on pt4.tech: 8.3M events in PG, then a ~1.5h gap as new events went to the local SQLite file. `db/sqlite.py::db_load_config` now **coerces a persisted `DB_BACKEND` to `postgres` whenever `POSTGRES_DSN` is set** (logs `db_backend_forced_pg_by_dsn`). A DSN now unambiguously means Postgres.
+
+### Added
+
+- **Boot-time SQLite→Postgres event gap back-fill** (`db/postgres.py::_backfill_events_gap_from_sqlite`, wired into `on_startup`). On a PG-mode boot, any events that piled up in the local SQLite store while the gateway was on SQLite are imported into Postgres — every row **newer than PG's `max(ts)`**, so the timeline becomes contiguous with no manual `python -m db.import`. Safety: clean no-op (never crashes boot) when there's no local SQLite file, no events table, or no gap; idempotent (`ts > pg_max` bound composes with the first-boot auto-import — no double-insert); batched + capped (logs a warning to finish manually if the cap is hit).
+
+### Tests
+
+- `tests/test_v192_pg_authority_and_backfill.py` (**7 tests**) — back-fill imports only `ts > pg_max`; no-gap / missing-file / no-events-table / no-DSN all clean no-ops; `db_load_config` coerces backend when DSN set; back-fill wired into `on_startup`.
+
+---
+
+## [1.9.2 iter-22] — 2026-06-12 — db-test endpoint hang fix (Timescale COUNT + event-loop block)
+
+### Fixed
+
+- **`/secured/db-test` hung 40+ s and stalled the whole worker on the live pt4.tech (Timescale) deployment.** Two compounding bugs:
+  - **`db/postgres.py::pg_db_size()` ran an unbounded `COUNT(*)` over the events table.** On a Timescale hypertable that full-scans every chunk (seconds → minutes as the table grows). Replaced with a planner **estimate** — `SUM(reltuples)` over the table + its inheritance children (Timescale chunks are inheritance children of the hypertable root) — a catalog-only read that's instant and accurate enough for a dashboard figure (kept fresh by ANALYZE/autovacuum).
+  - **`core/proxy_handler.py::db_test_endpoint` called the blocking probes (`pg_test_roundtrip`, `pg_db_size`) directly on the event loop.** A slow Postgres therefore froze the entire async worker — every concurrent admin request (`/secured/vhosts`, `/secured/config`, …) timed out with a 502. Both probes are now offloaded to a thread executor and bounded with `asyncio.wait_for` (8s for the roundtrip, 6s for the size query); on timeout the endpoint returns a clean `ok:false, reason:"probe timed out"` instead of hanging.
+
+### Tests
+
+- `tests/test_v192_db_test_no_blocking_count.py` (**3 tests**) — `pg_db_size` uses a reltuples estimate and never exact-counts events; `db_test_endpoint` offloads via `run_in_executor` + `wait_for`; `pg_db_size` returns fast when PG is unconfigured.
+
+---
+
+## [1.9.2 iter-21] — 2026-06-12 — Postgres auto-recovery (no-restart self-heal)
+
+### Added
+
+- **Postgres backend now self-heals after a failure — no operator restart required.** Previously, any Postgres failure (`db_init_postgres` auth rejection, container restart, network blip, or a password drift later corrected) called `_disable_postgres_for_process`, which latched the backend OFF for the life of the process: the gateway silently degraded to SQLite and stayed there — **empty dashboards, dead geo-data / event reads** — until someone restarted the container. This was the root cause of the pt4.tech "no events" + `geo-data 500` / `vhosts 502` incident after a Timescale restart.
+  - `db/postgres.py` — the disable is now *recoverable*: it records **why** it went down (`_PG_DISABLED_BY_FAILURE`, `_PG_DISABLED_TS`) rather than latching permanently.
+  - `pg_recovery_probe()` — a direct connect + `SELECT 1`, bypassing the pool and the auth latch, to test whether Postgres is reachable **and** authable again. Never raises.
+  - `pg_maybe_recover()` — cheap no-op while PG is healthy; when disabled-by-failure it probes once and, on success, calls `_reenable_postgres_for_process()` which clears the auth latch, flips `_postgres_available` back on across every module, restores `DB_BACKEND=postgres` on `core.proxy_handler`, and bumps `_PG_RECOVERED_COUNT`.
+  - `proxy.py::_pg_recovery_loop()` — background watchdog started in `on_startup` whenever a Postgres DSN is configured. Probes every `PG_RECOVERY_PROBE_SECS` (default **15s**, floored at 5s, env-tunable) **only while the backend is disabled** — zero steady-state cost when PG is healthy. The blocking connect runs in a thread executor so it never stalls the event loop.
+  - `dashboards/service_metrics.py` (`/services`) now surfaces `pg_disabled_by_failure`, `pg_disabled_ts`, `pg_recovered_count`, `pg_recovery_probe_secs` so operators can see "degraded → auto-recovery active" and how many times it self-healed.
+
+### Tests
+
+- `tests/test_v193_pg_auto_recovery.py` (**11 tests**) — disable records the failure reason; re-enable fully reverses it (latch, `_postgres_available`, `DB_BACKEND`); `maybe_recover` is a no-op while healthy (must not probe); re-enables on probe success; stays disabled (and retries) on probe failure; probe safe without a DSN and swallows connect errors; interval floor; loop coroutine wired into `proxy`.
+
+---
+
+## [1.9.2 iter-20] — 2026-06-11 — agents-timeline diagnostics + idle-timeout default
+
+### Fixed
+
+- **Agents `Detection vs Miss · Timeline` chart's "Stale — chart fetch failed" had no triage path.** Two layers:
+  - **Backend** — `dashboards/agents.py`: `print(f"[agents-timeline] db error: {e}")` → `slog("agents_timeline_db_err", level="error", backend=…, exc_type=…, error=…)`. Now visible in the in-process `/__logs` ring, not stdout-only.
+  - **Frontend** — `dashboards/agents.html::tickChart()`: explicit `Content-Type` guard before `r.json()`. When the endpoint returns the silent-decoy HTML (admin session revoked by idle timeout, absolute timeout, or Cloudflare-stripped cookie), the chart's "Stale" tooltip now reads *"Session likely expired or stripped by CDN (got 404 text/html). Refresh the page and re-login if asked."* instead of the misleading *"Stale — chart fetch failed: SyntaxError…"*.
+
+### Changed
+
+- **`SESSION_IDLE_TIMEOUT` default raised 1800s → 3600s** (`config.py`). 30 minutes was tight for active dashboard use — operators stepping away briefly were getting silently revoked, then every subsequent admin request returned the decoy HTML. 1 hour balances UX vs the `SESSION_ABSOLUTE_TIMEOUT` 8-hour hard cap. Operators wanting tighter or looser can still override via env.
+
+---
+
+## [1.9.2] — 2026-06-11 — posture wizard + PG-only-mode read sweep (iter-13→18)
+
+### Added
+
+- **Security-posture wizard expanded + 4th preset.** Per-vhost preset
+  bundles grew 14 → 25 knobs (all vhost-overridable thresholds + detector
+  toggles). New **Paranoid** profile (Turnstile + tightest thresholds);
+  red `.p-paranoid` badge. (iter-13)
+- **Profile-impact radar.** 5-axis SVG radar (bot-block / user-friction /
+  threat-coverage / rate-limit / response-strictness) overlaying all 4
+  profiles. (iter-14)
+- **Global posture wizard on the Controls page** — same radar + 4 cards;
+  Apply targets global `/secured/config`. (iter-15)
+
+### Fixed — PG-only-mode silent-empty reads
+
+In PG-only mode the writer "never touches SQLite", but many reads still
+opened a bare `sqlite3.connect(DB_PATH)` → blank dashboards:
+
+- **iter-16** (4): SIEM sparkline (was raising `operator does not exist:
+  timestamp with time zone >= integer`), reason-over-time chart, dow×hour
+  heatmap, Service per-vhost totals.
+- **iter-17** (17): Agents timeline buckets, vhost block-rate heatmap,
+  incident feed, ban-event timeline, geo cursor/target-points,
+  path-detail, agents bucket-detail. PG path wraps bounds in
+  `to_timestamp(?)` + `EXTRACT(EPOCH FROM ts)`.
+- **iter-18** (5): svc_metrics history, OIDC SSO provisioning (also
+  `INSERT OR IGNORE`→`ON CONFLICT`), config_kv dismissed-hosts read+write
+  (`INSERT OR REPLACE`→`ON CONFLICT`), gw_audit log viewer.
+
+### Tests
+
+- `test_v1814_posture_presets.py` (28), `test_v191_iter15_global_posture_wizard.py` (15),
+  `test_v191_iter16_pg_events_reads.py` (6),
+  `test_v191_iter17_pg_events_read_guard.py` (events guard),
+  `test_v191_iter17_sweep_qa.py` (17 anchored), and
+  **`test_v191_iter18_mirrored_table_guard.py`** — superset guard: any
+  bare-sqlite read of ANY of the ~24 PG-mirrored tables fails CI unless
+  the function early-returns on `DB_BACKEND != "sqlite"`.
+
+### Validation
+
+`validation/1.9.1.md` (iter-10→18 records; retained under that filename —
+work spans the 1.9.1→1.9.2 transition). Harbor manifest `:1.9.2` →
+`sha256:dd5740d007084f5d88664875e665a049245b886712d0caefc33d07f27009fac2`.
+
+---
+
+## [1.9.2] — 2026-06-11 — config_kv / secrets_kv backend-aware load
+
+### Fixed
+
+- **Dashboard knobs no longer reset on every upgrade for PG-mode deploys.** `db_load_config` and `db_load_secrets` (in `db/sqlite.py`) opened SQLite directly at `DB_PATH` regardless of `active_backend()`. On PG-mode deployments with an ephemeral `/data` volume — common in HA / Kubernetes setups — the read returned no rows even when Postgres had every saved setting (mirrored via `_pg_mirror_bg`). Operator symptom: every `docker compose up` after an image upgrade reverted all Controls / Thresholds knobs to env defaults.
+  - Both loaders now consult `db.conn.active_backend()`; when it returns `"postgres"`, the read routes through `db.conn.conn()` which connects to PG via the configured DSN.
+  - The legacy SQLite branch keeps the `g.get("DB_PATH") or os.environ.get("DB_PATH") or DB_PATH` resolution so tests that override `DB_PATH` at runtime still work.
+  - Failure log line now includes `backend=<sqlite|postgres>` for clean triage when load fails (e.g. PG transiently unreachable on cold boot).
+  - **No version bump** — point-fix on 1.9.2; rebuilding the same tag with the patch baked in.
+
+### Tests
+
+- `tests/test_v192_config_canonical_pg.py` — 5 source-anchor tests pinning the routing contract (active_backend() consulted; PG branch uses `db.conn.conn`; SQLite branch preserves DB_PATH resolution; except clause is `Exception` not `sqlite3.Error`; load-failed log includes `backend=`).
+
+---
+
+## [1.9.2] — 2026-06-11 — full-suite audit: completed dormant features
+
+A full-suite audit ("check everything") found ~75 red/errored specs describing
+features that shipped knobs/UI/tests but were never wired end-to-end. All wired
+test-driven; full suite now **1185 passed / 0 failed / 0 errors**.
+
+### Added / completed
+
+- **OIDC SSO — real id_token verification + pending-approval flow.** The
+  callback now REQUIRES and cryptographically verifies the `id_token`:
+  `_verify_id_token()` checks the JWKS-resolved RS/PS/ES signature
+  (`_OIDC_ALLOWED_ALGS` — no HS*/none, alg-confusion guard), `iss`/`aud`/`exp`/
+  `nbf` (±30 s leeway), required `iat`/`exp`/`sub`, and the login `nonce`; one
+  forced JWKS refresh tolerates key rotation, keys cached 1 h (`_JWKS_CACHE`).
+  New SSO users are provisioned `status='pending', sso_source='oidc'` via a
+  direct `sqlite3.connect(DB_PATH)` write and get **404 (no session)** until an
+  admin activates them. INT4-10 sub-binding: `id_token.sub` must equal
+  `userinfo.sub`. Errors redirect with OPAQUE `_ERROR_CODES` (never a reflected
+  IdP/exception string); the login page maps the code to a fixed safe message.
+  Session cookie hardened to `SameSite=Strict`.
+- **Interaction probe route** — registered the public `POST interaction-report`
+  endpoint (the `detection/interaction.py` analyser already existed, the route
+  was never wired).
+- **Login CSP nonce** — `login_page_endpoint` now mints a per-request nonce,
+  substitutes `__CSP_NONCE__`, and serves a strict `script-src 'self'
+  'nonce-…'` CSP (F-11; no `unsafe-inline`) so the inline Sign-in handler runs
+  while injected inline scripts stay blocked.
+
+### Fixed (post-ship hotfix)
+
+- **Security — maintainer→admin privilege escalation (S-C1).** `users_update_endpoint`
+  gated non-self updates as `admin,maintainer` then only blocked `viewer` from
+  the role field, so a **maintainer could PATCH any user's role to `admin`**.
+  Role changes are now **admin-only** (`if caller_role != "admin"`); maintainer
+  password/status edits are unaffected.
+- **Security — gateway private-key disclosure to maintainers (S-W3).**
+  `gw_registry_get_endpoint?reveal=1` was gated `admin,maintainer`, letting a
+  **maintainer exfiltrate the local gateway private key**. The `?reveal=1`
+  branch is now **admin-only**; maintainers still read registry metadata.
+- **Accepted risk — 2FA (TOTP) is dormant/incomplete (R4).** Frontend
+  (settings enrollment card + login TOTP step), helpers and schema exist, but
+  `2fa-setup` is unrouted, there is no enrollment-confirm endpoint
+  (`totp_enabled` is only ever set via DB import), and `login_submit` does not
+  step-up on `totp_enabled`. In normal operation 2FA cannot be enabled, so there
+  is no active bypass — **risk accepted** (validation §11b R4). Owner Pedro
+  Tarrinho; revisit if 2FA is built out.
+- **Emergency `BYPASS_MODE` could not disable the gateway on a vhost
+  deployment.** The site-wide bypass gate read `vc('BYPASS_MODE')`, which
+  resolves the *per-vhost* override first — so a vhost whose `VHOSTS` overlay
+  carried `BYPASS_MODE=False` silently **shadowed the global kill-switch**: the
+  operator flipped emergency bypass on but detection/bans kept firing on that
+  vhost ("não dá para desativar a GW"). The gate now fires when **either** the
+  global `BYPASS_MODE` (emergency, un-shadowable) **or** the per-vhost value is
+  true: `if (BYPASS_MODE or vc('BYPASS_MODE')) and not _is_admin_path(...)`. A
+  per-vhost `BYPASS_MODE=True` still enables pass-through for a single vhost.
+  (Bypass-position source-guards updated to the broadened condition.)
+- **Two-level "disable protections" controls.** Explicit global + per-vhost
+  off-switches for the whole pipeline. **Global** (Controls bypass bar): the
+  emergency `BYPASS_MODE` — disables ALL protections (detection, bans, rate
+  limits) on *every* vhost; session-only (resets on restart) so a forgotten
+  panic toggle can't outlive the incident; un-shadowable. **Per-vhost** (Vhost
+  Policy → new "Disable ALL protections" danger switch): sets `BYPASS_MODE` for
+  that vhost only and **persists** across restarts (deliberate policy via
+  `vhost_set`); other vhosts unaffected; the global bypass still overrides
+  everywhere. Dashboard labels clarified to distinguish the two scopes.
+- **Health-score block-ratio query crashed on Postgres/Timescale.** The inline
+  last-hour aggregation `SELECT reason, COUNT(*) FROM events WHERE ts >= ?` in
+  `health_score` ran through `open_conn()` (a PG wrapper on the Postgres
+  backend) but compared the `timestamptz` `events.ts` column against a raw epoch
+  float → `operator does not exist: timestamp with time zone >= double
+  precision`. SQLite coerces silently so it only showed on PG: the error was
+  swallowed by `except: pass` (block-ratio always read "low traffic") **and**
+  spammed the Timescale error log on every dashboard refresh. Now backend-aware
+  — `to_timestamp(?)` on Postgres, plain float compare on SQLite (matching the
+  existing `db/postgres.py` readers). Pre-existing latent bug, not introduced
+  this release.
+
+### Security
+
+- **SSRF guard for UPSTREAM hot-reload** — new `_upstream_safe_to_reload()`
+  rejects non-http(s)/schemeless/over-long URLs and hosts resolving to private/
+  loopback/link-local/metadata ranges (built on `_ssrf_guard_url`);
+  `ALLOW_PRIVATE_UPSTREAM` bypasses for trusted internal deployments.
+- **Host-header reflection guard** — when `ALLOWED_HOSTS` is set, an unlisted
+  (attacker-controlled) `Host` is no longer reflected into the rewritten
+  `Location`; the gateway falls back to the upstream netloc (open-redirect /
+  cache-poisoning fix).
+- **Defence-in-depth hardening** (post-review, from the secure code review's
+  low-severity findings): the SSRF guard now unwraps **NAT64** (`64:ff9b::/96`)
+  addresses so a NAT64 literal can't smuggle a private/loopback IPv4;
+  `_verify_id_token` requires a **concrete `kid` match** (a kid-less token no
+  longer matches a key-less JWK entry); `_fetch_jwks` **refuses a non-TLS JWKS
+  URL** (loopback exempt) to block plaintext key-injection; per-vhost
+  `RISK_OVERRIDES` weights are **clamped to `[0, 10000]`** (negative/absurd
+  values rejected).
+
+### Tests
+
+- Implemented features turn green: `test_oidc` (73), `test_v1811_oidc_idtoken_verify`
+  (20), `test_pentest_probes` (38), `test_login_csp_nonce` (3),
+  `test_interaction_probe` (52), `test_audit_trail` (60).
+- Aligned stale tests to the shipped contract (documented in-test):
+  `test_h4_pg_backend_switch` os._exit/`_startup_postgres_schema` (1.8.7 hot-swap
+  → 1.9.0 restart-based switch); `test_audit_trail` pg `gw_audit_add` (op-ladder
+  → A4 `_PG_OP_HANDLERS` registry); `test_integration` location-rewrite pinned
+  `ALLOWED_HOSTS=∅` (immune to cross-test leakage under the new host guard).
+
+
+## [1.9.2] — 2026-06-10 — per-vhost ban scope
+
+### Added
+
+- **`BAN_SCOPE` knob** (`global` default / `vhost`) — controls ban
+  blast-radius. `global` (default, backward-compatible): a behaviour-earned
+  ban locks the identity/IP out across all vhosts. `vhost`: the ban applies
+  only to the vhost where the bad behaviour was observed; the same identity
+  can still use other vhosts. Hot-reloadable AND per-vhost overridable (set
+  per hostname in the `VHOSTS` JSON), so one gateway can run mixed policy.
+
+### Changed
+
+- **New `ip_bans_vhost` table** (composite PK `(ip, vhost)`) holds vhost-scoped
+  bans; legacy `ip_bans` untouched (additive — no PK rebuild, no migration
+  step, no downtime, safe rollback). `IpState.banned_until_by_vhost` carries
+  the in-memory per-vhost expiry, rehydrated on boot (`vhost_bans_rehydrated`).
+  New dispatch ops `ip_ban_vhost` / `ip_ban_vhost_del` (M11 arity 5/2,
+  golden-SQL frozen). `PG_SCHEMA_VERSION 1→2` (additive; A5 tolerates ±1 so a
+  rollback to 1.9.1 ignores the new table). Global bans always win;
+  `BAN_SCOPE=vhost` only ADDS per-vhost isolation for new bans.
+
+### Fixed
+
+- **Host allowlist (Layer-0) now exempts admin paths.** With `VHOSTS`
+  configured (implicit-vhost-allowlist branch on), an admin request via the
+  server IP / localhost was silently decoyed as `host-not-allowed`, locking
+  the operator out of the dashboard unless they hit an exact vhost hostname.
+  Admin paths are already IP-allowlist + session gated, so Host matching adds
+  nothing there; now exempt (same pattern as the iter-10 method gate).
+- **iter-11b — per-vhost risk accumulation (TRUE isolation).** `BAN_SCOPE=vhost`
+  scoped the ban *storage* per-vhost but the `risk_score` was still global, so
+  an identity that built up risk on vhost A was banned on vhost B the moment it
+  touched it (carry-over). Risk now accumulates per-vhost
+  (`IpState.risk_by_vhost`, decays in lockstep) and the threshold is evaluated
+  against the per-vhost score, so behaviour on one vhost can no longer ban the
+  identity on another it has not abused. Verified live (attack jtsl → jtsl
+  banned, pt4 untouched stays `200`) and by controlled unit test (global score
+  424, pt4 per-vhost score 24 < 50 → pt4 free; pt4 still bans on its own 56≥50).
+- **`unban_endpoint` full scrub restored + extended.** The single-target unban
+  cleared only `risk_score`/`banned_until`, not the risk breakdown — a leftover
+  score could re-ban the identity on its next request (the bulk endpoint already
+  scrubbed fully; the two are now symmetric). Both unban paths additionally
+  clear the iter-11b per-vhost maps (`risk_by_vhost`, `banned_until_by_vhost`)
+  and DELETE matching `ip_bans_vhost` rows, so an Allow cannot leave a
+  vhost-scoped ban behind.
+
+### Completed dead-knob features (consumers were never wired in shipped 1.9.2)
+
+Three knobs/UI features were exposed (config + `_VHOST_COERCE` + dashboard) but
+their server-side consumers were missing — setting them was a silent no-op.
+Auditing the test suite surfaced ~57 red specs for them; all now wired and green.
+
+- **`RISK_OVERRIDES` (per-vhost risk-weight overrides) — now functional.**
+  `protect()` activates the matched vhost's `RISK_OVERRIDES` dict (signal →
+  weight) via a task-scoped `scoring._vhost_risk_ctx` ContextVar;
+  `update_risk_and_maybe_ban()` prefers the override weight over the global
+  `RISK_WEIGHTS` one (a `0` override suppresses the signal on that vhost). New
+  `vhost._to_risk_overrides` coercer. Lets an operator tune signal sensitivity
+  per hostname (e.g. silence `ua-non-browser` on an internal API vhost) with no
+  rebuild. ContextVar is task-scoped, so concurrent vhosts never cross-talk.
+- **`ALLOW_BYPASS_SECS` (operator-Allow grace window) — now functional.**
+  When an admin clicks Allow/Unban, both `unban_endpoint` and
+  `bulk_unban_endpoint` stamp `bypass_until = monotonic()+ALLOW_BYPASS_SECS` on
+  the cleared identity (0 disables). `protect()` honours it: while in grace the
+  heuristic detector pipeline is skipped (recorded `operator-allowed`) so a
+  freshly-allowed visitor isn't instantly re-banned by residual signals.
+  Operator-IP (`ADMIN_ALLOWED_IPS`) traffic to non-admin paths is likewise
+  never scored. `bypass_secs` exposed in `/metrics` clients + the unban
+  response. Unban auth unified across GET+POST (the GET Allow path was
+  reachable unauthenticated); both unban paths now reject a supplied-but-invalid
+  `X-CSRF-Token` (defence-in-depth atop the SameSite cookie + admin-IP gate);
+  `manual_unban` audit slog emitted.
+- **Risk-breakdown control enrichment — server side now emitted.** The scoring
+  endpoint returns `knob_state` (per-control `{on,kind,display}`, classified
+  bool/num/list), `knob_page` (controls-vs-settings deep-link target), and
+  `signal_meta` (`{weight,tier,desc}` per reason, covering synthetic reasons).
+  `admin-ip-blocked` now resolves to its real control `ADMIN_ALLOWED_IPS`;
+  synthetic reasons (`chal-required`, `pow-required`, `admin-probe`,
+  `operator-self`, `admin-ip-blocked`, `banned-silent`) gained descriptions.
+  The dashboards already consumed these fields.
+
+### Tests
+
+- `tests/test_v192_iter11_ban_scope.py` — 24 tests (knob registration both
+  registries, validator boundaries, dispatch ops arity/handlers/dual-write/
+  golden, schema both backends + PG_SCHEMA_VERSION==2 + legacy-ip_bans
+  invariant, `check_ip_ban_vhost` functional incl. expired + cross-vhost
+  isolation, ban-logic wiring, global-default backward-compat; **iter-11b**:
+  `risk_by_vhost` field + per-vhost `_eval_score`, risk-does-not-carry-across-
+  vhosts, per-vhost detection still bans on its own crossing).
+- Version-pinned sidebar-brand-ver tests rewritten to read `config.GW_VERSION`
+  dynamically — never goes stale on a bump again.
+- `test_import_postgres_dsn_applied` aligned with F14 redaction (asserts the
+  masked DSN in `/config` state, not the raw secret).
+
+### Validation
+
+- Live E2E (2 vhosts, same IP): `BAN_SCOPE=vhost` → banned on `shop.test`
+  (reason `ip-ban`), free on `api.test`; `global` default → vhost table
+  ignored. Per-suite sweep green; Bandit High 0, Semgrep `p/python` 0/0, ruff
+  blocking 0 new.
+
+---
+
+## [1.9.1] — 2026-06-06 — iter-10 internal pentest remediation
+
+### Security fixes (closes 7 internal pentest findings)
+
+- **LIVE-2 (HIGH)** — `POSTGRES_DSN` was returned in plaintext through
+  `GET /secured/config`, defeating the iter-7 Fernet-at-rest migration.
+  `_read_hot_reload_state()` now routes the value through a new
+  `_redact_state_value()` that mirrors `db.cli_helpers.mask_dsn`, so
+  the dashboard sees `postgresql://agw:****@host:5432/db` while the
+  in-memory global stays raw for connection use.
+- **LIVE-3 (MED)** — `POST /secured/config` (the all-knobs hot-reload
+  endpoint) now requires `X-CSRF-Token`. Previously the endpoint was
+  role-gated only; defence-in-depth pierced even though `SameSite=Strict`
+  blocked classical cross-origin CSRF.
+- **LIVE-4 (MED)** — `POST /secured/ban` now requires CSRF on non-safe
+  methods. Closes the symmetric gap on the ban surface.
+- **LIVE-5 (LOW)** — `_csrf_token_valid()` signature extended with
+  `require_for_safe: bool = False` kwarg (non-breaking default). Fixes
+  the `GET /secured/settings-export?include_secrets=1` TypeError 500 →
+  now returns a valid ZIP when the CSRF token header is presented.
+- **LIVE-1/6 (MED)** — `db_load_admin_ips` (and the OIDC user-
+  provisioning path in `admin/oidc.py`) used SQLite-only
+  `INSERT OR IGNORE`, so PG-only mode silently dropped persistence.
+  Both sites now branch on `active_backend()` and emit
+  `INSERT … ON CONFLICT … DO NOTHING` on PG.
+- **LIVE-7 (LOW)** — Server-side `_strip_html_brackets()` neutralises
+  raw `<`/`>` in operator free-text fields (`admin_ips.note`,
+  `admin_ips.description`, `ban?reason=…`) before they hit the DB.
+- **LIVE-8 (INFO)** — `/secured/ban?ip=…` now validates the IP via
+  `ipaddress.ip_address()` and rejects non-IP strings with 400.
+
+### Dependency bumps (CVE remediation)
+
+- `aiohttp 3.13.5 → 3.14.0` to clear CVE-2026-34993 + CVE-2026-47265
+  (both MEDIUM, fixed upstream in 3.14.0). All three image arches
+  rebuilt; Trivy now reports 0 CRITICAL / 0 HIGH / 0 MEDIUM on every
+  arch.
+
+### Code quality
+
+- B904 fix on `admin/auth.py`'s ADMIN_ALLOWED_IPS boot guard
+  (`raise SystemExit(2) from _e`).
+- F401 cleanup on `admin/oidc.py` (unused `sqlite3` + `DB_PATH` imports
+  obsolete after the backend-branched `open_conn()` path).
+
+### Tests
+
+- **`tests/test_v191_pentest_fixes.py`** — 17 new regression tests
+  covering all seven LIVE findings, plus a forward-looking guard that
+  fails CI if any new `INSERT OR …` SQLite-only DML lands outside the
+  documented backend-branched whitelist.
+- `GW-Tests-Full.md` catalogue updated: 6 previously-missing v19x
+  sections added with per-file totals.
+
+### Validation
+
+See `validation/1.9.1.md` → **Re-validation — iter-10**.
+
+---
+
+## [1.9.1] — 2026-06-05
+
+Post-1.9.0 hardening + documentation. No new features; security +
+operator-facing polish.
+
+### Security
+
+- **CSV-injection fix** in `dashboards/siem.py` audit-events export.
+  `_csv_safe()` prepends a single-quote on cells starting with formula
+  chars (`=`, `+`, `-`, `@`, `\t`, `\r`) so opening the export in
+  Excel/LibreOffice/Numbers renders them as text instead of evaluating.
+  Attacker who can write to `audit_events.detail` (via authenticated
+  admin paths) could otherwise inject `=HYPERLINK(...)` that fires on
+  operator download. Semgrep p/python now reports 0 findings.
+- **Propagator hardening** — `_PROPAGATE_NEVER` no longer references
+  `__path__` (proxy.py is a module, not a package — the dead-entries
+  lint guard would have flagged it as a regression). Other dangerous
+  builtins (open / exec / eval / globals / setattr / getattr / etc.)
+  still gated.
+
+### Documentation
+
+- **MANUAL §18 "Postgres / single-DB mode"** — new operator-facing
+  guide (~120 lines): backend auto-selection table, boot-guard exit
+  codes (2/3/4), `POSTGRES_BOOT_MAX_ATTEMPTS` / `POSTGRES_BOOT_BACKOFF_S`
+  / `OFFLINE_BG_TASKS` env vars, upgrade-banner + `.pg_migrated` marker
+  semantics (including how to re-trigger the banner by deleting the
+  marker), `db.import` / `db.export` CLI tools with arg examples + exit
+  codes, `pg_schema_versions` operator query, downgrade procedure.
+- **README** — 3 cross-reference rows added pointing to MANUAL §18.
+- **GW-Tests-Full.md** — 11 new test-file entries (mine + iter-4 work).
+  Totals updated: 156 → 167 files, ~7,114 → ~7,430 functions. Every
+  section now carries the mandatory `**Total: N tests**` line.
+
+### Tests
+
+- 177 PG-migration QA tests pass on 1.9.1 (22 static + 155 dynamic).
+- 38 live-PG E2E pass (with a PG container).
+- 0 ruff findings in migration files, 0 bandit High/Medium on proxy.py,
+  0 semgrep findings (after CSV-injection fix), 0 Trivy HIGH/CRITICAL
+  on all 3 arches.
+
+### Validation
+
+- Multi-arch images rebuilt and pushed:
+  - amd64 / arm64 / arm/v7 — Harbor tag `1.9.1`
+
+### Iter-5 — dynamic DB-test fixes (rolled into the 1.9.1 push)
+
+Live PG-mode round-trip on a real `agw-pg` + `agw-gw` rig surfaced 10
+source defects the static suites missed:
+
+- **UI-1** — `/secured/honeypots` returned 502. Dashboard file existed
+  but route + module-import were missing. Added route entries to
+  `proxy.py` and the `dashboards.honeypots` import to
+  `dashboards/__init__.py`.
+- **UI-2** — `chart.umd.min.js` + `purify.min.js` decoy-404'd
+  unauthenticated, breaking chart rendering on the login page and any
+  session-refresh window. Added both to `_ADMIN_PUBLIC_SUBPATHS`.
+- **B1** — `db_test_endpoint` / `db_switch_endpoint` now propagate the
+  candidate DSN to `db.postgres.POSTGRES_DSN` around the probe call —
+  the probe reads its OWN module's globals, not the caller's.
+- **B2** — `on_startup` reordered: `db_load_secrets()` runs BEFORE the
+  `if POSTGRES_DSN_NOW:` PG-init block. After a `/__db-switch` restart,
+  the env var is empty + the persisted DSN lives in `secrets_kv`; the
+  prior ordering silently skipped A5 + `db_init_postgres` + F12
+  boot-resume.
+- **B3** — `_resume_pending_bg_migration` reads the F12 marker via
+  direct `sqlite3.connect(DB_PATH)`. `open_conn()` would route to PG
+  once DSN is loaded, missing the marker that lives in SQLite.
+- **B4** — `_runner()` clears the marker via direct SQLite DELETE
+  (writer queue's `del_config` op routed to PG).
+- **B5** — `db_switch_endpoint` writes `DB_BACKEND` to SQLite SYNC via
+  direct `sqlite3` + `commit()` before `os._exit(0)`. The previous
+  `asyncio.sleep(0.5)` raced the exit, leaving the post-restart
+  gateway on the OLD backend.
+- **B6** — F12 marker write also via direct SQLite for the same reason.
+- **B7** — `admin/users.py:213` queued `user_session_create` with a
+  7-tuple; M11's runtime arity guard caught it and refused the mirror
+  write. Now an 8-tuple (trailing `csrf_nonce`).
+- **Bonus** — `db_migration_status_endpoint`, `db_vacuum_history_endpoint`,
+  `_vacuum_scheduler_loop`, `_DB_VACUUM_LOCK` re-added to
+  `core/proxy_handler.py` (proxy.py route table referenced them).
+
+#### Iter-5 QA additions
+
+- `tests/test_v190_dyntest_fixes.py` — **17 tests** freezing every
+  iter-5 fix (UI-1, UI-2, B1–B7, plus 4 endpoint-exists guards). All
+  pass. Full release-cycle suite now **1144 pass / 0 fail**.
+
+#### Iter-5 live verification
+
+- `/secured/honeypots` → HTTP 200 (was 502)
+- `/secured/honeypots-data` → HTTP 200, complete JSON shape
+- `/assets/chart.umd.min.js` unauth → HTTP 200, 205 KB (was 404 decoy)
+- `/assets/purify.min.js` unauth → HTTP 200, 25 KB (was 404 decoy)
+- `/secured/service-data` → 60 history buckets, 23/34 non-zero fields,
+  `pg_available:True`, `is_live:True`
+
+### Validation (iter-5 re-tag of 1.9.1)
+
+- Multi-arch images rebuilt and re-pushed under the 1.9.1 tag:
+  - amd64 `sha256:d812fbf613584398537e60463d08d1283dbf04139a19f1af994aab5fc13bbcb4`
+  - arm64 `sha256:a9f1f261e15e083a8a629d3e86ceb38247a1b9a5c17f1993422818ea8274516b`
+  - arm/v7 `sha256:c01db3b7e639dcc0f3f99487a6dce93749f9ac3d6488c23e3a5fe5600f8ce7b7`
+  - **manifest list** `sha256:009fd95a0351ef5c2651be45b1534a97ef32a39170b1b290922a9ab8b01756e7`
+- 0 CRITICAL / 0 HIGH (Trivy, all 3 arches)
+- 0 Bandit / Semgrep findings on iter-4/5 surface
+- Ruff blocking (`F841/F401/S314/B904`): clean
+
+---
+
+## [1.9.0] — 2026-06-05 — Iteration 4 (same-version)
+
+PG-only single-DB contract. Cumulative review-fix release across four
+iterations against the 1.9.0 line. Source / Harbor tag held at 1.9.0 for
+all iterations; this entry covers iteration-4's surface.
+
+### Security
+
+- **F11** — `db_switch_endpoint` audit row records `bg_scheduled`,
+  `full_migrate_requested`, `cutoff_ts`. Durable forensic anchor for the
+  historical-events copy (slog stream is lost on `os._exit(0)`).
+- **F12** — historical `_full_migrate_background` migration deferred to
+  the post-restart boot hook (`proxy._resume_pending_bg_migration`). Removes
+  the race where the executor was killed mid-COPY by the 1-second
+  `os._exit(0)`. Handler now persists a `pending_bg_migration` config_kv
+  marker; on_startup claims via `_try_claim_bg_migration` and clears the
+  marker after the COPY completes.
+- **F13** — `_role_denied` and `_require_csrf` return only
+  `{"error":"forbidden"}`; forensic detail (role, required-roles, path,
+  actor) goes to slog. Closes the info-leak that let a low-privilege user
+  enumerate the authorization model.
+- **F14** — `POSTGRES_DSN` persisted to `secrets_kv` (never returned by
+  `GET /__config`) and wrapped in Fernet keyed off a domain-separated
+  derive of `SESSION_KEY` (`enc:v1:` prefix). Legacy plaintext rows
+  decrypt as-is until the next `/__db-switch` re-persists ciphertext.
+- **F15** — `POSTGRES_DSN_ALLOWED_HOSTS` operator-hardening callout in
+  `validation/1.9.0.md`; F2 URL/probe validation still applies when unset.
+- **A5** — `check_pg_schema_version()` runs BEFORE `db_init_postgres` at
+  boot, reads `MAX(pg_schema_versions.version)`, refuses to start when
+  `abs(diff) > 1` major version. Pure read; no DB mutation.
+- **M10** — `_pg_mirror_kv` documents the `InFailedSqlTransaction` cascade
+  contract for callers passing `_conn=`.
+- **TC1** — runtime guard rejects `_conn=` with `autocommit=True` at the
+  dispatch boundary; prevents silent loss of M6 transaction semantics.
+
+### Architecture
+
+- **A4** — `_pg_dispatch_op` refactored from a 365-line if/elif ladder
+  into a registry pattern (`_PG_OP_HANDLERS` dict, 40 entries × tiny
+  `_h_<op>(cur, args)` handler functions). Lifted `_USER_MUTABLE` and
+  `_GW_MUTABLE` whitelists to module-level frozensets. New dispatcher is
+  ~30 lines: arity check → registry lookup → call. **Zero SQL drift** —
+  verified by the golden-SQL harness.
+- **Golden-SQL harness** — `tests/test_pg_dispatch_sql_golden.py` +
+  `tests/golden/pg_dispatch_sql.json` (40 ops frozen). Captures every
+  `cur.execute / executemany` per op via a capturing cursor; diffs vs
+  the checked-in golden. Catches accidental SQL changes (including
+  refactor regressions) at PR time.
+- **L8** — `db/cli_helpers.py:mask_dsn` shared by `db.export` and
+  `db.import` (was two duplicate `_mask_dsn` impls).
+- **L10** — `_PgCursorWrapper.execute()` and `_PgConnWrapper.execute()`
+  carry symmetric L10 return-contract docstrings; both produce
+  fetchone-able cursor objects.
+- **L11-strengthen** — when `proxy.py` is loaded via symlink
+  (lex_dir != real_dir), `_PROJECT_ROOTS` must contain BOTH directories
+  — test enforces it; skips on non-symlink installs.
+
+### Hygiene
+
+- **M9** — removed unused `Callable, Iterable` imports from `db/import.py`.
+- **L9** — hoisted `import os as _os_pg` out of `on_startup`; reuses
+  module-level `_os_proxy`.
+- **TC3** — new AST-based unused-imports lint covers `db/export.py`,
+  `db/import.py`, `db/cli_helpers.py`.
+- Ruff hygiene — `B904` `from None` on the M11 arity check; unused
+  `InvalidToken` import dropped from `db/sqlite.py`.
+
+### Tests
+
+- `tests/test_v190_iteration4_fixes.py` — 34 tests for F11/F12/F13/F14/F15
+  + L10/TC1/TC3 + A4 + A5 (registry + decision-matrix coverage).
+- `tests/test_pg_dispatch_sql_golden.py` — 5 tests; locks SQL+params for
+  every op against `tests/golden/pg_dispatch_sql.json` (40 ops captured).
+- Updated F10 tests for the post-F12 contract (executor moved to boot).
+
+### Validation
+
+108 release-cycle tests pass (iter-4 + iter-3 + iter-1 + 1.8.15). 145
+v14/v142/v173/control_regression tests pass. Bandit clean on `proxy.py`
+and `db/postgres.py`. Semgrep `p/python` 0/0 on the iter-4 surface. Ruff
+blocking categories (`F841, F401, S314, B904`) clean across all touched
+modules. Golden-SQL harness confirms zero dispatch drift for the A4
+registry refactor.
+
+---
+
+## [1.8.15] — 2026-06-04
+
+Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 line. Source carried `GW_VERSION = AntiBotWaf_GW_1.8.15` partway through; Harbor tag bumped to match.
+
+### Performance
+
+- **SQLite tuning** — single `_sqlite_connect()` helper consolidates all 12 connect sites with WAL + `synchronous=NORMAL` + `wal_autocheckpoint=10000` + `temp_store=MEMORY` + `mmap_size=256MB`. Cuts INSERT+COMMIT on slow-fsync disks (pt4.tech root cause).
+- **Quick-wins #2–#8/#11/#12** — `json.dumps` outside `state_lock`, JA4H short-circuit + lock-free write, decay skip when score is 0, LLM heuristic skips static assets, per-request `_vhost` cache, conditional LRU promotion (`_should_promote()`), per-request `_ua_of()` cache (38 callsites), `_is_static_asset_path()` single source.
+
+### Resilience
+
+- **Postgres auth-failure resilience** (iter-17 → iter-19). GW never blocks on Postgres being down or rejecting credentials: `_is_pg_auth_failure()` detector + `_pg_auth_failure_hint()` (placeholder-pwd) + `_disable_postgres_for_process()` flips `_postgres_available=False` and reverts `DB_BACKEND` to sqlite. Service dashboard banner surfaces the `ALTER USER` recovery command. `_postgres_load_module()` honest (install-state only).
+- **Upstream timeout knobs** — `UPSTREAM_TIMEOUT_SECS=10`, `UPSTREAM_CONNECT_TIMEOUT_SECS=3`; per-vhost + Thresholds card.
+- **Circuit-breaker knobs** — `CIRCUIT_FAIL_THRESHOLD/OPEN_SECS/HALF_OPEN_MAX` hot-reload + per-vhost.
+
+### Operator UX
+
+- **`ALLOWED_METHODS` default widened** to `GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS` so REST APIs work out of the box. Tighten via env or per-vhost.
+- **Per-vhost `ALLOWED_METHODS` now actually applied** — runtime checks read via `vc("ALLOWED_METHODS")` instead of the bare module global (was silent contract violation since iter-X).
+- **Operator Allow grace window** — `ALLOW_BYPASS_SECS=300` + `IpState.bypass_until`; admin Allow grants scoring bypass for the window.
+- **BLOCK_RESPONSE_MODE knob** — `"homepage"` (default) vs `"404"` decoy response.
+- **Identity-popover Unban** — Unban button added to Identity popover in both `main.html` and `agents.html`.
+- **Suspicious + Live Feed + Clients filter bars** — IP/UA/Domain search + sortable columns + UPSTREAM DOWN pulse pill.
+- **Domain column persistence (iter-21)** — `last_vhost` now persisted in `clients` table; survives GW restart instead of resetting to "—".
+
+### Security review fix (iter-22)
+
+- **F-1: `last_vhost` length cap** — capped at 120 chars (matches `last_path` / `last_user_agent`). Attacker-supplied Host headers up to 8 KiB would otherwise persist into memory + disk + dashboard JSON. CWE-400 mitigation.
+
+### Tests
+
+- 152 → 153 test files. ~100+ new QA tests across `test_v1815_*` family.
+
+---
+
+## [1.8.14 iter-20] — 2026-06-03
+
+### Changed
+
+- **Default `ALLOWED_METHODS` widened to include REST verbs** (`core/proxy_handler.py`). The original F3 hardening set the default to `GET,HEAD,POST,OPTIONS`, which silent-decoyed PATCH/PUT/DELETE — breaking every REST-API upstream out of the box. Default is now `GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS`. Operators who proxy a static-only site can tighten via env (`ALLOWED_METHODS=GET,HEAD,POST,OPTIONS`). Risk-side controls (rate-limit, score, ban) are unchanged — they already cover all methods.
+
+---
+
+## [1.8.14 iter-19] — 2026-06-03
+
+### Fixed
+
+- **`_postgres_load_module()` no longer reports library availability as runtime state** (`db/postgres.py`). iter-18's `if _PG_AUTH_FAILED: return None` made the dashboard's "Switch backend → Postgres" path emit the misleading `psycopg not installed in this image` (psycopg WAS installed; only the auth-failure flag was set). iter-19 reverts the loader to honest install-state reporting. Runtime suppression of post-failure connect attempts stays at the connect layer: `_PgPool._connect()` short-circuits on `_PG_AUTH_FAILED`, and the global `_postgres_available=False` flip keeps record()/sampler/svc-metrics/readers on the SQLite path.
+
+### Tests
+
+- Updated `test_postgres_load_module_reports_install_only` to assert the function reports install state ONLY (not runtime state). 14/14 QA suite green.
+
+---
+
+## [1.8.14 iter-18] — 2026-06-03
+
+### Fixed
+
+- **Gateway auto-reverts to SQLite if Postgres can't connect at startup** (`db/postgres.py`). User report: even with iter-17's auth-failure short-circuit, the gateway still left `_postgres_available=True` and `DB_BACKEND=postgres` after a non-auth init failure — the svc-metrics sampler (5 s) and every event-write kept re-opening doomed connections, filling the TimescaleDB log with `password authentication failed` lines indefinitely. Now:
+  - `_disable_postgres_for_process(reason)` helper flips `_postgres_available=False` across every sys.modules-loaded module AND coerces `DB_BACKEND` back to `"sqlite"` on `core.proxy_handler`. Idempotent; reset only by process restart.
+  - Called from BOTH branches: auth-failure (immediate short-circuit) and generic-failure giveup (after the 12-attempt × backoff window). Either way, the gateway transitions cleanly to SQLite for the remainder of the process.
+  - `_postgres_load_module()` now returns `None` when `_PG_AUTH_FAILED` is set — every ad-hoc `pg.connect()` caller (12 sites) already guards on `if pg is None: skip`, so a single check at the module loader cascades through the whole module.
+  - `_PgPool._connect()` refuses to attempt new connections after auth failure with a clear `RuntimeError`.
+  - New `[db-pg] active backend auto-reverted to SQLite` warning log makes the transition visible.
+
+### Tests
+
+- **3 new QA tests** in `test_v1815_pg_auth_resilience_qa.py` (total 14): `_disable_postgres_for_process` helper, `_postgres_load_module` short-circuit, `_PgPool._connect` gate.
+
+---
+
+## [1.8.14 iter-17] — 2026-06-03
+
+### Fixed
+
+- **Gateway must never fail to start when Postgres is down or has auth issues** (`db/postgres.py`, `dashboards/service_metrics.py`, `dashboards/service.html`). Previously `db_init_postgres` burned the full 12-attempt × backoff window on a wrong-password retry that would never recover (a classic Postgres-volume-vs-compose-password drift looks identical to "Postgres is down" but is unrecoverable from a retry). The gateway is also at risk of looking "stuck" during this window. Now:
+  - `_is_pg_auth_failure()` detects auth signatures (`password authentication failed`, `no password supplied`, `no pg_hba.conf entry`, `ident authentication failed`, `InvalidPassword`, `InvalidAuthorizationSpecification`) and the retry loop short-circuits immediately.
+  - One actionable log line emitted with the exact `ALTER USER <user> WITH PASSWORD '<value-from-docker-compose-or-DSN>';` recovery command. Password never logged verbatim — only the placeholder.
+  - New `_PG_AUTH_FAILED` / `_PG_AUTH_FAILED_TS` / `_PG_AUTH_FAILED_HINT` module-level state surfaced via `/secured/service-data` → rendered as a red banner at the top of the Service dashboard with the recovery command. Banner uses `textContent` (XSS-safe).
+  - `db_init_postgres` returns `False` on auth failure — never raises — so `on_startup` proceeds with the SQLite backend. Gateway stays UP.
+
+### Tests
+
+- **11 new QA tests** in `test_v1815_pg_auth_resilience_qa.py` covering: detector signatures, hint actionability + password-leak safety, retry short-circuit, `False`-not-raise contract, `on_startup` non-fatal handling, service-data surface, banner DOM safety, default-hidden state.
+
+### Validation
+
+- See `validation/1.8.14.md § Iter-17` for full per-stage table + R5 STRIDE register entry (banner XSS surface — controlled via `textContent`, not `innerHTML`).
+
+---
+
+## [1.8.14 iter-16] — 2026-06-03
+
+### Added
+
+- **BLOCK_RESPONSE_MODE knob** (`config.py`, `core/proxy_handler.py`): controls decoy response mode — `"homepage"` (default, returns vhost `/`) or `"404"` (static 404). Per-vhost override; hot-reload.
+- **Operator Allow grace window** (`ALLOW_BYPASS_SECS=300`, `state.py::IpState.bypass_until`): admin Allow grants a 5-minute scoring bypass; `protect()` records `reason="operator-allowed"` and short-circuits.
+- **Upstream timeout knobs** (`UPSTREAM_TIMEOUT_SECS=10`, `UPSTREAM_CONNECT_TIMEOUT_SECS=3`): hot-reload + per-vhost; surfaces in Thresholds card.
+- **Circuit-breaker knobs** (`CIRCUIT_FAIL_THRESHOLD`, `CIRCUIT_OPEN_SECS`, `CIRCUIT_HALF_OPEN_MAX`): hot-reload + per-vhost; surfaces in Thresholds card.
+- **Identity-popover Unban** (`dashboards/main.html`, `dashboards/agents.html`): Unban button added to Identity popover (was only on Risk breakdown).
+- **Suspicious + Live Feed + Clients filter bars**: IP/UA/Domain search inputs + sortable columns + UPSTREAM DOWN pulse pill.
+
+### Fixed
+
+- **pt4.tech slowness** — SQLite 802 MB DB on slow-fsync disk (57 ms/4 KB) caused 76 ms `INSERT+COMMIT`. New `db/sqlite.py::_sqlite_connect()` helper consolidates all 12 `sqlite3.connect()` call sites with `WAL + synchronous=NORMAL + wal_autocheckpoint=10000 + temp_store=MEMORY + mmap_size=256MB + cache_size=-20000`.
+- **Self-ban banner text**: distinguishes admin IP with session vs without.
+- **colspan=13 → 14** in `agents.html` (Suspicious table: 12 data + expand + bulk-chk).
+- **`_migPollTimer` leak**: pushed to `_timers` array + cleared in `beforeunload`.
+- **dead `import re`** in `helpers.py` (ruff F401 cleanup).
+
+### Performance
+
+- **Quick-wins #2–#8, #11, #12**: `json.dumps` moved outside `state_lock`; JA4H short-circuit + lock-free write; risk-decay skip when `risk_score == 0`; LLM heuristic skips static assets (`_is_static_asset_path()`); per-request `_vhost` cache; conditional LRU promotion via `_should_promote()` (50 % threshold); per-request `_ua_of(request)` cache (38 callsites).
+
+### Tests
+
+- **89 new QA tests** across 6 files (`test_v1815_{block_response_mode,vhost_policy_summary,allow_bypass,sqlite_tuning,id_popover_unban,perf_quick_wins}_qa.py`) + `test_v1814_admin_bypass_qa.py`. 18 prior 1.8.14/1.8.15 test files added to `GW-Tests-Full.md` (comm gap closed).
+
+### Validation
+
+- Stage 9 ruff blocking categories: 0 (F841/F401/S314/B904 all 0 after `import re` removal). Bandit `-ll`: 0 H/C. Semgrep `p/python`: 0 findings. Trivy ×3 arches: 0 CRITICAL/HIGH each. DAST: 24/25 (1 known by-design — `/live` 404 loopback-only).
+- Multi-arch manifest pushed to the release registry (`<registry>/antibotappsecgw:1.8.14`) → `sha256:1d205dd2d2a67093dfaa9d15d395e7b16650e3c8381a3ef8cd8905d461fbb7e2` (amd64+arm64+armv7).
+- See `validation/1.8.14.md § Iter-16` for full per-stage table and R4 STRIDE register entry (synchronous=NORMAL tradeoff accepted).
+
+---
+
+## [1.8.14] — 2026-05-25
+
+### Security
+
+- **T0-1 — Session absolute timeout** (`admin/users.py`, `config.py`): added `SESSION_ABSOLUTE_TIMEOUT` knob (default 8 h). `_session_verify` now checks `created_ts + SESSION_ABSOLUTE_TIMEOUT` against the current time; sessions that exceed the hard cap are rejected even when the sliding idle timeout has not expired. `created_ts` is persisted in `user_sessions` (already a DB column) and restored into `_SESSION_CACHE` on startup, so the cap survives process restarts.
+- **T0-2 — Per-session random CSRF nonce** (`admin/users.py`, `admin/auth.py`, `db/sqlite.py`): the CSRF token was previously derived as `HMAC(SESSION_KEY, sid)[:32]`, meaning key rotation (`/__rotate-keys`) silently invalidated every live session's CSRF protection. Each session now receives a `secrets.token_hex(16)` nonce at creation time, stored in `user_sessions.csrf_nonce` (new column, migration added). `_csrf_token_valid` reads the nonce from `_SESSION_CACHE`; pre-migration sessions without a stored nonce fall back to the HMAC derivation. `login_submit_endpoint` and `totp_verify_endpoint` updated to set the `agw_csrf` cookie from the stored nonce.
+- **T0-4 — OIDC state dict cap** (`admin/oidc.py`): `_OIDC_STATE` was unbounded — an automated login flood could grow it to exhaust memory. Added `_OIDC_STATE_MAX = 500`; `oidc_login_endpoint` purges expired states on each call and returns HTTP 503 `Retry-After: 30` when the cap is reached.
+- **T2-5 — eTLD+1 origin validation** (`core/proxy_handler.py`): `_origin_check_failed` previously used exact hostname matching (`host not in ALLOWED_HOSTS`), requiring operators to enumerate every subdomain. Changed to subdomain-aware check: `host.endswith("." + allowed_host)` is also accepted, so `sub.example.com` is allowed when `example.com` is in `ALLOWED_HOSTS`.
+
+### Added
+
+- **T1-1 — Upstream response latency tracking** (`core/proxy_handler.py`): rolling 500-sample deque `_upstream_latency_samples` records end-to-end upstream round-trip time (connection → last body byte). `/__metrics` now includes `upstream_latency: {p50_ms, p95_ms, sample_n, warn, warn_threshold_ms}`. New `UPSTREAM_LATENCY_WARN_MS` knob (default 2000 ms) triggers `warn: true` when p95 exceeds the threshold. No impact on the request path; append is O(1).
+- **T1-3 — Webhook delivery health counters** (`integrations/webhook.py`): `_WEBHOOK_LAST_SUCCESS_TS` and `_WEBHOOK_CONSECUTIVE_FAILURES` counters added. Updated on every delivery outcome in `_webhook_worker`. Exposed in `/__metrics` under `services.webhook: {configured, last_success_ts, consecutive_failures, circuit_open}` alongside the existing circuit-breaker state.
+- **T3-2 — Bulk unban UI** (`dashboards/agents.html`): checkbox column appears for banned rows; "Bulk actions" bar floats in when ≥ 1 box is checked. "Unban selected" calls `POST /secured/unban` per selected identity. "Select all" header checkbox and cancel button included.
+- **T3-3 — Ban → Logs drill-down** (`dashboards/agents.html`, `dashboards/main.html`): "View requests →" button added to the ban modal header. Click pre-populates `appsecgw.logs.prefs.v1` in `sessionStorage` with the banned IP as the `q` filter, then navigates to the Logs page — one-click pivot from ban to request history.
+
+### Configuration / Export — Full-backup surface (2026-05-29)
+
+- **F1 — Export now covers the full operator-curated surface** (`admin/settings.py`): prior to 1.8.14 the XML captured only `<knobs>`, `<admin_ips>`, and `<vhosts>`; a backup → reset → restore cycle silently dropped every operator-managed table. The exporter now emits eight additional sections: `<siem_alert_rules>`, `<dlp_patterns>`, `<signal_orders>` (LOCAL gw only — foreign gw_ids are meaningless on a restored instance), `<honey_fingerprints>` (most-recent 1000 to keep the archive under 1 MiB), `<gw_registry>`, `<gw_distribution>`, `<users>` (metadata only without `include_secrets`), and `<secrets>` (always-empty container without `include_secrets`). Each section is wrapped in an independent try/except so a missing table on a freshly-created DB cannot abort the whole export.
+- **F2 — `include_secrets` checkbox now honest** (`admin/settings.py`, `dashboards/settings.html`): `settings_export_endpoint` previously did `del include_secrets` at the top of `_settings_build_xml` and always forced it to `False`, so the operator-facing checkbox in the Settings dashboard was a lie. The endpoint now reads `?include_secrets=1` from the query string and threads it through; when set, the archive additionally serialises the `secrets_kv` plaintext, every `users.password_hash`, and the LOCAL gw row's HMAC `private_key`. Filename is suffixed `-with-secrets` and the UI tooltip + label updated to reflect what the box actually does. `slog`'s `config_exported` event records the `include_secrets` flag for auditability.
+- **F3 — Importer extended to restore every new section** (`admin/settings.py`): seven new dispatch arms applied directly to SQLite (atomic per row); summary JSON now reports `siem_rules_added`, `dlp_patterns_added`, `signal_orders_restored`, `honey_fps_restored`, `gw_registry_restored`, `gw_distribution_restored`, `users_restored`, and `secrets_restored` alongside the existing knob/admin-ip/vhost counters. Safe-by-default behaviour preserved: `users` uses `INSERT OR IGNORE` (an existing admin is never silently overwritten), `gw_registry` UPSERT `COALESCE`s the existing `private_key` so the live mesh secret is never clobbered, dedup keys for SIEM/DLP avoid duplicate rows on repeat-imports, and `signal_orders` are tied to the LOCAL `gw_id` regardless of what the archive carried.
+- **F4 — Two env-only knobs promoted to hot-reload**: `JA4H_DENY_LIST` and `ABUSEIPDB_CACHE_HOURS` are now in `_HOT_RELOAD_KNOBS`, so they ride the standard export lane and survive a restore. `JA4H_DENY_LIST`'s default type changed from `frozenset` to `set` in `config.py` so `_read_hot_reload_state`'s `isinstance(v, set)` branch picks it up consistently with the sibling `JA4_DENY_LIST`.
+
+### Tests (2026-05-29)
+
+- `tests/test_v1814_full_export_scope.py` — 12 tests covering the new export contract: endpoint honours `include_secrets`, no silent `del` of the param, all eleven sections emitted, summary counters present, LOCAL `private_key` protected on import, `users` uses `INSERT OR IGNORE`, integration probe against a fixture SQLite DB verifying that `include_secrets=False` strips password hashes / private keys / `secrets_kv` while `include_secrets=True` includes them, missing tables degrade gracefully, and both newly-promoted knobs are present in `_HOT_RELOAD_KNOBS`. `tests/test_critical.py::test_165` extended with test values for the two new knobs.
+- `tests/test_v1814_full_export_qa.py` — 12 QA regression guards for edge cases / invariants / UX traps the contract tests don't cover: `honey_fingerprints` 1000-row cap and most-recent ordering, `signal_orders` filtered to LOCAL `gw_id` (foreign gw rows stripped), peer `gw_registry` rows NEVER carry a `private_key` even with `include_secrets=True`, filename `-with-secrets` suffix only when secrets are honoured, `slog` records `include_secrets` flag for audit trail, the `settings.html` JS wires the checkbox into `?include_secrets=1`, `JA4H_DENY_LIST` default type is `set` not `frozenset`, repeated exports against the same DB produce identical section topology, unrecognised `?include_secrets=` values default to OFF (explicit truthy allow-list, no truthiness coercion), missing DB tables emit empty containers with no secret leakage, the importer wraps each new section in its own try/except so one bad row doesn't abort the rest, and both promoted knobs are wired as 2-tuples `(parser, validator)` in `_HOT_RELOAD_KNOBS`.
+
+### Security (post-release bypass hardening — 2026-05-27)
+
+- **B-04 — `agw_lc` lifecycle cookie HMAC** (`detection/cookie_lifecycle.py`): the `agw_lc` cookie was set to the static value `"1"`, allowing trivial static replay. Replaced with an HMAC-SHA256 token (`_make_lc_token(ip_tier)`) — 16-char hex, bound to the client's IP /24 tier and a 1-hour rolling window. `_verify_lc_token` accepts current and previous window (clock-skew tolerance). Static replay (`agw_lc=1`) now fails lifecycle verification.
+- **B-08 — Per-identity ghost-detection threshold jitter** (`state.py`): `IpState.cookie_ghost_threshold_jitter = random.randint(0, 2)` added at identity creation. `cookie_ghost_check` applies the jitter to both `COOKIE_GHOST_MIN_REQUESTS` and `COOKIE_GHOST_MISS_THRESHOLD`, making the exact request count at which ghost detection fires unpredictable per identity.
+- **B-01 — `sec-fetch-nav-absent` signal** (`config.py`, `core/proxy_handler.py`): Chrome/Edge `GET` requests with `text/html` in `Accept` but no `Sec-Fetch-Mode` header now score +20. Gated on `HEADER_COMPLETENESS_ENABLED`. Mitigates curl-impersonate and Playwright spoofing that omit Fetch metadata. Added to `SIGNAL_KNOB`, `SIGNAL_KNOB_JS`, `_REASON_METHOD`, `SIGNAL_LATENCY_HINTS`, `SIGNAL_LABELS`, and scoring endpoint `DESCRIPTIONS`.
+
+### Tests
+
+- `tests/test_v1814_security_hardening.py` — 30 new tests covering all T0/T1/T2/T3 changes: absolute timeout enforcement, CSRF nonce randomness and cache lookup, OIDC state cap, latency tracking structure, webhook health counters, eTLD+1 origin rules, and UI element presence for bulk unban and drill-down link.
+- `tests/test_v1814_bypass_hardening.py` — 21 new tests: HMAC lifecycle token (make/verify, static replay, wrong IP tier, window rollover), lifecycle script injection, per-identity ghost-threshold jitter (range, variance, effect on check timing), `sec-fetch-nav-absent` in RISK_WEIGHTS/SIGNAL_KNOB/SIGNAL_KNOB_JS.
+
+### Added (post-bypass-hardening)
+
+- **`PRESERVE_HOST` knob** (`config.py`, `core/proxy_handler.py`, `vhost.py`): new bool knob (default `False`) that — when enabled — forwards the client's original `Host`, `Origin`, and `Referer` headers to the upstream unchanged. Default `False` keeps the existing behaviour where the proxy rewrites these headers to the upstream's netloc (needed for TLS SNI and CORS on origin-strict backends). Enable only when the upstream routes by the public hostname (CDN-style, multi-tenant apps expecting the client hostname). Per-vhost configurable via `vhost_set` + `vc('PRESERVE_HOST')`; stored in `vhosts.json`; hot-reloadable via the Controls dashboard. `X-Forwarded-Host` is always set regardless of this knob (informational header for upstream). Registered in `_HOT_RELOAD_KNOBS`, `_VHOST_COERCE`, and `dashboards/vhost_policy.html KNOB_META`.
+
+### Tests (post-bypass-hardening)
+
+- `tests/test_v1814_signal_knob_hotreload_qa.py` — 19 tests: membership + parser, config default, `SIGNAL_KNOB` mapping, source-code gate presence and gate-off logic for all 5 new `_HOT_RELOAD_KNOBS` entries (`FEODO_ENABLED`, `CINS_ENABLED`, `URLHAUS_ENABLED`, `H2_SETTINGS_FP_ENABLED`, `JS_CONSISTENCY_ENABLED`).
+- `tests/test_v1814_preserve_host_qa.py` — 17 tests: `_HOT_RELOAD_KNOBS` registration + `_to_bool` parser, `config.PRESERVE_HOST` default, `_VHOST_COERCE` entry with string/bool coerce, HTTP path gate (`upstream_host and not vc('PRESERVE_HOST')`), WebSocket path gate + origin/referer guards, `X-Forwarded-Host` always-before-gate, per-vhost accept/persist/read-back.
+
+### Fixed (pre-existing, found during bypass hardening pipeline run)
+
+- **5 SIGNAL_KNOB knobs missing from `_HOT_RELOAD_KNOBS`** (`core/proxy_handler.py`): `FEODO_ENABLED`, `CINS_ENABLED`, `URLHAUS_ENABLED`, `H2_SETTINGS_FP_ENABLED`, `JS_CONSISTENCY_ENABLED` were in SIGNAL_KNOB (so the controls dashboard rendered toggle links for them) but not in `_HOT_RELOAD_KNOBS` (so those links would 400 when clicked). Added all five as `(_to_bool, None)` entries. Discovered by `test_v1813_control_toggles::test_signal_knob_toggles_are_settable`.
+
+### Added (iteration 7 — Settings/Infrastructure dashboard)
+
+- **`PRESERVE_HOST` in Settings → Infrastructure** (`dashboards/settings.html`): `PRESERVE_HOST` bool knob added to `INFRA_KNOBS` array so it renders as a live toggle in the Settings → Infrastructure card alongside `ALLOW_PRIVATE_UPSTREAM` and `STRICT_VHOST`. Description includes when to enable and the default-off rationale.
+
+### Fixed (found during PRESERVE_HOST iteration 6 pipeline run)
+
+- **`PRESERVE_HOST` missing from `vhost_policy.html` KNOB_META** (`dashboards/vhost_policy.html`): `PRESERVE_HOST` was registered in `_VHOST_COERCE` but absent from the `KNOB_META` JS object in `vhost_policy.html`, causing the Controls dashboard to render it as a generic text input instead of a bool toggle, and silently accepting string `"true"`/`"false"` from the UI instead of coercing to bool. Added `PRESERVE_HOST: {g:'Origin / Headers', t:'bool'}` entry. Caught by `test_pure.py::test_vhost_policy_html_knob_meta_coverage`.
+
+### Fixed (iteration 8 — export/backup completeness + change-password modal)
+
+- **Settings export/import missing vhost configs** (`admin/settings.py`): the `/__settings-export` ZIP contained all `_HOT_RELOAD_KNOBS` and admin IPs but omitted per-vhost policy overrides stored in `/data/vhosts.json`. A backup/restore cycle would silently drop all vhost-specific knob overrides. Fixed: `_settings_build_xml()` now serialises `vhost_list()` into a `<vhosts>` XML section; `settings_import_endpoint` restores each vhost entry via `vhost_set()` on import, and the JSON summary now includes `vhosts_restored`. The Settings → Export/Import UI cards updated to mention vhost coverage.
+- **Change-password modal missing current-password field** (`dashboards/settings.html`): `changeUserPassword()` in the Settings → Users admin panel had no "Current password" input and sent only `{ password: newPw }` to `PATCH /secured/admin/users/{username}`. The backend requires `current_password` when `is_self=True` (caller == target), so an admin changing their own password via the user table received a 400 error. Fixed: added `id="u-pw-cur"` field with `type="password"` and label "Current password"; the submit handler conditionally includes `body.current_password = curPw` only when the field is non-empty (`if (curPw)`), preserving the admin-changes-other-user flow (no current password required).
+
+### Tests (iteration 8)
+
+- `tests/test_settings_config_functional.py` — `TestSettingsVhostExportImport` class (5 new tests): export XML contains `<vhosts>` element; import with `<vhosts>` entry increments `vhosts_restored`; full roundtrip (add vhost → export → verify hostname in XML → re-import → `vhosts_restored ≥ 1`); missing-hostname entry silently skipped; old export without `<vhosts>` imports cleanly (backward compat).
+- `tests/test_v1814_change_password_qa.py` — **16 new tests** covering the full change-password flow: `TestChangePasswordUI` (8 source-code tests on `changeUserPassword()` modal HTML/JS — `u-pw-cur` input, type=password, label, value read, conditional body assignment, new/confirm fields, mismatch and min-length validation) and `TestChangePasswordEndpoint` (8 functional tests — self without current_password → 400, wrong current_password → 403, correct current_password → 200, admin changing other user → 200, viewer self without current_password → 400, viewer changing other user → 403, unauthenticated decoy, weak new password → 400).
+
+### Fixed (iteration 9 — credentials dedup + env-pinned UX)
+
+- **`POSTGRES_DSN` duplicate save surface** (`dashboards/settings.html`): the
+  PostgreSQL DSN was rendered both in the **Database backend** card (structured
+  host/port/user/pass form with mig-status and test-roundtrip) and in the
+  **Integration credentials** card (raw DSN text input with a "Save credentials"
+  button). Both wrote to the same `/secured/secrets` endpoint, but a Save in the
+  cred form would silently lose the password (the form posts `••••••` rendered
+  back) and made the authoritative surface ambiguous. Removed `POSTGRES_DSN`
+  from the `CREDS` array — it is now managed solely in the Database backend
+  card. The DSN reference left in the Database backend section is just a
+  status/requirement note.
+- **`env`-pinned credentials editable + Save misleading** (`dashboards/settings.html`):
+  when a cred's source was `env` (env-var-pinned), the input was still editable
+  and Save still POSTed to `/secured/secrets`. The runtime config writer rejects
+  config_kv stomps on secret keys (per `db_load_config`'s `_SECRET_KEYS` guard),
+  so the save was a misleading no-op — the env value still won on next reload.
+  Fixed: when `source==='env'` the input is rendered with `disabled` + a clear
+  "Set via env var — immutable from the UI" hint, the Clear button is hidden
+  (nothing in `secrets_kv` to clear), and `btn-creds-save` skips disabled
+  fields. Guard added: `test_v185_settings_migration::test_env_pinned_credential_inputs_are_disabled`.
+- Tests updated: `test_creds_list_has_seven_keys` → `test_creds_list_has_six_keys`
+  (POSTGRES_DSN moved); `test_creds_includes_expected_keys` no longer expects
+  POSTGRES_DSN; new `test_creds_excludes_postgres_dsn` guard codifies the
+  separation. Whole settings suite green.
+- `tests/test_v1814_creds_dedup_qa.py` — **14 new tests**: DB backend card has structured postgres form; save handler POSTs to `/secrets`; `POSTGRES_DSN` absent from `CREDS` array; `CREDS` contains exactly 6 keys; creds card mentions DSN lives in DB card; `loadCreds()` detects `env` source; env-pinned input `disabled` + tooltip + hint; env-pinned hides Clear; save skips disabled fields; no-values message mentions env-pinned; controls HTML doesn't render `POSTGRES_DSN` input; creds card cannot resurrect env-only secrets.
+
+### Fixed (iteration 10 — day-theme hardcoded dark backgrounds)
+
+- **Three elements broke in the day (light) theme** (`dashboards/settings.html`): the "Test" button (`id="_tip-pg-test"`), the "Load DSN" button (`id="_tip-pg-load"`) in the database tip popup, and the "not set" badge in the integration credentials section all used `background:#21262d` (the dark-theme `--bg-elevated` value) hardcoded in JavaScript template literals. Because these strings are injected into the DOM dynamically — the DB popup on demand, the creds list on every `loadCreds()` call — the `_dp` theme-toggle palette scan (which runs once on existing `[style]` elements) never replaces them. In the light theme they rendered as black boxes. Fixed: all three now use `background:var(--bg-elevated)`, which the browser resolves to `#21262d` (dark) or `#eaeef2` (light) per the active `data-theme` attribute.
+
+### Fixed (iteration 10 — ban-outcome breakdown card clarity)
+
+- **`banned-silent` signal misrepresented in risk breakdown** (`dashboards/main.html`): Three operator-confusion issues fixed.
+  1. `RISK_BAN_THRESHOLD` rendered as a numeric-cost control knob in the breakdown table (looked like the signal cost 500 pts). Fixed: outcome signals (`banned-silent`, `fp-banned`) detected via a new `_BAN_OUTCOME_SIGNALS` Set; their control column now renders an "outcome" badge (grey, `var(--dim)`) with a `≥N` threshold prefix and a tooltip explaining "adds 0 risk; request was silently served a decoy" and link title clarifying it is a threshold, not a cost.
+  2. When ban had already expired (`banned_secs === 0`), no header appeared — operator saw live risk 0.0 and `banned-silent` events with no context. Fixed: new `gw-expired-ban` yellow-warning block shown when `outcomeHits > 0 && !(d.banned_secs > 0)`; explains the ban has elapsed, how many requests were served a decoy, and offers "View requests →" plus RISK_BAN_THRESHOLD re-ban guidance.
+  3. Active-ban header read "likely tripped banned-silent" — circular because `banned-silent` was `breakdown[0]`. Fixed: `topRsnEntry` uses `breakdown.find()` skipping `_BAN_OUTCOME_SIGNALS`; falls back to empty string if no non-outcome signal found; "likely tripped" wording removed (now just "tripped").
+  - **New CSS**: `.gw-expired-ban` (yellow warning block), `.gw-expired-ban-line` (yellow bold header), `.gw-outcome-label` (dim uppercase outcome badge).
+
+### Fixed (iteration 10 — operator false-positive ban on upstream browsing)
+
+- **Admin-authenticated users were being banned by their own proxy** (`core/proxy_handler.py`, `core/metrics.py`): when an operator browsed the protected upstream while logged into the gateway admin panel, each page load fired 10-30 sub-requests (HTML + CSS + JS + images), each scored independently. Heuristic signals (`session-churn` 75 pts, `ai-headers-incomplete` 10 pts × N, `header-order-fp` 8 pts × N) accumulated fast enough to trip `RISK_BAN_THRESHOLD` within 3-4 page loads. Root cause: `ADMIN_ALLOWED_IPS` only gated dashboard access — upstream traffic from admin IPs was scored identically to regular visitors; no session-based bypass existed.
+  - **Fix**: added `_admin_authed_bypass` flag — True when the request comes from an `ADMIN_ALLOWED_IPS` address AND carries a valid `agw_session` cookie. When set:
+    1. Per-identity and fingerprint ban checks are skipped (admin cannot be decoy'd while authenticated).
+    2. All heuristic scoring (honey-fp, honeypot, session-churn, header-fp, canary, etc.) is bypassed; request proceeds straight to the upstream handler and is recorded as `admin-passthrough`.
+  - `"admin-passthrough"` added to `_PASSTHROUGH_REASONS` in `core/metrics.py` (counted as clean allowed traffic, not as a block).
+  - Scope: upstream paths only (`_is_admin_path` paths already had separate gating). External intel checks (AbuseIPDB / CrowdSec) are not bypassed — a genuinely compromised admin IP still generates intel signals. Bans from before a session was established (pre-login) are not bypassed.
+
+### Tests (iteration 10)
+
+- `tests/test_v1814_day_theme_qa.py` — **15 new tests**: `TestDayThemeSpecificElements` (10 tests — presence + no hardcoded `#21262d` + `var(--bg-elevated)` for each of the three fixed elements, plus badge text-color CSS variable check) and `TestDayThemeNoDarkHardcoded` (5 tests — no `#21262d` in JS-generated HTML strings outside `:root`/`_dp`; `_dp` map covers `#21262d`; `--bg-elevated` defined in dark and light themes; light-theme value is not the dark hex).
+- `tests/test_v1814_ban_outcome_breakdown_qa.py` — **27 new tests**: `TestBanOutcomeSignalConstants` (4), `TestBanOutcomeControlColumn` (6), `TestExpiredBanNote` (7), `TestActiveBanTopReason` (4), `TestBanOutcomeCSS` (6) — covers `_BAN_OUTCOME_SIGNALS` Set, outcome-signal rendering, expired-ban yellow block, `topRsnEntry` skip logic, and new CSS classes.
+- `tests/test_v1814_admin_bypass_qa.py` — **15 new tests**: `TestAdminBypassSourceGuards` (10 source-code guards — flag defined, dual condition, admin-path restriction, ban check gating, FP ban gating, heuristic gate, passthrough reason, metrics set, timeline set, ordering) and `TestAdminBypassFunctional` (5 live-proxy tests — bypass active, no session = no bypass, non-admin IP = no bypass, pre-existing ban bypassed, empty allowlist = no bypass).
+
+### Added (iteration 11 — BLOCK_RESPONSE_MODE knob)
+
+- **`BLOCK_RESPONSE_MODE`** new hot-reloadable knob (`config.py`, `vhost.py`, `core/proxy_handler.py`): controls what blocked clients receive. `"homepage"` (default, backward-compatible) serves upstream's `/` content — the block is invisible. `"404"` serves the upstream's real 404 page with status 404 — explicit rejection. API and admin-namespace paths always get a synthetic JSON 404 regardless of mode. Overridable per-vhost.
+- **`dashboards/controls.html`**: `BLOCK_RESPONSE_MODE` select knob (homepage / 404) added in the Tarpit / response section.
+- **`dashboards/vhost_policy.html`**: `BLOCK_RESPONSE_MODE` added to KNOB_META (group: Tarpit / Labyrinth) for per-vhost override UI.
+
+### Added (iteration 11 — Detection Methods "other" tooltip)
+
+- **`dashboards/main.html`** Live Feed: Detection Methods bar chart and Top Methods table now show a hover tooltip when the bucket is "other", listing all component reasons with hit counts (e.g. `header-order-fp: 12×`). "other" label gains `cursor:help` + dotted underline. Top Methods row gains `(N reasons)` sub-label. No backend change — uses `signals[]` already returned by `detector-stats`.
+
+### Tests (iteration 11)
+
+- `tests/test_v1815_block_response_mode_qa.py` — **17 new tests**: `TestBlockResponseModeSourceGuards` (10 static checks — config, default, vhost coerce, hot-reload validator, 404-cache, homepage-cache, API/admin priority, controls knob, vhost_policy meta, elif guard) and `TestBlockResponseModeFunctional` (7 live-proxy tests — homepage serves `/`, 404 serves upstream 404, API JSON 404 in both modes, admin JSON 404 in both modes, no decoy-cache pollution in 404 mode, hot-reload switch).
+
+### Fixed (iteration 13 — upstream unavailable response leaks gateway identity)
+
+- **`proxy()` returned proxy-fingerprinting error text** (`core/proxy_handler.py`): three upstream-failure paths returned `502 "upstream error\n"`, `504 "upstream timeout\n"`, and `503 "upstream circuit open\n"` — all of which reveal that a reverse proxy exists between the client and the application. Fixed via new `_upstream_unavailable_response()` helper that consolidates all three paths into a single `503` + `Retry-After: 30` response served from cached upstream content: `BLOCK_RESPONSE_MODE="404"` → `_upstream_404_cache`; else `_decoy_cache` (homepage); else neutral HTML fallback with no gateway wording. Clients can no longer distinguish "upstream unreachable" from "upstream busy" or any normal 503 response.
+
+### Added (iteration 13 — upstream health alert in pill + vhost display)
+
+- **`health_score_endpoint` upstream reason** (`core/proxy_handler.py`): added a 7th health-score factor — upstream reachability. When the circuit breaker is open: `bad` status, −40 pts, detail shows seconds-until-recovery + consecutive failure count. When failure count ≥ half the open threshold: `warn`, −10 pts. Exposed as `upstream_down: bool` in the JSON response. `KEY_LABELS` / `KEY_HINTS` maps in `main.html` updated to include the new `"upstream"` key.
+- **Pill UPSTREAM DOWN alert** (`dashboards/main.html`): `tick()` refactored into `_renderPill()` + `tick()`. When `upstream_down` is true the pill switches to: red background, `"● UPSTREAM DOWN"` text, slow pulse animation (`gw-pill-pulse 1.4s ease-in-out infinite`), and updated `title` tooltip. Animation and colour are cleared on recovery.
+- **Pill vhost suffix** (`dashboards/main.html`): pill text now appends ` · <hostname>` (truncated to 22 chars) when a vhost filter is active in `#vhost-select`. Updates instantly on `change` via `window._renderPill` exposed from the health-score IIFE.
+- **`@keyframes gw-pill-pulse`** CSS animation added; `transition` on `#gw-status-pill` extended to include `background`, `color`, and `border-color`.
+
+### Fixed (iteration 13 — stale type assertion in test_v185_new_features.py)
+
+- **`test_ja4h_deny_list_field_exists` expected `frozenset`** (`tests/test_v185_new_features.py`): `JA4H_DENY_LIST` was changed from `frozenset` to `set` in a prior iteration (F4, iter 8) for JSON serialisation; the assertion was never updated. Fixed: `isinstance(..., frozenset)` → `isinstance(..., set)`, docstring updated. The correct assertion is also guarded by `test_v1814_full_export_qa.py::test_ja4h_deny_list_default_is_set_not_frozenset`.
+
+### Fixed (iteration 12 — IP intelligence dashboard 400 error)
+
+- **`metrics_endpoint` serialised track_key hash as `ip` field** (`core/proxy_handler.py`): the clients list in `/secured/metrics` set `"ip": key` where `key` is the HMAC-derived `track_key` identity string, not the client IP. The Identity-details popover in `main.html` and `agents.html` passed `d.ip` directly to `fetchIpIntel()` → `/secured/ip-intel/<hash>` → `ipaddress.ip_address(<hash>)` raised `ValueError` → HTTP 400 → "IP intelligence unavailable: HTTP 400". Fixed: `"ip": s.last_ip or key` — uses the actual client IP when set (composite track-key entries), falls back to `key` only for pure-IP-keyed rate-limiter entries where `key` is already an IP address. Both `d.ip` and `d.last_ip` now carry the real client IP so `normalizeId`'s `raw.ip || raw.last_ip` fallback chain is correct.
+
+### Added (iteration 12 — QA test coverage expansion)
+
+- **`test_v1814_ip_intel_qa.py`** — 45 new tests covering the ip_intel fix end-to-end: source-inspection (`"ip": s.last_ip or key` present, `"ip": key` bare absent, `last_ip` sibling present, `id` still uses raw key); unit/parametrized tests of the `s.last_ip or key` expression (5 cases: track_key+IPv4, track_key+IPv6, empty last_ip, None last_ip, IPv6 key); functional tests verifying ip field always passes `ipaddress.ip_address()`; runtime tests with live `ip_state` injection (6 cases including `id ≠ ip` regression); `ip_intel_endpoint` validation matrix (7 valid IPs accepted, 6 invalid patterns rejected — hash/unknown/port/comma/empty/hostname); dashboard source tests (`normalizeId` raw.ip + raw.last_ip, `fetchIpIntel(d.ip)` in both `main.html` and `agents.html`).
+- **`test_v1814_qa_detection.py`** — 145 tests (was 135): added `TestSecLcToken` (6 SEC tests — hex-only output safe for `<script>`, previous-hour replay window accepted, 2-hour-ago token rejected, special-char inputs rejected, oversized input no crash, `hmac.compare_digest` used) and `TestSecAutomationScript` (4 SEC tests — hex-safe token, IIFE wrapper, `</script>` closes before `</body>`, different keys produce different tokens).
+- **`test_v1814_qa_modules.py`** — 168 tests (was 144): added `TestSecJwtAlgorithmConfusion` (7 — RS256/PS256/ES256/HS384/HS512 + NONE uppercase + missing-alg + tamper + constant-time-compare), `TestSecHoneyCredKeyProperties` (4 — hex-only, distinct identities, deterministic, expired-key not returned), `TestSecGraphqlBypass` (5 — introspection variants, depth boundary accounting JSON-wrapper +1, depth-over-limit), `TestSecFpTokenEntropy` (4 — hex-safe, distinct keys, IIFE wrapping, script-before-body).
+- **`test_v1814_qa_ui_ux.py`** — 113 tests (was 89): added `TestAgentsSecurity` (4 — no `eval()`, no `document.write()`, `_agwTok` CSRF interceptor, no inline event handlers with server data) and `TestCrossDashboardSecurityExtended` (12 parametrized — no `eval()` in 6 dashboards, no `document.write()` in 6 dashboards, `_agwTok` CSRF interceptor in 8 dashboards).
+
+### Fixed (iteration 14 — vhost policy no-hostname summary missing vhosts)
+
+- **`_renderOverrides` no-hostname branch filtered to `_vhActive` only** (`dashboards/vhost_policy.html`): when no inbound hostname was selected the summary content rendered only vhosts with at least one explicit override (`_vhActive` = filtered set). Vhosts inheriting everything from global were silently excluded — the visible count was smaller than the 7 shown in the routing section. Fixed: removed the `_vhActive` filter; the loop now iterates `_vhKeys` (all vhosts in `_allVhostSummary`). Vhosts with overrides render knob rows as before; vhosts with no overrides render a dim "inherits global" badge. Each vhost header is now clickable to jump directly to that vhost in `#vhost-select`. The `"No vhost-specific overrides configured"` early-return is removed — only the `_vhKeys.length === 0` empty state remains.
+
+### Tests (iteration 14)
+
+- `tests/test_v1815_vhost_policy_summary_qa.py` — **19 new tests**: `TestVhostPolicySummarySourceGuards` (10 source checks — no `_vhActive` in render loop, iterates `_vhKeys`, `"inherits global"` badge present, `hasOv` gates badge, `hasOv` gates knob rows, header clickable, old early-return removed, empty state only on `_vhKeys` empty, `escapeHtml(vh)` present, singular/plural count) and `TestVhostPolicySummaryContent` (9 logic simulations — 3 vhosts → all 3 shown; zero-override vhosts show "inherits global"; vhost with overrides shows count; 7 vhosts → all 7; empty → select prompt; knob rows only under vhosts with overrides; alphabetical sort; singular/plural edge cases).
+
+### Added (iteration 15 — operator Allow grace window + GET unban auth fix)
+
+- **`ALLOW_BYPASS_SECS` new hot-reloadable knob** (`config.py`, `vhost.py`, `core/proxy_handler.py`): grace window (default 300s, validator [0,86400]) granted when operator clicks Allow / Unban on an identity. Bug it solves: clicking Allow cleared the ban and reset `risk_score` to 0, but the next few requests from the same identity would re-trigger the same accumulated signals (session-churn 75 pts, ai-headers-incomplete, header-order-fp etc.) and re-ban within seconds.
+- **`bypass_until: float` field on `IpState`** (`state.py`): operator-granted monotonic-clock deadline. `unban_endpoint` sets it to `monotonic() + ALLOW_BYPASS_SECS` when clearing. `protect()` has a new bypass gate immediately after `_admin_authed_bypass`: if `monotonic() < s.bypass_until` the request is served from upstream with `reason="operator-allowed"` recorded — heuristic detection is bypassed for the grace window.
+- **`"operator-allowed"` passthrough reason** (`core/metrics.py` `_PASSTHROUGH_REASONS`, `core/proxy_handler.py` `_passthrough` timeline set): treated as clean allowed traffic — not a block. Distinct from `admin-passthrough` so SIEM can audit operator-grace events separately.
+- **`metrics_endpoint` clients list exposes `bypass_secs`** countdown for dashboards.
+- **`dashboards/main.html` + `agents.html` identity popover** shows `"Allowed (grace window · Ns remaining — detection bypassed)"` when `bypass_secs > 0`. Agents IIFE re-synced from main.html.
+- **`dashboards/controls.html`** — `ALLOW_BYPASS_SECS` num knob (min:0, max:86400, step:60).
+- **`dashboards/vhost_policy.html`** — KNOB_META entry (group: Tarpit / Labyrinth).
+
+### Fixed (iteration 15 — GET /unban was unauthenticated)
+
+- **`unban_endpoint` auth check was nested inside `if request.method == "POST":`** (`core/proxy_handler.py`): the GET branch (used by the Allow buttons in the UI) ran with no role check at all. Anyone reaching the URL could clear any ban or risk score via `GET /secured/unban?id=<key>`. Fixed: `_role_denied()` check moved outside the method-dispatch — now runs for both GET and POST before any work.
+
+### Tests (iteration 15)
+
+- `tests/test_v1815_allow_bypass_qa.py` — **18 new tests**: `TestAllowBypassSourceGuards` (13 source checks — `bypass_until` on `IpState`, `ALLOW_BYPASS_SECS` default 300, in `_VHOST_COERCE`, in `_HOT_RELOAD_KNOBS` with [0,86400] validator, unban sets `bypass_until` via monotonic, `protect()` has bypass gate before honey FP recording `operator-allowed`, `operator-allowed` in `_PASSTHROUGH_REASONS` + timeline `_passthrough` set, clients list includes `bypass_secs`, controls knob registered, vhost_policy KNOB_META, main.html popover shows grace), `TestUnbanAuthGet` (2 — `_role_denied` precedes method-dispatch, auth NOT nested in POST-only branch), `TestAllowBypassFunctional` (3 — unban POST sets `bypass_until` + clears risk via live admin session; `ALLOW_BYPASS_SECS=0` disables; `bypass_secs` exposed in `/metrics`).
+
+### Added (iteration 16 — UX + persistence + perf — 2026-06-02 → 2026-06-03)
+
+- **Reset risk action in the Risk-score-breakdown popover** (`dashboards/agents.html`, `dashboards/main.html`): operators previously had no way to clear a non-zero risk score for an identity that wasn't currently banned — the Unban button only appeared when `banned_secs > 0`. New amber `Reset risk` button shows in the breakdown popover when `risk_score > 0`; it POSTs to the existing `/secured/unban` endpoint (which already scrubs scalar score, per-reason breakdown, blocks histogram, blocked count, and grants the `ALLOW_BYPASS_SECS` grace window). CSS class `.gw-reset-risk` lives next to `.gw-unban` for visual consistency; the `unban_endpoint` did not need changes — it already implemented the full scrub.
+- **SILENT badge in the Vhost Policy picker** (`dashboards/vhost_policy.html`): vhosts with no traffic in the last 30 min are tagged `— SILENT` in the dropdown, mirroring the convention from the Control-Center heatmap. Marker is additive with the `— no overrides` badge (a configured-but-quiet vhost shows just `— SILENT`; a stats-only-quiet host shows `— no overrides — SILENT`).
+- **Historical vhost merge in the Vhost Policy picker** (`admin/settings.py`, `dashboards/vhost_policy.html`): `vhost-policy-data` now returns a new `seen_vhosts` array — `SELECT DISTINCT vhost FROM events WHERE vhost != '' AND ts >= now - 30 d` — so quiet hosts that fell outside the 24 h window of `/vhost-stats` remain pickable. Dropdown now merges three sources: configured (`d.vhosts`), recent stats (`sd.stats`, drives `last_seen` + SILENT), and historical (`d.seen_vhosts`).
+- **Operator-configurable ban durations in the Agents + Live-feed UIs** (`dashboards/agents.html`, `dashboards/main.html`): the Banned / Really-Banned buttons hardcoded `data-secs="86400"` / `data-secs="2592000"`, so operator changes to `HOSTILE_BAN_SECS` / `REALLY_BAN_SECS` in the Thresholds card had no effect — clicks still applied the historical defaults. New window-level cache `_gwBanCfg = {banSecs, reallyBanSecs}` is populated from `/secured/config` on page load + refreshed every 60 s. Buttons interpolate the cached values into `data-secs` + title + aria-label; the `> 86400` "really-banned" badge classifier reads `_gwBanCfg.banSecs` so the live feed correctly classifies a 7200 s ban as "Banned" when `HOSTILE_BAN_SECS` is set to 7200.
+- **Vacuum-DB UI hidden when DB_BACKEND ≠ sqlite** (`dashboards/settings.html`): manual VACUUM is a SQLite-only operation; Postgres / TimescaleDB has its own autovacuum daemon. The Vacuum-DB button, status text, and Last-5-runs history table now toggle off via `_dbUpdateActiveBadges(backend)` whenever Postgres is active, replaced by a short Postgres-only note. `loadVacuumHistory()` is no longer called unconditionally — it's gated by `_dbOrig === 'sqlite'` in `loadDb()` and refired on a sqlite-direction switch. Server-side `/secured/db-vacuum` and `/secured/db-vacuum-history` already had the `if DB_BACKEND != "sqlite"` short-circuit; the UI just stops surfacing the controls.
+
+### Fixed (iteration 16)
+
+- **DB_BACKEND switch reverted on restart when env was set** (`db/sqlite.py`): `db_load_config` skipped any knob present in `_ENV_PROVIDED_KNOBS`. `DB_BACKEND` was env-pinned whenever the operator shipped `DB_BACKEND=postgres|sqlite` via container env, so a `/secured/db-switch` choice (operator-mediated, with connectivity probe + schema init + pool reset + event-window migration) persisted to `config_kv` but reverted on every restart because env re-won at boot. Fix: `DB_BACKEND` is exempt from the env-pin in `db_load_config` only — every other knob still respects env precedence. The exemption is justified inline: `/secured/db-switch` is the operator-mediated channel; env now serves as a cold-start default that the operator can override at runtime. `POSTGRES_DSN` remains owned by `secrets_kv` / `db_load_secrets` (the secret-stomp protection is unaffected).
+
+### Performance (iteration 16 — hot-path pass)
+
+- **Shared upstream `ClientSession`** (`core/proxy_handler.py`, `proxy.py`): the main proxy hot-path opened `async with ClientSession(timeout=ClientTimeout(...)) as session:` per request — full TCP + TLS handshake to the upstream on every call. Replaced with a module-level `_UPSTREAM_HTTP_CLIENT` lazily created via `_get_upstream_client()`, backed by a `TCPConnector(limit=200, limit_per_host=50, ttl_dns_cache=300)`. Critical safety property: `cookie_jar=DummyCookieJar()` — without it, an upstream `Set-Cookie` from request A could leak into request B's request headers; cookies are still proxied via headers as before. Drained via `_close_upstream_client()` from `on_cleanup`. Per-request `ClientTimeout` is still constructed (cheaply) — see next item.
+- **Cached `ClientTimeout`** (`core/proxy_handler.py`): `_get_upstream_timeout()` returns the same `ClientTimeout` instance until either `UPSTREAM_TIMEOUT_SECS` or `UPSTREAM_CONNECT_TIMEOUT_SECS` is hot-reloaded — small allocation skipped per request.
+- **Precompiled `BYPASS_PATHS` matcher** (`core/proxy_handler.py`): replaced the per-request `any(p.endswith((...,"/")) and request.path.startswith(p[:-1]) ... for p in vc('BYPASS_PATHS'))` with `_bypass_match(path, paths)`, which compiles the list once into `(prefixes:tuple, exacts:frozenset)` and reuses it until the list identity changes (hot-reload rebinds `globals()["BYPASS_PATHS"]`). The hot path becomes `path in exacts or path.startswith(prefixes)` — frozenset O(1) + a C-level builtin loop on the tuple. Semantics preserved (including the historical greedy `/static/` → `/staticx` quirk).
+- **OrderedDict timeline eviction** (`state.py`, `core/metrics.py`): `timeline` and `cost_timeline` are now declared as `OrderedDict` so the per-minute roll evicts via `while timeline: oldest = next(iter(timeline)); if oldest >= cutoff: break; del timeline[oldest]` — O(buckets-to-evict) instead of the prior O(all-buckets) list-comprehension scan.
+
+### Tests (iteration 16)
+
+- `tests/test_v1815_unban_full_scrub.py` — 16 tests, 13 source + 3 functional. Asserts the existing `unban_endpoint` performs the full scrub (banned_until + risk_score + risk_by_reason + blocks_by_reason + blocked_count + last_risk_update + bypass_until) AND that the dashboards expose the `gw-reset-risk` button + wire its click handler. Functional test uses an `aiohttp` mini-app to seed an identity, POST `/secured/unban`, and assert every field on `IpState` is scrubbed.
+- `tests/test_v1814_vhost_policy_picker.py` — extended from 14 to **19 tests**: 3 SILENT-marker tests (constant present, `_now - _ls > _SILENT_THRESHOLD_S` predicate, marker orthogonal to `— no overrides`), 2 `seen_vhosts` tests (HTML consumes `d.seen_vhosts`, backend returns `seen_vhosts` from `DISTINCT vhost FROM events`).
+- `tests/test_v1814_db_backend_persists.py` (4 tests) + `tests/test_v1814_db_backend_persists_edge.py` (6 tests) — `db_load_config` exempts `DB_BACKEND` from the env-pin; non-DB_BACKEND knobs still respect env; invalid `config_kv` value falls back to env (validator rejection); validator=None handled; round-trip env→postgres→sqrite; the exemption is local to the env-pin check (doesn't widen to `POSTGRES_DSN`); end-of-load `db_config_loaded` slog still emits `applied`/`env_pinned`.
+- `tests/test_v1814_vacuum_sqlite_only.py` (7 tests) + `tests/test_v1814_vacuum_endpoint_gates.py` (9 tests) — UI invariants (wrap IDs, `_dbUpdateActiveBadges` toggling, postgres-skip in fetch, post-switch refresh) AND server-side gates on `/db-vacuum` + `/db-vacuum-history` (backend guard before `sqlite3.connect`, `400` + `history:[]` contract, role-gated, identical predicates).
+- `tests/test_v1814_ban_duration_dynamic.py` (12 tests) — cache + loader declared in both pages, cache warmed BEFORE first `tick()`, 60 s refresh interval, no hardcoded `data-secs="86400"` / `data-secs="2592000"`, classifier reads `_gwBanCfg.banSecs`, fallback defaults present in declaration.
+- `tests/test_v1814_perf_pass.py` (13 tests) + `tests/test_v1814_perf_pass_behavioral.py` (16 tests) — perf pass anchors (module-level `_UPSTREAM_HTTP_CLIENT`, `DummyCookieJar`, pooled `TCPConnector`, hot-path no longer constructs per-request session, `_UPSTREAM_TIMEOUT_CACHE` exists, `_bypass_match` defined and used, `OrderedDict` timeline typing, head-pop eviction) AND behaviour (cache identity invalidation, timeout knob-change invalidates, idempotent client + post-close lazy re-init, `DummyCookieJar` installed, head-pop preserves in-retention buckets).
+- `tests/test_pure.py` BYPASS_PATHS anchors updated to accept either the legacy `any(...)` form or the precompiled `_bypass_match(...)` form (6 tests adjusted).
+
+## [1.8.13] — 2026-05-24
+
+### Fix (honeypots dashboard — 2026-05-25)
+
+- **`method` column missing from SQLite migrations** (`db/sqlite.py`): `_SCHEMA_MIGRATIONS` lacked an entry for `("events", "method", "TEXT", "TEXT")`. Armv7/SQLite devices upgraded from pre-1.8.x schemas had no `method` column; the `db_writer_loop` INSERT (which names `method` explicitly) failed silently, storing no events — honeypots and events dashboards showed 0 records. Fixed by adding the migration entry; idempotent `ALTER TABLE … ADD COLUMN IF NOT EXISTS` applies safely on every startup.
+- **`method` column added to Postgres events schema** (`db/postgres.py`): `CREATE TABLE IF NOT EXISTS events` did not include `method`; `pg_insert_event()` omitted `method` from the INSERT. Both fixed: `method TEXT` added to the base schema, migration entry added to `_SCHEMA_MIGRATIONS` (shared with SQLite), and `pg_insert_event()` updated to accept and store the HTTP method. `_PG_MISSING_COLUMNS` emptied (was `{"method", "vhost"}` — both are now real Postgres columns added via migrations 1.8.0/1.8.13).
+- **`core/metrics.py` Postgres event write updated**: `pg_insert_event` call now passes `method` so the HTTP verb is stored on the Postgres backend.
+
+### Security (re-validation iteration — 2026-05-25)
+
+- **OIDC id_token `sub` claim made mandatory** (`admin/oidc.py`): added `"sub"` to PyJWT `require` list (OIDC Core §3.1.3.3 compliance). INT4-10 sub-binding check is now unconditional — an id_token with empty or absent `sub` is rejected with `oidc_id_token_missing_sub` error, closing an identity-confusion bypass where an attacker-controlled IdP could return an empty `sub` claim.
+- **Dead OIDC code removed** (`proxy.py`): local `_verify_jwt_hs256` and `_jwt_required_for` definitions that shadowed the canonical `integrations.jwt` implementations without being called through the local path were removed.
+- **`REDIRECT_MAZE_ENABLED` default changed to ON** (`config.py`): default changed from `"0"` to `"1"`; threshold gate (risk ≥ 80) prevents triggering on benign traffic.
+- **`dast-smoke.sh` version-disclosure check fixed**: stale `"1.8.7"` string updated to `"1.8.13"` and grep changed from regex to fixed-string (`-F`) to prevent SVG path-coordinate false positives from upstream responses.
+- **20 new QA tests** (`tests/test_v1811_oidc_idtoken_verify.py`): full id_token verification coverage — alg-confusion prevention (alg:none, HS256 rejected), RS256/ES256/RS384, tampered signatures, expiry/nbf, issuer/audience/nonce validation, kid-miss JWKS refresh, `sub` required, INT4-10 sub-mismatch.
+
+### Security (post-release secure code review — 2026-05-25)
+
+- **C1 — ReDoS DoS fixed in the Log4Shell WAF body regex** (`config.py`): the
+  obfuscated-JNDI matcher used four unbounded `[\$:{}]*` runs → catastrophic
+  O(n²) backtracking; an unauthenticated `${`-flood body stalled the event loop
+  (~18 s at 200 KB, hours over the 4 MiB scan window). Bounded each run to
+  `{0,64}` → linear (200 KB now ~34 ms); detection unchanged (the gadget
+  pattern backstops real payloads).
+- **H2/H3 — two more body-regex ReDoS fixed** (`config.py`): the cmd
+  `$(…)`/`<(…)` group (`[a-z]+[^)]*` overlap) and the xss `src=…` group
+  (`\s*=\s*["']?\s*` adjacent runs) were quadratic; bounded the runs (H3 11 s →
+  1.2 ms, H2 677 ms → 0.6 ms). Detection unchanged.
+- **H1 — stored XSS via `SERVICE_OWNER` fixed** (`core/middleware.py`,
+  `core/proxy_handler.py`): the org name was injected into a dashboard
+  `<script>` through `json.dumps` (JS-string-safe but not `<script>`-safe), so
+  `</script>…` broke out and ran on every dashboard load. Now escapes `< > &`
+  in the injected JSON **and** the setter rejects `<`, `>`, control chars.
+- **H4 — hardcoded admin key removed from `attack_demo.py`** (now reads
+  `$AGW_ADMIN_KEY`). The previously-committed key **must be rotated**.
+- **`test_165`** updated with test values for the 10 `SEC_*` response-header
+  knobs (coverage gap; no product change).
+- **External JS dependencies hardened** (the only two third-party scripts):
+  **Leaflet** (Geo dashboard, `dashboards/geo.html`) stays on the `unpkg.com`
+  CDN (SRI-pinned) but now shows a **visible error banner** when it fails to load
+  (offline / blocked / integrity mismatch) instead of a silently-broken map —
+  `onerror` flag + an init guard that reveals the banner before any `L.*` call.
+  **Cloudflare Turnstile** (challenge page, `challenge/js_challenge.py`) now
+  **fails closed fast**: a loader that can't load / fails integrity rejects
+  immediately ("access blocked"), no token → no cookie. Optional SRI pin via new
+  `TURNSTILE_SRI` knob (default empty — Cloudflare rotates `api.js`, so a stale
+  pin would block all new visitors; compute + refresh yourself to enable).
+  Guard: `tests/test_v1813_external_js_guards.py`.
+
+### Added
+
+- **Redirect maze wired in + made configurable** (1.7.3 P2 — `detection/redirect_maze.py`,
+  `config.py`, `core/proxy_handler.py`, `proxy.py`, `vhost.py`,
+  `dashboards/vhost_policy.html`): the redirect-maze detector — previously an
+  orphan module that raised `ImportError` because its config knobs were never
+  defined — is now functional. It is **distinct from the AI Labyrinth**
+  (`LABYRINTH_*`, hidden-link tarpit): the maze bounces identities already at
+  `risk ≥ REDIRECT_MAZE_THRESHOLD` through `REDIRECT_MAZE_DEPTH` HMAC-signed 302
+  hops (public `/maze` route, dest- and identity-bound tokens, 30 s TTL);
+  completing all hops in `< REDIRECT_MAZE_MIN_MS` fires the `redirect-maze-bot`
+  signal (weight `REDIRECT_MAZE_SCORE`, default 55). New knobs
+  `REDIRECT_MAZE_ENABLED` / `_THRESHOLD` / `_DEPTH` / `_MIN_MS` / `_SCORE` are
+  hot-reloadable and per-vhost overridable; `redirect-maze-bot` is registered in
+  `RISK_WEIGHTS` + `SIGNAL_KNOB`. **Ships OFF** (`REDIRECT_MAZE_ENABLED=0`) so it
+  never reroutes live traffic until an operator opts in. **Controls dashboard
+  widgets** (`dashboards/controls.html`): `REDIRECT_MAZE_ENABLED` toggle in the
+  Defenses & scoring table (labelled "Redirect Maze") + `REDIRECT_MAZE_THRESHOLD`
+  / `_DEPTH` / `_MIN_MS` numeric inputs in the Thresholds card, grouped next to
+  the AI Labyrinth knobs; signal label + severity/description + cost metadata
+  added so it renders cleanly in the scoring table.
+
+### Fixed
+
+- **Honeypots dashboard always empty in challenge-first mode** (`core/proxy_handler.py`):
+  the JS challenge gate ran *before* the honeypot/suspicious-path detectors, so a
+  cookieless scanner hitting a trap path (`/.env`, `/.git/HEAD`, …) was
+  silent-decoyed at the gate as a generic `chal-required` and never reached the
+  honeypot detector — so no `honeypot-silent`/`suspicious-path` event was ever
+  written and the Honeypots dashboard stayed empty even while bots hammered the
+  traps. Fix: trap paths (`HONEYPOT_PATHS` ∪ `is_suspicious_path`) are now
+  **exempt from the challenge gate** and fall through to the dedicated detectors,
+  which record the real reason + ban + decoy. Verified live: cookieless probes to
+  `/.env` now return the 404 decoy and write `honeypot-silent`. Guard:
+  `tests/test_functional.py::test_honeypot_path_exempt_from_challenge_gate`.
+- **Login Sign-in button dead under strict CSP** (`admin/users.py`,
+  `dashboards/login.html`): the login page's CSP was hardened to `script-src
+  'self'` (F-11, "no inline scripts") but `login.html` still shipped an inline
+  `<script>`, so the browser silently blocked it and the Sign-in click handler
+  never attached — login was impossible from a real browser (curl, which ignores
+  CSP, still rendered fine). Fixed with a per-request CSP nonce: the page's own
+  script runs via `script-src 'self' 'nonce-…'` while injected inline scripts
+  stay blocked (F-11 intent preserved). Guard: `tests/test_login_csp_nonce.py`.
+- **Controls vhost selector skipped its empty-list sync** (`dashboards/controls.html`):
+  `load()` decided the vhost-search box visibility from `body.vhosts.length`,
+  which the regression guard (`test_rv6_load_syncs_vhosts_without_length_guard`)
+  flags because length-gating risks skipping the option sync on an empty list.
+  Switched to `fresh.size` (the de-duplicated vhost `Set` already built for the
+  add/remove sync) — same threshold, no length gate.
+
+### Security
+
+- **URL-encoded injection bypass in `is_suspicious_path`** (`detection/paths.py`):
+  `request.path_qs` in aiohttp is NOT percent-decoded, so payloads like
+  `%3Cscript%3Ealert(1)%3C%2Fscript%3E` were passed to `is_suspicious_path()` as
+  the raw encoded string — the `<script\b` pattern never matched and the request
+  was recorded as `reason='ok'`. All 70+ `SUSPICIOUS_PATH_PATTERNS` were affected
+  for any percent-encoded variant of their triggers. Fix: `is_suspicious_path()`
+  now tests both the raw path and `urllib.parse.unquote(path)`. Discovered during
+  §12 E2E black-box probe on 2026-05-25; all 3 arch images rebuilt with the fix.
+
+### Tests
+
+- New `tests/test_redirect_maze.py` (20 tests): token sign/verify roundtrip,
+  dest/identity binding, expiry + skew, `should_maze()` gating, signal
+  registration, public-route exemption, and endpoint hop/landing behaviour.
+- Extended the knob-integration guards (`test_165_every_knob_persists_round_trip`,
+  vhost-coerce + vhost-policy-meta coverage) to include the new maze knobs.
+
+---
+
+## [1.8.12] — 2026-05-23
+
+### Added
+
+- **Honeypots dashboard restructure** (`dashboards/honeypots.html`, `core/proxy_handler.py`): full four-section layout — Overview (summary stats), Traps (top-path effectiveness table with per-path hit counts), Attackers (per-IP attack storyboard showing ordered steps), and Threat Intel (scanner-tool leaderboard derived client-side from `/secured/attack-playbook`). Two new backend fields added to `honeypots_data` endpoint: `trap_effectiveness` (top trap paths ranked by hits) and `attackers` (per-IP ordered step list). `escapeHtml` on all user-supplied fields; intervals registered in `_timers`.
+
+### Tests
+
+- **`tests/test_v1812_honeypots_sections.py`**: static layout checks (all four section IDs present, `trap_effectiveness` + `attackers` fields consumed); dynamic tests seeding trap and attacker events and verifying the endpoint returns correct shapes.
+
+---
+
+## [1.8.11] — 2026-05-22
+
+### Added
+
+- **Attack Playbook card** (`dashboards/agents.html`, `core/proxy_handler.py`): new card at the bottom of the Agents page turning honeypot/trap catches into a "how the attack works" playbook grouped by technique. Reasons covered: `honeypot`, `honeypot-silent`, `bot-trap`, `honey-cred`, `canary-echo`, `canary-probe-miss`. Each group shows: what the technique is, ≤6 deduped `(method, path)` examples, hit count, last-seen, and the governing defense control (live ON/OFF via `SIGNAL_KNOB_JS` with Controls deep-link). Backend: new `attack_playbook_endpoint` + route `GET /secured/attack-playbook`. `loadPlaybook()` auto-refreshes every 30 s; interval registered in `_timers`. All user-supplied paths/methods rendered via `escapeHtml`.
+- **Service owner label** (`config.py`, all dashboard footers): new `SERVICE_OWNER` knob — operator-set string persisted to `config_kv`, rendered in every dashboard footer as "Operated by \<owner\>". Hot-reloadable.
+- **Day/night theme** (all 12 dashboard files): full light/dark theme toggle. `--bright` / `--dim` CSS variables; `html[data-theme="light"]` block; `#theme-toggle` button; `_toggleTheme` function; `_gwTheme` Chart.js `afterInit` plugin; `_applyChartColorsToInstance` for live chart recolour; `_TILE_LIGHT` / `_TILE_DARK` Leaflet tile swap in `geo.html`. Theme persisted via `GET/PUT /secured/ui-theme` endpoint.
+- **Body size limit increases** (`core/proxy_handler.py`): `UPSTREAM_MAX_BODY` raised from 2 MiB to 4 MiB; `UPSTREAM_MAX_RESP` raised from 8 MiB to 17 MiB.
+
+### Fixed
+
+- **Thresholds Apply Changes button** (`dashboards/controls.html`): button was non-functional after a prior refactor; wired correctly to submit handler.
+- **Dead `else setInterval` removed** (`dashboards/agents.html`): orphaned `setInterval` in an unreachable `else` branch removed; resolves `test_setinterval_tracked_in_timers[agents.html]` failure.
+- **M-4 `ip_bans` table not cleared in functional test fixture** (`tests/test_functional.py`): `gw_client` fixture now clears `ip_bans` between tests, preventing ban-state leakage across tests.
+
+### Tests
+
+- **`tests/test_v1811_service_owner.py`**: knob exists + hot-reloadable + persists + renders in every dashboard footer.
+- **`tests/test_v1811_theme.py`** (CSS-01–12 + JS-01–06 + DB-01–04 + API endpoint): CSS variable definitions, theme toggle button/function, Chart.js afterInit plugin, Leaflet tile swap, `credentials:'include'` in theme fetch, DB get/set/fallback, and live API roundtrip.
+- **`tests/test_v1810_attack_playbook.py`** (7 tests): endpoint + route registered; dynamic spin-up seeds honeypot + non-honeypot events, verifies groups honeypot-only, correct counts/examples, `no-store` header, and `mins` clamp.
+- **Full suite**: 1017 passed (unit+pure), 38 functional, 23 integration.
+
+### Validation
+
+- **Trivy (armv7)**: 0 CRITICAL / 0 HIGH / 0 MEDIUM — `alpine 3.23.4`
+- **Images**: `1.8.11-amd64` `sha256:49ff121a1795` · `1.8.11-arm64` `sha256:79d4a1a5ea00` · `1.8.11-armv7` `sha256:b3396800a97d` · manifest `sha256:7d58b47cf431`
+
+---
+
+## [1.8.10] — 2026-05-21
+
+### Added
+
+- **Collapsible left sidebar** (all 9 dashboard pages): full-hide toggle (click arrow button collapses to icon-only rail; click again restores). Sidebar state persisted in `localStorage`; accordion sub-items animate open/close.
+- **Controls section icon-rail** (`dashboards/controls.html`): second-level hide (`#ctrl-nav`) — collapsible icon-rail for the Controls-page section navigation, matching the sidebar pattern.
+- **Settings section icon-rail** (`dashboards/settings.html`): `#settings-nav` collapsible icon-rail for Settings-page section navigation.
+- **Pre-flight gates** added to `rules.md`: Gate 0a (version consistency — `GW_VERSION` matches in `proxy.py`, compose, all dashboards) and Gate 0b (admin-key strength ≥ 16-char random; compose uses env-passthrough).
+
+### Fixed
+
+- **SIEM footer stale version** (`dashboards/siem.html`): `AntiBot/WAF GW 1.8.6` → `AntiBotWaf_GW_1.8.10` (space form slipped through bump script; Gate 0a now catches it).
+- **Topbar overlap** (`dashboards/controls.html`): topbar z-index/position fix to prevent overlap with sticky section headers.
+- **Per-vhost knob persistence**: `_to_bool` coercion applied uniformly; `vhost_policy` KNOB_META completeness verified.
+- **2FA card robustness**: 2FA status endpoint hardened against 500 on missing TOTP secret; backend guards added.
+- **SSO/CSRF cookie self-heal**: CSRF and SSO session cookies re-issued transparently on expiry without forcing re-login.
+
+### Tests
+
+- **`tests/test_v189_sidebar_collapse.py`**, **`test_v189_ctrlnav_rail.py`**, **`test_v189_setnav_rail.py`**: sidebar collapse/expand HTML structure, icon-rail existence, localStorage key, accordion animation classes across all dashboard files.
+- **`tests/test_v1810_csrf_autorefresh.py`**, **`test_v1810_riskbreakdown_control_column.py`**, **`test_v1810_riskbreakdown_enrichment.py`**, **`test_v1810_riskmodal_actions.py`**, **`test_v1810_admin_probe_classification.py`**, **`test_v1810_csrf_session_regression.py`**, **`test_v1810_csrf_shim_coverage.py`**, **`test_v1810_infra_restart_knobs.py`**, **`test_v1810_trusted_proxies_hotreload.py`**, **`test_v1810_2fa_status_robust.py`**, **`test_v1810_admin_key_strength.py`**, **`test_v1810_version_consistency.py`**, **`test_v1810_vhost_knob_persist.py`**, **`test_v1810_score_controls.py`**, **`test_v1810_topbar_overlap.py`**, **`test_v1810_topbar_overlap_dynamic.py`**: full coverage of the above feature areas (258 new tests).
+- **Full suite**: 976 unit, 38 functional, 23 integration, 20 component — all pass.
+
+### Validation
+
+- **Trivy**: 0 CRITICAL / 0 HIGH (amd64 + arm64 + armv7) — CVE-2026-8328 MEDIUM (`python-3.14 ftplib.py`) accepted risk (ftplib unused)
+- **Images**: `1.8.10-amd64` `sha256:9302385ca727` · `1.8.10-arm64` `sha256:a552480bd7bc` · `1.8.10-armv7` `sha256:4c4b792553f7` · manifest `sha256:f263551212302`
+
+---
+
+## [1.8.9] — 2026-05-19
+
+### Added
+
+- **Kill-switch knobs for all detectors** (30 new env vars, all default ON — `config.py`, `core/proxy_handler.py`): every previously always-on WAF/detection control now has an individually toggleable knob enabling per-deployment opt-out via environment variable or hot-reload. New knobs: `WAF_BODY_ENABLED`, `WAF_SMUGGLING_ENABLED`, `WAF_VERB_OVERRIDE_ENABLED`, `WAF_HEADER_INJECTION_ENABLED`, `WAF_GRAPHQL_ENABLED`, `WAF_UPLOAD_ENABLED`, `WAF_SLOWLORIS_ENABLED`, `ACCEPT_WILDCARD_CHECK_ENABLED`, `SESSION_CHURN_ENABLED`, `JA4H_DENY_ENABLED`, `HOST_BLOCKING_ENABLED`, `REQUIRED_HEADERS_ENABLED`, `JA4_REQUIRED_ENABLED`, `UPSTREAM_AUTH_FAIL_ENABLED`, `RATE_LIMIT_IP_ENABLED`, `RATE_LIMIT_ENABLED`, `FP_BAN_CHECK_ENABLED`, `TRAFFIC_THRESHOLD_ENABLED`, `TLS_FP_BLOCK_ENABLED`, `JWT_VALIDATION_ENABLED`, `CUSTOM_RULES_ENABLED`, `ENDPOINT_RATE_LIMIT_ENABLED`, `HONEY_CRED_ENABLED`, `REDIRECT_MAZE_ENABLED`, `CANARY_PROBE_ENABLED`, `LLM_HEURISTIC_ENABLED`, `AUTOMATION_PROBE_ENABLED`, `INTERACTION_PROBE_ENABLED`, `COORDINATED_ATTACK_ENABLED`, `JOURNEY_CHECK_ENABLED`. All accept `"1"/"true"/"yes"` via `os.environ.get`. Hot-reloadable; per-vhost overridable.
+
+### Tests
+
+- `test_165_every_knob_persists_round_trip` extended with 30 new test values covering every new kill-switch knob.
+- **`tests/test_component.py`** (20 tests): first component-test scaffold; spins up real gateway stack, verifies key architectural invariants.
+- **Full suite**: 961 unit+pure, 38 functional, 23 integration, 20 component — all pass.
+
+### Validation
+
+- **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (all 3 arches)
+- **Images**: `1.8.9-amd64` `sha256:dd0b78345b30` · `1.8.9-arm64` `sha256:1d7dd697ec29` · `1.8.9-armv7` `sha256:473de068802785` · manifest `sha256:661a65abcbc9`
+
+---
+
+## [1.8.8] — 2026-05-17
+
+### Added
+
+- **Redis IP/CIDR allowlist** (`core/proxy_handler.py`, `config.py`): new `REDIS_ALLOW_LIST` knob — only listed IPs/CIDRs may connect to the Redis sidecar; empty list defaults to open (no regression). Enforced at connect time.
+- **`REDIS_REQUIRE_TLS`** (`config.py`, `integrations/redis_client.py`): new knob; defaults to `True` (production hardening). Set to `false` in `docker-compose.yml` via env-passthrough for local dev with plain `redis://` sidecar.
+- **Ed25519 mesh signing** (`admin/mesh.py`, `tests/test_v188_ed25519_mesh.py`): gateway-to-gateway mesh calls signed with Ed25519 key pair; signature verified on receipt. Replay protection via nonce + timestamp window.
+
+### Fixed
+
+- **B1 — Tarpit log spam** (`challenge/tarpit.py`): `ClientConnectionResetError` on bot mid-stream disconnect now caught silently (`except ConnectionResetError: pass`) instead of logged.
+- **B2 — `secrets_kv` self-heal** (`db/postgres.py`): `_pg_mirror_kv` now attempts a one-shot `db_init_postgres()` on `UndefinedTable` error, then rate-limits retries to 1/min. Prevents schema-not-created errors spamming logs after PG unavailable at boot.
+- **B3 — `POSTGRES_DSN` propagation** (`db/sqlite.py`): `POSTGRES_DSN` was missing from `_refresh_integration_state._propagate`; `proxy_handler.py` retained empty import-time binding after `db_load_secrets()` loaded the real DSN. Added to propagate dict.
+- **B4 — Settings DB modal hint inverted** (`dashboards/settings.html`): ternary logic for "no DSN configured" / "DSN saved" hints was reversed; restructured. `autocomplete="off"` added to DSN input to prevent browser autofill triggering `_dsnUserTouched` prematurely.
+- **B5 — Vhost filter test assertions** (`tests/test_vhost_filtering.py`): 3 tests checked for raw SQL pattern `"vhost = ?"` after code was refactored to `db_read_events(vhost=…)` abstraction; assertions updated.
+- **B6 (CRITICAL) — HTTP 500 on invalid UTF-8 headers** (`identity.py`): five `.encode()` calls in `browser_fingerprint()`, `_header_order_sig()`, `_fp_hash()`, and `compute_ja4h()` raised `UnicodeEncodeError` on requests with surrogate code-points (e.g. `User-Agent: \xff\xfe\x00…`). Changed all five to `.encode("utf-8", errors="replace")`. Found during §15f DAST header fuzzing.
+
+### Security
+
+- **CVE-2026-26007** (`cryptography`): upgraded to ≥ 46.0.5.
+
+### Tests
+
+- **`tests/test_v188_redis_security.py`**, **`test_v188_ed25519_mesh.py`**, **`test_v188_db_settings_merge.py`**, **`test_v188_session_fixes.py`**, **`test_v188_startup_fixes.py`**, **`test_v188_settings_subnav.py`**, **`test_v188_backend_aware_reads.py`**: 7 new test files formalising the 1.8.8 feature set.
+- `test_pure.py` (+2 regression tests): `test_browser_fingerprint_invalid_utf8_surrogate_does_not_raise`, `test_header_order_sig_invalid_utf8_does_not_raise` (B6 guard).
+- **Full suite**: 959 unit+pure, 38 functional, 23 integration — all pass (830 test_pure total).
+
+### Validation
+
+- **Trivy**: 0 CRITICAL / 0 HIGH / 0 MEDIUM (amd64 + arm64 + armv7)
+- **Images**: `1.8.8-amd64` · `1.8.8-arm64` · `1.8.8-armv7` (`sha256:293c14b1`, rebuilt 2026-05-18 to include B6 surrogate fix) · manifest `sha256:211e433862aa`
+
+---
+
+## [1.8.7] — 2026-05-16
+
+### Added
+
+- **Score breakdown UX overhaul** (`dashboards/agents.html`, `dashboards/analytics.py`): expandable per-signal breakdown panel in the risk modal; `RISK_DETAIL_JS` / `BLOCK_DETAIL_JS` JS constants for label rendering; `score_source` field on events.
+- **DB backend section merged Controls → Settings** (`dashboards/settings.html`, `dashboards/controls.html`): DB-backend selector (SQLite ↔ Postgres), DSN input, and validation pipeline moved from the Controls page to a dedicated Settings card. Hot-swap without process restart (`_propagate_global()` replaces prior `os._exit(0)` approach). `pg_pool_reset()` on DSN change.
+- **Controls activation-order management** (`dashboards/controls.html`, `tests/test_v187_controls_order.py`): drag-and-drop signal activation order with `signal_orders_endpoint`; actor identity uses `_request_username` (session-verified) instead of forgeable `X-Admin-User` header.
+- **Settings vhost/upstream identity strip** (`dashboards/settings.html`, `tests/test_v187_settings_vhost_strip.py`): Settings page redacts `scheme://netloc` of upstream from displayed values; vhost-strip covers all vhost-keyed fields. 29 tests (H01–H08, J01–J14, A01–A02, V01–V05).
+
+### Security
+
+- **DET4-02 — Redirect maze dest binding** (`detection/redirect_maze.py`): `dest` parameter now bound in HMAC token; unsigned `dest` values rejected.
+- **DET4-03 — Interaction probe identity binding** (`detection/interaction.py`): interaction token now binds to `get_identity()` (not raw IP); cross-identity reuse rejected.
+- **DET4-04 — All-identical-timestamp bypass** (`detection/interaction.py`): all-zero or all-identical event timestamps now rejected as bot heuristic.
+- **PROXY4-01 — UPSTREAM hot-reload SSRF** (`core/proxy_handler.py`): `_upstream_safe_to_reload()` validates hot-reload UPSTREAM values against RFC1918/link-local/loopback ranges before applying.
+- **PROXY4-02 — Host header injection in Location rewrite** (`core/proxy_handler.py`): `ALLOWED_HOSTS` validates `Host` header before use in `Location` rewrite; unknown host falls back to `up_parsed.netloc`.
+- **PROXY4-03 — Module `__setattr__` builtin overwrite** (`proxy.py`): `_PROPAGATE_NEVER` frozenset blocks `open`, `exec`, `eval`, `__builtins__`, `__import__` from being overwritten via hot-reload propagation.
+- **`decimal.Decimal` crash on Postgres → SQLite migration** (`db/postgres.py`): `float(r[0])` cast added to row read; `pg_pool_reset()` exposed.
+
+### Tests
+
+- **`tests/test_v187_security.py`** (37 tests): DET4-02/03/04, PROXY4-01/02/03 verified.
+- **`tests/test_v187_settings_vhost_strip.py`** (29 tests): H01–H08 HTML, J01–J14 JS, A01–A02 admin, V01–V05 vhost.
+- **`tests/test_v187_db_switch_hotswap.py`**, **`test_v187_db_switch_roundtrip.py`**, **`test_v187_db_endpoints_dynamic.py`**, **`test_v187_controls_order.py`**, **`test_v187_login_2fa.py`**, **`test_v187_new_features.py`**, **`test_v187_ux_improvements.py`**.
+- `test_pure.py`: +121 targeted survivor-kill tests (828 total); `test_critical.py`: ALLOW_PRIVATE_UPSTREAM removed from hot-reload round-trip.
+- **Full suite**: 3285 passed, 0 failed (2026-05-16 clean run).
+
+### Validation
+
+- **Trivy**: 0 CRITICAL / 0 HIGH (amd64 + arm64 + armv7)
+- **Images**: `1.8.7-amd64` `sha256:7088e62334952` · `1.8.7-arm64` `sha256:1480e48b3921c` · `1.8.7-armv7` `sha256:4c724621d63da`
+
+---
+
+## [1.8.6] — 2026-05-16
+
+### Added
+
+- **Controls-nav split-pane** (`dashboards/controls.html`, `dashboards/controls_testA.html`, `dashboards/controls_testB.html`): split-pane Controls page with left navigation rail; prototype A/B endpoint scaffolding (`dashboards/controls.py`) with viewer-role guards.
+- **Score breakdown detail expansion** (`dashboards/agents.html`, `dashboards/agents.py`, `core/proxy_handler.py`): `RISK_DETAIL_JS` / `BLOCK_DETAIL_JS` JS constant strings; `score_source` missed-list field on events for per-signal detail breakdown in the risk modal.
+
+### Security
+
+- **P0-1** (`config.py`): `/login/totp` missing from `_ADMIN_LOGIN_SUBPATHS` → 2FA page inaccessible; `/interaction-report` missing from `_ADMIN_PUBLIC_SUBPATHS` → interaction probe silently dropped. Both paths added.
+- **P0-2** (`db/sqlite.py`): `oidc_sub` column missing from `_SCHEMA_MIGRATIONS` → SSO sub claim not persisted on existing deployments. Migration entry added.
+- **P0-3** (`admin/oidc.py`): no `oidc_sub` binding on first SSO login; no collision check → username takeover via pre-created local account with matching `preferred_username`. Extracted `sub` from userinfo; collision guard; bind on first login; reject missing `sub`.
+- **P0-4** (`admin/users.py`): `_user_load_all` SELECT excluded `oidc_sub` → admin dashboard could not display bound IdP subject. Added to SELECT.
+- **P0-5** (`admin/oidc.py`): OIDC session cookie `SameSite=Lax` → sent on top-level cross-site navigations. Changed to `SameSite=Strict`.
+- **P1-1** (`admin/users.py`): `totp_verify_endpoint` had no rate limiting → 6-digit TOTP brute-forceable at network speed. `_login_rate_limit(ip)` added; 429 + `Retry-After: 60` on excess.
+- **P1-2/3** (`dashboards/siem.py`, `dashboards/siem.html`): `siem_alert_rules_endpoint` had no CSRF protection; SIEM JS calls had no `X-CSRF-Token`. `@_require_csrf` on endpoint; token injected in all 3 fetch calls.
+- **P1-4/5** (`core/proxy_handler.py`, `dashboards/controls.html`, `dashboards/agents.html`): `ban_endpoint`, `config_endpoint`, `unban_endpoint` had no CSRF protection; controls/agents HTML had no token injection. `@_require_csrf` on all three; `window.fetch` IIFE auto-injects token for all non-GET/HEAD.
+- **P1-6** (`db/sqlite.py`): `user_update` built UPDATE with unsanitised column names → SQL injection via key injection. `_USER_MUTABLE` frozenset validates all column names before query.
+- **P1-7** (`integrations/ja4.py`): `_ja4_peer_trusted()` returned `True` when `JA4_TRUSTED_NETS` empty → fail-open. Changed to `return False`.
+- **P1-8** (`detection/interaction.py`): interaction probe accepted arbitrary `duration_ms` / `offset_ms` from client → integer overflow / scoring bypass. Clamped to `[0, _MAX_OFFSET_MS=60000]`.
+- **AUTH4-01/02** (`admin/auth.py`, `admin/users.py`): deleted-user sessions returned `"admin"` (fail-open); user delete didn't revoke active sessions. Fail-closed; session revoke on delete.
+- **AUTH4-03** (`admin/mesh.py`): 5 mesh endpoints had no role guard → any logged-in user could access topology data. `_role_denied(admin|maintainer)` on all 5.
+- **AUTH4-07/08/12/13** (`admin/oidc.py`): OIDC nonce missing (replay possible); session cap not enforced on OIDC login; no HTTPS check on `OIDC_ISSUER` at startup; opaque error codes to prevent open redirect via IdP error string reflection.
+- **AUTH4-10** (`dashboards/controls.py`): prototype endpoints checked role only, not `_internal_authed`. Require both.
+- **DET4-05/06/07** (`detection/interaction.py`): exception propagation → 500 on malformed input; no replay protection on interaction tokens; body read limit reduced from 65536 to 16384 bytes.
+- **PROXY4-07/09** (`rate_limit.py`, `core/proxy_handler.py`): `_PROBE_RL` never pruned; `signal_orders_endpoint` used forgeable `X-Admin-User` header.
+- **PROXY4-10** (`rate_limit.py`): `_TOTP_PENDING` never pruned → unbounded growth. Evicted after 600 s.
+
+### Tests
+
+- `_csrf_hdr` helper added to 8 test files; `test_oidc.py` updated for `SameSite=Strict` and opaque error codes.
+- **Full suite**: 2988 passed, 1 skipped — no regressions.
+
+### Validation
+
+- **Bandit**: 0 High / 0 Critical
+- **Trivy**: 0 CRITICAL / 0 HIGH (amd64 + arm64 + armv7)
+- **Images**: `1.8.6-amd64` `sha256:2922f3c6` · `1.8.6-arm64` `sha256:d4263f72` · `1.8.6-armv7` `sha256:e21970ad`
 
 ---
 
@@ -91,7 +1785,7 @@ Author: Pedro Tarrinho
 ### Changed
 - **`proxy.py` route table** — added `("security-incidents", "GET", security_incidents_endpoint, True)`, `("risk-percentiles", "GET", risk_percentiles_endpoint, True)`, `("ban-events", "GET", ban_events_endpoint, True)`, `("top-attackers", "GET", top_attackers_endpoint, True)`.
 - **`tests/test_pure.py`** — `stale_re` updated from `1.8.2` to `1.8.3`; `_EXPECTED_VERSION` updated.
-- **All test files with hardcoded `AppSecGW_1.8.2`** — version strings updated to `1.8.3` (`test_geo_dashboard.py`, `test_v180_v181_gaps.py`, `test_settings_config_functional.py`, `test_endpoints_dynamic.py`).
+- **All test files with hardcoded `AntiBotWaf_GW_1.8.2`** — version strings updated to `1.8.3` (`test_geo_dashboard.py`, `test_v180_v181_gaps.py`, `test_settings_config_functional.py`, `test_endpoints_dynamic.py`).
 
 ### Tests
 - **`tests/test_v183_incidents.py`** — 50 tests (35 static S01–S35 + 15 dynamic D01–D15):
@@ -114,7 +1808,7 @@ Author: Pedro Tarrinho
 
 ### Fixed
 - **Service metrics history capped at ~12h** — `service_metrics_data_endpoint` read only the in-memory deque (`SERVICE_METRICS_HISTORY`, maxlen=8640 × 5s = 12h). SQLite `svc_metrics` table already received every sample and pruned at 30 days (`SVC_DB_RETENTION_HOURS=720`), but the read path never consulted it. Requests whose window start precedes the in-memory buffer's oldest timestamp now fall through to `_svc_db_history()`, which aggregates the SQLite table in SQL (`GROUP BY CAST(ts/bucket AS INTEGER)`) and returns zero-filled buckets for gaps — up to 30 days of history.
-- **Sidebar version badge stale across 10 dashboard files** — `bump-version.sh` updates `AppSecGW_X.Y.Z` patterns in `config.py` and `<title>` tags but does not touch `<div id="sidebar-brand-ver">`. All 9 dashboard HTML files plus `center_control.html` and `header-designs.html` still showed `1.8.1`. Fixed to `1.8.2`.
+- **Sidebar version badge stale across 10 dashboard files** — `bump-version.sh` updates `AntiBotWaf_GW_X.Y.Z` patterns in `config.py` and `<title>` tags but does not touch `<div id="sidebar-brand-ver">`. All 9 dashboard HTML files plus `center_control.html` and `header-designs.html` still showed `1.8.1`. Fixed to `1.8.2`.
 - **`docker-compose.yml` container_name frozen at `1.7.10`** — `container_name` field was never updated by the bump script; fixed to `appsec-antibot-gw1.8.2`.
 - **`MANUAL.md` stale image tag** — example `docker run` command on line 425 referenced `appsec-antibot-gw:1.8.1`; updated to `1.8.2`.
 
@@ -179,7 +1873,7 @@ Author: Pedro Tarrinho
 - **Login redirect target** — `admin/users.py` both handlers now redirect to `/antibot-appsec-gateway/secured/control-center` (was `/secured/dashboard`); `next` param validation preserved.
 - **Vhost Traffic Summary moved from Settings to Control Center** — block removed from `settings.html` (replaced with comment); all `test_settings_vhost_stats_*` tests in `test_pure.py` updated to read `control_center.html`.
 - **`main.html` sidebar nav updated** — Control Center added as first item; Live Feed replaces Dashboard; sidebar uses `#sidebar-nav` pattern (distinct from top-nav on all other pages).
-- **Version bump** — `config.py` `GW_VERSION = "AppSecGW_1.8.1"`; all 9 dashboard `<title>` tags updated.
+- **Version bump** — `config.py` `GW_VERSION = "AntiBotWaf_GW_1.8.1"`; all 9 dashboard `<title>` tags updated.
 
 ### Design / UI
 - **`<!doctype html>` added** to 5 pages that were missing it: `main.html`, `agents.html`, `geo.html`, `logs.html`, `service.html`.
@@ -265,7 +1959,7 @@ Author: Pedro Tarrinho
 
 ### Changed
 - **SSRF guard scope narrowed** — `_assert_upstream_public()` retained in `vhost_set()` (API path) and the `VHOSTS` env var parsing loop; removed from module-level global `UPSTREAM` check (which fired before `test_functional.py` could set `UPSTREAM=http://127.0.0.1:18999`, causing `SystemExit`). Guard is unchanged for all operator-controlled inputs.
-- **Version bumped** — `config.py` `GW_VERSION = "AppSecGW_1.8.0"`; all 7 dashboard HTML `<h1>` version strings updated via sed.
+- **Version bumped** — `config.py` `GW_VERSION = "AntiBotWaf_GW_1.8.0"`; all 7 dashboard HTML `<h1>` version strings updated via sed.
 
 ### Fixed
 - **DOMContentLoaded race** — Virtual Hosts `<script>` block was an IIFE that ran before `escapeHtml` and `_timers` (declared in later `<script>` blocks) were defined; wrapping in `document.addEventListener('DOMContentLoaded', …)` eliminates the `ReferenceError`.
@@ -650,7 +2344,7 @@ Author: Pedro Tarrinho
 - **7-day graph no date labels in main/agents dashboards** (`dashboards/main.html`, `dashboards/agents.html`) — `pickBucketForRange` mapped the 7-day window to 900 s (15-min) buckets, producing 672 data points all labeled `"HH:MM"` by `fmtTime`'s sub-3600 s branch (no date component). Changed to map 7 d → 3600 s buckets (168 points, labeled `"May 3 14:00"`) and ≥ 30 d → 86400 s buckets (30 points, labeled `"May 3"`). Added `<option value="43200">30 days</option>` to the range selector in both dashboards. Added `tPickBucketForRange` + `tAutoSelectBucket` to `agents.html` (which had no equivalent auto-bucket logic) and wired it into the `t-range` change handler.
 
 ### Tests
-- **Version strings bumped** — `tests/test_pure.py` `_EXPECTED_VERSION`, `test_gw_version_constant`, and `test_no_stale_version_strings_in_source` updated to `AppSecGW_1.7.4`.
+- **Version strings bumped** — `tests/test_pure.py` `_EXPECTED_VERSION`, `test_gw_version_constant`, and `test_no_stale_version_strings_in_source` updated to `AntiBotWaf_GW_1.7.4`.
 - **`test_no_eschtml_calls`** — parametrized ×7 dashboards; asserts no call to undefined `escHtml()` (regression for 5-dashboard `escHtml` bug).
 - **`test_log_level_n_propagated_on_hot_reload`** — asserts `config_endpoint` contains `_LOG_LEVEL_N` propagation and `_LOG_LEVELS.get(` recompute (regression for hot-reload numeric sentinel bug).
 - **`test_ip_intel_endpoint_imports_reputation_symbols`** — asserts all 5 reputation symbols (`_city_lookup`, `_asn_lookup`, `_abuseipdb_lookup`, `_crowdsec_check`, `_tor_exits`) imported at module level in `admin/users.py` (regression for `NameError` in ip-intel endpoint).
@@ -724,7 +2418,7 @@ Author: Pedro Tarrinho
 - **[Post-release — MEDIUM] Soft-challenge tier never enforced on `JS_CHAL_OPEN_PATHS`** — `_js_challenge_required()` had the identical `_track_key` ordering bug: risky identities (SOFT_CHALLENGE_SCORE ≤ risk < RISK_BAN_THRESHOLD) on open paths were supposed to have their bypass revoked and be challenged. The `if track_key:` branch was always skipped (track_key = None), so the open-path bypass was always granted regardless of risk. Fixed: same pattern — derive identity via `get_identity(request)` directly.
 
 - **`ALLOWED_HOSTS` URL parsing bug** — `_to_host_set()` in `integrations/endpoint_policy.py` accepted bare hostnames only; full URLs with scheme (e.g. `https://example.com/`) stored verbatim, causing every request to match `host-not-allowed` (bare hostname `example.com` ≠ full URL string). Fixed: `_to_host_set()` now uses `urllib.parse.urlparse` to normalise each entry — strips scheme, path, and case. Startup parser in `proxy_handler.py` updated to use the same function. Regression tests added to `test_pure.py` (`test_to_host_set_strips_scheme_and_path`).
-- **Dashboard version string regression** — dashboard HTML files (`main.html`, `agents.html`, `controls.html`, `geo.html`, `logs.html`, `service.html`, `settings.html`) had `AppSecGW_1.7.2` hardcoded in `<title>` and `<h1>` tags after `config.py` was bumped to `1.7.3`; the version is not template-rendered but literal text. Updated all 7 files to `AppSecGW_1.7.3`. Added `test_no_stale_version_strings_in_source` (now includes `.html` in suffix set) and `test_dashboard_html_version_strings()` to `test_pure.py`; added `test_dashboard_html_version_matches_config()` to `test_control_regressions.py`. Added explicit file list to `rules.md` step 13b.
+- **Dashboard version string regression** — dashboard HTML files (`main.html`, `agents.html`, `controls.html`, `geo.html`, `logs.html`, `service.html`, `settings.html`) had `AntiBotWaf_GW_1.7.2` hardcoded in `<title>` and `<h1>` tags after `config.py` was bumped to `1.7.3`; the version is not template-rendered but literal text. Updated all 7 files to `AntiBotWaf_GW_1.7.3`. Added `test_no_stale_version_strings_in_source` (now includes `.html` in suffix set) and `test_dashboard_html_version_strings()` to `test_pure.py`; added `test_dashboard_html_version_matches_config()` to `test_control_regressions.py`. Added explicit file list to `rules.md` step 13b.
 
 ### Tests
 - **37 new unit tests** in `tests/test_v173.py`: P1 honey_cred (10), P2 redirect_maze (7), P3 llm_heuristic (9), P4 canary_probe (11).
@@ -767,7 +2461,7 @@ Author: Pedro Tarrinho
 - **Country table colspan** — no-data rows used `colspan="6"` despite the table having 7 columns. Fixed to `colspan="7"`.
 - **Geo dashboard dead code** — removed unused `url()` arrow function and `setInterval(loadLogLevel, 30000)` (log-level polling not applicable in geo page).
 - **Missed signal note** — added inline note in scrubber div explaining that missed counts are unavailable in scrubber mode (sourced from live `ip_state`, not DB events).
-- **All dashboard version badges** — `AppSecGW_1.7.1` → `AppSecGW_1.7.2` in `main.html`, `controls.html`, `agents.html`, `logs.html`, `settings.html`, `service.html`, `geo.html`.
+- **All dashboard version badges** — `AntiBotWaf_GW_1.7.1` → `AntiBotWaf_GW_1.7.2` in `main.html`, `controls.html`, `agents.html`, `logs.html`, `settings.html`, `service.html`, `geo.html`.
 - **JS SyntaxErrors in `main.html` and `agents.html`** — smart/typographic quotes (U+2018/U+2019) in `_adminLock` fallback literal and unescaped apostrophe in `_ADMIN_IP_TIP` string caused `Uncaught SyntaxError` that silently killed all dashboard JS (`tick()` never ran → zero stats). Fixed `_ADMIN_IP_TIP` to use double-quoted string; `_adminLock` fallback to ASCII single quotes.
 - **Blockrate chart always empty in `main.html`** — `d.timeline.buckets` does not exist; `d.timeline` is the array directly. Fixed to `Array.isArray(d.timeline) ? d.timeline : []` with `b.t||b.ts` for timestamp field.
 - **CI `docker-no-latest-tag` linter failure** — added `exceptions.yaml` to suppress the conftest rule for Chainguard images; both `FROM` lines are already pinned by `@sha256` digest so the `:latest` tag is a registry alias, not a floating reference.

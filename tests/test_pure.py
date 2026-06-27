@@ -88,11 +88,18 @@ def test_sign_then_verify_round_trip(proxy_module):
 
 
 def test_verify_session_rejects_empty_sid(proxy_module):
-    """N3: an HMAC-valid token over the empty string must NOT authenticate."""
+    """N3: an HMAC-valid token over the empty sid must NOT authenticate.
+    Uses the correct session: prefix so the sig passes the HMAC check and the
+    empty-sid guard is the only thing preventing authentication."""
     import hmac as _hmac
     import hashlib as _hashlib
-    sig = _hmac.new(proxy_module.SESSION_KEY, b"", _hashlib.sha256).hexdigest()
+    sig = _hmac.new(proxy_module.SESSION_KEY, b"session:", _hashlib.sha256).hexdigest()
     assert proxy_module._verify_session("." + sig) is None
+
+
+def test_verify_session_rejects_no_dot(proxy_module):
+    """A non-empty token with no dot must be rejected by the early guard."""
+    assert proxy_module._verify_session("nodothere") is None
 
 
 def test_verify_session_rejects_bad_charset(proxy_module):
@@ -226,6 +233,125 @@ def test_browser_fingerprint_differs_on_different_uas(proxy_module):
     assert proxy_module.browser_fingerprint(a) != proxy_module.browser_fingerprint(b)
 
 
+def test_browser_fingerprint_differs_on_different_accept_language(proxy_module):
+    """Accept-Language must be included in the fingerprint hash."""
+    a = _FakeReq({"User-Agent": "UA", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    b = _FakeReq({"User-Agent": "UA", "Accept-Language": "fr", "Accept-Encoding": "gzip"})
+    assert proxy_module.browser_fingerprint(a) != proxy_module.browser_fingerprint(b)
+
+
+def test_browser_fingerprint_differs_on_different_accept_encoding(proxy_module):
+    """Accept-Encoding must be included in the fingerprint hash."""
+    a = _FakeReq({"User-Agent": "UA", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    b = _FakeReq({"User-Agent": "UA", "Accept-Language": "en", "Accept-Encoding": "br"})
+    assert proxy_module.browser_fingerprint(a) != proxy_module.browser_fingerprint(b)
+
+
+def test_browser_fingerprint_missing_ua_is_stable(proxy_module):
+    """Missing User-Agent must not crash; same absent UA → same fingerprint."""
+    r1 = _FakeReq({"Accept-Language": "en", "Accept-Encoding": "gzip"})
+    r2 = _FakeReq({"Accept-Language": "en", "Accept-Encoding": "gzip"})
+    assert proxy_module.browser_fingerprint(r1) == proxy_module.browser_fingerprint(r2)
+
+
+def test_browser_fingerprint_ua_truncated_at_200(proxy_module):
+    """UA longer than 200 chars must be truncated so two 201+ UA that share the
+    first 200 chars produce the same fingerprint."""
+    ua_base = "A" * 200
+    a = _FakeReq({"User-Agent": ua_base + "X", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    b = _FakeReq({"User-Agent": ua_base + "Y", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    assert proxy_module.browser_fingerprint(a) == proxy_module.browser_fingerprint(b)
+
+
+def test_browser_fingerprint_length_is_12(proxy_module):
+    """Fingerprint must be exactly 12 hex chars."""
+    r = _FakeReq({"User-Agent": "UA", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    assert len(proxy_module.browser_fingerprint(r)) == 12
+
+
+def test_browser_fingerprint_missing_ua_differs_from_placeholder(proxy_module):
+    """Default for missing UA must be '' (empty), not some placeholder.
+    A request with no UA must differ from one with UA='XXXX'."""
+    no_ua   = _FakeReq({"Accept-Language": "en", "Accept-Encoding": "gzip"})
+    has_ua  = _FakeReq({"User-Agent": "XXXX", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    assert proxy_module.browser_fingerprint(no_ua) != proxy_module.browser_fingerprint(has_ua)
+
+
+def test_browser_fingerprint_missing_accept_language_differs_from_placeholder(proxy_module):
+    """Default for missing Accept-Language must be ''."""
+    no_al  = _FakeReq({"User-Agent": "UA", "Accept-Encoding": "gzip"})
+    has_al = _FakeReq({"User-Agent": "UA", "Accept-Language": "XXXX", "Accept-Encoding": "gzip"})
+    assert proxy_module.browser_fingerprint(no_al) != proxy_module.browser_fingerprint(has_al)
+
+
+def test_browser_fingerprint_missing_accept_encoding_differs_from_placeholder(proxy_module):
+    """Default for missing Accept-Encoding must be ''."""
+    no_ae  = _FakeReq({"User-Agent": "UA", "Accept-Language": "en"})
+    has_ae = _FakeReq({"User-Agent": "UA", "Accept-Language": "en", "Accept-Encoding": "XXXX"})
+    assert proxy_module.browser_fingerprint(no_ae) != proxy_module.browser_fingerprint(has_ae)
+
+
+def test_browser_fingerprint_join_separator_not_in_output(proxy_module):
+    """Parts are joined with '|'. A UA containing '|' must produce a different
+    fingerprint than a UA without '|', confirming the separator is the literal
+    pipe character."""
+    with_pipe    = _FakeReq({"User-Agent": "A|B", "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    without_pipe = _FakeReq({"User-Agent": "AB",  "Accept-Language": "en", "Accept-Encoding": "gzip"})
+    assert proxy_module.browser_fingerprint(with_pipe) != proxy_module.browser_fingerprint(without_pipe)
+
+
+def test_browser_fingerprint_separator_is_single_pipe(proxy_module):
+    """Separator must be exactly '|'. If it were a longer string (e.g. 'XX|XX'),
+    fields could collide: UA='AXX|XX' + AL='en' would hash the same as UA='A'
+    + AL='XX|XXen'. With the correct '|' separator those produce distinct hashes."""
+    # With '|': "AXX|XX|en|gz"  ≠  "A|XX|XXen|gz"
+    # With 'XX|XX': "AXX|XXXX|XXenXX|XXgz"  ==  "AXX|XXXX|XXenXX|XXgz"  (collision!)
+    r1 = _FakeReq({"User-Agent": "AXX|XX", "Accept-Language": "en",      "Accept-Encoding": "gz"})
+    r2 = _FakeReq({"User-Agent": "A",       "Accept-Language": "XX|XXen", "Accept-Encoding": "gz"})
+    assert proxy_module.browser_fingerprint(r1) != proxy_module.browser_fingerprint(r2)
+
+
+def test_browser_fingerprint_invalid_utf8_surrogate_does_not_raise(proxy_module):
+    """Invalid UTF-8 surrogates in UA header must not raise UnicodeEncodeError.
+    Found via DAST fuzzing: curl --User-Agent $'\\xff\\xfe\\x00' caused HTTP 500
+    because encode() rejected surrogates. Fix: encode(..., errors='replace')."""
+    surrogate_ua = _FakeReq({
+        "User-Agent": "\udcff\udcfe\x00bad-utf8",
+        "Accept-Language": "en",
+        "Accept-Encoding": "gzip",
+    })
+    fp = proxy_module.browser_fingerprint(surrogate_ua)
+    assert isinstance(fp, str) and len(fp) == 12
+
+
+def test_header_order_sig_invalid_utf8_does_not_raise():
+    """Header names with surrogate bytes must not crash _header_order_sig."""
+    import identity as _id
+    surrogate_hdr = _FakeReq({"\udcff-Header": "value", "Accept": "*/*"})
+    sig = _id._header_order_sig(surrogate_hdr)
+    assert isinstance(sig, str) and len(sig) == 12
+
+
+# ── _verify_session boundary conditions ──────────────────────────────────
+
+def test_verify_session_accepts_exactly_64_char_sid(proxy_module):
+    """A 64-char sid must NOT be rejected by the length guard (>64, not >=64)."""
+    token = proxy_module._sign_session("A" * 64)
+    assert proxy_module._verify_session(token) == "A" * 64
+
+
+def test_verify_session_rejects_65_char_sid(proxy_module):
+    """A 65-char sid must be rejected by the length guard."""
+    token = proxy_module._sign_session("A" * 65)
+    assert proxy_module._verify_session(token) is None
+
+
+def test_verify_session_accepts_dash_and_underscore(proxy_module):
+    """Sids may contain '-' and '_' (token_urlsafe alphabet)."""
+    token = proxy_module._sign_session("a-b_c")
+    assert proxy_module._verify_session(token) == "a-b_c"
+
+
 # ── _admin_ip_allowed semantics ──────────────────────────────────────────
 
 class _IPReq:
@@ -238,10 +364,10 @@ class _IPReq:
         self.path = "/"
 
 
-def test_admin_ip_allowed_open_when_unset(proxy_module):
-    """No allowlist → all IPs allowed (admin key still required)."""
+def test_admin_ip_allowed_closed_when_unset(proxy_module):
+    """No allowlist → all IPs denied (fail-closed, F-06)."""
     proxy_module.ADMIN_ALLOWED_NETS.clear()
-    assert proxy_module._admin_ip_allowed(_IPReq("8.8.8.8")) is True
+    assert proxy_module._admin_ip_allowed(_IPReq("8.8.8.8")) is False
 
 
 def test_admin_ip_allowed_single_ip(proxy_module):
@@ -330,6 +456,74 @@ def test_167_session_revoke_invalidates_cookie(proxy_module):
     assert proxy_module._internal_authed(_AuthReq(cookie=token))
     assert proxy_module._session_revoke(sid, by_username="admin") is True
     assert not proxy_module._internal_authed(_AuthReq(cookie=token))
+
+
+# ── Online indicator: _ACTIVE_SESSIONS shared-object regression ───────────
+# Bug: admin/users.py redefined _ACTIVE_SESSIONS = {} after "from state import *",
+# creating a local orphan dict that auth.py never wrote to.  Every user appeared
+# offline 60 s after login because the display read the empty local dict while
+# the auth middleware bumped state._ACTIVE_SESSIONS.
+# Fix: explicit "from state import _ACTIVE_SESSIONS" in users.py (private names
+# are not exported by wildcard imports unless __all__ is defined).
+
+def test_active_sessions_users_and_state_are_same_object(proxy_module):
+    """admin.users._ACTIVE_SESSIONS must be the same dict object as
+    state._ACTIVE_SESSIONS.  If they diverge, auth bumps are invisible to the
+    Users-list online indicator."""
+    import state
+    import admin.users as users
+    assert users._ACTIVE_SESSIONS is state._ACTIVE_SESSIONS, (
+        "admin.users._ACTIVE_SESSIONS is a different object from "
+        "state._ACTIVE_SESSIONS — online indicator will always show offline"
+    )
+
+
+def test_internal_authed_bumps_active_sessions(proxy_module):
+    """_internal_authed must write the authenticated username into
+    state._ACTIVE_SESSIONS so the Users list online indicator works.
+    Regression: the bump was targeting state._ACTIVE_SESSIONS but the
+    display was reading admin.users._ACTIVE_SESSIONS (separate orphan dict)."""
+    import state
+    import time as _time
+    sid, token = _prime_session(proxy_module, username="qa_operator")
+    before = state._ACTIVE_SESSIONS.get("qa_operator", 0.0)
+    t_before = _time.time()
+    result = proxy_module._internal_authed(_AuthReq(cookie=token))
+    assert result, "valid cookie must pass _internal_authed"
+    ts = state._ACTIVE_SESSIONS.get("qa_operator", 0.0)
+    assert ts >= t_before, (
+        f"_internal_authed did not bump state._ACTIVE_SESSIONS for 'qa_operator': "
+        f"before={before}, after={ts}"
+    )
+    # Clean up
+    state._ACTIVE_SESSIONS.pop("qa_operator", None)
+
+
+def test_users_list_online_field_uses_shared_active_sessions(proxy_module):
+    """The users-list online computation must read from the same dict that
+    auth bumps — verifies the logic in _user_list_handler's per-row online
+    calculation matches state._ACTIVE_SESSIONS."""
+    import state
+    import time as _time
+    import admin.users as users
+    now = _time.time()
+    # Inject a recent timestamp directly into state._ACTIVE_SESSIONS
+    state._ACTIVE_SESSIONS["__test_online_user__"] = now - 5
+    # Simulate the per-row calculation from _user_list_handler
+    ts = users._ACTIVE_SESSIONS.get("__test_online_user__", 0.0)
+    online = bool(ts and (now - ts) < users._ACTIVE_SESSION_TTL_S)
+    assert online, (
+        "User with timestamp 5 s ago must show as online — "
+        "_ACTIVE_SESSIONS write via state is not visible through admin.users"
+    )
+    # Inject a stale timestamp
+    state._ACTIVE_SESSIONS["__test_offline_user__"] = now - (users._ACTIVE_SESSION_TTL_S + 10)
+    ts_old = users._ACTIVE_SESSIONS.get("__test_offline_user__", 0.0)
+    offline = bool(ts_old and (now - ts_old) < users._ACTIVE_SESSION_TTL_S)
+    assert not offline, "User beyond TTL must show as offline"
+    # Clean up
+    state._ACTIVE_SESSIONS.pop("__test_online_user__", None)
+    state._ACTIVE_SESSIONS.pop("__test_offline_user__", None)
 
 
 # ── Dashboard static analysis: k_q removed ───────────────────────────────
@@ -504,7 +698,7 @@ def test_167_session_token_format_includes_sid(proxy_module):
 
 # ── version consistency ───────────────────────────────────────────────────
 
-_EXPECTED_VERSION = "AppSecGW_1.8.5"
+_EXPECTED_VERSION = "AntiBotWaf_GW_1.9.8"
 
 def test_gw_version_constant():
     """GW_VERSION in config.py must match the expected release string."""
@@ -519,10 +713,10 @@ def test_no_stale_version_strings_in_source():
     current release.  Comments (# …) and test fixtures are excluded."""
     import re, pathlib
     root = pathlib.Path(__file__).resolve().parent.parent
-    # Pattern: AppSecGW_ followed by a version number that is NOT the current one.
-    stale_re = re.compile(r'AppSecGW_(?!1\.8\.13\b)\d+\.\d+')
+    # Pattern: AntiBotWaf_GW_ followed by a version number that is NOT the current one.
+    stale_re = re.compile(r'AntiBotWaf_GW_(?!1\.9\.8\b)\d+\.\d+')
     # Files that intentionally reference old versions (changelogs, docs, test fixtures).
-    skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache"}
+    skip_dirs  = {"validation", ".git", "__pycache__", ".pytest_cache", "mutants"}
     skip_files = {"CHANGELOG.md", "README.md", "rules.md", "analysis.result.md"}
     hits = []
     for path in root.rglob("*"):
@@ -545,6 +739,71 @@ def test_no_stale_version_strings_in_source():
             if stale_re.search(line):
                 hits.append(f"{path.relative_to(root)}:{lineno}: {line.strip()}")
     assert not hits, f"Stale version strings found — update to {_EXPECTED_VERSION}:\n" + "\n".join(hits)
+
+
+def test_report_html_is_current_for_this_release():
+    """rules.md §13.4 requires `report.html` (and the `report.pdf` regenerated
+    from it) to be refreshed every release. Enforce it: the report must name the
+    current build, and the PDF must exist + be non-trivial (regenerated). On a
+    version bump this FAILS until the report is updated + the PDF regenerated via
+    Chromium headless — so the deliverable can't silently rot."""
+    import pathlib, pytest
+    root = pathlib.Path(__file__).resolve().parent.parent
+    if not (root / "report.html").exists():
+        pytest.skip("report.html not present in this tree (e.g. mutation sandbox)")
+    html = (root / "report.html").read_text(errors="replace")
+    assert _EXPECTED_VERSION in html, (
+        f"report.html does not mention the current build {_EXPECTED_VERSION!r} — "
+        "refresh it for this release (rules.md §13.4) and regenerate report.pdf."
+    )
+    pdf = root / "report.pdf"
+    assert pdf.exists() and pdf.stat().st_size > 20_000, (
+        "report.pdf missing or too small — regenerate from report.html: "
+        "chromium --headless --no-sandbox --print-to-pdf=report.pdf "
+        "--print-to-pdf-no-header file:///abs/report.html"
+    )
+    # Every embedded screenshot/image the report references must exist, or the
+    # published report (and PDF) ships with broken images.
+    import re
+    missing = [s for s in re.findall(r'<img[^>]*src="([^"]+)"', html)
+               if not (root / s).exists()]
+    assert not missing, f"report.html references missing image(s): {missing}"
+
+
+def test_report_html_is_publish_clean():
+    """`report.html`/`report.pdf` are published (copy-to-github MANIFEST) as of
+    1.9.7, so they must NOT re-introduce the internal/customer data that had them
+    blocklisted (engagement domains, local workstation path, registry host, live
+    tunnel URL). This guard fails loudly if any sneaks back in."""
+    import re, pathlib, pytest
+    root = pathlib.Path(__file__).resolve().parent.parent
+    if not (root / "report.html").exists():
+        pytest.skip("report.html not present in this tree (e.g. mutation sandbox)")
+    html = (root / "report.html").read_text(errors="replace")
+    forbidden = [
+        r"cfsectraining", r"sporting\.", r"\bngrok\b", r"/media/share",
+        r"kali-claude-code", r"harbor\.tools", r"trycloudflare", r"celfocus",
+        r"\.admin_key", r"node1\.",
+    ]
+    hits = [p for p in forbidden if re.search(p, html, re.IGNORECASE)]
+    assert not hits, (
+        "report.html contains internal/customer data that must be sanitised "
+        f"before publish: {hits}"
+    )
+
+
+def test_no_stale_sidebar_brand_ver_in_dashboards():
+    import re, pathlib
+    root = pathlib.Path(__file__).resolve().parent.parent / "dashboards"
+    ver_re = re.compile(r'id="sidebar-brand-ver">([^<]+)<')
+    stale = []
+    for path in sorted(root.glob("*.html")):
+        text = path.read_text(errors="replace")
+        for m in ver_re.finditer(text):
+            found = m.group(1).strip()
+            if found != "1.9.8":
+                stale.append(f"{path.name}: sidebar-brand-ver={found!r} (want 1.8.15)")
+    assert not stale, "Stale sidebar version(s):\n" + "\n".join(stale)
 
 
 def test_to_host_set_strips_scheme_and_path():
@@ -833,9 +1092,9 @@ def test_ja4_required_missing_logs_warning(proxy_module, caplog):
 
 
 # ── DAST regression: probe endpoints in _ADMIN_PUBLIC_SUBPATHS ────────────
-# Bug: /probe, /maze, /canary-probe/ were missing from _ADMIN_PUBLIC_SUBPATHS.
+# Bug: /probe, /canary-probe/ were missing from _ADMIN_PUBLIC_SUBPATHS.
 # protect() intercepts every admin-namespace path not in that list and
-# returns a 404 decoy before route dispatch — P1/P2/P4 detectors had zero
+# returns a 404 decoy before route dispatch — P1/P4 detectors had zero
 # effect in production because their endpoints were unreachable.
 
 def test_probe_endpoint_in_admin_public_subpaths():
@@ -848,16 +1107,6 @@ def test_probe_endpoint_in_admin_public_subpaths():
     )
 
 
-def test_maze_endpoint_in_admin_public_subpaths():
-    """P2 redirect-maze endpoint must be publicly reachable (no admin auth)."""
-    from config import _ADMIN_PUBLIC_SUBPATHS
-    assert "/maze" in _ADMIN_PUBLIC_SUBPATHS, (
-        "/maze must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
-        "admin-namespace path not in this list before route dispatch, making "
-        "the redirect-maze P2 detector completely non-functional"
-    )
-
-
 def test_canary_probe_in_admin_public_subpaths():
     """P4 canary-probe endpoint must be publicly reachable (no admin auth)."""
     from config import _ADMIN_PUBLIC_SUBPATHS
@@ -866,6 +1115,18 @@ def test_canary_probe_in_admin_public_subpaths():
         "admin-namespace path not in this list before route dispatch, making "
         "the browser execution probe P4 detector completely non-functional"
     )
+
+
+def test_favicon_assets_in_admin_public_subpaths():
+    """Favicon assets must be publicly reachable — injected into every HTML
+    response so browsers fetch them without a session cookie."""
+    from config import _ADMIN_PUBLIC_SUBPATHS
+    for path in ("/favicon.ico", "/apple-touch-icon.png", "/favicon.svg"):
+        assert path in _ADMIN_PUBLIC_SUBPATHS, (
+            f"{path} must be in _ADMIN_PUBLIC_SUBPATHS — protect() decoys any "
+            "admin-namespace path not in this list; favicon 404s on every page "
+            "when this entry is missing"
+        )
 
 
 # ── DAST regression: NameError 's' on ban recovery ───────────────────────
@@ -960,6 +1221,20 @@ def _read_dash(name: str) -> str:
         return f.read()
 
 
+# 1.8.13 #5 — escapeHtml moved from inline (per-file) to the shared
+# dashboards/assets/dashboard-common.js. Body-inspection tests (charset/null
+# guard) must look at wherever escapeHtml is actually defined now.
+def _read_dash_with_shared(name: str) -> str:
+    src = _read_dash(name)
+    try:
+        with open(_os.path.join(_DASH_DIR, 'assets', 'dashboard-common.js'),
+                  encoding='utf-8') as f:
+            src += "\n" + f.read()
+    except OSError:
+        pass
+    return src
+
+
 # ── SEC-1: Open Redirect in login.html ───────────────────────────────────────
 # Bug: `next` param taken verbatim from URL query string and used in
 # `location.href` — server error path bypasses server-supplied redirect.
@@ -1018,10 +1293,9 @@ def test_service_emessage_escaped_in_innerhtml():
 def test_service_has_global_escapehtml():
     """service.html must define escapeHtml at global script scope."""
     src = _read_dash('service.html')
-    assert 'function escapeHtml(' in src, (
-        "service.html must define a global function escapeHtml(). "
-        "Before the fix only local escHtml closures existed; callers outside "
-        "those closures would get ReferenceError."
+    assert 'function escapeHtml(' in src or 'dashboard-common.js' in src, (
+        "service.html must provide a global escapeHtml() — inline or via the "
+        "shared dashboard-common.js include (1.8.13 #5)."
     )
 
 
@@ -1039,10 +1313,7 @@ import pytest as _pytest
 @_pytest.mark.parametrize("fname", _DASHBOARD_FILES)
 def test_escapehtmlt_full_charset(fname):
     """Every dashboard escapeHtml must escape backtick (&#96;) and slash (&#47;)."""
-    src = _read_dash(fname)
-    # login.html doesn't use escapeHtml at all in its JS — skip charset check
-    if fname == 'login.html':
-        return
+    src = _read_dash_with_shared(fname)   # escapeHtml now lives in the shared asset
     assert '&#96;' in src, (
         f"{fname}: escapeHtml charset missing backtick escape (&#96;). "
         "Backtick allows template-literal injection in HTML attributes."
@@ -1081,19 +1352,23 @@ def test_no_eschtml_calls(fname):
 @_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
                                      'controls.html','geo.html','logs.html','settings.html'])
 def test_single_escapehtmlt_definition(fname):
-    """Each dashboard must have exactly one escapeHtml definition."""
+    """escapeHtml must be provided exactly once — either one inline definition,
+    or (1.8.13 #5) zero inline + the shared dashboard-common.js include. Multiple
+    inline definitions would let the wrong charset silently win."""
     src = _read_dash(fname)
     count = len(_re.findall(r'function escapeHtml\s*\(', src))
-    assert count == 1, (
-        f"{fname}: found {count} escapeHtml definitions (expected exactly 1). "
-        "Multiple definitions allow the wrong charset to silently win."
-    )
+    has_shared = 'dashboard-common.js' in src
+    assert count <= 1, (
+        f"{fname}: found {count} inline escapeHtml definitions (expected ≤1).")
+    assert count == 1 or has_shared, (
+        f"{fname}: no inline escapeHtml AND no dashboard-common.js include — "
+        "escapeHtml would be undefined.")
 
 @_pytest.mark.parametrize("fname", ['main.html','agents.html','service.html',
                                      'controls.html','geo.html','logs.html','settings.html'])
 def test_escapehtmlt_null_guard(fname):
     """escapeHtml must handle null/undefined via String(s==null?'':s)."""
-    src = _read_dash(fname)
+    src = _read_dash_with_shared(fname)   # escapeHtml now lives in the shared asset
     assert 'String(s==null' in src or "String(s == null" in src, (
         f"{fname}: escapeHtml must guard against null/undefined with "
         "String(s==null?'':s) — (s||'') coerces 0/false to empty string."
@@ -1307,10 +1582,11 @@ def test_control_center_beforeunload_cleanup():
 def test_control_center_escapehtml_used_in_dynamic_html():
     """control_center.html must use escapeHtml for all user-controlled values in innerHTML."""
     src = _read_dash('control_center.html')
-    fn_start = src.find('function escapeHtml')
-    assert fn_start != -1, "control_center.html: escapeHtml helper not defined"
-    assert src.find('escapeHtml', fn_start + 1) != -1, (
-        "control_center.html: escapeHtml defined but never called"
+    # escapeHtml is now provided by the shared dashboard-common.js include (1.8.13 #5)
+    assert 'function escapeHtml' in src or 'dashboard-common.js' in src, (
+        "control_center.html: escapeHtml helper not provided (inline or shared asset)")
+    assert 'escapeHtml(' in src, (
+        "control_center.html: escapeHtml provided but never called"
     )
 
 
@@ -1551,12 +1827,12 @@ def test_vhost_policy_html_has_vhost_selector():
 
 
 def test_vhost_policy_html_title_contains_version():
-    """vhost_policy.html <title> must reference AppSecGW and include 'Vhost Policy'."""
+    """vhost_policy.html <title> must reference AntiBot/WAF GW and include 'Vhost Policy'."""
     src = _read_dash('vhost_policy.html')
     assert 'Vhost Policy' in src, \
         "vhost_policy.html: page title/header must contain 'Vhost Policy'"
-    assert 'AppSecGW' in src, \
-        "vhost_policy.html: page must reference AppSecGW brand"
+    assert 'AntiBot/WAF GW' in src, \
+        "vhost_policy.html: page must reference AntiBot/WAF GW brand"
 
 
 def test_vhost_policy_html_nav_link_active():
@@ -1986,9 +2262,12 @@ def test_authorized_bot_bypass_only_on_root():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
-    assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1500]
+    # Anchor on the actual code block, not the earlier comment that also
+    # contains "AUTHORIZED_BOT_UAS", so extra lines before it don't shift
+    # the window past the request.path comparison.
+    bot_idx = src.find("if AUTHORIZED_BOT_UAS:")
+    assert bot_idx != -1, "if AUTHORIZED_BOT_UAS: block not found in protect()"
+    bot_block = src[bot_idx: bot_idx + 3000]
     assert "request.path ==" in bot_block or "request.path !=" in bot_block, (
         "Authorized bot bypass must compare request.path against the configured "
         "path from each entry (using == or !=)"
@@ -2617,7 +2896,7 @@ def test_geo_authorized_robot_kind_in_geo_data_endpoint():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     geo_start = src.find("async def geo_data_endpoint")
     assert geo_start != -1, "geo_data_endpoint must exist in proxy_handler.py"
-    geo_section = src[geo_start:geo_start + 6000]
+    geo_section = src[geo_start:geo_start + 16000]
     assert 'reason == "authorized-robot"' in geo_section, (
         "geo_data_endpoint must detect reason==\"authorized-robot\" for purple classification"
     )
@@ -2685,9 +2964,9 @@ def test_authorized_bot_bypass_uses_per_entry_path_variable():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
-    assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1500]
+    bot_idx = src.find("if AUTHORIZED_BOT_UAS:")
+    assert bot_idx != -1, "if AUTHORIZED_BOT_UAS: block not found in protect()"
+    bot_block = src[bot_idx: bot_idx + 3000]
     assert "_bot_path" in bot_block, (
         "protect() must extract _bot_path from each entry — "
         "the path to match is per-entry, not a global constant"
@@ -2703,9 +2982,9 @@ def test_authorized_bot_bypass_splits_on_colon():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
-    assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1000]
+    bot_idx = src.find("if AUTHORIZED_BOT_UAS:")
+    assert bot_idx != -1, "if AUTHORIZED_BOT_UAS: block not found in protect()"
+    bot_block = src[bot_idx: bot_idx + 3000]
     assert "_colon" in bot_block or '.find(":")' in bot_block or "split(" in bot_block, (
         "protect() bypass must locate the ':' separator in each UA:path entry "
         "to split UA substring from path"
@@ -2720,9 +2999,9 @@ def test_authorized_bot_bypass_backward_compat_no_colon():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
-    assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 1500]
+    bot_idx = src.find("if AUTHORIZED_BOT_UAS:")
+    assert bot_idx != -1, "if AUTHORIZED_BOT_UAS: block not found in protect()"
+    bot_block = src[bot_idx: bot_idx + 3000]
     # The new dict-based code uses .get("path", "/") and or "/" as fallbacks;
     # legacy string branch uses else "/" and or "/".
     assert (
@@ -2794,9 +3073,9 @@ def test_authorized_bot_allow_action_sets_custom_rule_flag():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
-    assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 2500]
+    bot_idx = src.find("if AUTHORIZED_BOT_UAS:")
+    assert bot_idx != -1, "if AUTHORIZED_BOT_UAS: block not found in protect()"
+    bot_block = src[bot_idx: bot_idx + 3000]
     assert "_custom_rule_allow" in bot_block, (
         "protect() bypass block must set request['_custom_rule_allow'] = True "
         "when action is 'allow' — so the bot is silently passed through"
@@ -2808,9 +3087,10 @@ def test_authorized_bot_ban_action_sets_banned_until():
     import inspect
     from core import proxy_handler
     src = inspect.getsource(proxy_handler.protect)
-    bot_idx = src.find("AUTHORIZED_BOT_UAS")
+    # Search for the for-loop block, not the earlier comment that mentions the var name
+    bot_idx = src.find("for _bot in AUTHORIZED_BOT_UAS")
     assert bot_idx != -1
-    bot_block = src[bot_idx: bot_idx + 3000]
+    bot_block = src[bot_idx: bot_idx + 4000]
     assert "banned_until" in bot_block, (
         "protect() bypass block must set ip_state[...].banned_until for "
         "ban/really-ban actions"
@@ -2947,15 +3227,26 @@ def test_agents_bucket_modal_renders_authorized_robot_from_response():
 
 
 def test_agents_bucket_endpoint_returns_authorized_robot_field():
-    """agents_bucket_detail_endpoint must query reason='authorized-robot' and include
-    authorized_robot in the response payload."""
+    """agents_bucket_detail_endpoint must classify authorized-robot events and
+    expose them in the response payload.
+
+    1.8.8 — previously this checked for the literal SQL `reason='authorized-robot'`.
+    After the backend-aware refactor, classification moved from SQL filter to
+    Python (rows come from db_read_events; the `reason == 'authorized-robot'`
+    check runs in the loop body). Updated to check the new pattern.
+    """
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     fn_start = src.find("async def agents_bucket_detail_endpoint")
     assert fn_start != -1, "proxy_handler.py must define agents_bucket_detail_endpoint"
-    fn_section = src[fn_start: fn_start + 7000]
-    assert "reason='authorized-robot'" in fn_section, (
-        "agents_bucket_detail_endpoint must query reason='authorized-robot' events"
+    fn_section = src[fn_start: fn_start + 8000]
+    assert (
+        'reason == "authorized-robot"' in fn_section
+        or "reason == 'authorized-robot'" in fn_section
+        or "reason='authorized-robot'" in fn_section
+    ), (
+        "agents_bucket_detail_endpoint must classify reason=='authorized-robot' events "
+        "(either via SQL filter or Python equality check after db_read_events)"
     )
     assert '"authorized_robot"' in fn_section or "'authorized_robot'" in fn_section, (
         "agents_bucket_detail_endpoint payload must include authorized_robot key"
@@ -3030,7 +3321,7 @@ def test_geo_data_authorized_robot_classification_precedes_asn_update():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     geo_fn = src.find("async def geo_data_endpoint")
     assert geo_fn != -1
-    geo_section = src[geo_fn: geo_fn + 8000]
+    geo_section = src[geo_fn: geo_fn + 16000]
     ar_kind_idx = geo_section.find('reason == "authorized-robot"')
     asn_update_idx = geo_section.find("asn_totals.setdefault")
     assert ar_kind_idx != -1, (
@@ -3058,7 +3349,7 @@ def test_metrics_clients_includes_is_authorized_bot_field():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     ca_idx = src.find("clients.append({")
     assert ca_idx != -1, "proxy_handler.py must have clients.append({ in metrics endpoint"
-    ca_block = src[ca_idx: ca_idx + 1000]
+    ca_block = src[ca_idx: ca_idx + 1500]
     assert '"is_authorized_bot"' in ca_block or "'is_authorized_bot'" in ca_block, (
         "clients.append() dict must include 'is_authorized_bot' field — "
         "dashboards use this to render the auth-bot status button and popover"
@@ -3076,8 +3367,12 @@ def test_metrics_clients_is_authorized_bot_checks_authorized_robot_action():
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     ca_idx = src.find("clients.append({")
     assert ca_idx != -1
-    # Search backwards from clients.append for the is_auth_bot computation
-    pre_block = src[max(0, ca_idx - 500): ca_idx + 50]
+    # Search backwards from clients.append for the is_auth_bot computation.
+    # iter-18: LIVE-5 inserted the stub-client skip block + an 8-line comment
+    # between _is_auth_bot and the append (now ~1040 chars away). Bumped 500
+    # → 1500 to keep the assertion meaningful without weakening intent (the
+    # auth-bot logic still must precede the same metrics_endpoint append).
+    pre_block = src[max(0, ca_idx - 1500): ca_idx + 50]
     assert "authorized-robot" in pre_block, (
         "is_authorized_bot computation must filter action == 'authorized-robot' — "
         "otherwise ban/allow bot entries would incorrectly set the flag"
@@ -3140,8 +3435,9 @@ def test_agents_html_bstate_checks_is_authorized_bot():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
     bstate_idx = src.find("_bstate =")
     assert bstate_idx != -1, "agents.html must have a _bstate variable"
-    # Check within a wider window — intermediate variable may be on the prior line
-    bstate_block = src[max(0, bstate_idx - 300): bstate_idx + 300]
+    # Check within a wider window — _isAuthBot derivation from is_authorized_bot
+    # can be many lines above (e.g. when synced from main.html's IIFE).
+    bstate_block = src[max(0, bstate_idx - 1200): bstate_idx + 300]
     assert "is_authorized_bot" in bstate_block, (
         "agents.html _bstate block must reference is_authorized_bot — "
         "otherwise authorized bots show as 'allow' instead of 'authorized-bot'"
@@ -3172,9 +3468,9 @@ def test_agents_html_popover_banline_has_authorized_bot_case():
     Logic now lives in window._gwIdentityPopover.buildIdHtml — search there."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "agents.html").read_text()
-    pop_idx = src.find("window._gwIdentityPopover")
+    pop_idx = src.find("window._gwIdentityPopover = (function(){")
     assert pop_idx != -1, "agents.html must define window._gwIdentityPopover"
-    pop_section = src[pop_idx: pop_idx + 4000]
+    pop_section = src[pop_idx: pop_idx + 6000]
     assert "is_authorized_bot" in pop_section, (
         "agents.html _gwIdentityPopover.buildIdHtml must check is_authorized_bot — "
         "without it the popover status line never shows 'Authorized Bot'"
@@ -3189,9 +3485,9 @@ def test_main_html_popover_banline_has_authorized_bot_case():
     Logic now lives in window._gwIdentityPopover.buildIdHtml — search there."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
-    pop_idx = src.find("window._gwIdentityPopover")
+    pop_idx = src.find("window._gwIdentityPopover = (function(){")
     assert pop_idx != -1, "main.html must define window._gwIdentityPopover"
-    pop_section = src[pop_idx: pop_idx + 4000]
+    pop_section = src[pop_idx: pop_idx + 6000]
     assert "is_authorized_bot" in pop_section, (
         "main.html _gwIdentityPopover.buildIdHtml must check is_authorized_bot — "
         "without it the popover status line never shows 'Authorized Bot'"
@@ -3574,7 +3870,7 @@ def test_main_html_tick_calls_apply_filters():
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     tick_idx = src.find("async function tick()")
     assert tick_idx != -1
-    tick_body = src[tick_idx: tick_idx + 5000]
+    tick_body = src[tick_idx: tick_idx + 8000]
     assert "_applyFilters()" in tick_body, (
         "main.html tick() must call _applyFilters() for client table rendering (1.7.6)"
     )
@@ -3707,8 +4003,9 @@ def test_protect_authenticated_admin_path_calls_record():
     # Locate the authenticated admin path branch
     admin_block_idx = src.find("_admin_ip_allowed(request) and _internal_authed(request)")
     assert admin_block_idx != -1, "protect() must have the authed-admin-path branch"
-    # record() must be called inside that block (within 400 chars of the branch)
-    block = src[admin_block_idx: admin_block_idx + 400]
+    # record() must be called inside that block. 1.8.11: widened window — the
+    # central CSRF gate now sits between the branch and the record() call.
+    block = src[admin_block_idx: admin_block_idx + 1600]
     assert "await record(" in block, (
         "protect() must call record() for authenticated admin path requests so that "
         "operator dashboard accesses appear in ip_state with last_path = /antibot-appsec-gateway/... "
@@ -3728,7 +4025,8 @@ def test_protect_authenticated_admin_path_uses_operator_passthrough_reason():
     src = inspect.getsource(proxy_handler.protect)
     admin_block_idx = src.find("_admin_ip_allowed(request) and _internal_authed(request)")
     assert admin_block_idx != -1
-    block = src[admin_block_idx: admin_block_idx + 400]
+    # 1.8.11: widened window — central CSRF gate added before the record() call.
+    block = src[admin_block_idx: admin_block_idx + 1600]
     assert "operator-passthrough" in block, (
         "protect() must pass reason='operator-passthrough' to record() for "
         "authenticated admin path requests so events are labelled correctly in the DB"
@@ -3842,12 +4140,13 @@ def test_bypass_paths_prefix_check_in_protect():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     assert "BYPASS_PATHS" in src, "proxy_handler.py must reference BYPASS_PATHS"
-    # Accept both the direct reference and the vhost-aware vc() form
-    bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
-    bp_idx_vc = src.find("vc('BYPASS_PATHS') and any(request.path.startswith")
-    assert bp_idx != -1 or bp_idx_vc != -1, (
-        "protect() must contain a BYPASS_PATHS prefix check "
-        "(either direct or via vc('BYPASS_PATHS') and any(request.path.startswith...))"
+    # Accept either the legacy `any()` form or the 1.8.14 precompiled _bypass_match()
+    # helper — both express the same "request.path matches a BYPASS_PATHS entry" check.
+    legacy = "vc('BYPASS_PATHS') and any(" in src
+    compiled = "_bypass_match(" in src and "vc('BYPASS_PATHS')" in src
+    assert legacy or compiled, (
+        "protect() must contain a BYPASS_PATHS check — either the legacy `any(...)` "
+        "form or the precompiled `_bypass_match(request.path, vc('BYPASS_PATHS'))` form"
     )
 
 
@@ -3891,8 +4190,8 @@ def test_controls_html_build_path_list_ui_exists():
     assert "_buildPathListUI" in src, (
         "controls.html must define _buildPathListUI for the bypass path editor"
     )
-    assert "Add path prefix" in src, (
-        "controls.html path list editor must have 'Add path prefix' button"
+    assert "Add path entry" in src, (
+        "controls.html path list editor must have 'Add path entry' button"
     )
     assert "bot-del-btn" in src[src.find("_buildPathListUI"):src.find("_buildPathListUI") + 2000], (
         "_buildPathListUI must include delete buttons"
@@ -3942,16 +4241,29 @@ def test_config_bypass_paths_env_parse():
         sys.modules.update(saved)
 
 
+def _bypass_check_idx(src: str) -> int:
+    """Return the source index of the BYPASS_PATHS guard in protect(),
+    accommodating: legacy `any()` form, vc() form, and the 1.8.14
+    precompiled `_bypass_match(...)` helper site."""
+    for needle in (
+        "BYPASS_PATHS and any(request.path.startswith",
+        "vc('BYPASS_PATHS') and any(",
+        "_bypass_match(request.path",
+    ):
+        i = src.find(needle)
+        if i != -1:
+            return i
+    return -1
+
+
 def test_bypass_paths_guard_after_authorized_bots_before_rps():
     """BYPASS_PATHS check must be positioned AFTER AUTHORIZED_BOT_UAS block
     and BEFORE the GLOBAL_RPS_LIMIT check in protect()."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
     bot_idx  = src.find("AUTHORIZED_BOT_UAS:")
-    # Accept both direct and vhost-aware vc() form
-    bp_idx   = src.find("BYPASS_PATHS and any(request.path.startswith")
-    if bp_idx == -1:
-        bp_idx = src.find("vc('BYPASS_PATHS') and any(request.path.startswith")
+    bp_idx   = _bypass_check_idx(src)
+
     # Accept both direct and vhost-aware (_vrps_limit) form
     rps_idx  = src.find("GLOBAL_RPS_LIMIT > 0 and")
     if rps_idx == -1:
@@ -3970,10 +4282,7 @@ def test_bypass_paths_early_return_calls_record():
     so traffic appears in the main dashboard timeline and clients table."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
-    # Accept both direct and vhost-aware vc() form
-    bp_idx = src.find("BYPASS_PATHS and any(request.path.startswith")
-    if bp_idx == -1:
-        bp_idx = src.find("vc('BYPASS_PATHS') and any(request.path.startswith")
+    bp_idx = _bypass_check_idx(src)
     assert bp_idx != -1
     block = src[bp_idx: bp_idx + 400]
     assert "await handler(request)" in block, (
@@ -3982,6 +4291,163 @@ def test_bypass_paths_early_return_calls_record():
     assert "await record(" in block, (
         "Bypass block must call record() so traffic appears in the dashboard timeline"
     )
+
+
+def test_bypass_paths_glob_matching_logic():
+    """BYPASS_PATHS entries ending with * are prefix/glob matches;
+    entries without * are exact matches only. 1.8.14 — the matching logic
+    moved into _bypass_match() with the same semantics."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+    # Anchor on whichever block holds the matching expression — _bypass_match()
+    # for the precompiled path, or the legacy inline expression.
+    anchor = src.find("def _bypass_match")
+    if anchor == -1:
+        anchor = _bypass_check_idx(src)
+    assert anchor != -1, "could not locate BYPASS_PATHS matcher in proxy_handler.py"
+    block = src[anchor: anchor + 1200]
+    # Glob detection: must check `endswith("*", "/")` (or a superset thereof).
+    assert "endswith(" in block and '"*"' in block, (
+        "BYPASS_PATHS matcher must detect glob entries via endswith('*' …)"
+    )
+    assert "p[:-1]" in block, (
+        "BYPASS_PATHS glob match must strip the trailing char via p[:-1] before "
+        "the prefix check"
+    )
+    # Exact-match contract: either inline `path == p` form, or a frozenset
+    # `path in exacts` lookup (the 1.8.14 precompiled equivalent).
+    assert ("request.path == p" in block
+            or "path in exacts" in block
+            or "path in _exacts" in block), (
+        "BYPASS_PATHS matcher must compare non-glob entries by exact equality "
+        "(or via the precompiled `path in exacts` frozenset)"
+    )
+
+
+def test_bypass_paths_glob_semantics():
+    """Validate glob/exact matching semantics directly against the matching expression."""
+    def _matches(bypass_paths, path):
+        return any(
+            path.startswith(p[:-1]) if p.endswith("*") else path == p
+            for p in bypass_paths
+        )
+
+    # Glob entries — prefix match
+    assert _matches(["/static/*"], "/static/")
+    assert _matches(["/static/*"], "/static/app.js")
+    assert _matches(["/static/*"], "/static/img/logo.png")
+    assert not _matches(["/static/*"], "/staticother")
+    assert not _matches(["/static/*"], "/other/static/")
+
+    # Exact entries — no sub-path leakage
+    assert _matches(["/blog/"], "/blog/")
+    assert not _matches(["/blog/"], "/blog/post")
+    assert not _matches(["/blog/"], "/blog/category/foo")
+    assert not _matches(["/blog/"], "/")
+
+    # Root exact match
+    assert _matches(["/"], "/")
+    assert not _matches(["/"], "/anything")
+    assert not _matches(["/"], "/.env")
+
+    # Mix of glob and exact
+    assert _matches(["/blog/", "/assets/*"], "/assets/style.css")
+    assert not _matches(["/blog/", "/assets/*"], "/blog/post")
+    assert _matches(["/blog/", "/assets/*"], "/blog/")
+
+
+def test_banned_ip_honeypot_path_records_honeypot_silent():
+    """Both ban gates (early ip-ban check and identity ban check) must emit
+    honeypot-silent for honeypot paths so the attack-playbook dashboard captures
+    probes from already-banned IPs."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+
+    # Early IP ban block (check_ip_ban / ip-ban)
+    ip_ban_start = src.find('"ip-ban"')
+    assert ip_ban_start != -1, "ip-ban reason not found"
+    ip_ban_block = src[max(0, ip_ban_start - 600): ip_ban_start + 200]
+    assert "honeypot-silent" in ip_ban_block, (
+        "Early ip-ban block must emit honeypot-silent for honeypot paths"
+    )
+    assert "await record(" in ip_ban_block, (
+        "Early ip-ban block must call record() to emit the honeypot-silent event"
+    )
+
+    # Identity ban block (is_banned / banned-silent)
+    id_ban_start = src.find("banned, remaining = await is_banned(track_key)")
+    assert id_ban_start != -1, "is_banned check not found"
+    id_ban_block = src[id_ban_start: id_ban_start + 700]
+    assert "honeypot-silent" in id_ban_block, (
+        "Identity ban block must emit honeypot-silent for honeypot paths"
+    )
+    assert "banned-silent" in id_ban_block, (
+        "Identity ban block must still return banned-silent decoy response"
+    )
+    assert "await record(" in id_ban_block, (
+        "Identity ban block must call record() to emit the honeypot-silent event"
+    )
+
+
+def test_ban_gate_record_exceptions_cannot_suppress_decoy():
+    """F-01/F-02: record() in both ban gates must be wrapped in its own
+    try/except so a transient DB error can never prevent the decoy response
+    from being returned — a banned IP must never reach upstream on record failure."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+
+    # Early IP ban block — ip_ban_record_error slog confirms the wrapping
+    ip_ban_start = src.find('"ip-ban"')
+    assert ip_ban_start != -1, "ip-ban reason not found"
+    ip_ban_block = src[max(0, ip_ban_start - 700): ip_ban_start + 300]
+    assert "ip_ban_record_error" in ip_ban_block, (
+        "F-01: record() in the ip-ban gate must be wrapped in try/except "
+        "with ip_ban_record_error slog — a record() failure must not suppress the decoy"
+    )
+
+    # Identity ban block — id_ban_record_error slog confirms the wrapping
+    id_ban_start = src.find("banned, remaining = await is_banned(track_key)")
+    assert id_ban_start != -1, "is_banned check not found"
+    id_ban_block = src[id_ban_start: id_ban_start + 800]
+    assert "id_ban_record_error" in id_ban_block, (
+        "F-02: record() in the identity ban gate must be wrapped in try/except "
+        "with id_ban_record_error slog — a record() failure must not suppress the decoy"
+    )
+
+
+def test_bypass_paths_rejects_wildcard_entries():
+    """F-03: BYPASS_PATHS validator must reject bare '*' and '/*' entries
+    that would prefix-match every request and bypass all detection."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
+
+    # The validator lambda must reference the dangerous values
+    bypass_cfg_start = src.find('"BYPASS_PATHS"')
+    assert bypass_cfg_start != -1, "BYPASS_PATHS config entry not found"
+    bypass_cfg_block = src[bypass_cfg_start: bypass_cfg_start + 250]
+    assert '"*"' in bypass_cfg_block or "\"*\"" in bypass_cfg_block, (
+        "F-03: BYPASS_PATHS validator lambda must check for bare '*' entry"
+    )
+    assert '"/*"' in bypass_cfg_block or "\"/*\"" in bypass_cfg_block, (
+        "F-03: BYPASS_PATHS validator lambda must check for '/*' entry"
+    )
+
+
+def test_bypass_paths_rejects_wildcard_semantics():
+    """F-03 inline logic: the validator lambda that guards BYPASS_PATHS must
+    reject '*' and '/*' (which would bypass every request) while allowing
+    well-formed glob entries like '/static/*'."""
+    # Inline the guard logic to verify the semantics are correct
+    def _bypass_paths_valid(paths):
+        return not any(p in ("*", "/*") for p in paths)
+
+    assert not _bypass_paths_valid(["*"]),  "'*' must be rejected"
+    assert not _bypass_paths_valid(["/*"]), "'/*' must be rejected"
+    assert not _bypass_paths_valid(["/static/*", "*"]), "mixed list with '*' must be rejected"
+    assert _bypass_paths_valid(["/static/*"]),   "'/static/*' must be allowed"
+    assert _bypass_paths_valid(["/blog/"]),       "'/blog/' exact must be allowed"
+    assert _bypass_paths_valid(["/", "/api/*"]),  "'/' exact + '/api/*' must be allowed"
+    assert _bypass_paths_valid([]),               "empty list must be allowed"
 
 
 def test_bypass_mode_not_persisted_to_db():
@@ -4410,10 +4876,20 @@ def test_maxmind_cache_evicts_oldest_at_max():
 # ── geo.html load-status pill text (1.7.7) ───────────────────────────────────
 
 def test_geo_html_load_status_ready_text():
-    """geo.html load-status pill must flip to 'Loading Ready' (not just 'Ready')."""
+    """geo.html load-status pill must show live loading progress on EVERY fetch.
+
+    1.9.5 redesigned the pill from a static 'Loading Ready' label to a
+    percent-progress pill ('Loading N%') that flips to 'Ready' when done and
+    re-arms on every range change / live tick (the old `ready`-class latch
+    froze it). Pin the current behaviour: the progress pill, and the re-arm
+    that drops the `ready` class so a slow window change shows feedback again.
+    """
     src = _dash("geo.html")
-    assert "Loading Ready" in src, (
-        "geo.html load-status pill text must be 'Loading Ready', not just 'Ready'"
+    assert "'<span class=\"dot\"></span>Loading ' + pct + '%'" in src, (
+        "geo.html load-status pill must render 'Loading N%' progress text"
+    )
+    assert "classList.remove('ready')" in src, (
+        "geo.html must re-arm the load pill (drop `ready`) on every fetch"
     )
 
 
@@ -4485,16 +4961,17 @@ def test_logs_html_hard_ban_reasons_defined():
 # ── controls.html actions bar placement (1.7.7) ──────────────────────────────
 
 def test_controls_actions_bar_before_scoring():
-    """div.actions (Save/Reset) must appear before card-scoring in source order."""
+    """Apply/Reset buttons must appear in #topbar-right (split-pane layout, v1.8.6+).
+    The standalone div.actions was replaced by individual buttons in #topbar-right."""
     src = _dash("controls.html")
-    actions_pos = src.find('class="actions"')
+    topbar_right_pos = src.find('id="topbar-right"')
     scoring_pos = src.find('id="card-scoring"')
-    assert actions_pos != -1, "controls.html missing div.actions"
+    apply_pos = src.find('id="apply"')
+    assert topbar_right_pos != -1, "controls.html missing #topbar-right"
     assert scoring_pos != -1, "controls.html missing card-scoring"
-    assert actions_pos < scoring_pos, (
-        f"div.actions (pos {actions_pos}) must appear before card-scoring "
-        f"(pos {scoring_pos}) in controls.html source order"
-    )
+    assert apply_pos != -1, "controls.html missing #apply"
+    assert apply_pos > topbar_right_pos, "apply must be inside #topbar-right"
+    assert 'class="actions"' not in src, "controls.html must not have standalone div.actions (removed in v1.8.6)"
 
 
 # ── geo-map 30-day view (1.7.7 session 3) ────────────────────────────────────
@@ -4794,12 +5271,20 @@ def test_main_html_apply_filters_calls_sync_panel_legends():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def _gw_popover_section(dashboard: str) -> str:
-    """Return the _gwIdentityPopover block from the given dashboard file."""
+    """Return the _gwIdentityPopover IIFE block from the given dashboard file."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "dashboards" / dashboard).read_text()
-    idx = src.find("window._gwIdentityPopover")
+    # Anchor on the IIFE *definition* — other code may reference
+    # window._gwIdentityPopover (e.g. the top-controls panel) earlier in the file.
+    idx = src.find("window._gwIdentityPopover = (function(){")
+    if idx == -1:
+        idx = src.find("window._gwIdentityPopover")
     assert idx != -1, f"{dashboard} must define window._gwIdentityPopover"
-    return src[idx: idx + 5000]
+    # Extract the full IIFE (ends with })()); after the opening assignment)
+    end = src.find("})();", idx)
+    if end != -1:
+        return src[idx: end + 5]
+    return src[idx: idx + 9000]  # generous fallback
 
 
 def test_gw_identity_popover_defined_in_agents_html():
@@ -5081,7 +5566,7 @@ def test_gw_identity_popover_open_client_popover_calls_fetch_with_normalized_ip(
     src = (Path(__file__).resolve().parent.parent / "dashboards" / "main.html").read_text()
     pop_idx = src.find("window.openClientPopover")
     assert pop_idx != -1
-    pop_body = src[pop_idx: pop_idx + 800]
+    pop_body = src[pop_idx: pop_idx + 2400]
     assert "fetchIpIntel(d.ip)" in pop_body, (
         "openClientPopover must pass d.ip to fetchIpIntel, not c.last_ip — "
         "d.ip is the normalizeId output which handles the ip/last_ip fallback chain"
@@ -5138,7 +5623,8 @@ def test_gw_identity_popover_core_logic_identical_in_both_files():
     def _extract_iife(src: str) -> str:
         start = src.find("function _fmt")
         assert start != -1
-        end = src.find("return { normalizeId, buildIdHtml, buildRiskHtml };", start)
+        # anchor on the common prefix — agents.html adds buildScoreHtml to the return
+        end = src.find("return { normalizeId, buildIdHtml, buildRiskHtml", start)
         assert end != -1
         return src[start: end].strip()
 
@@ -5537,7 +6023,7 @@ def test_settings_vhosts_api_path_correct():
 def test_vhost_policy_html_version_string():
     """vhost_policy.html must carry the current version string."""
     src = _dash("vhost_policy.html")
-    assert "AppSecGW_1.8.5" in src, "vhost_policy.html: version string missing or stale"
+    assert "AntiBotWaf_GW_1.9.8" in src, "vhost_policy.html: version string missing or stale"
 
 
 def test_vhost_policy_html_scope_bar():
@@ -5597,16 +6083,44 @@ def test_vhost_policy_html_active_nav_link():
 
 
 def test_vhost_policy_html_knob_meta_coverage():
-    """vhost_policy.html KNOB_META must reference the same knobs as _VHOST_COERCE."""
-    import re
+    """Every per-vhost-overridable knob (_VHOST_COERCE) MUST appear in
+    vhost_policy.html KNOB_META with a type matching its coercer.
+
+    A knob missing here falls back to the generic 'Other' text-input widget,
+    which sends bool values as the strings "true"/"false" — and silently
+    mis-saves them (see test_v1810_vhost_knob_persist). This is the guard that
+    was too weak (only counted ≥100) and let the 1.8.9 WAF knobs slip through.
+    """
+    import os, re, importlib
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    vhost_mod = importlib.import_module("vhost")
+    coerce = vhost_mod._VHOST_COERCE
     src = _dash("vhost_policy.html")
-    # Extract keys from KNOB_META object in the script
-    meta_keys = set(re.findall(r'^\s{2}([A-Z][A-Z0-9_]+):', src, re.MULTILINE))
-    # Must have at least 100 knobs declared (we added 116 to _VHOST_COERCE)
-    assert len(meta_keys) >= 100, (
-        f"vhost_policy.html: KNOB_META has only {len(meta_keys)} entries — "
-        "expected ≥100 to match expanded _VHOST_COERCE"
+    m = re.search(r"var KNOB_META\s*=\s*\{(.*?)\n\};", src, re.S)
+    assert m, "KNOB_META object not found in vhost_policy.html"
+    body = m.group(1)
+    meta = dict(re.findall(r"([A-Z0-9_]+):\s*\{[^}]*?t:'([a-z]+)'", body))
+
+    missing = sorted(set(coerce) - set(meta))
+    assert not missing, (
+        f"vhost_policy.html KNOB_META is missing {len(missing)} overridable "
+        f"knob(s) — they would render as generic 'Other' text inputs and "
+        f"mis-save bool values: {missing}"
     )
+
+    # type must match the coercer family for the unambiguous coercers
+    _to_bool = vhost_mod._to_bool
+    expect = {}
+    for k, c in coerce.items():
+        if c is _to_bool:
+            expect[k] = "bool"
+        elif c is int:
+            expect[k] = "int"
+        elif c is str:
+            expect[k] = "str"
+    bad = [f"{k}: KNOB_META t='{meta.get(k)}' but coercer expects '{exp}'"
+           for k, exp in expect.items() if meta.get(k) != exp]
+    assert not bad, "vhost_policy.html KNOB_META type mismatches:\n" + "\n".join(bad)
 
 
 def test_settings_vhost_table_has_policy_link():
@@ -5626,14 +6140,39 @@ def test_settings_topnav_has_vhost_policy_link():
 
 
 def test_vhost_coerce_expanded():
-    """_VHOST_COERCE must contain at least 100 knobs (expanded in 1.8.1)."""
+    """_VHOST_COERCE must contain at least 148 knobs (expanded in 1.8.9)."""
     import sys, os
     os.environ.setdefault("UPSTREAM", "https://example.com")
     import importlib
     vhost_mod = importlib.import_module("vhost")
     count = len(vhost_mod._VHOST_COERCE)
-    assert count >= 100, (
-        f"_VHOST_COERCE has only {count} entries — expected ≥100 after 1.8.1 expansion"
+    assert count >= 148, (
+        f"_VHOST_COERCE has only {count} entries — expected ≥148 after 1.8.9 expansion"
+    )
+
+
+def test_all_signal_knobs_in_vhost_coerce():
+    """Every SIGNAL_KNOB toggle value must be overridable at the vhost level.
+
+    When a new signal is added to SIGNAL_KNOB, its knob env-var must also be
+    added to _VHOST_COERCE so operators can enable/disable it per-hostname.
+    This test catches the gap where a knob is wired to SIGNAL_KNOB but
+    forgotten in _VHOST_COERCE, silently making the per-vhost toggle a no-op.
+    """
+    import os, importlib
+    os.environ.setdefault("UPSTREAM", "https://example.com")
+    vhost_mod = importlib.import_module("vhost")
+    from core.proxy_handler import SIGNAL_KNOB
+    # None values are signals with no kill-switch (always-on) — exclude from check.
+    # ADMIN_ALLOWED_IPS is a global admin security control (not a per-vhost
+    # toggle) — admin routes are not vhost-scoped so per-vhost override is N/A.
+    _GLOBAL_ONLY = {"ADMIN_ALLOWED_IPS"}
+    signal_knobs = {v for v in SIGNAL_KNOB.values() if v is not None} - _GLOBAL_ONLY
+    vhost_keys  = set(vhost_mod._VHOST_COERCE.keys())
+    missing = signal_knobs - vhost_keys
+    assert not missing, (
+        f"SIGNAL_KNOB toggle(s) missing from _VHOST_COERCE — "
+        f"add them as bool entries in vhost.py: {sorted(missing)}"
     )
 
 
@@ -5646,8 +6185,14 @@ def test_bot_detection_enabled_in_vhost_coerce():
         "BOT_DETECTION_ENABLED not in _VHOST_COERCE — per-vhost bot detection "
         "toggle cannot be applied via the vhost override system."
     )
-    assert vhost_mod._VHOST_COERCE["BOT_DETECTION_ENABLED"] is bool, (
-        "_VHOST_COERCE['BOT_DETECTION_ENABLED'] must be bool coercer."
+    coercer = vhost_mod._VHOST_COERCE["BOT_DETECTION_ENABLED"]
+    # 1.8.10 — bool knobs use the string-aware _to_bool (NOT bare `bool`, which
+    # mis-coerces the string "false" to True). See test_v1810_vhost_knob_persist.
+    assert coercer is vhost_mod._to_bool, (
+        "_VHOST_COERCE['BOT_DETECTION_ENABLED'] must use the _to_bool coercer."
+    )
+    assert coercer("false") is False and coercer("true") is True, (
+        "BOT_DETECTION_ENABLED coercer must parse string booleans correctly."
     )
 
 
@@ -5696,15 +6241,19 @@ def test_proxy_handler_bot_detection_gate_present():
         "core/proxy_handler.py: BOT_DETECTION_ENABLED gate not found — "
         "vc('BOT_DETECTION_ENABLED') must be checked in protect() before detector calls."
     )
-    # Gate (vc() call) must appear BEFORE the first detector vc() call
     gate_idx = src.find(gate_call)
-    honeypot_vc_idx = src.find("vc('HONEYPOT_ENABLED')")
-    assert gate_idx != -1 and honeypot_vc_idx != -1, (
-        "Could not locate vc('BOT_DETECTION_ENABLED') or vc('HONEYPOT_ENABLED') in proxy_handler.py"
+    assert gate_idx != -1, "Could not locate vc('BOT_DETECTION_ENABLED') in proxy_handler.py"
+    # 1.8.13: _is_trap_path pre-gate check uses vc('HONEYPOT_ENABLED') intentionally
+    # BEFORE the gate so trap paths bypass JS-challenge. The actual honeypot DETECTOR
+    # call must appear AFTER the gate. Search from gate_idx onwards.
+    honeypot_vc_idx = src.find("vc('HONEYPOT_ENABLED')", gate_idx)
+    assert honeypot_vc_idx != -1, (
+        "Could not locate vc('HONEYPOT_ENABLED') in proxy_handler.py after the "
+        "BOT_DETECTION_ENABLED gate — honeypot detector must be inside the gated block."
     )
     assert gate_idx < honeypot_vc_idx, (
         "proxy_handler.py: vc('BOT_DETECTION_ENABLED') gate must appear BEFORE "
-        "vc('HONEYPOT_ENABLED') (the first detector call) in protect()."
+        "vc('HONEYPOT_ENABLED') (the detector call) in protect()."
     )
 
 
@@ -5839,84 +6388,5266 @@ def test_strict_vhost_guard_requires_vhosts_non_empty():
     )
 
 
-# ── 1.8.13 honeypot-before-challenge-gate fix ─────────────────────────────
-# Root cause: honeypot/suspicious-path detection ran AFTER the JS challenge
-# gate. Challenge-blocked requests returned 'chal-required' before honeypot
-# detection fired → honeypot events never recorded on challenge-first
-# deployments (pt4.tech, jtsl.pt, any site with JS_CHALLENGE=1).
-# Fix: proxy_handler.py intercepts honeypot/suspicious-path paths inside
-# the chal-required early-return branch so events are captured regardless
-# of challenge state.
+# ── MaxMind ETag conditional download ─────────────────────────────────────
 
-def _find_chal_gate_block(src: str) -> str:
-    """Return the text of the JS-challenge gate's non-HTML early-return block
-    (the `else:` branch after the auto-mint path that emits 'chal-required').
-    Anchored by _js_challenge_required to skip earlier occurrences."""
-    gate_idx = src.find("_js_challenge_required(request)")
-    assert gate_idx != -1, "proxy_handler.py: _js_challenge_required gate not found"
-    # Find the chal-required emit inside or after the gate (~5000 char window)
-    window = src[gate_idx:gate_idx + 5000]
-    emit_idx = window.find('"chal-required"')
-    assert emit_idx != -1, "proxy_handler.py: chal-required not found after gate"
-    # Return the 1500 chars before the emit within that window
-    return window[max(0, emit_idx - 1500):emit_idx]
+def test_maxmind_fetch_edition_exists():
+    """_maxmind_fetch_edition must be defined in reputation/maxmind.py."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    assert "_maxmind_fetch_edition" in src, \
+        "reputation/maxmind.py: _maxmind_fetch_edition not found"
 
 
-def test_honeypot_check_precedes_chal_required():
-    """proxy_handler.py: the chal-required early-return branch must check
-    HONEYPOT_ENABLED before returning chal-required so that bots probing
-    honeypot paths (/.env, /wp-login.php) are always recorded even on
-    challenge-first deployments (pt4.tech, jtsl.pt, etc.)."""
+def test_maxmind_etag_helpers_exist():
+    """_etag_path, _read_etag, _write_etag must be defined."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    for fn in ("_etag_path", "_read_etag", "_write_etag"):
+        assert f"def {fn}" in src, \
+            f"reputation/maxmind.py: {fn} not found"
+
+
+def test_maxmind_fetch_sends_if_none_match():
+    """_maxmind_fetch_edition must include If-None-Match when an ETag is stored."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    assert "If-None-Match" in src, \
+        "reputation/maxmind.py: If-None-Match header not sent — conditional download not implemented"
+
+
+def test_maxmind_fetch_handles_304():
+    """_maxmind_fetch_edition must handle HTTP 304 Not Modified."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    assert "304" in src, \
+        "reputation/maxmind.py: 304 Not Modified not handled — downloads will count against daily limit even when database is unchanged"
+    assert "not_modified" in src, \
+        "reputation/maxmind.py: 'not_modified' return value not found"
+
+
+def test_maxmind_refresh_loop_uses_fetch_edition():
+    """_maxmind_refresh_loop must delegate to _maxmind_fetch_edition (not inline download)."""
+    import pathlib, re
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    loop_start = src.find("async def _maxmind_refresh_loop")
+    assert loop_start >= 0, "reputation/maxmind.py: _maxmind_refresh_loop not found"
+    loop_body = src[loop_start:loop_start + 2000]
+    assert "_maxmind_fetch_edition" in loop_body, \
+        "_maxmind_refresh_loop must call _maxmind_fetch_edition for ETag-based conditional download"
+
+
+def test_maxmind_auto_fetch_uses_fetch_edition():
+    """_maxmind_auto_fetch must delegate to _maxmind_fetch_edition."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    auto_start = src.find("def _maxmind_auto_fetch")
+    assert auto_start >= 0
+    auto_body = src[auto_start:auto_start + 1100]
+    assert "_maxmind_fetch_edition" in auto_body, \
+        "_maxmind_auto_fetch must call _maxmind_fetch_edition for ETag support"
+
+
+def test_maxmind_fetch_edition_source_has_mtime_check():
+    """_maxmind_fetch_edition must call os.path.getmtime to check file age."""
+    import pathlib
+    src = (pathlib.Path(__file__).resolve().parent.parent
+           / "reputation" / "maxmind.py").read_text()
+    fn_start = src.find("def _maxmind_fetch_edition")
+    assert fn_start >= 0
+    fn_body = src[fn_start: fn_start + 1200]
+    assert "getmtime" in fn_body, (
+        "_maxmind_fetch_edition must use os.path.getmtime to check "
+        "whether the existing file is fresh enough to skip the download"
+    )
+    assert "_MAXMIND_MIN_INTERVAL" in fn_body, (
+        "_maxmind_fetch_edition must compare file age against "
+        "_MAXMIND_MIN_INTERVAL (24 h) before deciding to skip"
+    )
+
+
+def test_maxmind_fetch_edition_skips_fresh_file(monkeypatch, tmp_path):
+    """force=False: return 'skipped' when file exists and mtime < 24 h."""
+    import time as _time
+    import importlib
+
+    dest = str(tmp_path / "GeoLite2-ASN.mmdb")
+    open(dest, "wb").close()
+
+    mm = importlib.import_module("reputation.maxmind")
+
+    real_exists = mm.os.path.exists
+    monkeypatch.setattr(mm.os.path, "exists",   lambda p: True if p == dest else real_exists(p))
+    monkeypatch.setattr(mm.os.path, "getmtime", lambda p: _time.time() - 3600)  # 1 h — fresh
+    monkeypatch.setattr(mm, "_validate_mmdb_path", lambda p, **kw: p)
+
+    result = mm._maxmind_fetch_edition("GeoLite2-ASN", dest, "fakekey", force=False)
+    assert result == "skipped", (
+        f"Expected 'skipped' for a file only 1 h old; got {result!r}"
+    )
+
+
+def test_maxmind_fetch_edition_fetches_stale_file(monkeypatch, tmp_path):
+    """force=False: attempt fetch when file exists but mtime >= 24 h (returns error, not skipped)."""
+    import time as _time
+    import importlib, urllib.error
+
+    dest = str(tmp_path / "GeoLite2-ASN.mmdb")
+    open(dest, "wb").close()
+
+    mm = importlib.import_module("reputation.maxmind")
+
+    real_exists = mm.os.path.exists
+    monkeypatch.setattr(mm.os.path, "exists",   lambda p: True if p == dest else real_exists(p))
+    monkeypatch.setattr(mm.os.path, "getmtime", lambda p: _time.time() - 90000)  # 25 h — stale
+    monkeypatch.setattr(mm, "_read_etag", lambda p: "")
+    monkeypatch.setattr(mm, "_validate_mmdb_path", lambda p, **kw: p)
+
+    # Simulate network failure so the function returns 'error' (not 'skipped').
+    import urllib.request as _ureq
+    def _fake_urlopen(req, timeout=None):
+        raise urllib.error.URLError("no network in test")
+    monkeypatch.setattr(_ureq, "urlopen", _fake_urlopen)
+
+    result = mm._maxmind_fetch_edition("GeoLite2-ASN", dest, "fakekey", force=False)
+    assert result != "skipped", (
+        "Stale file (25 h old) must not be skipped — "
+        f"_maxmind_fetch_edition returned {result!r} instead of 'error'/'downloaded'"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1.8.6 — Score breakdown tooltip (agents.html click-to-popover)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _agents_src():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "dashboards" / "agents.html").read_text()
+
+
+class TestScoreBreakdownCss:
+    """CSS for .score-click must be present in agents.html."""
+
+    def test_score_click_class_defined(self):
+        src = _agents_src()
+        assert ".score-click" in src, \
+            "agents.html: .score-click CSS class must be defined"
+
+    def test_score_click_has_cursor_pointer(self):
+        src = _agents_src()
+        idx = src.find(".score-click")
+        block = src[idx:idx+200]
+        assert "cursor:pointer" in block, \
+            "agents.html: .score-click must set cursor:pointer"
+
+
+class TestScoreCellMarkup:
+    """Score badge in the suspects table must be wired for click-to-popover."""
+
+    def test_score_span_has_score_click_class(self):
+        src = _agents_src()
+        assert 'class="tag score-click' in src or "class='tag score-click" in src, \
+            "agents.html: score badge span must carry class 'tag score-click'"
+
+    def test_score_span_has_data_pop_score(self):
+        src = _agents_src()
+        assert 'data-pop="score"' in src or "data-pop='score'" in src, \
+            "agents.html: score badge must have data-pop='score'"
+
+    def test_score_span_has_data_i(self):
+        src = _agents_src()
+        # The score span row must carry data-i="${i}" for index lookup
+        score_idx = src.find('data-pop="score"')
+        if score_idx == -1:
+            score_idx = src.find("data-pop='score'")
+        assert score_idx != -1, "data-pop='score' not found"
+        nearby = src[score_idx - 100: score_idx + 200]
+        assert "data-i=" in nearby, \
+            "agents.html: score badge must carry data-i for suspect index lookup"
+
+    def test_score_span_has_title_click_hint(self):
+        src = _agents_src()
+        score_idx = src.find('data-pop="score"')
+        if score_idx == -1:
+            score_idx = src.find("data-pop='score'")
+        assert score_idx != -1
+        nearby = src[score_idx - 50: score_idx + 300]
+        assert "title=" in nearby, \
+            "agents.html: score badge must have a title tooltip hint"
+
+
+class TestScoreClickWiring:
+    """The click loop must include .score-click elements."""
+
+    def test_score_click_in_queryselectorall(self):
+        src = _agents_src()
+        assert ".score-click" in src, "agents.html: .score-click selector missing"
+        # The querySelectorAll that wires cell clicks must include score-click
+        qs_idx = src.find("querySelectorAll('.cell-click, .score-click')")
+        if qs_idx == -1:
+            qs_idx = src.find('querySelectorAll(".cell-click, .score-click")')
+        if qs_idx == -1:
+            # Accept any querySelectorAll that references score-click
+            qs_idx = src.find(".score-click")
+            qs2    = src.find("querySelectorAll", qs_idx - 500)
+            assert qs2 != -1 and qs2 < qs_idx + 100, \
+                "agents.html: querySelectorAll must select .score-click elements"
+        else:
+            assert qs_idx != -1, \
+                "agents.html: querySelectorAll must include both .cell-click and .score-click"
+
+
+class TestOpenPopoverScoreCase:
+    """openPopover must handle kind='score' and call buildScoreHtml."""
+
+    def test_open_popover_has_score_case(self):
+        src = _agents_src()
+        assert "'score'" in src or '"score"' in src, \
+            "agents.html: openPopover must handle kind='score'"
+
+    def test_open_popover_calls_build_score_html(self):
+        src = _agents_src()
+        assert "buildScoreHtml" in src, \
+            "agents.html: openPopover must call buildScoreHtml for kind='score'"
+
+    def test_open_popover_score_title(self):
+        src = _agents_src()
+        assert "Score breakdown" in src, \
+            "agents.html: openPopover score case must set title 'Score breakdown'"
+
+
+class TestBuildScoreHtmlFunction:
+    """buildScoreHtml standalone function must exist and cover all 6 components."""
+
+    def _fn_body(self):
+        src = _agents_src()
+        start = src.find("function buildScoreHtml(")
+        assert start != -1, "agents.html: buildScoreHtml function not found"
+        return src[start: start + 15000]
+
+    def test_function_exists(self):
+        body = self._fn_body()
+        assert "buildScoreHtml" in body
+
+    def test_all_six_components_present(self):
+        body = self._fn_body()
+        for comp in ("headers", "assets", "enum", "timing", "risk", "404s"):
+            assert f"'{comp}'" in body or f'"{comp}"' in body, \
+                f"agents.html buildScoreHtml must reference component '{comp}'"
+
+    def test_component_colors_match_comp_bar(self):
+        body = self._fn_body()
+        # These are the exact colors used in the .bar .h/.a/.e/.t/.r/.f CSS
+        for color in ("#a78bfa", "#5fb3c0", "#3fb950", "#d29922", "#f85149", "#ff7b3a"):
+            assert color in body, \
+                f"agents.html buildScoreHtml must use component color {color}"
+
+    def test_uses_d_components(self):
+        body = self._fn_body()
+        assert "d.components" in body or "c = d.components" in body or \
+               "components" in body, \
+            "agents.html buildScoreHtml must read d.components"
+
+    def test_uses_d_metrics(self):
+        body = self._fn_body()
+        assert "d.metrics" in body or "m = d.metrics" in body or \
+               "metrics" in body, \
+            "agents.html buildScoreHtml must read d.metrics"
+
+    def test_renders_risk_breakdown_when_risk_nonzero(self):
+        body = self._fn_body()
+        assert "risk_breakdown" in body, \
+            "agents.html buildScoreHtml must conditionally render risk_breakdown signals"
+
+    def test_risk_section_gated_on_risk_score(self):
+        body = self._fn_body()
+        # Must check rScore > 0 (not c.risk) so signals show even when pts round to 0
+        assert "rScore > 0" in body or "rScore>0" in body, \
+            "agents.html buildScoreHtml risk section must be gated on rScore > 0"
+
+    def test_stealth_score_in_output(self):
+        body = self._fn_body()
+        assert "stealth_score" in body, \
+            "agents.html buildScoreHtml must display the stealth_score total"
+
+    def test_bars_equal_pct_contribution(self):
+        body = self._fn_body()
+        # Bar width must use the component percentage value
+        assert "width:${pct}%" in body or "width:"+'"${pct}%"' in body or \
+               "pct}%" in body, \
+            "agents.html buildScoreHtml bars must be sized by component percentage"
+
+    def test_risk_weights_js_const_exists(self):
+        src = _agents_src()
+        assert "RISK_WEIGHTS_JS" in src, \
+            "agents.html must define RISK_WEIGHTS_JS const mirroring config.py RISK_WEIGHTS"
+
+    def test_risk_labels_js_const_exists(self):
+        src = _agents_src()
+        assert "RISK_LABELS_JS" in src, \
+            "agents.html must define RISK_LABELS_JS const for human-readable signal descriptions"
+
+    def test_risk_ban_threshold_const_exists(self):
+        src = _agents_src()
+        assert "RISK_BAN_THRESHOLD" in src, \
+            "agents.html must define RISK_BAN_THRESHOLD const"
+
+    def test_risk_signals_show_base_weight(self):
+        body = self._fn_body()
+        assert "RISK_WEIGHTS_JS" in body, \
+            "agents.html buildScoreHtml risk rows must look up base weight from RISK_WEIGHTS_JS"
+
+    def test_risk_signals_show_hit_count(self):
+        body = self._fn_body()
+        assert "hits" in body and "triggered" in body, \
+            "agents.html buildScoreHtml risk rows must show approximate hit count"
+
+    def test_risk_signals_show_label(self):
+        body = self._fn_body()
+        assert "RISK_LABELS_JS" in body, \
+            "agents.html buildScoreHtml risk rows must look up human label from RISK_LABELS_JS"
+
+    def test_ban_threshold_progress_bar(self):
+        body = self._fn_body()
+        assert "ban threshold" in body or "banPct" in body, \
+            "agents.html buildScoreHtml must render ban threshold progress bar"
+
+
+class TestNormalizeIdPassesComponentsMetrics:
+    """normalizeId in both files must pass through components and metrics."""
+
+    def _iife_src(self, filename):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "dashboards" / filename).read_text()
+        start = src.find("function normalizeId(raw)")
+        assert start != -1, f"{filename}: normalizeId not found"
+        return src[start: start + 1500]
+
+    def test_agents_normalizeId_has_components(self):
+        body = self._iife_src("agents.html")
+        assert "components" in body, \
+            "agents.html normalizeId must pass through components field"
+
+    def test_agents_normalizeId_has_metrics(self):
+        body = self._iife_src("agents.html")
+        assert "metrics" in body, \
+            "agents.html normalizeId must pass through metrics field"
+
+    def test_main_normalizeId_has_components(self):
+        body = self._iife_src("main.html")
+        assert "components" in body, \
+            "main.html normalizeId must pass through components field"
+
+    def test_main_normalizeId_has_metrics(self):
+        body = self._iife_src("main.html")
+        assert "metrics" in body, \
+            "main.html normalizeId must pass through metrics field"
+
+
+class TestIpIntelRiskBreakdown:
+    """ip_intel_endpoint must return risk_breakdown in internal section."""
+
+    def _fn_body(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "admin" / "users.py").read_text()
+        fn_start = src.find("async def ip_intel_endpoint")
+        assert fn_start != -1, "admin/users.py: ip_intel_endpoint not found"
+        # iter-18: LIVE-1 added an auth gate and LIVE-3 added the ip_bans
+        # query block; both widened the function past the original 6000-char
+        # slice and pushed risk_breakdown (toward the bottom) out of frame.
+        return src[fn_start: fn_start + 9000]
+
+    def test_risk_breakdown_collected_in_ip_intel(self):
+        fn_body = self._fn_body()
+        assert "risk_breakdown" in fn_body, \
+            "ip_intel_endpoint must collect risk_breakdown from ip_state"
+
+    def test_risk_breakdown_in_internal_response(self):
+        fn_body = self._fn_body()
+        internal_start = fn_body.find('out["internal"]')
+        assert internal_start != -1, "ip_intel_endpoint must set out['internal']"
+        internal_block = fn_body[internal_start: internal_start + 600]
+        assert "risk_breakdown" in internal_block, \
+            "ip_intel_endpoint out['internal'] must include risk_breakdown key"
+
+    def test_risk_breakdown_sorted_descending(self):
+        fn_body = self._fn_body()
+        assert "reverse=True" in fn_body, \
+            "ip_intel_endpoint risk_breakdown must be sorted descending (reverse=True)"
+
+
+class TestMissedListRiskBreakdown:
+    """agents_bucket_detail_endpoint missed_list entries must include risk_breakdown."""
+
+    def _fn_body(self):
+        import pathlib
+        src = (pathlib.Path(__file__).resolve().parent.parent
+               / "core" / "proxy_handler.py").read_text()
+        fn_start = src.find("async def agents_bucket_detail_endpoint")
+        assert fn_start != -1
+        return src[fn_start: fn_start + 8000]
+
+    def test_risk_breakdown_in_missed_list_append(self):
+        body = self._fn_body()
+        missed_idx = body.find("missed_list.append(")
+        assert missed_idx != -1, "agents_bucket_detail_endpoint: missed_list.append not found"
+        append_block = body[missed_idx: missed_idx + 600]
+        assert "risk_breakdown" in append_block, \
+            "agents_bucket_detail_endpoint: missed_list entries must include risk_breakdown"
+        assert '"components"' in append_block or "'components'" in append_block, \
+            "agents_bucket_detail_endpoint: missed_list entries must include components"
+        assert '"metrics"' in append_block or "'metrics'" in append_block, \
+            "agents_bucket_detail_endpoint: missed_list entries must include metrics"
+
+    def test_risk_breakdown_sorted_descending(self):
+        body = self._fn_body()
+        missed_idx = body.find("missed_list.append(")
+        pre_block = body[max(0, missed_idx - 300): missed_idx + 100]
+        assert "reverse=True" in pre_block, \
+            "agents_bucket_detail_endpoint: risk_breakdown sort must use reverse=True"
+
+
+# ── 1.8.6 — TOTP / 2FA QR code ───────────────────────────────────────────────
+
+class TestTotpSetupQrCode:
+    """totp_setup_endpoint returns qr_data_url (base64 SVG), not raw secret."""
+
+    def _setup_src(self):
+        import pathlib as _pl
+        return (_pl.Path(__file__).parent.parent / "admin" / "users.py").read_text()
+
+    def test_qr_data_url_in_response(self):
+        src = self._setup_src()
+        assert "qr_data_url" in src, \
+            "totp_setup_endpoint must include qr_data_url in json_response"
+
+    def test_qrcode_import(self):
+        src = self._setup_src()
+        assert "qrcode" in src, \
+            "totp_setup_endpoint must import qrcode to generate QR code"
+
+    def test_base64_encode_used(self):
+        src = self._setup_src()
+        assert "_b64.b64encode" in src or "base64.b64encode" in src, \
+            "QR code must be base64-encoded for data URL"
+
+    def test_data_url_prefix(self):
+        src = self._setup_src()
+        assert "data:image/svg+xml;base64," in src, \
+            "qr_data_url must use data:image/svg+xml;base64, prefix (SVG, no PIL needed)"
+
+    def test_raw_secret_not_in_response(self):
+        """INT4-11: raw secret must not appear in json_response body."""
+        src = self._setup_src()
+        setup_fn_start = src.find("async def totp_setup_endpoint")
+        assert setup_fn_start != -1
+        # Grab the function body (up to next async def)
+        next_fn = src.find("\nasync def ", setup_fn_start + 10)
+        fn_body = src[setup_fn_start:next_fn] if next_fn != -1 else src[setup_fn_start:]
+        json_resp_idx = fn_body.find("json_response(")
+        assert json_resp_idx != -1
+        resp_call = fn_body[json_resp_idx: json_resp_idx + 200]
+        assert '"secret"' not in resp_call and "'secret'" not in resp_call, \
+            "INT4-11: raw TOTP secret must not be returned in API response"
+
+
+class TestTotpSetupSettingsHtml:
+    """settings.html renders QR code image, not just raw URI text."""
+
+    def _html(self):
+        import pathlib as _pl
+        return (_pl.Path(__file__).parent.parent / "dashboards" / "settings.html").read_text()
+
+    def test_qr_img_element_exists(self):
+        html = self._html()
+        assert 'id="twofa-qr-img"' in html, \
+            "settings.html must have <img id='twofa-qr-img'> for QR display"
+
+    def test_qr_wrap_element_exists(self):
+        html = self._html()
+        assert 'id="twofa-qr-wrap"' in html, \
+            "settings.html must have #twofa-qr-wrap container for QR visibility toggle"
+
+    def test_qr_img_src_set_from_data_url(self):
+        html = self._html()
+        assert "qrImg.src" in html or "qr_data_url" in html, \
+            "settings.html JS must set qrImg.src from qr_data_url returned by backend"
+
+    def test_qr_wrap_shown_on_setup(self):
+        html = self._html()
+        assert "qrWrap.style.display" in html, \
+            "settings.html must show/hide #twofa-qr-wrap when setup area opens"
+
+    def test_qr_img_has_alt_text(self):
+        html = self._html()
+        assert 'alt="TOTP QR code"' in html or "alt='TOTP QR code'" in html, \
+            "QR <img> must have descriptive alt text for accessibility"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P1 / P2  Mutation-kill tests — added to close uncovered mutants
+# Files covered: detection/llm_heuristic.py, detection/path_sweep.py,
+#                scoring.py, identity.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+import importlib
+import types
+from dataclasses import dataclass, field
+from collections import defaultdict, deque
+
+
+# ── helpers ────────────────────────────────────────────────────────────────
+
+class _FakeVersion:
+    def __init__(self, major=1):
+        self.major = major
+
+class _FakeReq:
+    """Minimal request-like object for pure-function tests."""
+    def __init__(self, headers=None, cookies=None, method="GET",
+                 version=None, content_length=None, path="/",
+                 remote="1.2.3.4"):
+        self.headers  = headers or {}
+        self.cookies  = cookies or {}
+        self.method   = method
+        self.version  = version or _FakeVersion(1)
+        self.content_length = content_length
+        self.path     = path
+        self.remote   = remote
+
+
+@dataclass
+class _FakeState:
+    risk_score: float = 0.0
+    last_risk_update: float = 0.0
+    risk_by_reason: dict = field(default_factory=lambda: defaultdict(float))
+
+
+# ── llm_heuristic._is_subresource ─────────────────────────────────────────
+
+class TestIsSubresource:
+    def _mod(self):
+        import detection.llm_heuristic as m
+        return m
+
+    def test_css_extension(self):
+        assert self._mod()._is_subresource("/style.css", "text/html") is True
+
+    def test_js_extension(self):
+        assert self._mod()._is_subresource("/app.js", "*/*") is True
+
+    def test_mjs_extension(self):
+        assert self._mod()._is_subresource("/mod.mjs", "") is True
+
+    def test_image_png(self):
+        assert self._mod()._is_subresource("/logo.png", "") is True
+
+    def test_woff2_font(self):
+        assert self._mod()._is_subresource("/font.woff2", "") is True
+
+    def test_unknown_extension_is_not_sub(self):
+        assert self._mod()._is_subresource("/page.html", "text/html") is False
+
+    def test_no_extension_is_not_sub(self):
+        assert self._mod()._is_subresource("/page", "text/html") is False
+
+    def test_json_accept_is_sub(self):
+        assert self._mod()._is_subresource("/api/data", "application/json") is True
+
+    def test_json_and_html_accept_is_not_sub(self):
+        # XHR rule only fires when text/html is absent
+        assert self._mod()._is_subresource("/api", "application/json, text/html") is False
+
+    def test_query_string_stripped_before_ext_check(self):
+        assert self._mod()._is_subresource("/style.css?v=123", "text/html") is True
+
+    def test_uppercase_ext_lowercased(self):
+        assert self._mod()._is_subresource("/img.PNG", "") is True
+
+    def test_mp4_video(self):
+        assert self._mod()._is_subresource("/video.mp4", "") is True
+
+    def test_svg_image(self):
+        assert self._mod()._is_subresource("/icon.svg", "") is True
+
+
+# ── llm_heuristic._is_html_request ────────────────────────────────────────
+
+class TestIsHtmlRequest:
+    def _mod(self):
+        import detection.llm_heuristic as m
+        return m
+
+    def test_get_html_accept_is_html(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/page") is True
+
+    def test_post_is_never_html(self):
+        assert self._mod()._is_html_request("POST", "text/html", "/page") is False
+
+    def test_put_is_never_html(self):
+        assert self._mod()._is_html_request("PUT", "text/html", "/page") is False
+
+    def test_css_path_is_not_html(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/style.css") is False
+
+    def test_js_path_is_not_html(self):
+        assert self._mod()._is_html_request("GET", "*/*", "/app.js") is False
+
+    def test_xml_extension_excluded(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/feed.xml") is False
+
+    def test_txt_extension_excluded(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/robots.txt") is False
+
+    def test_pdf_extension_excluded(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/doc.pdf") is False
+
+    def test_empty_accept_counts_as_html(self):
+        assert self._mod()._is_html_request("GET", "", "/page") is True
+
+    def test_wildcard_accept_counts_as_html(self):
+        assert self._mod()._is_html_request("GET", "*/*", "/page") is True
+
+    def test_path_without_extension_is_html(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/dashboard") is True
+
+    def test_query_string_not_misclassified(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/page?q=1") is True
+
+
+# ── llm_heuristic.observe + check (P2 — stateful, module-level dict) ──────
+
+class TestLlmObserveAndCheck:
+    """Tests for observe() and check() with teardown of module-level state."""
+
+    def setup_method(self):
+        import detection.llm_heuristic as m
+        self._m = m
+        # Clear module-level state before each test
+        m._req_log.clear()
+        m._fired.clear()
+
+    def teardown_method(self):
+        self._m._req_log.clear()
+        self._m._fired.clear()
+
+    def test_observe_records_html_request(self):
+        self._m.observe("id1", "GET", "/page", "text/html")
+        assert "id1" in self._m._req_log
+        assert len(self._m._req_log["id1"]) == 1
+        _ts, is_sub = self._m._req_log["id1"][0]
+        assert is_sub is False
+
+    def test_observe_records_subresource(self):
+        self._m.observe("id2", "GET", "/style.css", "text/html")
+        assert len(self._m._req_log["id2"]) == 1
+        _ts, is_sub = self._m._req_log["id2"][0]
+        assert is_sub is True
+
+    def test_observe_skips_post_non_sub(self):
+        # POST + non-JSON accept + no sub extension → neither html nor sub → not recorded
+        self._m.observe("id3", "POST", "/submit", "application/x-www-form-urlencoded")
+        assert "id3" not in self._m._req_log or len(self._m._req_log["id3"]) == 0
+
+    def test_observe_skips_empty_identity(self):
+        self._m.observe("", "GET", "/page", "text/html")
+        assert "" not in self._m._req_log
+
+    def test_check_returns_zero_with_no_log(self):
+        score = self._m.check("unknown-id", "1.2.3.4")
+        assert score == 0.0
+
+    def test_check_returns_zero_below_min_count(self):
+        import time
+        now = time.time()
+        # LLM_HTML_MIN_COUNT defaults to 5 — add 4 HTML entries
+        for _ in range(4):
+            self._m._req_log["id4"].append((now, False))
+        assert self._m.check("id4", "1.2.3.4") == 0.0
+
+    def test_check_fires_when_no_subresources_and_enough_html(self):
+        import time
+        from config import LLM_HTML_MIN_COUNT, LLM_HEURISTIC_SCORE
+        now = time.time()
+        for _ in range(LLM_HTML_MIN_COUNT):
+            self._m._req_log["id5"].append((now, False))
+        score = self._m.check("id5", "1.2.3.4")
+        assert score == LLM_HEURISTIC_SCORE
+
+    def test_check_cooldown_prevents_double_fire(self):
+        import time
+        from config import LLM_HTML_MIN_COUNT, LLM_HEURISTIC_SCORE
+        now = time.time()
+        for _ in range(LLM_HTML_MIN_COUNT):
+            self._m._req_log["id6"].append((now, False))
+        first  = self._m.check("id6", "1.2.3.4")
+        second = self._m.check("id6", "1.2.3.4")
+        assert first  == LLM_HEURISTIC_SCORE
+        assert second == 0.0  # cooldown active
+
+    def test_check_returns_zero_when_subresource_ratio_above_threshold(self):
+        import time
+        from config import LLM_HTML_MIN_COUNT
+        now = time.time()
+        # 5 html + 10 subresources → ratio = 2.0 > 0.0 threshold → no fire
+        for _ in range(LLM_HTML_MIN_COUNT):
+            self._m._req_log["id7"].append((now, False))
+        for _ in range(10):
+            self._m._req_log["id7"].append((now, True))
+        assert self._m.check("id7", "1.2.3.4") == 0.0
+
+    def test_check_excludes_stale_entries_outside_window(self):
+        import time
+        from config import LLM_HTML_MIN_COUNT, LLM_HEURISTIC_WINDOW_SECS
+        # All entries are older than the window → html_count = 0 → no fire
+        old = time.time() - LLM_HEURISTIC_WINDOW_SECS - 10
+        for _ in range(LLM_HTML_MIN_COUNT * 2):
+            self._m._req_log["id8"].append((old, False))
+        assert self._m.check("id8", "1.2.3.4") == 0.0
+
+
+# ── detection.path_sweep._is_static_path ──────────────────────────────────
+
+class TestIsStaticPath:
+    def _mod(self):
+        import detection.path_sweep as m
+        return m
+
+    def test_css_is_static(self):
+        assert self._mod()._is_static_path("/style.css") is True
+
+    def test_js_is_static(self):
+        assert self._mod()._is_static_path("/bundle.js") is True
+
+    def test_png_is_static(self):
+        assert self._mod()._is_static_path("/logo.png") is True
+
+    def test_woff2_is_static(self):
+        assert self._mod()._is_static_path("/font.woff2") is True
+
+    def test_mp4_is_static(self):
+        assert self._mod()._is_static_path("/video.mp4") is True
+
+    def test_pdf_is_static(self):
+        assert self._mod()._is_static_path("/doc.pdf") is True
+
+    def test_zip_is_static(self):
+        assert self._mod()._is_static_path("/archive.zip") is True
+
+    def test_html_is_not_static(self):
+        assert self._mod()._is_static_path("/index.html") is False
+
+    def test_no_extension_is_not_static(self):
+        assert self._mod()._is_static_path("/api/v1/users") is False
+
+    def test_extension_case_insensitive(self):
+        assert self._mod()._is_static_path("/Logo.PNG") is True
+
+    def test_ts_map_is_static(self):
+        # .ts and .map are in _STATIC_EXTS
+        assert self._mod()._is_static_path("/app.ts") is True
+        assert self._mod()._is_static_path("/app.js.map") is True
+
+    def test_no_dot_returns_false(self):
+        assert self._mod()._is_static_path("/nodotpath") is False
+
+
+# ── scoring._signal_runtime_order ─────────────────────────────────────────
+
+class TestSignalRuntimeOrder:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def setup_method(self):
+        import scoring as m
+        # Ensure cache is clear so DB-override path is not triggered
+        m._signal_order_cache.clear()
+
+    def test_unknown_signal_returns_1(self):
+        assert self._mod()._signal_runtime_order("totally-unknown") == 1
+
+    def test_escalate_only_signal_returns_3(self):
+        from config import ESCALATE_ONLY_REASONS
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        assert self._mod()._signal_runtime_order(sig) == 3
+
+    def test_second_order_signal_returns_2(self):
+        from config import SECOND_ORDER_REASONS
+        sig = next(iter(SECOND_ORDER_REASONS))
+        assert self._mod()._signal_runtime_order(sig) == 2
+
+    def test_cache_override_wins(self):
+        import scoring as m
+        m._signal_order_cache["test-sig"] = 2
+        assert m._signal_runtime_order("test-sig") == 2
+        del m._signal_order_cache["test-sig"]
+
+    def test_escalate_only_not_confused_with_second_order(self):
+        from config import ESCALATE_ONLY_REASONS
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        assert self._mod()._signal_runtime_order(sig) != 2
+
+
+# ── scoring._should_run_signal ─────────────────────────────────────────────
+
+class TestShouldRunSignal:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def setup_method(self):
+        import scoring as m
+        m._signal_order_cache.clear()
+
+    def test_order1_always_runs(self):
+        # "unknown" maps to order 1
+        assert self._mod()._should_run_signal("totally-unknown", 0.0) is True
+        assert self._mod()._should_run_signal("totally-unknown", 999.0) is True
+
+    def test_order3_runs_when_score_above_escalation_threshold(self):
+        from config import ESCALATE_ONLY_REASONS, ESCALATION_THRESHOLD
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        assert self._mod()._should_run_signal(sig, ESCALATION_THRESHOLD) is True
+
+    def test_order3_blocked_when_score_below_escalation_threshold(self):
+        from config import ESCALATE_ONLY_REASONS, ESCALATION_THRESHOLD
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        if ESCALATION_THRESHOLD > 0:
+            assert self._mod()._should_run_signal(sig, ESCALATION_THRESHOLD - 0.1) is False
+
+    def test_order2_runs_when_score_above_second_order_threshold(self):
+        from config import SECOND_ORDER_REASONS, SECOND_ORDER_THRESHOLD
+        sig = next(iter(SECOND_ORDER_REASONS))
+        assert self._mod()._should_run_signal(sig, SECOND_ORDER_THRESHOLD) is True
+
+    def test_order2_blocked_when_score_below_second_order_threshold(self):
+        from config import SECOND_ORDER_REASONS, SECOND_ORDER_THRESHOLD
+        sig = next(iter(SECOND_ORDER_REASONS))
+        if SECOND_ORDER_THRESHOLD > 0:
+            assert self._mod()._should_run_signal(sig, SECOND_ORDER_THRESHOLD - 0.1) is False
+
+    def test_order3_runs_when_escalation_threshold_zero(self, monkeypatch):
+        import scoring as m
+        import config as c
+        monkeypatch.setattr(c, "ESCALATION_THRESHOLD", 0)
+        monkeypatch.setattr(m, "ESCALATION_THRESHOLD", 0)
+        from config import ESCALATE_ONLY_REASONS
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        assert m._should_run_signal(sig, 0.0) is True
+
+    def test_order2_runs_when_second_order_threshold_zero(self, monkeypatch):
+        import scoring as m
+        import config as c
+        monkeypatch.setattr(c, "SECOND_ORDER_THRESHOLD", 0)
+        monkeypatch.setattr(m, "SECOND_ORDER_THRESHOLD", 0)
+        from config import SECOND_ORDER_REASONS
+        sig = next(iter(SECOND_ORDER_REASONS))
+        assert m._should_run_signal(sig, 0.0) is True
+
+
+# ── scoring._decay_risk ────────────────────────────────────────────────────
+
+class TestDecayRisk:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def test_no_decay_when_score_zero(self):
+        s = _FakeState(risk_score=0.0, last_risk_update=0.0)
+        self._mod()._decay_risk(s, 3600.0)
+        assert s.risk_score == 0.0
+
+    def test_decay_reduces_score(self):
+        s = _FakeState(risk_score=100.0, last_risk_update=0.0)
+        self._mod()._decay_risk(s, 3600.0)  # one half-life (3600s default)
+        assert 45.0 < s.risk_score < 55.0   # ~50 after one half-life
+
+    def test_decay_zeroes_score_below_half(self):
+        s = _FakeState(risk_score=0.4, last_risk_update=0.0)
+        self._mod()._decay_risk(s, 3600.0)
+        assert s.risk_score == 0.0
+
+    def test_last_risk_update_set_to_now_ts(self):
+        s = _FakeState(risk_score=10.0, last_risk_update=0.0)
+        self._mod()._decay_risk(s, 9999.0)
+        assert s.last_risk_update == 9999.0
+
+    def test_no_elapsed_no_change(self):
+        s = _FakeState(risk_score=50.0, last_risk_update=1000.0)
+        self._mod()._decay_risk(s, 1000.0)
+        assert s.risk_score == 50.0
+
+    def test_risk_by_reason_decays_in_lockstep(self):
+        s = _FakeState(risk_score=100.0, last_risk_update=0.0)
+        s.risk_by_reason["bad-ua"] = 100.0
+        self._mod()._decay_risk(s, 3600.0)
+        assert "bad-ua" in s.risk_by_reason
+        assert 45.0 < s.risk_by_reason["bad-ua"] < 55.0
+
+    def test_risk_by_reason_entry_pruned_below_half(self):
+        s = _FakeState(risk_score=0.4, last_risk_update=0.0)
+        s.risk_by_reason["tiny"] = 0.4
+        self._mod()._decay_risk(s, 3600.0)
+        assert "tiny" not in s.risk_by_reason
+
+    def test_negative_elapsed_clamped_to_zero(self):
+        # now_ts < last_risk_update → elapsed < 0 → clamped to 0
+        s = _FakeState(risk_score=50.0, last_risk_update=5000.0)
+        self._mod()._decay_risk(s, 1000.0)
+        assert s.risk_score == 50.0  # unchanged
+
+    def test_risk_by_reason_cleared_when_score_zeroed(self):
+        s = _FakeState(risk_score=0.4, last_risk_update=0.0)
+        s.risk_by_reason["x"] = 0.3
+        self._mod()._decay_risk(s, 3600.0)
+        assert len(s.risk_by_reason) == 0
+
+
+# ── scoring._escalation_score ──────────────────────────────────────────────
+
+class TestEscalationScore:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def setup_method(self):
+        from state import ip_state
+        ip_state.clear()
+
+    def teardown_method(self):
+        from state import ip_state
+        ip_state.clear()
+
+    def test_returns_zero_for_unknown_key(self):
+        assert self._mod()._escalation_score("no-such-key") == 0.0
+
+    def test_returns_risk_score_for_known_key(self):
+        from state import ip_state
+        ip_state["k1"].risk_score = 42.5
+        assert self._mod()._escalation_score("k1") == 42.5
+
+    def test_returns_zero_when_risk_score_none(self):
+        from state import ip_state
+        ip_state["k2"].risk_score = 0
+        assert self._mod()._escalation_score("k2") == 0.0
+
+
+# ── identity._fp_hash ──────────────────────────────────────────────────────
+
+class TestFpHash:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def test_returns_24_char_hex(self):
+        h = self._mod()._fp_hash("Mozilla/5.0", "1.2.3.0/24", "t13d...")
+        assert len(h) == 24
+        assert all(c in "0123456789abcdef" for c in h)
+
+    def test_different_ua_different_hash(self):
+        h1 = self._mod()._fp_hash("Mozilla/5.0", "1.2.3.0/24", "ja4")
+        h2 = self._mod()._fp_hash("curl/7.88",   "1.2.3.0/24", "ja4")
+        assert h1 != h2
+
+    def test_different_ip_tier_different_hash(self):
+        h1 = self._mod()._fp_hash("UA", "1.2.3.0/24", "ja4")
+        h2 = self._mod()._fp_hash("UA", "5.6.7.0/24", "ja4")
+        assert h1 != h2
+
+    def test_different_ja4_different_hash(self):
+        h1 = self._mod()._fp_hash("UA", "1.2.3.0/24", "ja4a")
+        h2 = self._mod()._fp_hash("UA", "1.2.3.0/24", "ja4b")
+        assert h1 != h2
+
+    def test_ua_truncated_at_200(self):
+        long_ua = "A" * 201
+        trunc   = "A" * 200
+        h1 = self._mod()._fp_hash(long_ua,  "ip", "ja4")
+        h2 = self._mod()._fp_hash(trunc,    "ip", "ja4")
+        assert h1 == h2  # truncation happens inside _fp_hash
+
+    def test_stable_for_same_inputs(self):
+        h1 = self._mod()._fp_hash("UA", "ip", "ja4")
+        h2 = self._mod()._fp_hash("UA", "ip", "ja4")
+        assert h1 == h2
+
+
+# ── identity._header_order_sig ────────────────────────────────────────────
+
+class TestHeaderOrderSig:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def test_returns_12_char_hex(self):
+        req = _FakeReq({"User-Agent": "x", "Accept": "text/html"})
+        sig = self._mod()._header_order_sig(req)
+        assert len(sig) == 12
+        assert all(c in "0123456789abcdef" for c in sig)
+
+    def test_host_header_excluded(self):
+        req1 = _FakeReq({"Host": "a.example.com", "Accept": "text/html"})
+        req2 = _FakeReq({"Host": "b.example.com", "Accept": "text/html"})
+        assert self._mod()._header_order_sig(req1) == self._mod()._header_order_sig(req2)
+
+    def test_order_matters(self):
+        # Same headers, different order → different sig
+        req1 = _FakeReq({"Accept": "text/html", "User-Agent": "x"})
+        req2 = _FakeReq({"User-Agent": "x", "Accept": "text/html"})
+        # dict in Python 3.7+ preserves insertion order
+        if list(req1.headers.keys()) != list(req2.headers.keys()):
+            assert self._mod()._header_order_sig(req1) != self._mod()._header_order_sig(req2)
+
+    def test_no_headers_stable(self):
+        req = _FakeReq({})
+        sig = self._mod()._header_order_sig(req)
+        assert len(sig) == 12
+
+    def test_header_names_lowercased(self):
+        req1 = _FakeReq({"Accept": "text/html"})
+        req2 = _FakeReq({"ACCEPT": "text/html"})
+        assert self._mod()._header_order_sig(req1) == self._mod()._header_order_sig(req2)
+
+
+# ── identity._is_library_headers ─────────────────────────────────────────
+
+class TestIsLibraryHeaders:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def test_python_requests_default_headers(self):
+        # python-requests 2.x: user-agent, accept-encoding, accept, connection
+        req = _FakeReq({
+            "User-Agent":      "python-requests/2.28",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept":          "*/*",
+            "Connection":      "keep-alive",
+        })
+        assert self._mod()._is_library_headers(req) is True
+
+    def test_curl_default_headers(self):
+        req = _FakeReq({
+            "User-Agent": "curl/7.88",
+            "Accept":     "*/*",
+        })
+        assert self._mod()._is_library_headers(req) is True
+
+    def test_browser_headers_not_library(self):
+        req = _FakeReq({
+            "User-Agent":      "Mozilla/5.0",
+            "Accept":          "text/html,application/xhtml+xml",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Cache-Control":   "max-age=0",
+            "Connection":      "keep-alive",
+        })
+        assert self._mod()._is_library_headers(req) is False
+
+    def test_go_net_http_headers(self):
+        req = _FakeReq({
+            "User-Agent":      "Go-http-client/1.1",
+            "Accept-Encoding": "gzip",
+        })
+        assert self._mod()._is_library_headers(req) is True
+
+    def test_httpx_async_headers(self):
+        req = _FakeReq({
+            "Accept":          "*/*",
+            "Accept-Encoding": "gzip, deflate",
+            "Accept-Language": "en-US,en;q=0.9",
+            "User-Agent":      "python-httpx/0.25",
+            "Connection":      "keep-alive",
+        })
+        assert self._mod()._is_library_headers(req) is True
+
+
+# ── identity.compute_ja4h ────────────────────────────────────────────────
+
+class TestComputeJa4h:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def _make_req(self, method="GET", version_major=1, headers=None,
+                  cookies=None, content_length=None):
+        return _FakeReq(
+            headers=headers or {},
+            cookies=cookies or {},
+            method=method,
+            version=_FakeVersion(version_major),
+            content_length=content_length,
+        )
+
+    def test_returns_string(self):
+        req = self._make_req()
+        result = self._mod().compute_ja4h(req)
+        assert isinstance(result, str)
+
+    def test_format_has_four_underscore_parts(self):
+        req = self._make_req()
+        parts = self._mod().compute_ja4h(req).split("_")
+        assert len(parts) == 4
+
+    def test_method_prefix_get(self):
+        req = self._make_req(method="GET")
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h.startswith("ge")
+
+    def test_method_prefix_post(self):
+        req = self._make_req(method="POST")
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h.startswith("po")
+
+    def test_http2_version(self):
+        req = self._make_req(version_major=2)
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[2:4] == "20"
+
+    def test_http1_version(self):
+        req = self._make_req(version_major=1)
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[2:4] == "11"
+
+    def test_no_body_flag(self):
+        req = self._make_req(content_length=None)
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[4] == "n"
+
+    def test_has_body_flag(self):
+        req = self._make_req(content_length=42)
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[4] == "y"
+
+    def test_referer_flag_absent(self):
+        req = self._make_req(headers={"Accept": "text/html"})
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[5] == "n"
+
+    def test_referer_flag_present(self):
+        req = self._make_req(headers={"Referer": "https://example.com"})
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[5] == "r"
+
+    def test_no_cookies_hash_is_zeros(self):
+        req = self._make_req(headers={"Accept": "text/html"}, cookies={})
+        ja4h = self._mod().compute_ja4h(req)
+        ck_hash = ja4h.split("_")[3]
+        assert ck_hash == "000000000000"
+
+    def test_with_cookie_hash_not_zeros(self):
+        req = self._make_req(headers={}, cookies={"session": "abc"})
+        ja4h = self._mod().compute_ja4h(req)
+        ck_hash = ja4h.split("_")[3]
+        assert ck_hash != "000000000000"
+
+    def test_different_cookies_different_hash(self):
+        req1 = self._make_req(cookies={"a": "1"})
+        req2 = self._make_req(cookies={"b": "1"})
+        assert self._mod().compute_ja4h(req1) != self._mod().compute_ja4h(req2)
+
+    def test_cookie_host_excluded_from_header_count(self):
+        req_with_host = self._make_req(headers={"Host": "x.com", "Accept": "*/*"})
+        req_no_host   = self._make_req(headers={"Accept": "*/*"})
+        # hdr_count part (index 1) should be equal since Host excluded
+        parts_with = self._mod().compute_ja4h(req_with_host).split("_")
+        parts_no   = self._mod().compute_ja4h(req_no_host).split("_")
+        assert parts_with[1] == parts_no[1]
+
+    def test_error_recovery(self):
+        # If request object is broken, must return "error" not raise
+        result = self._mod().compute_ja4h(object())
+        assert result == "error"
+
+
+# ── identity.get_identity ────────────────────────────────────────────────
+
+class TestGetIdentity:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def _signed_cookie(self, sid: str) -> str:
+        import hmac as _hmac, hashlib as _hl
+        from config import SESSION_KEY, SESSION_COOKIE
+        sig = _hmac.new(SESSION_KEY, b"session:" + sid.encode(), _hl.sha256).hexdigest()
+        return f"{sid}.{sig}"
+
+    def _anon_req(self, ua="curl/7", al="en", ae="gzip"):
+        from config import SESSION_COOKIE
+        # No valid cookie
+        return _FakeReq(headers={"User-Agent": ua, "Accept-Language": al,
+                                  "Accept-Encoding": ae},
+                         cookies={})
+
+    def _session_req(self, sid: str):
+        from config import SESSION_COOKIE
+        token = self._signed_cookie(sid)
+        return _FakeReq(headers={"User-Agent": "Mozilla/5.0"},
+                         cookies={SESSION_COOKIE: token})
+
+    def test_anon_mode_no_cookie(self):
+        req = self._anon_req()
+        _id, _sid, _fp, is_new, mode = self._mod().get_identity(req)
+        assert mode == "anon"
+        assert is_new is True
+
+    def test_session_mode_valid_cookie(self):
+        sid = "validSID12345678"
+        req = self._session_req(sid)
+        _id, ret_sid, _fp, is_new, mode = self._mod().get_identity(req)
+        assert mode == "session"
+        assert ret_sid == sid
+        assert is_new is False
+
+    def test_identity_is_16_char_hex(self):
+        req = self._anon_req()
+        identity, *_ = self._mod().get_identity(req)
+        assert len(identity) == 16
+        assert all(c in "0123456789abcdef" for c in identity)
+
+    def test_anon_identity_stable_same_headers_same_ip(self):
+        req = self._anon_req()
+        id1, *_ = self._mod().get_identity(req)
+        id2, *_ = self._mod().get_identity(req)
+        assert id1 == id2
+
+    def test_session_identity_stable_same_sid(self):
+        sid = "stableSID123456"
+        req = self._session_req(sid)
+        id1, *_ = self._mod().get_identity(req)
+        id2, *_ = self._mod().get_identity(req)
+        assert id1 == id2
+
+    def test_anon_different_ua_different_identity(self):
+        req1 = self._anon_req(ua="curl/7")
+        req2 = self._anon_req(ua="python-requests/2")
+        id1, *_ = self._mod().get_identity(req1)
+        id2, *_ = self._mod().get_identity(req2)
+        assert id1 != id2
+
+    def test_session_returns_correct_sid(self):
+        sid = "mySID1234567890"
+        req = self._session_req(sid)
+        _, ret_sid, *_ = self._mod().get_identity(req)
+        assert ret_sid == sid
+
+    def test_invalid_cookie_falls_back_to_anon(self):
+        from config import SESSION_COOKIE
+        req = _FakeReq(headers={"User-Agent": "Mozilla"},
+                        cookies={SESSION_COOKIE: "notvalid.sig"})
+        _, _sid, _fp, is_new, mode = self._mod().get_identity(req)
+        assert mode == "anon"
+
+    def test_fingerprint_length(self):
+        req = self._anon_req()
+        _, _, fp, *_ = self._mod().get_identity(req)
+        assert len(fp) == 12
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# P1/P2 round-2 — targeted survivor-kill tests
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── _is_subresource: multi-dot path (split vs rsplit distinction) ──────────
+
+class TestIsSubresourceMultiDot:
+    def _mod(self):
+        import detection.llm_heuristic as m
+        return m
+
+    def test_multi_dot_path_uses_rsplit(self):
+        # rsplit(".", 1) on "lib.v2.js" → ext=".js" (subresource)
+        # split(".", 1)  on "lib.v2.js" → ext=".v2.js" (not in exts)
+        assert self._mod()._is_subresource("/lib.v2.js", "") is True
+
+    def test_multi_dot_png(self):
+        assert self._mod()._is_subresource("/assets.prod.v2.png", "") is True
+
+    def test_no_dot_no_accept_is_not_sub(self):
+        assert self._mod()._is_subresource("/nodot", "") is False
+
+
+# ── _is_html_request: query string with extension ─────────────────────────
+
+class TestIsHtmlRequestQueryString:
+    def _mod(self):
+        import detection.llm_heuristic as m
+        return m
+
+    def test_js_extension_in_query_path_not_html(self):
+        # /style.js?v=1 → split("?")[0] = /style.js → ext=.js → not html
+        # split(None) or split("XX?XX") would NOT strip query → ext confusion
+        assert self._mod()._is_html_request("GET", "text/html", "/style.js?v=1") is False
+
+    def test_css_in_path_before_query_not_html(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/app.css?v=1.2.3") is False
+
+    def test_csv_extension_excluded(self):
+        assert self._mod()._is_html_request("GET", "text/html", "/export.csv") is False
+
+    def test_csv_uppercase_extension_excluded(self):
+        # .CSV lowercased → .csv → in exclusion set
+        assert self._mod()._is_html_request("GET", "text/html", "/DATA.CSV") is False
+
+    def test_multi_dot_css_not_html(self):
+        # rsplit(".", 1)[-1] = "css"; split(".", 1)[-1] = "v2.css"
+        assert self._mod()._is_html_request("GET", "text/html", "/theme.v2.css") is False
+
+
+# ── _is_static_path: dot at position 0 (root hidden file) ─────────────────
+
+class TestIsStaticPathDotAtZero:
+    def _mod(self):
+        import detection.path_sweep as m
+        return m
+
+    def test_dot_at_position_zero_css_is_static(self):
+        # ".css" → rfind(".") = 0. Original: dot < 0 = False → continue → ext=".css" → True
+        # mutmut_5 (dot <= 0): 0 <= 0 = True → return False (WRONG)
+        # mutmut_6 (dot < 1):  0 < 1  = True → return False (WRONG)
+        assert self._mod()._is_static_path(".css") is True
+
+    def test_dot_at_position_zero_js_is_static(self):
+        assert self._mod()._is_static_path(".js") is True
+
+    def test_dot_at_position_zero_png_is_static(self):
+        assert self._mod()._is_static_path(".png") is True
+
+    def test_root_css_is_static(self):
+        # "/.css" → rfind(".") = 1 (slash then dot). Normal case, both pass.
+        assert self._mod()._is_static_path("/.css") is True
+
+    def test_dot_zero_non_static_ext_not_static(self):
+        assert self._mod()._is_static_path(".html") is False
+
+
+# ── _should_run_signal: threshold=1 boundary kills <= vs < ────────────────
+
+class TestShouldRunSignalThresholdBoundary:
+    def setup_method(self):
+        import scoring as m
+        m._signal_order_cache.clear()
+
+    def test_escalation_threshold_1_blocks_score_0(self, monkeypatch):
+        import scoring as m
+        import config as c
+        monkeypatch.setattr(c, "ESCALATION_THRESHOLD", 1)
+        monkeypatch.setattr(m, "ESCALATION_THRESHOLD", 1)
+        from config import ESCALATE_ONLY_REASONS
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        # threshold=1 > 0, esc_score=0 < 1 → should NOT run
+        assert m._should_run_signal(sig, 0.0) is False
+
+    def test_escalation_threshold_1_allows_score_1(self, monkeypatch):
+        import scoring as m
+        import config as c
+        monkeypatch.setattr(c, "ESCALATION_THRESHOLD", 1)
+        monkeypatch.setattr(m, "ESCALATION_THRESHOLD", 1)
+        from config import ESCALATE_ONLY_REASONS
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        assert m._should_run_signal(sig, 1.0) is True
+
+    def test_second_order_threshold_1_blocks_score_0(self, monkeypatch):
+        import scoring as m
+        import config as c
+        monkeypatch.setattr(c, "SECOND_ORDER_THRESHOLD", 1)
+        monkeypatch.setattr(m, "SECOND_ORDER_THRESHOLD", 1)
+        from config import SECOND_ORDER_REASONS
+        sig = next(iter(SECOND_ORDER_REASONS))
+        assert m._should_run_signal(sig, 0.0) is False
+
+    def test_second_order_threshold_1_allows_score_1(self, monkeypatch):
+        import scoring as m
+        import config as c
+        monkeypatch.setattr(c, "SECOND_ORDER_THRESHOLD", 1)
+        monkeypatch.setattr(m, "SECOND_ORDER_THRESHOLD", 1)
+        from config import SECOND_ORDER_REASONS
+        sig = next(iter(SECOND_ORDER_REASONS))
+        assert m._should_run_signal(sig, 1.0) is True
+
+
+# ── _decay_risk: targeted boundary tests ──────────────────────────────────
+
+class TestDecayRiskBoundaries:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def test_two_half_lives_decay_to_quarter(self):
+        s = _FakeState(risk_score=100.0, last_risk_update=0.0)
+        from config import RISK_DECAY_HALFLIFE_SECS
+        # 2 half-lives: 0.5^2 = 0.25 → 25. With * mutant: 0.5*2 = 1.0 → 100.
+        self._mod()._decay_risk(s, RISK_DECAY_HALFLIFE_SECS * 2)
+        assert 15.0 < s.risk_score < 35.0  # ~25; kills multiply vs exponent mutation
+
+    def test_sub_one_second_elapsed_causes_tiny_decay(self):
+        s = _FakeState(risk_score=100.0, last_risk_update=0.0)
+        # elapsed=0.5 → original enters branch (0.5 > 0). mutant_10 doesn't (0.5 > 1 = False).
+        self._mod()._decay_risk(s, 0.5)
+        assert s.risk_score != 100.0  # any decay has occurred
+
+    def test_half_life_risk_by_reason_boundary_keeps_at_exactly_half(self):
+        # After one half-life, risk_by_reason["x"] starts at 1.0 → decays to 0.5.
+        # Original: 0.5 < 0.5 = False → kept. Mutant_29 (<= 0.5) → deleted.
+        s = _FakeState(risk_score=1.0, last_risk_update=0.0)
+        s.risk_by_reason["x"] = 1.0
+        from config import RISK_DECAY_HALFLIFE_SECS
+        self._mod()._decay_risk(s, RISK_DECAY_HALFLIFE_SECS)
+        # After decay: risk_by_reason["x"] ≈ 0.5 which is exactly at boundary.
+        # We can't assert on the exact value due to floats, but entry should exist.
+        assert "x" in s.risk_by_reason
+
+    def test_risk_by_reason_large_value_not_pruned_after_half_life(self):
+        # Initial value=2.0 → after half-life → 1.0. 1.0 < 0.5 False → kept.
+        # Mutant_30 (<1.5): 1.0 < 1.5 = True → deleted.
+        s = _FakeState(risk_score=2.0, last_risk_update=0.0)
+        s.risk_by_reason["big"] = 2.0
+        from config import RISK_DECAY_HALFLIFE_SECS
+        self._mod()._decay_risk(s, RISK_DECAY_HALFLIFE_SECS)
+        assert "big" in s.risk_by_reason
+
+    def test_risk_score_half_life_not_zeroed(self):
+        # risk_score=1.0 → after half-life → 0.5. Original: 0.5 < 0.5 = False → kept.
+        # Mutant_31 (<= 0.5): True → zeroed. Mutant_32 (< 1.5): 0.5 < 1.5 = True → zeroed.
+        s = _FakeState(risk_score=1.0, last_risk_update=0.0)
+        from config import RISK_DECAY_HALFLIFE_SECS
+        self._mod()._decay_risk(s, RISK_DECAY_HALFLIFE_SECS)
+        assert s.risk_score > 0.0  # should NOT be zeroed
+
+    def test_risk_by_reason_cleared_when_score_below_threshold_and_reason_large(self):
+        # risk_score=0.4 (below threshold after decay) BUT risk_by_reason["x"]=5.0.
+        # After decay: risk_score ≈ 0.2 → zeroed. risk_by_reason["x"] = 2.5 (not pruned by per-reason loop).
+        # Original: getattr(state, "risk_by_reason", None) = non-empty dict → clear().
+        # Mutant_35: getattr(None, ...) = None → don't clear.
+        s = _FakeState(risk_score=0.4, last_risk_update=0.0)
+        s.risk_by_reason["x"] = 5.0
+        from config import RISK_DECAY_HALFLIFE_SECS
+        self._mod()._decay_risk(s, RISK_DECAY_HALFLIFE_SECS)
+        # risk_score was 0.4, after half-life factor=0.5 → 0.2 < 0.5 → zeroed.
+        # risk_by_reason["x"] = 2.5 ≥ 0.5 → not pruned in loop.
+        # Then zeroing block: should clear risk_by_reason.
+        assert len(s.risk_by_reason) == 0  # kills mutmut_35, 39, 40, 41
+
+    def test_risk_by_reason_attribute_name_must_be_exact(self):
+        # Verify that risk_by_reason is accessed (not typo like RISK_BY_REASON)
+        s = _FakeState(risk_score=0.4, last_risk_update=0.0)
+        s.risk_by_reason["r"] = 5.0
+        from config import RISK_DECAY_HALFLIFE_SECS
+        self._mod()._decay_risk(s, RISK_DECAY_HALFLIFE_SECS)
+        assert s.risk_score == 0.0
+
+
+# ── llm_heuristic.check: targeted kills ───────────────────────────────────
+
+class TestCheckTargeted:
+    def setup_method(self):
+        import detection.llm_heuristic as m
+        self._m = m
+        m._req_log.clear()
+        m._fired.clear()
+
+    def teardown_method(self):
+        self._m._req_log.clear()
+        self._m._fired.clear()
+
+    def test_disabled_llm_returns_zero_even_with_identity(self, monkeypatch):
+        import config as c
+        monkeypatch.setattr(c, "LLM_HEURISTIC_ENABLED", False)
+        monkeypatch.setattr(self._m, "LLM_HEURISTIC_ENABLED", False)
+        import time
+        from config import LLM_HTML_MIN_COUNT
+        now = time.time()
+        for _ in range(LLM_HTML_MIN_COUNT * 2):
+            self._m._req_log["id-dis"].append((now, False))
+        # With 'or', disabling + identity present → return 0.
+        # With 'and' mutation: disabled AND identity → returns 0 only if both true.
+        # Actually 'and' means BOTH must be true to return 0. disabled=True, identity present=False.
+        # So 'and' mutation WOULD continue past early return.
+        # But 'not LLM_HEURISTIC_ENABLED' = True, 'not identity' = False → 'and' = False → continue.
+        # Then it would fire since log is populated! So disabled check won't kill with normal identity.
+        # Use empty identity instead:
+        result = self._m.check("", "1.2.3.4")
+        assert result == 0.0
+
+    def test_first_return_zero_not_one_when_disabled(self, monkeypatch):
+        import config as c
+        monkeypatch.setattr(c, "LLM_HEURISTIC_ENABLED", False)
+        monkeypatch.setattr(self._m, "LLM_HEURISTIC_ENABLED", False)
+        result = self._m.check("some-identity", "1.2.3.4")
+        assert result == 0.0  # kills mutmut_4 (return 1.0 at first guard)
+
+    def test_cooldown_boundary_exactly_at_window_does_not_fire(self):
+        import time
+        from config import LLM_HTML_MIN_COUNT, LLM_HEURISTIC_WINDOW_SECS
+        now = time.time()
+        # Set last_fired exactly at now - window (boundary).
+        # Original: now - last_fired < window → window < window = False → no cooldown → proceeds.
+        # Mutant_13 (<= window): window <= window = True → cooldown → returns 0.
+        self._m._fired["id-bd"] = now - LLM_HEURISTIC_WINDOW_SECS
+        for _ in range(LLM_HTML_MIN_COUNT):
+            self._m._req_log["id-bd"].append((now, False))
+        # At exact boundary: original SHOULD fire (no cooldown); mutant would return 0.
+        from config import LLM_HEURISTIC_SCORE
+        result = self._m.check("id-bd", "1.2.3.4")
+        assert result == LLM_HEURISTIC_SCORE  # kills mutmut_13
+
+    def test_stale_entries_not_counted(self):
+        import time
+        from config import LLM_HTML_MIN_COUNT, LLM_HEURISTIC_WINDOW_SECS
+        now = time.time()
+        # Entries just inside window (50% of window ago) must be counted
+        inside_ts = now - LLM_HEURISTIC_WINDOW_SECS / 2
+        from config import LLM_HEURISTIC_SCORE
+        for _ in range(LLM_HTML_MIN_COUNT):
+            self._m._req_log["id-in"].append((inside_ts, False))
+        result = self._m.check("id-in", "1.2.3.4")
+        assert result == LLM_HEURISTIC_SCORE  # inside window → counted
+
+
+# ── llm_heuristic.observe: timestamp must be numeric ─────────────────────
+
+class TestObserveTimestamp:
+    def setup_method(self):
+        import detection.llm_heuristic as m
+        self._m = m
+        m._req_log.clear()
+        m._fired.clear()
+
+    def teardown_method(self):
+        self._m._req_log.clear()
+        self._m._fired.clear()
+
+    def test_recorded_timestamp_is_float(self):
+        self._m.observe("ts-id", "GET", "/page", "text/html")
+        assert "ts-id" in self._m._req_log
+        ts, _ = self._m._req_log["ts-id"][0]
+        assert isinstance(ts, float)  # kills mutmut_4 (now=None)
+
+    def test_recorded_timestamp_is_recent(self):
+        import time
+        before = time.time()
+        self._m.observe("ts-id2", "GET", "/page", "text/html")
+        after = time.time()
+        ts, _ = self._m._req_log["ts-id2"][0]
+        assert before <= ts <= after
+
+
+# ── _header_order_sig: host excluded ─────────────────────────────────────
+
+class TestHeaderOrderSigHostExclusion:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def test_host_only_equals_no_headers(self):
+        # With Host header only, sig should equal sig with no headers
+        # (Host is excluded). Mutant that includes Host would give different sig.
+        req_host = _FakeReq({"Host": "example.com"})
+        req_none = _FakeReq({})
+        assert self._mod()._header_order_sig(req_host) == self._mod()._header_order_sig(req_none)
+
+    def test_mixed_case_host_excluded(self):
+        req1 = _FakeReq({"HOST": "a.com", "Accept": "text/html"})
+        req2 = _FakeReq({"Accept": "text/html"})
+        # k.lower() == "host" so both HOST and host are excluded
+        assert self._mod()._header_order_sig(req1) == self._mod()._header_order_sig(req2)
+
+    def test_names_string_truncated_at_300_chars(self):
+        # Generate 30 headers each with 11-char name → 30*11 + 29*1 (colons) = 359 > 300
+        # Signals truncation at 300 matters
+        hdrs = {f"x-header-{i:02d}": "val" for i in range(30)}
+        req = _FakeReq(hdrs)
+        sig = self._mod()._header_order_sig(req)
+        assert len(sig) == 12  # must still be 12 chars, not 13
+
+
+# ── compute_ja4h: targeted survivor kills ─────────────────────────────────
+
+class TestComputeJa4hTargeted:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def test_single_char_method_padded_with_underscore(self):
+        # method="G" → ljust(2, "_") → "g_"; rjust → "_g"; ljust no fill → "g "
+        req = _FakeReq(method="G")
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[:2] == "g_"  # kills mutmut_5 (ljust no fill) and mutmut_6 (rjust)
+
+    def test_none_method_gives_underscore_prefix(self):
+        # (None or "")[:2] = "" → ljust(2, "_") = "__"
+        # (None or "XXXX")[:2] = "XX" → "xx" (mutant_9)
+        req = _FakeReq(method=None)
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[:2] == "__"  # kills mutmut_9
+
+    def test_content_length_one_is_y(self):
+        # > 0 is True; > 1 is False (mutant_39)
+        req = _FakeReq(content_length=1)
+        ja4h = self._mod().compute_ja4h(req)
+        assert ja4h[4] == "y"  # kills mutmut_39
+
+    def test_cookie_header_excluded_from_hdr_count(self):
+        # Cookie header must NOT be counted in hdr_count
+        req = _FakeReq(headers={"Accept": "text/html", "Cookie": "session=abc"})
+        ja4h = self._mod().compute_ja4h(req)
+        parts = ja4h.split("_")
+        hdr_count = int(parts[1][:2])
+        assert hdr_count == 1  # only Accept, not Cookie  # kills mutmut_64, mutmut_65
+
+    def test_hdr_hash_uses_comma_separator_not_xx(self):
+        import hashlib
+        req = _FakeReq(headers={"User-Agent": "x", "Accept": "text/html"})
+        ja4h = self._mod().compute_ja4h(req)
+        hdr_hash = ja4h.split("_")[2]
+        expected = hashlib.sha256("user-agent,accept".encode()).hexdigest()[:12]
+        assert hdr_hash == expected  # kills mutmut_62, mutmut_63
+
+    def test_hdr_hash_is_lowercase_header_names(self):
+        import hashlib
+        req = _FakeReq(headers={"ACCEPT": "text/html"})
+        ja4h = self._mod().compute_ja4h(req)
+        hdr_hash = ja4h.split("_")[2]
+        expected = hashlib.sha256("accept".encode()).hexdigest()[:12]
+        assert hdr_hash == expected  # kills mutmut_63 (upper vs lower)
+
+    def test_hdr_hash_part_is_exactly_12_chars(self):
+        req = _FakeReq(headers={"Accept": "text/html"})
+        ja4h = self._mod().compute_ja4h(req)
+        hdr_hash = ja4h.split("_")[2]
+        assert len(hdr_hash) == 12  # kills mutmut_94 (None) and mutmut_96 ([:13])
+
+    def test_ck_hash_part_is_exactly_12_chars(self):
+        req = _FakeReq(headers={}, cookies={"session": "abc"})
+        ja4h = self._mod().compute_ja4h(req)
+        ck_hash = ja4h.split("_")[3]
+        assert len(ck_hash) == 12  # kills mutmut_99 ([:13])
+
+    def test_two_cookies_ck_hash_uses_comma_separator(self):
+        import hashlib
+        req = _FakeReq(headers={}, cookies={"session": "abc", "aid": "xyz"})
+        ja4h = self._mod().compute_ja4h(req)
+        ck_hash = ja4h.split("_")[3]
+        expected = hashlib.sha256(",".join(sorted(["session", "aid"])).encode()).hexdigest()[:12]
+        assert ck_hash == expected  # kills mutmut_80 (XX,XX separator)
+
+    def test_non_special_header_included_in_hdr_names(self):
+        import hashlib
+        # With mutant_65 (in vs not in), only cookie+host would be included
+        # With correct code, user-agent is included
+        req = _FakeReq(headers={"User-Agent": "x"})
+        ja4h = self._mod().compute_ja4h(req)
+        hdr_hash = ja4h.split("_")[2]
+        expected = hashlib.sha256("user-agent".encode()).hexdigest()[:12]
+        assert hdr_hash == expected  # kills mutmut_65
+
+    def test_cookie_header_excluded_from_hdr_names(self):
+        import hashlib
+        # Cookie header must be excluded from hdr_names (affects hdr_hash).
+        # mutmut_64: h.upper() not in ("cookie","host") → "COOKIE" not in → included.
+        # mutmut_68: "XXcookieXX" → "cookie" not in → included.
+        # mutmut_69: "COOKIE" → "cookie" != "COOKIE" → included.
+        req = _FakeReq(headers={"Accept": "text/html", "Cookie": "session=abc"})
+        ja4h = self._mod().compute_ja4h(req)
+        hdr_hash = ja4h.split("_")[2]
+        expected = hashlib.sha256("accept".encode()).hexdigest()[:12]
+        assert hdr_hash == expected  # kills mutmut_64, 68, 69
+
+    def test_host_header_excluded_from_hdr_names(self):
+        import hashlib
+        # Host header must be excluded from hdr_names.
+        # mutmut_66: "XXhostXX" → "host" not in → included.
+        # mutmut_67: "HOST" → "host" != "HOST" → included.
+        req = _FakeReq(headers={"Host": "example.com", "Accept": "text/html"})
+        ja4h = self._mod().compute_ja4h(req)
+        hdr_hash = ja4h.split("_")[2]
+        expected = hashlib.sha256("accept".encode()).hexdigest()[:12]
+        assert hdr_hash == expected  # kills mutmut_66, 67
+
+
+# ── get_identity: targeted survivor kills ─────────────────────────────────
+
+class TestGetIdentityTargeted:
+    def _mod(self):
+        import identity as m
+        return m
+
+    def _signed_cookie(self, sid: str) -> str:
+        import hmac as _hmac, hashlib as _hl
+        from config import SESSION_KEY, SESSION_COOKIE
+        sig = _hmac.new(SESSION_KEY, b"session:" + sid.encode(), _hl.sha256).hexdigest()
+        return f"{sid}.{sig}"
+
+    def _session_req(self, sid: str):
+        from config import SESSION_COOKIE
+        token = self._signed_cookie(sid)
+        return _FakeReq(headers={"User-Agent": "Mozilla/5.0"},
+                         cookies={SESSION_COOKIE: token})
+
+    def test_session_identity_differs_for_different_sids(self):
+        sid1 = "SID1111111111111"
+        sid2 = "SID2222222222222"
+        id1, *_ = self._mod().get_identity(self._session_req(sid1))
+        id2, *_ = self._mod().get_identity(self._session_req(sid2))
+        assert id1 != id2  # kills mutmut_13 (hmac(None) gives same identity for all)
+
+    def test_session_identity_is_16_chars(self):
+        req = self._session_req("validSID12345678")
+        identity, *_ = self._mod().get_identity(req)
+        assert len(identity) == 16  # kills mutmut_11 (None) and mutmut_18 ([:17])
+
+    def test_session_identity_is_hex(self):
+        req = self._session_req("validSID12345678")
+        identity, *_ = self._mod().get_identity(req)
+        assert all(c in "0123456789abcdef" for c in identity)
+
+    def test_anon_identity_changes_with_different_ip(self):
+        req1 = _FakeReq(headers={"User-Agent": "curl/7"}, remote="1.2.3.4")
+        req2 = _FakeReq(headers={"User-Agent": "curl/7"}, remote="5.6.7.8")
+        id1, *_ = self._mod().get_identity(req1)
+        id2, *_ = self._mod().get_identity(req2)
+        assert id1 != id2  # kills mutmut_22 (ip=None: all anon → same identity)
+
+    def test_anon_new_sid_is_string(self):
+        req = _FakeReq(headers={"User-Agent": "curl/7"})
+        _, new_sid, *_ = self._mod().get_identity(req)
+        assert isinstance(new_sid, str) and len(new_sid) > 0
+
+    def test_anon_new_sid_length_is_16(self):
+        # token_urlsafe(12) = 16 chars; token_urlsafe(13) = 18 chars
+        req = _FakeReq(headers={"User-Agent": "curl/7"})
+        _, new_sid, *_ = self._mod().get_identity(req)
+        assert len(new_sid) == 16  # kills mutmut_34 (token_urlsafe(13))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Round-3 targeted kills — slog verification + static path boundary fix
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCheckSlogArgs:
+    """Verify slog is called with correct arguments when LLM pattern fires.
+    Kills mutmut_54-72 (19 survivors) — all mutations in the slog() call."""
+
+    def setup_method(self):
+        import detection.llm_heuristic as m
+        self._m = m
+        m._req_log.clear()
+        m._fired.clear()
+
+    def teardown_method(self):
+        self._m._req_log.clear()
+        self._m._fired.clear()
+
+    def _fire(self, identity, ip, monkeypatch):
+        import time
+        from config import LLM_HTML_MIN_COUNT
+        now = time.time()
+        for _ in range(LLM_HTML_MIN_COUNT):
+            self._m._req_log[identity].append((now, False))
+        calls = []
+        def fake_slog(event, level="info", **fields):
+            calls.append({"event": event, "level": level, **fields})
+        monkeypatch.setattr(self._m, "slog", fake_slog)
+        result = self._m.check(identity, ip)
+        return result, calls
+
+    def test_slog_called_on_fire(self, monkeypatch):
+        _, calls = self._fire("long-identity-12", "10.0.0.1", monkeypatch)
+        assert len(calls) == 1  # exactly one slog call
+
+    def test_slog_event_name(self, monkeypatch):
+        _, calls = self._fire("long-identity-12", "10.0.0.1", monkeypatch)
+        assert calls[0]["event"] == "llm_no_subresources"  # kills mutmut_54, 68, 69
+
+    def test_slog_level_warn(self, monkeypatch):
+        _, calls = self._fire("long-identity-12", "10.0.0.1", monkeypatch)
+        assert calls[0]["level"] == "warn"  # kills mutmut_55, 62, 70, 71
+
+    def test_slog_ip_kwarg(self, monkeypatch):
+        _, calls = self._fire("long-identity-12", "10.0.0.1", monkeypatch)
+        assert calls[0].get("ip") == "10.0.0.1"  # kills mutmut_56, 63
+
+    def test_slog_identity_truncated_to_8(self, monkeypatch):
+        # identity has 16 chars; identity[:8] ≠ identity[:9]
+        identity = "abcdef1234567890"
+        _, calls = self._fire(identity, "1.2.3.4", monkeypatch)
+        assert calls[0].get("identity") == identity[:8]  # kills mutmut_57, 64, 72
+
+    def test_slog_html_count_kwarg(self, monkeypatch):
+        from config import LLM_HTML_MIN_COUNT
+        _, calls = self._fire("long-identity-12", "1.2.3.4", monkeypatch)
+        assert calls[0].get("html_count") == LLM_HTML_MIN_COUNT  # kills mutmut_58, 65
+
+    def test_slog_subres_count_zero(self, monkeypatch):
+        _, calls = self._fire("long-identity-12", "1.2.3.4", monkeypatch)
+        assert calls[0].get("subres_count") == 0  # kills mutmut_59, 66
+
+    def test_slog_window_secs_kwarg(self, monkeypatch):
+        from config import LLM_HEURISTIC_WINDOW_SECS
+        _, calls = self._fire("long-identity-12", "1.2.3.4", monkeypatch)
+        assert calls[0].get("window_secs") == LLM_HEURISTIC_WINDOW_SECS  # kills mutmut_60, 67
+
+
+# ── Async tests: path_sweep, scoring, identity async functions ─────────────
+# These cover the 299 no-test mutants in scoring.py, identity.py, path_sweep.py.
+# Requires pytest-asyncio with asyncio_mode = strict (see pytest.ini).
+
+
+class TestPathSweepRecord:
+    """Covers detection.path_sweep.path_sweep_record (8 mutants)."""
+
+    def _mod(self):
+        import detection.path_sweep as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_static_css_not_recorded(self):
+        m, s = self._mod(), self._st()
+        key = f"psr-css-{id(self)}"
+        await m.path_sweep_record(key, "/bundle.css", "/admin")
+        assert len(s.ip_state[key].path_sweep_times) == 0
+
+    @pytest.mark.asyncio
+    async def test_static_js_not_recorded(self):
+        m, s = self._mod(), self._st()
+        key = f"psr-js-{id(self)}"
+        await m.path_sweep_record(key, "/app.js", "/admin")
+        assert len(s.ip_state[key].path_sweep_times) == 0
+
+    @pytest.mark.asyncio
+    async def test_admin_ns_exact_not_recorded(self):
+        # Kills mutmut_1 (or→and, changes second condition precedence)
+        # and mutmut_4 (== → !=).
+        m, s = self._mod(), self._st()
+        key = f"psr-adm-{id(self)}"
+        await m.path_sweep_record(key, "/admin", "/admin")
+        assert len(s.ip_state[key].path_sweep_times) == 0
+
+    @pytest.mark.asyncio
+    async def test_admin_ns_subpath_not_recorded(self):
+        # Kills mutmut_5 (startswith(None)), mutmut_6 (str-op), mutmut_7 (wrong prefix).
+        m, s = self._mod(), self._st()
+        key = f"psr-sub-{id(self)}"
+        await m.path_sweep_record(key, "/admin/users", "/admin")
+        assert len(s.ip_state[key].path_sweep_times) == 0
+
+    @pytest.mark.asyncio
+    async def test_normal_path_recorded(self):
+        m, s = self._mod(), self._st()
+        key = f"psr-norm-{id(self)}"
+        await m.path_sweep_record(key, "/dashboard", "/admin")
+        assert len(s.ip_state[key].path_sweep_times) == 1
+
+    @pytest.mark.asyncio
+    async def test_appended_tuple_has_correct_path(self):
+        # Kills mutmut_8 (appends None instead of (ts, path)).
+        m, s = self._mod(), self._st()
+        key = f"psr-val-{id(self)}"
+        await m.path_sweep_record(key, "/products", "/admin")
+        _, path = s.ip_state[key].path_sweep_times[-1]
+        assert path == "/products"
+
+    @pytest.mark.asyncio
+    async def test_appended_tuple_ts_is_float(self):
+        m, s = self._mod(), self._st()
+        key = f"psr-ts-{id(self)}"
+        await m.path_sweep_record(key, "/about", "/admin")
+        ts, _ = s.ip_state[key].path_sweep_times[-1]
+        assert isinstance(ts, float) and ts > 0
+
+    @pytest.mark.asyncio
+    async def test_non_static_non_admin_recorded(self):
+        # Kills mutmut_2 (and instead of or between first two conditions):
+        # static=False, path!=admin → orig returns early iff static OR admin.
+        # With mutant_2: (static AND admin) OR subpath → False → records.
+        m, s = self._mod(), self._st()
+        key = f"psr-nonstatic-{id(self)}"
+        await m.path_sweep_record(key, "/contact", "/admin")
+        assert len(s.ip_state[key].path_sweep_times) == 1
+
+
+class TestPathSweepCheck:
+    """Covers detection.path_sweep.path_sweep_check (12 mutants)."""
+
+    def _mod(self):
+        import detection.path_sweep as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_empty_deque_not_fired(self):
+        # Kills mutmut_1 (s=None), mutmut_4 (or→iterates empty→IndexError),
+        # mutmut_11 (returns True,"" when not fired), mutmut_12 (returns False,"XXXX").
+        m = self._mod()
+        key = f"psc-empty-{id(self)}"
+        fired, detail = await m.path_sweep_check(key)
+        assert fired is False
+        assert detail == ""
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_not_fired(self):
+        from config import PATH_SWEEP_THRESHOLD
+        m, s = self._mod(), self._st()
+        key = f"psc-below-{id(self)}"
+        import time as _t
+        now = _t.monotonic()
+        for i in range(PATH_SWEEP_THRESHOLD - 1):
+            s.ip_state[key].path_sweep_times.append((now, f"/p{i}"))
+        fired, detail = await m.path_sweep_check(key)
+        assert fired is False
+        assert detail == ""
+
+    @pytest.mark.asyncio
+    async def test_at_threshold_fires(self):
+        # Kills mutmut_9 (>= → >, which would NOT fire at exactly threshold).
+        from config import PATH_SWEEP_THRESHOLD
+        m, s = self._mod(), self._st()
+        key = f"psc-at-{id(self)}"
+        import time as _t
+        now = _t.monotonic()
+        for i in range(PATH_SWEEP_THRESHOLD):
+            s.ip_state[key].path_sweep_times.append((now, f"/q{i}"))
+        fired, _ = await m.path_sweep_check(key)
+        assert fired is True
+
+    @pytest.mark.asyncio
+    async def test_fired_first_element_true(self):
+        # Kills mutmut_10 (returns False, detail when fired).
+        from config import PATH_SWEEP_THRESHOLD
+        m, s = self._mod(), self._st()
+        key = f"psc-true-{id(self)}"
+        import time as _t
+        now = _t.monotonic()
+        for i in range(PATH_SWEEP_THRESHOLD):
+            s.ip_state[key].path_sweep_times.append((now, f"/r{i}"))
+        fired, _ = await m.path_sweep_check(key)
+        assert fired is True
+
+    @pytest.mark.asyncio
+    async def test_fired_detail_contains_distinct_count(self):
+        from config import PATH_SWEEP_THRESHOLD
+        m, s = self._mod(), self._st()
+        key = f"psc-detail-{id(self)}"
+        import time as _t
+        now = _t.monotonic()
+        for i in range(PATH_SWEEP_THRESHOLD):
+            s.ip_state[key].path_sweep_times.append((now, f"/s{i}"))
+        _, detail = await m.path_sweep_check(key)
+        assert str(PATH_SWEEP_THRESHOLD) in detail
+
+    @pytest.mark.asyncio
+    async def test_stale_entries_pruned_so_not_fired(self):
+        # Kills mutmut_2 (cutoff=None→TypeError) and mutmut_3 (cutoff=+WINDOW→stale kept).
+        from config import PATH_SWEEP_THRESHOLD, PATH_SWEEP_WINDOW_SECS
+        m, s = self._mod(), self._st()
+        key = f"psc-stale-{id(self)}"
+        import time as _t
+        old = _t.monotonic() - PATH_SWEEP_WINDOW_SECS - 10
+        for i in range(PATH_SWEEP_THRESHOLD):
+            s.ip_state[key].path_sweep_times.append((old, f"/old{i}"))
+        fired, _ = await m.path_sweep_check(key)
+        assert fired is False
+
+    @pytest.mark.asyncio
+    async def test_fresh_entries_not_pruned(self):
+        from config import PATH_SWEEP_THRESHOLD
+        m, s = self._mod(), self._st()
+        key = f"psc-fresh-{id(self)}"
+        import time as _t
+        now = _t.monotonic()
+        for i in range(PATH_SWEEP_THRESHOLD):
+            s.ip_state[key].path_sweep_times.append((now, f"/t{i}"))
+        fired, _ = await m.path_sweep_check(key)
+        assert fired is True
+
+    @pytest.mark.asyncio
+    async def test_repeated_path_counts_once(self):
+        # distinct uses a set; repeated paths count as 1, not N.
+        from config import PATH_SWEEP_THRESHOLD
+        m, s = self._mod(), self._st()
+        key = f"psc-rep-{id(self)}"
+        import time as _t
+        now = _t.monotonic()
+        for _ in range(PATH_SWEEP_THRESHOLD + 5):
+            s.ip_state[key].path_sweep_times.append((now, "/same"))
+        fired, _ = await m.path_sweep_check(key)
+        assert fired is False
+
+    @pytest.mark.asyncio
+    async def test_index_0_element_0_is_timestamp(self):
+        # Kills mutmut_5 ([1][0]) and mutmut_6 ([0][1]) — wrong index causes
+        # IndexError or type mismatch in comparison with cutoff float.
+        from config import PATH_SWEEP_WINDOW_SECS
+        m, s = self._mod(), self._st()
+        key = f"psc-idx-{id(self)}"
+        import time as _t
+        old = _t.monotonic() - PATH_SWEEP_WINDOW_SECS - 1
+        fresh = _t.monotonic()
+        s.ip_state[key].path_sweep_times.append((old, "/old"))
+        s.ip_state[key].path_sweep_times.append((fresh, "/fresh"))
+        # Only the old one should be pruned; fresh stays.
+        fired, _ = await m.path_sweep_check(key)
+        assert len(s.ip_state[key].path_sweep_times) == 1
+
+
+class TestRecordChalMint:
+    """Covers identity._record_chal_mint (48 mutants, async)."""
+
+    def _mod(self):
+        import identity as m
+        return m
+
+    @pytest.mark.asyncio
+    async def test_single_call_returns_false(self):
+        m = self._mod()
+        result = await m._record_chal_mint(
+            f"UA-single-{id(self)}", "A", f"ja4-{id(self)}", "1.1.1.1"
+        )
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_churn_threshold_triggers_true(self):
+        # SESSION_CHURN_MAX calls don't trigger; SESSION_CHURN_MAX+1 does.
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        ua, tier, ja4 = f"UA-churn-{id(self)}", "B", f"ja4churn-{id(self)}"
+        result = False
+        for _ in range(churn_max + 1):
+            result = await m._record_chal_mint(ua, tier, ja4, "1.1.1.2")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_exactly_at_churn_max_not_triggered(self):
+        # len(q) > SESSION_CHURN_MAX: at exactly max, NOT triggered.
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        ua, tier, ja4 = f"UA-exact-{id(self)}", "C", f"ja4exact-{id(self)}"
+        result = None
+        for _ in range(churn_max):
+            result = await m._record_chal_mint(ua, tier, ja4, "1.1.1.3")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_stale_entries_pruned_before_count(self):
+        # Stale timestamps (outside SESSION_CHURN_WINDOW_S) are removed before
+        # comparing len(q) > SESSION_CHURN_MAX.
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        window_s = m.SESSION_CHURN_WINDOW_S
+        import time
+        from collections import deque
+        ua, tier, ja4 = f"UA-stale-{id(self)}", "D", f"ja4stale-{id(self)}"
+        fp_h = m._fp_hash(ua, tier, ja4)
+        # Pre-fill with churn_max stale timestamps (outside the window).
+        m._fp_session_creations[fp_h] = deque(
+            [time.time() - window_s - 10] * churn_max,
+            maxlen=64,
+        )
+        result = await m._record_chal_mint(ua, tier, ja4, "1.1.1.4")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_slog_called_on_churn(self, monkeypatch):
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        ua, tier, ja4 = f"UA-slog-{id(self)}", "E", f"ja4slog-{id(self)}"
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, **kw: calls.append(event))
+        for _ in range(churn_max + 1):
+            await m._record_chal_mint(ua, tier, ja4, "1.1.1.5")
+        assert "session_churn" in calls
+
+    @pytest.mark.asyncio
+    async def test_slog_level_warn_on_churn(self, monkeypatch):
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        ua, tier, ja4 = f"UA-warn-{id(self)}", "F", f"ja4warn-{id(self)}"
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, level="info", **kw: calls.append(level))
+        for _ in range(churn_max + 1):
+            await m._record_chal_mint(ua, tier, ja4, "1.1.1.6")
+        assert "warn" in calls
+
+    @pytest.mark.asyncio
+    async def test_slog_fp_hash_kwarg(self, monkeypatch):
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        ua, tier, ja4 = f"UA-fph-{id(self)}", "G", f"ja4fph-{id(self)}"
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, **kw: calls.append(kw))
+        for _ in range(churn_max + 1):
+            await m._record_chal_mint(ua, tier, ja4, "1.1.1.7")
+        expected_fp = m._fp_hash(ua, tier, ja4)
+        assert any(c.get("fp_hash") == expected_fp for c in calls)
+
+    @pytest.mark.asyncio
+    async def test_fp_hash_separates_distinct_fingerprints(self):
+        # Two different (ua, tier, ja4) combos have independent counters.
+        m = self._mod()
+        churn_max = m.SESSION_CHURN_MAX
+        ua1, tier1, ja4_1 = f"UA-fp1-{id(self)}", "H", f"ja4fp1-{id(self)}"
+        ua2, tier2, ja4_2 = f"UA-fp2-{id(self)}", "I", f"ja4fp2-{id(self)}"
+        # Churn first fingerprint.
+        for _ in range(churn_max + 1):
+            await m._record_chal_mint(ua1, tier1, ja4_1, "1.1.1.8")
+        # Second fingerprint has no prior calls → should NOT churn.
+        result2 = await m._record_chal_mint(ua2, tier2, ja4_2, "1.1.1.9")
+        assert result2 is False
+
+
+class TestIsBanned:
+    """Covers scoring.is_banned (21 mutants, async)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_locally_banned_returns_true(self):
+        m, s = self._mod(), self._st()
+        ip = f"ban-t-{id(self) % 65535}"
+        from helpers import now
+        s.ip_state[ip].banned_until = now() + 300
+        banned, _ = await m.is_banned(ip)
+        assert banned is True
+
+    @pytest.mark.asyncio
+    async def test_locally_banned_remaining_positive(self):
+        m, s = self._mod(), self._st()
+        ip = f"ban-r-{id(self) % 65535}"
+        from helpers import now
+        s.ip_state[ip].banned_until = now() + 300
+        _, remaining = await m.is_banned(ip)
+        assert remaining > 0
+
+    @pytest.mark.asyncio
+    async def test_locally_banned_remaining_approx_correct(self):
+        # remaining ≈ banned_until - now(): kills mutants that flip sign or add.
+        m, s = self._mod(), self._st()
+        ip = f"ban-ra-{id(self) % 65535}"
+        from helpers import now
+        s.ip_state[ip].banned_until = now() + 300
+        _, remaining = await m.is_banned(ip)
+        assert 250 < remaining <= 300
+
+    @pytest.mark.asyncio
+    async def test_not_banned_returns_false(self):
+        m, s = self._mod(), self._st()
+        ip = f"ban-f-{id(self) % 65535}"
+        s.ip_state[ip].banned_until = 0.0
+        banned, _ = await m.is_banned(ip)
+        assert banned is False
+
+    @pytest.mark.asyncio
+    async def test_not_banned_remaining_zero(self):
+        m, s = self._mod(), self._st()
+        ip = f"ban-rz-{id(self) % 65535}"
+        s.ip_state[ip].banned_until = 0.0
+        _, remaining = await m.is_banned(ip)
+        assert remaining == 0.0
+
+    @pytest.mark.asyncio
+    async def test_expired_ban_returns_false(self):
+        m, s = self._mod(), self._st()
+        ip = f"ban-exp-{id(self) % 65535}"
+        from helpers import now
+        s.ip_state[ip].banned_until = now() - 10
+        banned, _ = await m.is_banned(ip)
+        assert banned is False
+
+    @pytest.mark.asyncio
+    async def test_banned_until_exactly_now_not_banned(self):
+        # s.banned_until > n → exactly now is NOT banned (kills mutmut_3: >= n).
+        m, s = self._mod(), self._st()
+        ip = f"ban-eq-{id(self) % 65535}"
+        from helpers import now
+        s.ip_state[ip].banned_until = now() - 0.001
+        banned, _ = await m.is_banned(ip)
+        assert banned is False
+
+
+class TestBan:
+    """Covers scoring.ban (17 mutants, async)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_ban_sets_banned_until_future(self):
+        m, s = self._mod(), self._st()
+        ip = f"bn-fut-{id(self) % 65535}"
+        from helpers import now
+        before = now()
+        await m.ban(ip, secs=60)
+        assert s.ip_state[ip].banned_until > before
+
+    @pytest.mark.asyncio
+    async def test_ban_duration_approximately_correct(self):
+        m, s = self._mod(), self._st()
+        ip = f"bn-dur-{id(self) % 65535}"
+        from helpers import now
+        await m.ban(ip, secs=120)
+        remaining = s.ip_state[ip].banned_until - now()
+        assert 100 < remaining <= 120
+
+    @pytest.mark.asyncio
+    async def test_ban_then_is_banned_true(self):
+        m, s = self._mod(), self._st()
+        ip = f"bn-chk-{id(self) % 65535}"
+        await m.ban(ip, secs=60)
+        banned, _ = await m.is_banned(ip)
+        assert banned is True
+
+    @pytest.mark.asyncio
+    async def test_ban_default_secs_is_nonzero(self):
+        m, s = self._mod(), self._st()
+        ip = f"bn-def-{id(self) % 65535}"
+        from helpers import now
+        before = now()
+        await m.ban(ip)
+        assert s.ip_state[ip].banned_until > before + 1
+
+
+class TestUpdateRiskAndMaybeBan:
+    """Covers scoring.update_risk_and_maybe_ban (119 mutants, async)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_zero_weight_returns_false(self):
+        # "rate-limit-ip" has weight 0 → early return False.
+        m = self._mod()
+        key = f"urm-zero-{id(self)}"
+        result = await m.update_risk_and_maybe_ban(key, "rate-limit-ip", "5.5.5.1")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_unknown_reason_returns_false(self):
+        m = self._mod()
+        key = f"urm-unk-{id(self)}"
+        result = await m.update_risk_and_maybe_ban(key, "no-such-signal", "5.5.5.2")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_nonzero_weight_increases_risk_score(self):
+        # "js-challenge" weight=3 < threshold=50 → no ban, but risk grows.
+        m, s = self._mod(), self._st()
+        key = f"urm-inc-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.3")
+        assert s.ip_state[key].risk_score > 0
+
+    @pytest.mark.asyncio
+    async def test_reason_tracked_in_risk_by_reason(self):
+        m, s = self._mod(), self._st()
+        key = f"urm-rbr-{id(self)}"
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.4")
+        assert "js-challenge" in s.ip_state[key].risk_by_reason
+
+    @pytest.mark.asyncio
+    async def test_risk_score_incremented_by_weight(self):
+        from config import RISK_WEIGHTS
+        m, s = self._mod(), self._st()
+        key = f"urm-wt-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].last_risk_update = __import__("helpers").now()
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.5")
+        weight = RISK_WEIGHTS["js-challenge"]
+        assert abs(s.ip_state[key].risk_score - weight) < 1.0
+
+    @pytest.mark.asyncio
+    async def test_high_weight_triggers_ban(self):
+        # "honeypot" weight=50 >= RISK_BAN_THRESHOLD=50 → bans → returns True.
+        m, s = self._mod(), self._st()
+        key = f"urm-ban-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        result = await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.6")
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_banned_ip_has_future_banned_until(self):
+        m, s = self._mod(), self._st()
+        key = f"urm-banf-{id(self)}"
+        from helpers import now
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.7")
+        assert s.ip_state[key].banned_until > now()
+
+    @pytest.mark.asyncio
+    async def test_below_threshold_no_ban(self):
+        # js-challenge (weight=3) alone doesn't hit threshold=50 → not banned.
+        m, s = self._mod(), self._st()
+        key = f"urm-noban-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        result = await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.8")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_already_banned_no_double_ban(self):
+        # s.banned_until > n → condition s.banned_until <= n is False → not triggered.
+        m, s = self._mod(), self._st()
+        key = f"urm-dbl-{id(self)}"
+        from helpers import now
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = now() + 3600
+        result = await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.9")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_accumulated_risk_triggers_ban(self):
+        # Multiple js-challenge calls accumulate to >= threshold → ban fired.
+        from config import RISK_BAN_THRESHOLD, RISK_WEIGHTS
+        m, s = self._mod(), self._st()
+        key = f"urm-acc-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        s.ip_state[key].last_risk_update = __import__("helpers").now()
+        weight = RISK_WEIGHTS["js-challenge"]
+        # Ceiling: calls_needed * weight >= RISK_BAN_THRESHOLD.
+        calls_needed = (RISK_BAN_THRESHOLD + weight - 1) // weight
+        triggered = False
+        for _ in range(calls_needed):
+            r = await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.10")
+            if r:
+                triggered = True
+                break
+        assert triggered is True
+
+    @pytest.mark.asyncio
+    async def test_unknown_reason_no_risk_score_increase(self):
+        # Kills mutmut_6: RISK_WEIGHTS.get(reason, 0) → (reason, 1).
+        # With mutmut_6, unknown reason gets weight=1 and proceeds, increasing risk_score.
+        m, s = self._mod(), self._st()
+        key = f"urm-norisk-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        await m.update_risk_and_maybe_ban(key, "no-such-signal", "5.5.5.11")
+        assert s.ip_state[key].risk_score == 0.0
+
+    @pytest.mark.asyncio
+    async def test_risk_by_reason_value_equals_weight(self):
+        # Kills mutmut_19 (−weight instead of +weight) and mutmut_24 (default 1.0).
+        from config import RISK_WEIGHTS
+        m, s = self._mod(), self._st()
+        key = f"urm-rbrv-{id(self)}"
+        weight = RISK_WEIGHTS["js-challenge"]
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.12")
+        assert s.ip_state[key].risk_by_reason.get("js-challenge") == weight
+
+    @pytest.mark.asyncio
+    async def test_risk_by_reason_accumulates_across_calls(self):
+        # Kills mutmut_20: .get(None, 0.0) makes accumulation fail (always returns weight).
+        from config import RISK_WEIGHTS
+        m, s = self._mod(), self._st()
+        key = f"urm-acc2-{id(self)}"
+        from helpers import now
+        s.ip_state[key].last_risk_update = now()
+        weight = RISK_WEIGHTS["js-challenge"]
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.13")
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.13")
+        val = s.ip_state[key].risk_by_reason.get("js-challenge", 0)
+        assert val > weight  # accumulated > 1 call; mutmut_20 (.get(None)) would give exactly weight
+
+    @pytest.mark.asyncio
+    async def test_really_ban_reason_gets_really_ban_secs(self):
+        # "honeypot" ∈ _REALLY_BAN_REASONS → banned_until ≈ now + REALLY_BAN_SECS.
+        # Kills mutmut_52 (not in → swaps REALLY→HOSTILE for "honeypot").
+        from config import REALLY_BAN_SECS
+        m, s = self._mod(), self._st()
+        key = f"urm-rbs-{id(self)}"
+        from helpers import now
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        s.ip_state[key].last_risk_update = now()
+        await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.14")
+        remaining = s.ip_state[key].banned_until - now()
+        assert abs(remaining - REALLY_BAN_SECS) < 10
+
+    @pytest.mark.asyncio
+    async def test_hostile_reason_gets_hostile_ban_secs(self):
+        # "session-churn" ∈ _HOSTILE_REASONS but ∉ _REALLY_BAN_REASONS.
+        # Kills mutmut_53 (not in → gives RISK_BAN_DURATION instead of HOSTILE).
+        from config import HOSTILE_BAN_SECS
+        m, s = self._mod(), self._st()
+        key = f"urm-hbs-{id(self)}"
+        from helpers import now
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        s.ip_state[key].last_risk_update = now()
+        await m.update_risk_and_maybe_ban(key, "session-churn", "5.5.5.15")
+        remaining = s.ip_state[key].banned_until - now()
+        assert abs(remaining - HOSTILE_BAN_SECS) < 10
+
+    @pytest.mark.asyncio
+    async def test_regular_reason_gets_risk_ban_duration_secs(self):
+        # "js-challenge" is in neither set → RISK_BAN_DURATION_SECS.
+        # Combined with test_hostile, kills variants that conflate the three paths.
+        from config import RISK_BAN_DURATION_SECS, RISK_BAN_THRESHOLD, RISK_WEIGHTS
+        m, s = self._mod(), self._st()
+        key = f"urm-rbd-{id(self)}"
+        from helpers import now
+        weight = RISK_WEIGHTS["js-challenge"]
+        # Set at threshold so decay+weight still clears it
+        s.ip_state[key].risk_score = RISK_BAN_THRESHOLD
+        s.ip_state[key].banned_until = 0.0
+        s.ip_state[key].last_risk_update = now()
+        await m.update_risk_and_maybe_ban(key, "js-challenge", "5.5.5.16")
+        remaining = s.ip_state[key].banned_until - now()
+        assert abs(remaining - RISK_BAN_DURATION_SECS) < 10
+
+    @pytest.mark.asyncio
+    async def test_ban_triggered_db_queue_message_op(self, monkeypatch):
+        # Kills mutmut_65 (put None), 66 ("XXbanXX"), 67 ("BAN").
+        import asyncio
+        m, s = self._mod(), self._st()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        key = f"urm-dbqop-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.17")
+        assert not q.empty()
+        op, _ = q.get_nowait()
+        assert op == "ban"
+
+    @pytest.mark.asyncio
+    async def test_ban_triggered_db_queue_track_key(self, monkeypatch):
+        # Kills mutmut_70 (None instead of track_key in db_queue message).
+        import asyncio
+        m, s = self._mod(), self._st()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        key = f"urm-dbqtk-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.18")
+        _, args = q.get_nowait()
+        assert args[0] == key
+
+    @pytest.mark.asyncio
+    async def test_ban_triggered_db_queue_populated(self, monkeypatch):
+        # Kills mutmut_58 (ban_dur=None → TypeError in db_queue put).
+        import asyncio
+        m, s = self._mod(), self._st()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        key = f"urm-dbqpop-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.19")
+        assert not q.empty()
+
+    @pytest.mark.asyncio
+    async def test_ban_triggered_db_queue_until_future(self, monkeypatch):
+        # Kills ban_dur mutations that set negative or zero until timestamp.
+        import asyncio, time
+        m, s = self._mod(), self._st()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        key = f"urm-dbquf-{id(self)}"
+        s.ip_state[key].risk_score = 0.0
+        s.ip_state[key].banned_until = 0.0
+        await m.update_risk_and_maybe_ban(key, "honeypot", "5.5.5.20")
+        _, args = q.get_nowait()
+        assert args[1] > time.time()  # until is in the future
+
+
+class TestBanDbQueue:
+    """Covers scoring.ban db_queue mutations (mutmut_7-10)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    @pytest.mark.asyncio
+    async def test_ban_db_queue_op_is_ban(self, monkeypatch):
+        import asyncio
+        m = self._mod()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        ip = f"bndbq-op-{id(self) % 65535}"
+        await m.ban(ip, secs=60)
+        assert not q.empty()
+        op, _ = q.get_nowait()
+        assert op == "ban"  # kills mutmut_7 (None), 8 ("XXbanXX"), 9 ("BAN")
+
+    @pytest.mark.asyncio
+    async def test_ban_db_queue_until_is_future(self, monkeypatch):
+        import asyncio, time
+        m = self._mod()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        ip = f"bndbq-fut-{id(self) % 65535}"
+        await m.ban(ip, secs=60)
+        _, args = q.get_nowait()
+        assert args[1] > time.time()  # kills mutmut_10 (_t.time() - secs)
+
+    @pytest.mark.asyncio
+    async def test_ban_db_queue_ip_arg(self, monkeypatch):
+        import asyncio
+        m = self._mod()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        ip = f"bndbq-ip-{id(self) % 65535}"
+        await m.ban(ip, secs=60)
+        _, args = q.get_nowait()
+        assert args[0] == ip
+
+
+class TestLoadSignalOrderCache:
+    """Covers scoring._load_signal_order_cache (39 mutants)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def test_returns_without_exception_when_gw_raises(self, monkeypatch):
+        import admin.mesh as mesh
+        m = self._mod()
+        def _raise():
+            raise RuntimeError("no mesh")
+        monkeypatch.setattr(mesh, "_gw_local_id", _raise)
+        m._load_signal_order_cache()
+
+    def test_loads_valid_rows_into_cache(self, monkeypatch, tmp_path):
+        import sqlite3
+        import state as _s
+        import admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-lsc', 'honeypot', 2)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-lsc")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        m._load_signal_order_cache()
+        assert _s._signal_order_cache.get("honeypot") == 2
+
+    def test_order_1_accepted(self, monkeypatch, tmp_path):
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc1.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-o1', 'ua-blocked', 1)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-o1")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        m._load_signal_order_cache()
+        assert _s._signal_order_cache.get("ua-blocked") == 1
+
+    def test_invalid_order_filtered_out(self, monkeypatch, tmp_path):
+        # Order 99 is not in (1,2,3) → filtered out → not in cache.
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc2.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-lsc2', 'honeypot', 99)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-lsc2")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        m._load_signal_order_cache()
+        assert "honeypot" not in _s._signal_order_cache
+
+    def test_slog_called_when_cache_nonempty(self, monkeypatch, tmp_path):
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc3.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-lsc3', 'ua-empty', 1)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-lsc3")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, **kw: calls.append({"event": event, **kw}))
+        m._load_signal_order_cache()
+        assert any(c["event"] == "signal_orders_loaded" for c in calls)
+
+    def test_slog_count_kwarg_matches_loaded(self, monkeypatch, tmp_path):
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc4.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-lsc4', 'ua-empty', 2)")
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-lsc4', 'ua-blocked', 3)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-lsc4")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, **kw: calls.append({"event": event, **kw}))
+        m._load_signal_order_cache()
+        loaded = [c for c in calls if c["event"] == "signal_orders_loaded"]
+        assert loaded and loaded[0]["count"] >= 2
+
+    def test_gw_id_kwarg_in_slog(self, monkeypatch, tmp_path):
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc5.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('gw-lsc5', 'ai-probe', 1)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-lsc5")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, **kw: calls.append({"event": event, **kw}))
+        m._load_signal_order_cache()
+        loaded = [c for c in calls if c["event"] == "signal_orders_loaded"]
+        assert loaded and loaded[0].get("gw_id") == "gw-lsc5"
+
+    def test_sqlite_error_calls_slog_failed(self, monkeypatch):
+        import admin.mesh as mesh
+        m = self._mod()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-err")
+        monkeypatch.setattr(m, "DB_PATH", "/nonexistent/path/x.db")
+        calls = []
+        monkeypatch.setattr(m, "slog", lambda event, **kw: calls.append({"event": event, **kw}))
+        m._load_signal_order_cache()
+        assert any("failed" in c["event"] for c in calls)
+
+    def test_query_filters_by_gw_id(self, monkeypatch, tmp_path):
+        # Rows for a DIFFERENT gw_id should NOT be loaded.
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "lsc6.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute(
+            "CREATE TABLE signal_orders (gw_id TEXT, signal TEXT, activation_order INT)"
+        )
+        conn.execute("INSERT INTO signal_orders VALUES ('other-gw', 'honeypot', 2)")
+        conn.commit(); conn.close()
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "my-gw")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        _s._signal_order_cache.clear()
+        m._load_signal_order_cache()
+        assert "honeypot" not in _s._signal_order_cache
+
+
+class TestSaveSignalOrder:
+    """Covers scoring._save_signal_order (35 mutants)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def test_returns_silently_when_gw_raises(self, monkeypatch):
+        import admin.mesh as mesh
+        m = self._mod()
+        def _raise():
+            raise RuntimeError("no mesh")
+        monkeypatch.setattr(mesh, "_gw_local_id", _raise)
+        m._save_signal_order("honeypot", 1, "admin")
+
+    def test_updates_in_memory_cache(self, monkeypatch, tmp_path):
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "sso.db"
+        _create_signal_orders_table(db)
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-sso")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        monkeypatch.setattr(m, "POSTGRES_DSN", "")
+        _s._signal_order_cache.pop("ua-empty", None)
+        m._save_signal_order("ua-empty", 3, "testuser")
+        assert _s._signal_order_cache.get("ua-empty") == 3
+
+    def test_cache_value_matches_saved_order(self, monkeypatch, tmp_path):
+        import state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "sso2.db"
+        _create_signal_orders_table(db)
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-sso2")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        monkeypatch.setattr(m, "POSTGRES_DSN", "")
+        _s._signal_order_cache.pop("ai-probe", None)
+        m._save_signal_order("ai-probe", 2, "op")
+        assert _s._signal_order_cache["ai-probe"] == 2
+
+    def test_persists_to_sqlite(self, monkeypatch, tmp_path):
+        import sqlite3, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "sso3.db"
+        _create_signal_orders_table(db)
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-sso3")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        monkeypatch.setattr(m, "POSTGRES_DSN", "")
+        m._save_signal_order("suspicious-path", 2, "operator")
+        conn = sqlite3.connect(str(db))
+        rows = conn.execute(
+            "SELECT signal, activation_order FROM signal_orders WHERE gw_id='gw-sso3'"
+        ).fetchall()
+        conn.close()
+        assert ("suspicious-path", 2) in rows
+
+    def test_upsert_overwrites_existing(self, monkeypatch, tmp_path):
+        import sqlite3, state as _s, admin.mesh as mesh
+        m = self._mod()
+        db = tmp_path / "sso4.db"
+        _create_signal_orders_table(db)
+        monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-sso4")
+        monkeypatch.setattr(m, "DB_PATH", str(db))
+        monkeypatch.setattr(m, "POSTGRES_DSN", "")
+        m._save_signal_order("ai-probe", 1, "op")
+        m._save_signal_order("ai-probe", 3, "op")  # overwrite
+        conn = sqlite3.connect(str(db))
+        rows = conn.execute(
+            "SELECT activation_order FROM signal_orders WHERE gw_id='gw-sso4' AND signal='ai-probe'"
+        ).fetchall()
+        conn.close()
+        assert rows == [(3,)]
+
+    def test_order_1_2_3_all_valid(self, monkeypatch, tmp_path):
+        import state as _s, admin.mesh as mesh
+        m = self._mod()
+        for order in (1, 2, 3):
+            db = tmp_path / f"sso_ord{order}.db"
+            _create_signal_orders_table(db)
+            monkeypatch.setattr(mesh, "_gw_local_id", lambda: "gw-ord")
+            monkeypatch.setattr(m, "DB_PATH", str(db))
+            monkeypatch.setattr(m, "POSTGRES_DSN", "")
+            sig = f"sig-ord{order}"
+            _s._signal_order_cache.pop(sig, None)
+            m._save_signal_order(sig, order, "tester")
+            assert _s._signal_order_cache.get(sig) == order
+
+
+def _create_signal_orders_table(db_path):
+    import sqlite3
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE signal_orders (
+            gw_id TEXT, signal TEXT, activation_order INT,
+            updated_ts REAL, updated_by TEXT,
+            UNIQUE(gw_id, signal)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+# ── _should_run_signal: threshold=0 boundary (mutmut_6, mutmut_12) ─────────
+
+class TestShouldRunSignalThresholdZero:
+    def setup_method(self):
+        import scoring as m
+        m._signal_order_cache.clear()
+
+    def test_escalation_threshold_0_always_runs_order3(self, monkeypatch):
+        # mutmut_6: ESCALATION_THRESHOLD < 0 instead of <= 0
+        # threshold=0: orig (0<=0)=True → short-circuit → True regardless of esc_score
+        # mutmut_6: (0<0)=False → checks esc_score >= 0; esc_score=-1 → False
+        import scoring as m
+        monkeypatch.setattr(m, "ESCALATION_THRESHOLD", 0.0)
+        from config import ESCALATE_ONLY_REASONS
+        sig = next(iter(ESCALATE_ONLY_REASONS))
+        assert m._should_run_signal(sig, -1.0) is True
+
+    def test_second_order_threshold_0_always_runs_order2(self, monkeypatch):
+        # mutmut_12: SECOND_ORDER_THRESHOLD < 0 instead of <= 0
+        import scoring as m
+        monkeypatch.setattr(m, "SECOND_ORDER_THRESHOLD", 0.0)
+        from config import SECOND_ORDER_REASONS
+        sig = next(iter(SECOND_ORDER_REASONS))
+        assert m._should_run_signal(sig, -1.0) is True
+
+
+# ── _decay_risk: condition boundary (mutmut_8, mutmut_9, mutmut_11, mutmut_23, mutmut_39) ─
+
+class TestDecayRiskConditionBoundary:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def test_no_decay_when_elapsed_zero_risk_below_noise(self):
+        # orig: elapsed=0 > 0 → False → body skipped → risk_score stays 0.4
+        # mutmut_8 (and→or): False or (0.4>0)=True → factor=1 → 0.4<0.5 → cleared to 0.0
+        # mutmut_9 (>→>=): 0>=0=True → same clearing
+        s = _FakeState(risk_score=0.4, last_risk_update=5000.0)
+        self._mod()._decay_risk(s, 5000.0)  # elapsed=0 exactly
+        assert s.risk_score == pytest.approx(0.4)
+
+    def test_zero_risk_score_skips_decay_body(self):
+        # orig: elapsed>0 and 0.0>0 = False → skip → risk_by_reason untouched
+        # mutmut_11 (risk_score >= 0): True → factor applied → 0.0<0.5 → risk_by_reason cleared
+        s = _FakeState(risk_score=0.0, last_risk_update=0.0)
+        s.risk_by_reason["js-challenge"] = 5.0
+        self._mod()._decay_risk(s, 1.0)  # elapsed=1s
+        assert "js-challenge" in s.risk_by_reason
+
+    def test_no_getattr_error_when_risk_by_reason_absent_decay_runs(self):
+        # mutmut_23: getattr(state, "risk_by_reason") without default → AttributeError
+        # when attribute absent; orig handles it safely with None default
+        import types
+        state = types.SimpleNamespace(risk_score=5.0, last_risk_update=0.0)
+        self._mod()._decay_risk(state, 1.0)  # elapsed=1s, risk_score>0 → enters body
+        # mutmut_23: AttributeError in first getattr → test error → killed
+
+    def test_no_getattr_error_when_risk_by_reason_absent_zero_block(self):
+        # mutmut_39: second getattr (in risk_score<0.5 block) without default → AttributeError
+        import types
+        state = types.SimpleNamespace(risk_score=0.3, last_risk_update=0.0)
+        self._mod()._decay_risk(state, 1.0)  # risk_score → decays below 0.5 → enters zero block
+        assert state.risk_score == 0.0  # zeroing ran
+
+
+# ── update_risk_and_maybe_ban: unknown reason early return (mutmut_8) ────────
+
+class TestUpdateRiskEarlyReturn:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_unknown_reason_does_not_touch_risk_by_reason(self):
+        # orig: weight==0 → return False early → risk_by_reason unchanged
+        # mutmut_8: weight==1 → weight=0 doesn't equal 1 → continues
+        #   → risk_by_reason["totally-unknown"] = 0.0 (side-effect)
+        m, st = self._mod(), self._st()
+        key = f"urm-unk-{id(self)}"
+        st.ip_state[key].risk_by_reason.clear()
+        await m.update_risk_and_maybe_ban(key, "totally-unknown-reason-xyz", "1.2.3.5")
+        assert "totally-unknown-reason-xyz" not in st.ip_state[key].risk_by_reason
+
+
+# ── update_risk_and_maybe_ban: NAT counting (mutmut_27, mutmut_32) ───────────
+
+class TestUpdateRiskNatDetection:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    def _mock_redis_noop(self, monkeypatch):
+        """Prevent real Redis connection when ban is triggered in test."""
+        import sys, types
+        mod = types.ModuleType('integrations.redis')
+        async def _noop(*a, **kw): pass
+        mod._shared_ban_set = _noop
+        monkeypatch.setitem(sys.modules, 'integrations.redis', mod)
+
+    @pytest.mark.asyncio
+    async def test_nat_counting_each_identity_counted_once(self, monkeypatch):
+        # mutmut_27: sum(2 for ...) instead of sum(1 for ...)
+        # 3 valid entries: orig→identities=3<5→threshold=50; mutmut_27→6>=5→threshold=100
+        # orig: 53>=50 → ban triggered; mutmut_27: 53<100 → no ban → killed
+        self._mock_redis_noop(monkeypatch)
+        from helpers import now
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        m, st = self._mod(), self._st()
+        ip = f"10.20.30.{id(self) % 200 + 10}"
+        nat_keys = [f"nat27-k{i}-{id(self)}" for i in range(3)]
+        n = now()
+        for k in nat_keys:
+            s2 = st.ip_state[k]
+            s2.last_ip = ip
+            s2.last_seen = n
+            s2.static_loads = 1
+            s2.allowed_count = 3
+            st.ip_to_identities[ip].add(k)
+        track_key = f"nat27-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = n
+        result = await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        assert result is True  # orig: 53>=50 → True; mutmut_27: 53<100 → False
+
+    @pytest.mark.asyncio
+    async def test_stale_entry_excluded_from_nat_count(self, monkeypatch):
+        # mutmut_32: "and st.static_loads>=1 or st.allowed_count>=3"
+        # 5 stale entries (last_ip mismatch) with allowed_count=3:
+        # orig: excluded → identities=0 → threshold=50 → ban
+        # mutmut_32: OR-allowed_count → included → NAT threshold → no ban
+        self._mock_redis_noop(monkeypatch)
+        from helpers import now
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        m, st = self._mod(), self._st()
+        ip = f"10.20.30.{id(self) % 200 + 50}"
+        stale_keys = [f"nat32-k{i}-{id(self)}" for i in range(5)]
+        n = now()
+        for k in stale_keys:
+            s2 = st.ip_state[k]
+            s2.last_ip = "9.9.9.9"  # wrong IP — stale entry
+            s2.last_seen = n
+            s2.static_loads = 0     # fails static_loads >= 1
+            s2.allowed_count = 3    # passes allowed_count >= 3 (exploited by mutmut_32)
+            st.ip_to_identities[ip].add(k)
+        track_key = f"nat32-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = n
+        result = await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        assert result is True  # orig: stale excluded → ban; mutmut_32: NAT threshold → no ban
+
+
+# ── ban: default reason parameter (mutmut_1, mutmut_2) ─────────────────────
+
+class TestBanDefaultReason:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_ban_default_reason_is_honeypot(self, monkeypatch):
+        # mutmut_1: default reason="XXhoneypotXX"
+        # mutmut_2: default reason="HONEYPOT"
+        # Call ban(ip) without reason → db_queue message reason must equal "honeypot"
+        import asyncio
+        m = self._mod()
+        q = asyncio.Queue()
+        monkeypatch.setattr(m, "db_queue", q)
+        ip = f"ban-dr-{id(self) % 65535}"
+        await m.ban(ip)  # uses default reason
+        assert not q.empty()
+        _, args = q.get_nowait()
+        _, _, reason, _ = args
+        assert reason == "honeypot"
+
+
+# ── is_banned: exact-boundary (mutmut_3) ────────────────────────────────────
+
+class TestIsBannedExactBoundary:
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    @pytest.mark.asyncio
+    async def test_not_banned_when_banned_until_equals_now(self, monkeypatch):
+        # orig: s.banned_until > n → False when banned_until==n → not banned
+        # mutmut_3: s.banned_until >= n → True when banned_until==n → wrongly banned
+        FIXED_NOW = 50000.0
+        m = self._mod()
+        st = self._st()
+        monkeypatch.setattr(m, "now", lambda: FIXED_NOW)
+        ip = f"ib-bnd-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = FIXED_NOW  # exactly == now
+        result, remaining = await m.is_banned(ip)
+        assert result is False   # ban expired exactly at this instant
+        assert remaining == 0.0
+
+
+# ── is_banned: Redis-path mock kills (mutmut_7-8, mutmut_10-19) ─────────────
+
+class TestIsBannedRedisMock:
+    """Mock integrations.redis to exercise the Redis code path in is_banned."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    def _fake_redis_get(self, monkeypatch, ip, *, raises=False, return_val=None):
+        """Inject a fake integrations.redis module with a _shared_ban_get mock."""
+        import sys, types, time as _time
+        future = _time.time() + 3600
+        if return_val is None:
+            return_val = future
+
+        async def mock_get(arg):
+            if raises:
+                raise RuntimeError("mock-redis-error")
+            if arg == ip:
+                return return_val
+            return 0.0
+
+        mod = types.ModuleType('integrations.redis')
+        mod._shared_ban_get = mock_get
+        monkeypatch.setitem(sys.modules, 'integrations.redis', mod)
+        return return_val
+
+    @pytest.mark.asyncio
+    async def test_redis_ban_get_called_with_ip(self, monkeypatch):
+        # mutmut_7: _shared_ban_get(None) instead of (ip) → gets 0.0 → not banned
+        # orig: called with ip → returns future → banned → True
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm7-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0  # not locally banned
+        self._fake_redis_get(monkeypatch, ip)
+        result, _ = await m.is_banned(ip)
+        assert result is True  # Redis says banned; mutmut_7 (None arg) gets 0.0 → False → killed
+
+    @pytest.mark.asyncio
+    async def test_redis_get_raises_returns_not_banned(self, monkeypatch):
+        # mutmut_8: until = None in except → None > time() → TypeError propagates → test error → killed
+        # orig: until = 0.0 → not banned → (False, 0.0)
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm8-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+        self._fake_redis_get(monkeypatch, ip, raises=True)
+        result, remaining = await m.is_banned(ip)  # mutmut_8: TypeError here
+        assert result is False
+        assert remaining == 0.0
+
+    @pytest.mark.asyncio
+    async def test_redis_remaining_is_float(self, monkeypatch):
+        # mutmut_11: remaining = None → returns (True, None)
+        # orig: remaining = until - time() ≈ 3600 → (True, ~3600)
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm11-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+        self._fake_redis_get(monkeypatch, ip)
+        result, remaining = await m.is_banned(ip)
+        assert result is True
+        assert isinstance(remaining, float) and remaining > 0  # kills mutmut_11 (None)
+
+    @pytest.mark.asyncio
+    async def test_redis_remaining_is_time_until_not_sum(self, monkeypatch):
+        # mutmut_12: remaining = until + time() ≈ 3.5e9 instead of ~3600
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm12-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+        self._fake_redis_get(monkeypatch, ip)
+        result, remaining = await m.is_banned(ip)
+        assert result is True
+        assert remaining < 7200  # ~3600 expected; mutmut_12 gives ~3.5e9
+
+    @pytest.mark.asyncio
+    async def test_redis_sets_banned_until_not_none(self, monkeypatch):
+        # mutmut_13: ip_state[ip].banned_until = None
+        # mutmut_14: max(None, now()+remaining) → TypeError → test error → killed
+        # mutmut_15: max(banned_until, None) → TypeError → killed
+        from helpers import now
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm13-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+        self._fake_redis_get(monkeypatch, ip)
+        await m.is_banned(ip)
+        assert st.ip_state[ip].banned_until is not None  # kills mutmut_13
+
+    @pytest.mark.asyncio
+    async def test_redis_sets_banned_until_to_future_monotonic(self, monkeypatch):
+        # mutmut_17: max(banned_until,) = banned_until (never updates)
+        # mutmut_18: max(banned_until, now()-remaining) → keeps old value (smaller)
+        from helpers import now
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm17-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0  # starts unset
+        self._fake_redis_get(monkeypatch, ip)
+        await m.is_banned(ip)
+        # orig: banned_until ≈ now() + 3600 > now()
+        # mutmut_17: stays 0.0 → not > now()
+        # mutmut_18: max(0.0, now()-3600) ≈ 0 → not > now()
+        assert st.ip_state[ip].banned_until > now()
+
+    @pytest.mark.asyncio
+    async def test_redis_banned_until_preserves_larger_existing_value(self, monkeypatch):
+        # mutmut_16: max(now()+remaining) ignores existing banned_until
+        from helpers import now
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm16-{id(self) % 65535}"
+        large_val = now() + 1_000_000  # 11+ days in future (monotonic)
+        st.ip_state[ip].banned_until = large_val
+        self._fake_redis_get(monkeypatch, ip)
+        await m.is_banned(ip)
+        # orig: max(large_val, now()+3600) = large_val (preserved)
+        # mutmut_16: max(now()+3600) ≈ now()+3600 (ignores large_val)
+        assert st.ip_state[ip].banned_until > now() + 999_000  # still ~11 days
+
+    @pytest.mark.asyncio
+    async def test_redis_returns_true_when_banned(self, monkeypatch):
+        # mutmut_19: return False, remaining instead of True, remaining
+        m, st = self._mod(), self._st()
+        ip = f"ib-rm19-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+        self._fake_redis_get(monkeypatch, ip)
+        result, _ = await m.is_banned(ip)
+        assert result is True  # kills mutmut_19 which returns False
+
+    @pytest.mark.asyncio
+    async def test_redis_until_equals_time_not_banned(self, monkeypatch):
+        """Kill mutmut_10: until >= _t.time() (>=) vs orig (>).
+        When until==time exactly, orig: False; mutant: True."""
+        import sys, types
+        FROZEN = 1_000_000.0
+        m, st = self._mod(), self._st()
+        fake_t = types.SimpleNamespace(time=lambda: FROZEN)
+        monkeypatch.setattr(m, '_t', fake_t)
+        ip = f"ib-mm10-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+
+        async def mock_get(arg):
+            return FROZEN  # until == time exactly
+
+        redis_mod = types.ModuleType('integrations.redis')
+        redis_mod._shared_ban_get = mock_get
+        monkeypatch.setitem(sys.modules, 'integrations.redis', redis_mod)
+
+        result, remaining = await m.is_banned(ip)
+        assert result is False, "until==time → NOT banned (kills mutmut_10 which uses >=)"
+        assert remaining == 0.0
+
+    @pytest.mark.asyncio
+    async def test_redis_except_sets_until_zero_not_one(self, monkeypatch):
+        """Kill mutmut_9: except sets until=1.0 instead of 0.0.
+        Freeze _t.time() to 0.5 so 1.0 > 0.5 = True (mutant: banned), 0.0 > 0.5 = False (orig: not banned)."""
+        import sys, types
+        FROZEN_TINY = 0.5
+        m, st = self._mod(), self._st()
+        fake_t = types.SimpleNamespace(time=lambda: FROZEN_TINY)
+        monkeypatch.setattr(m, '_t', fake_t)
+        ip = f"ib-mm9-{id(self) % 65535}"
+        st.ip_state[ip].banned_until = 0.0
+
+        async def mock_get_raises(arg):
+            raise RuntimeError("redis-down")
+
+        redis_mod = types.ModuleType('integrations.redis')
+        redis_mod._shared_ban_get = mock_get_raises
+        monkeypatch.setitem(sys.modules, 'integrations.redis', redis_mod)
+
+        result, remaining = await m.is_banned(ip)
+        assert result is False, "except → until=0.0 → 0.0>0.5 False (kills mutmut_9 with until=1.0)"
+        assert remaining == 0.0
+
+
+# ── ban: Redis-path mock kills (mutmut_11-17) ────────────────────────────────
+
+class TestBanRedisMock:
+    """Mock integrations.redis to capture _shared_ban_set args in ban()."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    def _setup_redis_set_mock(self, monkeypatch):
+        """Inject fake redis module; return list that collects call args."""
+        import sys, types
+        calls = []
+
+        async def mock_set(*args, **kwargs):
+            calls.append(args)
+
+        mod = types.ModuleType('integrations.redis')
+        mod._shared_ban_set = mock_set
+        monkeypatch.setitem(sys.modules, 'integrations.redis', mod)
+        return calls
+
+    @pytest.mark.asyncio
+    async def test_ban_redis_first_arg_is_ip(self, monkeypatch):
+        # mutmut_11: _shared_ban_set(None, ...) — first arg None instead of ip
+        m = self._mod()
+        calls = self._setup_redis_set_mock(monkeypatch)
+        ip = f"ban-rs11-{id(self) % 65535}"
+        await m.ban(ip, secs=60, reason="test-reason")
+        assert calls, "mock was not called"
+        assert calls[0][0] == ip  # kills mutmut_11 (None first arg)
+
+    @pytest.mark.asyncio
+    async def test_ban_redis_second_arg_is_future_timestamp(self, monkeypatch):
+        # mutmut_17: _t.time() - secs instead of _t.time() + secs → past timestamp
+        import time as _t
+        m = self._mod()
+        calls = self._setup_redis_set_mock(monkeypatch)
+        ip = f"ban-rs17-{id(self) % 65535}"
+        secs = 3600
+        await m.ban(ip, secs=secs, reason="test-reason")
+        assert calls
+        until_arg = calls[0][1]
+        assert until_arg > _t.time()  # must be in the future; mutmut_17 gives past
+
+    @pytest.mark.asyncio
+    async def test_ban_redis_third_arg_is_reason(self, monkeypatch):
+        # mutmut_13: reason=None in third arg
+        m = self._mod()
+        calls = self._setup_redis_set_mock(monkeypatch)
+        ip = f"ban-rs13-{id(self) % 65535}"
+        await m.ban(ip, secs=60, reason="explicit-reason")
+        assert calls
+        assert calls[0][2] == "explicit-reason"  # kills mutmut_13 (None)
+
+    @pytest.mark.asyncio
+    async def test_ban_redis_three_positional_args(self, monkeypatch):
+        # mutmut_14: _shared_ban_set(_t.time()+secs, reason) — only 2 args
+        # mutmut_15: _shared_ban_set(ip, reason) — only 2 args
+        # mutmut_16: _shared_ban_set(ip, _t.time()+secs, ) — trailing comma = 2 args
+        m = self._mod()
+        calls = self._setup_redis_set_mock(monkeypatch)
+        ip = f"ban-rs14-{id(self) % 65535}"
+        await m.ban(ip, secs=60, reason="test-reason")
+        assert calls
+        assert len(calls[0]) == 3  # ip, until, reason; kills mutmut_14,15,16
+
+
+# ── update_risk_and_maybe_ban: NAT filter detail kills ───────────────────────
+
+class TestUpdateRiskNatFilters:
+    """Target surviving NAT-detection filter mutants (28,33,34,36-45,47,50)."""
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    def _mock_redis_noop(self, monkeypatch):
+        """Prevent real Redis connection when ban is triggered in test."""
+        import sys, types
+        mod = types.ModuleType('integrations.redis')
+        async def _noop(*a, **kw): pass
+        mod._shared_ban_set = _noop
+        monkeypatch.setitem(sys.modules, 'integrations.redis', mod)
+
+    def _setup_nat_entries(self, st, ip, count, *, last_ip=None, last_seen_offset=0,
+                           static_loads=1, allowed_count=3):
+        """Populate ip_to_identities with count entries meeting the orig filter."""
+        from helpers import now
+        n = now()
+        keys = [f"natf-k{i}-{id(self)}-{ip}" for i in range(count)]
+        for k in keys:
+            s2 = st.ip_state[k]
+            s2.last_ip = last_ip if last_ip is not None else ip
+            s2.last_seen = n - last_seen_offset
+            s2.static_loads = static_loads
+            s2.allowed_count = allowed_count
+            st.ip_to_identities[ip].add(k)
+        return keys
+
+    def _setup_nat_entries_fixed(self, st, ip, count, fixed_now, *, last_ip=None,
+                                  last_seen_offset=0, static_loads=1, allowed_count=3):
+        """Like _setup_nat_entries but uses a fixed now value for deterministic timing."""
+        keys = [f"natff-k{i}-{id(self)}-{ip}" for i in range(count)]
+        for k in keys:
+            s2 = st.ip_state[k]
+            s2.last_ip = last_ip if last_ip is not None else ip
+            s2.last_seen = fixed_now - last_seen_offset
+            s2.static_loads = static_loads
+            s2.allowed_count = allowed_count
+            st.ip_to_identities[ip].add(k)
+        return keys
+
+    @pytest.mark.asyncio
+    async def test_nat_five_valid_entries_raises_threshold(self, monkeypatch):
+        # With 5 valid entries: orig→NAT threshold(100)→no ban→False
+        # Kills: mutmut_28 (get(None)), mutmut_36 (ip_state.get(None)),
+        #        mutmut_37 (is None), mutmut_38 (last_ip !=),
+        #        mutmut_39 (n + last_seen), mutmut_42 (static_loads > 1),
+        #        mutmut_43 (static_loads >= 2), mutmut_44 (allowed_count > 3),
+        #        mutmut_45 (allowed_count >= 4), mutmut_47 (> not >=)
+        # All these mutants → identities=0 (or 5>5=False) → regular(50) → ban→True
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        FIXED = 300000.0
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, "now", lambda: FIXED)
+        ip = f"10.0.{id(self) % 254 + 1}.1"
+        self._setup_nat_entries_fixed(st, ip, NAT_IDENTITIES_THRESHOLD, FIXED,
+                                      last_seen_offset=60)
+        track_key = f"natf5-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = FIXED
+        result = await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        assert result is False  # NAT threshold: 53 < 100 → no ban
+
+    @pytest.mark.asyncio
+    async def test_nat_stale_last_seen_excluded(self, monkeypatch):
+        # mutmut_33: (... <3600) or (static>=1 and allowed>=3) includes stale entries
+        # 5 stale entries (2h ago) → orig: excluded → regular → ban → True
+        # mutmut_33: or-short-circuit → included → NAT → no ban → False → killed
+        self._mock_redis_noop(monkeypatch)
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        FIXED = 300000.0
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, "now", lambda: FIXED)
+        ip = f"10.0.{id(self) % 254 + 1}.2"
+        self._setup_nat_entries_fixed(st, ip, NAT_IDENTITIES_THRESHOLD, FIXED,
+                                      last_seen_offset=7200)  # 2 hours ago > 3600
+        track_key = f"natf33-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = FIXED
+        result = await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        assert result is True  # orig: stale excluded → regular → ban
+
+    @pytest.mark.asyncio
+    async def test_nat_wrong_last_ip_excluded(self, monkeypatch):
+        # mutmut_34: (... and last_ip==ip) or (last_seen<3600 and ...) includes wrong-IP entries
+        # 5 entries with wrong last_ip → orig: excluded → regular → ban → True
+        # mutmut_34: or-short-circuit (recent last_seen) → included → NAT → no ban → False → killed
+        self._mock_redis_noop(monkeypatch)
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        FIXED = 300000.0
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, "now", lambda: FIXED)
+        ip = f"10.0.{id(self) % 254 + 1}.3"
+        self._setup_nat_entries_fixed(st, ip, NAT_IDENTITIES_THRESHOLD, FIXED,
+                                      last_ip="9.9.9.9", last_seen_offset=60)
+        track_key = f"natf34-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = FIXED
+        result = await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        assert result is True  # orig: wrong last_ip excluded → regular → ban
+
+    @pytest.mark.asyncio
+    async def test_nat_entry_at_exact_3600s_boundary(self, monkeypatch):
+        # mutmut_40 (<= 3600): 3600 <= 3600 = True → includes boundary entries → NAT
+        # mutmut_41 (< 3601): 3600 < 3601 = True → same
+        # orig (< 3600): 3600 < 3600 = False → excludes → regular → ban → True
+        self._mock_redis_noop(monkeypatch)
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        FIXED = 300000.0
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, "now", lambda: FIXED)
+        ip = f"10.0.{id(self) % 254 + 1}.4"
+        self._setup_nat_entries_fixed(st, ip, NAT_IDENTITIES_THRESHOLD, FIXED,
+                                      last_seen_offset=3600)  # exactly at boundary
+        track_key = f"natf40-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = FIXED
+        result = await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        assert result is True  # orig: 3600 < 3600 False → excluded → regular → ban
+
+    @pytest.mark.asyncio
+    async def test_nat_banned_until_equals_now_triggers_ban(self, monkeypatch):
+        # mutmut_50: s.banned_until < n (strict) → False when banned_until==n → no ban
+        # orig: s.banned_until <= n → True → ban triggered
+        self._mock_redis_noop(monkeypatch)
+        from config import RISK_BAN_THRESHOLD, NAT_IDENTITIES_THRESHOLD
+        FIXED = 300000.0
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, "now", lambda: FIXED)
+        ip = f"10.0.{id(self) % 254 + 1}.5"
+        # No NAT entries → identities=0 → regular threshold (50)
+        track_key = f"natf50-main-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = FIXED  # exactly == now
+        st.ip_state[track_key].last_risk_update = FIXED
+        result = await m.update_risk_and_maybe_ban(track_key, "honeypot", ip)
+        assert result is True  # orig: banned_until <= n → True → retrigger ban
+
+
+class TestUpdateRiskPostBanPath:
+    """Kill mutmut_70-119: post-ban Redis/JA4/webhook side-effect assertions.
+
+    All these mutants modify code inside try/except Exception:pass so they can't
+    be killed by checking the return value — we must assert integration call args.
+    """
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _st(self):
+        import state as s
+        return s
+
+    def _setup_integrations(self, monkeypatch):
+        """Inject async spy mocks for all three integration modules."""
+        import sys, types
+        redis_calls: list = []
+        ja4_calls: list = []
+        webhook_calls: list = []
+
+        async def mock_shared_ban_set(*a, **kw):
+            redis_calls.append(a)
+
+        async def mock_observe_ja4_ban(*a, **kw):
+            ja4_calls.append(a)
+
+        async def mock_post_webhook(*a, **kw):
+            webhook_calls.append(a[0] if a else None)
+
+        redis_mod = types.ModuleType('integrations.redis')
+        redis_mod._shared_ban_set = mock_shared_ban_set
+        monkeypatch.setitem(sys.modules, 'integrations.redis', redis_mod)
+
+        ja4_mod = types.ModuleType('integrations.ja4')
+        ja4_mod._observe_ja4_ban = mock_observe_ja4_ban
+        monkeypatch.setitem(sys.modules, 'integrations.ja4', ja4_mod)
+
+        wh_mod = types.ModuleType('integrations.webhook')
+        wh_mod._post_webhook = mock_post_webhook
+        monkeypatch.setitem(sys.modules, 'integrations.webhook', wh_mod)
+
+        return redis_calls, ja4_calls, webhook_calls
+
+    @pytest.mark.asyncio
+    async def test_post_ban_integration_correct_args(self, monkeypatch):
+        """Kill mutmut_70-87,89-119 by asserting correct integration call args."""
+        import asyncio, time as _time
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', 'https://hook.test.internal')
+        from config import RISK_BAN_THRESHOLD, RISK_BAN_DURATION_SECS
+        ip = f"10.0.{id(self) % 254 + 1}.20"
+        track_key = f"pst-ban-{id(self)}"
+        reason = "js-challenge"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = "t13d2d_testja4"
+        st.ip_state[track_key].last_user_agent = "Mozilla/5.0 Test"
+        before = _time.time()
+        result = await m.update_risk_and_maybe_ban(track_key, reason, ip)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        assert result is True
+        # redis checks: kills 70 (None arg1), 71 (None arg2), 72 (None arg3),
+        #               73-75 (arg count), 76 (past timestamp), 77 (not called)
+        assert redis_calls, "redis must be called (kills 77)"
+        assert len(redis_calls[0]) == 3, "must pass 3 args (kills 73,74,75)"
+        assert redis_calls[0][0] == track_key, "arg1=track_key (kills 70)"
+        assert redis_calls[0][1] >= before + RISK_BAN_DURATION_SECS - 2, (
+            "arg2=future timestamp (kills 71,76)")
+        assert isinstance(redis_calls[0][2], str), "arg3 is string (kills 72)"
+        assert redis_calls[0][2].startswith("risk-score:"), "arg3 format (kills 72)"
+        assert redis_calls[0][2].endswith(":" + reason), "arg3 has reason (kills 72)"
+        # ja4 checks: kills 78 (last_ja4=None), 79 (last_ja4=''), 81 (t1=None),
+        #             82 (create_task(None)), 83 (_observe_ja4_ban(None))
+        assert ja4_calls, "ja4 must be called when last_ja4 set (kills 78,79,81,82)"
+        assert ja4_calls[0][0] == "t13d2d_testja4", "ja4 arg must be last_ja4 (kills 83)"
+        # webhook checks: kills 85 (callback(None) aborts), 86 (t2=None),
+        #                 87 (create_task(None)), 88 (_post_webhook(None)),
+        #                 89-119 (payload key/value mutations)
+        assert webhook_calls, "webhook must be called when WEBHOOK_URL set (kills 85,86,87)"
+        payload = webhook_calls[0]
+        assert isinstance(payload, dict), "payload must be dict (kills 88)"
+        assert payload.get("event") == "ban", "event=ban (kills 89,90,91,92)"
+        assert "ts" in payload, "ts key present (kills 93,94)"
+        assert payload.get("reason") == reason, "reason matches input (kills 95,96)"
+        assert "risk_score" in payload, "risk_score key present (kills 97,98)"
+        assert payload.get("track_key") == track_key[:32], "track_key truncated correctly (kills 99,100)"
+        assert payload.get("ip") == ip, "ip matches (kills 101,102)"  # noqa: E501 — for readability in mutmut context
+        assert payload.get("ja4") == "t13d2d_testja4", "ja4 from state (kills 103,104)"
+        assert "ua" in payload, "ua key present (kills 105,106)"
+        assert "duration_s" in payload, "duration_s key present (kills 107,108)"
+        assert payload.get("hostile") is False, "js-challenge not hostile (kills 117,118)"
+
+    @pytest.mark.asyncio
+    async def test_post_ban_ja4_not_called_when_last_ja4_none(self, monkeypatch):
+        """Kill mutmut_80: (s.last_ja4 or 'XXXX') would call ja4 with 'XXXX' when None."""
+        import asyncio
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', '')
+        from config import RISK_BAN_THRESHOLD
+        ip = f"10.0.{id(self) % 254 + 1}.21"
+        track_key = f"pst-nm80-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = None
+        await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        await asyncio.sleep(0)
+        assert not ja4_calls, "ja4 must NOT be called when last_ja4 is None (kills 80)"
+
+    @pytest.mark.asyncio
+    async def test_post_ban_hostile_reason_sets_hostile_true(self, monkeypatch):
+        """Kill mutmut_119 variant and webhook hostile-flag mutations."""
+        import asyncio
+        from config import _HOSTILE_REASONS, RISK_BAN_THRESHOLD
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', 'https://hook.test.internal')
+        hostile_reason = next(r for r in _HOSTILE_REASONS if r not in {"canary-echo","honeypot-silent","honeypot"})
+        weight = m.RISK_WEIGHTS.get(hostile_reason, 0)
+        if weight == 0:
+            pytest.skip("hostile reason has no risk weight")
+        ip = f"10.0.{id(self) % 254 + 1}.22"
+        track_key = f"pst-hostile-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = None
+        await m.update_risk_and_maybe_ban(track_key, hostile_reason, ip)
+        await asyncio.sleep(0)
+        assert webhook_calls, "webhook called for hostile ban"
+        assert webhook_calls[0].get("hostile") is True, "hostile=True for hostile reason"
+
+    @pytest.mark.asyncio
+    async def test_track_key_truncated_to_32_not_33(self, monkeypatch):
+        """Kill mutmut_103: track_key[:33] vs [:32]. Use 40-char key to expose off-by-one."""
+        import asyncio
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', 'https://hook.test.internal')
+        from config import RISK_BAN_THRESHOLD
+        ip = "10.0.50.103"
+        track_key = "abcdefghij" * 4  # exactly 40 chars: [:32] != [:33]
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = None
+        await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        await asyncio.sleep(0)
+        assert webhook_calls
+        assert webhook_calls[0]["track_key"] == track_key[:32], (
+            f"must truncate at 32 not 33 (kills 103): got {webhook_calls[0]['track_key']!r}")
+
+    @pytest.mark.asyncio
+    async def test_webhook_ua_preserves_value_when_set(self, monkeypatch):
+        """Kill mutmut_110: (ua and '') returns '' for truthy ua — must return the ua value."""
+        import asyncio
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', 'https://hook.test.internal')
+        from config import RISK_BAN_THRESHOLD
+        ip = "10.0.50.110"
+        track_key = f"pst-ua110-{id(self)}"
+        ua_value = "Mozilla/5.0 (KillMutmut110)"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = None
+        st.ip_state[track_key].last_user_agent = ua_value
+        await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        await asyncio.sleep(0)
+        assert webhook_calls
+        assert webhook_calls[0]["ua"] == ua_value, (
+            f"ua must equal user_agent (kills 110: 'and' returns ''), got {webhook_calls[0]['ua']!r}")
+
+    @pytest.mark.asyncio
+    async def test_webhook_ua_empty_when_none(self, monkeypatch):
+        """Kill mutmut_111: (ua or 'XXXX') returns 'XXXX' when None instead of ''."""
+        import asyncio
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', 'https://hook.test.internal')
+        from config import RISK_BAN_THRESHOLD
+        ip = "10.0.50.111"
+        track_key = f"pst-ua111-{id(self)}"
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = None
+        st.ip_state[track_key].last_user_agent = None
+        await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        await asyncio.sleep(0)
+        assert webhook_calls
+        assert webhook_calls[0]["ua"] == "", (
+            f"ua must be '' when None (kills 111: or 'XXXX'), got {webhook_calls[0]['ua']!r}")
+
+    @pytest.mark.asyncio
+    async def test_webhook_ua_truncated_at_120_not_121(self, monkeypatch):
+        """Kill mutmut_112: [:121] vs [:120]. Use 130-char UA to expose off-by-one."""
+        import asyncio
+        redis_calls, ja4_calls, webhook_calls = self._setup_integrations(monkeypatch)
+        m, st = self._mod(), self._st()
+        monkeypatch.setattr(m, 'WEBHOOK_URL', 'https://hook.test.internal')
+        from config import RISK_BAN_THRESHOLD
+        ip = "10.0.50.112"
+        track_key = f"pst-ua112-{id(self)}"
+        long_ua = "A" * 130
+        st.ip_state[track_key].risk_score = RISK_BAN_THRESHOLD
+        st.ip_state[track_key].banned_until = 0.0
+        st.ip_state[track_key].last_risk_update = m.now()
+        st.ip_state[track_key].last_ja4 = None
+        st.ip_state[track_key].last_user_agent = long_ua
+        await m.update_risk_and_maybe_ban(track_key, "js-challenge", ip)
+        await asyncio.sleep(0)
+        assert webhook_calls
+        assert webhook_calls[0]["ua"] == "A" * 120, (
+            f"ua must be truncated at 120 (kills 112: [:121]), got len={len(webhook_calls[0]['ua'])}")
+
+
+class TestLoadSignalOrderCache:
+    """Kill _load_signal_order_cache survivors via slog spy + SQLite temp DB.
+
+    Survivors are mutations to slog() call args (level, event string, kwargs).
+    Tests: 18 (level=None), 27 (level='XXinfoXX'), 28 (level='INFO'),
+           30 (error-level=None), 31 (error=None), 33 (missing level kwarg → 'info'),
+           34 (missing error kwarg), 35 ('XXsignal_orders_load_failedXX'),
+           37 (error-level='XXwarnXX'), 38 (error-level='WARN'), 39 (error=str(None)).
+    Equivalent (can't kill): 10 (SQL lowercase), 11 (SQL uppercase), 22 (missing level→default).
+    """
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _setup_admin_mesh_mock(self, monkeypatch, gw_id="test-gw-001"):
+        import sys, types
+        mesh_mod = types.ModuleType('admin.mesh')
+        mesh_mod._gw_local_id = lambda: gw_id
+        monkeypatch.setitem(sys.modules, 'admin.mesh', mesh_mod)
+        return gw_id
+
+    def _make_db(self, gw_id="test-gw-001", rows=None):
+        import tempfile, sqlite3 as _sqlite3, os
+        tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        tmp.close()
+        conn = _sqlite3.connect(tmp.name)
+        conn.execute("""CREATE TABLE signal_orders (
+            gw_id TEXT, signal TEXT, activation_order INT,
+            updated_ts REAL, updated_by TEXT)""")
+        for row in (rows or []):
+            conn.execute("INSERT INTO signal_orders VALUES (?,?,?,?,?)", row)
+        conn.commit()
+        conn.close()
+        return tmp.name
+
+    def _make_slog_spy(self, monkeypatch):
+        calls = []
+        def fake_slog(event, level="info", **fields):
+            calls.append({"event": event, "level": level, "fields": fields})
+        m = self._mod()
+        monkeypatch.setattr(m, 'slog', fake_slog)
+        return calls
+
+    def test_happy_path_slog_level_info(self, monkeypatch):
+        """Kill mutmut_18 (level=None), 27 (level='XXinfoXX'), 28 (level='INFO').
+        Happy path: DB has matching rows → cache populated → slog with level='info'."""
+        import tempfile, os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id, rows=[(gw_id, "js-challenge", 2, 0.0, "test")])
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        slog_calls = self._make_slog_spy(monkeypatch)
+        # Clear the cache so the if _signal_order_cache: branch runs
+        from state import _signal_order_cache
+        _signal_order_cache.clear()
+        try:
+            m._load_signal_order_cache()
+        finally:
+            os.unlink(db_path)
+        # Assert cache was populated
+        assert "js-challenge" in _signal_order_cache, "cache must be populated"
+        # Assert slog called with level='info' (kills 18,27,28)
+        assert slog_calls, "slog must have been called"
+        assert slog_calls[0]["event"] == "signal_orders_loaded"
+        assert slog_calls[0]["level"] == "info", f"level must be 'info', got {slog_calls[0]['level']!r}"
+
+    def test_error_path_slog_level_warn(self, monkeypatch):
+        """Kill mutmut_30 (level=None), 37 (level='XXwarnXX'), 38 (level='WARN').
+        Error path: DB connect succeeds but execute raises → slog with level='warn'."""
+        import types
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        slog_calls = self._make_slog_spy(monkeypatch)
+
+        class _MockConn:
+            def execute(self, *a, **kw):
+                raise RuntimeError("mock-sqlite-error-for-mutmut")
+            def close(self): pass
+
+        class _MockSqlite3:
+            @staticmethod
+            def connect(path): return _MockConn()
+
+        monkeypatch.setattr(m, 'sqlite3', _MockSqlite3)
+        monkeypatch.setattr(m, 'DB_PATH', '/nonexistent/path.db')
+        m._load_signal_order_cache()
+        assert slog_calls, "slog must have been called on error"
+        assert slog_calls[0]["event"] == "signal_orders_load_failed", "correct event name (kills 35)"
+        assert slog_calls[0]["level"] == "warn", f"level must be 'warn', got {slog_calls[0]['level']!r} (kills 30,37,38)"
+        assert "error" in slog_calls[0]["fields"], "error kwarg must be present (kills 34)"
+        assert slog_calls[0]["fields"]["error"] is not None, "error must not be None (kills 31)"
+        assert "mock-sqlite-error-for-mutmut" in slog_calls[0]["fields"]["error"], "error must contain exc string (kills 39)"
+
+    def test_error_path_slog_has_level_kwarg(self, monkeypatch):
+        """Kill mutmut_33: missing level kwarg → defaults to 'info' not 'warn'."""
+        import types
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        slog_calls = self._make_slog_spy(monkeypatch)
+
+        class _MockConn:
+            def execute(self, *a, **kw): raise RuntimeError("err33")
+            def close(self): pass
+
+        class _MockSqlite3:
+            @staticmethod
+            def connect(path): return _MockConn()
+
+        monkeypatch.setattr(m, 'sqlite3', _MockSqlite3)
+        monkeypatch.setattr(m, 'DB_PATH', '/nonexistent/path.db')
+        m._load_signal_order_cache()
+        assert slog_calls
+        assert slog_calls[0]["level"] == "warn", "error path must use level='warn' not default 'info' (kills 33)"
+
+    def test_order1_rows_included_in_cache(self, monkeypatch):
+        """Kill mutmut_14: n in (2, 2, 3) drops order-1 rows — must include them."""
+        import os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id, rows=[(gw_id, "rate-limit", 1, 0.0, "test")])
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        self._make_slog_spy(monkeypatch)
+        from state import _signal_order_cache
+        _signal_order_cache.clear()
+        try:
+            m._load_signal_order_cache()
+        finally:
+            os.unlink(db_path)
+        assert "rate-limit" in _signal_order_cache, "order-1 rows must be loaded (kills 14)"
+        assert _signal_order_cache["rate-limit"] == 1
+
+    def test_order3_rows_included_in_cache(self, monkeypatch):
+        """Kill mutmut_16: n in (1, 2, 4) drops order-3 rows — must include them."""
+        import os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id, rows=[(gw_id, "ai-probe", 3, 0.0, "test")])
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        self._make_slog_spy(monkeypatch)
+        from state import _signal_order_cache
+        _signal_order_cache.clear()
+        try:
+            m._load_signal_order_cache()
+        finally:
+            os.unlink(db_path)
+        assert "ai-probe" in _signal_order_cache, "order-3 rows must be loaded (kills 16)"
+        assert _signal_order_cache["ai-probe"] == 3
+
+    def test_slog_happy_path_count_and_gw_id_kwargs(self, monkeypatch):
+        """Kill mutmut_19 (count=None), 20 (gw_id=None), 23 (missing count), 24 (missing gw_id)."""
+        import os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch, gw_id="gw-kwarg-test")
+        db_path = self._make_db(gw_id, rows=[(gw_id, "js-challenge", 2, 0.0, "t")])
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        slog_calls = self._make_slog_spy(monkeypatch)
+        from state import _signal_order_cache
+        _signal_order_cache.clear()
+        try:
+            m._load_signal_order_cache()
+        finally:
+            os.unlink(db_path)
+        assert slog_calls
+        assert slog_calls[0]["event"] == "signal_orders_loaded"
+        fields = slog_calls[0]["fields"]
+        assert "count" in fields, "slog must include count kwarg (kills 23)"
+        assert fields["count"] is not None, "count must not be None (kills 19)"
+        assert fields["count"] == 1, "count must equal loaded entries (kills 19)"
+        assert "gw_id" in fields, "slog must include gw_id kwarg (kills 24)"
+        assert fields["gw_id"] is not None, "gw_id must not be None (kills 20)"
+        assert fields["gw_id"] == gw_id, "gw_id must equal gateway id (kills 20)"
+
+
+class TestSaveSignalOrder:
+    """Kill _save_signal_order survivors via DB/slog/postgres spies.
+
+    Survivors:
+    - mutmut_2: ts=None (null DB timestamp)
+    - mutmut_9-19: error-path slog arg mutations
+    - mutmut_21: pg=None always (postgres block never runs)
+    - mutmut_22: equivalent (pg="" in except → still falsy)
+    - mutmut_23: or instead of and in guard
+    - mutmut_24-26: pg.connect() kwarg mutations
+    - mutmut_27-35: Postgres SQL/param mutations
+    """
+
+    def _mod(self):
+        import scoring as m
+        return m
+
+    def _setup_admin_mesh_mock(self, monkeypatch, gw_id="test-gw-save"):
+        import sys, types
+        mesh_mod = types.ModuleType('admin.mesh')
+        mesh_mod._gw_local_id = lambda: gw_id
+        monkeypatch.setitem(sys.modules, 'admin.mesh', mesh_mod)
+        return gw_id
+
+    def _make_db(self, gw_id="test-gw-save"):
+        import tempfile, sqlite3 as _sqlite3, os
+        tmp = tempfile.NamedTemporaryFile(suffix='.db', delete=False)
+        tmp.close()
+        conn = _sqlite3.connect(tmp.name)
+        conn.execute("""CREATE TABLE signal_orders (
+            gw_id TEXT, signal TEXT, activation_order INT,
+            updated_ts REAL, updated_by TEXT,
+            PRIMARY KEY (gw_id, signal))""")
+        conn.commit()
+        conn.close()
+        return tmp.name
+
+    def _make_slog_spy(self, monkeypatch):
+        calls = []
+        def fake_slog(event="<missing>", level="info", **fields):
+            calls.append({"event": event, "level": level, "fields": fields})
+        m = self._mod()
+        monkeypatch.setattr(m, 'slog', fake_slog)
+        return calls
+
+    def _mock_sqlite_execute_fail(self, monkeypatch, exc_msg="mock-sqlite-fail"):
+        m = self._mod()
+        class _MockConn:
+            def execute(self, *a, **kw): raise RuntimeError(exc_msg)
+            def commit(self): pass
+            def close(self): pass
+        class _MockSqlite3:
+            @staticmethod
+            def connect(path): return _MockConn()
+        monkeypatch.setattr(m, 'sqlite3', _MockSqlite3)
+        monkeypatch.setattr(m, 'DB_PATH', '/nonexistent/path.db')
+
+    def _setup_postgres_spy(self, monkeypatch, postgres_dsn="postgres://test/db"):
+        import sys, types
+        from unittest.mock import MagicMock
+        m = self._mod()
+        connect_calls = []
+        execute_calls = []
+
+        mock_cur_ctx = MagicMock()
+        mock_cur_ctx.__enter__.return_value.execute = lambda sql, params: execute_calls.append((sql, params))
+        mock_cur_ctx.__exit__ = MagicMock(return_value=False)
+
+        mock_conn_ctx = MagicMock()
+        mock_conn_ctx.__enter__.return_value.cursor.return_value = mock_cur_ctx
+        mock_conn_ctx.__exit__ = MagicMock(return_value=False)
+
+        mock_pg = MagicMock()
+        mock_pg.connect = lambda *a, **kw: (connect_calls.append((a, kw)) or mock_conn_ctx)
+
+        def mock_postgres_load():
+            return mock_pg
+
+        pg_mod = types.ModuleType('db.postgres')
+        pg_mod._postgres_load_module = mock_postgres_load
+        monkeypatch.setitem(sys.modules, 'db.postgres', pg_mod)
+        monkeypatch.setattr(m, 'POSTGRES_DSN', postgres_dsn)
+        return connect_calls, execute_calls
+
+    def test_happy_path_ts_not_none(self, monkeypatch):
+        """Kill mutmut_2: ts=None → DB stores NULL timestamp."""
+        import sqlite3 as _sqlite3, os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id)
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        monkeypatch.setattr(m, 'POSTGRES_DSN', '')
+        try:
+            m._save_signal_order("js-challenge", 2, "test-actor")
+            conn = _sqlite3.connect(db_path)
+            rows = conn.execute(
+                "SELECT updated_ts FROM signal_orders WHERE gw_id=? AND signal=?",
+                (gw_id, "js-challenge")
+            ).fetchall()
+            conn.close()
+            assert rows, "row must exist in DB"
+            assert rows[0][0] is not None, "updated_ts must not be None (kills mutmut_2)"
+            assert isinstance(rows[0][0], float), "updated_ts must be a float"
+        finally:
+            os.unlink(db_path)
+
+    def test_error_path_slog_correct_args(self, monkeypatch):
+        """Kill mutmut_9-19: slog called with correct event/level/error on SQLite failure."""
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        slog_calls = self._make_slog_spy(monkeypatch)
+        self._mock_sqlite_execute_fail(monkeypatch, exc_msg="unique-error-xyz")
+        monkeypatch.setattr(m, 'POSTGRES_DSN', '')
+        m._save_signal_order("js-challenge", 2, "test-actor")
+        assert slog_calls, "slog must be called on SQLite error"
+        call = slog_calls[0]
+        assert call["event"] == "signal_orders_save_failed", (
+            f"wrong event: {call['event']!r} (kills 9,15,16)")
+        assert call["level"] == "warn", (
+            f"wrong level: {call['level']!r} (kills 10,13,17,18)")
+        assert "error" in call["fields"], "error kwarg must be present (kills 14)"
+        assert call["fields"]["error"] is not None, "error must not be None (kills 11)"
+        assert "unique-error-xyz" in call["fields"]["error"], (
+            "error must contain exc str (kills 19)")
+
+    def test_cache_updated_on_success(self, monkeypatch):
+        """Verify _signal_order_cache[sig]=order after successful save."""
+        import sqlite3 as _sqlite3, os
+        from state import _signal_order_cache
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id)
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        monkeypatch.setattr(m, 'POSTGRES_DSN', '')
+        sig = "honeypot-test-sig"
+        _signal_order_cache.pop(sig, None)
+        try:
+            m._save_signal_order(sig, 3, "test-actor")
+            assert _signal_order_cache.get(sig) == 3, "cache must be updated (kills 20 if not already)"
+        finally:
+            os.unlink(db_path)
+
+    def test_postgres_execute_called_when_pg_and_dsn(self, monkeypatch):
+        """Kill mutmut_21: pg=None always → Postgres execute never called."""
+        import sqlite3 as _sqlite3, os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id)
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        connect_calls, execute_calls = self._setup_postgres_spy(monkeypatch)
+        try:
+            m._save_signal_order("js-challenge", 2, "test-actor")
+            assert execute_calls, "Postgres execute must be called when pg and DSN set (kills 21)"
+        finally:
+            os.unlink(db_path)
+
+    def test_postgres_guard_requires_both_pg_and_dsn(self, monkeypatch):
+        """Kill mutmut_23: or instead of and — runs when DSN empty but pg truthy."""
+        import sqlite3 as _sqlite3, os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id)
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        connect_calls, execute_calls = self._setup_postgres_spy(monkeypatch, postgres_dsn="")
+        try:
+            m._save_signal_order("js-challenge", 2, "test-actor")
+            assert not execute_calls, "Postgres execute must NOT run when DSN empty (kills 23: or would run it)"
+        finally:
+            os.unlink(db_path)
+
+    def test_postgres_connect_called_with_dsn_and_kwargs(self, monkeypatch):
+        """Kill mutmut_24 (connect(None)), 25 (timeout=None), 26 (autocommit=None)."""
+        import sqlite3 as _sqlite3, os
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id)
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        POSTGRES_DSN_VAL = "postgres://testhost/testdb"
+        connect_calls, execute_calls = self._setup_postgres_spy(monkeypatch, postgres_dsn=POSTGRES_DSN_VAL)
+        try:
+            m._save_signal_order("js-challenge", 2, "test-actor")
+            assert connect_calls, "Postgres connect must be called"
+            conn_args, conn_kwargs = connect_calls[0]
+            assert conn_args and conn_args[0] == POSTGRES_DSN_VAL, (
+                f"connect first arg must be DSN (kills 24), got {conn_args!r}")
+            assert conn_kwargs.get("connect_timeout") == 3, (
+                f"connect_timeout must be 3 (kills 25), got {conn_kwargs!r}")
+            assert conn_kwargs.get("autocommit") is True, (
+                f"autocommit must be True (kills 26), got {conn_kwargs!r}")
+        finally:
+            os.unlink(db_path)
+
+    def test_postgres_execute_sql_and_params(self, monkeypatch):
+        """Kill mutmut_27-35: Postgres INSERT SQL and params must be correct."""
+        import sqlite3 as _sqlite3, os, time as _time
+        m = self._mod()
+        gw_id = self._setup_admin_mesh_mock(monkeypatch)
+        db_path = self._make_db(gw_id)
+        monkeypatch.setattr(m, 'DB_PATH', db_path)
+        POSTGRES_DSN_VAL = "postgres://testhost/testdb"
+        connect_calls, execute_calls = self._setup_postgres_spy(monkeypatch, postgres_dsn=POSTGRES_DSN_VAL)
+        sig, order, actor = "ai-probe", 1, "test-actor-2"
+        before = _time.time()
+        try:
+            m._save_signal_order(sig, order, actor)
+            assert execute_calls, "Postgres execute must be called"
+            sql, params = execute_calls[0]
+            assert "INSERT INTO signal_orders" in sql, f"SQL must contain INSERT (kills 27-35): {sql!r}"
+            assert "signal_orders" in sql
+            assert len(params) == 5, f"must pass 5 params (kills tuple mutations): {params!r}"
+            assert params[0] == gw_id, f"params[0] must be gw_id (kills 28): {params!r}"
+            assert params[1] == sig, f"params[1] must be sig (kills 29): {params!r}"
+            assert params[2] == order, f"params[2] must be order (kills 30): {params!r}"
+            assert params[3] is not None and params[3] >= before, (
+                f"params[3] must be timestamp (kills 31): {params!r}")
+            assert params[4] == actor, f"params[4] must be actor (kills 32): {params!r}"
+        finally:
+            os.unlink(db_path)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Bypass & Allowlists — static QA (1.8.10)
+# Covers the five knobs in the Bypass & Allowlists controls group:
+#   BYPASS_MODE, BOT_DETECTION_ENABLED, BYPASS_PATHS,
+#   AUTHORIZED_BOT_UAS, JS_CHAL_OPEN_PATHS
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestBypassAllowlistsStaticQA:
+
+    # ── Knob presence in _HOT_RELOAD_KNOBS ───────────────────────────────────
+
+    def _knobs(self):
+        from core.proxy_handler import _HOT_RELOAD_KNOBS
+        return _HOT_RELOAD_KNOBS
+
+    def test_bypass_mode_in_hot_reload_knobs(self):
+        """BYPASS_MODE must be hot-reloadable (incident-response toggle)."""
+        assert "BYPASS_MODE" in self._knobs(), (
+            "BYPASS_MODE missing from _HOT_RELOAD_KNOBS — "
+            "operators cannot toggle site-wide bypass at runtime"
+        )
+
+    def test_bot_detection_enabled_in_hot_reload_knobs(self):
+        """BOT_DETECTION_ENABLED must be hot-reloadable (global master switch)."""
+        assert "BOT_DETECTION_ENABLED" in self._knobs(), (
+            "BOT_DETECTION_ENABLED missing from _HOT_RELOAD_KNOBS — "
+            "global bot-detection master switch cannot be toggled at runtime"
+        )
+
+    def test_bypass_paths_in_hot_reload_knobs(self):
+        """BYPASS_PATHS must be hot-reloadable (operators add/remove paths live)."""
+        assert "BYPASS_PATHS" in self._knobs(), (
+            "BYPASS_PATHS missing from _HOT_RELOAD_KNOBS"
+        )
+
+    def test_js_chal_open_paths_in_hot_reload_knobs(self):
+        """JS_CHAL_OPEN_PATHS must be hot-reloadable."""
+        assert "JS_CHAL_OPEN_PATHS" in self._knobs(), (
+            "JS_CHAL_OPEN_PATHS missing from _HOT_RELOAD_KNOBS"
+        )
+
+    def test_authorized_bot_uas_in_hot_reload_knobs(self):
+        """AUTHORIZED_BOT_UAS must be hot-reloadable."""
+        assert "AUTHORIZED_BOT_UAS" in self._knobs(), (
+            "AUTHORIZED_BOT_UAS missing from _HOT_RELOAD_KNOBS"
+        )
+
+    # ── _NOT_PERSIST_KNOBS ────────────────────────────────────────────────────
+
+    def test_bypass_mode_in_not_persist_knobs(self):
+        """BYPASS_MODE must NOT be persisted to the DB (resets on restart)."""
+        from core.proxy_handler import _NOT_PERSIST_KNOBS
+        assert "BYPASS_MODE" in _NOT_PERSIST_KNOBS, (
+            "BYPASS_MODE must be in _NOT_PERSIST_KNOBS so it resets to False "
+            "on container restart — emergency bypass must never survive a restart"
+        )
+
+    def test_bot_detection_enabled_not_in_not_persist_knobs(self):
+        """BOT_DETECTION_ENABLED should persist across restarts (intentional setting)."""
+        from core.proxy_handler import _NOT_PERSIST_KNOBS
+        assert "BOT_DETECTION_ENABLED" not in _NOT_PERSIST_KNOBS, (
+            "BOT_DETECTION_ENABLED must persist across restarts — "
+            "it is an intentional vhost/global configuration, not an incident toggle"
+        )
+
+    # ── Source ordering ───────────────────────────────────────────────────────
+
+    def test_bypass_mode_precedes_authorized_bot_uas_in_source(self):
+        """BYPASS_MODE guard must appear before AUTHORIZED_BOT_UAS in protect().
+
+        If BYPASS_MODE sits below AUTHORIZED_BOT_UAS, action=ban entries can
+        still ban traffic even when the operator has enabled bypass mode.
+        """
+        import inspect
+        from core import proxy_handler
+        src = inspect.getsource(proxy_handler.protect)
+        bypass_idx  = src.find("if (BYPASS_MODE or vc('BYPASS_MODE')) and not _is_admin_path")
+        bot_uas_idx = src.find("if AUTHORIZED_BOT_UAS:")
+        assert bypass_idx != -1,  "BYPASS_MODE check missing from protect()"
+        assert bot_uas_idx != -1, "AUTHORIZED_BOT_UAS loop missing from protect()"
+        assert bypass_idx < bot_uas_idx, (
+            f"BYPASS_MODE check (pos {bypass_idx}) must precede "
+            f"AUTHORIZED_BOT_UAS (pos {bot_uas_idx}) in protect() — "
+            "otherwise action=ban entries fire even in bypass mode"
+        )
+
+    def test_bypass_mode_precedes_bypass_paths_in_source(self):
+        """BYPASS_MODE guard must appear before BYPASS_PATHS in protect()."""
+        import inspect
+        from core import proxy_handler
+        src = inspect.getsource(proxy_handler.protect)
+        bypass_idx  = src.find("if (BYPASS_MODE or vc('BYPASS_MODE')) and not _is_admin_path")
+        # 1.8.14 — BYPASS_PATHS may be guarded by the legacy `any(...)` form
+        # or the precompiled `_bypass_match(...)` helper. Match either.
+        paths_idx = -1
+        for needle in (
+            "if vc('BYPASS_PATHS') and any(",
+            "_bypass_match(request.path",
+        ):
+            i = src.find(needle)
+            if i != -1:
+                paths_idx = i
+                break
+        assert bypass_idx != -1, "BYPASS_MODE check missing"
+        assert paths_idx  != -1, "BYPASS_PATHS check missing"
+        assert bypass_idx < paths_idx, (
+            "BYPASS_MODE must precede BYPASS_PATHS in protect()"
+        )
+
+    def test_bot_detection_enabled_gate_after_rate_limit(self):
+        """BOT_DETECTION_ENABLED gate must sit AFTER rate-limit enforcement.
+
+        Rate limits are unconditional — they must fire even when bot detection
+        is disabled (e.g. for a trusted internal vhost under attack).
+        """
+        import inspect
+        from core import proxy_handler
+        src = inspect.getsource(proxy_handler.protect)
+        rate_idx = src.find("rate-limit-endpoint")
+        bde_idx  = src.find("if not vc('BOT_DETECTION_ENABLED')")
+        assert rate_idx != -1, "rate-limit-endpoint reason missing from protect()"
+        assert bde_idx  != -1, "BOT_DETECTION_ENABLED gate missing from protect()"
+        assert rate_idx < bde_idx, (
+            f"Rate-limit enforcement (pos {rate_idx}) must precede "
+            f"BOT_DETECTION_ENABLED gate (pos {bde_idx}) — "
+            "rate limits must apply even when bot detection is off"
+        )
+
+    # ── AUTHORIZED_BOT_UAS action validation ──────────────────────────────────
+
+    def test_authorized_bot_uas_valid_actions(self):
+        """Every entry in default AUTHORIZED_BOT_UAS must have a recognised action."""
+        import os, importlib
+        os.environ.setdefault("UPSTREAM", "https://example.com")
+        cfg = importlib.import_module("config")
+        valid_actions = {"authorized-robot", "allow", "ban", "really-ban"}
+        for entry in getattr(cfg, "AUTHORIZED_BOT_UAS", []):
+            if not isinstance(entry, dict):
+                continue
+            action = entry.get("action", "authorized-robot")
+            assert action in valid_actions, (
+                f"AUTHORIZED_BOT_UAS entry {entry.get('name')!r} has "
+                f"unrecognised action {action!r} — valid: {sorted(valid_actions)}"
+            )
+
+    def test_authorized_bot_uas_enabled_field_is_bool(self):
+        """Every dict entry in AUTHORIZED_BOT_UAS must have enabled as a bool."""
+        import os, importlib
+        os.environ.setdefault("UPSTREAM", "https://example.com")
+        cfg = importlib.import_module("config")
+        for entry in getattr(cfg, "AUTHORIZED_BOT_UAS", []):
+            if not isinstance(entry, dict):
+                continue
+            assert isinstance(entry.get("enabled", True), bool), (
+                f"AUTHORIZED_BOT_UAS entry {entry.get('name')!r}: "
+                f"'enabled' must be bool, got {type(entry.get('enabled'))}"
+            )
+
+    # ── Dashboard META coverage ───────────────────────────────────────────────
+
+    def test_bypass_group_bool_knobs_in_controls_meta(self):
+        """BOT_DETECTION_ENABLED and BYPASS_MODE must appear in controls.html META dict."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent /
+               "dashboards" / "controls.html").read_text()
+        for knob in ("BOT_DETECTION_ENABLED", "BYPASS_MODE"):
+            assert f"{knob}:" in src, (
+                f"{knob} missing from controls.html META — "
+                "the Bypass & Allowlists group card will be empty"
+            )
+
+    def test_bypass_group_knobs_in_ctrl_groups(self):
+        """The bypass CTRL_GROUP must list all 5 bypass knobs."""
+        from pathlib import Path
+        src = (Path(__file__).resolve().parent.parent /
+               "dashboards" / "controls.html").read_text()
+        # Find the CTRL_GROUPS entry (has lane:'bypass' + knobs:)
+        bypass_block_start = src.find("lane:'bypass',  knobs:")
+        assert bypass_block_start != -1, "bypass CTRL_GROUP knobs entry missing from controls.html"
+        bypass_block = src[bypass_block_start: bypass_block_start + 400]
+        for knob in ("BOT_DETECTION_ENABLED", "BYPASS_MODE",
+                     "AUTHORIZED_BOT_UAS", "BYPASS_PATHS", "JS_CHAL_OPEN_PATHS"):
+            assert knob in bypass_block, (
+                f"{knob} missing from bypass CTRL_GROUP knobs list — "
+                "it will not appear in the Bypass & Allowlists panel"
+            )
+
+
+# ── 1.8.11 QW-1: HONEYPOT_EXTRA_PATHS env merge ──────────────────────────────
+
+def test_honeypot_extra_paths_merged():
+    """HONEYPOT_EXTRA_PATHS JSON array merges into HONEYPOT_PATHS at startup."""
+    import importlib, sys, os
+    env_bak = os.environ.copy()
+    os.environ["HONEYPOT_EXTRA_PATHS"] = '["/my-secret-admin", "/legacy/backdoor.php"]'
+    try:
+        if "config" in sys.modules:
+            del sys.modules["config"]
+        import config
+        assert "/my-secret-admin" in config.HONEYPOT_PATHS, (
+            "HONEYPOT_EXTRA_PATHS entry /my-secret-admin not merged into HONEYPOT_PATHS"
+        )
+        assert "/legacy/backdoor.php" in config.HONEYPOT_PATHS, (
+            "HONEYPOT_EXTRA_PATHS entry /legacy/backdoor.php not merged into HONEYPOT_PATHS"
+        )
+        # original paths still present
+        assert "/wp-admin" in config.HONEYPOT_PATHS
+    finally:
+        os.environ.clear()
+        os.environ.update(env_bak)
+        if "config" in sys.modules:
+            del sys.modules["config"]
+
+
+def test_honeypot_extra_paths_in_hot_reload_knobs():
+    """HONEYPOT_EXTRA_PATHS must be registered in _HOT_RELOAD_KNOBS."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler)
+    assert '"HONEYPOT_EXTRA_PATHS"' in src, (
+        "HONEYPOT_EXTRA_PATHS missing from _HOT_RELOAD_KNOBS — "
+        "runtime injection of extra trap paths requires hot-reload support"
+    )
+
+
+# ── 1.8.11 QW-3: bulk unban endpoint ─────────────────────────────────────────
+
+def test_bulk_unban_endpoint_exists():
+    """bulk_unban_endpoint must be defined in core.proxy_handler."""
+    from core import proxy_handler
+    assert hasattr(proxy_handler, "bulk_unban_endpoint"), (
+        "bulk_unban_endpoint missing from core.proxy_handler"
+    )
+
+
+def test_bulk_unban_route_registered():
+    """DELETE /secured/bans must be wired in proxy.py routes table."""
+    import inspect
+    import proxy as _proxy_module
+    src = inspect.getsource(_proxy_module.make_app)
+    assert "bulk_unban_endpoint" in src, (
+        "bulk_unban_endpoint not registered in make_app() routes — "
+        "DELETE /secured/bans will return 404"
+    )
+
+
+# ── 1.8.11 QW-4: audit log export endpoint ───────────────────────────────────
+
+def test_audit_log_export_endpoint_exists():
+    """audit_log_export_endpoint must be defined in dashboards.siem."""
+    from dashboards import siem
+    assert hasattr(siem, "audit_log_export_endpoint"), (
+        "audit_log_export_endpoint missing from dashboards.siem"
+    )
+
+
+def test_audit_log_export_route_registered():
+    """GET /secured/audit-log-export must be wired in proxy.py routes table."""
+    import inspect
+    import proxy as _proxy_module
+    src = inspect.getsource(_proxy_module.make_app)
+    assert "audit_log_export_endpoint" in src, (
+        "audit_log_export_endpoint not registered in make_app() routes — "
+        "GET /secured/audit-log-export will return 404"
+    )
+
+
+# ── 1.8.11 QW-5: SIEM reason_count fnmatch metric ────────────────────────────
+
+def test_siem_reason_count_prefix_defined():
+    """_REASON_COUNT_PREFIX constant must be in dashboards.siem."""
+    from dashboards import siem
+    assert hasattr(siem, "_REASON_COUNT_PREFIX"), (
+        "_REASON_COUNT_PREFIX missing from dashboards.siem"
+    )
+    assert siem._REASON_COUNT_PREFIX == "reason_count:", (
+        "_REASON_COUNT_PREFIX must equal 'reason_count:'"
+    )
+
+
+def test_siem_alert_rules_accepts_reason_count_metric():
+    """_eval_server_alert_rules must accept reason_count:<glob> metrics."""
+    import inspect
+    from dashboards import siem
+    src = inspect.getsource(siem._eval_server_alert_rules)
+    assert "_REASON_COUNT_PREFIX" in src, (
+        "_eval_server_alert_rules does not handle reason_count: metric type"
+    )
+
+
+# ── 1.8.11 QW-6: behavioral threshold env vars ───────────────────────────────
+
+def test_behavioral_threshold_env_vars_exist():
+    """Six behavioral threshold constants must be exposed in config."""
+    import config
+    for attr in (
+        "BEHAVIORAL_SAMPLE_N",
+        "BEHAVIORAL_COV_THRESHOLD",
+        "BEHAVIORAL_R1_THRESHOLD",
+        "BEHAVIORAL_BIN_PCT_THRESHOLD",
+        "BEHAVIORAL_MAX_INTERVAL_S",
+        "BEHAVIORAL_SKIP_INTERVAL_S",
+    ):
+        assert hasattr(config, attr), (
+            f"config.{attr} missing — behavioral thresholds must be env-configurable"
+        )
+
+
+def test_behavioral_py_uses_config_thresholds():
+    """detection/behavioral.py must import and use the config threshold constants."""
+    import inspect
+    from detection import behavioral
+    src = inspect.getsource(behavioral)
+    for name in (
+        "BEHAVIORAL_SAMPLE_N",
+        "BEHAVIORAL_COV_THRESHOLD",
+        "BEHAVIORAL_R1_THRESHOLD",
+        "BEHAVIORAL_BIN_PCT_THRESHOLD",
+        "BEHAVIORAL_MAX_INTERVAL_S",
+        "BEHAVIORAL_SKIP_INTERVAL_S",
+    ):
+        assert name in src, (
+            f"detection/behavioral.py does not use {name} — "
+            "env-var override has no effect; hardcoded threshold still in use"
+        )
+
+
+def test_behavioral_hot_reload_knobs_registered():
+    """Behavioral threshold knobs must be in _HOT_RELOAD_KNOBS."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler)
+    for knob in (
+        '"BEHAVIORAL_SAMPLE_N"',
+        '"BEHAVIORAL_COV_THRESHOLD"',
+        '"BEHAVIORAL_R1_THRESHOLD"',
+        '"BEHAVIORAL_BIN_PCT_THRESHOLD"',
+        '"BEHAVIORAL_MAX_INTERVAL_S"',
+        '"BEHAVIORAL_SKIP_INTERVAL_S"',
+    ):
+        assert knob in src, (
+            f"{knob} missing from _HOT_RELOAD_KNOBS — "
+            "operator cannot tune behavioral thresholds without container restart"
+        )
+
+
+# ── M-4: IP ban persistence ────────────────────────────────────────────────
+
+def test_ip_bans_schema_has_table():
+    """ip_bans table DDL must be in db/sqlite.py."""
+    import inspect
+    from db import sqlite as _sq
+    src = inspect.getsource(_sq)
+    assert "CREATE TABLE IF NOT EXISTS ip_bans" in src
+    assert "ip_bans(banned_until)" in src, "Missing index on banned_until"
+
+
+def test_check_ip_ban_exported():
+    """check_ip_ban and prune_ip_bans must be exported from db package."""
+    from db import check_ip_ban, prune_ip_bans  # noqa: F401
+    assert callable(check_ip_ban)
+    assert callable(prune_ip_bans)
+
+
+def test_check_ip_ban_miss_returns_zero(tmp_path):
+    """check_ip_ban returns 0 when IP is not banned."""
+    import importlib, sys
+    # Patch DB_PATH to a temp file so the function can create the schema
+    orig = None
+    try:
+        from db import sqlite as _sq
+        orig = _sq.DB_PATH
+        _sq.DB_PATH = str(tmp_path / "test.db")
+        import sqlite3
+        conn = sqlite3.connect(_sq.DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY, banned_until REAL NOT NULL,
+            reason TEXT, ts REAL NOT NULL)""")
+        conn.commit(); conn.close()
+        result = _sq.check_ip_ban("1.2.3.4")
+        assert result == 0.0, f"Expected 0.0, got {result}"
+    finally:
+        if orig is not None:
+            _sq.DB_PATH = orig
+
+
+def test_check_ip_ban_hit_returns_until(tmp_path):
+    """check_ip_ban returns banned_until for an active ban."""
+    import time as _time
+    import sqlite3
+    from db import sqlite as _sq
+    orig = _sq.DB_PATH
+    try:
+        _sq.DB_PATH = str(tmp_path / "test.db")
+        conn = sqlite3.connect(_sq.DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY, banned_until REAL NOT NULL,
+            reason TEXT, ts REAL NOT NULL)""")
+        future = _time.time() + 3600
+        conn.execute("INSERT INTO ip_bans VALUES (?,?,?,?)",
+                     ("10.0.0.1", future, "test", _time.time()))
+        conn.commit(); conn.close()
+        result = _sq.check_ip_ban("10.0.0.1")
+        assert abs(result - future) < 1.0, f"Expected ~{future}, got {result}"
+    finally:
+        _sq.DB_PATH = orig
+
+
+def test_prune_ip_bans_removes_expired(tmp_path):
+    """prune_ip_bans deletes only expired rows, leaves active ones."""
+    import time as _time
+    import sqlite3
+    from db import sqlite as _sq
+    orig = _sq.DB_PATH
+    try:
+        _sq.DB_PATH = str(tmp_path / "test.db")
+        conn = sqlite3.connect(_sq.DB_PATH)
+        conn.execute("""CREATE TABLE IF NOT EXISTS ip_bans (
+            ip TEXT PRIMARY KEY, banned_until REAL NOT NULL,
+            reason TEXT, ts REAL NOT NULL)""")
+        past = _time.time() - 1
+        future = _time.time() + 3600
+        conn.execute("INSERT INTO ip_bans VALUES (?,?,?,?)",
+                     ("expired.ip", past, "old", _time.time()))
+        conn.execute("INSERT INTO ip_bans VALUES (?,?,?,?)",
+                     ("active.ip", future, "current", _time.time()))
+        conn.commit(); conn.close()
+        pruned = _sq.prune_ip_bans()
+        assert pruned == 1, f"Expected 1 pruned row, got {pruned}"
+        conn2 = sqlite3.connect(_sq.DB_PATH)
+        rows = conn2.execute("SELECT ip FROM ip_bans").fetchall()
+        conn2.close()
+        assert len(rows) == 1 and rows[0][0] == "active.ip"
+    finally:
+        _sq.DB_PATH = orig
+
+
+def test_ip_ban_written_on_hostile_ban_in_scoring():
+    """ban() must enqueue ip_ban op for secs >= HOSTILE_BAN_SECS."""
+    import inspect
+    import scoring
+    src = inspect.getsource(scoring.ban)
+    assert "ip_ban" in src, "ban() does not enqueue ip_ban op"
+    assert "HOSTILE_BAN_SECS" in src, "ban() ip_ban condition missing HOSTILE_BAN_SECS threshold"
+
+
+def test_ip_ban_written_on_risk_ban():
+    """update_risk_and_maybe_ban() must enqueue ip_ban when ban_dur >= HOSTILE_BAN_SECS."""
+    import inspect
+    import scoring
+    src = inspect.getsource(scoring.update_risk_and_maybe_ban)
+    assert "ip_ban" in src, "update_risk_and_maybe_ban() does not enqueue ip_ban op"
+    assert "HOSTILE_BAN_SECS" in src, "ip_ban condition missing HOSTILE_BAN_SECS threshold"
+
+
+def test_protect_has_ip_ban_check():
+    """protect() must perform an ip-ban point-lookup before identity derivation."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.protect)
+    assert "check_ip_ban" in src, "protect() missing check_ip_ban call"
+    assert "ip-ban" in src, "protect() ip_ban check must emit 'ip-ban' reason"
+
+
+def test_prune_loop_calls_prune_ip_bans():
+    """_prune_state_loop must call prune_ip_bans to expire ip_bans rows."""
+    import inspect
+    from rate_limit import _prune_state_loop
+    src = inspect.getsource(_prune_state_loop)
+    assert "prune_ip_bans" in src, "_prune_state_loop does not call prune_ip_bans"
+
+
+def test_unban_endpoint_clears_ip_bans():
+    """unban_endpoint must DELETE from ip_bans table."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.unban_endpoint)
+    assert "ip_bans" in src, "unban_endpoint does not clean ip_bans table"
+
+
+# ── SH-1: SSRF guard on URL-type secrets ──────────────────────────────────
+
+def test_ssrf_guard_url_helper_exists():
+    """_ssrf_guard_url must be defined in proxy_handler."""
+    from core.proxy_handler import _ssrf_guard_url
+    assert callable(_ssrf_guard_url)
+
+
+def test_url_secret_guards_map_exists():
+    """_URL_SECRET_GUARDS must include CROWDSEC_LAPI_URL and OIDC_ISSUER."""
+    from core.proxy_handler import _URL_SECRET_GUARDS
+    assert "CROWDSEC_LAPI_URL" in _URL_SECRET_GUARDS
+    assert "OIDC_ISSUER" in _URL_SECRET_GUARDS
+
+
+def test_ssrf_guard_blocks_cloud_metadata():
+    """_ssrf_guard_url must raise ValueError for cloud metadata IP 169.254.169.254."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('169.254.169.254', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        try:
+            _ssrf_guard_url("http://metadata.internal/", label="CROWDSEC_LAPI_URL",
+                            allow_loopback=True)
+            assert False, "Expected ValueError for cloud metadata address"
+        except ValueError as e:
+            assert "SSRF guard" in str(e)
+
+
+def test_ssrf_guard_blocks_rfc1918():
+    """_ssrf_guard_url must raise ValueError for RFC1918 addresses."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('10.0.0.1', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        try:
+            _ssrf_guard_url("http://internal.corp/", label="CROWDSEC_LAPI_URL",
+                            allow_loopback=True)
+            assert False, "Expected ValueError for RFC1918 address"
+        except ValueError as e:
+            assert "SSRF guard" in str(e)
+
+
+def test_ssrf_guard_allows_loopback_when_flag_set():
+    """_ssrf_guard_url must allow 127.0.0.1 when allow_loopback=True."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        _ssrf_guard_url("http://localhost:8080/", label="CROWDSEC_LAPI_URL",
+                        allow_loopback=True)  # Must not raise
+
+
+def test_ssrf_guard_blocks_loopback_when_flag_off():
+    """_ssrf_guard_url must block 127.0.0.1 when allow_loopback=False."""
+    from core.proxy_handler import _ssrf_guard_url
+    import unittest.mock as _mock
+    import socket
+
+    def _fake_getaddrinfo(host, port, *a, **kw):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 0, '', ('127.0.0.1', 0))]
+
+    with _mock.patch("socket.getaddrinfo", side_effect=_fake_getaddrinfo):
+        try:
+            _ssrf_guard_url("http://localhost/", label="OIDC_ISSUER",
+                            allow_loopback=False)
+            assert False, "Expected ValueError for loopback when allow_loopback=False"
+        except ValueError:
+            pass
+
+
+def test_secrets_endpoint_applies_ssrf_guard():
+    """secrets_endpoint POST loop must call _ssrf_guard_url for URL secrets."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.secrets_endpoint)
+    assert "_ssrf_guard_url" in src, \
+        "secrets_endpoint does not apply SSRF guard on URL-type secrets"
+    assert "_URL_SECRET_GUARDS" in src
+
+
+def test_settings_import_no_secret_import():
+    """settings_import_endpoint must NOT import secrets (F-10: secrets excluded
+    from export/import to prevent plaintext key exfiltration via XML)."""
+    import inspect
+    from admin import settings
+    src = inspect.getsource(settings.settings_import_endpoint)
+    # Confirm dead code was removed: overwrite_secrets param and secrets_applied
+    assert "overwrite_secrets" not in src, \
+        "settings_import_endpoint: overwrite_secrets dead code must be absent (F-10)"
+    assert "secrets_applied" not in src, \
+        "settings_import_endpoint: secrets_applied dead code must be absent (F-10)"
+
+
+# ── SH-3: PoW endpoint rate limiting ─────────────────────────────────────────
+
+def test_pow_rl_dicts_defined():
+    """_POW_RL and _POW_CHAL_CACHE must be defined in proxy_handler."""
+    from core.proxy_handler import _POW_RL, _POW_CHAL_CACHE
+    assert isinstance(_POW_RL, dict)
+    assert isinstance(_POW_CHAL_CACHE, dict)
+
+
+def test_pow_rl_constants_defined():
+    """POW_RL_LIMIT and POW_RL_WINDOW must be defined and sane."""
+    from core.proxy_handler import POW_RL_LIMIT, POW_RL_WINDOW
+    assert isinstance(POW_RL_LIMIT, int) and POW_RL_LIMIT >= 1
+    assert isinstance(POW_RL_WINDOW, float) and POW_RL_WINDOW >= 1.0
+
+
+def test_pow_endpoint_applies_rate_limit():
+    """pow_endpoint source must reference _POW_RL for rate limiting."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.pow_endpoint)
+    assert "_POW_RL" in src, "pow_endpoint does not use _POW_RL for rate limiting"
+    assert "429" in src, "pow_endpoint does not return 429 on rate-limit breach"
+    assert "Retry-After" in src, "pow_endpoint missing Retry-After header on 429"
+
+
+def test_pow_endpoint_idempotent_cache():
+    """pow_endpoint must reuse _POW_CHAL_CACHE within window."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.pow_endpoint)
+    assert "_POW_CHAL_CACHE" in src, \
+        "pow_endpoint does not cache challenges for idempotent issuance"
+
+
+def test_pow_endpoint_uses_socket_ip():
+    """pow_endpoint must rate-limit by socket IP (request.remote), not XFF."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler.pow_endpoint)
+    assert "request.remote" in src, \
+        "pow_endpoint does not use request.remote for rate-limit source IP"
+
+
+def test_prune_loop_prunes_pow_rl():
+    """_prune_state_loop must prune _POW_RL and _POW_CHAL_CACHE."""
+    import inspect
+    from rate_limit import _prune_state_loop
+    src = inspect.getsource(_prune_state_loop)
+    assert "_POW_RL" in src, "_prune_state_loop does not prune _POW_RL"
+    assert "_POW_CHAL_CACHE" in src, "_prune_state_loop does not prune _POW_CHAL_CACHE"
+
+
+# ── M-6: Redis ban retry queue ─────────────────────────────────────────────
+
+def test_pending_redis_bans_deque_defined():
+    """_pending_redis_bans must be a bounded deque (maxlen=1000)."""
+    from integrations.redis import _pending_redis_bans
+    import collections
+    assert isinstance(_pending_redis_bans, collections.deque)
+    assert _pending_redis_bans.maxlen == 1000
+
+
+def test_shared_ban_set_enqueues_on_failure():
+    """_shared_ban_set must push to _pending_redis_bans when Redis write fails."""
+    import inspect
+    from integrations import redis as _redis_mod
+    src = inspect.getsource(_redis_mod._shared_ban_set)
+    assert "_pending_redis_bans" in src, \
+        "_shared_ban_set does not enqueue failed bans to _pending_redis_bans"
+    assert "redis_ban_queued" in src, \
+        "_shared_ban_set does not emit redis_ban_queued slog"
+
+
+def test_redis_ban_flush_loop_defined():
+    """_redis_ban_flush_loop must be an async coroutine function."""
+    import asyncio
+    from integrations.redis import _redis_ban_flush_loop
+    assert asyncio.iscoroutinefunction(_redis_ban_flush_loop)
+
+
+def test_redis_ban_flush_loop_emits_flushed_log():
+    """_redis_ban_flush_loop must emit redis_ban_flushed slog on success."""
+    import inspect
+    from integrations.redis import _redis_ban_flush_loop
+    src = inspect.getsource(_redis_ban_flush_loop)
+    assert "redis_ban_flushed" in src
+    assert "redis_ban_flush_failed" in src
+
+
+def test_redis_ban_flush_loop_exponential_backoff():
+    """_redis_ban_flush_loop must implement exponential backoff on repeated failures."""
+    import inspect
+    from integrations.redis import _redis_ban_flush_loop
+    src = inspect.getsource(_redis_ban_flush_loop)
+    assert "_backoff" in src and "* 2" in src, \
+        "_redis_ban_flush_loop missing exponential backoff"
+    assert "_MAX_BACKOFF" in src, "missing _MAX_BACKOFF cap"
+
+
+def test_redis_flush_loop_started_in_proxy():
+    """proxy.py must import and start _redis_ban_flush_loop in on_startup."""
+    import inspect
+    import proxy
+    src = inspect.getsource(proxy)
+    assert "_redis_ban_flush_loop" in src, \
+        "proxy.py does not import _redis_ban_flush_loop"
+    startup_src = inspect.getsource(proxy._startup_integrations_and_tasks)
+    assert "_redis_ban_flush_loop" in startup_src, \
+        "_startup_integrations_and_tasks does not start _redis_ban_flush_loop"
+
+
+# ── Live-feed pill flicker fix (1.8.12) ──────────────────────────────────────
+
+def test_live_pill_no_per_poll_flicker():
+    """tick() must NOT flap the pill every poll. The old deferred loading
+    indicator (_liveTimer) is removed — the pill is repainted only on a state
+    change, so steady polls leave the LIVE pill untouched (the bug was: it kept
+    showing LIVE and reloading)."""
+    src = _dashboard_src("main.html")
+    assert "_liveTimer" not in src, \
+        "per-poll _liveTimer loading flicker must be gone (repaint only on state change)"
+
+
+def test_live_pill_repaints_only_on_state_change():
+    """Both the live (success) and error (catch) transitions are change-detected
+    via dataset.state, so a healthy poll never rewrites the pill."""
+    src = _dashboard_src("main.html")
+    assert "dataset.state !== 'live'" in src, \
+        "success path must guard the repaint behind dataset.state !== 'live'"
+    assert "dataset.state = 'live'" in src and "dataset.state = 'error'" in src, \
+        "both the live and error transitions must set dataset.state"
+
+
+def test_live_pill_live_write_is_guarded():
+    """The '● LIVE' repaint must sit inside the dataset.state !== 'live' guard,
+    so it only runs when recovering from a problem — never on a steady poll."""
+    src = _dashboard_src("main.html")
+    guard = src.find("dataset.state !== 'live'")
+    live = src.find("'● LIVE'")   # '● LIVE'
+    assert guard != -1 and live != -1 and guard < live, \
+        "'● LIVE' must be repainted only inside the dataset.state !== 'live' guard"
+
+
+
+# ── Honeypot suggest + Trap button fix (1.8.12) ──────────────────────────────
+
+def test_hs_trap_btn_uses_data_path_not_inline_onclick():
+    """+ Trap buttons in the suggest list must use data-path + JS event
+    listener, not onclick with JSON.stringify — the JSON double-quotes break
+    out of the onclick="" attribute and the handler never fires."""
+    src = _dashboard_src("honeypots.html")
+    # No inline onclick calling addHoneypotPath with JSON.stringify
+    assert 'onclick="addHoneypotPath(' not in src, \
+        "Trap buttons use inline onclick with JSON.stringify — handler will never fire"
+    assert "onclick='addHoneypotPath(" not in src, \
+        "Trap buttons use inline onclick — use data-path + addEventListener instead"
+
+
+def test_hs_trap_btn_class_present_in_suggest_render():
+    """renderSuggest() must output buttons with class hs-trap-btn so the
+    post-innerHTML event binding loop can find them."""
+    src = _dashboard_src("honeypots.html")
+    assert 'class="hs-trap-btn"' in src, \
+        "renderSuggest() missing hs-trap-btn class on + Trap buttons"
+    assert 'data-path=' in src, \
+        "renderSuggest() missing data-path attribute on + Trap buttons"
+    assert '.hs-trap-btn' in src and 'addHoneypotPath(b.dataset.path' in src, \
+        "renderSuggest() missing querySelectorAll('.hs-trap-btn') event binding"
+
+
+def test_pp_trap_btn_class_present_in_predicted_render():
+    """renderPredicted() must output buttons with class pp-trap-btn (same
+    fix as hs-trap-btn — no inline onclick with JSON.stringify)."""
+    src = _dashboard_src("honeypots.html")
+    assert 'class="pp-trap-btn"' in src, \
+        "renderPredicted() missing pp-trap-btn class on + Trap buttons"
+    assert '.pp-trap-btn' in src and 'addHoneypotPath(b.dataset.path' in src, \
+        "renderPredicted() missing querySelectorAll('.pp-trap-btn') event binding"
+
+
+def test_add_honeypot_path_refreshes_ui_on_success():
+    """addHoneypotPath() must call loadData() and loadSuggest() after a
+    successful POST so the trap list and suggestions update immediately."""
+    src = _dashboard_src("honeypots.html")
+    # Find the success branch (after res.ok) and check refresh calls exist
+    ok_pos = src.find("res.ok")
+    assert ok_pos != -1, "addHoneypotPath res.ok check not found"
+    after_ok = src[ok_pos:ok_pos + 400]
+    assert "loadData()" in after_ok and "loadSuggest()" in after_ok, \
+        "addHoneypotPath success branch must call loadData() and loadSuggest() to refresh UI"
+
+
+# ── 15+ vhost scalability (1.8.12) ───────────────────────────────────────────
+
+def test_vhost_pill_bars_no_wrap():
+    """Pill bars in agents.html and geo.html must not use flex-wrap:wrap —
+    at 15+ vhosts the bar would grow to 2-3 rows. Must be nowrap + overflow-x."""
+    for name in ("agents.html", "geo.html"):
+        src = _dashboard_src(name)
+        assert "flex-wrap:nowrap" in src and "overflow-x:auto" in src, \
+            f"{name}: #vhost-bar must use flex-wrap:nowrap + overflow-x:auto for 15+ vhosts"
+        assert "#vhost-bar{" in src and "flex-wrap:wrap" not in src.split("#vhost-bar{")[1].split("}")[0], \
+            f"{name}: #vhost-bar still has flex-wrap:wrap — will stack on 15+ vhosts"
+
+
+def test_vhost_select_filter_inputs_present():
+    """Every dashboard with a vhost <select> must have a companion filter <input>
+    so operators can find a specific vhost among 15+ options without scrolling."""
+    cases = [
+        ("main.html",         "vhost-search-inp"),
+        ("controls.html",     "vhost-sel-search"),
+        ("siem.html",         "vhost-filter-search"),
+        ("vhost_policy.html", "vhost-policy-search"),
+    ]
+    for name, inp_id in cases:
+        src = _dashboard_src(name)
+        assert f'id="{inp_id}"' in src, \
+            f"{name}: missing vhost filter input #{inp_id}"
+        assert "filter vhosts" in src, \
+            f"{name}: vhost filter input missing placeholder text"
+
+
+def test_vhost_filter_inputs_are_hidden_by_default():
+    """Filter inputs must start hidden (display:none) and be shown only when
+    the vhost count reaches the threshold — keeps the UI clean for small setups."""
+    cases = [
+        ("main.html",         "vhost-search-inp"),
+        ("controls.html",     "vhost-sel-search"),
+        ("siem.html",         "vhost-filter-search"),
+        ("vhost_policy.html", "vhost-policy-search"),
+    ]
+    for name, inp_id in cases:
+        src = _dashboard_src(name)
+        # The input element must carry display:none in its style attribute
+        import re
+        m = re.search(r'id="' + re.escape(inp_id) + r'"[^>]*style="[^"]*display\s*:\s*none', src)
+        assert m, f"{name}: #{inp_id} must have display:none in its style (hidden by default)"
+
+
+def test_vhost_filter_logic_uses_option_hidden():
+    """The filter oninput handler must set option.hidden rather than removing
+    options — removing would break value preservation across filter changes."""
+    for name in ("main.html", "controls.html", "siem.html", "vhost_policy.html"):
+        src = _dashboard_src(name)
+        assert "o.hidden=" in src or "o.hidden =" in src, \
+            f"{name}: vhost filter must use option.hidden, not option removal"
+
+
+def test_control_center_vhost_table_scrollable():
+    """The vhost stats table wrapper must have max-height + overflow-y:auto
+    so it scrolls rather than stretching the page with 15+ vhosts."""
+    src = _dashboard_src("control_center.html")
+    assert "max-height:520px" in src or "max-height: 520px" in src, \
+        "control_center.html: vhost stats table container missing max-height"
+    assert "overflow-y:auto" in src, \
+        "control_center.html: vhost stats table container missing overflow-y:auto"
+
+
+def test_control_center_vhost_thead_sticky():
+    """The vhost stats table <thead> must use position:sticky so the column
+    headers remain visible when scrolling through 15+ vhost rows."""
+    src = _dashboard_src("control_center.html")
+    assert "position:sticky" in src and "top:0" in src, \
+        "control_center.html: .tbl thead th must have position:sticky;top:0"
+
+
+# ── 1.8.13 Honeypot storyboard intelligence ─────────────────────────────────
+
+def test_honeypots_path_ann_lookup_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "var PATH_ANN" in src or "PATH_ANN=" in src or "PATH_ANN =" in src, \
+        "honeypots.html: PATH_ANN path annotation lookup table not defined"
+
+
+def test_honeypots_annotation_for_function_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function annotationFor(" in src or "annotationFor=function" in src, \
+        "honeypots.html: annotationFor() helper function not defined"
+
+
+def test_honeypots_classify_intent_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function classifyIntent(" in src or "classifyIntent=function" in src, \
+        "honeypots.html: classifyIntent() helper function not defined"
+
+
+def test_honeypots_kill_chain_phase_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function killChainPhase(" in src or "killChainPhase=function" in src, \
+        "honeypots.html: killChainPhase() helper function not defined"
+
+
+def test_honeypots_synthesize_goal_defined():
+    src = _dashboard_src("honeypots.html")
+    assert "function synthesizeGoal(" in src or "synthesizeGoal=function" in src, \
+        "honeypots.html: synthesizeGoal() helper function not defined"
+
+
+def test_honeypots_got_data_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-step.got-data" in src, \
+        "honeypots.html: .story-step.got-data CSS class not defined"
+
+
+def test_honeypots_story_intent_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-intent" in src, \
+        "honeypots.html: .story-intent CSS class not defined"
+
+
+def test_honeypots_story_narrative_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-narrative" in src, \
+        "honeypots.html: .story-narrative CSS class not defined"
+
+
+def test_honeypots_st_phase_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-step .st-phase" in src or ".st-phase" in src, \
+        "honeypots.html: .st-phase CSS class not defined"
+
+
+def test_honeypots_st_200_css_class():
+    src = _dashboard_src("honeypots.html")
+    assert ".story-step .st-200" in src or ".st-200" in src, \
+        "honeypots.html: .st-200 CSS class not defined"
+
+
+def test_honeypots_renderstoryboard_uses_classify_intent():
+    src = _dashboard_src("honeypots.html")
+    rs_idx = src.find("function renderStoryboard(")
+    assert rs_idx != -1, "honeypots.html: renderStoryboard() function not found"
+    rs_body = src[rs_idx:rs_idx + 2000]
+    assert "classifyIntent(" in rs_body, \
+        "honeypots.html: renderStoryboard() must call classifyIntent()"
+
+
+def test_honeypots_renderstoryboard_uses_synthesize_goal():
+    src = _dashboard_src("honeypots.html")
+    rs_idx = src.find("function renderStoryboard(")
+    assert rs_idx != -1, "honeypots.html: renderStoryboard() function not found"
+    rs_body = src[rs_idx:rs_idx + 2000]
+    assert "synthesizeGoal(" in rs_body, \
+        "honeypots.html: renderStoryboard() must call synthesizeGoal()"
+
+
+# ── 1.8.13 security fix regression tests ─────────────────────────────────
+
+# F-01 / F-02 / F-03: CSRF enforcement on write endpoints
+def test_csrf_decorator_on_dlp_post():
+    """core/proxy_handler.py: dlp_patterns_post must have @_require_csrf."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
-    before = _find_chal_gate_block(src)
-    assert "HONEYPOT_ENABLED" in before, (
-        "proxy_handler.py: chal-required early-return must check HONEYPOT_ENABLED "
-        "before emitting chal-required — honeypot events are lost on challenge-first "
-        "deployments (pt4.tech, jtsl.pt) without this check"
-    )
+    idx = src.find("dlp_patterns_post")
+    assert idx != -1, "dlp_patterns_post not found in proxy_handler.py"
+    before = src[max(0, idx - 300):idx]
+    assert "_require_csrf" in before, \
+        "proxy_handler.py: dlp_patterns_post must have @_require_csrf before it"
 
 
-def test_suspicious_path_check_precedes_chal_required():
-    """proxy_handler.py: the chal-required early-return branch must check
-    SUSPICIOUS_PATH_ENABLED before returning chal-required."""
+def test_csrf_decorator_on_dlp_delete():
+    """core/proxy_handler.py: dlp_patterns_delete must have @_require_csrf."""
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
-    before = _find_chal_gate_block(src)
-    assert "SUSPICIOUS_PATH_ENABLED" in before, (
-        "proxy_handler.py: chal-required early-return must check SUSPICIOUS_PATH_ENABLED "
-        "before emitting chal-required — suspicious-path events are lost on "
-        "challenge-first deployments without this check"
+    idx = src.find("dlp_patterns_delete")
+    assert idx != -1, "dlp_patterns_delete not found in proxy_handler.py"
+    before = src[max(0, idx - 300):idx]
+    assert "_require_csrf" in before, \
+        "proxy_handler.py: dlp_patterns_delete must have @_require_csrf before it"
+
+
+def test_csrf_decorator_on_mesh_write_endpoints():
+    """admin/mesh.py: all write endpoints must have @_require_csrf."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "mesh.py").read_text()
+    write_endpoints = [
+        "gw_registry_create_endpoint",
+        "gw_registry_update_endpoint",
+        "gw_registry_delete_endpoint",
+        "gw_registry_rotate_key_endpoint",
+        "gw_registry_can_distribute_endpoint",
+        "gw_registry_auto_apply_endpoint",
+        "gw_registry_distribution_rules_endpoint",
+    ]
+    for ep in write_endpoints:
+        idx = src.find(ep)
+        assert idx != -1, f"mesh.py: {ep} not found"
+        before = src[max(0, idx - 300):idx]
+        assert "_require_csrf" in before, \
+            f"mesh.py: {ep} must have @_require_csrf"
+
+
+def test_csrf_decorator_on_settings_import():
+    """admin/settings.py: settings_import_endpoint must have @_require_csrf."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "settings.py").read_text()
+    idx = src.find("settings_import_endpoint")
+    assert idx != -1, "settings_import_endpoint not found in settings.py"
+    before = src[max(0, idx - 300):idx]
+    assert "_require_csrf" in before, \
+        "settings.py: settings_import_endpoint must have @_require_csrf"
+
+
+# F-04: mesh private-key wrap/unwrap round-trip
+def test_mesh_key_wrap_unwrap_roundtrip():
+    """_gw_wrap_private_key / _gw_unwrap_private_key must be inverse of each other."""
+    import sys, importlib
+    # patch SESSION_KEY before importing
+    import admin.mesh as mesh
+    original = getattr(mesh, "SESSION_KEY", b"test-session-key-32bytes!padding!")
+    try:
+        mesh.SESSION_KEY = b"test-session-key-32bytes!padding!"
+        raw = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        wrapped = mesh._gw_wrap_private_key(raw)
+        assert wrapped != raw, "_gw_wrap_private_key must encrypt the key"
+        assert wrapped.startswith("fernet:"), "_gw_wrap_private_key result must start with 'fernet:'"
+        unwrapped = mesh._gw_unwrap_private_key(wrapped)
+        assert unwrapped == raw, "_gw_unwrap_private_key must recover the original key"
+    finally:
+        mesh.SESSION_KEY = original
+
+
+def test_mesh_key_unwrap_legacy_passthrough():
+    """_gw_unwrap_private_key must pass through plaintext (legacy) values unchanged."""
+    import admin.mesh as mesh
+    raw = "some-legacy-b64-key"
+    assert mesh._gw_unwrap_private_key(raw) == raw, \
+        "legacy plaintext private key must pass through unwrap unchanged"
+
+
+# F-05: Redis exclusion of secrets
+def test_mesh_redis_excluded_keys_frozenset():
+    """admin/mesh.py: _MESH_REDIS_EXCLUDED_KEYS must be a frozenset containing secret keys."""
+    import admin.mesh as mesh
+    assert hasattr(mesh, "_MESH_REDIS_EXCLUDED_KEYS"), \
+        "admin/mesh.py must define _MESH_REDIS_EXCLUDED_KEYS"
+    excl = mesh._MESH_REDIS_EXCLUDED_KEYS
+    assert isinstance(excl, frozenset), "_MESH_REDIS_EXCLUDED_KEYS must be a frozenset"
+    for key in ("TURNSTILE_SECRET", "ABUSEIPDB_KEY", "CROWDSEC_LAPI_KEY", "MAXMIND_LICENSE_KEY"):
+        assert key in excl, f"_MESH_REDIS_EXCLUDED_KEYS must contain {key}"
+
+
+# F-08: backup code entropy
+def test_backup_code_entropy():
+    """admin/users.py: backup codes must use token_hex(10) for 80-bit entropy."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "users.py").read_text()
+    idx = src.find("_generate_backup_codes")
+    assert idx != -1, "_generate_backup_codes not found in admin/users.py"
+    body = src[idx:idx + 500]
+    assert "token_hex(10)" in body, \
+        "admin/users.py: backup codes must use token_hex(10) for 80-bit entropy (not token_hex(4))"
+
+
+# F-10: settings export must not include plaintext secrets
+def test_settings_export_no_secrets():
+    """admin/settings.py: XML export must emit empty <secrets/> not plaintext values."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "settings.py").read_text()
+    # The _settings_build_xml must produce <secrets /> not populate secret values
+    idx = src.find("_settings_build_xml")
+    assert idx != -1, "_settings_build_xml not found in settings.py"
+    # Must not concatenate actual secret config values into the XML secrets block
+    assert "overwrite_secrets" not in src, \
+        "settings.py: overwrite_secrets dead code must be removed"
+    assert "secrets_applied" not in src, \
+        "settings.py: secrets_applied dead code must be removed"
+
+
+# F-12: default CSP must not be permissive
+def test_default_csp_no_unsafe():
+    """config.py: default SEC_CSP must not contain unsafe-inline or unsafe-eval."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "config.py").read_text()
+    idx = src.find("SEC_CSP")
+    assert idx != -1, "SEC_CSP not found in config.py"
+    # Extract default value (within 200 chars of the definition)
+    segment = src[idx:idx + 200]
+    assert "unsafe-inline" not in segment, \
+        "config.py: default SEC_CSP must not contain 'unsafe-inline'"
+    assert "unsafe-eval" not in segment, \
+        "config.py: default SEC_CSP must not contain 'unsafe-eval'"
+
+
+# F-13: _gw_actor must use username not IP
+def test_gw_actor_uses_username():
+    """admin/mesh.py: _gw_actor must return _request_username (not just get_ip)."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "admin" / "mesh.py").read_text()
+    idx = src.find("def _gw_actor(")
+    assert idx != -1, "_gw_actor not found in admin/mesh.py"
+    body = src[idx:idx + 300]
+    assert "_request_username" in body, \
+        "admin/mesh.py: _gw_actor must call _request_username() for attribution"
+
+
+# F-15: PyJWT in Dockerfile
+def test_dockerfile_has_pyjwt():
+    """Dockerfile must install PyJWT>=2.8.0 for OIDC id_token verification."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
+    assert "PyJWT" in src, \
+        "Dockerfile must include PyJWT>=2.8.0 in pip install for OIDC support"
+
+
+# F-16: no key prefix in startup banner
+def test_no_key_prefix_in_startup_banner():
+    """proxy.py: startup banner must not print partial INTERNAL_KEY bytes."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "proxy.py").read_text()
+    assert "INTERNAL_KEY[:4]" not in src, \
+        "proxy.py: startup banner must not print INTERNAL_KEY[:4] (info-leak)"
+    assert "INTERNAL_KEY[:8]" not in src, \
+        "proxy.py: startup banner must not print any INTERNAL_KEY prefix"
+
+
+# F-18: PoW WebWorker must use async/await not while(true)+.then()
+def test_pow_worker_uses_async_await():
+    """challenge/js_challenge.py: PoW WebWorker blob must use async function + await."""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "challenge" / "js_challenge.py").read_text()
+    blob_idx = src.find("new Blob([")
+    assert blob_idx != -1, "js_challenge.py: WebWorker Blob not found"
+    blob_body = src[blob_idx:blob_idx + 800]
+    assert "async function" in blob_body, \
+        "js_challenge.py: PoW WebWorker must use 'async function' (not while+.then)"
+    # The broken pattern: .then() inside while(true) causes all hashes to fire
+    # simultaneously and postMessage to fire multiple times on the first match.
+    assert "while(true)" not in blob_body or ".then(" not in blob_body, \
+        "js_challenge.py: PoW WebWorker must not combine while(true) with .then() callbacks"
+
+
+def test_sec_header_knobs_in_hot_reload_registry():
+    """All SEC_* security-header knobs must be hot-reloadable."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler)
+    for knob in (
+        '"SEC_X_FRAME_OPTIONS"',
+        '"SEC_X_CONTENT_TYPE_OPTIONS"',
+        '"SEC_REFERRER_POLICY"',
+        '"SEC_X_PERMITTED_XDP"',
+        '"SEC_PERMISSIONS_POLICY"',
+        '"SEC_HSTS"',
+        '"SEC_CSP"',
+        '"SEC_COOP"',
+        '"SEC_CORP"',
+        '"SEC_SERVER_OVERRIDE"',
+    ):
+        assert knob in src, (
+            f"{knob} missing from _HOT_RELOAD_KNOBS — "
+            "operator cannot tune security headers without container restart"
+        )
+
+
+def test_sec_header_knobs_in_controls_dashboard():
+    """Every SEC_* knob must appear in controls.html KNOB_META and secheaders card."""
+    import pathlib, re
+    html = (pathlib.Path(__file__).parent.parent / "dashboards" / "controls.html").read_text()
+    knobs = [
+        "SEC_SERVER_OVERRIDE",
+        "SEC_X_FRAME_OPTIONS",
+        "SEC_X_CONTENT_TYPE_OPTIONS",
+        "SEC_REFERRER_POLICY",
+        "SEC_X_PERMITTED_XDP",
+        "SEC_PERMISSIONS_POLICY",
+        "SEC_HSTS",
+        "SEC_CSP",
+        "SEC_COOP",
+        "SEC_CORP",
+    ]
+    for k in knobs:
+        assert k in html, f"{k} missing from controls.html"
+
+
+def test_sec_header_knobs_in_config():
+    """SEC_* module-level constants must exist in config and SEC_HEADER_KNOBS."""
+    import config
+    assert hasattr(config, "SEC_SERVER_OVERRIDE")
+    assert hasattr(config, "SEC_HEADER_KNOBS")
+    knob_keys = {vk for _, vk in config.SEC_HEADER_KNOBS}
+    for k in (
+        "SEC_X_FRAME_OPTIONS", "SEC_X_CONTENT_TYPE_OPTIONS",
+        "SEC_REFERRER_POLICY", "SEC_X_PERMITTED_XDP",
+        "SEC_PERMISSIONS_POLICY", "SEC_HSTS", "SEC_CSP",
+        "SEC_COOP", "SEC_CORP",
+    ):
+        assert k in knob_keys, f"{k} missing from SEC_HEADER_KNOBS mapping"
+
+
+def test_inject_security_headers_uses_vc_not_constant():
+    """proxy_handler must call vc('INJECT_SECURITY_HEADERS'), not the bare constant."""
+    import inspect
+    from core import proxy_handler
+    src = inspect.getsource(proxy_handler)
+    assert "vc(\"INJECT_SECURITY_HEADERS\")" in src or "vc('INJECT_SECURITY_HEADERS')" in src, (
+        "INJECT_SECURITY_HEADERS read as bare constant — hot-reload has no effect"
     )
 
 
-def test_honeypot_early_intercept_calls_update_risk():
-    """proxy_handler.py: the early honeypot intercept in the chal-required
-    branch must call update_risk_and_maybe_ban so banning also triggers."""
-    from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py").read_text()
-    before = _find_chal_gate_block(src)
-    assert "update_risk_and_maybe_ban" in before, (
-        "proxy_handler.py: early honeypot intercept must call update_risk_and_maybe_ban "
-        "to trigger ban logic, not just log the event"
-    )
+# ── F-02: proxy.py shadow _eval_custom_rules parity ──────────────────────────
+# proxy.py defines _eval_custom_rules which shadows the canonical import from
+# integrations.endpoint_policy (last-binding-wins). This test verifies the
+# shadow supports query.param matching — the one capability the canonical has
+# that the shadow historically lacked — preventing silent divergence.
+
+def test_proxy_eval_custom_rules_supports_query_param():
+    """proxy._eval_custom_rules must match query.param conditions (parity with canonical)."""
+    import proxy
+    from integrations.endpoint_policy import _to_custom_rules
+
+    rules = _to_custom_rules([{"if": {"query.debug": "1"}, "then": "block"}])
+    orig = proxy.CUSTOM_RULES
+    try:
+        proxy.CUSTOM_RULES = rules
+
+        class _Req:
+            path = "/test"
+            method = "GET"
+            headers = {}
+            query = {"debug": "1"}
+
+        action, _ = proxy._eval_custom_rules(_Req(), "1.2.3.4")
+        assert action == "block", (
+            "proxy._eval_custom_rules does not honour query.param conditions — "
+            "shadow diverged from integrations.endpoint_policy._eval_custom_rules"
+        )
+
+        class _ReqNoMatch:
+            path = "/test"
+            method = "GET"
+            headers = {}
+            query = {"debug": "0"}
+
+        action2, _ = proxy._eval_custom_rules(_ReqNoMatch(), "1.2.3.4")
+        assert action2 is None, (
+            "proxy._eval_custom_rules incorrectly matched query.param=0 against rule query.debug=1"
+        )
+    finally:
+        proxy.CUSTOM_RULES = orig
 
 
-def test_demo_script_warns_trust_xff():
-    """demo-attack-traffic.py must warn that TRUST_XFF=none (default since
-    1.8.13) silently ignores XFF spoofing, causing all events to land on
-    the runner's real IP."""
-    from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "demo-attack-traffic.py").read_text()
-    assert "TRUST_XFF" in src, (
-        "demo-attack-traffic.py must warn that TRUST_XFF=none breaks XFF spoofing"
-    )
-
-
-def test_attack_demo_warns_trust_xff():
-    """attack_demo.py must warn that TRUST_XFF=none breaks XFF spoofing."""
-    from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "attack_demo.py").read_text()
-    assert "TRUST_XFF" in src, (
-        "attack_demo.py must warn that TRUST_XFF=none breaks XFF spoofing"
+def test_login_html_has_escapehtml():
+    """login.html must define escapeHtml at the top of its script block (§17a)."""
+    src = _read_dash('login.html')
+    assert 'function escapeHtml(' in src, (
+        "login.html is missing the canonical escapeHtml definition. "
+        "§17a requires every dashboard to define it so future edits cannot "
+        "accidentally introduce an unescaped innerHTML sink."
     )

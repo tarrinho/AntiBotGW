@@ -1,8 +1,8 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/siem.py — SIEM Security Event Center (1.8.4)
 from collections import defaultdict
 from config import *   # noqa: F401,F403
+from db import open_conn
+from db.sqlite import inject_theme  # noqa: F401 — 1.9.6 per-dashboard theme bake
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
@@ -80,6 +80,239 @@ def _threat_cat(reason: str) -> str:
     return _CAT_MAP.get(reason, "Other")
 
 
+# ── Alert rule constants ──────────────────────────────────────────────────────
+_ALERT_COOLDOWN_S = 300
+_VALID_METRICS = frozenset({"block_pct", "blocked", "bans", "threat_index", "crit_count", "high_count"})
+# 1.8.11 QW-5 — metric names starting with "reason_count:" carry a glob
+# suffix (e.g. "reason_count:ua-ai-*") that is matched against event reasons
+# in the evaluation window.
+_REASON_COUNT_PREFIX = "reason_count:"
+_VALID_OPS     = frozenset({">", ">=", "<", "<="})
+
+# ── Server-side rules in-memory cache ────────────────────────────────────────
+_rules_cache: list = []
+_rules_cache_ts: float = 0.0
+_RULES_CACHE_TTL = 30.0
+
+
+def _get_cached_rules() -> list:
+    global _rules_cache, _rules_cache_ts
+    if now() - _rules_cache_ts > _RULES_CACHE_TTL:
+        try:
+            import sqlite3 as _sqlite3
+            conn = open_conn()
+            conn.row_factory = _sqlite3.Row
+            rows = conn.execute(
+                "SELECT id, metric, op, threshold, label, "
+                "last_fired_ts, cooldown_s "
+                "FROM siem_alert_rules WHERE enabled = 1"
+            ).fetchall()
+            conn.close()
+            _rules_cache = [{k: row[k] for k in row.keys()} for row in rows]
+            _rules_cache_ts = now()
+        except Exception:
+            pass
+    return _rules_cache
+
+
+async def _eval_server_alert_rules(
+        stats: dict, threat_index: int, crit_n: int, high_n: int,
+        reason_counts: dict | None = None) -> list:
+    """Evaluate enabled DB rules; fire webhooks + persist fire records on trigger.
+    Returns list of currently-firing rule dicts for the UI.
+
+    reason_counts: optional pre-computed {reason: count} dict for this window.
+    When provided, rules with metric="reason_count:<glob>" are also evaluated.
+    """
+    import fnmatch as _fnm
+    rules = _get_cached_rules()
+    if not rules:
+        return []
+
+    now_ts = now()
+    metric_vals = {
+        "block_pct":    (stats["blocked"] / stats["total"] * 100)
+                        if stats.get("total", 0) > 0 else 0.0,
+        "blocked":      float(stats.get("blocked", 0)),
+        "bans":         float(stats.get("bans", 0)),
+        "threat_index": float(threat_index),
+        "crit_count":   float(crit_n),
+        "high_count":   float(high_n),
+    }
+
+    # 1.8.11 QW-5 — pre-compute reason_count:<glob> values on demand
+    def _reason_count_for_glob(glob: str) -> float:
+        if not reason_counts:
+            return 0.0
+        return float(sum(
+            cnt for rsn, cnt in reason_counts.items()
+            if _fnm.fnmatch(rsn, glob)
+        ))
+
+    firing: list = []
+    for rule in rules:
+        op  = rule["op"]
+        metric = rule["metric"]
+        if metric.startswith(_REASON_COUNT_PREFIX):
+            glob = metric[len(_REASON_COUNT_PREFIX):]
+            val = _reason_count_for_glob(glob)
+        else:
+            val = metric_vals.get(metric, 0.0)
+        thr = float(rule["threshold"])
+        triggered = (
+            (op == ">"  and val > thr) or
+            (op == ">=" and val >= thr) or
+            (op == "<"  and val < thr) or
+            (op == "<=" and val <= thr)
+        )
+        if triggered:
+            firing.append({
+                "id":        rule["id"],
+                "label":     rule["label"],
+                "metric":    rule["metric"],
+                "op":        op,
+                "threshold": thr,
+                "value":     round(val, 2),
+            })
+            last = float(rule.get("last_fired_ts") or 0)
+            cooldown = int(rule.get("cooldown_s") or _ALERT_COOLDOWN_S)
+            if now_ts - last >= cooldown:
+                try:
+                    db_queue.put_nowait(("siem_alert_fired", (rule["id"], now_ts, val)))
+                except Exception:
+                    pass
+                global _rules_cache_ts
+                _rules_cache_ts = 0.0
+                try:
+                    from integrations.webhook import _post_webhook  # noqa: PLC0415
+                    asyncio.ensure_future(_post_webhook({
+                        "event":      "siem_alert",
+                        "rule_id":    rule["id"],
+                        "rule_label": rule["label"],
+                        "metric":     rule["metric"],
+                        "op":         op,
+                        "threshold":  thr,
+                        "value":      val,
+                        "ts":         now_ts,
+                    }))
+                except Exception:
+                    pass
+    return firing
+
+
+# ── 1.8.11 QW-4 — Audit log export ───────────────────────────────────────────
+async def audit_log_export_endpoint(request: web.Request) -> web.Response:
+    """GET /…/audit-log-export — stream audit_events rows as CSV or JSON."""
+    import sqlite3 as _sqlite3
+    import json as _json
+    import csv as _csv
+    import io as _io
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    now_ts = now()
+    try:
+        start = float(request.query.get("start", now_ts - 86400))
+        if not (start == start) or start in (float("inf"), float("-inf")):
+            start = now_ts - 86400
+    except (ValueError, TypeError):
+        start = now_ts - 86400
+    try:
+        end = float(request.query.get("end", now_ts))
+        if not (end == end) or end in (float("inf"), float("-inf")):
+            end = now_ts
+    except (ValueError, TypeError):
+        end = now_ts
+    try:
+        limit = max(1, min(50000, int(request.query.get("limit", "5000"))))
+    except (ValueError, TypeError):
+        limit = 5000
+    fmt          = request.query.get("format", "csv").strip().lower()
+    event_filter = request.query.get("event_type", "").strip()
+    actor_filter = request.query.get("actor", "").strip()
+
+    where_clauses = ["ts >= ?", "ts <= ?"]
+    params: list = [start, end]
+    if event_filter:
+        where_clauses.append("event_type = ?")
+        params.append(event_filter)
+    if actor_filter:
+        where_clauses.append("actor = ?")
+        params.append(actor_filter)
+    params.append(limit)
+
+    try:
+        conn = open_conn()
+        conn.row_factory = _sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, ts, event_type, actor, target, ip, detail, session_id, severity "  # nosec B608
+            f"FROM audit_events WHERE {' AND '.join(where_clauses)} "
+            "ORDER BY ts DESC LIMIT ?",
+            params,
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        return web.json_response({"error": str(e)[:200]}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+
+    if fmt == "json":
+        data = [
+            {k: row[k] for k in ("id", "ts", "event_type", "actor", "target",
+                                  "ip", "detail", "session_id", "severity")}
+            for row in rows
+        ]
+        return web.Response(
+            body=_json.dumps({"rows": data, "count": len(data)},
+                              separators=(",", ":"), default=str).encode(),
+            content_type="application/json",
+            headers={
+                "Content-Disposition": f'attachment; filename="audit-export-{int(now_ts)}.json"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    # CSV-injection (R4) fix — prefix any cell starting with a formula
+    # char (= + - @ \t \r) with a single-quote so spreadsheet apps render
+    # it as text instead of evaluating. Attacker writes to audit_events
+    # via authenticated routes; without this guard, opening the export
+    # in Excel/LibreOffice could fire `=HYPERLINK(...)` etc.
+    def _csv_safe(v):
+        if v is None:
+            return ""
+        s = str(v)
+        if s and s[0] in ("=", "+", "-", "@", "\t", "\r"):
+            return "'" + s
+        return s
+
+    buf = _io.StringIO()
+    writer = _csv.writer(buf)
+    writer.writerow(["id", "ts", "event_type", "actor", "target", "ip",
+                     "detail", "session_id", "severity"])
+    for row in rows:
+        # All non-int fields go through _csv_safe() above — formula-
+        # prefix chars get a single-quote prepended, the documented
+        # mitigation for CSV-injection. The id+ts integers are not
+        # operator-controlled.
+        writer.writerow([  # nosemgrep: python.django.security.injection.csv-writer-injection.csv-writer-injection
+            row["id"], row["ts"],
+            _csv_safe(row["event_type"]),
+            _csv_safe(row["actor"]),
+            _csv_safe(row["target"]),
+            _csv_safe(row["ip"]),
+            _csv_safe(row["detail"]),
+            _csv_safe(row["session_id"]),
+            _csv_safe(row["severity"]),
+        ])
+    return web.Response(
+        body=buf.getvalue().encode("utf-8"),
+        content_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="audit-export-{int(now_ts)}.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
 # ── Endpoint: SIEM JSON data ──────────────────────────────────────────────────
 async def siem_data_endpoint(request: web.Request) -> web.Response:
     """GET /antibot-appsec-gateway/secured/siem-data
@@ -99,8 +332,8 @@ async def siem_data_endpoint(request: web.Request) -> web.Response:
     # ── Filter events from deque ─────────────────────────────────────────────
     async with state_lock:
         raw_events = list(events)  # snapshot under lock
-        ip_snap    = {k: v for k, v in ip_state.items()}  # shallow copy
-        tl_snap    = {k: v for k, v in timeline.items()}
+        ip_snap    = dict(ip_state)   # single-op shallow copy: smallest race
+        tl_snap    = dict(timeline)   # window vs the rehydrate worker thread
 
     filtered: list[dict] = []
     for ev in raw_events:
@@ -314,7 +547,7 @@ SIEM_DASHBOARD_HTML = (_DASHBOARDS_DIR / "siem.html").read_text(encoding="utf-8"
 async def siem_dashboard_endpoint(request: web.Request) -> web.Response:
     """Serve the SIEM Security Event Center dashboard."""
     return web.Response(
-        text=SIEM_DASHBOARD_HTML,
+        text=inject_theme(SIEM_DASHBOARD_HTML, DB_PATH),  # 1.9.6 — honour saved theme
         content_type="text/html",
         headers={
             "Cache-Control":        "no-store",

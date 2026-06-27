@@ -8,26 +8,61 @@
 
 # Helper scripts and local secrets — never committed
 copy-to-github.sh
+publish.sh
+tag-versions.sh
 .env
+
+# publish.sh writes this on successful push (rules.md §13c freshness marker).
+# Contains repo HEADs + remote URLs — keep local only.
+.last-publish.json
+
+# GeoLite2 DBs — size + MaxMind licensing; provided at runtime, never committed
+_seed/
 
 # ── Runtime state (live container DB + secrets) ─────────────────────────
 antibot.db
 antibot.db-shm
 antibot.db-wal
+gw.db
+gw.db-shm
+gw.db-wal
+gw.sqlite
 .admin_key
 .session_key
 .pow_key
 .admin_key.stale-*
 .session_key.stale-*
+mutants/.admin_key
+mutants/.session_key
+mutants/.pow_key
 
 # ── Python cruft ────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.mutmut-cache
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 .coverage
 htmlcov/
+
+# ── Non-published local/dev artifacts (never sent to repos) ───────────────
+attack_demo.py
+demo-attack-traffic.py
+fix_theme_*.py
+analysis.result.md
+GW-Tests-Full.md
+*.db
+*.sqlite
+*.sqlite3
+sbom/*.json
+report.html
+report.pdf
+report-*.html
+manual/*report*
+manual/*.pdf
 
 # ── OS / editor ─────────────────────────────────────────────────────────
 .DS_Store
@@ -43,7 +78,12 @@ Thumbs.db
 dist/
 build/
 
-.env
-.DS_Store
-_seed/*.mmdb
-copy-to-github.sh
+# ── Build/test logs, backups, runtime dirs, generated trees (never committed) ──
+*.log
+.claude/
+Users/
+*.orig
+mutants/
+*.mmdb
+data/
+gwdata/

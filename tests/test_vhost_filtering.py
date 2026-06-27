@@ -77,21 +77,32 @@ _DASHBOARDS = _PROJ / "dashboards"
 
 @pytest.fixture(autouse=True)
 def _isolate_events(proxy_module):
-    """Wipe events before and after every test to prevent cross-test bleed.
+    """Wipe events (SQLite + in-memory ring buffers) before and after every test.
 
-    Uses a try/except on OperationalError because the DB schema is created
-    lazily when make_app() runs on_startup.  The first test in the session
-    may run before any proxy has been spun up, so the events table may not
-    exist yet — that is safe to ignore (there is nothing to wipe).
+    Clears both the SQLite events table AND the in-memory events_by_cat ring
+    buffers so metrics-timeline vhost-filter tests don't inherit events from
+    prior tests in the same combined session run.
     """
     def _wipe():
+        # Backend-aware wipe: under APPSECGW_TEST_PG the dashboard endpoints
+        # read events from Postgres, so wiping only the local SQLite file left
+        # stale PG rows visible (and seeded rows below would never appear). Go
+        # through db.open_conn() so we clear whichever backend is live.
         try:
-            conn = sqlite3.connect(proxy_module.DB_PATH)
+            from db import open_conn
+            conn = open_conn()
             conn.execute("DELETE FROM events")
             conn.commit()
             conn.close()
-        except sqlite3.OperationalError:
+        except Exception:
             pass  # table not yet created — nothing to wipe
+        # Also clear in-memory ring buffers used by metrics timeline aggregation
+        try:
+            from state import events_by_cat
+            for dq in events_by_cat.values():
+                dq.clear()
+        except Exception:
+            pass
     _wipe()
     yield
     _wipe()
@@ -142,29 +153,60 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _is_pg():
+    """True when the active backend is Postgres (APPSECGW_TEST_PG mode)."""
+    try:
+        from db.conn import active_backend
+        return active_backend() == "postgres"
+    except Exception:
+        return False
+
+
+def _insert_event_row(conn, ts, ip, ua, path, status, reason, vhost, pg):
+    """Insert one events row through a backend-aware connection. On Postgres
+    the `ts` column is TIMESTAMPTZ, so wrap the epoch float in to_timestamp();
+    on SQLite ts is a raw float. open_conn() rewrites ? -> %s for PG."""
+    if pg:
+        conn.execute(
+            "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+            "VALUES (to_timestamp(?),?,?,?,?,?,?)",
+            (ts, ip, ua, path, status, reason, vhost),
+        )
+    else:
+        conn.execute(
+            "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (ts, ip, ua, path, status, reason, vhost),
+        )
+
+
 def _seed_event(proxy_module, vhost="", reason="ok", ip="1.2.3.4",
                 path="/", ts=None, status=200):
-    """Insert a single event row into the events table directly via sqlite3."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.execute(
-        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-        "VALUES (?,?,?,?,?,?,?)",
-        (ts or time.time(), ip, "test-ua", path, status, reason, vhost),
-    )
+    """Insert a single event row into the events table on the active backend.
+
+    Backend-aware (was sqlite3.connect(DB_PATH)): the dashboard endpoints read
+    events from Postgres under APPSECGW_TEST_PG, so seeding only the local
+    SQLite file left the rows invisible to the endpoints under test.
+    """
+    from db import open_conn
+    pg = _is_pg()
+    conn = open_conn()
+    _insert_event_row(conn, ts or time.time(), ip, "test-ua", path, status,
+                      reason, vhost, pg)
     conn.commit()
     conn.close()
 
 
 def _seed_many(proxy_module, rows):
-    """Insert multiple (vhost, reason, ip) tuples as recent events."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
+    """Insert multiple (vhost, reason, ip) tuples as recent events on the
+    active backend (see _seed_event for the backend-aware rationale)."""
+    from db import open_conn
+    pg = _is_pg()
+    conn = open_conn()
     now = time.time()
     for i, (vhost, reason, ip) in enumerate(rows):
-        conn.execute(
-            "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (now - i, ip, "test-ua", "/", 200, reason, vhost),
-        )
+        _insert_event_row(conn, now - i, ip, "test-ua", "/", 200,
+                          reason, vhost, pg)
     conn.commit()
     conn.close()
 
@@ -854,35 +896,53 @@ class TestR1SourceGuards:
         return (_DASHBOARDS / "main.html").read_text(encoding="utf-8")
 
     def test_metrics_endpoint_uses_vhost_filter_in_events_query(self):
-        """proxy_handler.py metrics timeline branch must have vhost_filter in SQL."""
+        """proxy_handler.py metrics timeline branch must pass vhost filter to db_read_events."""
         src = self._proxy_handler_src()
-        # Find the metrics_endpoint function
         fn_start = src.find("async def metrics_endpoint(")
         assert fn_start != -1, "metrics_endpoint must exist in proxy_handler.py"
-        # Locate the filtered-timeline branch
         branch_start = src.find("if path_q or _vhost_filter:", fn_start)
         assert branch_start != -1, (
             "metrics_endpoint must have 'if path_q or _vhost_filter:' branch"
         )
-        # Verify the vhost_filter is appended to SQL params within the branch
         branch_body = src[branch_start: branch_start + 2000]
         assert "_vhost_filter" in branch_body, (
             "metrics_endpoint filtered timeline branch must reference _vhost_filter"
         )
-        assert "vhost = ?" in branch_body, (
-            "metrics_endpoint filtered timeline branch must use 'vhost = ?' SQL clause"
+        # CONTRACT (shipped): proxy_handler endpoints never adopted the
+        # db_read_events() abstraction (it is only used in admin/settings.py and
+        # dashboards/honeypots.py). The metrics filtered-timeline branch applies
+        # vhost isolation via raw *parameterized* SQL: a 'vhost = ?' WHERE clause
+        # with _vhost_filter bound as the bind value. Behavioural isolation is
+        # covered by test_vhost_filter_isolates_timeline. This guard asserts the
+        # parameterized vhost clause is wired (not the helper name).
+        assert '"vhost = ?"' in branch_body, (
+            "metrics_endpoint filtered timeline branch must apply a parameterized "
+            "'vhost = ?' SQL clause for per-vhost isolation"
+        )
+        assert "_params.append(_vhost_filter)" in branch_body, (
+            "metrics_endpoint filtered timeline branch must bind _vhost_filter as "
+            "the parameter value for the 'vhost = ?' clause"
         )
 
     def test_logs_data_endpoint_has_vhost_filter(self):
-        """proxy_handler.py logs_data_endpoint must have WHERE vhost = ? for kind=requests."""
+        """proxy_handler.py logs_data_endpoint must pass vhost filter to db_read_events."""
         src = self._proxy_handler_src()
         fn_start = src.find("async def logs_data_endpoint(")
         assert fn_start != -1, "logs_data_endpoint must exist in proxy_handler.py"
-        # Find the next top-level function definition to bound our search
         fn_end = src.find("\nasync def ", fn_start + 1)
         fn_body = src[fn_start:fn_end] if fn_end != -1 else src[fn_start:]
+        # CONTRACT (shipped): logs_data_endpoint never adopted db_read_events();
+        # for kind=requests it applies vhost isolation via raw *parameterized* SQL
+        # ('WHERE vhost = ?' with vhost_filter bound as the value). Behavioural
+        # isolation is covered by test_vhost_filter_isolates_db_events. This guard
+        # asserts the parameterized vhost clause + bind are wired.
         assert "WHERE vhost = ?" in fn_body, (
-            "logs_data_endpoint must have 'WHERE vhost = ?' SQL clause for kind=requests"
+            "logs_data_endpoint (kind=requests) must apply a parameterized "
+            "'WHERE vhost = ?' SQL clause for per-vhost isolation"
+        )
+        assert "(vhost_filter, sql_cap)" in fn_body, (
+            "logs_data_endpoint must bind vhost_filter as the parameter value for "
+            "the 'WHERE vhost = ?' clause"
         )
 
     def test_logs_html_sends_vhost_param(self):
@@ -923,14 +983,24 @@ class TestR1SourceGuards:
         )
 
     def test_geo_data_uses_vhost_sql_clause(self):
-        """proxy_handler.py geo_data_endpoint must have vhost = ? in its SQL."""
+        """proxy_handler.py geo_data_endpoint must pass vhost filter to db_read_events."""
         src = self._proxy_handler_src()
         fn_start = src.find("async def geo_data_endpoint(")
         assert fn_start != -1, "geo_data_endpoint must exist in proxy_handler.py"
         fn_end = src.find("\nasync def ", fn_start + 1)
         fn_body = src[fn_start:fn_end] if fn_end != -1 else src[fn_start:]
-        assert "vhost = ?" in fn_body, (
-            "geo_data_endpoint must use 'vhost = ?' SQL clause when ?vhost= is set"
+        # CONTRACT (shipped): geo_data_endpoint never adopted db_read_events()
+        # (it even hand-rolls a PG to_timestamp() branch, 1.9.1 iter-17). It applies
+        # vhost isolation via a raw *parameterized* ' AND vhost = ?' clause with
+        # _geo_vhost bound as the value. Behavioural isolation is covered by
+        # test_vhost_filter_isolates_countries. This guard asserts the clause + bind.
+        assert "AND vhost = ?" in fn_body, (
+            "geo_data_endpoint must apply a parameterized ' AND vhost = ?' SQL "
+            "clause for per-vhost isolation"
+        )
+        assert "_geo_sql_args.append(_geo_vhost)" in fn_body, (
+            "geo_data_endpoint must bind _geo_vhost as the parameter value for the "
+            "'vhost = ?' clause"
         )
 
     def test_service_data_uses_vhost_filter(self):

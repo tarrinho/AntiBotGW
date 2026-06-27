@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 challenge/pow.py — Proof-of-Work challenge generation and verification.
 Extracted from proxy.py as part of Phase 6 modular refactoring.
@@ -83,11 +81,18 @@ def verify_pow(token: str, solution: str,
     if age > POW_VALID_SECS:
         return False, f"expired ({age}s old)"
     # 1.6.10 — minimum solve time: a pre-computed or replayed solution arrives
-    # before any real CPU work could have completed. Clocks can drift ~1s so
-    # we tolerate up to 1s slack below POW_MIN_SOLVE_MS.
+    # before any real CPU work could have completed.
+    # 1.8.11 fix: the previous fixed 1000 ms drift slack collapsed the floor to
+    # zero at the default POW_MIN_SOLVE_MS=200 (max(0, 200-1000)=0), so the
+    # check never fired and instant/precomputed solves passed. `issued` is a
+    # server-signed timestamp verified by the same fleet, so only small
+    # cross-node clock skew is possible — bound the slack to a fraction of the
+    # configured minimum (cap 250 ms) so the floor can never reach zero.
     elapsed_ms = (now_float - float(issued)) * 1000
-    if elapsed_ms < max(0.0, POW_MIN_SOLVE_MS - 1000):
-        return False, f"solved too quickly ({elapsed_ms:.0f} ms < {POW_MIN_SOLVE_MS} ms minimum)"
+    _drift_ms = min(250.0, POW_MIN_SOLVE_MS * 0.25)
+    _floor_ms = max(0.0, POW_MIN_SOLVE_MS - _drift_ms)
+    if elapsed_ms < _floor_ms:
+        return False, f"solved too quickly ({elapsed_ms:.0f} ms < {_floor_ms:.0f} ms floor)"
     try:
         diff_int = int(diff)
     except ValueError:
@@ -95,21 +100,29 @@ def verify_pow(token: str, solution: str,
     h = hashlib.sha256(f"{nonce}{solution}".encode()).hexdigest()
     if not h.startswith("0" * diff_int):
         return False, f"hash {h[:8]} does not start with {diff_int} zeros"
-    # Replay protection: each (token, solution) usable exactly once within
-    # the validity window. Lazy prune of expired pairs.
+    # Replay protection: each token usable exactly once within the validity
+    # window. 1.8.11: key on the token alone (single-use) — the previous
+    # (token, solution) key let an attacker reuse one still-valid token with
+    # different valid solutions repeatedly. Lazy prune of expired entries.
     now_ts = time.time()
     if len(_pow_seen) > _POW_SEEN_MAX:
-        for k in [k for k, exp in _pow_seen.items() if exp < now_ts]:
+        # Prune expired entries. Snapshot keys first (can't mutate during iteration).
+        # F-19: avoid building a full 10 k-entry list — snapshot only the keys,
+        # then filter lazily to reduce peak memory on the hot path.
+        for k in [k for k, exp in _pow_seen.items() if exp <= now_ts]:
             _pow_seen.pop(k, None)
         if len(_pow_seen) > _POW_SEEN_MAX:
-            # Hard cap: drop oldest half — replay protection degrades but
-            # memory stays bounded. (Should never happen at sane volumes.)
-            for k in list(_pow_seen.keys())[:len(_pow_seen)//2]:
-                _pow_seen.pop(k, None)
-    pair_key = (token, solution)
-    if pair_key in _pow_seen:
+            # Still over cap: all remaining entries are unexpired.
+            # Log the pressure but do NOT drop valid entries — dropping
+            # them would open a replay window (F-08). Prefer bounded
+            # memory growth; the operator should raise _POW_SEEN_MAX
+            # or tighten POW_VALID_SECS if this log fires repeatedly.
+            from helpers import slog
+            slog("pow_seen_cap_exceeded", level="warn",
+                 count=len(_pow_seen), cap=_POW_SEEN_MAX)
+    if token in _pow_seen:
         return False, "solution already used (replay)"
-    _pow_seen[pair_key] = now_ts + POW_VALID_SECS
+    _pow_seen[token] = now_ts + POW_VALID_SECS
     return True, "ok"
 
 

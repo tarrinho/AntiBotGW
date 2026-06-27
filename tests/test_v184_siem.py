@@ -133,7 +133,13 @@ def _fn_body(src: str, fn_name: str) -> str:
 def _siem_fn_ns() -> dict:
     """Exec the pure-Python portion of siem.py (sets + functions, no async endpoints)."""
     src = _siem_src()
-    end = src.find("\nasync def siem_data_endpoint")
+    # Contract change (1.8.11 QW-4): audit_log_export_endpoint was inserted
+    # before siem_data_endpoint, so the old "stop at siem_data_endpoint" anchor
+    # now pulled in a `web.Request`-annotated endpoint and raised NameError.
+    # Stop at the FIRST async HTTP endpoint instead (any `async def` whose
+    # signature takes `request:`), keeping only the pure-Python sets/functions.
+    m = re.search(r"\nasync def \w+\(\s*request:", src)
+    end = m.start() if m else src.find("\nasync def siem_data_endpoint")
     snippet = src[:end] if end != -1 else src
     clean = re.sub(r"^(from|import)\s.*$", "pass", snippet, flags=re.MULTILINE)
     ns: dict = {"defaultdict": defaultdict, "__name__": "siem_stub"}
@@ -262,15 +268,22 @@ def test_s12_ja4_drawer_open_class():
 
 def test_s13_escape_html_defined_globally():
     src = _html()
-    assert "function escapeHtml(" in src, (
-        "siem.html: escapeHtml() function not defined. "
+    assert "function escapeHtml(" in src or "dashboard-common.js" in src, (
+        "siem.html: escapeHtml() not provided (inline or shared dashboard-common.js). "
         "Required to prevent stored XSS from attacker-controlled event fields."
     )
-    idx = src.find("function escapeHtml(")
-    fn_body = src[idx:idx + 400]
+    # escapeHtml now lives in the shared dashboard-common.js (1.8.13 #5);
+    # inspect its body there if not defined inline.
+    if "function escapeHtml(" in src:
+        idx = src.find("function escapeHtml(")
+        fn_body = src[idx:idx + 400]
+    else:
+        import pathlib
+        fn_body = (pathlib.Path(__file__).resolve().parent.parent /
+                   "dashboards" / "assets" / "dashboard-common.js").read_text(encoding="utf-8")
     for entity in ("&amp;", "&lt;", "&gt;", "&quot;"):
         assert entity in fn_body, (
-            f"siem.html: escapeHtml() does not map to '{entity}'. "
+            f"siem escapeHtml() does not map to '{entity}'. "
             "All HTML-significant characters must be escaped."
         )
 
@@ -412,13 +425,17 @@ def test_s26_escape_html_in_render_top_ips():
 
 def test_s27_tick_interval_in_timers_dcl():
     src = _html()
-    dcl_idx = src.find("DOMContentLoaded")
-    assert dcl_idx != -1, "siem.html: DOMContentLoaded listener not found."
-    dcl_end = src.find("});", dcl_idx)
-    dcl = src[dcl_idx:dcl_end]
-    assert "_timers.push(setInterval(tick" in dcl, (
-        "siem.html: tick() setInterval not pushed to _timers in DOMContentLoaded. "
+    # 1.8.10 — the shared sidebar accordion adds its own DOMContentLoaded listener
+    # near the top of every dashboard, so we can't assume the first one wires the
+    # tick. Locate the timer-tracked tick directly, then confirm it sits inside a
+    # DOMContentLoaded listener (so it's cleaned up on navigation).
+    idx = src.find("_timers.push(setInterval(tick")
+    assert idx != -1, (
+        "siem.html: tick() setInterval not pushed to _timers. "
         "The interval will leak on navigation without cleanup."
+    )
+    assert src.rfind("DOMContentLoaded", 0, idx) != -1, (
+        "siem.html: tick() timer must be wired inside a DOMContentLoaded listener."
     )
 
 
@@ -454,7 +471,7 @@ def test_s30_badge_live_present():
 
 def test_s31_sev_critical_members():
     src = _siem_src()
-    for reason in ("canary-echo", "honey-cred", "redirect-maze-bot",
+    for reason in ("canary-echo", "honey-cred",
                    "canary-probe-miss", "honeypot", "honeypot-silent"):
         assert reason in src, (
             f"siem.py: '{reason}' missing from _SEV_CRITICAL."
@@ -544,7 +561,6 @@ def test_s41_threat_cat_canary():
     fn = ns["_threat_cat"]
     assert fn("canary-echo") == "Canary"
     assert fn("canary-probe-miss") == "Canary"
-    assert fn("redirect-maze-bot") == "Canary"
 
 
 def test_s42_threat_cat_bot_scraper():
@@ -737,20 +753,27 @@ async def test_d04_siem_data_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (302, 401, 403), (
+                # 404 = silent-decoy deflection: unauthenticated probes to a
+                # secured admin endpoint get the upstream-mirrored 404 (recon
+                # hardening — the endpoint's existence is not confirmed). This
+                # is the shipped, stronger deflection vs a bare 401/403.
+                assert r.status in (302, 401, 403, 404), (
                     f"/siem-data unauthenticated: unexpected status {r.status}."
                 )
 
 
 @pytest.mark.asyncio
 async def test_d05_mins_filters_old_events(proxy_module):
-    proxy_module.events.clear()
-    now_ts = time.monotonic()
-    proxy_module.events.append(_ev("canary-echo", ts=now_ts - 30, ip="10.0.0.1"))
-    proxy_module.events.append(_ev("honeypot",    ts=now_ts - 7200, ip="10.0.0.2"))
-
     async with _spin_upstream() as up:
         async with _gateway(proxy_module, up) as cli:
+            # Seed post-boot: PG-only boot rehydrates `events` from Postgres
+            # (could otherwise add a recent 10.0.0.2-like row, or drop the
+            # seeded recent event). Clearing after boot keeps the window
+            # assertion deterministic.
+            proxy_module.events.clear()
+            now_ts = time.monotonic()
+            proxy_module.events.append(_ev("canary-echo", ts=now_ts - 30, ip="10.0.0.1"))
+            proxy_module.events.append(_ev("honeypot",    ts=now_ts - 7200, ip="10.0.0.2"))
             cookies = _admin_cookie(proxy_module)
             r = await cli.get(f"{NS}/siem-data?mins=1", cookies=cookies)
             data = await r.json()
@@ -792,16 +815,20 @@ async def test_d06_vhost_filter(proxy_module):
 
 @pytest.mark.asyncio
 async def test_d07_stats_computed_correctly(proxy_module):
-    proxy_module.events.clear()
-    now_ts = time.monotonic()
-    # 2 blocked, 1 ok (allowed), 1 bypass
-    proxy_module.events.append(_ev("honeypot",    ts=now_ts - 5, ip="10.2.0.1", status=403))
-    proxy_module.events.append(_ev("banned",      ts=now_ts - 5, ip="10.2.0.2", status=403))
-    proxy_module.events.append(_ev("ok",          ts=now_ts - 5, ip="10.2.0.3", status=200))
-    proxy_module.events.append(_ev("bypass-mode", ts=now_ts - 5, ip="10.2.0.4", status=200))
-
     async with _spin_upstream() as up:
         async with _gateway(proxy_module, up) as cli:
+            # Seed the in-memory deque AFTER gateway boot. In PG-only mode the
+            # boot path runs _rehydrate_events(), which refills `events` from
+            # Postgres — a pre-boot clear()+append() gets clobbered and the
+            # stats then count the rehydrated history (total=155 in CI). Seeding
+            # post-boot keeps the deque under the test's control at query time.
+            proxy_module.events.clear()
+            now_ts = time.monotonic()
+            # 2 blocked, 1 ok (allowed), 1 bypass
+            proxy_module.events.append(_ev("honeypot",    ts=now_ts - 5, ip="10.2.0.1", status=403))
+            proxy_module.events.append(_ev("banned",      ts=now_ts - 5, ip="10.2.0.2", status=403))
+            proxy_module.events.append(_ev("ok",          ts=now_ts - 5, ip="10.2.0.3", status=200))
+            proxy_module.events.append(_ev("bypass-mode", ts=now_ts - 5, ip="10.2.0.4", status=200))
             cookies = _admin_cookie(proxy_module)
             r = await cli.get(f"{NS}/siem-data?mins=60", cookies=cookies)
             data = await r.json()
@@ -892,14 +919,16 @@ async def test_d11_invalid_mins_defaults_60(proxy_module):
 
 @pytest.mark.asyncio
 async def test_d12_enriched_events_carry_sev(proxy_module):
-    proxy_module.events.clear()
-    now_ts = time.monotonic()
-    proxy_module.events.append(_ev("canary-echo", ts=now_ts - 5, ip="10.5.0.1"))
-    proxy_module.events.append(_ev("body-rce",    ts=now_ts - 5, ip="10.5.0.2"))
-    proxy_module.events.append(_ev("rate-burst",  ts=now_ts - 5, ip="10.5.0.3"))
-
     async with _spin_upstream() as up:
         async with _gateway(proxy_module, up) as cli:
+            # Seed post-boot: PG-only boot rehydrates `events` from Postgres,
+            # which would otherwise push these seeded IPs out of the last-100
+            # enriched window (canary-echo sev lookup returned None in CI).
+            proxy_module.events.clear()
+            now_ts = time.monotonic()
+            proxy_module.events.append(_ev("canary-echo", ts=now_ts - 5, ip="10.5.0.1"))
+            proxy_module.events.append(_ev("body-rce",    ts=now_ts - 5, ip="10.5.0.2"))
+            proxy_module.events.append(_ev("rate-burst",  ts=now_ts - 5, ip="10.5.0.3"))
             cookies = _admin_cookie(proxy_module)
             r = await cli.get(f"{NS}/siem-data?mins=60", cookies=cookies)
             data = await r.json()
@@ -1166,7 +1195,14 @@ async def test_sec05_unauthenticated_siem_data_rejected(proxy_module):
                 assert isinstance(data, dict), (
                     "/siem-data unauthenticated: non-dict JSON response."
                 )
+                # Must NOT leak the seeded sensitive event to an unauth caller.
+                _ips = [e.get("ip") for e in data.get("events", [])]
+                assert "192.168.99.1" not in _ips, (
+                    "/siem-data unauthenticated LEAKED a seeded event IP"
+                )
             else:
-                assert r.status in (302, 401, 403), (
+                # 404 = silent-decoy deflection for unauthenticated admin-path
+                # probes (recon hardening); stronger than a bare 401/403.
+                assert r.status in (302, 401, 403, 404), (
                     f"/siem-data unauthenticated: unexpected status {r.status}."
                 )

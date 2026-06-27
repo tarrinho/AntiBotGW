@@ -32,6 +32,9 @@ async def honeypots_data_endpoint(request: web.Request):
     except (TypeError, ValueError):
         mins = 1440
     mins = max(5, min(mins, 43200))   # 5 min … 30 days
+    # vhost filter — empty = all vhosts. Stored lowercase; match convention
+    # used by the agents/siem dashboards.
+    _vhost = request.query.get("vhost", "").strip().lower()
 
     now = _t.time()
     start = now - mins * 60
@@ -41,6 +44,7 @@ async def honeypots_data_endpoint(request: web.Request):
             start, now,
             columns=["ts", "ip", "method", "path", "reason"],
             reason_in=_PLAYBOOK_REASONS,
+            vhost=_vhost,
             order_by="ts DESC",
             limit=50000,
         )
@@ -188,11 +192,8 @@ HONEYPOTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "honeypots.html").read_text(encodi
 
 
 async def honeypots_dashboard_endpoint(request: web.Request):
-    from db.sqlite import get_ui_theme as _get_theme
-    _theme = _get_theme(DB_PATH)
-    body = HONEYPOTS_DASHBOARD_HTML.replace(
-        '<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1
-    )
+    from db.sqlite import inject_theme  # 1.9.6 — honour saved theme
+    body = inject_theme(HONEYPOTS_DASHBOARD_HTML, DB_PATH)
     return web.Response(
         text=body,
         content_type="text/html",

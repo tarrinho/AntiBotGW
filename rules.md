@@ -1,12 +1,157 @@
-# Rules of Engagement — AppSecGW build pipeline
+# Rules of Engagement — AntiBot/WAF GW build pipeline
 
 These rules are non-optional. After every Docker build of
-`appsec-antibot-gw:<version>`, run the full 17-step validation chain
+`appsec-antibot-gw:<version>`, run the full validation pipeline
 below **before announcing the build as done**. Every finding must be
 fixed (or explicitly classified as pre-existing in the report) before
 the version is considered released.
 
-Author: Pedro Tarrinho · Last updated for: 1.7.5
+**Every run of this pipeline MUST end with the Stage 21 status report** — a
+per-stage status table plus the aggregate test totals. This is mandatory output
+on every run, pass or fail; announcing a build "done" without it is a protocol
+violation. See [§21](#21-pipeline-status-report-mandatory).
+
+**Pipeline overview:**
+
+| Step | Type | Gate |
+|------|------|------|
+| 0 | Zombie process cleanup | mandatory pre-flight |
+| 0a | Version consistency | blocking pre-flight |
+| 0b | Admin key strength (≥16-char random) | blocking pre-flight |
+| 1 | Unit tests | blocking |
+| 2 | Functional tests | blocking |
+| 3 | Integration tests | blocking |
+| 3a | Component tests | blocking |
+| 3b | Mutation testing | ≥ 80 % score |
+| 3c | Sanity tests (per-fix) | blocking |
+| 4 | Sufficient logs | blocking |
+| 5 | Regression tests | no new failures |
+| 6 | Performance (load/stress/spike/volume/scalability) | blocking |
+| 7 | Secret-leak scan | blocking |
+| 8 | Injection sanitisation | blocking |
+| 9 | Static hardening (Bandit + Semgrep + SonarQube) | 0 H / 0 C |
+| 10 | Image CVE scan (Trivy + Aikido) | 0 C / 0 H |
+| 11 | Automated code review | no open H/C |
+| 11a | Secure code review (white-box) | blocking |
+| 11b | Security risk evaluation (STRIDE + accepted-risk register) | 0 unmitigated High |
+| 12 | E2E / Black-box pentest | 0 bypasses |
+| 13 | Documentation | complete |
+| 14 | Multi-arch build + Harbor push | all 3 arches |
+| 14f | Build smoke test | blocking |
+| 15 | DAST (TLS, OWASP, rate, canary, fuzzing, IAST, config, chaos, contract, exploratory) | blocking |
+| 16 | Post-release bug watch | regression tests green |
+| 17 | Dashboard security standards | 0 violations |
+| 17j | Dashboard dynamic + mobile check (Playwright + Lighthouse) | 0 JS errors · mobile ≥ 70 · a11y ≥ 80 |
+| 18 | Acceptance / UAT | operator sign-off |
+| 19 | Canary deployment gate | 0 new errors in 15 min |
+| 20 | Compliance attestation | all items confirmed |
+| 21 | Pipeline status report | **mandatory final output** (status table + test totals) |
+
+Author: Pedro Tarrinho · Last updated for: 1.8.12
+
+---
+
+## 0. Zombie process cleanup
+
+**Run before any test session.** Orphaned pytest processes from previous
+sessions consume CPU/RAM and distort timing, and can cause spurious OOM
+failures in the full suite.
+
+```bash
+# Kill all pytest processes not belonging to the current session.
+# Replace <KEEP_PIDS> with PIDs of any intentional background test runs.
+KEEP="<KEEP_PIDS>"   # e.g. "1234567 1234568" or leave empty to kill all
+ps aux | grep -E '(pytest|py\.test)' | grep -v grep | awk '{print $2}' \
+  | grep -Ev "^(${KEEP// /|})$" \
+  | xargs -r kill -9
+```
+
+**Quick one-liner (kill ALL pytest, no exceptions):**
+```bash
+pkill -9 -f pytest
+```
+
+**Pass criterion:** `ps aux | grep -E 'pytest' | grep -v grep` returns nothing
+(or only intentional background runs).
+
+**Why:** Long-lived pytest workers from previous Claude Code context windows
+accumulate over sessions. Each orphan holds ~350 MB RSS and burns a full CPU
+core, saturating the host after 3–4 sessions. They also hold file locks on
+`.pytest_cache` that can corrupt incremental test runs.
+
+---
+
+## 0a. Version consistency
+
+**Run before build.** `config.GW_VERSION` is the single source of truth for the
+gateway version. Every other surface that hard-codes the version must match it,
+or the build ships a mislabelled image / a dashboard that lies about its version.
+
+```bash
+pytest tests/test_v1810_version_consistency.py -q
+```
+
+Surfaces verified against `config.GW_VERSION` (`AntiBotWaf_GW_X.Y.Z`):
+- `proxy.py` references the bare `X.Y.Z`.
+- `docker-compose.yml` — `image: appsec-antibot-gw:X.Y.Z` **and** `container_name:
+  appsec-antibot-gwX.Y.Z` both match; no stale second `appsec-antibot-gw:` tag.
+- Every served dashboard (`main`, `control_center`, `agents`, `siem`, `settings`,
+  `vhost_policy`, `controls`, `geo`, `logs`, `service`) carries `GW_VERSION` in its
+  `<title>`/brand, and **none** displays a different `AntiBotWaf_GW_X.Y.Z`.
+
+**Pass criterion:** 100 % green. Any mismatch is blocking — fix the lagging
+surface (or `GW_VERSION`) before building. Historical feature comments
+(`# 1.8.x — …`) are NOT version strings and are ignored. When iterating on the
+same release, keep all surfaces on the *same* tag (do not bump per micro-fix;
+see version-bump discipline).
+
+**Manual cross-check** (what the test automates):
+```bash
+grep -n 'GW_VERSION' config.py
+grep -nE 'image:|container_name:' docker-compose.yml | grep appsec-antibot-gw
+grep -rhoE 'AntiBotWaf_GW_[0-9]+\.[0-9]+\.[0-9]+' dashboards/*.html | sort | uniq -c
+```
+
+---
+
+## 0b. Admin key strength (≥16-char random)
+
+**Rule.** The gateway's admin key / bootstrap password (`ADMIN_KEY` /
+`INTERNAL_KEY`, and any operator password set thereafter) **MUST be a
+randomly-generated secret of at least 16 characters** drawn from a mixed
+alphabet. Never ship or demo with a guessable, word-based, or reused key — the
+login form is internet-reachable and a weak key is brute-forceable.
+
+**Generate one:**
+```bash
+# 16-char URL/shell-safe random key (alphanumeric)
+python3 -c "import secrets,string;print(''.join(secrets.choice(string.ascii_letters+string.digits) for _ in range(16)))"
+# or:  openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 16; echo
+```
+
+Set it at deploy time (`-e ADMIN_KEY=<key>` / compose env), then rotate again
+via **Settings → Users** after first login. The bootstrap key is printed to
+container logs in plaintext, so treat the first-login rotation as mandatory.
+
+**Pass criterion (blocking):**
+- The admin key in use is ≥16 chars, random (not a dictionary word / known
+  pattern / reused secret), and not the framework default.
+- No weak/demo key (`admin`, `password`, `test`, `LocalTest…`, etc.) is present
+  in any committed `.env`, compose file, or deploy script.
+- `git`/secret scan (§7) shows no admin key committed in plaintext.
+
+```bash
+# Quick check: no obviously-weak admin key VALUE committed.
+# Anchors on a real assignment (excludes comments); skips env-passthrough
+# (${...}) and blank/templated values; flags weak literal values only.
+grep -rhInE '^[[:space:]]*(ADMIN_KEY|INTERNAL_KEY)[[:space:]]*[:=]' .env* docker-compose*.yml deploy*/ 2>/dev/null \
+  | grep -vE '\$\{|[:=][[:space:]]*$|<key>|<your' \
+  | grep -iE '(admin|password|passwd|test|changeme|1234|secret|local)' \
+  && echo "WEAK KEY FOUND" || echo "no weak key literals"
+```
+
+> Demo/tunnel instances are not exempt — a public trycloudflare URL is
+> internet-reachable. Use a fresh 16-char random key there too.
 
 ---
 
@@ -15,6 +160,12 @@ Author: Pedro Tarrinho · Last updated for: 1.7.5
 pytest tests/test_critical.py tests/test_pure.py tests/test_async.py -q
 ```
 **Pass criterion:** 100 % green. Failures block the build.
+
+**When adding a new signal or detector:** every value added to `SIGNAL_KNOB` in
+`core/proxy_handler.py` must also appear as a `bool` entry in `_VHOST_COERCE` in
+`vhost.py`, so the toggle is overridable per hostname. The test
+`test_pure.py::test_all_signal_knobs_in_vhost_coerce` enforces this automatically —
+it will fail if any `SIGNAL_KNOB` value is missing from `_VHOST_COERCE`.
 
 ## 2. Functional tests
 ```
@@ -29,6 +180,58 @@ pytest tests/test_integration.py -q
 ```
 **Pass criterion:** 100 % green. Flaky tests that pass in isolation
 should be flagged for investigation but do not block.
+
+## 3a. Component tests
+
+Test the gateway as a single deployable unit with its real internals wired but all external
+collaborators stubbed (AbuseIPDB, CrowdSec, MaxMind, upstream app). This is the layer between
+unit and full integration — it confirms that the detection pipeline, scoring engine, and admin
+API all work together correctly without requiring real network calls.
+
+```bash
+# Spin the harness with stubs for every external dependency
+pytest tests/test_component.py -q
+# Or manually: gateway + stub_upstream only, all reputation APIs mocked
+```
+
+**Pass criterion:** 100 % green. Component failures indicate wiring errors between modules —
+treat as blocking. The stub upstream must receive exactly the requests the gateway proxied,
+in the correct order, with the correct Host and X-Forwarded-For headers.
+
+## 3b. Mutation testing
+
+Verify the test suite itself actually catches bugs by deliberately introducing faults and
+confirming tests fail. Run `mutmut` (or equivalent) against `scoring.py`, `identity.py`,
+`core/proxy_handler.py` core logic blocks.
+
+```bash
+# mutmut v3 reads paths_to_mutate from [tool.mutmut] in pyproject.toml — the
+# old `--paths-to-mutate` CLI flag was removed (it now errors). Scope is
+# pinned there (detection/, scoring.py, endpoint_policy.py). A full run is
+# long (~hundreds of mutants × the test suite) — run it in the BACKGROUND.
+mutmut run            # honours pyproject paths_to_mutate; no path flag
+mutmut results        # summarise killed / survived / timeout
+# To scope tighter for a quick check, narrow paths_to_mutate in pyproject.toml.
+```
+
+**Pass criterion:** Mutation score ≥ 80 % on core scoring logic. Surviving mutants must be
+individually triaged: confirmed-equivalent (no semantic change) → document; real gap → add
+a test before release. Never silence a surviving mutant without analysis.
+
+## 3c. Sanity tests
+
+After every individual bug fix or targeted code change, run a narrow smoke set that confirms
+the specific fix works and that the immediately adjacent paths did not regress. Do NOT
+substitute the full suite — sanity is fast and focused.
+
+```bash
+# Example: after fixing scoring.py risk accumulation
+pytest tests/test_critical.py -k "risk or score" -v
+```
+
+**Pass criterion:** Targeted set 100 % green within 30 s. If any targeted test fails, the fix
+is incomplete — do not proceed to the next step. Document the sanity command used in the
+validation record under the specific bug entry.
 
 ## 4. Sufficient logs
 - Every detector path must emit a structured `event=request` line with a
@@ -45,11 +248,64 @@ pytest tests/test_control_regressions.py tests/test_v14.py tests/test_v142.py te
 **Pass criterion:** Same set of pre-existing failures as last release
 (no new regressions). Diff the failure list against the previous build.
 
-## 6. Performance smoke
+## 6. Performance testing
+
+### 6a. Smoke baselines (run after every build)
 - Cold-start time (image launch → `[js-challenge] active`) **< 5 s**
 - `/__metrics?key=…` p99 latency **< 50 ms**
 - 1000-request burst against `/` does NOT trigger any false-positive ban
 - Memory after 1 h soak **< 200 MB RSS**
+
+### 6b. Load testing — expected peak traffic
+```bash
+# Sustained 500 req/s for 60 s from 50 concurrent clients
+ab -n 30000 -c 50 -t 60 http://127.0.0.1:18443/ 2>&1 | grep -E "Requests|Failed|Percentile"
+```
+**Pass criterion:** p50 < 10 ms, p99 < 100 ms, error rate < 0.1 %, no false-positive bans on clean IPs.
+
+### 6c. Stress testing — beyond rated limits
+```bash
+# Ramp from 500 to 5000 req/s until the gateway fails or starts rejecting
+wrk -t12 -c400 -d30s http://127.0.0.1:18443/
+```
+**Pass criterion:** Gateway degrades gracefully (returns 429/503, never crashes). No memory leak
+above 2× the idle RSS. Error log must not contain uncaught exceptions.
+
+### 6d. Spike testing — sudden sharp jump
+```bash
+# Idle for 10 s, then 1000 req in 2 s, then back to idle
+sleep 10
+ab -n 1000 -c 200 -t 2 http://127.0.0.1:18443/
+sleep 10
+curl -sk http://127.0.0.1:18443/ -w "%{http_code}\n" -o /dev/null
+```
+**Pass criterion:** Spike handled without crash; legitimate traffic after the spike returns 200 within
+5 s of the burst ending; RSS returns to within 20 % of pre-spike baseline.
+
+### 6e. Volume testing — large in-memory state
+```bash
+# Seed ip_state with 100 000 synthetic identities, then send 10 000 requests
+python3 tests/volume_seed.py --identities 100000
+ab -n 10000 -c 50 http://127.0.0.1:18443/
+```
+**Pass criterion:** p99 latency does not degrade by more than 2× vs empty-state baseline.
+No OOM-kill. `/__metrics` still responds within 200 ms.
+
+### 6f. Scalability testing — Redis-mesh multi-node
+When `REDIS_URL` is set, verify bans propagate across replicas within 5 s:
+```bash
+redis-cli FLUSHALL
+# Node A bans 1.2.3.4
+curl -sk -X POST http://nodeA:18443/antibot-appsec-gateway/secured/bans \
+  -H "X-Admin-Key: $KEY" -d '{"ip":"1.2.3.4","reason":"test","ttl":300}'
+sleep 2
+# Node B must reject 1.2.3.4
+curl -sk http://nodeB:18443/ -H "X-Forwarded-For: 1.2.3.4" -w "%{http_code}\n" -o /dev/null
+# Expected: 403
+```
+**Pass criterion:** Ban visible on all nodes within 5 s. `redis-cli KEYS "ban:*"` shows the key on
+every Redis shard. Adding a second gateway node does NOT double the memory footprint of ip_state
+(state is Redis-authoritative, not duplicated locally).
 
 ## 7. Secret-leak scan
 - `grep -nE '(BEGIN PRIVATE KEY|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{32}|ghp_[A-Za-z0-9]{36})' proxy.py dashboards/`
@@ -102,12 +358,25 @@ info-level findings do not block release but should be noted.
 
 ## 10. Image CVE scan (Trivy + Aikido)
 
+Run Trivy against **all three** built images:
+
 ```
+# arm64
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
   aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
-  --quiet appsec-antibot-gw:<version>
+  --quiet appsec-antibot-gw:<version>-arm64
+
+# armv7
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
+  --quiet appsec-antibot-gw:<version>-armv7
+
+# amd64
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+  aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
+  --quiet appsec-antibot-gw:<version>-amd64
 ```
-**Pass criterion (Trivy):** 0 CRITICAL / 0 HIGH / 0 MEDIUM CVEs.
+**Pass criterion (Trivy):** 0 CRITICAL / 0 HIGH / 0 MEDIUM CVEs on **each** arch. All three must pass.
 
 Push the built image to Harbor and trigger an **Aikido Security** scan from the
 Aikido dashboard (or via the Aikido CLI / CI integration). Aikido scans the
@@ -119,14 +388,34 @@ triaged; accepted-risk items require a note in the validation record. Aikido
 findings that duplicate Trivy CVEs already classified are inherited — do not
 re-classify.
 
-## 11. Automated code review (CodeRabbit)
+## 11. Automated code review
 
-Run CodeRabbit on all changes in this version using the `/coderabbit:coderabbit-review`
-skill (or via the CodeRabbit GitHub integration on the release PR).
+Run the full static analysis stack:
 
-**Pass criterion:** All actionable findings resolved or explicitly classified as
-false-positive in the report. Nitpicks may be deferred with a note. No finding
-rated **high** or **critical** by CodeRabbit may be left open.
+```bash
+# ruff — comprehensive lint: errors, bugs, security, naming
+ruff check proxy.py core/ db/ scoring.py identity.py helpers.py admin/ \
+  --select E,F,W,C,B,S --ignore E501,E402,F401,F403,F405,W291,W293,W292,S110,E711,E712
+
+# ruff auto-fix safe issues (F541, B010, E401, C420)
+ruff check proxy.py core/ db/ scoring.py identity.py helpers.py admin/ \
+  --select F541,E401,C420 --fix
+
+# mypy — type checking
+mypy proxy.py core/ scoring.py identity.py helpers.py --ignore-missing-imports --no-error-summary
+
+# vulture — dead code (≥90% confidence)
+vulture proxy.py core/ db/ scoring.py identity.py helpers.py admin/ --min-confidence 90
+
+# radon — cyclomatic complexity (flag grade C+)
+radon cc proxy.py core/ scoring.py identity.py -a -n C
+```
+
+**Pass criterion:** All actionable findings resolved or explicitly classified as false-positive in the report.
+- ruff: 0 new **F841** (unused variable), **F401** (unused import from non-star import), **S314** (unnosec'd XML), **B904** (raise in except) findings.
+- mypy: no new errors vs previous release baseline.
+- vulture: 0 findings at ≥90% confidence.
+- radon: any new grade-F function must be triaged (expected for request-pipeline handlers).
 
 ## 11a. Secure code review
 Read every line of code added or modified in this version. Check for:
@@ -139,11 +428,67 @@ Read every line of code added or modified in this version. Check for:
 - New external dependencies (must justify)
 - New deps must be in `Dockerfile` AND `requirements.txt` if added
 
-## 12. Black-box pentest
+## 11b. Security risk evaluation (blocking)
+
+Tool scans (§9/§10) and code review (§11/§11a) find *defects*. This stage
+evaluates **residual risk** — the security-relevant design decisions and accepted
+trade-offs that are not bugs but still carry exposure. Run it every release; it is
+blocking on any unmitigated High.
+
+### 11b-1. New-surface threat pass (STRIDE-lite)
+
+For **each feature/endpoint added or changed** this version, answer:
+
+| Question | If yes → |
+|----------|----------|
+| New input crosses a trust boundary (request body/header/query/path)? | validated + bounded? injection-tested (§8)? |
+| New auth / session / token / CSRF surface? | constant-time compare · gated · rate-limited? |
+| New data exposed in a response/dashboard/log? | no secrets/PII; attacker-controlled values escaped? |
+| New outbound request (SSRF reach)? | passes `_ssrf_guard_url` / `ALLOW_PRIVATE_UPSTREAM` checked? |
+| New file/DB write or config mutation? | authz-checked · path-constrained · idempotent? |
+| New persistence/poll loop or unbounded structure? | bounded · DoS-amplifier reviewed? |
+
+Any "yes" without a satisfactory control is a finding — fix or record as accepted.
+
+### 11b-2. Accepted-risk register
+
+Maintain a risk table in `validation/<version>.md` §11b. Carry every standing
+accepted risk forward and **re-confirm** it each release (it is not "decided once"):
+
+| ID | Risk | Likelihood | Impact | Mitigation | Decision | Owner | Review-by |
+|----|------|-----------|--------|------------|----------|--------|-----------|
+| R1 | `agw_csrf` cookie JS-readable (HttpOnly off) | … | … | double-submit token + SameSite | accept | Pedro Tarrinho | next release |
+| R2 | `ALLOW_PRIVATE_UPSTREAM` default-allow (SSRF) | … | … | operator-scoped, `_ssrf_guard_url` elsewhere | accept | … | … |
+| R3 | Admin surface hidden via decoy-404 (security-by-obscurity layer) | … | … | admin-IP allowlist is the real gate | accept | … | … |
+
+Rules:
+- Every row needs a named **Owner** and a **Review-by** date (a release tag or
+  calendar date) — no perpetual "accept" without a recheck horizon.
+- A **new** High/Critical residual risk blocks the release unless explicitly
+  accepted by the owner with written rationale.
+- New features that introduce a residual risk add a row here in the same release.
+
+### 11b-3. Pass criterion
+
+Every changed surface has a completed 11b-1 row; the 11b-2 register is current
+(all rows re-confirmed, owners + review dates present); zero unmitigated
+High/Critical residual risks. Record the outcome in `validation/<version>.md` §11b
+and reflect it in the §21 status table.
+
+## 12. E2E / Black-box pentest
+
+**Testing layer:** This step serves as both the **end-to-end (E2E) test** — exercising the whole
+system from real network interface to upstream response — and the **black-box security assessment**
+(no prior knowledge of internals). Complementary to §11a (white-box code review) and §15 (DAST).
+
 Spin a fresh harness on port 18443 with a tiny upstream stub. Probe
 every NEW detector added in this version + the 6 generic OWASP probes
 listed in §8. Document each probe with: request, expected reason, actual
 reason, pass/fail. Tear the harness down when done.
+
+**Gray-box variant (optional):** After the blind black-box pass, repeat 3 targeted probes with
+internal knowledge (e.g. knowing the scoring weights) to verify there are no logic gaps between
+the documented behaviour and the actual enforcement. Record both passes in the validation record.
 
 ## 13. Documentation
 Each release MUST update:
@@ -181,13 +526,42 @@ Each release MUST update:
    Verify that every new knob, endpoint, and operational procedure introduced
    in this version is documented with an example command.
 
-4. **`report.pdf`** — generated from `report.html` via Chromium headless
-   (WeasyPrint v62.3 is broken on the build host):
+4. **`report.html` + `report.pdf`** — the implementation report. Refresh
+   `report.html` for the release (build/version banner, current layer set,
+   test-result counts), then regenerate `report.pdf` from it via Chromium
+   headless (WeasyPrint v62.3 is broken on the build host):
    ```
    chromium --headless --no-sandbox --print-to-pdf=report.pdf \
      --print-to-pdf-no-header file:///abs/path/to/report.html
    ```
    Author: Pedro Tarrinho. Reports must NOT reference any AI tooling.
+   **Both files are published** (in the `copy-to-github.sh` MANIFEST as of 1.9.7)
+   and must stay sanitised — generic targets/paths only, no customer name,
+   internal registry host, admin key, or live tunnel URL. Enforced by
+   `test_pure.py::test_report_html_is_current_for_this_release` (fails on a
+   version bump until the report + PDF are refreshed) and
+   `::test_report_html_is_publish_clean` (fails if internal/customer data
+   re-appears). `bump-version.sh` rewrites the version token; the layer/test
+   content and the PDF regeneration are the manual follow-up.
+
+5. **`GW-Tests-Full.md`** — full test suite reference (one section per test file).
+   Any release that adds, removes, or materially changes a test file MUST update this document:
+   - **New file added:** add a section under the correct version heading; add the filename to the Table of Contents row for that version; increment the `Total test files` count in the header and footer.
+   - **Per-table total (MANDATORY):** every per-test-file table MUST be immediately
+     followed by a `**Total: N tests**` line — `N` = sum of the `Tests` column, or
+     the data-row count for one-test-per-row tables. Prose sections (no table)
+     must state the count inline (e.g. "46 tests covering:").
+   - **Tests changed within a file:** update the affected class row (test count, description) **and the table's `**Total: N tests**` line**.
+   - **File removed or renamed:** remove or update its section and TOC entry; decrement the count.
+   - **Version header:** bump `**Version:**` field to match the release being documented.
+   - **Coverage + total gate (automated — replaces the old `comm`/inline-python checks):**
+     ```bash
+     python3 scripts/check_test_coverage.py          # verify: presence + every section has a total
+     python3 scripts/check_test_coverage.py --fix     # scaffold any missing section, then re-verify
+     ```
+     **Pass criterion:** exit 0 (`OK — N test files all documented; M sections all carry a total line`).
+     `--fix` only *appends* stub sections for undocumented files — it never edits
+     curated prose. Enrich a scaffolded stub by hand; the gate stays green either way.
 
 ### 13a. Architecture + version consistency review
 
@@ -203,8 +577,8 @@ Each release MUST update:
 Run it **before** any manual checks below — then verify the output shows no `WARN: pattern not found` lines.
 
 Before declaring documentation complete, verify:
-- `config.py` `GW_VERSION` constant matches the release tag (e.g. `AppSecGW_1.7.0`).
-- Run `pytest tests/test_pure.py::test_gw_version_constant tests/test_pure.py::test_no_stale_version_strings_in_source` — both must PASS.  The second test scans all `.py/.yml/.yaml/.sh/.md` source files for `AppSecGW_X.Y` strings that do not match the current release (excluding comments, CHANGELOG, README, rules.md, and the validation/ directory).
+- `config.py` `GW_VERSION` constant matches the release tag (e.g. `AntiBotWaf_GW_1.7.0`).
+- Run `pytest tests/test_pure.py::test_gw_version_constant tests/test_pure.py::test_no_stale_version_strings_in_source` — both must PASS.  The second test scans all `.py/.yml/.yaml/.sh/.md` source files for `AntiBotWaf_GW_X.Y` strings that do not match the current release (excluding comments, CHANGELOG, README, rules.md, and the validation/ directory).
 - `README.md` image tag in Quick Start, multi-site fleet examples, and
   `Build from source` block all reference the new version.
 - `Dockerfile` and `docker-compose.yml` default image tags updated if needed.
@@ -214,6 +588,8 @@ Before declaring documentation complete, verify:
   add any new detection layer or admin endpoint introduced since last release.
 - `CHANGELOG.md` `[Unreleased]` section is empty (or absent) after the
   release entry is stamped — nothing left undocumented.
+- `GW-Tests-Full.md` version header matches the release; coverage + per-section
+  totals verified by `python3 scripts/check_test_coverage.py` (exit 0).
 
 ### 13b. Full version-string sweep
 Run `./bump-version.sh PREV NEW` first (see §13a), then verify with the grep below.
@@ -238,7 +614,7 @@ grep -rn --include="*.py" --include="*.html" --include="*.yml" \
 
 | File | What to check |
 |------|--------------|
-| `core/config.py` | `GW_VERSION = "AppSecGW_<version>"` |
+| `core/config.py` | `GW_VERSION = "AntiBotWaf_GW_<version>"` |
 | `Dockerfile` | `LABEL version=` and any `ARG VERSION=` line |
 | `Dockerfile.armv7` | same as above |
 | `docker-compose.yml` | `image: appsec-antibot-gw:<version>` and `container_name:` |
@@ -253,9 +629,46 @@ grep -rn --include="*.py" --include="*.html" --include="*.yml" \
 | `CHANGELOG.md` | Latest `## [<version>]` section header stamped (not `[Unreleased]`) |
 | `MANUAL.md` | Any pinned image tags in example commands |
 | `copy-to-github.sh` | `VERSION=` line or equivalent constant |
+| `GW-Tests-Full.md` | `**Version:**` field in header; `Total test files` count; all new test files documented |
 
 **Pass criterion:** Zero stale-version hits from the grep AND every row in
 the checklist manually confirmed. Any mismatch must be corrected before step 14.
+
+### 13c. GitHub sync freshness
+
+`publish.sh` (the Mac-side master sync) writes `.last-publish.json` at the
+repo root after every successful push to both origins. The marker carries:
+
+```jsonc
+{
+  "timestamp": "2026-06-27T14:00:00Z",          // ISO-8601 UTC, written on push
+  "version": "1.9.7",                            // GW_VERSION at the time of push
+  "tag":     "v1.9.7",                           // tag that WOULD be cut at release
+  "released": false,                             // false after Stage 4 push,
+                                                 // true after Stage 5 tag + GitHub Release
+  "corporate": { "head": "<sha>", "remote": "git-celfocus:..." },
+  "personal":  { "head": "<sha>", "remote": "git-personal:..."  }
+}
+```
+
+The file is `.gitignore`-d AND excluded from the `copy-to-github.sh` MANIFEST
+(it embeds remote SSH aliases). It lives in the shared folder so the Kali-side
+pytest can read it.
+
+**Pytest check (CI-friendly):**
+```bash
+pytest tests/test_v197_publish_marker_qa.py -v
+```
+
+**Pass criterion:**
+- `.last-publish.json` exists
+- `version` field matches current `GW_VERSION`
+- `timestamp` not older than **14 days**
+
+**Soft mode:** if any criterion fails, the operator runs `publish.sh` on the
+Mac before continuing to §14. The marker is rewritten on the next successful
+push. CI may skip this gate when `CI=1` since hosted runners can't access
+the Mac.
 
 ---
 
@@ -304,10 +717,10 @@ docker build --platform linux/arm/v7 -f Dockerfile.armv7 \
 ```
 **Pass criterion:** All three builds exit 0 with no layer errors.
 
-### 14c. Tag and push to Harbor
-Registry: `harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw`
+### 14c. Tag and push to your registry
+Registry: `registry.example.com/appsecgw/appsecgw` (set to your own)
 ```
-HARBOR=harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw
+HARBOR=registry.example.com/appsecgw/appsecgw
 VER=<version>
 
 docker tag appsec-antibot-gw:${VER}-amd64 ${HARBOR}:${VER}-amd64
@@ -336,6 +749,43 @@ After all three pushes succeed, remove dangling (untagged) images left by the bu
 docker image prune -f
 ```
 **Pass criterion:** Command exits 0. `docker images` shows no `<none>` entries for `appsec-antibot-gw`.
+
+### 14f. Build smoke test
+
+Run immediately after the image builds exit 0 and before any deeper testing. Verifies the
+container starts, the health endpoint responds, and catastrophic wiring errors are caught early.
+
+```bash
+VER=<version>
+
+# Start the freshly built armv7 image
+docker run -d --name smoke-test-armv7 \
+  --platform linux/arm/v7 \
+  -p 18444:8443 \
+  -e ADMIN_KEY=smoketest \
+  appsec-antibot-gw:${VER}-armv7
+
+# Wait for startup (max 10 s)
+for i in $(seq 1 10); do
+  STATUS=$(curl -sk -o /dev/null -w "%{http_code}" http://127.0.0.1:18444/)
+  [ "$STATUS" = "200" ] || [ "$STATUS" = "403" ] && break
+  sleep 1
+done
+
+# Health check
+curl -sk http://127.0.0.1:18444/antibot-appsec-gateway/health
+echo "Exit: $?"
+
+docker rm -f smoke-test-armv7
+```
+
+**Pass criterion:**
+- Container starts within 10 s (no crash loop, no missing-import error in `docker logs`).
+- Health endpoint returns `{"status":"ok"}` or equivalent.
+- `docker logs smoke-test-armv7` contains `[js-challenge] active` or `startup complete`.
+- No Python `ImportError`, `ModuleNotFoundError`, or `AttributeError` in startup logs.
+
+Repeat for `-arm64` and `-amd64` tags if built in this cycle.
 
 ---
 
@@ -498,6 +948,258 @@ curl -sk "http://127.0.0.1:18443/antibot-appsec-gateway/bans" \
   `reason=canary-hit` in structured log and bans API.
 - Canary tokens must be unique per session (two fetches produce different tokens).
 - Canary tokens must NOT appear in any admin-visible key fields, metrics output, or error pages.
+
+### 15f. Fuzzing — malformed and random input
+
+Fixed injection payloads (§8) test known patterns. Fuzzing verifies the gateway handles
+arbitrary malformed input without crashing. Run against every input surface.
+
+```bash
+# HTTP request fuzzing via ffuf — random payloads in path, headers, body
+ffuf -u http://127.0.0.1:18443/FUZZ \
+  -w /usr/share/seclists/Fuzzing/special-chars.txt \
+  -mc all -fs 0 -t 20
+
+# Large body (body-size limit)
+python3 -c "import requests; requests.post('http://127.0.0.1:18443/', data='A'*10_000_000, timeout=5)"
+
+# Binary / null-byte in path
+curl -sk "http://127.0.0.1:18443/$(python3 -c "print('A'*4096)")" -o /dev/null -w "%{http_code}\n"
+
+# Invalid UTF-8 in User-Agent
+curl -sk http://127.0.0.1:18443/ -H $'User-Agent: \xff\xfe\x00' -w "%{http_code}\n"
+```
+
+**Pass criterion:** No 5xx response on any fuzz input. No Python traceback in `docker logs`.
+Gateway must return 400, 403, or 429 for invalid inputs — never 500. RSS does not grow
+unboundedly during a 5-minute fuzz run (< 50 MB growth).
+
+### 15g. IAST — instrumented analysis
+
+If the CI environment supports runtime instrumentation (e.g. Contrast Security agent, Pyrasp,
+or manual taint tracking), enable it during the §12 and §15b test runs to capture findings
+that static analysis misses.
+
+```bash
+# Example: run the §15b DAST probes with Python's trace hooks active
+PYTHONTRACEMALLOC=1 python3 -m pytest tests/test_functional.py -q 2>&1 | grep -E "WARN|ERROR|taint"
+```
+
+**Pass criterion:** No new taint-flow findings (data from untrusted input reaching a sink
+without sanitisation) not already captured by §9 SAST. Document any findings in the
+validation record with: sink, source, data flow, and whether it is exploitable.
+
+If no IAST tooling is available, mark this step as "N/A — tooling not installed" in the
+validation record and note it as a future improvement.
+
+### 15h. Configuration testing
+
+Verify that the gateway behaves correctly across the key deployment configurations — not just
+the default. At minimum, test the four combinations below.
+
+| Config variant | Key knobs | Expected outcome |
+|----------------|-----------|-----------------|
+| Strict mode | `BAN_THRESHOLD=30`, `SOFT_CHALLENGE_SCORE=10`, `JS_CHALLENGE_ENABLED=1` | Low-scoring requests challenged earlier |
+| Permissive mode | `BAN_THRESHOLD=100`, `JS_CHALLENGE_ENABLED=0` | Only extreme offenders banned; no JS challenge |
+| XFF trust off | `TRUST_XFF=none` | `X-Forwarded-For` ignored; client IP from TCP |
+| Redis mesh | `REDIS_URL=redis://127.0.0.1:6379` | Bans propagate; state reads from Redis |
+
+```bash
+# Example: test strict mode
+docker run -d --name cfg-strict -p 18445:8443 \
+  -e BAN_THRESHOLD=30 -e SOFT_CHALLENGE_SCORE=10 -e JS_CHALLENGE_ENABLED=1 \
+  appsec-antibot-gw:<version>-arm64
+curl -sk http://127.0.0.1:18445/ -H "User-Agent: python-requests/2.31" -w "%{http_code}\n"
+# Expected: 200 with JS challenge body, not 403
+docker rm -f cfg-strict
+```
+
+**Pass criterion:** Each variant produces the expected behaviour as documented in `MANUAL.md`.
+No configuration combination causes a startup crash or renders the admin API unreachable.
+
+### 15i. Reliability & availability testing
+
+Verify the gateway recovers correctly from common failure modes without operator intervention.
+
+```bash
+# 1. Graceful restart — send SIGTERM, confirm in-flight requests complete
+docker kill --signal=SIGTERM <container>
+# Monitor: last request before shutdown must complete (not 502)
+
+# 2. Health-check recovery — kill the upstream, verify health endpoint degrades correctly
+docker stop upstream-stub
+curl -sk http://127.0.0.1:18443/antibot-appsec-gateway/health
+# Expected: {"status":"degraded"} or similar — NOT 500
+
+# 3. Redis loss — stop Redis mid-flight
+docker stop redis
+sleep 2
+curl -sk http://127.0.0.1:18443/ -w "%{http_code}\n"
+# Expected: 200 (gateway must fall back to in-process state, not crash)
+docker start redis
+
+# 4. Container restart — confirm state survives SQLite persistence
+BAN_IP="10.0.0.99"
+# ... ban $BAN_IP via admin API ...
+docker restart <container>
+sleep 5
+curl -sk http://127.0.0.1:18443/ -H "X-Forwarded-For: $BAN_IP" -w "%{http_code}\n"
+# Expected: 403 — ban loaded from SQLite on startup
+```
+
+**Pass criterion:** All four scenarios produce the documented degraded/recovered behaviour with no
+crash (exit code non-zero), no data loss for persisted bans, and no hung goroutines or file handles.
+
+### 15j. Chaos / resilience testing
+
+Deliberately inject infrastructure failures to verify graceful degradation — not correctness.
+Run only on a dedicated chaos harness, never against a shared environment.
+
+```bash
+# 1. OOM pressure — restrict container memory to 64 MB and verify it doesn't crash silently
+docker run -d --memory=64m --memory-swap=64m \
+  -p 18446:8443 appsec-antibot-gw:<version>-arm64
+sleep 5
+docker inspect <id> --format "{{.State.Status}}"
+# Expected: "running" — NOT "exited"
+
+# 2. CPU starvation — limit to 0.1 CPU and verify latency degrades gracefully
+docker update --cpus=0.1 <container>
+ab -n 100 -c 10 http://127.0.0.1:18443/ | grep "Time per request"
+# Expected: latency increases but no 5xx
+
+# 3. Network partition — drop packets to reputation APIs
+iptables -A OUTPUT -d abuseipdb.com -j DROP
+curl -sk http://127.0.0.1:18443/ -H "User-Agent: Mozilla/5.0" -w "%{http_code}\n"
+# Expected: 200 — reputation fallback to cached/default, no crash
+iptables -D OUTPUT -d abuseipdb.com -j DROP
+```
+
+**Pass criterion:** Gateway continues to serve traffic (correct HTTP codes, no 5xx) under every
+injected failure. Structured log must contain `event=degraded` or equivalent when a dependency fails.
+
+### 15k. Contract testing — upstream HTTP contract
+
+The gateway proxies to an upstream over HTTP. Verify the upstream contract is honoured:
+correct Host header, correct X-Forwarded-For chain, no stripped hop-by-hop headers.
+
+```bash
+# Deploy an echo server as upstream and verify header forwarding
+docker run -d --name echo-upstream -p 18447:80 mendhak/http-https-echo
+# Route gateway to echo-upstream, then send a request
+curl -sk http://127.0.0.1:18443/ -H "X-Real-IP: 5.5.5.5" | python3 -m json.tool | grep -E "x-forwarded|host"
+```
+
+**Pass criterion:**
+- `Host` header set to the vhost hostname, not the gateway's own address.
+- `X-Forwarded-For` contains the correct client IP (not the gateway's internal IP).
+- `X-Real-IP` forwarded to upstream when configured.
+- No `X-Admin-Key`, `X-Session-Key`, or internal gateway headers leaked to upstream.
+- Admin API responses must not reach the upstream under any path.
+
+Also run the admin API contract check:
+```bash
+# Every documented admin endpoint returns the documented status code for valid + invalid auth
+pytest tests/test_admin_contract.py -q
+```
+
+### 15m. Black-box smoke runner — `dast-smoke.sh` (1.8.15+)
+
+Canonical entrypoint for **automated dynamic testing against a running gateway**. Runs the
+union of OWASP probes, security-header checks, admin-decoy verification, CSRF guard, version
+disclosure, AND the 1.8.15 behavioural surface (method allowlist, Host-cap, decoy mode,
+concurrent burst sanity, admin /service-data fields, /metrics last_vhost cap).
+
+**Usage:**
+```bash
+# HTTP localhost form
+./dast-smoke.sh 127.0.0.1 8443
+
+# HTTPS / tunnel form (no admin probes)
+./dast-smoke.sh https://duck-conferencing-sixth-coast.trycloudflare.com
+
+# HTTPS + admin key (enables §15l + §15m admin probes)
+./dast-smoke.sh https://pt4.tech "$(cat /data/.admin_key)"
+```
+
+**Sections (each prefixed `§15…` inside the script, distinct from this rules.md labelling):**
+| Script § | Coverage |
+|----------|----------|
+| §15a | Liveness — `/antibot-appsec-gateway/live` returns `200 ok` (loopback only) |
+| §15b | Security headers — `X-Content-Type-Options`, `X-Frame-Options`, no `Server: aiohttp` |
+| §15c | OWASP-style probes — XSS, path traversal, Log4Shell UA, SQLi, scanner paths must not 500 |
+| §15d | Admin decoy — secured paths return decoy/redirect (not real dashboard) without auth |
+| §15e | CSRF guard — `POST /secured/config` without token → 403/decoy |
+| §15f | Version disclosure — no `Traceback`/`aiohttp`/stale-version in 404 body |
+| §15g | **(iter-20)** HTTP method allowlist — GET/POST/PUT/PATCH/DELETE/OPTIONS pass, TRACE/CONNECT blocked |
+| §15h | **(iter-22 F-1)** Oversized Host header — 500-char Host does not 5xx, body does not reflect |
+| §15i | **(1.8.15)** Version banner — `X-Proxy` header must reflect current major version |
+| §15j | **(iter-15)** `BLOCK_RESPONSE_MODE=homepage` — decoy 404 returns >50 bytes (not empty) |
+| §15k | **(perf baseline)** 30× concurrent decoy burst — p95 ≤ 5s (catches state_lock regressions) |
+| §15l | **(iter-17 surface, admin)** `/service-data` exposes `pg_auth_failed{,_ts,_hint}` + `pg_available` |
+| §15m | **(iter-22 F-1, admin)** `client.vhost` length cap in `/metrics` payload ≤ 120 chars |
+| §15n | **Bot UA classification** — `python-requests`, `curl`, `Go-http-client`, `wget` handled cleanly (no 5xx); burst of 20 from same UA should trigger ≥10 blocked under healthy scoring |
+| §15o | **HTTP request smuggling** — CL+TE conflict (RFC 7230 §3.3.3) → 400/403/404 (rejected); never 5xx |
+| §15p | **Body size enforcement** — 10 MB POST → no 5xx (CWE-400 cap); expect 400/413/decoy |
+| §15q | **Cookie hygiene** — GW-set cookies (`agw_session`, `agw_csrf`, `agw_lc`, `appsecgw_*`) carry `Secure` on HTTPS + `SameSite`; upstream cookies excluded |
+| §15r | **Open redirect protection** — `?url=`, `?next=`, `?return_to=`, `?redirect_uri=` to attacker-controlled domains / `javascript:` URIs must not surface in `Location:` |
+| §15s | **SSRF markers in body** — `file:///etc/passwd`, `gopher://127.0.0.1`, AWS IMDS, IPv6 loopback do not crash the GW (no 5xx) |
+| §15t | **CRLF header injection in path** — URL-encoded `%0d%0a`/`%0a`/`%00` does not inject Set-Cookie or split the response |
+| §15u | **HTTP/2 support** — negotiation succeeds end-to-end (status 200, protocol = 2) when client offers h2 |
+
+**Pass criterion:** Exit code 0 (all probes PASS or admin-required probes INFO-skipped when no key).
+The only KNOWN-by-design exception is when probing from outside the loopback: `§15a` `/live` returns 404 (deliberate — health endpoint is loopback-only). Counts as `⚠️ KNOWN`, not a defect.
+
+**Live-demo expectation (cloudflared tunnel):** §15a + §15b + §15i + §15l + §15m will INFO (CDN-shaped — admin auth needs session, X-Frame/X-Content-Type/X-Proxy may be stripped, `/live` is loopback-only). Everything else (§15c–§15u, minus admin-required §15l/§15m) must PASS. Document as KNOWN in `validation/<version>.md`.
+
+### 15n. Full dynamic-test runner — `tests/dynamic/run-all.sh` (1.9.4+)
+
+**Mandatory on every `rules.md` run** — covers all 13 dynamic-test categories from `tests/DYNAMIC_TESTS.md`. Includes `dast-smoke.sh` as one of the 13 categories plus 12 more (functional, performance, resilience/chaos, concurrency, integration, UI/browser, protocol/RFC, observability, data-integrity, property/fuzz, operational, project-specific). Each category script emits `[PASS]` / `[FAIL]` / `[INFO]` / `[SKIP]` lines and a final `[CAT-DONE]` aggregate. The runner aggregates everything and prints a per-category table + a paste-friendly totals summary at the end.
+
+**Usage:**
+```bash
+./tests/dynamic/run-all.sh <URL>                       # quick run, no admin
+./tests/dynamic/run-all.sh <URL> <ADMIN_KEY>           # enable admin-gated probes
+./tests/dynamic/run-all.sh <URL> --tier=quick          # cat 1 + 3 + 13 only (≈ 3 min)
+./tests/dynamic/run-all.sh <URL> --tier=medium         # default — all cats, no soak (≈ 10–30 min)
+./tests/dynamic/run-all.sh <URL> --tier=heavy          # + 24h soak + fuzz + ZAP (overnight)
+
+# Enable chaos sub-tests (skipped by default)
+CHAOS_PG_CONTAINER=appsec-timescaledb \
+CHAOS_GW_CONTAINER=appsec-gw-demo \
+  ./tests/dynamic/run-all.sh https://demo
+```
+
+**Pass criterion:** exit code 0. The runner's final line will be either:
+- `RESULT: ✅ PASS  (N INFO + N SKIP are non-blocking)` — release-ready, or
+- `RESULT: ❌ FAIL  (see [FAIL] lines above)` — fix before shipping.
+
+**Mandatory: append the summary to `validation/<version>.md`** under the §15 section so each release's dynamic-test results are part of the historical record.
+
+```bash
+# Append the final summary block to the validation record
+./tests/dynamic/run-all.sh <URL> 2>&1 | \
+  awk '/^━{20}/{p=1} p' | tail -30 >> validation/<version>.md
+```
+
+Per-category gap-IDs (e.g. `C-1`, `X-5`, `Q-2`) reference `tests/DYNAMIC_TESTS.md`. Adding a new test = drop a `[PASS]`/`[FAIL]`/etc. line in the relevant `tests/dynamic/cat*_*.sh`; the runner picks it up automatically.
+
+### 15l. Exploratory testing session
+
+After all scripted tests pass, run a **30-minute unscripted manual session** against the live
+harness. The goal is finding what the test plan missed — unexpected interactions, edge cases,
+and usability issues that automated tests cannot anticipate.
+
+**Session structure:**
+1. Start with the happy path (legitimate browser traffic, admin console).
+2. Follow any unexpected response — probe it further before moving on.
+3. Try combinations: banned IP + new session cookie; auth bot + rate burst; canary + VPN IP.
+4. Check all dashboard pages for JS console errors during the above.
+5. Record every anomaly, even if it seems minor.
+
+**Pass criterion:** No new security-relevant finding left unclassified. Every anomaly is either:
+a) filed as a bug in §16a, or b) confirmed as expected behaviour with a one-line note.
+Duration: minimum 30 minutes. Document findings in `validation/<version>.md` under §15l.
 
 ---
 
@@ -751,10 +1453,459 @@ fills to origin.
 
 ---
 
+### 17j. Dashboard dynamic + mobile check (Playwright + Lighthouse)
+
+Run after every release that touches any file in `dashboards/`. Verifies that pages
+**actually load data at runtime** (not just pass static HTML checks), that no
+JavaScript errors are thrown, that layouts hold at three viewport sizes, and that
+the mobile score is acceptable.
+
+#### Prerequisites
+
+```bash
+pip install playwright
+playwright install chromium          # ~130 MB one-time download
+npm install -g lighthouse            # or: npx lighthouse (no install)
+```
+
+#### Step 1 — Playwright: dynamic load + JS errors + viewport screenshots
+
+Obtain a live session cookie first (login via the tunnel URL), then run:
+
+```python
+# scripts/dashboard_check.py
+import asyncio, pathlib
+from playwright.async_api import async_playwright
+
+# ── config ────────────────────────────────────────────────────────────────────
+BASE       = "https://<tunnel>.trycloudflare.com"   # or http://localhost:8443
+SESSION    = "<agw_session cookie value>"           # from browser DevTools after login
+CSRF       = "<agw_csrf cookie value>"
+
+PAGES = [
+    ("dashboard",     "/antibot-appsec-gateway/secured/dashboard"),
+    ("controls",      "/antibot-appsec-gateway/secured/controls"),
+    ("settings",      "/antibot-appsec-gateway/secured/settings"),
+    ("agents",        "/antibot-appsec-gateway/secured/agents"),
+    ("service",       "/antibot-appsec-gateway/secured/service"),
+    ("geo",           "/antibot-appsec-gateway/secured/geo"),
+    ("siem",          "/antibot-appsec-gateway/secured/siem"),
+    ("logs",          "/antibot-appsec-gateway/secured/logs"),
+]
+
+VIEWPORTS = [
+    ("desktop", 1440, 900),
+    ("tablet",   768, 1024),
+    ("mobile",   390,  844),   # iPhone 14
+]
+
+OUT = pathlib.Path("screenshots"); OUT.mkdir(exist_ok=True)
+
+DYNAMIC_SIGNALS = [
+    # each page must contain at least one of these after networkidle
+    "dashboard":  ["risk-score", "requests", "clients"],
+    "controls":   ["card-db", "card-redis", "card-gateway"],
+    "settings":   ["card-gateway-id", "card-db", "card-redis"],
+    "agents":     ["agent-table", "no-agents"],
+    "service":    ["cpu", "mem", "rss"],
+    "geo":        ["map", "geo-table"],
+    "siem":       ["siem-table", "no-events"],
+    "logs":       ["log-row", "no-logs"],
+]
+
+async def check():
+    async with async_playwright() as p:
+        browser  = await p.chromium.launch()
+        ctx      = await browser.new_context()
+        await ctx.add_cookies([
+            {"name": "agw_session", "value": SESSION, "domain": BASE.split("//")[1], "path": "/"},
+            {"name": "agw_csrf",    "value": CSRF,    "domain": BASE.split("//")[1], "path": "/"},
+        ])
+
+        results = []
+        for slug, path in PAGES:
+            for vp_name, w, h in VIEWPORTS:
+                page   = await ctx.new_page()
+                page.set_default_timeout(15_000)
+                errors = []
+                page.on("console",   lambda m:    errors.append(f"[console.error] {m.text}") if m.type == "error" else None)
+                page.on("pageerror", lambda e:    errors.append(f"[pageerror] {e}"))
+
+                await page.set_viewport_size({"width": w, "height": h})
+                resp = await page.goto(BASE + path, wait_until="networkidle")
+
+                # ── check 1: HTTP status ──────────────────────────────────────
+                status_ok = resp.status == 200
+
+                # ── check 2: not redirected to login ─────────────────────────
+                not_login = "/login" not in page.url
+
+                # ── check 3: dynamic content present ─────────────────────────
+                html     = await page.content()
+                signals  = DYNAMIC_SIGNALS.get(slug, [])
+                dyn_ok   = any(s in html for s in signals) if signals else True
+
+                # ── check 4: no horizontal scroll on mobile ───────────────────
+                scroll_ok = True
+                if vp_name == "mobile":
+                    scroll_w = await page.evaluate("document.documentElement.scrollWidth")
+                    scroll_ok = scroll_w <= w + 5   # 5px tolerance
+
+                # ── screenshot ───────────────────────────────────────────────
+                await page.screenshot(
+                    path=OUT / f"{slug}-{vp_name}.png",
+                    full_page=(vp_name == "desktop"),
+                )
+
+                verdict = "PASS" if (status_ok and not_login and dyn_ok and scroll_ok and not errors) else "FAIL"
+                results.append({
+                    "page": slug, "viewport": vp_name, "verdict": verdict,
+                    "status": resp.status, "not_login": not_login,
+                    "dyn_ok": dyn_ok, "scroll_ok": scroll_ok, "js_errors": len(errors),
+                    "errors": errors,
+                })
+                await page.close()
+
+        await browser.close()
+
+        # ── report ────────────────────────────────────────────────────────────
+        failures = [r for r in results if r["verdict"] == "FAIL"]
+        for r in results:
+            mark = "✓" if r["verdict"] == "PASS" else "✗"
+            print(f"  {mark} {r['page']:12s} @ {r['viewport']:8s}  "
+                  f"status={r['status']} dyn={r['dyn_ok']} scroll={r['scroll_ok']} js_err={r['js_errors']}")
+            for e in r["errors"]:
+                print(f"      !! {e}")
+
+        print(f"\nScreenshots: {OUT.resolve()}/")
+        if failures:
+            print(f"\nFAILED: {len(failures)} check(s)")
+            raise SystemExit(1)
+        print(f"\nAll {len(results)} checks PASS")
+
+asyncio.run(check())
+```
+
+```bash
+python3 scripts/dashboard_check.py
+```
+
+**What it validates per page × viewport:**
+
+| Check | Rule |
+|-------|------|
+| HTTP 200 | Page serves successfully with valid session |
+| Not redirected to `/login` | Session cookie accepted |
+| Dynamic content present | At least one known data-bearing element in the DOM |
+| No horizontal scroll on mobile | `scrollWidth ≤ viewport + 5 px` |
+| Zero JS console errors | `console.error` and `pageerror` events = 0 |
+
+**Pass criterion:** All pages × all 3 viewports = PASS. Screenshots saved to `screenshots/` for visual review.
+
+#### Step 2 — Lighthouse: mobile score + accessibility
+
+Run against the live tunnel for each page that renders meaningful content without heavy interaction:
+
+```bash
+BASE="https://<tunnel>.trycloudflare.com"
+COOKIE="agw_session=<value>; agw_csrf=<value>"
+
+for PAGE in dashboard controls settings service siem; do
+  lighthouse "${BASE}/antibot-appsec-gateway/secured/${PAGE}" \
+    --form-factor=mobile \
+    --throttling-method=simulate \
+    --extra-headers="{\"Cookie\": \"${COOKIE}\"}" \
+    --output=html \
+    --output-path="lh-${PAGE}-mobile.html" \
+    --chrome-flags="--headless --no-sandbox" \
+    --only-categories=performance,accessibility,best-practices \
+    --quiet
+  echo "Lighthouse done: ${PAGE}"
+done
+```
+
+Open the generated `.html` files in a browser to review scores.
+
+**Pass criteria:**
+
+| Category | Minimum score | Rationale |
+|----------|---------------|-----------|
+| Mobile Performance | ≥ 70 | Admin tools tolerate some weight; < 70 = unusable on slow 4G |
+| Accessibility | ≥ 80 | ARIA roles, colour contrast, keyboard nav for operator efficiency |
+| Best Practices | ≥ 85 | HTTPS, no deprecated APIs, no console errors counted by LH |
+
+Scores below threshold are **blocking** — record findings in `validation/<version>.md`
+under `§17j` and fix before UAT sign-off.
+
+#### Step 3 — Mobile visual review (human, 5 min)
+
+Open `screenshots/` and inspect each `*-mobile.png`:
+
+- [ ] Sidebar collapsed or hidden (not overlapping content)
+- [ ] Cards stack vertically (no two-column bleed on 390 px)
+- [ ] Tables have horizontal scroll wrapper (not clipped)
+- [ ] Buttons / pill actions are ≥ 44 px tap target
+- [ ] No text truncated mid-word by overflow: hidden
+
+#### Pass criterion (§17j overall)
+
+All three sub-checks must pass before the version advances to Step 18:
+
+1. Playwright: `0 FAIL` across all pages × viewports
+2. Lighthouse: mobile ≥ 70 · accessibility ≥ 80 · best-practices ≥ 85
+3. Mobile visual: all 5 checklist items confirmed
+
+Record results in `validation/<version>.md`:
+
+```markdown
+## Step 17j — Dashboard dynamic + mobile check
+
+### Playwright
+| Page | desktop | tablet | mobile |
+|------|---------|--------|--------|
+| dashboard | PASS | PASS | PASS |
+…
+
+### Lighthouse (mobile)
+| Page | Performance | Accessibility | Best Practices |
+|------|-------------|---------------|----------------|
+| dashboard | 82 | 91 | 92 |
+…
+
+### Mobile visual review
+- [x] Sidebar collapsed
+- [x] Cards stack vertically
+- [x] Tables scrollable
+- [x] Tap targets ≥ 44 px
+- [x] No overflow truncation
+
+**Result: PASS / FAIL**
+```
+
+---
+
+## 18. Acceptance / UAT
+
+Before marking the version as production-ready, confirm it solves the actual operational problem —
+not just that it passes technical tests.
+
+**Checklist (operator sign-off, not automated):**
+
+- [ ] Admin console loads in the target browser without JS errors.
+- [ ] IP intelligence popover, risk score breakdown, and score signals all render correctly.
+- [ ] Creating a ban, an allow-list entry, and an auth-bot entry all persist across a container restart.
+- [ ] Webhook fires correctly on a test ban (confirm payload arrives at webhook URL).
+- [ ] All new features described in `CHANGELOG.md` are demo-able end-to-end by the operator.
+- [ ] Operator can locate and clear a false-positive ban in under 60 s using the dashboard alone.
+- [ ] Demo links (§ Live Demo Checklist) work from an external network after Harbor push.
+
+**Pass criterion:** All checked items verified by a human operator, not a script.
+Record the operator name and timestamp in `validation/<version>.md`.
+
+## 19. Canary deployment gate
+
+Before promoting the multi-arch manifest to the `latest` tag in Harbor, perform a limited
+rollout to a non-critical gateway instance (e.g. staging or a single production node).
+
+```bash
+HARBOR=registry.example.com/appsecgw/appsecgw
+VER=<version>
+
+# 1. Deploy only to canary node (direct image tag, not manifest)
+ssh canary-node "docker pull ${HARBOR}:${VER}-arm64 && \
+  docker run -d --name gw-canary -p 8443:8443 ${HARBOR}:${VER}-arm64"
+
+# 2. Monitor for 15 minutes: error rate, latency, ban accuracy
+watch -n 30 "curl -sk http://canary-node:8443/antibot-appsec-gateway/metrics \
+  | python3 -m json.tool | grep -E 'error|ban|latency'"
+
+# 3. Confirm no new crash or regression pattern in logs
+ssh canary-node "docker logs gw-canary --since 15m | grep -c ERROR"
+```
+
+**Pass criterion:** Zero new ERRORs in canary logs. Error rate ≤ pre-canary baseline.
+No operator-reported false-positive spikes. After 15-minute soak, promote `latest`:
+
+```bash
+docker manifest create ${HARBOR}:latest \
+  --amend ${HARBOR}:${VER}-amd64 \
+  --amend ${HARBOR}:${VER}-arm64 \
+  --amend ${HARBOR}:${VER}-armv7
+docker manifest push ${HARBOR}:latest
+```
+
+## 20. Compliance attestation
+
+AntiBot/WAF GW processes IP addresses, HTTP headers, and request payloads from end users. Confirm
+compliance with applicable standards before production deployment.
+
+### 20a. GDPR / data-minimisation
+
+- IP addresses are PII under GDPR. Confirm `LOG_RETENTION_DAYS` (or equivalent) is set and
+  that the SQLite `events` table is pruned on schedule.
+- No full request body is logged unless `DLP_ENABLED=1` and redaction is on.
+- `GET /antibot-appsec-gateway/secured/ip-intel/<ip>` must be access-logged (`event=admin_access`)
+  for audit purposes.
+- Confirm the privacy notice at `MANUAL.md § Privacy` covers IP-address processing.
+
+```bash
+# Verify retention job fires
+docker exec <container> python3 -c "from db.sqlite import prune_old_events; prune_old_events(); print('ok')"
+```
+
+### 20b. Security controls baseline (ISO 27001 / CIS)
+
+- All admin endpoints require `X-Admin-Key` — verified in §8.
+- TLS is terminated before the gateway or by the gateway (not plaintext on public interface).
+- Secrets (`ADMIN_KEY`, `SESSION_KEY`, `POW_HMAC_KEY`) are injected via env var / secret mount,
+  never baked into the image — confirmed by §7 secret-leak scan.
+- Image uses a minimal base (Chainguard distroless / Debian slim) — confirmed by §10 Trivy.
+- No SSH or remote-management daemon inside the container — verify: `docker exec <c> ss -tlnp`.
+
+### 20c. Pass criterion
+
+All items above confirmed. Record in `validation/<version>.md` under §20. Any gap must be
+classified: accepted-risk (with owner + review date) or remediated before release.
+
+---
+
+## 21. Pipeline status report (mandatory)
+
+**Every run of this pipeline MUST end by printing (a) a per-stage status table and
+(b) the aggregate test totals — no exceptions, pass or fail.** This is the single
+artifact the operator reads to judge release-readiness. Announcing the build
+"done" without it is a protocol violation. Also append the same table + totals to
+`validation/<version>.md`.
+
+### 21a. Per-stage status table
+
+Render a Markdown table with **one row for every stage 0–20**. Never omit a row —
+a stage that was not run is marked `⏭️ SKIP` with the reason. Status legend:
+`✅ PASS` · `❌ FAIL` · `⏭️ SKIP` (+reason) · `⚠️ KNOWN` (pre-existing, documented).
+
+| # | Stage | Status | Key metric / note |
+|---|-------|--------|-------------------|
+| 0 | Zombie cleanup | ✅ | 0 orphans |
+| 0a | Version consistency | ✅ | 1.8.12 across all files |
+| 1 | Unit | ✅ | 1234 passed |
+| 2 | Functional | ✅ | 38 passed |
+| 3 | Integration | ✅ | 23 passed |
+| 3a | Component | ✅ | 20 passed |
+| 3b | Mutation | ✅ | 712/812 = 87.7% |
+| 5 | Regression | ✅ | no new failures |
+| 6 | Performance | ✅ | p95 within budget |
+| 7 | Secret-leak | ✅ | 0 leaks |
+| 8 | Injection | ✅ | 0 bypasses |
+| 9 | Bandit + Semgrep | ✅ | 0 H / 0 C · 0 findings |
+| 10 | Trivy (×3 arch) | ✅ | 0 C / 0 H / 0 M |
+| 12 | E2E pentest | ✅ | 0 bypasses |
+| 14 | Multi-arch + Harbor | ✅ | amd64 · arm64 · armv7 |
+| 15 | DAST | ✅ | no 5xx / tracebacks |
+| 15n | **Dynamic-tests catalogue** (13 categories — `tests/dynamic/run-all.sh`) | ✅ | per-category totals + grand-total in §21b |
+| 17 | Dashboard security | ✅ | 0 violations |
+| 20 | Compliance attestation | ⏭️ | operator sign-off pending |
+
+Rules:
+- Every `❌ FAIL` is expanded below the table with the failing test/finding and its
+  fix or classification.
+- Every `⚠️ KNOWN` row links the documented pre-existing issue.
+
+### 21b. Test totals (mandatory)
+
+Immediately below the table, print the aggregate counts taken from the **final
+`pytest` summary line of the full suite run** (not a subset):
+
+```
+Tests:    <collected> collected · <passed> passed · <failed> failed · <skipped> skipped · <xfail> xfail
+Mutation: <killed>/<total> = <pct>%   (gate ≥ 80%)
+Coverage: <pct>%                       (if measured)
+```
+
+- If the suite was run in shards, sum them and state that it was sharded.
+- A release may be announced **only when `failed == 0`**, or when every remaining
+  failure is an explicit `⚠️ KNOWN` with a linked rationale.
+
+**Then append the dynamic-test totals from `tests/dynamic/run-all.sh`** (verbatim — copy the per-category table + grand-total block; see §15n). Without this block the report is incomplete:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Per-category result
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Category                          PASS  FAIL  INFO  SKIP
+  1.Functional                        2     0     1     0
+  …                                  …    …    …    …
+ 13.Project-specific                  2     0     1     2
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Dynamic-tests TOTAL — tier=medium
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  PASS:  58   FAIL: 0   INFO: 15   SKIP: 31
+RESULT: ✅ PASS  (INFO + SKIP are non-blocking)
+```
+
+### 21c. Verdict line
+
+End with a single verdict line, then the version and the three image digests:
+
+```
+VERDICT: RELEASE-READY ✅   (all gates pass / only documented KNOWNs)
+   — or —
+VERDICT: BLOCKED ❌         (N unresolved FAIL(s): <list>)
+
+version: 1.8.12
+amd64:  sha256:…
+arm64:  sha256:…
+armv7:  sha256:…
+```
+
+**Pass criterion:** the status table (all 0–20 rows) + the totals line + the
+verdict line are present in both the chat output and `validation/<version>.md`.
+
+---
+
 ## Findings policy
 **Fix before declaring the build done.** Pre-existing failures (e.g.
 the JS-challenge HTML tests broken since 1.5.4 risk-gating Turnstile)
 are classified at the top of the report — never silently inherited.
+
+## Test design techniques (reference)
+
+Apply these techniques when writing new tests anywhere in the pipeline.
+
+**Equivalence partitioning + boundary value analysis:** For every numeric knob (e.g. `BAN_THRESHOLD`),
+test the boundary values (threshold − 1, threshold, threshold + 1) and one representative value
+from each class (well below, at, just above). Most bugs live at boundaries.
+
+**Decision table testing:** For detectors with multiple conditions (e.g. ua-non-browser AND
+ai-headers-incomplete AND high-rate), enumerate the combinations that produce different outcomes.
+At minimum test each rule's triggering combination and the complementary safe case.
+
+**State transition testing:** The identity lifecycle has states (new → observed → soft-challenged →
+hard-challenged → banned → expired). Write tests for every valid and invalid transition, especially
+the expiry / recovery edge.
+
+**Property-based testing:** For pure functions in `scoring.py` and `identity.py`, assert invariants
+across generated inputs rather than fixed examples. Use `hypothesis`:
+```python
+from hypothesis import given, strategies as st
+
+@given(st.floats(min_value=0, max_value=200))
+def test_risk_score_never_negative(score):
+    assert decay(score, elapsed_secs=3600) >= 0
+```
+
+**Snapshot testing:** For admin API responses and dashboard HTML fragments that must not change
+accidentally, capture a reference snapshot and diff on every build:
+```bash
+curl -sk http://127.0.0.1:18443/antibot-appsec-gateway/health > tests/snapshots/health.json
+diff tests/snapshots/health.json tests/snapshots/health.json.ref
+```
+
+**Pairwise / combinatorial testing:** For configuration combinations (§15g), use pairwise
+tools (`allpairspy`, `pict`) to cover all 2-way interactions of the 4+ config knobs without
+a full Cartesian explosion.
+
+---
 
 ## Release announcement template
 ```
@@ -917,3 +2068,48 @@ Demo service 2 (via gateway):
 
 **Do not ask the user to do any of the above steps themselves.**
 Run all checks silently and only share the final URLs + key.
+
+---
+
+## Phase: Disk Cleanup
+
+Run when disk usage is high or after multiple build iterations.
+
+### Check
+
+```bash
+df -h / /media/share
+docker system df
+```
+
+**Trigger cleanup if:** either filesystem is above 90% used, or Docker reclaimable > 1 GB.
+
+### Clean
+
+```bash
+# Remove stopped containers, dangling images, unused networks, build cache
+docker system prune -f
+
+# Remove unused volumes (anonymous volumes from old containers)
+docker volume prune -f
+
+# Remove specific old image tags that have been superseded
+docker rmi appsec-antibot-gw:<old-version> 2>/dev/null || true
+```
+
+**Safe to remove:**
+- Dangling images (`<none>:<none>`) — always
+- Build cache — always (rebuilt on next `docker build`)
+- Old version tags (e.g. `1.8.6`) — once the new version is confirmed running
+- Unused volumes — once confirmed no active container references them
+
+**Do NOT remove:**
+- Any image currently used by a running container (`docker system df` marks these as active)
+- Named volumes that map to persistent data dirs (`/data`, `/gwdata`)
+
+### Verify after
+
+```bash
+docker system df
+df -h / /media/share
+```

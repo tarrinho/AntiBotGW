@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 config.py — All module-level constants, env vars, and key loading functions.
 Extracted from proxy.py as part of Phase 1 modular refactoring.
@@ -24,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AppSecGW_1.8.5"
+GW_VERSION = "AntiBotWaf_GW_1.9.8"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -49,9 +47,12 @@ except Exception as _e:
     print(f"FATAL: invalid UPSTREAM={_upstream_raw!r} — {_e}", flush=True)
     raise SystemExit(2)
 UPSTREAM        = _upstream_raw.rstrip("/")
-# Set ALLOW_PRIVATE_UPSTREAM=1 to permit upstream URLs that resolve to
-# RFC-1918 / loopback addresses (e.g. host.docker.internal, 192.168.x.x).
-# Only enable in trusted internal deployments — disables the SSRF guard.
+# Permit upstream URLs that resolve to RFC-1918 / loopback addresses
+# (e.g. host.docker.internal, 192.168.x.x). Default OFF — the SSRF guard is
+# ON by default (1.8.11, fail-closed), so an admin cannot repoint UPSTREAM at
+# cloud metadata (169.254.169.254) or internal services. Set
+# ALLOW_PRIVATE_UPSTREAM=1 for compose deployments that legitimately use an
+# internal upstream (host.docker.internal / 192.168.x.x / a sidecar service).
 ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() == "1"
 # STRICT_VHOST: when at least one vhost is registered, reject inbound hosts that
 # are not in the vhost table (502). Default ON. Has no effect when VHOSTS is empty
@@ -59,6 +60,27 @@ ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() =
 # Set STRICT_VHOST=0 to allow unknown hosts to fall through to global UPSTREAM even
 # when other vhosts are configured.
 STRICT_VHOST = os.environ.get("STRICT_VHOST", "1").strip() == "1"
+# 1.9.8 — VHOST_PORT_AWARE: treat the inbound Host's PORT as part of the vhost
+# identity, so `challenges.site.com:8008` and `challenges.site.com:8009` are
+# DISTINCT vhosts (separate config / upstream / stats / bans). Default OFF — the
+# port is stripped and the vhost key is host-only (the historical behaviour).
+# When ON: the vhost key is `host:port`; lookup precedence is exact `host:port`
+# → portless `host` (an all-ports fallback) → `*.parent` wildcards. The gateway
+# binds a single LISTEN_PORT, so the distinction comes from the Host header —
+# the front (CDN / reverse proxy) must forward the original `host:port` (or
+# X-Forwarded-Host) for this to work.
+#   Why this exists: CTFd serves DYNAMIC challenges as separate instances on the
+#   SAME hostname but DIFFERENT ports (e.g. challenges.site.com:8008,
+#   challenges.site.com:8009, …). Host-only keying collapses them into one
+#   vhost, so each challenge can't have its own upstream / policy / ban scope —
+#   port-aware keying is required to front per-instance dynamic challenges.
+VHOST_PORT_AWARE = os.environ.get("VHOST_PORT_AWARE", "0").strip() in ("1", "true", "yes", "on")
+# PRESERVE_HOST: forward the client's original Host header to upstream unchanged.
+# Default OFF — the proxy rewrites Host to the upstream's netloc so TLS SNI and
+# upstream CSRF / origin-validation work correctly.  Enable only when upstream
+# routes by incoming Host (CDN-style backends, multi-tenant apps that expect the
+# public hostname) and does NOT validate Origin against its own netloc.
+PRESERVE_HOST = os.environ.get("PRESERVE_HOST", "0") in ("1", "true", "yes")
 LISTEN_HOST     = os.environ.get("LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8443"))
 
@@ -71,6 +93,14 @@ HONEYPOT_BAN_SECS = int(os.environ.get("HONEYPOT_BAN_SECS", "3600"))  # 1 h defa
 # AI-agent-specific signals (canary-echo, honeypot-silent, honeypot)
 # upgrade to hostile-pool duration.
 HOSTILE_BAN_SECS  = int(os.environ.get("HOSTILE_BAN_SECS", "86400"))   # 24 h
+# 1.9.1 iter-11 — ban blast-radius. "global" (default): a ban earned on any
+# vhost locks the identity/IP out across ALL vhosts (current behaviour,
+# backward-compatible). "vhost": the ban only applies to the vhost where the
+# bad behaviour was observed — the same identity can still use other vhosts on
+# the gateway. Per-vhost overridable via the VHOSTS JSON. See MANUAL §4.
+BAN_SCOPE = (os.environ.get("BAN_SCOPE", "global").strip().lower()
+             if os.environ.get("BAN_SCOPE", "global").strip().lower()
+             in ("global", "vhost") else "global")
 # 1.7.3 — "Really Ban": definitive-proof signals (canary-echo, honeypot-silent,
 # honeypot) earn a 30-day ban instead of the standard 24 h. Configurable via
 # REALLY_BAN_SECS env var or the Controls dashboard Thresholds card.
@@ -176,8 +206,30 @@ _HOSTILE_REASONS  = {"canary-echo", "honeypot-silent", "honeypot",
                      "ai-probe", "suspicious-path", "session-churn"}
 POW_DIFFICULTY    = 5       # leading hex zeros (~16M hashes for d=5)
 POW_VALID_SECS    = 300     # 5 minutes
-BEHAVIOR_WINDOW   = 30      # seconds
-BEHAVIOR_MAX_REGULAR = 8    # >N requests with σ<10ms → bot
+BEHAVIOR_WINDOW   = 30      # retained for backwards compat — not used by behavioral.py
+BEHAVIOR_MAX_REGULAR = 8    # retained for backwards compat — not used by behavioral.py
+
+# 1.8.11 QW-6 — expose actual behavioral detection thresholds as env vars.
+# behavioral.py uses statistical analysis on the last N request intervals;
+# these constants map directly to the three orthogonal tests it runs.
+BEHAVIORAL_SAMPLE_N         = int(os.environ.get("BEHAVIORAL_SAMPLE_N",    "16"))   # last N intervals to analyse
+BEHAVIORAL_COV_THRESHOLD    = float(os.environ.get("BEHAVIORAL_COV_THRESHOLD", "0.05"))  # σ/μ below this → too regular
+BEHAVIORAL_R1_THRESHOLD     = float(os.environ.get("BEHAVIORAL_R1_THRESHOLD",  "0.85"))  # lag-1 autocorrelation above this → bot
+BEHAVIORAL_BIN_PCT_THRESHOLD= float(os.environ.get("BEHAVIORAL_BIN_PCT",       "0.70"))  # % of intervals in one 50ms bin above this → bot
+BEHAVIORAL_MAX_INTERVAL_S   = float(os.environ.get("BEHAVIORAL_MAX_INTERVAL",  "2.0"))   # μ above this → skip (too slow for bot)
+BEHAVIORAL_SKIP_INTERVAL_S  = float(os.environ.get("BEHAVIORAL_SKIP_INTERVAL", "5.0"))   # individual interval above this → skip entire sample
+
+# 1.7.3 P2 — Risk-gated redirect maze (default ON as of 1.8.13). Identities at
+# risk >= REDIRECT_MAZE_THRESHOLD are bounced through REDIRECT_MAZE_DEPTH signed
+# 302 hops; completing all hops in < REDIRECT_MAZE_MIN_MS fires the
+# `redirect-maze-bot` signal (weight = REDIRECT_MAZE_SCORE). Distinct from the
+# AI Labyrinth (LABYRINTH_*) which traps link-following crawlers in hidden
+# fake-content pages — this one detects bots by redirect *timing*. Hot-reloadable.
+REDIRECT_MAZE_ENABLED   = os.environ.get("REDIRECT_MAZE_ENABLED", "1") in ("1", "true", "yes")
+REDIRECT_MAZE_THRESHOLD = float(os.environ.get("REDIRECT_MAZE_THRESHOLD", "80"))   # risk score to enter the maze
+REDIRECT_MAZE_DEPTH     = int(os.environ.get("REDIRECT_MAZE_DEPTH", "3"))          # number of 302 hops
+REDIRECT_MAZE_MIN_MS    = int(os.environ.get("REDIRECT_MAZE_MIN_MS", "800"))       # total < this across all hops → bot
+REDIRECT_MAZE_SCORE     = int(os.environ.get("REDIRECT_MAZE_SCORE", "55"))         # weight for the redirect-maze-bot signal
 
 # 1.6.7 — runtime-key directory.
 # Container (Dockerfile symlinks /app/.X_key → /data/.X_key on build) keeps
@@ -190,7 +242,7 @@ def _resolve_key_dir() -> str:
         d = os.path.expanduser(env_dir)
         try:
             os.makedirs(d, mode=0o700, exist_ok=True)
-            try: os.chmod(d, 0o700)
+            try: os.chmod(d, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
             except OSError: pass  # nosec B110 — chmod is best-effort hardening; dir already writable
             return d
         except OSError as _e:
@@ -308,6 +360,74 @@ HONEYPOT_PATHS = {
     "/staff/dashboard.json", "/.crawler-trap/secrets",
 }
 
+# 1.8.11 QW-1 — operator-injectable extra honeypot trap paths.
+# HONEYPOT_EXTRA_PATHS: comma-separated or JSON-array of path strings, e.g.
+#   HONEYPOT_EXTRA_PATHS='["/my-secret-admin","/legacy/backdoor.php"]'
+# Merged into HONEYPOT_PATHS at startup; also hot-reloadable via /__config.
+_honeypot_extra_raw = os.environ.get("HONEYPOT_EXTRA_PATHS", "").strip()
+HONEYPOT_EXTRA_PATHS: list = []
+if _honeypot_extra_raw:
+    try:
+        _extra = json.loads(_honeypot_extra_raw) if _honeypot_extra_raw.startswith("[") \
+            else [p.strip() for p in _honeypot_extra_raw.split(",") if p.strip()]
+        if isinstance(_extra, list):
+            HONEYPOT_EXTRA_PATHS = [str(p) for p in _extra if p]
+            HONEYPOT_PATHS = HONEYPOT_PATHS | set(HONEYPOT_EXTRA_PATHS)
+    except Exception:
+        pass
+
+# 1.8.11 QW-1 — operator-provided extra honeypot paths (JSON array env var).
+# Merged into HONEYPOT_PATHS at startup so the live detection set is updated.
+HONEYPOT_EXTRA_PATHS: list = []
+try:
+    import json as _hp_json
+    _hp_extra_raw = os.environ.get("HONEYPOT_EXTRA_PATHS", "").strip()
+    if _hp_extra_raw:
+        _hp_extra = _hp_json.loads(_hp_extra_raw)
+        if isinstance(_hp_extra, list):
+            HONEYPOT_EXTRA_PATHS = [str(p) for p in _hp_extra if str(p).startswith("/")]
+            HONEYPOT_PATHS = set(HONEYPOT_PATHS) | set(HONEYPOT_EXTRA_PATHS)
+except Exception:
+    HONEYPOT_EXTRA_PATHS = []
+
+# 1.8.11 QW-6 — behavioral detection thresholds (env-overridable, hot-reloadable).
+BEHAVIORAL_SAMPLE_N         = int(os.environ.get("BEHAVIORAL_SAMPLE_N",    "16"))
+BEHAVIORAL_COV_THRESHOLD    = float(os.environ.get("BEHAVIORAL_COV_THRESHOLD", "0.05"))
+BEHAVIORAL_R1_THRESHOLD     = float(os.environ.get("BEHAVIORAL_R1_THRESHOLD",  "0.85"))
+BEHAVIORAL_BIN_PCT_THRESHOLD= float(os.environ.get("BEHAVIORAL_BIN_PCT_THRESHOLD", "0.70"))
+BEHAVIORAL_MAX_INTERVAL_S   = float(os.environ.get("BEHAVIORAL_MAX_INTERVAL_S",  "2.0"))
+BEHAVIORAL_SKIP_INTERVAL_S  = float(os.environ.get("BEHAVIORAL_SKIP_INTERVAL_S", "5.0"))
+
+# 1.8.13 — individual security-header values (each env-overridable + hot-reloadable).
+SEC_X_FRAME_OPTIONS        = os.environ.get("SEC_X_FRAME_OPTIONS",        "SAMEORIGIN")
+SEC_X_CONTENT_TYPE_OPTIONS = os.environ.get("SEC_X_CONTENT_TYPE_OPTIONS", "nosniff")
+SEC_REFERRER_POLICY        = os.environ.get("SEC_REFERRER_POLICY",
+                                            "strict-origin-when-cross-origin")
+SEC_X_PERMITTED_XDP        = os.environ.get("SEC_X_PERMITTED_XDP",        "none")
+SEC_PERMISSIONS_POLICY     = os.environ.get("SEC_PERMISSIONS_POLICY",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+    "magnetometer=(), microphone=(), payment=(), usb=()")
+SEC_HSTS                   = os.environ.get("SEC_HSTS",
+    "max-age=31536000; includeSubDomains")
+SEC_CSP                    = os.environ.get("SEC_CSP",
+    "upgrade-insecure-requests; frame-ancestors 'self'")
+SEC_COOP                   = os.environ.get("SEC_COOP", "same-origin")
+SEC_CORP                   = os.environ.get("SEC_CORP", "same-site")
+SEC_SERVER_OVERRIDE        = os.environ.get("SEC_SERVER_OVERRIDE",        "AntiBot/WAF GW")
+
+# Mapping used by the security-header injection middleware (header-name → knob-name).
+SEC_HEADER_KNOBS: list[tuple[str, str]] = [
+    ("X-Frame-Options",                   "SEC_X_FRAME_OPTIONS"),
+    ("X-Content-Type-Options",            "SEC_X_CONTENT_TYPE_OPTIONS"),
+    ("Referrer-Policy",                   "SEC_REFERRER_POLICY"),
+    ("X-Permitted-Cross-Domain-Policies", "SEC_X_PERMITTED_XDP"),
+    ("Permissions-Policy",                "SEC_PERMISSIONS_POLICY"),
+    ("Strict-Transport-Security",         "SEC_HSTS"),
+    ("Content-Security-Policy",           "SEC_CSP"),
+    ("Cross-Origin-Opener-Policy",        "SEC_COOP"),
+    ("Cross-Origin-Resource-Policy",      "SEC_CORP"),
+]
+
 # Path PATTERNS (regex) that indicate file-hunting / CTF reconnaissance.
 SUSPICIOUS_PATH_PATTERNS = (
     # ── Flag / secret hunting ────────────────────────────────────────────
@@ -363,7 +483,7 @@ SUSPICIOUS_PATH_PATTERNS = (
     # ── Path traversal (encoded variants) ────────────────────────────────
     re.compile(r"\.\.[\\/]"),                          # ../  ..\
     re.compile(r"\.\.;[\\/]"),                         # semicolon trick (Tomcat)
-    re.compile(r"\.{4,}/"),                            # ....//
+    re.compile(r"\.{4,128}/"),                         # ....//  (M1: bounded, was \.{4,} → O(n²))
     re.compile(r"%2e%2e[%/\\]",                  re.I),  # URL-encoded ..
     re.compile(r"%252e%252e",                    re.I),  # double-encoded
     re.compile(r"%c0%ae|%c0%2e",                 re.I),  # overlong UTF-8 ..
@@ -393,7 +513,7 @@ SUSPICIOUS_PATH_PATTERNS = (
     re.compile(r"(c:[\\/])?windows[\\/](system32[\\/])?(config[\\/]sam|win\.ini|boot\.ini|drivers[\\/]etc[\\/]hosts)", re.I),
     # ── OS / shell injection ─────────────────────────────────────────────
     re.compile(r"[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id|env|uname|nslookup|dig|ping|ifconfig|netstat|lsof|ps)\b", re.I),
-    re.compile(r"\$\([^)]+\)|`[^`]+`|<\([^)]+\)",           re.I),
+    re.compile(r"\$\([^)]{1,128}\)|`[^`\n]{1,128}`|<\([^)]{1,128}\)", re.I),  # M2: bounded (was [^)]+ → O(n²))
     re.compile(r"\b(/bin/|/usr/bin/|/sbin/|/usr/sbin/)(sh|bash|zsh|nc|cat|ls|chmod|chown|wget|curl)\b", re.I),
     re.compile(r"\b(cmd\.exe|powershell(\.exe)?|certutil|bitsadmin)\b",       re.I),
     # ── Server-side template injection (path-side hints) ─────────────────
@@ -450,6 +570,12 @@ JA4_DENY_LIST: set = {
     e.strip() for e in os.environ.get("JA4_DENY_LIST", "").split(",")
     if e.strip()
 }
+# 1.8.6 — JA4H HTTP fingerprint deny-list. 1.8.14: changed to `set` to match
+# the sibling JA4_DENY_LIST so `_read_hot_reload_state`'s isinstance(v, set)
+# check picks it up and serialises it as a sorted list for the export XML.
+JA4H_DENY_LIST: set = {
+    s.strip() for s in os.environ.get("JA4H_DENY_LIST", "").split(",") if s.strip()
+}
 JA4_AUTODENY_THRESHOLD = int(os.environ.get("JA4_AUTODENY_THRESHOLD", "3"))
 JA4_AUTODENY_WINDOW_S  = int(os.environ.get("JA4_AUTODENY_WINDOW_S",  "86400"))
 _ja4_trusted_raw = os.environ.get("JA4_TRUSTED_PEERS", "").strip()
@@ -472,6 +598,20 @@ LOCALE_GEO_CHECK_ENABLED  = os.environ.get("LOCALE_GEO_CHECK_ENABLED",  "1") in 
 ROBOTS_MONITOR_ENABLED    = os.environ.get("ROBOTS_MONITOR_ENABLED",    "1") in ("1", "true", "yes")
 # 1.6.10 — HTTP/2 fingerprint fallback (H2_FP_ENABLED=0 by default; off unless TLS-terminating)
 H2_FP_ENABLED             = os.environ.get("H2_FP_ENABLED",             "0") in ("1", "true", "yes")
+# 1.8.14 Week 2 — fingerproxy sidecar: H2 SETTINGS frame fingerprinting.
+# Set H2_SETTINGS_FP_ENABLED=1 when fingerproxy (or a compatible sidecar) is
+# injecting X-H2-FP / X-H2-Settings headers.  Both default OFF so operators
+# who are not running fingerproxy see no change in behaviour.
+H2_SETTINGS_FP_ENABLED   = os.environ.get("H2_SETTINGS_FP_ENABLED",   "0") in ("1", "true", "yes")
+H2_FP_DENY_ENABLED        = os.environ.get("H2_FP_DENY_ENABLED",       "1") in ("1", "true", "yes")
+H2_SETTINGS_MISMATCH_ENABLED = os.environ.get("H2_SETTINGS_MISMATCH_ENABLED", "1") in ("1", "true", "yes")
+# Header names injected by fingerproxy (override if your sidecar uses different names)
+H2_FP_HEADER              = os.environ.get("H2_FP_HEADER",              "X-H2-FP")
+H2_SETTINGS_HEADER        = os.environ.get("H2_SETTINGS_HEADER",        "X-H2-Settings")
+# Deny-listed H2 SETTINGS fingerprints (comma-separated hash values from fingerproxy)
+H2_FP_DENY_LIST: frozenset = frozenset(
+    s.strip() for s in os.environ.get("H2_FP_DENY_LIST", "").split(",") if s.strip()
+)
 # 1.6.10 — PoW minimum solve time (ms): reject solutions that arrive suspiciously fast
 POW_MIN_SOLVE_MS          = int(os.environ.get("POW_MIN_SOLVE_MS",      "200"))
 # 1.6.10 — tighter session-churn threshold for hosting/datacenter ASNs
@@ -597,12 +737,45 @@ PRUNE_INTERVAL_SECS = 600  # run every 10 min
 import time as _t
 
 # ── DB backend ─────────────────────────────────────────────────────────────
-DB_BACKEND = os.environ.get("DB_BACKEND", "sqlite").strip().lower()
-if DB_BACKEND not in ("sqlite", "postgres"):
-    print(f"[db] unknown DB_BACKEND={DB_BACKEND!r}; falling back to sqlite",
+# Backend selection (1.9.7 — DB_BACKEND is authoritative when explicit):
+#   DB_BACKEND=sqlite              → SQLite, even if POSTGRES_DSN is set
+#                                    (the DSN is left configured but inactive)
+#   DB_BACKEND=postgres + DSN      → Postgres
+#   DB_BACKEND unset + DSN set     → Postgres (DSN implies PG; back-compat)
+#   DB_BACKEND=postgres + no DSN   → invalid → SQLite + warning
+#   DB_BACKEND unset/sqlite, no DSN→ SQLite
+# Selecting on DB_BACKEND (not raw DSN presence) keeps READS (active_backend/
+# open_conn) aligned with WRITES (the writer loop branches on DB_BACKEND), so
+# a configured-but-unwanted DSN can't split reads→PG while writes→SQLite.
+POSTGRES_DSN = os.environ.get("POSTGRES_DSN", "").strip()
+_legacy_db_backend = os.environ.get("DB_BACKEND", "").strip().lower()
+if _legacy_db_backend == "sqlite" and POSTGRES_DSN:
+    # Operator explicitly pins SQLite while a DSN is configured: DB_BACKEND
+    # wins. DEACTIVATE the DSN so EVERY DSN-keyed path stays on SQLite — the
+    # active_backend()/open_conn() read path, the writer loop, and the PG
+    # mirror. (Previously reads keyed on POSTGRES_DSN went to PG while writes
+    # went to SQLite — a split that also ran synchronous psycopg calls on the
+    # event loop and stalled /live under load.) The DSN stays in the env, so a
+    # later flip to PG is just `DB_BACKEND=postgres` (or unset DB_BACKEND).
+    print("[db] DB_BACKEND=sqlite explicitly set with POSTGRES_DSN present; "
+          "running SQLite and leaving the DSN inactive (set DB_BACKEND=postgres "
+          "to activate PG).", flush=True)
+    POSTGRES_DSN = ""
+    DB_BACKEND = "sqlite"
+elif POSTGRES_DSN:
+    # DSN set and DB_BACKEND is postgres or unset → Postgres.
+    DB_BACKEND = "postgres"
+elif _legacy_db_backend == "postgres":
+    print("[db] DB_BACKEND=postgres requested but POSTGRES_DSN is unset; "
+          "falling back to sqlite (PG mode requires POSTGRES_DSN)",
           flush=True)
     DB_BACKEND = "sqlite"
-POSTGRES_DSN = os.environ.get("POSTGRES_DSN", "").strip()
+elif _legacy_db_backend in ("sqlite", ""):
+    DB_BACKEND = "sqlite"
+else:
+    print(f"[db] unknown DB_BACKEND={_legacy_db_backend!r}; falling back to "
+          f"sqlite", flush=True)
+    DB_BACKEND = "sqlite"
 
 # ── SQLite persistence ─────────────────────────────────────────────────────
 DB_PATH = os.environ.get("DB_PATH", os.path.join(
@@ -612,6 +785,28 @@ DB_PATH = os.environ.get("DB_PATH", os.path.join(
 REDIS_URL          = os.environ.get("REDIS_URL", "").strip()
 REDIS_NS           = os.environ.get("REDIS_NS", "appsecgw").strip() or "appsecgw"
 REDIS_TIMEOUT      = float(os.environ.get("REDIS_TIMEOUT", "0.5"))
+# 1.8.8 — TLS enforcement. When true (default) the gateway refuses to connect
+# to Redis unless REDIS_URL uses the rediss:// scheme. Set REDIS_REQUIRE_TLS=false
+# only in isolated dev/test environments where network-level encryption is not
+# available (e.g. localhost loopback, Docker-internal network).
+REDIS_REQUIRE_TLS: bool = os.environ.get("REDIS_REQUIRE_TLS", "true").strip().lower() not in ("0", "false", "no")
+
+# 1.8.8 — IP/CIDR allowlist for Redis connections. When non-empty the gateway
+# refuses to connect to a Redis host whose resolved IP is not in this list.
+# Empty = no restriction (single-host deployments where Docker network isolation
+# is the only enforcement layer).
+_redis_allow_raw = os.environ.get("REDIS_ALLOW_LIST", "").strip()
+REDIS_ALLOW_LIST: list = []   # list of normalised CIDR strings; populated below
+if _redis_allow_raw:
+    import ipaddress as _ip
+    for _ra_entry in _redis_allow_raw.split(","):
+        _ra_entry = _ra_entry.strip()
+        if _ra_entry:
+            try:
+                REDIS_ALLOW_LIST.append(str(_ip.ip_network(_ra_entry, strict=False)))
+            except ValueError:
+                print(f"WARN: invalid REDIS_ALLOW_LIST entry {_ra_entry!r} — ignoring",
+                      flush=True)
 
 # ── Webhook fan-out ────────────────────────────────────────────────────────
 WEBHOOK_URL    = os.environ.get("WEBHOOK_URL", "").strip()
@@ -625,6 +820,13 @@ WEBHOOK_EVENT_FILTER = [
 SERVICE_METRICS_INTERVAL = float(os.environ.get("SVC_METRICS_INTERVAL", "60"))    # secs (60s → 30-day window at ~22 MB)
 SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "43200"))  # in-mem samples (30 days × 1440/day)
 SVC_DB_RETENTION_HOURS = int(os.environ.get("SVC_DB_RETENTION_HOURS", "720"))    # on-disk retention
+
+# Stage 20a (GDPR data-minimization): prune the SQLite events table beyond this
+# horizon. Default 30 days matches SERVICE_METRICS_RETENTION. Postgres mirror
+# uses TimescaleDB drop_chunks for the same role; this knob is for the SQLite
+# source-of-truth so single-node deployments still meet the retention SLA.
+EVENTS_RETENTION_DAYS = int(os.environ.get("EVENTS_RETENTION_DAYS", "30"))
+EVENTS_PRUNE_INTERVAL_SECS = int(os.environ.get("EVENTS_PRUNE_INTERVAL_SECS", "3600"))  # hourly
 _PROC = "/proc"
 _DATA_PATH = os.environ.get("DB_PATH", "/data/antibot.db")
 
@@ -645,6 +847,9 @@ if _trusted_proxies_raw:
         except ValueError as _e2:
             print(f"FATAL: invalid TRUSTED_PROXIES entry {_e!r} — {_e2}", flush=True)
             raise SystemExit(2)
+# Normalised CIDR strings — hot-reload stores/reads this form; TRUSTED_PROXIES_NETS
+# holds the parsed ip_network objects and is updated in tandem by proxy_handler.
+TRUSTED_PROXIES: list = [str(n) for n in TRUSTED_PROXIES_NETS]
 
 # ── Structured logging + request correlation IDs ─────────────────────────
 LOG_FORMAT = os.environ.get("LOG_FORMAT", "text").lower()
@@ -663,16 +868,33 @@ _ADMIN_PUBLIC_SUBPATHS = (
     "/botd-report",
     "/automation-report",
     "/assets/botd.bundle.js",
+    # 1.9.0 (iter-5) — dashboard chart + sanitiser libraries must be
+    # reachable on the login page (before the session cookie exists)
+    # so the initial render isn't a bare HTML document with no JS.
+    # Static, immutable files — no leak risk.
+    "/assets/chart.umd.min.js",
+    "/assets/purify.min.js",
     "/tarpit/",
+    # 1.7.3 P2 — redirect maze (public; HMAC-token-gated internally)
+    "/maze",
     "/fp-report",
     "/sw.js",
     # 1.7.3 — AI-agent detection probes (public, no auth required)
     "/probe",
-    "/maze",
     "/canary-probe/",
+    # 1.8.5 — interaction-report must be public: bot-detection JS posts here
+    # before any session exists. Missing entry caused silent bot-detect failure.
+    "/interaction-report",
+    # 1.8.9 — favicon assets: injected into every HTML response so browsers
+    # fetch them without a session cookie.
+    "/favicon.ico",
+    "/apple-touch-icon.png",
+    "/favicon.svg",
 )
 _ADMIN_LOGIN_SUBPATHS = ("/login", "/logout",
-                         "/auth/oidc/login", "/auth/oidc/callback")
+                         "/auth/oidc/login", "/auth/oidc/callback",
+                         # 1.8.5 — TOTP step: missing entry blocked 2FA entirely
+                         "/login/totp")
 
 # High-frequency read-only polling endpoints that must not flood the events
 # buffer — recording them every 2–15 s displaces real traffic events.
@@ -688,6 +910,7 @@ RISK_WEIGHTS = {
     "honeypot":              50,
     "honeypot-silent":       50,
     "suspicious-path":       50,
+    "redirect-maze-bot":     REDIRECT_MAZE_SCORE,   # 1.7.3 P2 — redirect-timing bot
     "ai-probe":              40,
     "ai-enumeration":        30,
     "behavior":               8,
@@ -771,17 +994,16 @@ RISK_WEIGHTS = {
     "webgl-missing":         15,
     # 1.7.3 — AI-agent specific signals
     "honey-cred":            90,   # P1: fake credential used
-    "redirect-maze-bot":     55,   # P2: maze completed too fast
     "llm-no-subresources":   40,   # P3: HTML fetched without CSS/JS/images
     "canary-probe-miss":     35,   # P4: preload probe never fetched
-    # 1.8.5 — new signals
+    # 1.8.6 — new signals
     "body-critical-injection": 80,
     "method-override-attempt": 35,
     "smuggling-dual-header":   90,
     "smuggling-invalid-te":    90,
     "smuggling-obfuscated-te": 90,
     "smuggling-duplicate-cl":  90,
-    # 1.8.5 Week 3/4 — new detection signals
+    # 1.8.6 Week 3/4 — new detection signals
     "body-xxe":                80,
     "body-proto-pollution":    50,
     "header-ssti":             50,
@@ -791,7 +1013,43 @@ RISK_WEIGHTS = {
     "gql-depth-exceeded":      30,
     "upload-dangerous-ext":    60,
     "upload-dangerous-magic":  70,
+    # 1.8.6 — credential stuffing + JA4H signals
+    "upstream-auth-fail":      40,
+    "ja4h-deny":               90,
+    # 1.8.6 — client-side interaction probe
+    "no-interaction":          20,
+    "bot-motion":              25,
+    "scripted-motion":         20,
+    "bot-scroll":              15,
+    "scripted-keys":           15,
+    "low-entropy-input":       15,
+    # 1.8.12 — honeypot learning subsystem
+    "coordinated-honeypot":    30,   # N IPs hit same trap path in 5-min window
+    "honey-fp-match":          15,   # JA4 matches a confirmed-attacker fingerprint
+    # 1.8.14 — threat-intel feed signals (reputation/feeds.py)
+    "feodo-c2":                60,   # abuse.ch Feodo Tracker — known botnet C2 IP
+    "cins-rogue":              30,   # CINS Army — rogue / scan-origin IP
+    "urlhaus-malware":         45,   # abuse.ch URLhaus — active malware-hosting IP
+    # 1.8.14 Week 2 — fingerproxy H2 SETTINGS fingerprinting (integrations/fingerproxy.py)
+    "h2-settings-deny":        25,   # H2 SETTINGS fingerprint in H2_FP_DENY_LIST
+    "h2-settings-mismatch":    15,   # H2 SETTINGS inconsistent with claimed browser UA
+    # 1.8.14 Week 3 — JS multi-vector consistency (detection/js_consistency.py)
+    "js-cua-version-mismatch": 20,   # Sec-Ch-Ua v= doesn't match Chrome version in UA
+    "js-mobile-hint-mismatch": 20,   # Sec-Ch-Ua-Mobile contradicts UA platform
+    "js-fetch-impossible":     30,   # Sec-Fetch-* combo real browsers never produce
+    # B-01 hardening — curl-impersonate / browser-impersonator gap
+    "sec-fetch-nav-absent":    20,   # Chrome/Edge UA on GET with no Sec-Fetch-Mode at all
 }
+
+# ── 1.8.6 — Credential stuffing detection config ─────────────────────────────
+AUTH_PATHS: frozenset = frozenset(
+    p.strip() for p in
+    os.environ.get("AUTH_PATHS", "/login,/signin,/auth,/api/auth,/api/login").split(",")
+    if p.strip()
+)
+AUTH_FAIL_THRESHOLD: int  = int(os.environ.get("AUTH_FAIL_THRESHOLD", "5"))
+AUTH_FAIL_WINDOW_SECS: int = int(os.environ.get("AUTH_FAIL_WINDOW_SECS", "300"))
+CRED_STUFF_GLOBAL_RPS: float = float(os.environ.get("CRED_STUFF_GLOBAL_RPS", "5.0"))
 
 SOFT_CHALLENGE_SCORE = float(os.environ.get("SOFT_CHALLENGE_SCORE", "4"))
 ESCALATION_THRESHOLD = float(os.environ.get("ESCALATION_THRESHOLD", "30"))
@@ -846,15 +1104,6 @@ PATH_SWEEP_THRESHOLD    = int(os.environ.get("PATH_SWEEP_THRESHOLD",    "40"))  
 HONEY_CRED_ENABLED = os.environ.get("HONEY_CRED_ENABLED", "1") in ("1", "true", "yes")
 HONEY_CRED_SCORE   = float(os.environ.get("HONEY_CRED_SCORE", "90"))
 
-# ── 1.7.3 — P2: risk-gated redirect maze ─────────────────────────────────────
-# For identities above threshold, serve a chain of signed redirects.
-# Agents follow all steps in milliseconds; humans show normal latency.
-REDIRECT_MAZE_ENABLED   = os.environ.get("REDIRECT_MAZE_ENABLED",   "0") in ("1", "true", "yes")
-REDIRECT_MAZE_THRESHOLD = float(os.environ.get("REDIRECT_MAZE_THRESHOLD", "20"))  # risk score
-REDIRECT_MAZE_DEPTH     = int(os.environ.get("REDIRECT_MAZE_DEPTH",     "4"))     # redirect steps
-REDIRECT_MAZE_MIN_MS    = float(os.environ.get("REDIRECT_MAZE_MIN_MS",  "800"))   # ms a human needs
-REDIRECT_MAZE_SCORE     = float(os.environ.get("REDIRECT_MAZE_SCORE",   "55"))
-
 # ── 1.7.3 — P3: LLM no-subresource heuristic ────────────────────────────────
 # Real browsers load CSS/JS/images for every HTML page. AI agents fetch only
 # HTML. Track ratio: if N HTML pages fetched with zero sub-resources → LLM.
@@ -875,6 +1124,9 @@ CANARY_PROBE_SCORE      = float(os.environ.get("CANARY_PROBE_SCORE",      "20"))
 # ── 1.7.2 — browser fingerprint enrichment (canvas + WebGL) ─────────────────
 FP_ENRICHMENT_ENABLED = os.environ.get("FP_ENRICHMENT_ENABLED", "1") in ("1", "true", "yes")
 
+# ── 1.8.6 — client-side interaction probe (mouse/scroll/keystroke entropy) ───
+INTERACTION_PROBE_ENABLED = os.environ.get("INTERACTION_PROBE_ENABLED", "1") in ("1", "true", "yes")
+
 # ── 1.7.2 — service worker challenge ────────────────────────────────────────
 SW_CHALLENGE_ENABLED = os.environ.get("SW_CHALLENGE_ENABLED", "0") in ("1", "true", "yes")
 
@@ -883,6 +1135,47 @@ POW_CHAL_THRESHOLD = float(os.environ.get("POW_CHAL_THRESHOLD", "30.0"))
 
 TARPIT_ENABLED = os.environ.get("TARPIT_ENABLED", "0") in ("1", "true", "yes")
 TARPIT_DELAY_MS = int(os.environ.get("TARPIT_DELAY_MS", "1500"))
+
+# 1.8.15 — scheduled daily VACUUM (SQLite backend only).
+# Format: "HH:MM" 24-h. Empty string disables. Default "05:00" = 5 AM container
+# local time. The scheduler respects the migration guard + single-flight lock:
+# if a manual VACUUM or DB migration is in flight at the scheduled time, the
+# run is skipped (slog'd) and the next attempt is at the same time tomorrow.
+VACUUM_DAILY_AT = os.environ.get("VACUUM_DAILY_AT", "05:00").strip()
+
+# 1.8.15 — gw_audit retention (days). Older rows pruned by _prune_state_loop.
+# 0 = disable pruning (legacy behaviour). Default 365 days.
+GW_AUDIT_RETENTION_DAYS = int(os.environ.get("GW_AUDIT_RETENTION_DAYS", "365"))
+
+# 1.8.15 — what page blocked clients receive.
+# "homepage" (default): upstream's / content (stealth — looks like a normal page load).
+# "404": upstream's real 404 page (explicit rejection signal, status 404).
+BLOCK_RESPONSE_MODE = os.environ.get("BLOCK_RESPONSE_MODE", "homepage")
+
+# 1.8.14 — PRESERVE_HOST: when True, skip Host/Origin/Referer rewriting on
+# forward and pass the client's original Host to upstream. Default False (safe
+# default rewrites Host to upstream's netloc). Per-vhost; hot-reloadable.
+PRESERVE_HOST = os.environ.get("PRESERVE_HOST", "").strip().lower() in ("1", "true", "yes", "on")
+
+# 1.8.15 — grace window (seconds) granted to an identity when an operator
+# clicks Allow / Unban. During this window heuristic detection is skipped so
+# the identity can re-establish a session without being immediately re-banned.
+# Set 0 to disable (operator allow = risk-reset only, no detection bypass).
+ALLOW_BYPASS_SECS = int(os.environ.get("ALLOW_BYPASS_SECS", "300"))
+
+# 1.8.15 — upstream request timeouts. Previous code hardcoded 30s total,
+# which made every user wait 30s when upstream was slow/flapping before
+# the circuit breaker tripped (10 consecutive failures). Tighter defaults
+# fail fast and surface the cached decoy page sooner.
+#   UPSTREAM_TIMEOUT_SECS         total upstream request timeout (default 10)
+#   UPSTREAM_CONNECT_TIMEOUT_SECS TCP connect timeout (default 3)
+UPSTREAM_TIMEOUT_SECS         = int(os.environ.get("UPSTREAM_TIMEOUT_SECS",         "10"))
+UPSTREAM_CONNECT_TIMEOUT_SECS = int(os.environ.get("UPSTREAM_CONNECT_TIMEOUT_SECS", "3"))
+
+# 1.8.14 M-1 — per-vhost risk weight overrides (global default: no overrides).
+# vc("RISK_OVERRIDES") falls through to this when no vhost context is active,
+# so protect() never raises AttributeError on vanilla (non-vhost) setups.
+RISK_OVERRIDES: dict = {}
 
 ESCALATE_ONLY_REASONS = {
     "abuseipdb-high", "abuseipdb-med",
@@ -893,6 +1186,13 @@ ESCALATE_ONLY_REASONS = {
     "suspicious-body",
     "dlp-cc", "dlp-aws", "dlp-jwt", "dlp-private-key",
     "dlp-api-key", "dlp-pii-email", "dlp-pii-ssn",
+    # 1.8.14 — threat-intel feeds
+    "feodo-c2", "cins-rogue", "urlhaus-malware",
+    # 1.8.14 Week 2 — fingerproxy H2 SETTINGS fingerprint (checked only after
+    # prior signal raised suspicion; pure H2 mismatch alone is low-confidence)
+    "h2-settings-mismatch",
+    # 1.8.14 Week 3 — JS multi-vector consistency
+    "js-cua-version-mismatch",   # version discrepancy alone is low confidence
 }
 
 SECOND_ORDER_REASONS = {
@@ -936,10 +1236,18 @@ def _to_bool_default_true(v):
     return s in ("1", "true", "yes", "on")
 
 HONEYPOT_ENABLED          = _to_bool_default_true(os.environ.get("HONEYPOT_ENABLED", "1"))
+# Minimum distinct source IPs hitting the same trap path in a 5-minute window
+# before a "coordinated-honeypot" risk bump fires on each new hitter.
+HONEYPOT_CLUSTER_THRESHOLD = int(os.environ.get("HONEYPOT_CLUSTER_THRESHOLD", "3"))
 SUSPICIOUS_PATH_ENABLED   = _to_bool_default_true(os.environ.get("SUSPICIOUS_PATH_ENABLED", "1"))
 AI_PROBE_ENABLED          = _to_bool_default_true(os.environ.get("AI_PROBE_ENABLED", "1"))
 UA_FILTER_ENABLED         = _to_bool_default_true(os.environ.get("UA_FILTER_ENABLED", "1"))
 UA_PLATFORM_CHECK_ENABLED = _to_bool_default_true(os.environ.get("UA_PLATFORM_CHECK_ENABLED", "1"))
+# 1.8.14 Week 3 — JS multi-vector consistency checker (detection/js_consistency.py)
+JS_CONSISTENCY_ENABLED          = _to_bool_default_true(os.environ.get("JS_CONSISTENCY_ENABLED",         "1"))
+JS_CUA_VERSION_CHECK_ENABLED    = _to_bool_default_true(os.environ.get("JS_CUA_VERSION_CHECK_ENABLED",  "1"))
+JS_MOBILE_HINT_CHECK_ENABLED    = _to_bool_default_true(os.environ.get("JS_MOBILE_HINT_CHECK_ENABLED",  "1"))
+JS_FETCH_IMPOSSIBLE_CHECK_ENABLED = _to_bool_default_true(os.environ.get("JS_FETCH_IMPOSSIBLE_CHECK_ENABLED", "1"))
 HEADER_COMPLETENESS_ENABLED = _to_bool_default_true(os.environ.get("HEADER_COMPLETENESS_ENABLED", "1"))
 BEHAVIORAL_CHECK_ENABLED  = _to_bool_default_true(os.environ.get("BEHAVIORAL_CHECK_ENABLED", "1"))
 AI_ENUMERATION_ENABLED    = _to_bool_default_true(os.environ.get("AI_ENUMERATION_ENABLED", "1"))
@@ -953,30 +1261,65 @@ CHAL_COOKIE      = "chal"
 JS_CHALLENGE_TTL = int(os.environ.get("JS_CHALLENGE_TTL", "3600"))
 CHAL_NONCE_TTL   = 120
 
-# ── Edge-injected security response headers (HTML only) ─────────────────────
+# ── Edge-injected security response headers ──────────────────────────────────
+# All knobs are hot-reloadable via the Controls dashboard.
+# Headers are injected on every HTML response (proxied + gateway-own).
+# The upstream's value for a given header is kept when already present;
+# the gateway value only fills the gap.  Empty string disables that header.
 INJECT_SECURITY_HEADERS = os.environ.get(
     "INJECT_SECURITY_HEADERS", "1") not in ("", "0", "false", "False", "no")
-SECURITY_HEADERS: dict = {
-    "X-Frame-Options":           os.environ.get("SEC_X_FRAME_OPTIONS", "SAMEORIGIN"),
-    "X-Content-Type-Options":    os.environ.get("SEC_X_CONTENT_TYPE_OPTIONS", "nosniff"),
-    "Referrer-Policy":           os.environ.get("SEC_REFERRER_POLICY",
-                                                "strict-origin-when-cross-origin"),
-    "X-Permitted-Cross-Domain-Policies":
-                                 os.environ.get("SEC_X_PERMITTED_XDP", "none"),
-    "Permissions-Policy":        os.environ.get("SEC_PERMISSIONS_POLICY",
-        "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
-        "magnetometer=(), microphone=(), payment=(), usb=()"),
-    "Strict-Transport-Security": os.environ.get("SEC_HSTS",
-        "max-age=31536000; includeSubDomains"),
-    "Content-Security-Policy":   os.environ.get("SEC_CSP", ""),
-    "Cross-Origin-Opener-Policy":   os.environ.get("SEC_COOP", "same-origin"),
-    "Cross-Origin-Resource-Policy": os.environ.get("SEC_CORP", "same-site"),
-}
+
+# Individual header values — each overridable by env var or hot-reload.
+SEC_X_FRAME_OPTIONS       = os.environ.get("SEC_X_FRAME_OPTIONS",       "SAMEORIGIN")
+SEC_X_CONTENT_TYPE_OPTIONS= os.environ.get("SEC_X_CONTENT_TYPE_OPTIONS","nosniff")
+SEC_REFERRER_POLICY       = os.environ.get("SEC_REFERRER_POLICY",
+                                           "strict-origin-when-cross-origin")
+SEC_X_PERMITTED_XDP       = os.environ.get("SEC_X_PERMITTED_XDP",       "none")
+SEC_PERMISSIONS_POLICY    = os.environ.get("SEC_PERMISSIONS_POLICY",
+    "accelerometer=(), camera=(), geolocation=(), gyroscope=(), "
+    "magnetometer=(), microphone=(), payment=(), usb=()")
+SEC_HSTS                  = os.environ.get("SEC_HSTS",
+    "max-age=31536000; includeSubDomains")
+SEC_CSP                   = os.environ.get("SEC_CSP",
+    "upgrade-insecure-requests; frame-ancestors 'self'")
+SEC_COOP                  = os.environ.get("SEC_COOP", "same-origin")
+SEC_CORP                  = os.environ.get("SEC_CORP", "same-site")
+
+# Server header override — replaces aiohttp's default on every response.
+# Set to empty string to leave the Server header untouched.
+SEC_SERVER_OVERRIDE       = os.environ.get("SEC_SERVER_OVERRIDE",       "AntiBot/WAF GW")
+
+# Mapping used by the injection middleware (header-name → knob-name).
+# Order matters: earlier headers take priority if a client accepts-ranges conflict.
+SEC_HEADER_KNOBS: list[tuple[str, str]] = [
+    ("X-Frame-Options",                "SEC_X_FRAME_OPTIONS"),
+    ("X-Content-Type-Options",         "SEC_X_CONTENT_TYPE_OPTIONS"),
+    ("Referrer-Policy",                "SEC_REFERRER_POLICY"),
+    ("X-Permitted-Cross-Domain-Policies", "SEC_X_PERMITTED_XDP"),
+    ("Permissions-Policy",             "SEC_PERMISSIONS_POLICY"),
+    ("Strict-Transport-Security",      "SEC_HSTS"),
+    ("Content-Security-Policy",        "SEC_CSP"),
+    ("Cross-Origin-Opener-Policy",     "SEC_COOP"),
+    ("Cross-Origin-Resource-Policy",   "SEC_CORP"),
+]
+
+# Legacy alias kept for any code that references SECURITY_HEADERS directly.
+# Populated from the module-level SEC_* CONSTANTS so the defaults defined
+# above (e.g. SEC_X_FRAME_OPTIONS = "SAMEORIGIN") flow through. Previously
+# this dict read os.environ directly, so an unset env var produced an
+# empty string and the inject-headers loop silently skipped the header.
+SECURITY_HEADERS: dict = {hk: globals().get(vk, os.environ.get(vk, ""))
+                           for hk, vk in SEC_HEADER_KNOBS}
 
 # Base URL to strip from HTML response bodies (turns absolute upstream URLs into
 # relative paths so images/links load through the proxy and satisfy the CSP).
 # Example: UPSTREAM_REWRITE_BASE=http://host.docker.internal:8093
 UPSTREAM_REWRITE_BASE: str = os.environ.get("UPSTREAM_REWRITE_BASE", "").rstrip("/")
+
+# 1.8.11 — operator-set service owner, shown in the dashboard footer notes.
+# Hot-reloadable + persisted to config_kv (SQLite + Postgres). Empty = no note.
+# Set via Settings → Config; env var is only the cold-start default (UI wins).
+SERVICE_OWNER: str = os.environ.get("SERVICE_OWNER", "").strip()
 
 BODY_TIMEOUT           = float(os.environ.get("BODY_TIMEOUT",           "30"))
 SESSION_CHURN_WINDOW_S = int(os.environ.get("SESSION_CHURN_WINDOW_S",   "120"))
@@ -994,7 +1337,7 @@ JWT_REQUIRED_ISSUER  = os.environ.get("JWT_REQUIRED_ISSUER", "").strip()
 JWT_REQUIRED_AUDIENCE = os.environ.get("JWT_REQUIRED_AUDIENCE", "").strip()
 JWT_LEEWAY_SECS      = int(os.environ.get("JWT_LEEWAY_SECS", "30"))
 
-# ── 1.8.5 — OIDC / Keycloak SSO ─────────────────────────────────────────────
+# ── 1.8.6 — OIDC / Keycloak SSO ─────────────────────────────────────────────
 OIDC_ISSUER        = os.environ.get("OIDC_ISSUER", "").rstrip("/")
 OIDC_CLIENT_ID     = os.environ.get("OIDC_CLIENT_ID", "").strip()
 OIDC_CLIENT_SECRET = os.environ.get("OIDC_CLIENT_SECRET", "").strip()
@@ -1005,6 +1348,19 @@ OIDC_ENABLED       = bool(OIDC_ISSUER and OIDC_CLIENT_ID and OIDC_CLIENT_SECRET)
 # ── Turnstile (Cloudflare JS challenge backend) ───────────────────────────────
 TURNSTILE_SITEKEY = os.environ.get("TURNSTILE_SITEKEY", "").strip()
 TURNSTILE_SECRET  = os.environ.get("TURNSTILE_SECRET", "").strip()
+# 1.8.13 — optional Subresource-Integrity pin for Cloudflare's Turnstile
+# `api.js`. When set (full `sha384-…` value), the challenge page loads the
+# script with `integrity=` + `crossorigin=anonymous`, so a tampered/altered
+# script is refused by the browser. Cloudflare does NOT publish/guarantee an SRI
+# hash for api.js and updates it without notice — a pinned hash WILL eventually
+# mismatch, and because the challenge fails closed that blocks new (un-cookied)
+# visitors until the hash is refreshed. Left empty by default for that reason;
+# set it (and refresh on Cloudflare updates) only if you want tamper-pinning.
+# Compute with:  curl -s https://challenges.cloudflare.com/turnstile/v0/api.js \
+#                  | openssl dgst -sha384 -binary | openssl base64 -A
+# then set TURNSTILE_SRI="sha384-<output>". Regardless of this knob, the
+# challenge ALWAYS fails closed if the script does not load/execute.
+TURNSTILE_SRI = os.environ.get("TURNSTILE_SRI", "").strip()
 # 1.5.4 — Turnstile is now OPT-IN even when keys are configured. Operators
 # explicitly enable via env (`TURNSTILE_ENABLED=1`) or the controls dashboard
 # toggle. Closes the deploy-time risk where leaving the test keys in env
@@ -1049,6 +1405,14 @@ JS_CHAL_OPEN_PATHS = [p.strip() for p in _JS_CHAL_OPEN_PATHS_RAW.split(",")
                       if p.strip()]
 
 # ── v1.4: Body pattern matching (extends Layer 3 to POST/PUT bodies) ─────────
+# 1.8.11 security fix (H1): the body inspectors used to scan only the first
+# 64 KiB of the request body while the proxy accepts and forwards up to
+# UPSTREAM_MAX_BODY (4 MiB by default). An attacker could prepend 64 KiB of
+# padding and smuggle any SQLi/XSS/RCE/XXE/GraphQL payload past the entire WAF.
+# WAF_BODY_SCAN_BYTES now defaults to the full accepted body so there is no
+# unscanned tail. Keep this >= UPSTREAM_MAX_BODY; lowering it re-opens the
+# padding bypass (a startup check in proxy.py warns if it is smaller).
+WAF_BODY_SCAN_BYTES = int(os.environ.get("WAF_BODY_SCAN_BYTES", str(4 * 1024 * 1024)))
 BODY_PATTERN_MATCH = os.environ.get("BODY_PATTERN_MATCH", "0") in ("1", "true", "yes")
 SUSPICIOUS_BODY_PATTERNS = (
     # Legacy catch-all set kept for backwards compatibility with the
@@ -1095,7 +1459,7 @@ BODY_PATTERN_GROUPS = {
         re.compile(rb"(?i)<(iframe|object|embed|svg|math|video|audio|details|frame|frameset"
                    rb"|applet|meta|link|base|form|input|textarea|button|isindex)\b[^>]*>"),
         re.compile(rb"(?i)<(img|input|video|audio|details|svg)[^>]+\bonerror\s*="),
-        re.compile(rb"(?i)\b(srcdoc|formaction|background|poster|icon|action|src|href)\s*=\s*[\"']?\s*(javascript|data):"),
+        re.compile(rb"(?i)\b(srcdoc|formaction|background|poster|icon|action|src|href)\s{0,64}=\s{0,64}[\"']?\s{0,64}(javascript|data):"),  # H3 fix: bound \s runs (was \s*=\s*["']?\s* → O(n²))
         re.compile(rb"(?i)<style\b[^>]*>[^<]*expression\s*\("),
         re.compile(rb"(?i)\b(import\s+url\s*\(|@import\s+[\"']?(java|vb)script:)"),
         re.compile(rb"(?i)&#x?(0*(60|3c)|[0]*[36]0|[0]*x?3c)\b"),
@@ -1120,7 +1484,11 @@ BODY_PATTERN_GROUPS = {
     # ── Remote code execution (multi-language + framework) ───────────────
     "rce": (
         re.compile(rb"(?i)\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)"),
-        re.compile(rb"(?i)\$\{[\$:{}]*j[\$:{}]*n[\$:{}]*d[\$:{}]*i\s*:"),
+        # C1 fix: bound each obfuscation run ({0,64}) so this can't backtrack
+        # O(n²) on a flood of "${" — unbounded [\$:{}]* was a remote event-loop
+        # DoS over the 4 MiB body window. The simpler gadget pattern on the line
+        # above ($ {jndi|env|lower|::- …}) backstops detection of real payloads.
+        re.compile(rb"(?i)\$\{[\$:{}]{0,64}j[\$:{}]{0,64}n[\$:{}]{0,64}d[\$:{}]{0,64}i\s*:"),
         re.compile(rb"(?i)class\.module\.classLoader\."),
         re.compile(rb"(?i)\bRuntime\.getRuntime\s*\(\s*\)\s*\.exec\b|\bProcessBuilder\s*\("),
         re.compile(rb"(?i)#exec\s*\(|@\s*java\.lang\.Runtime|@\s*java\.lang\.ProcessBuilder"),
@@ -1157,7 +1525,7 @@ BODY_PATTERN_GROUPS = {
     "cmd": (
         re.compile(rb"(?i)[;&|`]\s*(cat|ls|wget|curl|nc|ncat|sh|bash|zsh|whoami|id|env|uname|nslookup|dig|ping|host|ifconfig|ip\b|route|netstat|ss\b|lsof|ps|tail|head|find|chmod|chown|crontab)\b"),
         re.compile(rb"(\n|%0a|\r|%0d)\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id|chmod|chown)\b", re.I),
-        re.compile(rb"\$\(\s*[a-z]+[^)]*\)|`[^`\n]+`|<\(\s*[a-z]+[^)]*\)"),
+        re.compile(rb"\$\(\s{0,8}[a-z]{1,32}[^)]{0,128}\)|`[^`\n]{1,256}`|<\(\s{0,8}[a-z]{1,32}[^)]{0,128}\)"),  # H2 fix: bound runs (was [a-z]+[^)]* overlap → O(n²))
         re.compile(rb"(?i)\b(/bin/|/usr/bin/|/sbin/|/usr/sbin/)(sh|bash|zsh|dash|ksh|nc|ncat|cat|ls|wget|curl|chmod|chown|chsh|find|nmap)\b"),
         re.compile(rb"(?i)(bash\s+-i\s*>&\s*/dev/tcp/|/dev/tcp/[\w.]+/\d+|nc\s+(-l\s+)?-?[ev]+\s+\S+\s+\d+|python\s+-c\s+['\"]\s*import\s+(os|socket|pty))"),
         re.compile(rb"(?i)\bsocat\s+(tcp|exec|file):"),
@@ -1173,37 +1541,74 @@ BODY_GROUP_RCE_ENABLED  = os.environ.get("BODY_GROUP_RCE_ENABLED",  "1") in ("1"
 BODY_GROUP_SSRF_ENABLED = os.environ.get("BODY_GROUP_SSRF_ENABLED", "1") in ("1", "true", "yes")
 BODY_GROUP_CMD_ENABLED  = os.environ.get("BODY_GROUP_CMD_ENABLED",  "1") in ("1", "true", "yes")
 
+def _extract_multipart_fields(body: bytes, ctype: str) -> bytes:
+    """Extract field values from multipart/form-data body for WAF scanning.
+    Returns concatenated field values (not filenames or headers)."""
+    import re as _re
+    m = _re.search(rb'boundary=([^\s;]+)', ctype.encode(), _re.I)
+    if not m:
+        return body
+    boundary = b"--" + m.group(1).strip(b'"\'')
+    parts = body.split(boundary)
+    values = []
+    for part in parts[1:]:  # skip preamble
+        if part.startswith(b"--"):
+            break  # epilogue
+        # Split headers from body on double CRLF
+        if b"\r\n\r\n" in part:
+            hdr, _, val = part.partition(b"\r\n\r\n")
+            hdr_lower = hdr.lower()
+            # Skip file uploads (has filename=) — check_file_upload handles those
+            if b"filename=" not in hdr_lower:
+                values.append(val.rstrip(b"\r\n"))
+        elif b"\n\n" in part:
+            hdr, _, val = part.partition(b"\n\n")
+            if b"filename=" not in hdr.lower():
+                values.append(val.rstrip(b"\n"))
+    return b"\n".join(values) if values else body
+
+
 def is_suspicious_body(body: bytes, ctype: str) -> bool:
     """Returns True if request body matches a known SQLi/XSS/SSTI/cmd-injection
     pattern. Only scans text-ish content types and bounds at 64 KiB.
     L3: form-encoded bodies are percent-decoded before matching so payloads
-    like name=%27+OR+1%3D1 are caught (matched as `' OR 1=1`)."""
+    like name=%27+OR+1%3D1 are caught (matched as `' OR 1=1`).
+    F-14: multipart/form-data fields are extracted and scanned."""
     if not BODY_PATTERN_MATCH or not body:
         return False
     cl = ctype.lower()
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
-                                  "text/plain", "text/xml", "application/xml")):
+                                  "text/plain", "text/xml", "application/xml",
+                                  "multipart/form-data")):
         return False
-    sample = body[:65536]
-    if "x-www-form-urlencoded" in cl:
+    if "multipart/form-data" in cl:
+        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
+    elif "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
-        sample = unquote_to_bytes(sample)
+        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
+    else:
+        sample = body[:WAF_BODY_SCAN_BYTES]
     return any(p.search(sample) for p in SUSPICIOUS_BODY_PATTERNS)
 
 def match_body_group(body: bytes, ctype: str):
     """1.6.1 — return the first matched group name or None.
     Groups checked in order: rce → cmd → sqli → xss → lfi → ssrf
-    (most-severe first so reasons dominate when patterns overlap)."""
+    (most-severe first so reasons dominate when patterns overlap).
+    F-14: multipart/form-data fields are extracted and scanned."""
     if not BODY_PATTERN_MATCH or not body:
         return None
     cl = ctype.lower()
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
-                                  "text/plain", "text/xml", "application/xml")):
+                                  "text/plain", "text/xml", "application/xml",
+                                  "multipart/form-data")):
         return None
-    sample = body[:65536]
-    if "x-www-form-urlencoded" in cl:
+    if "multipart/form-data" in cl:
+        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
+    elif "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
-        sample = unquote_to_bytes(sample)
+        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
+    else:
+        sample = body[:WAF_BODY_SCAN_BYTES]
     enabled = {
         "rce":  BODY_GROUP_RCE_ENABLED,
         "cmd":  BODY_GROUP_CMD_ENABLED,
@@ -1220,7 +1625,40 @@ def match_body_group(body: bytes, ctype: str):
                 return grp
     return None
 
-# 1.8.5 — ungated critical patterns: fire regardless of escalation score.
+# ── 1.8.9 — WAF always-on knobs ─────────────────────────────────────────────
+# All default ON. Set to 0 in .env or toggle live via /__controls to suppress
+# false positives without a container restart.
+WAF_BODY_ENABLED          = os.environ.get("WAF_BODY_ENABLED",          "1") in ("1", "true", "yes")
+WAF_SMUGGLING_ENABLED     = os.environ.get("WAF_SMUGGLING_ENABLED",     "1") in ("1", "true", "yes")
+WAF_VERB_OVERRIDE_ENABLED = os.environ.get("WAF_VERB_OVERRIDE_ENABLED", "1") in ("1", "true", "yes")
+WAF_HEADER_INJECTION_ENABLED = os.environ.get("WAF_HEADER_INJECTION_ENABLED", "1") in ("1", "true", "yes")
+WAF_GRAPHQL_ENABLED       = os.environ.get("WAF_GRAPHQL_ENABLED",       "1") in ("1", "true", "yes")
+WAF_UPLOAD_ENABLED        = os.environ.get("WAF_UPLOAD_ENABLED",        "1") in ("1", "true", "yes")
+WAF_SLOWLORIS_ENABLED     = os.environ.get("WAF_SLOWLORIS_ENABLED",     "1") in ("1", "true", "yes")
+ACCEPT_WILDCARD_CHECK_ENABLED = os.environ.get("ACCEPT_WILDCARD_CHECK_ENABLED", "1") in ("1", "true", "yes")
+
+# ── 1.8.9 — Additional kill-switches (previously structural / always-on) ────
+SESSION_CHURN_ENABLED        = os.environ.get("SESSION_CHURN_ENABLED",        "1") in ("1", "true", "yes")
+JA4H_DENY_ENABLED            = os.environ.get("JA4H_DENY_ENABLED",            "1") in ("1", "true", "yes")
+# 1.8.15 perf — when JA4H_DENY_ENABLED is OFF and you still want JA4H captured
+# on IpState for telemetry / dashboard display, set JA4H_LOG_ENABLED=1.
+# Default OFF — most deployments don't display JA4H, and computing it on every
+# request costs ~10µs + an extra state_lock acquire.
+JA4H_LOG_ENABLED             = os.environ.get("JA4H_LOG_ENABLED",             "0") in ("1", "true", "yes")
+HOST_BLOCKING_ENABLED        = os.environ.get("HOST_BLOCKING_ENABLED",        "1") in ("1", "true", "yes")
+REQUIRED_HEADERS_ENABLED     = os.environ.get("REQUIRED_HEADERS_ENABLED",     "1") in ("1", "true", "yes")
+JA4_REQUIRED_ENABLED         = os.environ.get("JA4_REQUIRED_ENABLED",         "1") in ("1", "true", "yes")
+UPSTREAM_AUTH_FAIL_ENABLED   = os.environ.get("UPSTREAM_AUTH_FAIL_ENABLED",   "1") in ("1", "true", "yes")
+RATE_LIMIT_IP_ENABLED        = os.environ.get("RATE_LIMIT_IP_ENABLED",        "1") in ("1", "true", "yes")
+RATE_LIMIT_ENABLED           = os.environ.get("RATE_LIMIT_ENABLED",           "1") in ("1", "true", "yes")
+FP_BAN_CHECK_ENABLED         = os.environ.get("FP_BAN_CHECK_ENABLED",         "1") in ("1", "true", "yes")
+TRAFFIC_THRESHOLD_ENABLED    = os.environ.get("TRAFFIC_THRESHOLD_ENABLED",    "1") in ("1", "true", "yes")
+TLS_FP_BLOCK_ENABLED         = os.environ.get("TLS_FP_BLOCK_ENABLED",         "1") in ("1", "true", "yes")
+JWT_VALIDATION_ENABLED       = os.environ.get("JWT_VALIDATION_ENABLED",       "1") in ("1", "true", "yes")
+CUSTOM_RULES_ENABLED         = os.environ.get("CUSTOM_RULES_ENABLED",         "1") in ("1", "true", "yes")
+ENDPOINT_RATE_LIMIT_ENABLED  = os.environ.get("ENDPOINT_RATE_LIMIT_ENABLED",  "1") in ("1", "true", "yes")
+
+# 1.8.6 — ungated critical patterns: fire regardless of escalation score.
 _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)\bunion[ +/*]+(all[ +/*]+)?select\b"),
     re.compile(rb"(?i)\$\{(jndi|env|sys|ctx|spring|lower|upper|::-)"),
@@ -1233,7 +1671,7 @@ _BODY_ALWAYS_RE = (
     re.compile(rb"(?i)/proc/self/(environ|cmdline|exe)\b"),
     re.compile(rb"(?i)[;&|`]\s*(cat|ls|wget|curl|nc|sh|bash|whoami|id)\b"),
     re.compile(rb"(?i)\b(/bin/sh|/bin/bash|/usr/bin/python)\b"),
-    # 1.8.5 Week 3 — XXE patterns (any content-type)
+    # 1.8.6 Week 3 — XXE patterns (any content-type)
     re.compile(rb"(?i)<!ENTITY\b"),
     re.compile(rb"(?i)<!DOCTYPE[^>]*\["),
     re.compile(rb"(?i)SYSTEM\s+[\"'](file|http|ftp|php|expect|data)://"),
@@ -1242,17 +1680,22 @@ _BODY_ALWAYS_RE = (
 
 
 def check_always_body(body: bytes, ctype: str) -> bool:
-    """Check body against ungated high-confidence patterns. Returns True if matched."""
+    """Check body against ungated high-confidence patterns. Returns True if matched.
+    F-14: multipart/form-data fields are extracted and scanned."""
     if not body:
         return False
     cl = ctype.lower()
     if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
-                                  "text/plain", "text/xml", "application/xml")):
+                                  "text/plain", "text/xml", "application/xml",
+                                  "multipart/form-data")):
         return False
-    sample = body[:65536]
-    if "x-www-form-urlencoded" in cl:
+    if "multipart/form-data" in cl:
+        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
+    elif "x-www-form-urlencoded" in cl:
         from urllib.parse import unquote_to_bytes
-        sample = unquote_to_bytes(sample)
+        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
+    else:
+        sample = body[:WAF_BODY_SCAN_BYTES]
     return any(p.search(sample) for p in _BODY_ALWAYS_RE)
 
 
@@ -1406,7 +1849,7 @@ def dlp_redact(body: bytes, hits) -> bytes:
     return out
 
 
-# ── 1.8.5 (Week 3) — New detection signals ───────────────────────────────────
+# ── 1.8.6 (Week 3) — New detection signals ───────────────────────────────────
 
 # ── Task A: XXE Detection (2.2) ───────────────────────────────────────────────
 
@@ -1426,7 +1869,7 @@ def check_xxe_body(body: bytes, ctype: str) -> bool:
     is_xml = any(t in cl for t in ("xml", "text/html")) or body[:5] in (b"<?xml", b"<!DOC")
     if not is_xml:
         return False
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     return any(p.search(sample) for p in _XXE_RE)
 
 
@@ -1455,7 +1898,7 @@ def check_proto_pollution(body: bytes, ctype: str) -> bool:
     """Detect prototype pollution in JSON bodies (or via regex fallback)."""
     if not body:
         return False
-    sample = body[:65536]
+    sample = body[:WAF_BODY_SCAN_BYTES]
     cl = ctype.lower()
     # Try JSON parse for application/json
     if "application/json" in cl:
@@ -1515,8 +1958,11 @@ def check_host_header_injection(request) -> bool:
     # Reject if host contains path/query characters
     if _HOST_INJECT_RE.search(host):
         return True
-    # Reject if host is a raw non-loopback IP (potential SSRF/password-reset poison)
-    # Allow loopback addresses (127.x.x.x, ::1) — legitimate for internal/test use
+    # Reject raw non-loopback IP literals in the Host header (F-13).
+    # Loopback (127.x.x.x / ::1) is exempted: upstreams behind the gateway
+    # may accept 127.0.0.1 legitimately, and test infrastructure uses it.
+    # Non-loopback IPs (public or private) are rejected because an attacker
+    # can poison password-reset links or SSRF via a forged Host: 1.2.3.4.
     import ipaddress as _ipa
     try:
         ip_obj = _ipa.ip_address(host)
@@ -1605,4 +2051,13 @@ METRICS_ALLOWED_IPS_RAW  = os.environ.get("METRICS_ALLOWED_IPS", "")
 # ── Session limits (Task E, F) ────────────────────────────────────────────────
 
 MAX_ADMIN_SESSIONS  = int(os.environ.get("MAX_ADMIN_SESSIONS", "5"))
-SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", "1800"))
+SESSION_IDLE_TIMEOUT = int(os.environ.get("SESSION_IDLE_TIMEOUT", "3600"))
+# 1.8.14 T0-1: hard upper bound regardless of activity (0 = disabled)
+SESSION_ABSOLUTE_TIMEOUT = int(os.environ.get("SESSION_ABSOLUTE_TIMEOUT", str(8 * 3600)))
+
+# ── 1.8.6 — TOTP two-factor authentication ───────────────────────────────────
+REQUIRE_2FA: bool = os.environ.get("REQUIRE_2FA", "0") not in ("", "0", "false", "False", "no")
+
+# ── Session IP binding (Task J) ───────────────────────────────────────────────
+# Default OFF — too disruptive for users behind NAT/VPN
+BIND_SESSION_TO_IP = os.environ.get("BIND_SESSION_TO_IP", "0") in ("1", "true", "yes")

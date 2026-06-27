@@ -96,6 +96,15 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -204,6 +213,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 75},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -224,6 +234,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"key": "RISK_BAN_THRESHOLD", "value": 75},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -246,6 +257,7 @@ class TestConfigPost:
                                          "RATE_LIMIT_BURST":    50,
                                          "HOSTILE_BAN_SECS":    3600,
                                      },
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -263,6 +275,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"NONEXISTENT_KNOB_XYZ": True},
+                                     headers=_csrf_hdr(proxy_module, cookie),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     assert r.status == 200
                     d = await r.json()
@@ -282,6 +295,7 @@ class TestConfigPost:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 99},
+                                 headers=_csrf_hdr(proxy_module, cookie),
                                  cookies={proxy_module._SESSION_COOKIE: cookie})
                     r = await c.get(NS + "/config",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
@@ -471,7 +485,8 @@ class TestSettingsImportRoundTrip:
                         "RATE_LIMIT_BURST":  orig["RATE_LIMIT_BURST"]  + 30,
                         "HOSTILE_BAN_SECS":  3600,
                     }
-                    mod_r = await c.post(NS + "/config", json=changes, cookies=ck)
+                    _csrf = _csrf_hdr(proxy_module, cookie)
+                    mod_r = await c.post(NS + "/config", json=changes, headers=_csrf, cookies=ck)
                     mod_d = await mod_r.json()
                     for k in changes:
                         assert k in mod_d.get("applied", {}), f"{k} not applied"
@@ -480,7 +495,7 @@ class TestSettingsImportRoundTrip:
                     imp_r = await c.post(
                         NS + "/settings-import?dry_run=0&overwrite_secrets=0",
                         data=raw_zip,
-                        headers={"Content-Type": "application/octet-stream"},
+                        headers={"Content-Type": "application/octet-stream", **_csrf},
                         cookies=ck,
                     )
                     assert imp_r.status == 200
@@ -563,8 +578,10 @@ class TestSettingsImportRoundTrip:
                     )
                     d = await r.json()
                     for key in ("knobs_applied", "knobs_rejected",
-                                "admin_ips_added", "secrets_applied", "errors"):
+                                "admin_ips_added", "vhosts_restored", "errors"):
                         assert key in d, f"Import summary missing key {key!r}"
+                    assert "secrets_applied" not in d, \
+                        "Import summary must NOT include secrets_applied (F-10: no secret import)"
         _run(go())
 
 
@@ -1077,7 +1094,7 @@ class TestControlsDashboard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/controls")
                     body = await r.text()
-                    assert "AppSecGW" not in body or "agw-c-" in body, (
+                    assert "AntiBot/WAF GW" not in body or "agw-c-" in body, (
                         "Unauthenticated /controls must decoy"
                     )
         _run(go())
@@ -1255,7 +1272,7 @@ class TestVhostPolicyDashboard:
         status, ct, html = _run(go())
         assert status == 200, f"GET /vhost-policy with auth returned {status}"
         assert "html" in ct, f"Content-Type not HTML: {ct}"
-        assert "AppSecGW_1.8.5" in html, "vhost-policy page missing version string"
+        assert "AntiBotWaf_GW_1.9.8" in html, "vhost-policy page missing version string"
 
     def test_vhost_policy_page_no_store_header(self, proxy_module):
         async def go():
@@ -1381,3 +1398,427 @@ class TestVhostPolicyDataEndpoint:
                     return await r.json()
         d = _run(go())
         assert isinstance(d["vhosts"], list), "vhosts field must be a list"
+
+
+# ── 10. TestDbConfigExportImport ─────────────────────────────────────────────
+
+class TestDbConfigExportImport:
+    """Explicit coverage for DB_BACKEND and POSTGRES_DSN across the
+    /secured/config → export → import pipeline.
+
+    The general round-trip tests verify total knob counts but never name
+    DB_BACKEND or POSTGRES_DSN.  These tests assert the exact values so a
+    rename or accidental removal of either key is caught immediately.
+
+    DB_BACKEND is not env-pinned in the test environment (conftest.py does
+    not set DB_BACKEND in os.environ), so imports are allowed to change it.
+    """
+
+    # ── A: /secured/config GET ────────────────────────────────────────
+
+    def test_config_state_has_db_backend(self, proxy_module):
+        """GET /secured/config state must include DB_BACKEND."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    d = await (await c.get(NS + "/config",
+                                           cookies={proxy_module._SESSION_COOKIE: cookie})).json()
+                    return d["state"]
+        state = _run(go())
+        assert "DB_BACKEND" in state, "DB_BACKEND missing from /secured/config state"
+
+    def test_config_state_db_backend_default_sqlite(self, proxy_module):
+        """Default DB_BACKEND must be 'sqlite'.
+
+        The active backend is auto-derived from POSTGRES_DSN (config.py): unset
+        → sqlite (the zero-deps default), set → postgres. Assert that contract
+        so the PG-mode test harness (POSTGRES_DSN exported) is not a false
+        failure — the value must reflect the configured backend, not a constant.
+        """
+        import os as _os
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    d = await (await c.get(NS + "/config",
+                                           cookies={proxy_module._SESSION_COOKIE: cookie})).json()
+                    return d["state"].get("DB_BACKEND")
+        expected = "postgres" if _os.environ.get("POSTGRES_DSN", "").strip() else "sqlite"
+        assert _run(go()) == expected, (
+            f"DB_BACKEND must be {expected!r} for this backend configuration")
+
+    def test_config_state_has_postgres_dsn(self, proxy_module):
+        """GET /secured/config state must include POSTGRES_DSN (may be empty)."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    d = await (await c.get(NS + "/config",
+                                           cookies={proxy_module._SESSION_COOKIE: cookie})).json()
+                    return d["state"]
+        state = _run(go())
+        assert "POSTGRES_DSN" in state, "POSTGRES_DSN missing from /secured/config state"
+
+    # ── B: export contains DB keys ────────────────────────────────────
+
+    def test_export_xml_has_db_backend_knob(self, proxy_module):
+        """Exported XML <knobs> section must contain a <knob name='DB_BACKEND'>."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    raw_zip = await (await c.get(NS + "/settings-export",
+                                                 cookies={proxy_module._SESSION_COOKIE: cookie})).read()
+                    with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                        xml_bytes = zf.read("appsecgw-config.xml")
+                    root = ET.fromstring(xml_bytes)
+                    names = {e.attrib["name"] for e in root.find("knobs").findall("knob")}
+                    return names
+        names = _run(go())
+        assert "DB_BACKEND" in names, f"DB_BACKEND missing from export knobs; got {names}"
+
+    def test_export_db_backend_value_matches_active(self, proxy_module):
+        """Exported DB_BACKEND value must match the live /secured/config value."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    live_val = (await (await c.get(NS + "/config", cookies=ck)).json())["state"]["DB_BACKEND"]
+                    raw_zip = await (await c.get(NS + "/settings-export", cookies=ck)).read()
+                    with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                        xml_bytes = zf.read("appsecgw-config.xml")
+                    root = ET.fromstring(xml_bytes)
+                    exported_val = None
+                    for e in root.find("knobs").findall("knob"):
+                        if e.attrib["name"] == "DB_BACKEND":
+                            exported_val = json.loads(e.text)
+                            break
+                    return live_val, exported_val
+        live, exported = _run(go())
+        assert exported == live, (
+            f"exported DB_BACKEND {exported!r} does not match live value {live!r}"
+        )
+
+    def test_export_xml_has_postgres_dsn_knob(self, proxy_module):
+        """Exported XML <knobs> section must contain a <knob name='POSTGRES_DSN'>."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    raw_zip = await (await c.get(NS + "/settings-export",
+                                                 cookies={proxy_module._SESSION_COOKIE: cookie})).read()
+                    with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                        xml_bytes = zf.read("appsecgw-config.xml")
+                    root = ET.fromstring(xml_bytes)
+                    return {e.attrib["name"] for e in root.find("knobs").findall("knob")}
+        names = _run(go())
+        assert "POSTGRES_DSN" in names, f"POSTGRES_DSN missing from export knobs; got {names}"
+
+    # ── C: import applies DB keys ─────────────────────────────────────
+
+    def test_import_db_backend_applied(self, proxy_module):
+        """Importing a config XML with DB_BACKEND='postgres' must report it as applied."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    xml = _make_config_xml({"DB_BACKEND": "postgres"})
+                    r = await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/zip"},
+                        cookies=ck,
+                    )
+                    return await r.json()
+        summary = _run(go())
+        assert "DB_BACKEND" in summary.get("applied", []), (
+            f"DB_BACKEND must be in applied list; got summary={summary}"
+        )
+        assert summary["knobs_applied"] >= 1
+
+    def test_import_db_backend_reflects_in_config(self, proxy_module):
+        """After importing DB_BACKEND='postgres', GET /secured/config must show 'postgres'."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    # Import postgres backend
+                    xml = _make_config_xml({"DB_BACKEND": "postgres"})
+                    await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/zip"},
+                        cookies=ck,
+                    )
+                    # Read back
+                    state = (await (await c.get(NS + "/config", cookies=ck)).json())["state"]
+                    return state.get("DB_BACKEND")
+        assert _run(go()) == "postgres", "DB_BACKEND must reflect 'postgres' after import"
+
+    def test_import_postgres_dsn_applied(self, proxy_module):
+        """Importing POSTGRES_DSN must report it as applied and update live state."""
+        dsn = "postgresql://user:pass@localhost:5432/testdb"
+
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    xml = _make_config_xml({"POSTGRES_DSN": dsn})
+                    r = await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/zip"},
+                        cookies=ck,
+                    )
+                    summary = await r.json()
+                    state = (await (await c.get(NS + "/config", cookies=ck)).json())["state"]
+                    return summary, state.get("POSTGRES_DSN")
+        summary, live_dsn = _run(go())
+        # POSTGRES_DSN is a hot-reload knob, but when it is provided via the
+        # process env (the PG-mode test harness exports POSTGRES_DSN to point at
+        # the live database) it is env-pinned: settings_import_endpoint MUST
+        # refuse to override an env-pinned DB connection string from an uploaded
+        # config file (security — a file upload must not repoint the database).
+        # So the contract is backend-dependent:
+        #   • env DSN absent (SQLite harness): import applies it, live state
+        #     echoes the masked form.
+        #   • env DSN present (PG harness): import rejects it as "env-pinned".
+        import os as _os
+        from db.cli_helpers import mask_dsn
+        if _os.environ.get("POSTGRES_DSN", "").strip():
+            assert "POSTGRES_DSN" not in summary.get("applied", []), (
+                "env-pinned POSTGRES_DSN must NOT be applied from an uploaded "
+                f"config; got summary={summary}"
+            )
+            assert summary.get("rejected", {}).get("POSTGRES_DSN") == "env-pinned", (
+                "env-pinned POSTGRES_DSN must be rejected with reason "
+                f"'env-pinned'; got summary={summary}"
+            )
+        else:
+            assert "POSTGRES_DSN" in summary.get("applied", []), (
+                f"POSTGRES_DSN must be in applied list; got summary={summary}"
+            )
+            # F14 (1.9.0 iter-4): GET /__config redacts secret-class knobs — the
+            # POSTGRES_DSN password is masked in the returned `state` so the
+            # dashboard never echoes credentials, even to an authenticated admin.
+            assert live_dsn == mask_dsn(dsn), (
+                f"live POSTGRES_DSN {live_dsn!r} must equal the masked form "
+                f"{mask_dsn(dsn)!r} (F14 redaction); raw DSN must never be echoed"
+            )
+
+    def test_export_after_db_change_reflects_new_value(self, proxy_module):
+        """After importing DB_BACKEND='postgres', the next export must include 'postgres'."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    # Change backend to postgres via import
+                    xml = _make_config_xml({"DB_BACKEND": "postgres"})
+                    await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/zip"},
+                        cookies=ck,
+                    )
+                    # Export and read back
+                    raw_zip = await (await c.get(NS + "/settings-export", cookies=ck)).read()
+                    with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                        xml_bytes = zf.read("appsecgw-config.xml")
+                    root = ET.fromstring(xml_bytes)
+                    for e in root.find("knobs").findall("knob"):
+                        if e.attrib["name"] == "DB_BACKEND":
+                            return json.loads(e.text)
+                    return None
+        assert _run(go()) == "postgres", (
+            "export after DB_BACKEND change must reflect 'postgres'"
+        )
+
+    def test_import_invalid_db_backend_rejected(self, proxy_module):
+        """Importing DB_BACKEND='mysql' must be rejected (validator only allows sqlite/postgres)."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    xml = _make_config_xml({"DB_BACKEND": "mysql"})
+                    r = await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/zip"},
+                        cookies=ck,
+                    )
+                    return await r.json()
+        summary = _run(go())
+        assert "DB_BACKEND" not in summary.get("applied", []), (
+            "DB_BACKEND='mysql' must NOT be applied"
+        )
+        assert "DB_BACKEND" in summary.get("rejected", {}), (
+            "DB_BACKEND='mysql' must appear in rejected dict"
+        )
+
+
+# ── 12. TestSettingsVhostExportImport ────────────────────────────────────────
+
+class TestSettingsVhostExportImport:
+    """Vhost configurations must round-trip through settings export/import.
+    Before 1.8.14 the <vhosts> section was absent — export was config-incomplete."""
+
+    def _make_vhost_xml(self, hostname: str, overrides: dict) -> str:
+        """Build an appsecgw-config XML with a single vhost entry."""
+        root = ET.Element("appsecgw-config", attrib={"version": "1.6.5", "exported_at": "0"})
+        ET.SubElement(root, "knobs")
+        ET.SubElement(root, "admin_ips")
+        vhosts_el = ET.SubElement(root, "vhosts")
+        vh_el = ET.SubElement(vhosts_el, "vhost", attrib={"hostname": hostname})
+        for k, v in overrides.items():
+            ov = ET.SubElement(vh_el, "override", attrib={"name": k, "type": type(v).__name__})
+            ov.text = json.dumps(v, ensure_ascii=False)
+        ET.SubElement(root, "secrets")
+        ET.indent(root, space="  ")
+        return ET.tostring(root, encoding="unicode", xml_declaration=False)
+
+    def test_export_xml_contains_vhosts_element(self, proxy_module):
+        """The export ZIP must contain a <vhosts> element in the XML."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    raw_zip = await (await c.get(NS + "/settings-export", cookies=ck)).read()
+                    with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                        xml_bytes = zf.read("appsecgw-config.xml")
+                    root = ET.fromstring(xml_bytes)
+                    assert root.find("vhosts") is not None, (
+                        "Export XML must contain a <vhosts> element"
+                    )
+        _run(go())
+
+    def test_vhost_import_increments_vhosts_restored(self, proxy_module):
+        """Importing a ZIP with a <vhosts> entry must set vhosts_restored >= 1."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    # No UPSTREAM override — avoid SSRF guard on loopback.
+                    xml = self._make_vhost_xml(
+                        "test.example.com",
+                        {"JS_CHALLENGE": False},
+                    )
+                    r = await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/octet-stream"},
+                        cookies=ck,
+                    )
+                    d = await r.json()
+                    assert d["vhosts_restored"] >= 1, (
+                        f"Expected vhosts_restored >= 1, got {d['vhosts_restored']}\nerrors: {d['errors']}"
+                    )
+                    assert d["errors"] == [], f"Unexpected errors: {d['errors']}"
+        _run(go())
+
+    def test_vhost_roundtrip(self, proxy_module):
+        """Add a vhost directly, export, re-import — vhost must be in exported XML
+        and import must report vhosts_restored >= 1."""
+        from vhost import vhost_set as _vs, VHOSTS
+        _vs("roundtrip.example.com", {"JS_CHALLENGE": False})
+
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+
+                    # Export — must include the directly-added vhost
+                    raw_zip = await (await c.get(NS + "/settings-export", cookies=ck)).read()
+
+                    # Verify XML contains our vhost
+                    with zipfile.ZipFile(io.BytesIO(raw_zip)) as zf:
+                        xml_bytes = zf.read("appsecgw-config.xml")
+                    root = ET.fromstring(xml_bytes)
+                    vhosts_el = root.find("vhosts")
+                    assert vhosts_el is not None
+                    hostnames = [v.attrib.get("hostname") for v in vhosts_el.findall("vhost")]
+                    assert "roundtrip.example.com" in hostnames, (
+                        f"Exported vhosts must include 'roundtrip.example.com'; got {hostnames}"
+                    )
+
+                    # Re-import (idempotent — no UPSTREAM so SSRF guard not triggered)
+                    r_imp = await c.post(
+                        NS + "/settings-import",
+                        data=raw_zip,
+                        headers={**csrf, "Content-Type": "application/octet-stream"},
+                        cookies=ck,
+                    )
+                    d = await r_imp.json()
+                    assert d["vhosts_restored"] >= 1
+                    assert d["errors"] == []
+        _run(go())
+
+    def test_vhost_missing_hostname_skipped(self, proxy_module):
+        """A <vhost> element without a hostname attr must be silently skipped."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    xml = (
+                        '<appsecgw-config version="1.6.5" exported_at="0">'
+                        '<knobs/><admin_ips/>'
+                        '<vhosts>'
+                        '  <vhost>'  # no hostname attr
+                        '    <override name="JS_CHALLENGE" type="bool">false</override>'
+                        '  </vhost>'
+                        '</vhosts>'
+                        '<secrets/>'
+                        '</appsecgw-config>'
+                    )
+                    r = await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/octet-stream"},
+                        cookies=ck,
+                    )
+                    d = await r.json()
+                    assert r.status == 200
+                    assert d["vhosts_restored"] == 0, (
+                        "Entry without hostname must not count as restored"
+                    )
+        _run(go())
+
+    def test_no_vhosts_element_import_works(self, proxy_module):
+        """An older export ZIP without <vhosts> must still import cleanly (compat)."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = _make_admin_cookie(proxy_module)
+                    ck = {proxy_module._SESSION_COOKIE: cookie}
+                    csrf = _csrf_hdr(proxy_module, cookie)
+                    # Old-format XML with no <vhosts> element
+                    xml = _make_config_xml({"RATE_LIMIT_BURST": 100})
+                    r = await c.post(
+                        NS + "/settings-import",
+                        data=_make_zip(xml),
+                        headers={**csrf, "Content-Type": "application/octet-stream"},
+                        cookies=ck,
+                    )
+                    d = await r.json()
+                    assert r.status == 200
+                    assert d["errors"] == []
+                    assert d["vhosts_restored"] == 0
+        _run(go())

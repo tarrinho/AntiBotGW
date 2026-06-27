@@ -1,4 +1,4 @@
-# AppSecGW Controls
+# AntiBot/WAF GW Controls
 
 **Version**: 1.7.3 · **Author**: Pedro Tarrinho
 

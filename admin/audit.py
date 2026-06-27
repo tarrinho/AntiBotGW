@@ -10,7 +10,7 @@ Records 10 event types to the audit_events table via the async db_queue:
 """
 import json
 import time as _t
-from helpers import slog
+from helpers import slog  # noqa: F401 — re-exported for callers that import slog from admin.audit
 
 EVT_LOGIN_SUCCESS      = "login_success"
 EVT_LOGIN_FAILED       = "login_failed"

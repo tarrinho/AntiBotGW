@@ -1,5 +1,5 @@
 #!/bin/bash
-# AppSecGW — monthly refresh of MaxMind GeoLite2-ASN database.
+# AntiBot/WAF GW — monthly refresh of MaxMind GeoLite2-ASN database.
 # Install in cron:   0 5 1 * *   /path/to/maxmind-refresh.sh >> /var/log/maxmind-refresh.log 2>&1
 #
 # Reads MAXMIND_LICENSE_KEY from /etc/appsecgw/maxmind.env (mode 0600) so

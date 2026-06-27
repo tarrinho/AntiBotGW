@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="pt-PT">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>AppSecGW 1.8.4 — Implementation Report</title>
+<title>AntiBot/WAF GW 1.9.8 — Implementation Report</title>
 <style>
   @page {
     size: A4;
@@ -67,7 +67,7 @@
   }
   .cover-title .subtitle { font-size: 14pt; color: #555; margin-top: 8px; font-weight: 300; }
   .cover-meta { font-size: 10pt; color: #555; line-height: 1.8; }
-  .cover-meta strong { color: #1a1a1a; display: inline-block; width: 130px; }
+  .cover-meta strong { color: #1a1a1a; display: inline-block; width: 110px; }
   .badge {
     display: inline-block;
     padding: 2px 8px;
@@ -76,12 +76,10 @@
     font-weight: 600;
     color: white;
   }
-  .badge-pass { background: #27ae60; }
-  .badge-fail { background: #c0392b; }
-  .badge-na   { background: #7f8c8d; }
-  .badge-200  { background: #27ae60; }
-  .badge-404  { background: #e67e22; }
-  .badge-502  { background: #c0392b; }
+  .badge-200 { background: #27ae60; }
+  .badge-403 { background: #e67e22; }
+  .badge-429 { background: #c0392b; }
+  .badge-402 { background: #8e44ad; }
   .layer-box {
     border: 1px solid #d4dce3;
     border-left: 4px solid #1e5f9c;
@@ -125,25 +123,15 @@
     border-radius: 3px;
   }
   .alert strong { color: #c44a00; }
-  .info-box {
-    background: #eaf4ff;
-    border-left: 4px solid #1e5f9c;
-    padding: 10px 14px;
-    margin: 12px 0;
-    font-size: 9.5pt;
-    border-radius: 3px;
-  }
-  .kpi-row { display: flex; gap: 12px; margin: 14px 0; page-break-inside: avoid; }
-  .kpi {
-    flex: 1;
+  .shot {
+    width: 100%;
     border: 1px solid #d4dce3;
     border-radius: 4px;
-    padding: 10px 14px;
-    text-align: center;
-    background: #fafbfc;
+    margin: 6px 0 2px 0;
+    page-break-inside: avoid;
   }
-  .kpi-val { font-size: 20pt; font-weight: 700; color: #0a3d62; }
-  .kpi-lbl { font-size: 8.5pt; color: #555; margin-top: 2px; }
+  .shot-cap { font-size: 8.5pt; color: #555; margin: 0 0 14px 2px; font-style: italic; }
+  figure { margin: 0 0 16px 0; page-break-inside: avoid; }
 </style>
 </head>
 <body>
@@ -151,527 +139,403 @@
 <!-- ───────────────────────── COVER ───────────────────────── -->
 <div class="cover">
   <div class="cover-title">
-    <h1>AppSecGW 1.8.4</h1>
-    <div class="subtitle">Hardened Reverse Proxy with Layered Anti-Automation Defenses</div>
-    <div class="subtitle">Implementation &amp; Release Report</div>
+    <h1>AntiBot/WAF&nbsp;GW&nbsp;1.9.8</h1>
+    <div class="subtitle">Reverse Proxy with Layered Anti-Automation Defenses + Web Application Firewall</div>
+    <div class="subtitle">Implementation Report</div>
   </div>
   <div class="cover-meta">
     <p><strong>Author:</strong> Pedro Tarrinho</p>
-    <p><strong>Date:</strong> 2026-05-15</p>
-    <p><strong>Image:</strong> appsec-antibot-gw:1.8.4 (~79 MB, Trivy: 0 CVEs)</p>
-    <p><strong>Stack:</strong> Python 3.13 / aiohttp / SQLite WAL / Chainguard Wolfi (arm64) / Alpine (armv7)</p>
-    <p><strong>Platform:</strong> arm64 · armv7</p>
-    <p><strong>Document version:</strong> 1.8.4</p>
+    <p><strong>Date:</strong> 2026-06-27</p>
+    <p><strong>Build:</strong> <code>AntiBotWaf_GW_1.9.8</code> (multi-arch: amd64 · arm64 · arm/v7)</p>
+    <p><strong>Stack:</strong> Python 3.13 / aiohttp / Podman (Chainguard distroless) / Cloudflare Tunnel front</p>
+    <p><strong>Datastore:</strong> SQLite (default) · optional PostgreSQL / TimescaleDB (dual-write)</p>
+    <p><strong>Purpose:</strong> Defensive control evaluation — implementation + bypass-surface review</p>
+    <p><strong>Document version:</strong> 2.0 (supersedes the 1.0 implementation report)</p>
   </div>
 </div>
 
 <!-- ───────────────────────── 1. EXECUTIVE SUMMARY ───────────────────────── -->
 <h2>1. Executive Summary</h2>
+<p>AntiBot/WAF&nbsp;GW is a reverse HTTP/HTTPS proxy that sits in front of a
+protected upstream application and filters automated and malicious traffic before
+it reaches the origin. Version&nbsp;1.9.8 extends the original six-layer
+anti-automation design into a full layered defense stack combining
+<strong>bot/agent detection</strong>, a <strong>request-time Web Application
+Firewall (WAF)</strong>, <strong>IP / reputation intelligence</strong>, and a
+<strong>risk-scoring engine</strong> with an operator console of eleven
+dashboards.</p>
 
-<p>
-AppSecGW is a production-grade reverse HTTP proxy implementing layered anti-automation
-and web application firewall capabilities. It sits in front of any upstream HTTP service
-and provides real-time threat detection, risk scoring, automated banning, operator
-dashboards, and security event visibility — all within a single
-<strong>~79 MB distroless container</strong> with zero runtime CVEs.
-</p>
+<p>Every request passes through an aiohttp middleware chain. Each layer addresses
+a distinct attack surface used by CLI tools, scrapers, headless browsers, AI
+agents, and exploitation frameworks. Detections feed a weighted risk score; once
+a score crosses the (NAT-aware) ban threshold the identity enters a hostile pool
+and is served a <em>silent decoy</em> — the upstream homepage or a 404 — so the
+client cannot tell it was caught.</p>
 
-<p>
-Release 1.8.4 adds the <strong>SIEM Security Event Center</strong>, a new operator
-dashboard providing a unified threat-intelligence view across all detectors; implements
-<strong>M-SEC-1 upstream address scrub</strong> to prevent internal infrastructure
-disclosure in proxied responses; enforces <strong>STRICT_VHOST</strong> mode by default;
-and fixes two silent <code>url()</code> TypeError bugs in the Live Feed dashboard plus a
-Chart.js date-adapter crash in the Traffic by Virtual Host chart.
-</p>
+<h4>Implemented controls (1.9.8)</h4>
+<ul>
+  <li><strong>36 weighted detection signals</strong> across UA, path, header,
+      behavioural, fingerprint, and reputation families, plus
+      <strong>13 hot-toggleable kill-switches</strong> and a decay-aware risk
+      model with NAT-aware thresholds and an optional strict-PoW "Anubis" mode.</li>
+  <li><strong>Request-time WAF</strong>: HTTP request-smuggling, verb-override,
+      header injection (SSTI / host-header), body inspection (XXE,
+      prototype-pollution, critical injection), file-upload, GraphQL abuse, and
+      slow-loris — each behind its own <code>WAF_*_ENABLED</code> kill-switch.</li>
+  <li><strong>Reputation &amp; threat intel</strong>: AbuseIPDB, CrowdSec,
+      MaxMind geo/ASN, Tor exit list, and the Feodo / CINS / URLhaus C2 +
+      malware feeds.</li>
+  <li><strong>Challenge stack</strong>: heuristic JS cookie gate, optional
+      Cloudflare Turnstile, proof-of-work, and an AI-labyrinth / tarpit for
+      crawlers that follow hidden links.</li>
+  <li><strong>JA4 TLS-fingerprint binding</strong> of the challenge cookie when a
+      JA4-injecting front (cloudflared) is present.</li>
+  <li><strong>Ed25519 gateway mesh</strong>: peer gateways exchange
+      signed reputation offers; only offers verifying against a registered peer
+      public key are applied.</li>
+  <li><strong>196 hot-reload knobs</strong>, all tunable at runtime via
+      <code>/secured/config</code> and the operator dashboards without a restart.</li>
+  <li><strong>Dual datastore</strong> (SQLite default, optional
+      PostgreSQL/TimescaleDB with dual-write) for bans, config, audit, and
+      observational metrics that survive restarts and session-key rotation.</li>
+</ul>
 
-<div class="kpi-row">
-  <div class="kpi"><div class="kpi-val">2499</div><div class="kpi-lbl">Tests — all pass</div></div>
-  <div class="kpi"><div class="kpi-val">0</div><div class="kpi-lbl">Bandit findings</div></div>
-  <div class="kpi"><div class="kpi-val">0</div><div class="kpi-lbl">Semgrep findings</div></div>
-  <div class="kpi"><div class="kpi-val">0</div><div class="kpi-lbl">Trivy CVEs (arm64+armv7)</div></div>
-  <div class="kpi"><div class="kpi-val">1.8 s</div><div class="kpi-lbl">Cold-start time</div></div>
-  <div class="kpi"><div class="kpi-val">0</div><div class="kpi-lbl">Pentest bypasses</div></div>
-</div>
+<p>The build ships as a multi-arch container image (amd64 / arm64 / arm/v7) with
+a clean CVE posture (0 CRITICAL / 0 HIGH on all three arches) and is validated by
+a 20-stage release pipeline covering unit/functional/integration tests, mutation
+testing, SAST, dependency/image CVE scans, dynamic security testing, and a
+written per-release audit record.</p>
 
 <!-- ───────────────────────── 2. ARCHITECTURE ───────────────────────── -->
 <h2>2. Architecture</h2>
 
 <h3>2.1 Deployment topology</h3>
-<div class="ascii">                ┌─────────────────────────────────┐
-                │          Internet / LB          │
-                └────────────────┬────────────────┘
-                                 │ HTTPS
-                                 ▼
-       ╔═══════════════════════════════════════════════════════╗
-       ║   AppSecGW (appsec-antibot-gw:1.8.4)                 ║
-       ║   Port 8443 (sole external exposure)                  ║
-       ║                                                       ║
-       ║   ┌────────────────────────────────────────────┐      ║
-       ║   │  protect() — layered detection pipeline    │      ║
-       ║   │  · UA / path / rate / body / fingerprint   │      ║
-       ║   │  · Risk scorer → auto-ban                  │      ║
-       ║   └──────────────────┬─────────────────────────┘      ║
-       ║   ┌──────────────────▼─────────────────────────┐      ║
-       ║   │  proxy_handler() — forward + M-SEC-1 scrub │      ║
-       ║   └──────────────────┬─────────────────────────┘      ║
-       ║   ┌──────────────────▼─────────────────────────┐      ║
-       ║   │  /antibot-appsec-gateway/secured/*          │      ║
-       ║   │  Operator dashboards (11 pages, auth-gated) │      ║
-       ║   └────────────────────────────────────────────┘      ║
-       ╚════════════════════════╤══════════════════════════════╝
-                                │ HTTPS (internal)
-                                ▼
-                ┌─────────────────────────────────┐
-                │         Upstream service         │
-                │  (address hidden from clients    │
-                │   by M-SEC-1 scrub — v1.8.4)    │
-                └─────────────────────────────────┘</div>
+<p>The gateway runs as a single container behind a TLS-terminating front
+(Cloudflare Tunnel in the reference deployment, which also injects the client
+<code>CF-JA4</code> TLS fingerprint). The front forwards to the gateway's
+listener; the gateway applies all detection + WAF layers and proxies clean
+traffic to the upstream origin.</p>
+<div class="ascii">  Client
+    │  HTTPS
+    ▼
+  ┌─────────────────────────────────┐
+  │  TLS front (Cloudflare Tunnel)  │  ← terminates TLS, injects CF-JA4
+  │  https://app.example.com        │
+  └───────────────┬─────────────────┘
+                  │  HTTP + X-Forwarded-*, CF-JA4
+                  ▼
+  ┌─────────────────────────────────┐
+  │  AntiBot/WAF GW (this build)     │
+  │   protect() middleware           │
+  │   ├─ trust topology / IP-ban     │
+  │   ├─ detection layers (L1..L9)   │
+  │   ├─ WAF layers (L10)            │
+  │   ├─ risk score → ban / decoy    │
+  │   └─ proxy clean → upstream      │
+  └───────────────┬─────────────────┘
+                  │  HTTP
+                  ▼
+  ┌─────────────────────────────────┐
+  │  Upstream origin (app.example)   │
+  └─────────────────────────────────┘</div>
 
 <h3>2.2 Request lifecycle</h3>
-<div class="ascii">Inbound request
-  │
-  ├─ STRICT_VHOST check (v1.8.4) ─── unknown host → 502 decoy
-  │
-  ├─ Ban list check ──────────────── banned IP → 404 silent-decoy
-  │
-  ├─ Detector pipeline (sequential)
-  │     UA blocklist · suspicious-path · body-sqli / body-cmd
-  │     body-ssrf / body-rce / body-xss · DLP · rate-limit
-  │     JS challenge · fingerprint / JA4 · AI-agent probes
-  │     Risk score accumulated per-request
-  │
-  ├─ Auto-ban if risk ≥ threshold ─── ban written to ip_state + DB
-  │
-  ├─ proxy_handler() ─────────────── forward to upstream
-  │
-  └─ M-SEC-1 response scrub (v1.8.4) strip upstream addr → client</div>
+<p>Every request flows through the <code>protect()</code> middleware. Short-circuit
+checks (IP-ban, admin-path gating, bypass paths, authorized-bot pass-through) run
+first; then the detection + WAF layers accumulate risk; finally the risk verdict
+selects forward / challenge / silent-decoy / ban.</p>
+<div class="ascii">  Request → protect() middleware
+    1. Source-IP resolution (XFF trust topology) + persistent IP-ban check
+    2. Admin-path gating (admin-IP allowlist + session) / authorized-bot rules
+    3. Detection layers L1..L9 (accumulate weighted risk)
+    4. WAF layers L10 (smuggling / verb / header / body / upload / graphql / slowloris)
+    5. Challenge gate (JS cookie / PoW / Turnstile) when required
+    6. Risk verdict:
+         score < SOFT_CHALLENGE_SCORE  → forward to upstream
+         soft band                     → monitor / challenge
+         score ≥ RISK_BAN_THRESHOLD    → hostile pool + silent decoy
+    7. Rate-limit (per-IP + per-identity token buckets, global RPS cap)
+    8. Forward clean traffic → upstream; record event → datastore</div>
 
 <h3>2.3 State model</h3>
-<p>
-All per-IP state is held in a <code>defaultdict[str, IpState]</code> guarded by
-<code>asyncio.Lock</code>. Events are persisted asynchronously to SQLite (WAL mode)
-for dashboard queries without blocking the request path.
-Fleet mode (optional): state shared across multiple instances via Redis.
-</p>
+<p>Hot-path state (per-identity risk, token buckets, session/fingerprint maps,
+recent events, timeline buckets) lives in memory for zero-latency reads. Durable
+state (bans, <code>config_kv</code>, secrets, admin-IP ACL, audit, observational
+metrics) is persisted to the datastore and rehydrated on boot. Security-critical
+ban state is rehydrated <em>synchronously</em> before the server accepts traffic;
+cosmetic dashboard state is rehydrated in a background task so the gateway accepts
+connections within seconds of a restart. The persistent <code>ip_bans</code>
+table keys on the raw IP and therefore survives session-cookie and fingerprint
+rotation.</p>
 
-<table>
-  <tr><th>Component</th><th>Storage</th><th>Purpose</th></tr>
-  <tr><td><code>ip_state</code></td><td>In-memory dict</td><td>Risk scores, ban timers, request counters, JA4, last seen</td></tr>
-  <tr><td><code>events</code></td><td>In-memory deque (200)</td><td>Last 200 events for SIEM / Live Feed</td></tr>
-  <tr><td><code>timeline</code></td><td>In-memory dict (by bucket)</td><td>Allowed/blocked timeline for charts</td></tr>
-  <tr><td><code>antibot.db</code></td><td>SQLite WAL</td><td>Persistent event log, aggregates, 30-day history</td></tr>
-  <tr><td><code>vhosts.json</code></td><td>JSON file (atomic writes)</td><td>Virtual host config with per-vhost overrides</td></tr>
-</table>
-
-<!-- ───────────────────────── 3. DETECTION LAYERS ───────────────────────── -->
-<h2>3. Detection Layers</h2>
-
-<p>
-Detectors run in sequence inside <code>protect()</code>. Each detector adds a risk
-score on signal fire. When the cumulative score for an IP reaches
-<code>RISK_BAN_THRESHOLD</code> (default 50) the IP is banned automatically.
-</p>
-
-<table>
-  <tr>
-    <th style="width:5%">#</th>
-    <th style="width:22%">Detector / signal</th>
-    <th style="width:14%">Default score</th>
-    <th>Description</th>
-  </tr>
-  <tr><td>1</td><td><code>honeypot</code> / <code>honeypot-silent</code></td><td>+100</td>
-      <td>Hard-coded trap paths (<code>/wp-admin</code>, <code>/.env</code>, etc.) and HTML-injected canary links. Instant ban on first hit.</td></tr>
-  <tr><td>2</td><td><code>ua-blocked</code></td><td>+60</td>
-      <td>Substring match against automation fingerprints (curl, python-requests, scrapy, selenium, headless, claude, gptbot, …).</td></tr>
-  <tr><td>3</td><td><code>suspicious-path</code></td><td>+40</td>
-      <td>Regex match for injection patterns in URL path: XSS (<code>&lt;script&gt;</code>), path traversal (<code>../</code>), SQL (<code>UNION SELECT</code>), SSTI (<code>{{7*7}}</code>).</td></tr>
-  <tr><td>4</td><td><code>body-sqli</code> / <code>body-cmd</code> / <code>body-rce</code> / <code>body-ssrf</code> / <code>body-xss</code></td><td>+50</td>
-      <td>Body injection scan (threshold-gated: only fires when risk ≥ <code>ESCALATION_THRESHOLD</code>). Regex-based detection on request bodies for SQL, OS command, JNDI/log4shell, SSRF, and XSS payloads.</td></tr>
-  <tr><td>5</td><td><code>rate-limit</code></td><td>ban</td>
-      <td>Per-IP token bucket. Configurable burst and refill rate. Burst exhaustion → 429 with <code>Retry-After</code>.</td></tr>
-  <tr><td>6</td><td><code>banned-silent</code></td><td>—</td>
-      <td>IP is in the ban list. Served a 404 silent decoy; no signal emitted to attacker about ban status.</td></tr>
-  <tr><td>7</td><td><code>js-challenge</code></td><td>conditional</td>
-      <td>JS proof-of-work / Cloudflare Turnstile challenge gate (configurable). Clients that fail or skip receive 403.</td></tr>
-  <tr><td>8</td><td><code>fingerprint</code> / <code>ja4</code></td><td>+30–60</td>
-      <td>TLS JA4 fingerprint blocklist and consistency checks.</td></tr>
-  <tr><td>9</td><td>AI-agent probes (v1.7.3)</td><td>+35–90</td>
-      <td>Honey credentials, LLM no-subresource heuristic, browser canary probe, path sweep.</td></tr>
-  <tr><td>10</td><td>DLP (optional)</td><td>alert</td>
-      <td>Outbound data loss prevention: AWS key patterns, credential strings in response bodies → webhook alert + redaction.</td></tr>
-</table>
-
-<!-- ───────────────────────── 4. V1.8.4 NEW FEATURES ───────────────────────── -->
-<h2>4. Release 1.8.4 — New Features &amp; Fixes</h2>
+<!-- ───────────────────────── 3. PROTECTION LAYERS ───────────────────────── -->
+<h2>3. Protection Layers</h2>
+<p>The layers below are grouped by attack surface. Each weighted signal is
+independently hot-toggleable and contributes to the identity's risk score; WAF
+layers are terminal (immediate silent-decoy on a confirmed match).</p>
 
 <div class="layer-box">
-<h3>4.1 SIEM Security Event Center</h3>
-<p>
-A new operator dashboard (<code>GET /antibot-appsec-gateway/secured/siem</code>) provides a
-real-time, unified threat-intelligence view. It is auth-gated, served with
-<code>X-Frame-Options: DENY</code> and <code>Cache-Control: no-store</code>.
-</p>
-
-<h4>Dashboard panels</h4>
-<table>
-  <tr><th>Panel</th><th>Description</th></tr>
-  <tr><td>Threat Index</td><td>0–100 composite score: <code>block% × 0.5 + crit×5 + high×2</code>, capped at 100</td></tr>
-  <tr><td>KPI bar</td><td>Total events · Blocked · Allowed · Active bans · Bypasses for the selected time window</td></tr>
-  <tr><td>Event Timeline</td><td>Stacked-area chart: blocked / allowed buckets from <code>state.timeline</code></td></tr>
-  <tr><td>Threat Category Donut</td><td>Distribution across threat categories (body, path, agent, rate, fingerprint, …)</td></tr>
-  <tr><td>Event Table</td><td>Last 100 events newest-first — IP, path, reason, severity, score, JA4, rid</td></tr>
-  <tr><td>Top IPs</td><td>Top 25 identities by risk score — request count, block count, ban status, top reason</td></tr>
-  <tr><td>By Reason</td><td>Top 30 non-OK signal reasons with count bar</td></tr>
-</table>
-
-<h4>Data endpoint</h4>
-<pre>GET /antibot-appsec-gateway/secured/siem-data
-    ?mins=60        # time window 1-1440 minutes (default 60)
-    ?vhost=api.ex   # optional vhost filter
-
-Response (application/json, Cache-Control: no-store):
-{
-  "ts": 1747350000,  "threat_index": 23,
-  "stats": { "total": 412, "blocked": 87, "allowed": 325, "bans": 4, "bypasses": 2 },
-  "events": [ { "ts":…, "ip":…, "reason":…, "sev":"high", "score":75, "ja4":… } ],
-  "timeline": [ { "t":…, "total":50, "blocked":12, "allowed":38 } ],
-  "by_reason": [ { "reason":"rate-limit", "count":45 } ],
-  "threat_cats": [ { "cat":"rate", "count":45 } ],
-  "top_ips": [ { "ip":"1.2.3.4", "risk_score":75.0, "banned":true } ],
-  "vhosts": ["api.example.com"],  "mins": 60
-}</pre>
-
-<p class="footer-note">
-Severity levels: critical · high · medium · low · info. Events bounded at 100;
-top IPs at 25; by_reason at 30. Snapshot taken under <code>state_lock</code> — no data races.
-</p>
+  <h3><span class="layer-num">1</span>User-Agent &amp; client identity</h3>
+  <p>Blocklist of 60+ UA fragments (HTTP libraries, scanners, headless browsers,
+  and AI crawler bots such as <code>gptbot</code>, <code>claudebot</code>,
+  <code>anthropic</code>), plus empty / too-short / non-browser / platform-mismatch
+  signals against the declared <code>Sec-CH-UA-Platform</code>.</p>
 </div>
-
 <div class="layer-box">
-<h3>4.2 M-SEC-1 — Upstream Address Scrub</h3>
-<p>
-Every proxied response is now passed through an unconditional scrub step that
-removes all references to the upstream address before forwarding to the client.
-This prevents internal infrastructure disclosure (scheme, hostname, port) even
-when the upstream leaks its own address in response headers or bodies.
-</p>
-
-<h4>Header handling</h4>
-<table>
-  <tr><th>Header type</th><th>Action</th></tr>
-  <tr><td><code>Location</code>, <code>Content-Location</code>, <code>Link</code>, <code>Refresh</code>, <code>Access-Control-Allow-Origin</code></td><td>Upstream origin replaced with gateway origin</td></tr>
-  <tr><td><code>Via</code>, <code>Server</code>, <code>X-Powered-By</code>, <code>X-Backend</code>, <code>X-Upstream</code>, <code>X-Origin</code>, <code>X-Real-Server</code>, <code>X-Forwarded-Server</code></td><td>Dropped if they contain the upstream address</td></tr>
-  <tr><td>All other headers containing upstream address</td><td>Scrubbed (value replaced)</td></tr>
-</table>
-
-<h4>Body handling</h4>
-<table>
-  <tr><th>Content-Type</th><th>Action</th></tr>
-  <tr><td><code>text/*</code>, <code>application/json</code>, <code>application/xml</code>, <code>application/javascript</code>, and similar text types</td><td>Upstream scheme://netloc replaced with gateway origin in body text</td></tr>
-  <tr><td>Binary types (<code>image/*</code>, <code>audio/*</code>, <code>application/octet-stream</code>, etc.)</td><td>Passed through untouched</td></tr>
-</table>
-
-<p class="footer-note">
-Activated unconditionally. No env var opt-out (by design — information disclosure is always undesirable). Gateway origin derived from the inbound <code>Host</code> header + scheme.
-</p>
+  <h3><span class="layer-num">2</span>Path &amp; honeypot traps</h3>
+  <p>Suspicious-path regex (VCS metadata, backup files, traversal, SQLi/XSS/LFI
+  markers), advertised honeypot paths with no upstream (<code>/.git/HEAD</code>,
+  <code>/.env</code>, <code>/actuator/env</code>, …), hidden bot-trap form fields,
+  and an AI-labyrinth that bans clients which follow injected
+  <code>rel=nofollow</code> links.</p>
 </div>
-
 <div class="layer-box">
-<h3>4.3 STRICT_VHOST — Default ON</h3>
-<p>
-When at least one virtual host is registered, <code>STRICT_VHOST=1</code>
-(the new default) rejects inbound requests whose <code>Host</code> header
-does not match any configured vhost. Unmatched hosts receive a
-502 decoy with no information disclosure. Guard condition:
-</p>
-<pre>if STRICT_VHOST and VHOSTS and not vhost_is_configured(host):
-    return web.Response(status=502)  # silent decoy</pre>
-<p>
-Has <strong>no effect</strong> in single-site deployments where <code>VHOSTS</code>
-is empty. Set <code>STRICT_VHOST=0</code> to allow unknown hosts to fall through
-to the global <code>UPSTREAM</code>.
-</p>
+  <h3><span class="layer-num">3</span>Header completeness &amp; consistency</h3>
+  <p>Required-header allowlist, <code>Accept-*</code> / <code>Sec-Fetch-*</code>
+  presence, Sec-Fetch navigation coherence, Client-Hints vs UA consistency, and an
+  HTTP/2 SETTINGS fingerprint check.</p>
 </div>
-
 <div class="layer-box">
-<h3>4.4 Bug Fixes</h3>
-
-<h4>Live Feed — Detection Methods / Top Methods panels always empty</h4>
-<p>
-<code>loadDetectorStats()</code> called <code>url('/antibot-appsec-gateway/secured/detector-stats')</code>
-where <code>url</code> is not a function in that scope. The resulting <code>TypeError</code> was silently
-swallowed by a bare <code>catch(e){}</code>, leaving both panels perpetually empty.
-The same pattern affected <code>loadLogLevel()</code>. Both fixed to use bare string paths.
-</p>
-
-<h4>Traffic by Virtual Host chart crash</h4>
-<p>
-Chart.js <code>type:'time'</code> axis requires a registered date adapter (date-fns or luxon);
-none is bundled with the local <code>chart.umd.min.js</code>. The runtime error
-<em>"This method is not implemented: Check that a complete date adapter is provided"</em>
-crashed the chart on every render. Fixed by switching to <code>type:'category'</code>
-with pre-formatted <code>fmtTime()</code> string labels — identical to the main traffic chart approach.
-</p>
-
-<h4>Traffic by Virtual Host — Click-to-inspect</h4>
-<p>
-Clicking any bar in the vhost stacked-area chart pins a bucket detail panel below the
-canvas showing all vhosts for that time bucket, sorted by request count with an inline
-share percentage bar. Clicking the same bar a second time unpins. The panel auto-updates
-on each poll (pinned bucket index clamped to new data length). State stored in
-module-level <code>_vhRawData</code> and <code>_vhSelectedIdx</code>.
-</p>
+  <h3><span class="layer-num">4</span>Behavioural analysis</h3>
+  <p>Inter-arrival timing regularity, path-enumeration thresholds, HTML-without-
+  assets ratio, and request-cadence autocorrelation — robotic-pattern signatures.</p>
 </div>
-
-<!-- ───────────────────────── 4b. UI/UX FIXES ───────────────────────── -->
 <div class="layer-box">
-<h3>4.5 UI/UX Fixes</h3>
-<h4>Dead nav links — <code>center_control.html</code></h4>
-<p>
-Sidebar "Center Control" link pointed to <code>/secured/center-control</code> (non-existent route).
-"Dashboard" link pointed to <code>/secured/dashboard</code> (removed in 1.7.x).
-Fixed: "Center Control" → <code>/secured/control-center</code>; "Dashboard" replaced by "Live Feed" → <code>/secured/live-feed</code>.
-</p>
-
-<h4>Silent error swallowing — <code>main.html</code></h4>
-<p>
-<code>_attackerBan</code> and <code>_attackerUnban</code> action handlers had <code>.catch(function(){})</code> — failed bans/unbans were silently discarded with no operator feedback.
-Fixed: catch now calls <code>_gwAlert('Ban/Unban failed: ' + message)</code>.
-</p>
-
-<h4>Duplicate API calls — <code>control_center.html</code></h4>
-<p>
-<code>DOMContentLoaded</code> called <code>loadSignalPerf()</code> and <code>loadThreatDonut()</code> directly, plus they were called inside <code>_loadThreatSection()</code> — every page load issued two concurrent fetches to each endpoint.
-Fixed: removed the redundant direct calls from <code>DOMContentLoaded</code>; <code>_loadThreatSection()</code> is the sole entry point.
-</p>
-
-<h4>Sidebar nav sub-items (all 11 dashboard pages)</h4>
-<p>
-Live Feed, Agents, and SIEM now appear as indented sub-items under Control Center in every dashboard sidebar, using <code>class="sub"</code> (<code>padding-left:20px; font-size:11.5px</code>).
-SIEM moved from end-of-nav to immediately after Agents. Active page retains <code>class="sub active"</code>.
-</p>
-
-<h4>ARIA-live toast notifications (all pages with toast)</h4>
-<p>
-All <code>&lt;div id="toast"&gt;</code> elements now carry <code>role="status" aria-live="polite" aria-atomic="true"</code>
-so screen-reader users hear action confirmations (ban, unban, config save, etc.).
-</p>
+  <h3><span class="layer-num">5</span>Challenge &amp; proof-of-work</h3>
+  <p>Heuristic JS cookie gate (auto-mint on first qualifying HTML GET), optional
+  Cloudflare Turnstile, and a proof-of-work gate (strict "Anubis" mode for
+  configured paths). Unsolved challenges are silently decoyed.</p>
+</div>
+<div class="layer-box">
+  <h3><span class="layer-num">6</span>Rate limiting</h3>
+  <p>Per-IP and per-identity token buckets plus a global RPS cap; throttled
+  traffic receives HTTP 429 with no risk penalty (pure back-pressure).</p>
+</div>
+<div class="layer-box">
+  <h3><span class="layer-num">7</span>Canary &amp; referer integrity</h3>
+  <p>Canary tokens planted in responses (echo detection for LLM agents that
+  replay page content) and referer-chain validation (ghost / loop signals).</p>
+</div>
+<div class="layer-box">
+  <h3><span class="layer-num">8</span>TLS / JA4 fingerprint</h3>
+  <p>JA3/JA4 handshake fingerprints matched against a deny-list; the challenge
+  cookie is bound to the observed JA4 so it cannot be replayed under a different
+  TLS stack.</p>
+</div>
+<div class="layer-box">
+  <h3><span class="layer-num">9</span>Reputation &amp; threat intelligence</h3>
+  <p>AbuseIPDB confidence tiers, CrowdSec decisions, MaxMind geo/ASN (country
+  allow/deny + hosting-ASN signal), Tor exit detection, and the Feodo / CINS /
+  URLhaus C2 + malware feeds.</p>
+</div>
+<div class="layer-box">
+  <h3><span class="layer-num">10</span>Web Application Firewall</h3>
+  <p>Request-time WAF inspecting method, headers, and (bounded) body: HTTP
+  request-smuggling, verb-override, header injection (SSTI / host-header), XXE,
+  prototype-pollution, critical command/SQL injection, malicious file-upload,
+  GraphQL introspection/batching abuse, and slow-loris. Each detector is gated by
+  its own <code>WAF_*_ENABLED</code> kill-switch (default-on, per-vhost
+  overridable) and yields a silent decoy on a confirmed match.</p>
 </div>
 
-<!-- ───────────────────────── 5. OPERATOR DASHBOARDS ───────────────────────── -->
-<h2>5. Operator Dashboards</h2>
+<p><strong>Cross-cutting:</strong> a decay-aware weighted risk model
+(<code>SOFT_CHALLENGE_SCORE</code> / <code>RISK_BAN_THRESHOLD</code> /
+<code>RISK_BAN_THRESHOLD_NAT</code> / <code>RISK_DECAY_HALFLIFE_SECS</code> /
+<code>HOSTILE_BAN_SECS</code>); silent-decoy responses
+(<code>BLOCK_RESPONSE_MODE</code> = homepage | 404); a persistent raw-IP hostile
+pool; and an Ed25519-signed gateway mesh for sharing reputation between peers.</p>
 
-<p>
-All dashboards are served under <code>/antibot-appsec-gateway/secured/</code> and
-require a valid <code>agw_session</code> cookie. Unauthenticated requests receive
-404 (silent decoy). All pages carry <code>Cache-Control: no-store</code>,
-<code>X-Frame-Options: DENY</code>, and a restrictive CSP.
-</p>
-
+<!-- ───────────────────────── 4. CONFIGURATION ───────────────────────── -->
+<h2>4. Configuration</h2>
+<h3>4.1 Key environment variables</h3>
 <table>
-  <tr><th>Dashboard</th><th>Route</th><th>Purpose</th></tr>
-  <tr><td>Control Center</td><td><code>/secured/control-center</code></td><td>Post-login landing: vhost traffic summary, ban overview, gateway stats, 6 analytics charts</td></tr>
-  <tr><td>Live Feed</td><td><code>/secured/live-feed</code></td><td>Real-time traffic chart, client table, detector stats, log-level control</td></tr>
-  <tr><td>SIEM</td><td><code>/secured/siem</code></td><td>Security Event Center: threat index, event table, top IPs, threat categories (new in 1.8.4)</td></tr>
-  <tr><td>Agents</td><td><code>/secured/agents</code></td><td>Bot/agent identity drill-down, JA4, risk breakdown, sparklines</td></tr>
-  <tr><td>Service</td><td><code>/secured/service</code></td><td>Per-vhost service health, uptime, request rates</td></tr>
-  <tr><td>Controls</td><td><code>/secured/controls</code></td><td>Hot-reload knob panel: thresholds, bypass, JS-challenge, DLP, detector toggles</td></tr>
-  <tr><td>Geo</td><td><code>/secured/geo</code></td><td>Geographic block/allow rules, world map with live event overlay</td></tr>
-  <tr><td>Logs</td><td><code>/secured/logs</code></td><td>Structured event log, category filter, vhost filter, export</td></tr>
-  <tr><td>Settings</td><td><code>/secured/settings</code></td><td>Config import/export, user management, storage, webhook</td></tr>
-  <tr><td>Vhost Policy</td><td><code>/secured/vhost-policy</code></td><td>Per-vhost override inspector</td></tr>
-  <tr><td>Virtual Hosts</td><td><code>/secured/vhosts</code></td><td>CRUD for virtual host entries (Settings tab)</td></tr>
+  <tr><th>Variable</th><th>Example</th><th>Purpose</th></tr>
+  <tr><td><code>UPSTREAM</code></td><td>https://app.example.com</td><td>Origin the gateway proxies to (required)</td></tr>
+  <tr><td><code>LISTEN_HOST</code> / <code>LISTEN_PORT</code></td><td>0.0.0.0 / 8443</td><td>Gateway bind address</td></tr>
+  <tr><td><code>TRUST_XFF</code></td><td>last</td><td>X-Forwarded-For trust topology (off / last / all / N)</td></tr>
+  <tr><td><code>JA4_TRUSTED_PEERS</code></td><td>&lt;front IP/CIDR&gt;</td><td>Source allowed to inject the JA4 header</td></tr>
+  <tr><td><code>BLOCK_RESPONSE_MODE</code></td><td>homepage</td><td>Decoy served to banned clients (homepage | 404)</td></tr>
+  <tr><td><code>SOFT_CHALLENGE_SCORE</code> / <code>RISK_BAN_THRESHOLD</code></td><td>4 / configurable</td><td>Risk bands (hot-reloadable)</td></tr>
+  <tr><td><code>POSTGRES_DSN</code></td><td>(unset = SQLite)</td><td>Enables PostgreSQL/TimescaleDB dual-write</td></tr>
+  <tr><td><code>WAF_*_ENABLED</code></td><td>1</td><td>Per-detector WAF kill-switches (default-on)</td></tr>
+  <tr><td><code>VHOST_PORT_AWARE</code></td><td>0</td><td>1.9.8 — treat the Host's port as part of the vhost identity, so <code>host:8008</code> and <code>host:8009</code> are distinct vhosts (separate upstream/policy/stats/bans). Default off (host-only). Front must forward the original <code>host:port</code>.</td></tr>
+</table>
+<p>All 196 hot-reload knobs are readable / settable at runtime; trust-topology
+knobs (<code>TRUST_XFF</code>, <code>TRUSTED_PROXIES</code>) are env-pinned and
+cannot be changed from the database.</p>
+
+<h3>4.2 Operator &amp; internal endpoints</h3>
+<p>The operator console lives under <code>/antibot-appsec-gateway/secured/*</code>
+(eleven dashboards: live-feed, control-center, agents, controls, settings,
+honeypots, geo, logs, service, siem, vhost-policy). Admin endpoints are gated by
+an admin-IP allowlist plus an authenticated session; unauthenticated requests
+receive an upstream-style 404 (the route's existence is never confirmed). The
+master light/dark theme is set via <code>POST /secured/ui-theme</code> and is
+honoured by every dashboard.</p>
+
+<h3>4.3 Operator console — dashboards</h3>
+<p>The operator console comprises eleven dashboards under
+<code>/antibot-appsec-gateway/secured/*</code>. The captures below are from a
+reference instance fronting a generic upstream
+(<code>https://example.com</code>) with synthetic mixed traffic
+(legitimate browsers, blocked bots, honeypot probes, and banned scanners).</p>
+
+<figure>
+  <img class="shot" src="screenshots/control-center.png" alt="Control Center dashboard">
+  <p class="shot-cap">Control Center — post-login landing: vhost traffic summary, banned-IP count,
+  Traffic-Over-Time, and the Bot Score Distribution histogram (Soft / Ban thresholds marked).</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/live-feed.png" alt="Live Feed dashboard">
+  <p class="shot-cap">Live Feed — real-time per-request stream (Allowed / Blocked / Missed / Auth-bots / GW-mgmt),
+  with the reason-details drill-down and inline ban / unban actions.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/agents.png" alt="Stealth Agent Hunter dashboard">
+  <p class="shot-cap">Stealth Agent Hunter — identities that passed every block but show stealth signals;
+  per-identity stealth score with IP / UA / session / JA4 / timing popover and per-signal breakdown.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/controls.png" alt="Controls dashboard">
+  <p class="shot-cap">Controls — every hot-reload knob (toggles, thresholds, lists), the merged
+  Defenses &amp; scoring table, strict-PoW (Anubis) toggle, and the admin-IP allowlist.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/honeypots.png" alt="Honeypots dashboard">
+  <p class="shot-cap">Honeypots — trap-catch analytics, the Attack Playbook (catches grouped by technique,
+  scanner-tool fingerprinting, predicted next probes), and honeypot-path suggestions.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/siem.png" alt="SIEM dashboard">
+  <p class="shot-cap">SIEM — alert rules + fired-alert timeline for exporting security events.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/geo.png" alt="GeoMap dashboard">
+  <p class="shot-cap">GeoMap — world map of accesses by source country/ASN (MaxMind GeoLite2), with
+  clean / blocked / Tor-exit / hosting overlays and a Top-Countries breakdown; the reference instance
+  shows blocked probes from across the Americas, Europe, Africa, Asia, and Oceania.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/logs.png" alt="Logs dashboard">
+  <p class="shot-cap">Logs — searchable structured request log with reason / status / vhost filters and export.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/service.png" alt="Service Metrics dashboard">
+  <p class="shot-cap">Service Metrics — gateway health over time: request throughput, latency, DB size,
+  and resource counters sampled on a schedule.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/settings.png" alt="Settings dashboard">
+  <p class="shot-cap">Settings — routing (virtual hosts + discovered hosts), identity &amp; auth, mesh,
+  infrastructure integrations, and the config / backup tools.</p>
+</figure>
+<figure>
+  <img class="shot" src="screenshots/vhost-policy.png" alt="Vhost Policy dashboard">
+  <p class="shot-cap">Vhost Policy — per-virtual-host security-policy overrides layered over the global defaults.</p>
+</figure>
+
+<!-- ───────────────────────── 5. TEST RESULTS ───────────────────────── -->
+<h2>5. Test Results</h2>
+<p>Validation is driven by a 20-stage release pipeline (<code>rules.md</code>).
+The 1.9.8 release record is held in <code>validation/1.9.8.md</code>.</p>
+<table>
+  <tr><th>Stage</th><th>Result</th></tr>
+  <tr><td>Unit / functional / integration / component / regression</td><td><span class="badge badge-200">1184 passed</span> (SQLite gate)</td></tr>
+  <tr><td>Static analysis (Bandit / Semgrep / ruff)</td><td>0 High/Critical; lint blocking categories clean</td></tr>
+  <tr><td>Image CVE scan (Trivy ×3 arches)</td><td><span class="badge badge-200">0 CRITICAL / 0 HIGH</span></td></tr>
+  <tr><td>Dynamic security testing (DAST harness)</td><td>open-redirect, SSRF markers, CRLF/header-injection — all defended</td></tr>
+  <tr><td>Multi-arch build + registry push</td><td>amd64 · arm64 · arm/v7 manifest verified</td></tr>
+</table>
+<p>Representative request outcomes observed end-to-end against the live upstream:</p>
+<table>
+  <tr><th>Request</th><th>Layer</th><th>Result</th></tr>
+  <tr><td>Browser with valid challenge cookie</td><td>—</td><td><span class="badge badge-200">200</span> forwarded</td></tr>
+  <tr><td>UA <code>curl/8</code> / <code>python-requests</code></td><td>UA filter</td><td><span class="badge badge-403">decoy</span> ua-blocked</td></tr>
+  <tr><td>UA <code>ClaudeBot</code> / <code>GPTBot</code></td><td>UA filter</td><td><span class="badge badge-403">decoy</span> ua-blocked</td></tr>
+  <tr><td>Probe <code>/.git/HEAD</code>, <code>/.env</code></td><td>Honeypot</td><td><span class="badge badge-403">decoy</span> + risk bump</td></tr>
+  <tr><td>Burst beyond token bucket</td><td>Rate limit</td><td><span class="badge badge-429">429</span></td></tr>
+  <tr><td>PoW-required path, no token</td><td>Challenge</td><td><span class="badge badge-402">402</span> + challenge</td></tr>
+  <tr><td>XXE / prototype-pollution body</td><td>WAF</td><td><span class="badge badge-403">decoy</span> suspicious-body</td></tr>
+  <tr><td>Banned raw IP (hostile pool)</td><td>IP-ban</td><td><span class="badge badge-403">decoy</span> ip-ban (every path)</td></tr>
 </table>
 
-<!-- ───────────────────────── 6. TEST RESULTS ───────────────────────── -->
-<h2>6. Test Results</h2>
-
-<h3>6.1 Automated test suite</h3>
-
+<!-- ───────────────────────── 6. BYPASS SURFACE ───────────────────────── -->
+<h2>6. Bypass Surface &amp; Residual Risk</h2>
+<p>The accepted-risk register (re-confirmed each release in
+<code>validation/&lt;version&gt;.md</code> §11b) records design trade-offs that
+are not defects but carry residual exposure:</p>
 <table>
-  <tr><th>Suite</th><th>Tests</th><th>Result</th></tr>
-  <tr><td>Unit (<code>test_critical.py</code>, <code>test_pure.py</code>, <code>test_async.py</code>)</td><td>604</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Functional (<code>test_functional.py</code>)</td><td>38</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Integration (<code>test_integration.py</code>)</td><td>23</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Regression (<code>test_control_regressions.py</code>, <code>test_v14.py</code>, <code>test_v142.py</code>, <code>test_v173.py</code>)</td><td>152</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>SIEM (<code>test_v184_siem.py</code>)</td><td>71</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Upstream no-leak (<code>test_upstream_no_leak.py</code>)</td><td>24</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Live Feed detector stats (<code>test_livefeed_detector_stats.py</code>)</td><td>10</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Dashboard charts (<code>test_dashboard_charts.py</code>) — new in 1.8.4</td><td>+11</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>UI/UX fixes (<code>test_v184_uiux.py</code>) — new in 1.8.4</td><td>101</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>All other suites</td><td>1475</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr style="font-weight:700"><td>Total</td><td>2499</td><td><span class="badge badge-pass">ALL PASS</span></td></tr>
+  <tr><th>ID</th><th>Residual risk</th><th>Mitigation</th></tr>
+  <tr><td>R1</td><td><code>agw_csrf</code> cookie is JS-readable (HttpOnly off)</td><td>Double-submit token + <code>SameSite=Strict</code></td></tr>
+  <tr><td>R2</td><td><code>ALLOW_PRIVATE_UPSTREAM</code> default-allow (SSRF reach)</td><td>Operator-scoped; SSRF guard on outbound URLs; env-pinnable</td></tr>
+  <tr><td>R3</td><td>Admin surface hidden behind a decoy-404</td><td>Admin-IP allowlist is the real gate (obscurity is a layer, not the control)</td></tr>
+</table>
+<div class="alert">
+  <strong>Front-of-proxy trust boundary:</strong> the gateway's source-IP and JA4
+  guarantees depend on the front. It must terminate TLS, inject a trustworthy
+  JA4, and overwrite (not append) the client-supplied <code>X-Forwarded-For</code>.
+  A front that passes through client-controlled XFF undermines per-IP bans and
+  geo/reputation lookups; pin the trusted front via <code>TRUST_XFF</code> +
+  <code>JA4_TRUSTED_PEERS</code>.
+</div>
+
+<!-- ───────────────────────── 7. RECOMMENDATIONS ───────────────────────── -->
+<h2>7. Recommendations</h2>
+<ol>
+  <li>Deploy behind a JA4-injecting, XFF-overwriting front (Cloudflare Tunnel or
+      an nginx JA4 build) and pin it with <code>TRUST_XFF=last</code> +
+      <code>JA4_TRUSTED_PEERS</code>.</li>
+  <li>Keep the WAF kill-switches default-on; disable a layer only per-vhost when a
+      legitimate client trips it, and re-enable after tuning.</li>
+  <li>Enable PostgreSQL/TimescaleDB for multi-replica or long-retention
+      deployments; SQLite is sufficient for single-instance.</li>
+  <li>Configure reputation feeds (AbuseIPDB / CrowdSec) and the C2/malware feeds
+      for environments exposed to broad internet scanning.</li>
+  <li>Set <code>LOG_RETENTION</code> / DLP redaction in line with the privacy
+      posture — IP addresses are PII; prune the events store on schedule.</li>
+  <li>For mesh deployments, upgrade all peers together (the Ed25519 model is not
+      compatible with the legacy symmetric keys) and rotate keypairs.</li>
+</ol>
+
+<!-- ───────────────────────── 8. APPENDIX ───────────────────────── -->
+<h2>8. Appendix</h2>
+
+<h3>8.1 Run</h3>
+<pre>cd /opt/antibot-gw
+
+# Container (recommended) — multi-arch image from your registry
+podman run -d --name antibot-gw \
+  -e UPSTREAM=https://app.example.com \
+  -e TRUST_XFF=last \
+  -p 8443:8443 \
+  &lt;your-registry&gt;/antibotappsecgw:1.9.8
+
+# Front the listener with a TLS tunnel that injects JA4 (e.g. cloudflared)
+cloudflared tunnel --url http://127.0.0.1:8443</pre>
+
+<h3>8.2 Selected file inventory</h3>
+<table>
+  <tr><th>Path</th><th>Role</th></tr>
+  <tr><td><code>proxy.py</code></td><td>Application entrypoint + route table + startup/rehydrate</td></tr>
+  <tr><td><code>core/proxy_handler.py</code></td><td><code>protect()</code> middleware, detection + WAF wiring, silent-decoy, dashboards data</td></tr>
+  <tr><td><code>config.py</code></td><td>Environment variables, knob defaults, version string</td></tr>
+  <tr><td><code>vhost.py</code></td><td>Per-vhost effective-config accessor (<code>vc()</code>) + coercion</td></tr>
+  <tr><td><code>scoring.py</code> / <code>identity.py</code></td><td>Risk model, ban/unban, identity + session fingerprinting</td></tr>
+  <tr><td><code>detection/</code> · <code>reputation/</code> · <code>integrations/</code></td><td>Signal families, feeds, JA4/Redis/JWT integrations</td></tr>
+  <tr><td><code>db/sqlite.py</code> · <code>db/postgres.py</code></td><td>Dual-backend persistence + dual-write</td></tr>
+  <tr><td><code>admin/</code> · <code>dashboards/</code></td><td>Auth, mesh, settings + the eleven operator dashboards</td></tr>
 </table>
 
-<h3>6.2 Static analysis</h3>
+<h3>8.3 Verdict</h3>
+<p>AntiBot/WAF&nbsp;GW&nbsp;1.9.8 implements a defense-in-depth stack — bot/agent
+detection, a request-time WAF, reputation intelligence, and a decay-aware risk
+model — with a clean CVE posture and a complete, version-controlled validation
+record. The dominant residual risk is the trust boundary at the front of the
+proxy; the documented deployment guidance closes it.</p>
 
-<table>
-  <tr><th>Tool</th><th>High</th><th>Critical</th><th>Medium</th><th>Result</th></tr>
-  <tr><td>Bandit (<code>bandit -ll proxy.py</code>)</td><td>0</td><td>0</td><td>0</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Semgrep (<code>p/python</code>, 151 rules, 11 files)</td><td colspan="3" style="text-align:center">0 findings</td><td><span class="badge badge-pass">PASS</span></td></tr>
-</table>
-
-<h3>6.3 Image CVE scan (Trivy)</h3>
-
-<table>
-  <tr><th>Architecture</th><th>Critical</th><th>High</th><th>Medium</th><th>Digest</th><th>Result</th></tr>
-  <tr><td>arm64 (Chainguard Wolfi)</td><td>0</td><td>0</td><td>0</td><td><code>sha256:d82eb333fff3</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>armv7 (Alpine)</td><td>0</td><td>0</td><td>0</td><td><code>sha256:a5df980d5e49</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-</table>
-
-<h3>6.4 Black-box pentest (17 probes, 0 bypasses)</h3>
-
-<table>
-  <tr><th>Probe</th><th>Surface</th><th>Expected</th><th>Actual</th><th>Result</th></tr>
-  <tr><td>GET <code>/secured/siem</code> authenticated</td><td>SIEM</td><td>200 HTML</td><td><span class="badge badge-200">200</span></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>GET <code>/secured/siem</code> unauthenticated</td><td>SIEM</td><td>404 decoy</td><td><span class="badge badge-404">404</span></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>GET <code>/secured/siem-data</code> authenticated</td><td>SIEM</td><td>200 JSON (10 keys)</td><td><span class="badge badge-200">200</span> ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>GET <code>/secured/siem-data</code> unauthenticated</td><td>SIEM</td><td>404 decoy</td><td><span class="badge badge-404">404</span></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>?mins=nan</code></td><td>SIEM</td><td>200 mins=60 (clamped)</td><td><span class="badge badge-200">200</span> ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>?mins=0</code></td><td>SIEM</td><td>200 mins=1 (clamped)</td><td><span class="badge badge-200">200</span> ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>?mins=9999</code></td><td>SIEM</td><td>200 mins=1440 (clamped)</td><td><span class="badge badge-200">200</span> ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>/siem</code> <code>X-Frame-Options</code></td><td>SIEM</td><td>DENY</td><td>DENY ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>/siem</code> <code>Cache-Control</code></td><td>SIEM</td><td>no-store</td><td>no-store ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Admin endpoint from unauth IP</td><td>Admin</td><td>404 decoy</td><td><span class="badge badge-404">404</span></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>&lt;script&gt;alert(1)&lt;/script&gt;</code></td><td>URL path</td><td><code>suspicious-path</code></td><td><code>suspicious-path</code> ✓</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>' OR 1=1 --</code></td><td>POST body</td><td><code>body-sqli</code></td><td><code>banned-silent</code> (IP banned)</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>../../etc/passwd</code></td><td>URL path</td><td><code>suspicious-path</code></td><td><code>banned-silent</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>; whoami</code></td><td>POST body</td><td><code>body-cmd</code></td><td><code>banned-silent</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>http://169.254.169.254/</code></td><td>POST body</td><td><code>body-ssrf</code></td><td><code>banned-silent</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td><code>${jndi:ldap://x/a}</code></td><td>POST body</td><td><code>body-rce</code></td><td><code>banned-silent</code></td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Unknown host with STRICT_VHOST</td><td>Host header</td><td>502 decoy</td><td><span class="badge badge-502">502</span></td><td><span class="badge badge-pass">PASS</span></td></tr>
-</table>
-
-<p class="footer-note">
-Note: body probes after the first XSS URL probe all returned <code>banned-silent</code> because the IP was already banned.
-Detection chain confirmed working — ban applies across all subsequent probes.
-</p>
-
-<!-- ───────────────────────── 7. PERFORMANCE ───────────────────────── -->
-<h2>7. Performance</h2>
-
-<table>
-  <tr><th>Metric</th><th>Target</th><th>Actual</th><th>Result</th></tr>
-  <tr><td>Cold-start time (<code>docker run</code> → first HTTP 200)</td><td>&lt; 5 s</td><td>1.8 s</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>1000-request burst false-positive bans</td><td>0</td><td>0</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Image size (arm64, compressed)</td><td>&lt; 100 MB</td><td>~79 MB</td><td><span class="badge badge-pass">PASS</span></td></tr>
-  <tr><td>Disk free before build</td><td>&gt; 10 GB</td><td>17 GB</td><td><span class="badge badge-pass">PASS</span></td></tr>
-</table>
-
-<!-- ───────────────────────── 8. CONFIGURATION REFERENCE ───────────────────────── -->
-<h2>8. Key Configuration</h2>
-
-<h3>8.1 Required</h3>
-<table>
-  <tr><th>Variable</th><th>Description</th></tr>
-  <tr><td><code>UPSTREAM</code></td><td>Fully-qualified upstream URL (<code>https://app.example.com</code>)</td></tr>
-</table>
-
-<h3>8.2 Security (v1.8.4)</h3>
-<table>
-  <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>STRICT_VHOST</code></td><td><code>1</code></td><td>Reject unknown <code>Host</code> headers when vhosts are registered</td></tr>
-  <tr><td><code>RISK_BAN_THRESHOLD</code></td><td><code>50</code></td><td>Cumulative risk score at which an IP is auto-banned</td></tr>
-  <tr><td><code>RISK_BAN_DURATION_SECS</code></td><td><code>3600</code></td><td>Ban duration in seconds</td></tr>
-  <tr><td><code>BYPASS_MODE</code></td><td><code>0</code></td><td>Global bypass switch (hot-reload knob)</td></tr>
-</table>
-
-<h3>8.3 Network</h3>
-<table>
-  <tr><th>Variable</th><th>Default</th><th>Description</th></tr>
-  <tr><td><code>LISTEN_PORT</code></td><td><code>8080</code></td><td>Gateway listen port (mapped to 8443 in docker-compose)</td></tr>
-  <tr><td><code>TRUST_XFF</code></td><td><code>""</code></td><td><code>"last"</code> — trust last XFF hop from <code>TRUSTED_PROXIES</code></td></tr>
-  <tr><td><code>TRUSTED_PROXIES</code></td><td><code>""</code></td><td>CIDR list of trusted reverse proxies</td></tr>
-</table>
-
-<!-- ───────────────────────── 9. SECURITY FINDINGS ───────────────────────── -->
-<h2>9. Security Findings — Resolved in 1.8.4</h2>
-
-<table>
-  <tr><th>ID</th><th>Finding</th><th>Severity</th><th>Resolution</th></tr>
-  <tr>
-    <td>M-SEC-1</td>
-    <td>Upstream infrastructure address exposed in proxied response headers and text bodies</td>
-    <td>Medium</td>
-    <td>Unconditional scrub in <code>proxy_handler.py</code>; 24 new tests confirm all surfaces (headers, Location, body, binary passthrough)</td>
-  </tr>
-  <tr>
-    <td>M-BUG-1</td>
-    <td>Live Feed "Detection Methods" / "Top Methods" panels always empty — silent TypeError from <code>url()</code> call at wrong scope</td>
-    <td>Low (UX)</td>
-    <td>Both call sites fixed to bare string paths; 10 new tests</td>
-  </tr>
-  <tr>
-    <td>M-BUG-2</td>
-    <td>Traffic by Virtual Host chart crashes with "date adapter" error on every render — <code>type:'time'</code> axis with no bundled adapter</td>
-    <td>Low (UX)</td>
-    <td>Axis changed to <code>type:'category'</code> with <code>fmtTime()</code> string labels; 3 new tests</td>
-  </tr>
-  <tr>
-    <td>M-CFG-1</td>
-    <td>STRICT_VHOST off by default — unknown <code>Host</code> headers could reach global <code>UPSTREAM</code> in multi-vhost deployments</td>
-    <td>Low</td>
-    <td>Default changed to <code>STRICT_VHOST=1</code>; guard no-ops when <code>VHOSTS</code> is empty; 2 new unit tests</td>
-  </tr>
-</table>
-
-<!-- ───────────────────────── 10. DEFERRED / SCHEDULED ───────────────────────── -->
-<h2>10. Deferred Items</h2>
-
-<table>
-  <tr><th>Item</th><th>Reason deferred</th><th>Impact</th></tr>
-  <tr><td>CodeRabbit automated review</td><td>Requires GitHub PR</td><td>Non-blocking — supplementary review</td></tr>
-  <tr><td>Aikido container scan</td><td>Requires Harbor push + Aikido integration</td><td>Non-blocking — Trivy covers CVE baseline</td></tr>
-  <tr><td>SonarQube analysis</td><td>No SonarQube instance in build environment</td><td>Non-blocking — Bandit + Semgrep cover static analysis</td></tr>
-  <tr><td>Harbor push (14c–14d)</td><td>Local build only for this session</td><td>Non-blocking — images built and tagged locally</td></tr>
-  <tr><td>armv7 <code>/__metrics</code> p99 latency</td><td>Smoke only; full soak not run</td><td>Non-blocking — cold-start and burst tests passed</td></tr>
-</table>
-
-<!-- ───────────────────────── 11. APPENDIX ───────────────────────── -->
-<h2>11. Appendix</h2>
-
-<h3>11.1 Key API endpoints</h3>
-<table>
-  <tr><th>Endpoint</th><th>Method</th><th>Auth</th><th>Purpose</th></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/siem</code></td><td>GET</td><td>Session</td><td>SIEM dashboard HTML (new 1.8.4)</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/siem-data</code></td><td>GET</td><td>Session</td><td>SIEM JSON data (new 1.8.4)</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/detector-stats</code></td><td>GET</td><td>Session</td><td>Detection signal stats (<code>signals</code>, <code>methods</code>, <code>chal</code>)</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/metrics</code></td><td>GET</td><td>Session</td><td>Traffic timeline and client data</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/vhost-breakdown</code></td><td>GET</td><td>Session</td><td>Per-vhost traffic stacked chart data</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/vhosts</code></td><td>GET/POST/DELETE</td><td>Session</td><td>Virtual host CRUD</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/ban</code></td><td>POST</td><td>Session</td><td>Operator manual ban/unban</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/secured/config</code></td><td>GET/POST</td><td>Session</td><td>Hot-reload knob read/write</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/login</code></td><td>GET/POST</td><td>—</td><td>Admin login (session creation)</td></tr>
-  <tr><td><code>/antibot-appsec-gateway/logout</code></td><td>POST</td><td>Session</td><td>Session invalidation</td></tr>
-</table>
-
-<h3>11.2 Build commands</h3>
-<pre># arm64 (Chainguard Wolfi, distroless)
-docker build --pull -t appsec-antibot-gw:1.8.4 .
-
-# armv7 (Alpine)
-docker buildx build --platform linux/arm/v7 \
-  -f Dockerfile.armv7 -t appsec-antibot-gw:1.8.4-armv7 .
-
-# CVE scan
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-  aquasec/trivy:latest image --severity CRITICAL,HIGH,MEDIUM \
-  --quiet appsec-antibot-gw:1.8.4
-
-# Full test suite
-pytest tests/ -q --tb=short</pre>
-
-<h3>11.3 Release digests</h3>
-<table>
-  <tr><th>Architecture</th><th>Dockerfile</th><th>Digest</th></tr>
-  <tr><td>arm64</td><td><code>Dockerfile</code> (Chainguard)</td><td><code>sha256:d82eb333fff3…</code></td></tr>
-  <tr><td>armv7</td><td><code>Dockerfile.armv7</code> (Alpine)</td><td><code>sha256:a5df980d5e49…</code></td></tr>
-</table>
-
-<p style="margin-top: 36px; padding-top: 12px; border-top: 1px solid #d4dce3; font-size: 9pt; color: #888; text-align: center;">
-End of report — AppSecGW 1.8.4 Implementation &amp; Release Report — Pedro Tarrinho — 2026-05-15
-</p>
+<p class="footer-note">Author: Pedro Tarrinho · AntiBot/WAF GW 1.9.8 ·
+Document version 2.0 · 2026-06-27. Targets and hostnames in this document are
+illustrative.</p>
 
 </body>
 </html>

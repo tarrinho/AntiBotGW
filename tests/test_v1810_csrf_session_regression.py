@@ -105,16 +105,35 @@ class TestCsrfTokenRoundTrip:
         return hmac.new(key, sid.encode(), hashlib.sha256).hexdigest()[:32]
 
     def test_r01_login_and_validation_use_same_formula(self):
+        # CONTRACT CHANGE: the 1.8.14 per-session-nonce (secrets.token_hex +
+        # csrf_nonce in _SESSION_CACHE) design was superseded — the shipped
+        # token is pure HMAC(SESSION_KEY, sid)[:32], minted at login
+        # (admin/users.py) and verified with the identical formula in
+        # admin/auth.py.  The csrf_nonce DB slot is now an unused empty
+        # placeholder (users.py: "CSRF is also derived from session_sign()").
+        # This matches the HMAC contract the H/G/M groups in this file assert.
         users = _read("admin/users.py")
         auth  = _read("admin/auth.py")
-        formula = "hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]"
-        assert formula in users, "login must set csrf = HMAC(SESSION_KEY, sid)[:32]"
-        assert formula in auth,  "validation must expect HMAC(SESSION_KEY, sid)[:32]"
+        assert "hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]" in users, \
+            "login must mint agw_csrf as HMAC(SESSION_KEY, sid)[:32]"
+        assert "hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]" in auth, \
+            "validation must recompute the SAME HMAC(SESSION_KEY, sid)[:32]"
 
     def test_r02_oidc_uses_same_formula(self):
+        # CONTRACT CHANGE: OIDC SSO no longer mints agw_csrf inline. It creates
+        # the session via the SAME _session_create() machinery as password
+        # login and only sets the agw_session cookie; the agw_csrf cookie is
+        # then issued by core/middleware._csrf_self_heal on the first
+        # authenticated response (HMAC(SESSION_KEY, sid)[:32]). This makes the
+        # self-heal middleware the single source of CSRF-cookie issuance for
+        # both password and SSO logins, so the token formula stays identical.
         oidc = _read("admin/oidc.py")
-        assert "hexdigest()[:32]" in oidc and "SESSION_KEY" in oidc, (
-            "OIDC login must mint the csrf token with the same HMAC formula"
+        assert "_session_create(username, ip, ua)" in oidc, (
+            "OIDC login must create the session via the shared _session_create "
+            "machinery (agw_csrf is then healed by _csrf_self_heal)"
+        )
+        assert "set_cookie(_SESSION_COOKIE" in oidc, (
+            "OIDC login must set the agw_session cookie"
         )
 
     def test_r03_csrf_token_valid_accepts_matching_token(self, monkeypatch):

@@ -1,34 +1,45 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
+<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Settings</title>
+<title>AntiBotWaf_GW_1.9.8 · Settings</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}html[data-theme="light"] .banner{background:#e8f4fd!important;color:var(--fg)}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 a{color:var(--blue);text-decoration:none}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:#1f2730}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
 #page-content{flex:1;padding:14px}
@@ -41,43 +52,78 @@ a{color:var(--blue);text-decoration:none}
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* -- Sidebar collapse (desktop hide/unhide) -- */
+#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
+/* -- Submenu collapse (accordion) -- */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
   .btn{min-height:36px;padding:8px 12px}
   .btn-sm{min-height:32px;padding:6px 10px}
 }
-main{max-width:1100px;margin:0 auto}
+/* ── Settings split layout ── */
+#settings-split{display:flex;flex:1;min-height:0;overflow:hidden}
+#settings-nav{width:175px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);overflow-y:auto;padding:8px 0}
+#settings-panels{flex:1;overflow-y:auto;padding:14px;min-width:0}
+.sni{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .1s,color .1s;user-select:none}
+.sni:hover{background:rgba(121,192,255,.06);color:var(--fg)}
+.sni.active{color:var(--bright);background:var(--bg-hover);border-left-color:var(--blue)}
+.sni-icon{font-size:14px;line-height:1}
+.sni-label{flex:1;min-width:0}
+/* -- Settings submenu icon-rail (second hide: keep section logos, drop labels) -- */
+#settings-nav-toggle{display:block;width:calc(100% - 16px);margin:0 8px 6px;background:var(--bg);border:1px solid var(--line);color:var(--dim);cursor:pointer;border-radius:4px;padding:4px 8px;font-size:12px;font-weight:400;line-height:1.3;text-align:center;white-space:nowrap}
+#settings-nav-toggle:hover{color:var(--fg);border-color:var(--blue);filter:none}
+#settings-nav.sn-rail{width:50px}
+#settings-nav.sn-rail #settings-nav-toggle{padding:4px 0}
+#settings-nav.sn-rail .sni-label{display:none}
+#settings-nav.sn-rail .sni{justify-content:center;padding:10px 0;gap:0}
+#settings-id-strip{padding:14px 14px 0}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:780px){.row{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:18px 18px 16px 18px;margin-bottom:14px}
 .card h2{margin:0 0 6px 0;font-size:14px;font-weight:600;color:var(--fg)}
 .card .desc{color:var(--dim);font-size:11.5px;margin-bottom:14px;line-height:1.55}
-.card .desc code{background:#0d1117;color:var(--fg);padding:1px 5px;border-radius:3px;
+.card .desc code{background:var(--bg);color:var(--fg);padding:1px 5px;border-radius:3px;
                  font-family:ui-monospace,Menlo,monospace;font-size:11px}
 .row-controls{display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap}
 .row-controls label{font-size:11.5px;color:var(--dim);display:flex;align-items:center;gap:6px;cursor:pointer}
 .row-controls input[type=checkbox]{accent-color:var(--blue);transform:scale(1.1)}
-button{background:var(--blue);color:#fff;border:none;padding:9px 18px;
+button{background:var(--blue);color:var(--bright);border:none;padding:9px 18px;
        border-radius:5px;font-size:12.5px;font-weight:600;cursor:pointer;
        font-family:inherit}
 button:hover{filter:brightness(1.1)}
 button:disabled{opacity:.4;cursor:not-allowed}
-button.secondary{background:#30363d;color:var(--fg)}
+@keyframes knobFlash{0%{background:rgba(121,192,255,.28)}100%{background:transparent}}
+.knob-deeplink-flash{animation:knobFlash 2.4s ease-out;border-radius:6px;box-shadow:0 0 0 2px var(--blue) inset}
+button.secondary{background:var(--line);color:var(--fg)}
 button.danger{background:var(--red)}
 .drop{border:2px dashed var(--line);border-radius:8px;padding:24px;text-align:center;
       color:var(--dim);font-size:12px;cursor:pointer;transition:border-color .15s,background .15s}
-.drop:hover,.drop.over{border-color:var(--blue);background:rgba(88,166,255,.05);color:var(--fg)}
+.drop:hover,.drop.over{border-color:var(--blue);background:rgba(121,192,255,.05);color:var(--fg)}
 .drop strong{color:var(--fg);display:block;margin-bottom:4px}
 .drop .hint{font-size:10.5px;color:var(--dim);margin-top:6px}
 .fname{font-family:ui-monospace,Menlo,monospace;color:var(--blue);font-size:11.5px;margin-top:8px}
 .banner{background:#1a2733;border-left:3px solid var(--blue);padding:10px 14px;
         border-radius:5px;color:var(--dim);font-size:12px;margin-bottom:14px}
-.banner code{background:#0d1117;color:var(--fg);padding:1px 5px;border-radius:3px}
+.banner code{background:var(--bg);color:var(--fg);padding:1px 5px;border-radius:3px}
+.cfg-info{cursor:help;color:var(--dim);font-size:13px;font-weight:400;vertical-align:baseline}
+.cfg-info:hover,.cfg-info:focus{color:var(--blue);outline:none}
 .result{margin-top:14px;padding:10px 12px;border-radius:6px;font-size:11.5px;
         font-family:ui-monospace,Menlo,monospace;white-space:pre-wrap;
         max-height:240px;overflow:auto;border:1px solid var(--line);
-        background:#0a0e13;display:none}
+        background:var(--bg-inset);display:none}
 .result.show{display:block}
 .result.ok{border-color:var(--green)}
 .result.err{border-color:var(--red);color:#ffb4b4}
@@ -89,7 +135,7 @@ button.danger{background:var(--red)}
 .toast.ok{border-color:var(--green)}
 .toast.err{border-color:var(--red)}
 .kv{display:flex;gap:14px;font-size:11px;color:var(--dim);margin-top:8px}
-.kv .pill{background:#0d1117;border:1px solid var(--line);padding:3px 8px;border-radius:4px;
+.kv .pill{background:var(--bg);border:1px solid var(--line);padding:3px 8px;border-radius:4px;
           font-family:ui-monospace,Menlo,monospace}
 .kv .pill .n{color:var(--fg);font-weight:600}
 .foot{margin-top:14px;text-align:right;font-size:10.5px;color:var(--dim)}
@@ -98,19 +144,19 @@ button.danger{background:var(--red)}
 .gw-tab{padding:7px 14px;font-size:12px;color:var(--dim);cursor:pointer;
         border-radius:5px 5px 0 0;border:1px solid transparent;border-bottom:none;
         user-select:none;font-weight:500;line-height:1.2}
-.gw-tab:hover{color:var(--fg);background:#1f2730}
+.gw-tab:hover{color:var(--fg);background:var(--bg-hover)}
 .gw-tab.gw-tab-active{color:var(--fg);background:var(--card);
         border-color:var(--line);border-bottom-color:var(--card);
         position:relative;top:1px;font-weight:600}
 .gw-tbl{width:100%;border-collapse:collapse;font-size:12px}
-.gw-tbl th{background:#0d1117;color:var(--dim);text-align:left;
+.gw-tbl th{background:var(--bg);color:var(--dim);text-align:left;
         padding:7px 9px;font-weight:600;text-transform:uppercase;
         letter-spacing:.5px;font-size:10px;border-bottom:1px solid var(--line);
         cursor:pointer;user-select:none;white-space:nowrap}
 .gw-tbl th[data-sort]:hover{color:var(--fg)}
-.gw-tbl td{padding:6px 9px;border-bottom:1px solid #1f2730;
+.gw-tbl td{padding:6px 9px;border-bottom:1px solid var(--bg-hover);
         font-family:ui-monospace,Menlo,monospace;font-size:11.5px;vertical-align:middle}
-.gw-tbl tr:hover td{background:#1f2730}
+.gw-tbl tr:hover td{background:var(--bg-hover)}
 .gw-tbl tr.gw-row-local td:first-child::before{content:'★ ';color:var(--yellow);
         font-family:-apple-system}
 .gw-tbl tr.gw-row-local{background:rgba(217,154,32,.05)}
@@ -119,25 +165,26 @@ button.danger{background:var(--red)}
 .gw-tbl .pill-active{background:rgba(63,185,80,.15);color:var(--green)}
 .gw-tbl .pill-inactive{background:rgba(217,154,32,.15);color:var(--yellow)}
 .gw-tbl .pill-decommissioned{background:rgba(248,81,73,.15);color:var(--red)}
-.gw-tbl .act-btn{background:#0d1117;border:1px solid var(--line);color:var(--fg);
+.gw-tbl .act-btn{background:var(--bg);border:1px solid var(--line);color:var(--fg);
         padding:3px 8px;border-radius:4px;font-size:10.5px;cursor:pointer;
         font-family:-apple-system;margin-right:4px}
 .gw-tbl .act-btn:hover{border-color:var(--blue);color:var(--blue)}
 .gw-tbl .act-btn.danger:hover{border-color:var(--red);color:var(--red)}
 .gw-empty{padding:34px 14px;text-align:center;color:var(--dim);font-size:12px}
 .gw-empty strong{color:var(--fg);display:block;margin-bottom:6px;font-size:13px}
-.gw-fp{font-family:ui-monospace,Menlo,monospace;background:#0d1117;
+.gw-fp{font-family:ui-monospace,Menlo,monospace;background:var(--bg);
         padding:1px 6px;border-radius:3px;font-size:10.5px;color:var(--blue)}
 
 .gw-matrix-tbl{width:auto;border-collapse:collapse;font-size:11.5px;
         font-family:ui-monospace,Menlo,monospace}
 .gw-matrix-tbl th, .gw-matrix-tbl td{padding:6px 8px;border:1px solid var(--line);
         text-align:center;white-space:nowrap}
-.gw-matrix-tbl th{background:#0d1117;color:var(--dim);font-weight:600}
-.gw-matrix-tbl td.cell{cursor:pointer;background:#0a0e13}
+.gw-matrix-tbl th{background:var(--bg);color:var(--dim);font-weight:600}
+.gw-matrix-tbl td.cell{cursor:pointer;background:var(--bg-inset)}
 .gw-matrix-tbl td.cell.on{background:rgba(63,185,80,.20);color:var(--green);font-weight:700}
 .gw-matrix-tbl td.cell:hover{outline:1px solid var(--blue)}
 .gw-matrix-tbl td.cell.disabled{cursor:not-allowed;color:#3a4048;background:#1c1f24}
+html[data-theme="light"] .gw-matrix-tbl td.cell.disabled{background:var(--bg-inset);color:var(--dim)}
 .gw-matrix-tbl td.cell.asym{box-shadow:inset 0 0 0 2px var(--yellow)}
 .gw-matrix-tbl tr.gw-row-local th{color:var(--yellow)}
 
@@ -145,7 +192,7 @@ button.danger{background:var(--red)}
         align-items:center;font-size:12px}
 .gw-form-grid label{color:var(--dim);font-size:11.5px}
 .gw-form-grid input[type=text], .gw-form-grid select, .gw-form-grid textarea{
-        background:#0d1117;border:1px solid var(--line);color:var(--fg);
+        background:var(--bg);border:1px solid var(--line);color:var(--fg);
         border-radius:5px;padding:6px 10px;font-family:ui-monospace,Menlo,monospace;
         font-size:12px;width:100%}
 .gw-form-grid textarea{font-size:11px;min-height:80px;resize:vertical;word-break:break-all}
@@ -154,7 +201,7 @@ button.danger{background:var(--red)}
         color:#ffb4b4;padding:10px 12px;font-size:11.5px;margin:10px 0}
 .gw-warn strong{color:var(--red)}
 .gw-key-block{font-family:ui-monospace,Menlo,monospace;font-size:11px;
-        background:#0a0e13;border:1px solid var(--line);border-radius:5px;
+        background:var(--bg-inset);border:1px solid var(--line);border-radius:5px;
         padding:8px 10px;word-break:break-all;line-height:1.5;color:var(--green);
         max-height:120px;overflow:auto}
 
@@ -162,26 +209,42 @@ button.danger{background:var(--red)}
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--bg-hover);margin-bottom:8px}
+.gw-meta .chip{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
+.gw-row.row-ok{opacity:.6}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
 </style></head>
 <body>
-<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<!-- 1.9.2 UX — shared progress bar + escapeHtml -->
+<script src="/antibot-appsec-gateway/assets/dashboard-common.js"></script>
+
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div>
+      <div id="sidebar-brand-name">AntiBot/WAF GW</div>
+      <div id="sidebar-brand-ver">1.9.8</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
-  <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+  <nav id="sidebar-nav" aria-label="Main navigation">
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/service">Service</a>
-    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings" class="active">Settings</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings" class="active">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -193,12 +256,24 @@ button.danger{background:var(--red)}
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Settings</div>
-  <div id="topbar-right"></div>
+  <div id="topbar-right">
+    <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+      <label for="gw-loglvl">log</label>
+      <select id="gw-loglvl">
+        <option value="debug">debug</option>
+        <option value="info">info</option>
+        <option value="warn">warn</option>
+        <option value="error">error</option>
+        <option value="critical">critical</option>
+      </select>
+    </div>
+    <div id="gw-status-pill" title="Gateway health score — refreshes every 15 s · click for breakdown">● —</div>
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
+  </div>
 </div>
-<div id="page-content">
-
-<main>
-<!-- ── 1.6.6 — Gateway identity strip ──────────────────────────── -->
+<div id="page-content" style="padding:0;display:flex;flex-direction:column;flex:1">
+<div id="settings-id-strip">
+<!-- ── 1.8.7 — Gateway identity strip ──────────────────────────── -->
 <div class="card" style="display:flex;flex-wrap:wrap;gap:10px 32px;align-items:center;
                           padding:12px 16px;margin-bottom:14px">
   <div>
@@ -216,11 +291,28 @@ button.danger{background:var(--red)}
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)"
          id="gw-started">—</div>
   </div>
+  <div style="border-left:1px solid var(--line);padding-left:24px">
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Vhost</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);display:flex;align-items:center;gap:6px"
+         id="gw-vhost">—</div>
+  </div>
+  <div style="min-width:0;max-width:340px">
+    <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Upstream</div>
+    <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--blue);
+                overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+         id="gw-upstream" title="">—</div>
+  </div>
   <div style="margin-left:auto">
     <div style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Logged in as</div>
     <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--green);font-weight:600"
-         id="gw-whoami">—</div>  </div>
+         id="gw-whoami">—</div>
+  </div>
 </div>
+</div><!-- /settings-id-strip -->
+
+<div id="settings-split">
+<nav id="settings-nav"><!-- built by JS --></nav>
+<div id="settings-panels">
 
 <!-- ── Virtual Hosts ─────────────────────────────────────────────── -->
 <div class="card" id="card-vhosts">
@@ -576,11 +668,11 @@ document.addEventListener('DOMContentLoaded', function(){
   <div class="gw-pane" id="pane-list">
     <div class="row-controls" style="margin-bottom:10px">
       <input id="gw-filter" type="text" placeholder="Search id / region / env / status…"
-             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+             style="background:var(--bg);border:1px solid var(--line);color:var(--fg);
                     border-radius:5px;padding:6px 10px;font-family:inherit;font-size:12px;
                     flex:1;min-width:240px">
       <select id="gw-bulk-action" class="ctrl"
-              style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+              style="background:var(--bg);border:1px solid var(--line);color:var(--fg);
                      border-radius:5px;padding:6px 10px;font-size:12px">
         <option value="">Bulk action…</option>
         <option value="enable">Enable can_distribute</option>
@@ -639,7 +731,7 @@ document.addEventListener('DOMContentLoaded', function(){
   <div class="gw-pane" id="pane-audit" style="display:none">
     <div class="row-controls" style="margin-bottom:10px">
       <select id="audit-action" class="ctrl"
-              style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+              style="background:var(--bg);border:1px solid var(--line);color:var(--fg);
                      border-radius:5px;padding:6px 10px;font-size:12px">
         <option value="">All actions</option>
         <option value="gw_registered">gw_registered</option>
@@ -650,7 +742,7 @@ document.addEventListener('DOMContentLoaded', function(){
         <option value="distribution_rules_updated">distribution_rules_updated</option>
       </select>
       <input id="audit-gw" type="text" placeholder="filter by gw_id"
-             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);
+             style="background:var(--bg);border:1px solid var(--line);color:var(--fg);
                     border-radius:5px;padding:6px 10px;font-family:inherit;font-size:12px;
                     width:160px">
       <button id="audit-refresh" class="secondary">↻</button>
@@ -681,6 +773,7 @@ document.addEventListener('DOMContentLoaded', function(){
 </div>
 
 <!-- ── 1.6.7 — Users ─────────────────────────────────────────────── -->
+<!-- 1.8.9 — moved to top of Identity & Auth section (most-used card) -->
 <div class="card" id="card-users" style="margin-top:14px">
   <div style="display:flex;justify-content:space-between;align-items:flex-start;
               flex-wrap:wrap;gap:10px;margin-bottom:10px">
@@ -715,6 +808,136 @@ document.addEventListener('DOMContentLoaded', function(){
       <tbody id="users-tbody">
         <tr><td colspan="7" class="dim" style="text-align:center;padding:18px">Loading…</td></tr>
       </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── 1.8.6 — Two-Factor Authentication ─────────────────────────── -->
+<!-- 1.8.9 — moved up to live next to Users (auth basics first) -->
+<div class="card" id="card-2fa" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:14px">
+    <div>
+      <h2 style="margin-bottom:4px">Two-Factor Authentication</h2>
+      <p class="desc" style="margin:0">
+        Protect your account with a TOTP authenticator app (Google Authenticator,
+        Authy, 1Password). When enabled, a 6-digit code is required after password
+        login.
+      </p>
+    </div>
+    <span id="twofa-status-badge" class="pill" style="font-size:11px">checking…</span>
+  </div>
+  <div id="twofa-setup-area" style="display:none">
+    <p class="desc" style="margin-bottom:10px">Scan this QR code (or enter the secret manually) in your authenticator app, then enter the 6-digit code to confirm.</p>
+    <div id="twofa-qr-wrap" style="margin-bottom:12px;display:none">
+      <img id="twofa-qr-img" src="" alt="TOTP QR code"
+           style="width:180px;height:180px;border:4px solid #fff;border-radius:4px;display:block">
+    </div>
+    <div id="twofa-qr-uri" style="font-size:11px;color:var(--dim);word-break:break-all;margin-bottom:8px"></div>
+    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+      <input id="twofa-code" type="text" placeholder="6-digit code" maxlength="6"
+             style="width:140px;margin:0" autocomplete="one-time-code">
+      <button id="twofa-confirm">Confirm &amp; Enable</button>
+    </div>
+    <div id="twofa-backup-codes" style="display:none;margin-top:12px">
+      <p style="color:var(--yellow);font-size:12px;margin-bottom:6px">&#9888; Save these backup codes — each can be used once if you lose your authenticator:</p>
+      <pre id="twofa-codes-list" style="background:var(--bg);padding:10px;border-radius:5px;font-size:12px;color:var(--fg)"></pre>
+    </div>
+  </div>
+  <div class="row-controls" style="margin-top:10px">
+    <button id="twofa-enable-btn">Set up 2FA</button>
+    <button class="secondary" id="twofa-disable-btn" style="display:none;color:var(--red)">Disable 2FA</button>
+    <span class="foot" id="twofa-msg"></span>
+  </div>
+</div>
+
+<!-- ── 1.8.6 — SSO / OIDC configuration ─────────────────────── -->
+<div class="card" id="card-sso" style="margin-top:14px">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:14px">
+    <div>
+      <h2 style="margin-bottom:4px">SSO / OIDC</h2>
+      <p class="desc" style="margin:0">
+        Configure Keycloak (or any OIDC provider) for single sign-on. When
+        all three required fields are set the SSO button appears on the login
+        page. Changes take effect immediately — no restart needed.
+      </p>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="sso-status-badge" class="pill" style="font-size:11px">checking…</span>
+      <button class="secondary" id="sso-refresh">↻ Refresh</button>
+    </div>
+  </div>
+
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px" id="sso-form">
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Issuer URL <span style="color:var(--red);display:inline">*</span>
+      <input id="sso-issuer" type="url" placeholder="https://auth.example.com/realms/myrealm"
+             style="margin:0">
+      <span class="foot">Keycloak realm base URL (no trailing slash)</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Client ID <span style="color:var(--red);display:inline">*</span>
+      <input id="sso-client-id" type="text" placeholder="appsecgw" style="margin:0">
+      <span class="foot">Confidential client registered in Keycloak</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Client Secret <span style="color:var(--red);display:inline">*</span>
+      <input id="sso-client-secret" type="password" placeholder="••••••••" style="margin:0"
+             autocomplete="new-password">
+      <span class="foot">Leave blank to keep existing secret</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim)">
+      Default Role
+      <select id="sso-default-role" style="margin:0;background:var(--bg);color:var(--fg);
+              border:1px solid var(--line);border-radius:5px;padding:7px 10px;font:inherit">
+        <option value="viewer">viewer</option>
+        <option value="maintainer">maintainer</option>
+        <option value="admin">admin</option>
+      </select>
+      <span class="foot">Role assigned to auto-provisioned SSO users</span>
+    </label>
+    <label style="display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--dim);grid-column:1/-1">
+      Scopes
+      <input id="sso-scopes" type="text" placeholder="openid profile email" style="margin:0">
+      <span class="foot">Space-separated OIDC scopes</span>
+    </label>
+  </div>
+
+  <div class="row-controls" style="margin-top:14px">
+    <button id="sso-save">Save</button>
+    <button class="secondary" id="sso-clear" style="color:var(--red)">Disable SSO</button>
+    <span class="foot" id="sso-msg"></span>
+  </div>
+</div>
+
+<!-- ── SSO Access Requests ────────────────────────────────────────── -->
+<div class="card" id="card-sso-pending" style="margin-top:14px;display:none">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;
+              flex-wrap:wrap;gap:10px;margin-bottom:10px">
+    <div>
+      <h2 style="margin-bottom:4px">SSO Access Requests</h2>
+      <p class="desc" style="margin:0">
+        Users who signed in via SSO for the first time. They cannot access
+        the dashboard until an admin authorises them. Deny removes the account.
+      </p>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span class="foot" id="sso-pending-count">—</span>
+      <button class="secondary" id="sso-pending-refresh">↻ Refresh</button>
+    </div>
+  </div>
+  <div style="overflow-x:auto">
+    <table class="gw-tbl">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Role</th>
+          <th>First seen (UTC)</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="sso-pending-tbody"></tbody>
     </table>
   </div>
 </div>
@@ -760,42 +983,226 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 </div>
 
-<div class="banner">
-  Export and import the gateway's hot-reload configuration as a zipped XML file.
-  Includes every knob from <code>/antibot-appsec-gateway/secured/config</code> plus the admin-IP allowlist.
-  Secrets are excluded by default — tick the box to include them and store the
-  archive somewhere safe.
+<!-- ── Infrastructure ──────────────────────────────────────────────── -->
+<div class="card" id="card-infrastructure">
+  <h2>⚙️ Infrastructure</h2>
+  <p class="desc">
+    Networking and response-rewriting knobs.
+    Changes marked <span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px">REQUIRES RESTART</span>
+    take effect only after the container is restarted.
+  </p>
+  <div id="infra-body" style="font-size:12.5px">Loading…</div>
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-infra-apply" disabled>Apply changes</button>
+    <button class="secondary" id="btn-infra-reset" disabled>Reset</button>
+    <span id="infra-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
 </div>
 
-<div class="row">
+<!-- ── Database backend ────────────────────────────────────────────── -->
+<div class="card" id="card-db">
+  <h2>🗄️ Database backend <span style="font-size:11px;color:var(--green);font-weight:400">— hot-swap, no restart needed</span></h2>
+  <p class="desc">
+    Select where the gateway stores request events. Bans, configuration and admin IPs always remain in
+    SQLite regardless of the backend chosen. Switching backends triggers a full background migration of
+    all event history to the target store — no data is left behind.
+  </p>
 
-  <!-- ── Storage ─────────────────────────────────────────────── -->
-  <div class="card" id="card-storage">
-    <h2>Storage</h2>
-    <p class="desc">
-      Disk usage for the <code>/data</code> volume. When disk fills, SQLite write errors
-      occur and endpoints return HTTP 500. Use <b>Vacuum DB</b> to shrink the database
-      file and truncate the WAL — safe to run at any time.
-    </p>
-    <div id="storage-body" style="font-size:13px;color:var(--dim)">Loading…</div>
-    <div class="row-controls" style="margin-top:12px">
-      <button id="btn-vacuum">Vacuum DB</button>
-      <span class="foot" id="vacuum-status"></span>
+  <!-- Toggle row -->
+  <div style="display:flex;align-items:center;gap:14px;margin-bottom:14px">
+
+    <!-- SQLite side (click for info popover) -->
+    <div id="db-side-sqlite"
+         style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;min-width:0;cursor:pointer"
+         onclick="_dbSideClick('sqlite',this)">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span id="db-lbl-sqlite" style="font-size:13px;font-weight:700;transition:color .15s;color:var(--dim)">📦 SQLite</span>
+        <span id="db-badge-sqlite" style="display:none;font-size:9px;color:var(--green);
+              background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3);
+              padding:1px 5px;border-radius:3px;line-height:1.6">● active</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--dim);text-align:right;line-height:1.5">
+        Embedded · zero-dependency<br>Single-instance deployments
+      </div>
+    </div>
+
+    <!-- Toggle switch. 1.9.3 — starts in a NEUTRAL loading state (grey track,
+         hidden thumb, ⏳ centred) so it never flashes "SQLite active" before
+         loadDb() resolves the real backend. dbSetTarget() reveals the thumb +
+         hides the hourglass once the live DB_BACKEND is known. -->
+    <div id="db-track" style="flex-shrink:0;position:relative;width:60px;height:32px;background:#484f58;
+         border-radius:16px;cursor:pointer;transition:background .2s;box-shadow:inset 0 1px 3px rgba(0,0,0,.3)"
+         onclick="dbToggle()">
+      <div id="db-thumb" style="position:absolute;top:4px;left:4px;width:24px;height:24px;background:#fff;
+           border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,.4);transition:left .2s;display:none"></div>
+      <span id="db-loading" title="Detecting active backend…"
+            style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+            font-size:15px;line-height:1">⏳</span>
+    </div>
+
+    <!-- PostgreSQL side (click for info popover) -->
+    <div id="db-side-pg"
+         style="display:flex;flex-direction:column;align-items:flex-start;gap:3px;min-width:0;cursor:pointer"
+         onclick="_dbSideClick('postgres',this)">
+      <div style="display:flex;align-items:center;gap:6px">
+        <span id="db-lbl-pg" style="font-size:13px;font-weight:700;transition:color .15s;color:var(--dim)">🐘 PostgreSQL / TimescaleDB</span>
+        <span id="db-badge-pg" style="display:none;font-size:9px;color:var(--green);
+              background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.3);
+              padding:1px 5px;border-radius:3px;line-height:1.6">● active</span>
+      </div>
+      <div style="font-size:10.5px;color:var(--dim);text-align:left;line-height:1.5">
+        High-volume · multi-instance<br>TimescaleDB hypertables
+      </div>
     </div>
   </div>
 
+  <!-- Migration status row (shown when background migration is running/done) -->
+  <div id="db-mig-status-row" style="min-height:0"></div>
+  <div class="row-controls" style="margin-top:10px">
+    <button id="btn-db-apply" disabled>Apply backend</button>
+    <button id="btn-db-load-dsn" style="margin-left:6px">Load DSN</button>
+    <span id="db-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── Storage ────────────────────────────────────────────────────── -->
+<div class="card" id="card-storage">
+  <h2>Storage</h2>
+  <p class="desc">
+    Disk usage for the <code>/data</code> volume. When disk fills, SQLite write errors
+    occur and endpoints return HTTP 500. Use <b>Vacuum DB</b> to shrink the database
+    file and truncate the WAL — safe to run at any time.
+  </p>
+  <div id="storage-body" style="font-size:13px;color:var(--dim)">Loading…</div>
+  <!-- 1.8.14 — VACUUM is a SQLite-only operation. Postgres has its own
+       autovacuum daemon, so we hide the manual controls + history when
+       DB_BACKEND=postgres. Toggled by _dbUpdateActiveBadges(). -->
+  <div class="row-controls" id="vacuum-controls-row" style="margin-top:12px">
+    <button id="btn-vacuum">Vacuum DB</button>
+    <span class="foot" id="vacuum-status"></span>
+  </div>
+  <!-- VACUUM history (last 5 runs) -->
+  <div id="vacuum-history-wrap" style="margin-top:14px">
+    <div style="font-size:11px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px">Last 5 VACUUM runs</div>
+    <div id="vacuum-history" style="font-size:12px;color:var(--dim)">Loading…</div>
+  </div>
+  <!-- 1.8.14 — Postgres-only note, shown when DB_BACKEND=postgres. -->
+  <div id="vacuum-pg-note" style="display:none;margin-top:12px;padding:8px 11px;background:rgba(63,185,80,.06);border:1px solid rgba(63,185,80,.2);border-radius:5px;font-size:12px;color:var(--dim)">
+    <span style="color:var(--green)">✓</span>
+    Manual VACUUM is hidden because Postgres / TimescaleDB has its own
+    autovacuum daemon. The <code>events</code> hypertable is also automatically
+    compressed and retention-policied by TimescaleDB.
+  </div>
+</div>
+
+<!-- ── Integration credentials ─────────────────────────────────────── -->
+<div class="card" id="card-credentials">
+  <h2>🔑 Integration credentials</h2>
+  <p class="desc">
+    Runtime secrets — saved in the DB and applied immediately (no restart).
+    Leave a field blank to keep the existing value.
+    Click <b>Clear</b> to revert to the environment-variable fallback.
+    Note: <code>WEBHOOK_URL</code>, <code>WEBHOOK_SECRET</code>, and <code>JWT_HMAC_SECRET</code> are environment-variable only.
+  </p>
+  <div id="creds-body">Loading…</div>
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-creds-save">Save credentials</button>
+    <span id="creds-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── System logging ──────────────────────────────────────────────── -->
+<div class="card" id="card-logging">
+  <h2>📋 System logging &amp; webhook filter</h2>
+  <p class="desc">Log verbosity, output format, and which detection reasons trigger webhook calls.</p>
+  <div id="logging-body">Loading…</div>
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-logging-apply" disabled>Apply</button>
+    <button class="secondary" id="btn-logging-reset" disabled>Reset</button>
+    <span id="logging-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── Redis shared store ──────────────────────────────────────────────── -->
+<div class="card" id="card-redis">
+  <h2>🔴 Redis shared store</h2>
+  <p class="desc">
+    When <code>REDIS_URL</code> is set, bans and JA4 deny-lists are shared across all gateway instances in real time.
+    Bans, config and admin IPs always stay in SQLite — only event data and cross-instance signals use Redis.
+  </p>
+
+  <!-- Status row -->
+  <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+    <span id="redis-status-pill"
+          style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;
+                 padding:3px 10px;border-radius:10px;font-weight:600;
+                 background:var(--bg-inset);color:var(--dim);border:1px solid var(--line)">
+      <span id="redis-status-dot">●</span>
+      <span id="redis-status-text">checking…</span>
+    </span>
+    <span id="redis-url-display" style="font-size:11px;color:var(--dim);font-family:ui-monospace,Menlo,monospace"></span>
+  </div>
+
+  <!-- Security flags -->
+  <div id="redis-sec-flags" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"></div>
+
+  <!-- IP Allowlist -->
+  <div style="margin-bottom:10px">
+    <label style="font-size:11.5px;color:var(--dim);font-weight:600;display:block;margin-bottom:4px">
+      Connection allowlist <span style="font-weight:400;color:var(--dim)">(REDIS_ALLOW_LIST)</span>
+    </label>
+    <p class="desc" style="margin-bottom:6px">
+      Comma or newline-separated IPs and CIDRs. When non-empty the gateway refuses Redis operations
+      if the resolved server IP is not in this list. Empty = no restriction (Docker network isolation applies).
+    </p>
+    <textarea id="redis-allowlist-input"
+              rows="4"
+              placeholder="Leave empty for no restriction, or enter one IP/CIDR per line e.g.:&#10;172.18.0.0/16&#10;10.0.0.5/32"
+              style="width:100%;background:var(--bg);color:var(--fg);border:1px solid var(--line);
+                     border-radius:5px;padding:8px 10px;font-family:ui-monospace,Menlo,monospace;
+                     font-size:11.5px;resize:vertical;line-height:1.6"></textarea>
+    <div id="redis-allowlist-status" style="font-size:10.5px;color:var(--dim);margin-top:4px"></div>
+  </div>
+
+  <div class="row-controls" style="margin-top:14px">
+    <button id="btn-redis-apply" disabled>Apply allowlist</button>
+    <button class="secondary" id="btn-redis-reset" disabled>Reset</button>
+    <span id="redis-msg" style="font-size:11.5px;color:var(--dim);margin-left:6px"></span>
+  </div>
+</div>
+
+<!-- ── Service owner (1.8.11) ─────────────────────────────────── -->
+<div class="card" id="card-service-owner">
+  <h2>Service owner</h2>
+  <p class="desc">
+    The organisation this gateway protects — its name is shown in every dashboard
+    footer. Stored in the gateway DB (<code>config_kv</code>, mirrored to Postgres)
+    and hot-reloaded — no restart. Leave empty for no footer note.
+  </p>
+  <div class="row-controls">
+    <input type="text" id="svc-owner-input" maxlength="128"
+           placeholder="e.g. Acme Security Team"
+           style="flex:1;min-width:220px;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:inherit;font-size:12.5px">
+    <button id="btn-svc-owner-save">Save</button>
+    <span class="foot" id="svc-owner-status"></span>
+  </div>
+</div>
+
+<div class="row">
   <!-- ── Export ───────────────────────────────────────────────── -->
-  <div class="card">
-    <h2>Export configuration</h2>
+  <div class="card" id="card-export">
+    <h2>Export configuration <span class="cfg-info" tabindex="0" role="img" aria-label="About export" title="Full backup as a zipped XML file. Includes every hot-reload knob, the admin-IP allowlist, vhost overrides, SIEM alert rules, DLP patterns, signal orders, honey fingerprints (latest 1000), the gateway-mesh registry + distribution, and user metadata. Ticking the box adds plaintext integration secrets, user password hashes, and the LOCAL mesh private key &mdash; treat that archive as credential material.">&#9432;</span></h2>
     <p class="desc">
-      Download a ZIP archive containing <code>appsecgw-config.xml</code> with
-      all hot-reload knobs and the admin-IP allowlist. The file is named
-      <code>appsecgw-config-&lt;host&gt;-&lt;timestamp&gt;.zip</code>.
+      Download a ZIP archive containing <code>appsecgw-config.xml</code> with the
+      full configuration surface: hot-reload knobs, admin-IP allowlist, vhost
+      overrides, SIEM alert rules, DLP patterns, signal orders, recent honey
+      fingerprints, gateway-mesh registry &amp; distribution, and user metadata.
+      Filename: <code>appsecgw-config-&lt;host&gt;-&lt;timestamp&gt;.zip</code>.
     </p>
     <div class="row-controls">
       <label>
         <input type="checkbox" id="export-include-secrets">
-        Include integration secrets (Turnstile, AbuseIPDB, CrowdSec, MaxMind, JWT)
+        Include secrets (integration keys, password hashes, local mesh private key &mdash; store archive securely)
       </label>
     </div>
     <div class="row-controls">
@@ -806,12 +1213,12 @@ document.addEventListener('DOMContentLoaded', function(){
   </div>
 
   <!-- ── Import ───────────────────────────────────────────────── -->
-  <div class="card">
-    <h2>Import configuration</h2>
+  <div class="card" id="card-import">
+    <h2>Import configuration <span class="cfg-info" tabindex="0" role="img" aria-label="About import" title="Upload a previously-exported ZIP. Knobs, admin IPs, vhost overrides, SIEM rules, DLP patterns, signal orders, honey fingerprints, gateway-mesh registry+distribution, users, and secrets are merged into the current configuration. Env-pinned knobs are skipped; existing usernames + admin IPs + vhosts are merged (never wiped); the LOCAL gw private_key is never overwritten by an import.">&#9432;</span></h2>
     <p class="desc">
       Upload a previously-exported ZIP. Knobs validate against the same rules
-      as <code>POST /antibot-appsec-gateway/secured/config</code>; env-pinned values are skipped. Admin IPs
-      are merged (existing entries are not removed).
+      as <code>POST /antibot-appsec-gateway/secured/config</code>; env-pinned values are skipped.
+      Admin IPs are merged; virtual-host overrides are restored.
     </p>
     <div class="row-controls">
       <label>
@@ -839,11 +1246,40 @@ document.addEventListener('DOMContentLoaded', function(){
 
 </div>
 
-</main>
+</div><!-- /settings-panels -->
+</div><!-- /settings-split -->
 
 <div id="toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
+<script>
+// Inject X-CSRF-Token automatically for every state-mutating same-origin request.
+(function() {
+  const _orig = window.fetch;
+  function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}
+  window.fetch = function(resource, init) {
+    const m = ((init && init.method) || 'GET').toUpperCase();
+    if (m === 'GET' || m === 'HEAD') return _orig.call(this, resource, init);
+    init = init || {};
+    init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': _agwTok()});
+    const _self = this;
+    return _orig.call(_self, resource, init).then(function(resp){
+      if (resp.status !== 403) return resp;
+      // Stale CSRF token (session rotated, or CDN HttpOnly'd the cookie) —
+      // refresh from the server and retry once so operators never clear cookies.
+      return _orig.call(_self, '/antibot-appsec-gateway/secured/csrf', {credentials:'include'})
+        .then(function(r){ return r.ok ? r.json() : null; })
+        .then(function(j){
+          if (!j || !j.token || j.token === _agwTok()) return resp;
+          window.__AGW_CSRF__ = j.token;
+          init.headers = Object.assign({}, init.headers, {'X-CSRF-Token': j.token});
+          return _orig.call(_self, resource, init);
+        }).catch(function(){ return resp; });
+    });
+  };
+}());
+</script>
 <script>
 "use strict";
 const _dp = (h) => {
@@ -864,30 +1300,237 @@ const toast = (msg, kind) => {
 // ── Gateway identity strip ────────────────────────────────────────
 (async () => {
   try {
-    const r = await fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' });
-    if (!r.ok) return;
-    const j = await r.json();
-    if (j.version)          $("gw-version").textContent  = j.version;
-    if (j.db_backend)       $("gw-db").textContent       = j.db_backend;
-    if (j.uptime_secs != null) {
-      const up   = Number(j.uptime_secs) || 0;
-      const tNow = Date.now() / 1000;
-      const startEpoch = tNow - up;
-      $("gw-started").textContent = new Date(startEpoch * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+    // Show hostname immediately — no fetch needed
+    const curHost = window.location.hostname.toLowerCase();
+    $("gw-vhost").textContent = curHost;
+
+    const [hsr, vhr] = await Promise.all([
+      fetch("/antibot-appsec-gateway/secured/health-score", { credentials: 'include' }),
+      fetch("/antibot-appsec-gateway/secured/vhosts",       { credentials: 'include' }),
+    ]);
+
+    // Health / version / uptime
+    if (hsr.ok) {
+      const j = await hsr.json();
+      if (j.version)          $("gw-version").textContent  = j.version;
+      if (j.db_backend) {
+        $("gw-db").textContent       = j.db_backend;
+        // 1.9.2 iter-26 — surface auto-revert. When PG init/auth fails at
+        // startup, runtime DB_BACKEND is flipped to sqlite. Operators
+        // previously had zero indication their PG config was being silently
+        // ignored. Render a ⚠ badge next to the backend name + tooltip
+        // explaining the revert reason and pointing to the Service banner.
+        const gwDb = $("gw-db");
+        if (j.db_backend_reverted && gwDb) {
+          const reason = j.db_backend_revert_reason || "pg-init-failure";
+          const reasonHuman = reason === "pg-auth-failure"
+            ? "Postgres authentication failed at startup"
+            : "Postgres init failed or was unreachable at startup";
+          gwDb.innerHTML =
+            window.escapeHtml(j.db_backend) +
+            ' <span style="color:var(--yellow);font-size:11px;cursor:help"' +
+            ' title="DB_BACKEND env was set to postgres but ' + reasonHuman +
+            '. The gateway auto-reverted to SQLite to stay up. See the ' +
+            'Service page banner for the recovery command (typically: ' +
+            'ALTER USER appsec WITH PASSWORD \'...\' on TimescaleDB), or ' +
+            'check /__logs?event=db_config_load_failed.">' +
+            '⚠ auto-reverted from <code style="font-size:11px;background:none;' +
+            'color:var(--yellow)">postgres</code></span>';
+        }
+      }
+      if (j.uptime_secs != null) {
+        const startEpoch = Date.now() / 1000 - (Number(j.uptime_secs) || 0);
+        $("gw-started").textContent = new Date(startEpoch * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC";
+      }
+
+      // Vhost registration lookup
+      let vhostUpstream = null;
+      let isRegistered  = false;
+      if (vhr.ok) {
+        try {
+          const vd = await vhr.json();
+          const entry = (vd.vhosts || []).find(v => (v.hostname || "").toLowerCase() === curHost);
+          if (entry) {
+            isRegistered  = true;
+            vhostUpstream = entry.UPSTREAM || null;  // null = inherits global
+          }
+        } catch (_) {}
+      }
+
+      const globalUpstream = j.upstream || "";
+      const displayUpstream = vhostUpstream || globalUpstream;
+      const upEl = $("gw-upstream");
+      upEl.textContent = displayUpstream || "—";
+      upEl.title       = displayUpstream || "";
+
+      // Badge: vhost (own upstream) / global (inherits) / unregistered
+      const badge = document.createElement("span");
+      badge.style.cssText = "font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;font-family:-apple-system,sans-serif;white-space:nowrap;flex-shrink:0";
+      if (isRegistered && vhostUpstream) {
+        badge.textContent = "vhost";
+        badge.style.background = "rgba(121,192,255,.15)";
+        badge.style.color      = "#79c0ff";
+        badge.title = "Upstream overridden by vhost entry";
+      } else if (isRegistered) {
+        badge.textContent = "global";
+        badge.style.background = "rgba(139,148,158,.12)";
+        badge.style.color      = "var(--dim)";
+        badge.title = "Vhost registered but uses global upstream";
+      } else {
+        badge.textContent = "unregistered";
+        badge.style.background = "rgba(210,153,34,.12)";
+        badge.style.color      = "var(--yellow)";
+        badge.title = "Host not in vhost table — using global upstream";
+      }
+      $("gw-vhost").appendChild(badge);
     }
-  } catch (e) { /* leave dashes */ }
+  } catch (e) { console.error("[gw-identity]", e); }
 })();
 
 
 // 1.6.7 — fill the "Logged in as" cell from /secured/whoami.
+// 1.9.2 iter-27 — fix misleading "(via key)" label. Admin-key bearer auth
+// was removed in 1.6.7 (see admin/auth.py:122 docstring); seeing the via=
+// "admin-key" branch fire today actually means the session cookie failed
+// to authenticate (expired, idle-revoked, Cloudflare cookie-stripped, or
+// the browser blocked it). The old label "Unknown (via key)" wrongly
+// suggested deliberate admin-key access. Now it honestly reports the
+// failure mode and how to fix it.
 (async () => {
   try {
     const r = await fetch("/antibot-appsec-gateway/secured/whoami", { credentials: 'include' });
     if (!r.ok) return;
     const j = await r.json();
-    const who = j.username + (j.via === "admin-key" ? " (via key)" : "");
-    document.getElementById("gw-whoami").textContent = who;
+    const el = document.getElementById("gw-whoami");
+    if (!el) return;
+    if (j.username && j.username !== "unknown" && j.via === "session") {
+      el.textContent = j.username;
+    } else {
+      // Session was not detected. Render a ⚠ pill with tooltip so the
+      // operator sees actionable text instead of misleading "(via key)".
+      el.innerHTML =
+        '<span style="color:var(--yellow)" title="The session cookie ' +
+        '(agw_session) was missing, expired, or rejected by the server. ' +
+        'This usually means: idle timeout (default 60 min), absolute ' +
+        'timeout (default 8 h), browser cookie blocked, or a CDN ' +
+        'stripping/altering the cookie. Sign out and sign in again.">' +
+        '⚠ session not detected</span>';
+    }
   } catch (e) { /* leave dashes */ }
+})();
+
+// ── Settings section nav ────────────────────────────────────────────
+(function(){
+  const SECTIONS = [
+    {id:'routing',    label:'Routing',        icon:'🌐'},
+    {id:'identity',   label:'Identity & Auth', icon:'🔐'},
+    {id:'mesh',       label:'Mesh',           icon:'🕸️'},
+    {id:'infra',      label:'Infrastructure', icon:'⚙️'},
+    {id:'config',     label:'Config',         icon:'📦'},
+  ];
+
+  const CARD_SEC = {
+    'card-vhosts':        'routing',
+    'card-discovered':    'routing',
+    'card-sso':           'identity',
+    'card-users':         'identity',
+    'card-sso-pending':   'identity',
+    'card-2fa':           'identity',
+    'card-gw-registry':   'mesh',
+    'card-mesh':          'mesh',
+    'card-redis':         'mesh',
+    'card-infrastructure':'infra',
+    'card-db':            'infra',
+    'card-storage':       'infra',
+    'card-credentials':   'infra',
+    'card-logging':       'infra',
+    'card-service-owner': 'config',
+    'card-export':        'config',
+    'card-import':        'config',
+  };
+
+  const _CONFIG_BANNER_ID = 'settings-config-banner';
+  let _active = 'routing';
+
+  function _switch(secId) {
+    _active = secId;
+    for (const [cardId, sec] of Object.entries(CARD_SEC)) {
+      const el = document.getElementById(cardId);
+      if (!el) continue;
+      if (sec !== secId) {
+        el.dataset.secHidden = '1';
+        el.style.display = 'none';
+      } else {
+        el.dataset.secHidden = '';
+        if (!el.dataset.otherHidden) el.style.display = '';
+      }
+    }
+    const banner = document.getElementById(_CONFIG_BANNER_ID);
+    if (banner) banner.style.display = secId === 'config' ? '' : 'none';
+    document.querySelectorAll('.sni').forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.sec === secId);
+    });
+    const panels = document.getElementById('settings-panels');
+    if (panels) panels.scrollTop = 0;
+  }
+
+  function _buildNav() {
+    const nav = document.getElementById('settings-nav');
+    if (!nav) return;
+    nav.innerHTML = '';
+    // second-hide toggle: collapse to icon-rail (logos stay, labels hide).
+    // Rebuilt here because _buildNav wipes innerHTML.
+    const tog = document.createElement('button');
+    tog.id = 'settings-nav-toggle';
+    tog.type = 'button';
+    tog.onclick = window._settingsNavToggle;
+    nav.appendChild(tog);
+    SECTIONS.forEach(sec => {
+      const el = document.createElement('div');
+      el.className = 'sni' + (sec.id === _active ? ' active' : '');
+      el.dataset.sec = sec.id;
+      el.title = sec.label;  // tooltip when collapsed to icon-rail
+      el.innerHTML = `<span class="sni-icon">${sec.icon}</span><span class="sni-label">${sec.label}</span>`;
+      el.onclick = () => _switch(sec.id);
+      nav.appendChild(el);
+    });
+    _settingsNavSetToggle(nav.classList.contains('sn-rail'));
+  }
+
+  function _settingsNavSetToggle(r) {
+    const b = document.getElementById('settings-nav-toggle');
+    if (!b) return;
+    b.textContent = r ? '»' : '« Collapse';
+    b.title = r ? 'Expand sections' : 'Collapse sections (keep icons)';
+    b.setAttribute('aria-label', b.title);
+  }
+  window._settingsNavToggle = function() {
+    const nav = document.getElementById('settings-nav');
+    if (!nav) return;
+    const r = !nav.classList.contains('sn-rail');
+    nav.classList.toggle('sn-rail', r);
+    try { localStorage.setItem('agw_setnav_rail', r ? '1' : '0'); } catch (e) {}
+    _settingsNavSetToggle(r);
+  };
+
+  document.addEventListener('DOMContentLoaded', function() {
+    document.querySelectorAll('#settings-panels .banner').forEach(el => {
+      if (!el.id) el.id = _CONFIG_BANNER_ID;
+    });
+    const pending = document.getElementById('card-sso-pending');
+    if (pending && pending.style.display === 'none') pending.dataset.otherHidden = '1';
+    // restore settings submenu icon-rail preference before building (no flash)
+    try {
+      if (localStorage.getItem('agw_setnav_rail') === '1') {
+        const _sn = document.getElementById('settings-nav');
+        if (_sn) _sn.classList.add('sn-rail');
+      }
+    } catch (e) {}
+    _buildNav();
+    _switch('routing');
+    window._settingsSwitch = _switch;
+    window._settingsBuildNav = _buildNav;
+  });
 })();
 
 // ── Export ─────────────────────────────────────────────────────────
@@ -899,7 +1542,12 @@ $("btn-export").addEventListener("click", async () => {
   result.className = "result";
   status.textContent = "Building archive…";
   try {
-    const r = await fetch(url, { method: "GET", credentials: 'include' });
+    // S-W6 fix: secrets export now requires an X-CSRF-Token header even on GET
+    // so an attacker cannot trigger the download via <img>/<a>/navigation.
+    const _csrfTok = (typeof _agwTok === 'function') ? _agwTok()
+                   : (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '');
+    const headers = inc === "1" ? { "X-CSRF-Token": _csrfTok } : {};
+    const r = await fetch(url, { method: "GET", credentials: 'include', headers });
     if (!r.ok) {
       const txt = await r.text();
       throw new Error("HTTP " + r.status + " — " + txt.slice(0, 200));
@@ -998,6 +1646,7 @@ async function _doImport(dry) {
       "Knobs applied:    " + (j.knobs_applied || 0),
       "Knobs rejected:   " + (j.knobs_rejected || 0),
       "Admin-IPs added:  " + (j.admin_ips_added || 0),
+      "Vhosts restored:  " + (j.vhosts_restored || 0),
       "Secrets applied:  " + (j.secrets_applied || 0),
     ].join("\n");
     result.textContent = summary + "\n\n" + JSON.stringify(j, null, 2);
@@ -1022,8 +1671,8 @@ $("btn-import").addEventListener("click", async () => {
 
 // ── 1.6.7 — Gateway Registry ─────────────────────────────────────────
 const GW_BASE = "/antibot-appsec-gateway/secured/admin/gw-registry";
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
-function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:#1e1e2e;border:1px solid #f85149;color:#e6edf3;padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.5)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
+
+function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--card,#1e1e2e);border:1px solid var(--red,#f85149);color:var(--fg,#e6edf3);padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.25)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
 const _timers=[];
 const fmtAge = (epoch) => {
   if (!epoch) return "—";
@@ -1085,6 +1734,8 @@ function showSimpleModal(innerHtml) {
     box-shadow:0 8px 28px rgba(0,0,0,.5);font-family:-apple-system,'SF Pro',ui-sans-serif">
     ${innerHtml}</div>`);
   m.style.display = "flex";
+  // _dp strips inline onclick; bind any [data-close] (and legacy ×) close controls.
+  m.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', closeSimpleModal));
 }
 function closeSimpleModal() {
   const m = document.getElementById("simple-modal");
@@ -1313,7 +1964,7 @@ function statusOpts(sel) {
 
 function openAddModal() {
   showSimpleModal(`
-    <h3 style="margin:0 0 14px 0;color:#fff">Register a new gateway</h3>
+    <h3 style="margin:0 0 14px 0;color:var(--bright)">Register a new gateway</h3>
     <div class="gw-form-grid">
       <label>Domain</label>
       <input id="add-domain" type="text"
@@ -1452,7 +2103,7 @@ async function openEditModal(gwId) {
   const isProd = row.environment === "production";
   showSimpleModal(`
     ${isProd ? '<div class="gw-warn"><strong>Production gateway.</strong> Changes propagate to mesh peers.</div>' : ''}
-    <h3 style="margin:0 0 12px 0;color:#fff">Gateway · ${escapeHtml(row.gw_id)} ${row.is_local ? '<span style="color:var(--yellow);font-size:11px">★ LOCAL</span>' : ''}</h3>
+    <h3 style="margin:0 0 12px 0;color:var(--bright)">Gateway · ${escapeHtml(row.gw_id)} ${row.is_local ? '<span style="color:var(--yellow);font-size:11px">★ LOCAL</span>' : ''}</h3>
     <div class="gw-form-grid">
       <label>GW ID</label><div class="dim" style="font-family:ui-monospace">${escapeHtml(row.gw_id)}</div>
       <label>Domain</label>
@@ -1753,7 +2404,7 @@ async function loadUsers() {
                title="View active sessions">${escapeHtml(u.username)}</a>
             ${isCurrent ? '<span style="color:var(--yellow);font-size:10px">(you)</span>' : ''}</td>
         <td>${onlineDot}</td>
-        <td><span class="pill-status pill-active" style="background:rgba(88,166,255,.15);color:var(--blue)">${escapeHtml(u.role)}</span></td>
+        <td><span class="pill-status pill-active" style="background:rgba(121,192,255,.15);color:var(--blue)">${escapeHtml(u.role)}</span></td>
         <td><span class="pill-status pill-${u.status === 'active' ? 'active' : 'decommissioned'}">${escapeHtml(u.status)}</span></td>
         <td>${u.last_login_ts ? new Date(u.last_login_ts*1000).toISOString().replace('T',' ').slice(0,19) + 'Z' : '<span class="dim">—</span>'}</td>
         <td>${u.created_ts ? new Date(u.created_ts*1000).toISOString().slice(0,10) : '—'}</td>
@@ -1766,6 +2417,30 @@ async function loadUsers() {
       </tr>`;
     }).join(""));
   } catch (e) { toast("Users load failed: " + e.message, "err"); }
+}
+
+// ── SSO Access Requests ───────────────────────────────────────────────────
+async function loadSsoPending() {
+  try {
+    const j = await api("GET", USERS_BASE);
+    const pending = (j.users || []).filter(u => u.status === "pending" && u.sso_source);
+    const card = $("card-sso-pending");
+    if (!card) return;
+    card.style.display = pending.length ? "" : "none";
+    $("sso-pending-count").textContent = pending.length + " pending";
+    const tb = $("sso-pending-tbody");
+    if (!pending.length) { tb.innerHTML = ""; return; }
+    tb.innerHTML = _dp(pending.map(u => `
+      <tr>
+        <td style="font-family:ui-monospace,monospace">${escapeHtml(u.username)}</td>
+        <td><span class="pill-status pill-active" style="background:rgba(121,192,255,.15);color:var(--blue)">${escapeHtml(u.role)}</span></td>
+        <td>${u.created_ts ? new Date(u.created_ts * 1000).toISOString().replace('T', ' ').slice(0, 19) + 'Z' : '—'}</td>
+        <td>
+          <button class="act-btn" data-pact="approve" data-user="${escapeHtml(u.username)}">Authorize</button>
+          <button class="act-btn danger" data-pact="deny" data-user="${escapeHtml(u.username)}">Deny</button>
+        </td>
+      </tr>`).join(""));
+  } catch (e) { toast("SSO pending load failed: " + e.message, "err"); }
 }
 
 $("users-refresh").addEventListener("click", loadUsers);
@@ -1782,13 +2457,39 @@ $("users-tbody").addEventListener("click", (ev) => {
   if (a === "delete")   return deleteUser(u);
 });
 
+$("sso-pending-refresh").addEventListener("click", loadSsoPending);
+$("sso-pending-tbody").addEventListener("click", async (ev) => {
+  const t = ev.target.closest("[data-pact]");
+  if (!t) return;
+  ev.preventDefault();
+  const username = t.dataset.user;
+  const action   = t.dataset.pact;
+  if (action === "approve") {
+    if (!confirm(`Authorize "${username}" to access the gateway dashboard?`)) return;
+    try {
+      await api("PATCH", `${USERS_BASE}/${encodeURIComponent(username)}`,
+                {status: "active"});
+      toast(`${username} authorized`, "ok");
+      loadUsers();
+      loadSsoPending();
+    } catch (e) { toast("Authorize failed: " + e.message, "err"); }
+  } else if (action === "deny") {
+    if (!confirm(`Deny and remove "${username}"? This will delete the account.`)) return;
+    try {
+      await api("DELETE", `${USERS_BASE}/${encodeURIComponent(username)}`);
+      toast(`${username} removed`, "ok");
+      loadSsoPending();
+    } catch (e) { toast("Deny failed: " + e.message, "err"); }
+  }
+});
+
 // ── 1.6.7 — Sessions tooltip / modal ──────────────────────────────
 async function openSessionsModal(username) {
   showSimpleModal(`
-    <h3 style="margin:0 0 8px 0;color:#fff">
+    <h3 style="margin:0 0 8px 0;color:var(--bright)">
       Sessions — ${escapeHtml(username)}
       <span style="float:right;cursor:pointer;color:var(--dim);font-size:18px"
-            onclick="closeSimpleModal()">×</span>
+            data-close="1">×</span>
     </h3>
     <p class="desc" style="margin-bottom:10px">
       Every successful login mints a server-side session bound to the
@@ -1820,7 +2521,7 @@ async function openSessionsModal(username) {
           ${rows.map(s => {
             const isMe = s.sid === currentSid;
             const statusColor = s.status === "active"
-              ? (s.online ? "var(--green)" : "var(--blue)")
+              ? (s.online ? "var(--green)" : "#79c0ff")
               : (s.status === "revoked" ? "var(--red)" : "var(--dim)");
             const statusLabel = s.online ? "● online"
                               : (s.status === "active" ? "active"
@@ -1876,7 +2577,7 @@ async function openSessionsModal(username) {
 
 function openAddUserModal() {
   showSimpleModal(`
-    <h3 style="margin:0 0 14px 0;color:#fff">Add a dashboard user</h3>
+    <h3 style="margin:0 0 14px 0;color:var(--bright)">Add a dashboard user</h3>
     <div class="gw-form-grid">
       <label>Username</label>
       <input id="u-add-name" type="text" placeholder="lowercase, dot/underscore/hyphen ok"
@@ -1919,8 +2620,10 @@ function openAddUserModal() {
 
 function changeUserPassword(username) {
   showSimpleModal(`
-    <h3 style="margin:0 0 12px 0;color:#fff">Change password — ${escapeHtml(username)}</h3>
+    <h3 style="margin:0 0 12px 0;color:var(--bright)">Change password — ${escapeHtml(username)}</h3>
     <div class="gw-form-grid">
+      <label>Current password</label>
+      <input id="u-pw-cur" type="password" autocomplete="current-password" placeholder="Required when changing your own account">
       <label>New password</label>
       <input id="u-pw-new" type="password" autocomplete="new-password">
       <label>Confirm</label>
@@ -1933,13 +2636,16 @@ function changeUserPassword(username) {
     </div>`);
   document.getElementById("u-pw-go").addEventListener("click", async () => {
     const errEl = document.getElementById("u-pw-err"); errEl.textContent = "";
+    const curPw = document.getElementById("u-pw-cur").value;
     const a = document.getElementById("u-pw-new").value;
     const b = document.getElementById("u-pw-confirm").value;
     if (a !== b) { errEl.textContent = "passwords do not match"; return; }
     if (a.length < 8) { errEl.textContent = "password must be at least 8 chars"; return; }
     document.getElementById("u-pw-go").disabled = true;
+    const body = { password: a };
+    if (curPw) body.current_password = curPw;
     try {
-      await api("PATCH", `${USERS_BASE}/${encodeURIComponent(username)}`, { password: a });
+      await api("PATCH", `${USERS_BASE}/${encodeURIComponent(username)}`, body);
       closeSimpleModal();
       toast(`Password updated for '${username}'`, "ok");
       loadUsers();
@@ -2072,7 +2778,7 @@ async function loadStorage() {
   const el = document.getElementById('storage-body');
   if (!el) return;
   try {
-    const r = await fetch(BASE + '/disk-stats', {credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/disk-stats', {credentials:'include'});
     if (!r.ok) { el.innerHTML = '<span style="color:var(--red)">Failed to load storage info (HTTP '+r.status+')</span>'; return; }
     const d = await r.json();
     const disk = d.disk || {};
@@ -2087,21 +2793,21 @@ async function loadStorage() {
           <span style="color:var(--fg)">Disk usage</span>
           <span style="color:${color};font-weight:600">${pct}% used &mdash; ${free} free of ${total}</span>
         </div>
-        <div style="background:#0d1117;border-radius:4px;height:8px;overflow:hidden">
+        <div style="background:var(--bg);border-radius:4px;height:8px;overflow:hidden">
           <div style="width:${Math.min(pct,100)}%;height:100%;background:${color};transition:width .3s"></div>
         </div>
         ${warn ? '<div style="color:var(--red);margin-top:6px;font-size:12px">⚠ Disk above 90% — SQLite write errors likely. Vacuum DB or free space.</div>' : ''}
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;font-size:12px">
-        <div style="background:#0d1117;border-radius:4px;padding:8px">
+        <div style="background:var(--bg);border-radius:4px;padding:8px">
           <div style="color:var(--dim);margin-bottom:2px">DB file</div>
           <div style="color:var(--fg);font-weight:600">${fmtBytes(d.db_bytes)}</div>
         </div>
-        <div style="background:#0d1117;border-radius:4px;padding:8px">
+        <div style="background:var(--bg);border-radius:4px;padding:8px">
           <div style="color:var(--dim);margin-bottom:2px">WAL file</div>
           <div style="color:var(--fg);font-weight:600">${fmtBytes(d.wal_bytes)}</div>
         </div>
-        <div style="background:#0d1117;border-radius:4px;padding:8px">
+        <div style="background:var(--bg);border-radius:4px;padding:8px">
           <div style="color:var(--dim);margin-bottom:2px">SHM file</div>
           <div style="color:var(--fg);font-weight:600">${fmtBytes(d.shm_bytes)}</div>
         </div>
@@ -2117,12 +2823,18 @@ document.getElementById('btn-vacuum').addEventListener('click', async () => {
   const btn = document.getElementById('btn-vacuum');
   btn.disabled = true; st.textContent = 'Running VACUUM…'; st.style.color='var(--dim)';
   try {
-    const r = await fetch(BASE + '/db-vacuum', {method:'POST', credentials:'include'});
+    const r = await fetch('/antibot-appsec-gateway/secured/db-vacuum', {method:'POST', credentials:'include'});
     const d = await r.json();
     if (d.ok) {
       const saved = fmtBytes(d.saved_bytes);
-      st.textContent = `Done — reclaimed ${saved}`;
+      const dur   = (d.duration_ms != null) ? ` in ${d.duration_ms}ms` : '';
+      st.textContent = `Done — reclaimed ${saved}${dur}`;
       st.style.color = '#3fb950';
+      // refresh history table with the returned snapshot
+      if (Array.isArray(d.history)) renderVacuumHistory(d.history);
+    } else if (r.status === 409) {
+      st.textContent = 'Skipped: ' + (d.reason || 'busy');
+      st.style.color = 'var(--amber)';
     } else {
       st.textContent = 'Failed: ' + (d.reason || 'unknown');
       st.style.color = 'var(--red)';
@@ -2134,122 +2846,272 @@ document.getElementById('btn-vacuum').addEventListener('click', async () => {
   } finally { btn.disabled = false; }
 });
 
+// render VACUUM history table
+function renderVacuumHistory(rows) {
+  const el = document.getElementById('vacuum-history');
+  if (!el) return;
+  if (!Array.isArray(rows) || rows.length === 0) {
+    el.innerHTML = '<span style="color:var(--dim)">No previous runs.</span>';
+    return;
+  }
+  const fmtTs = (ts) => {
+    if (!ts) return '—';
+    try { return new Date(ts * 1000).toLocaleString(); } catch { return String(ts); }
+  };
+  const html = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr style="text-align:left;color:var(--dim);border-bottom:1px solid var(--line)">
+          <th style="padding:4px 8px 4px 0">When</th>
+          <th style="padding:4px 8px">Actor</th>
+          <th style="padding:4px 8px;text-align:right">Saved</th>
+          <th style="padding:4px 8px;text-align:right">Duration</th>
+          <th style="padding:4px 0;text-align:center">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => {
+          const ok = r.ok !== false;
+          const saved = ok ? fmtBytes(r.saved_bytes || 0) : '—';
+          const dur = (r.duration_ms != null) ? r.duration_ms + 'ms' : '—';
+          const status = ok
+            ? '<span style="color:#3fb950">✓ ok</span>'
+            : `<span style="color:var(--red)" title="${escapeHtml(r.reason || '')}">✗ fail</span>`;
+          return `<tr style="border-bottom:1px solid var(--line)">
+            <td style="padding:4px 8px 4px 0">${escapeHtml(fmtTs(r.ts))}</td>
+            <td style="padding:4px 8px">${escapeHtml(r.actor || '—')}</td>
+            <td style="padding:4px 8px;text-align:right">${escapeHtml(saved)}</td>
+            <td style="padding:4px 8px;text-align:right">${escapeHtml(dur)}</td>
+            <td style="padding:4px 0;text-align:center">${status}</td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>`;
+  el.innerHTML = _dp ? _dp(html) : html;
+}
+
+async function loadVacuumHistory() {
+  const el = document.getElementById('vacuum-history');
+  if (!el) return;
+  // 1.8.14 — skip the fetch when Postgres is active. The wrap is hidden by
+  // _dbUpdateActiveBadges() so the result wouldn't be visible anyway; this
+  // avoids a needless round-trip on every page load.
+  const wrap = document.getElementById('vacuum-history-wrap');
+  if (wrap && wrap.style.display === 'none') return;
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/db-vacuum-history', {credentials:'include'});
+    const d = await r.json();
+    renderVacuumHistory(Array.isArray(d.history) ? d.history : []);
+  } catch(e) {
+    el.innerHTML = '<span style="color:var(--red)">Error loading history: ' + escapeHtml(String(e.message||e)) + '</span>';
+  }
+}
+
 // Initial load.
 loadList();
 loadUsers();
+loadSsoPending();
 loadMesh();
 loadStorage();
+// 1.8.14 — loadVacuumHistory() is now called by loadDb() only when the
+// active backend is sqlite, avoiding a needless fetch on postgres.
 window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
 </script>
 
-<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
+<!-- 1.8.7 GW status pill (topbar; click for breakdown) + log-level combo -->
 <style>
-#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
-  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
-  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
-  background:#161b22;color:#fff;border:1px solid #30363d;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:5px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:var(--card);color:var(--bright);border:1px solid var(--line);
+  box-shadow:0 1px 4px rgba(0,0,0,.3);transition:transform .12s;white-space:nowrap}
 #gw-status-pill:hover{transform:scale(1.04)}
-#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
-  display:flex;align-items:center;gap:5px;
-  background:#161b22;border:1px solid #30363d;border-radius:14px;
-  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
-  font-size:10.5px;color:#8b949e;
-  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap{display:flex;align-items:center;gap:5px;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:4px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;box-shadow:0 1px 4px rgba(0,0,0,.3)}
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
-#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+#gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #58a6ff}
+#gw-loglvl:focus{outline:1px solid #79c0ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
 .gw-modal-overlay.show{display:flex}
-.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
-  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+.gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:18px 22px;max-width:700px;width:100%;max-height:80vh;overflow:auto;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
-.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+.gw-modal-card h3{margin:0 0 4px 0;color:var(--bright);font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
-.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
-  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
-.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+#gw-score-bar-track{height:4px;background:var(--bg-hover);border-radius:2px;margin:8px 0 14px}
+#gw-score-bar{height:100%;border-radius:2px;width:0%;transition:width .4s ease}
+.gw-row{display:grid;grid-template-columns:140px 56px 1fr 72px 42px;gap:10px;
+  padding:8px 4px;border-bottom:1px solid var(--bg-hover);align-items:center;font-size:12px}
+.gw-row.status-ok{opacity:.4}
+.gw-row .key{font-weight:600;color:#c9d1d9;font-size:12px}
 .gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
 .gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
 .gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
-.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+.gw-row .val{font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;text-align:right;font-size:11px}
+.gw-row .pen{font-family:ui-monospace,monospace;font-size:11px;text-align:right;font-weight:700;color:#f85149}
+.gw-row.status-ok .pen{visibility:hidden}
 </style>
-<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
-  <label for="gw-loglvl">log</label>
-  <select id="gw-loglvl">
-    <option value="debug">debug</option>
-    <option value="info">info</option>
-    <option value="warn">warn</option>
-    <option value="error">error</option>
-    <option value="critical">critical</option>
-  </select>
-</div>
-<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
-    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+    <div id="gw-score-bar-track"><div id="gw-score-bar"></div></div>
+    <div id="gw-modal-body" style="color:#8b949e">Loading…</div>
   </div>
 </div>
 <script>
 (function(){
-  const pill = document.getElementById('gw-status-pill');
-  const modal = document.getElementById('gw-status-modal');
+  const pill      = document.getElementById('gw-status-pill');
+  const modal     = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
+  const scoreBar  = document.getElementById('gw-score-bar');
   const modalBody = document.getElementById('gw-modal-body');
   const lvlSelect = document.getElementById('gw-loglvl');
-  function colorFor(score){
-    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
-    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
-    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+
+  function colorFor(s){
+    const L=document.documentElement.getAttribute('data-theme')==='light';
+    if(s>=80)return L?{bg:'#f0fdf4',fg:'#166534',edge:'#22c55e'}:{bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if(s>=50)return L?{bg:'#fef3c7',fg:'#92400e',edge:'#f59e0b'}:{bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return   L?{bg:'#fde8e8',fg:'#991b1b',edge:'#ef4444'}:{bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
   }
+
+  // Human-readable labels for health pillars
+  const LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'Integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  // Sort order: bad first, then warn, then ok; within tier sort by descending weight
+  const ORDER = {bad:0, warn:1, ok:2};
+
   let lastData = null;
+  let authError = false;
+
+  // Surface an admin-auth/session failure on the Health pill so it's visible
+  // globally (not buried in one card). Any admin fetch that gets 401/403/404
+  // — including the silent 404 decoy served when the session has expired —
+  // can call window._gwPillAuthError() to flip the pill here.
+  function _setAuthError(){
+    authError = true; lastData = null;
+    pill.style.background  = 'rgba(248,81,73,0.12)';
+    pill.style.color       = '#f85149';
+    pill.style.borderColor = '#f85149';
+    pill.textContent       = '● ⚠ sign in';
+    pill.title = 'An admin request failed authentication — your session has expired. '
+               + 'Reload the page and sign in again.';
+  }
+  window._gwPillAuthError = _setAuthError;
+
   async function tick(){
+    let r;
     try {
-      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
-                            {credentials:'include'});
-      const d = await r.json();
-      lastData = d;
-      const s = d.score|0;
-      const c = colorFor(s);
-      pill.style.background = c.bg;
-      pill.style.color = c.fg;
-      pill.style.borderColor = c.edge;
-      pill.textContent = `● GW ${s}/100`;
+      r = await fetch('/antibot-appsec-gateway/secured/health-score', {credentials:'include'});
     } catch(e){
-      pill.style.background = '#3d1a1a';
-      pill.style.color = '#f85149';
-      pill.textContent = '● ERR';
+      pill.style.background='rgba(248,81,73,0.12)'; pill.style.color='#f85149'; pill.style.borderColor='#f85149';
+      pill.textContent='● Health  ERR';
+      pill.title='Could not reach the gateway (network error). Refreshes every 15 s.';
+      return;
     }
+    // 401/403/404 (incl the expired-session decoy) → auth/session problem
+    if (r.status === 401 || r.status === 403 || r.status === 404) { _setAuthError(); return; }
+    let d;
+    try { d = await r.json(); }
+    catch(_){ _setAuthError(); return; }   // non-JSON decoy ⇒ session likely gone
+    authError = false;
+    lastData = d;
+    const s = d.score|0;
+    const c = colorFor(s);
+    pill.style.background  = c.bg;
+    pill.style.color       = c.fg;
+    pill.style.borderColor = c.edge;
+    pill.textContent = `● Health  ${s}/100`;
+    pill.title = 'Gateway health score — refreshes every 15 s · click for breakdown';
+  }
+
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  const KEY_HINTS = {
+    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
+    memory:'Consider restarting the container or increasing container memory limits',
+    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
+    integrations:'Check API keys in Settings → Integration Credentials',
+    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
+    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
+  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
+  function fmtUptime(secs){
+    if(!secs) return '?';
+    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
+    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
   }
   pill.onclick = () => {
-    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    modalScore.textContent = lastData.score|0;
-    modalScore.style.color = colorFor(lastData.score).fg;
-    const rows = (lastData.reasons||[]).map(r => `
-      <div class="gw-row">
-        <span class="key">${escapeHtml(r.key)}</span>
+    if (authError){
+      modalBody.innerHTML = '<div style="padding:10px 4px;color:#f85149;font-size:13px;line-height:1.5">'
+        + '<strong>⚠ Admin session expired</strong><br>'
+        + 'A secured request failed authentication. Reload the page and sign in again to restore access.'
+        + '</div><div style="padding:4px"><button onclick="location.reload()">Reload &amp; sign in</button></div>';
+      modal.classList.add('show'); return;
+    }
+    if (!lastData){ modalBody.textContent='Loading…'; modal.classList.add('show'); return; }
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    const lbl = document.getElementById('gw-score-label');
+    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
+    const bar = document.getElementById('gw-score-bar');
+    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
+    const ver = (lastData.version||'').replace('AntiBotWaf_GW_','v');
+    const up = fmtUptime(lastData.uptime_secs||0);
+    const db = lastData.db_backend||'?';
+    const rawUp = lastData.upstream||'';
+    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
+    const metaHtml = `<div class="gw-meta">
+      <span class="chip">${escapeHtml(ver)}</span>
+      <span class="chip">${escapeHtml(db)}</span>
+      <span class="chip">↑ ${escapeHtml(up)}</span>
+      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
+    </div>`;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
+      return sd!==0?sd:(b.weight||0)-(a.weight||0);
+    });
+    const rowsHtml = sorted.map(r=>{
+      const label = KEY_LABELS[r.key]||r.key;
+      const isOk = r.status==='ok';
+      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
+      return `<div class="gw-row${isOk?' row-ok':''}">
+        <span class="key">${escapeHtml(label)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
-        <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
+        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`).join('');
-    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
-      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+      </div>`;
+    }).join('');
+    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
+    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
+    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
+      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
+      <span>checked ${escapeHtml(ageStr)}</span>
     </div>`);
     modal.classList.add('show');
   };
+
   document.addEventListener('keydown', e => {
-    if (e.key==='Escape') modal.classList.remove('show');
+    if (e.key === 'Escape') modal.classList.remove('show');
   });
   tick();
   _timers.push(setInterval(tick, 15000));
@@ -2258,8 +3120,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
       const d = await r.json();
-      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
-      lvlSelect.value = cur;
+      lvlSelect.value = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
     } catch(e){}
   }
   lvlSelect.onchange = async () => {
@@ -2279,10 +3140,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   _timers.push(setInterval(loadLogLevel, 30000));
 })();
 </script>
-<!-- /1.6.5 GW status pill + log-level combo -->
+<!-- /1.8.7 GW status pill + log-level combo -->
 
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
   <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -2313,7 +3174,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
       var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
@@ -2341,7 +3202,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:var(--bright);border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>');
         el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
@@ -2352,7 +3213,1481 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
   window._acct={openModal:_openAcctModal,changePw:_acctChangePw,revokeSession:_acctRevokeSession};
 })();
+
+// ── SSO / OIDC ──────────────────────────────────────────────────────────────
+(function() {
+  const NS = '/antibot-appsec-gateway';
+  const badge  = document.getElementById('sso-status-badge');
+  const msgEl  = document.getElementById('sso-msg');
+  const issuer = document.getElementById('sso-issuer');
+  const cid    = document.getElementById('sso-client-id');
+  const csec   = document.getElementById('sso-client-secret');
+  const role   = document.getElementById('sso-default-role');
+  const scopes = document.getElementById('sso-scopes');
+
+  function setBadge(enabled) {
+    badge.textContent = enabled ? '● Enabled' : '○ Disabled';
+    badge.style.background = enabled ? 'var(--green,#238636)' : 'var(--line)';
+    badge.style.color = enabled ? '#fff' : 'var(--dim)';
+  }
+
+  async function loadSso() {
+    try {
+      const r = await fetch(NS + '/secured/secrets', {credentials:'include'});
+      const j = await r.json();
+      const s = j.secrets || {};
+      const state = j.integration_state || {};
+      setBadge(!!state.OIDC_ENABLED);
+      if (s.OIDC_ISSUER)    issuer.placeholder = s.OIDC_ISSUER.configured ? '(configured)' : issuer.placeholder;
+      if (s.OIDC_CLIENT_ID) cid.placeholder    = s.OIDC_CLIENT_ID.configured ? '(configured)' : cid.placeholder;
+    } catch(e) { badge.textContent = 'error'; }
+  }
+
+  document.getElementById('sso-refresh').addEventListener('click', loadSso);
+
+  document.getElementById('sso-save').addEventListener('click', async () => {
+    const body = {};
+    if (issuer.value.trim()) body.OIDC_ISSUER = issuer.value.trim();
+    if (cid.value.trim())    body.OIDC_CLIENT_ID = cid.value.trim();
+    if (csec.value.trim())   body.OIDC_CLIENT_SECRET = csec.value.trim();
+    body.OIDC_DEFAULT_ROLE = role.value;
+    if (scopes.value.trim()) body.OIDC_SCOPES = scopes.value.trim();
+    if (!Object.keys(body).filter(k => k !== 'OIDC_DEFAULT_ROLE').length) {
+      msgEl.textContent = 'Fill in at least Issuer, Client ID or Client Secret.';
+      return;
+    }
+    try {
+      const csrf = window.__AGW_CSRF__ || document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
+      const r = await fetch(NS + '/secured/secrets', {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf},
+        body: JSON.stringify(body),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        msgEl.textContent = 'Saved.';
+        issuer.value = ''; cid.value = ''; csec.value = '';
+        await loadSso();
+      } else {
+        msgEl.textContent = j.error || 'Save failed';
+      }
+    } catch(e) { msgEl.textContent = String(e); }
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  });
+
+  document.getElementById('sso-clear').addEventListener('click', async () => {
+    if (!confirm('Disable SSO? This will remove all OIDC credentials and hide the SSO login button.')) return;
+    const csrf = window.__AGW_CSRF__ || document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || '';
+    const keys = ['OIDC_ISSUER','OIDC_CLIENT_ID','OIDC_CLIENT_SECRET','OIDC_DEFAULT_ROLE','OIDC_SCOPES'];
+    for (const k of keys) {
+      await fetch(NS + '/secured/secrets?name=' + k, {
+        method: 'DELETE', credentials: 'include',
+        headers: {'X-CSRF-Token': csrf},
+      }).catch(() => {});
+    }
+    msgEl.textContent = 'SSO disabled.';
+    await loadSso();
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  });
+
+  loadSso();
+})();
+
+// ── Two-Factor Authentication ────────────────────────────────────────────────
+(function() {
+  const NS = '/antibot-appsec-gateway';
+  const badge     = document.getElementById('twofa-status-badge');
+  const setupArea = document.getElementById('twofa-setup-area');
+  const enableBtn = document.getElementById('twofa-enable-btn');
+  const disableBtn= document.getElementById('twofa-disable-btn');
+  const msgEl     = document.getElementById('twofa-msg');
+  const codeInput = document.getElementById('twofa-code');
+  const backupDiv = document.getElementById('twofa-backup-codes');
+  const codesList = document.getElementById('twofa-codes-list');
+  const qrUri     = document.getElementById('twofa-qr-uri');
+  const qrWrap    = document.getElementById('twofa-qr-wrap');
+  const qrImg     = document.getElementById('twofa-qr-img');
+
+  function csrf() { return window.__AGW_CSRF__ || document.cookie.match(/agw_csrf=([^;]+)/)?.[1] || ''; }
+
+  // The /secured/* gate silently 404-decoys (HTML, not JSON) when the admin
+  // session is missing/expired, so r.json() would throw. Parse defensively and
+  // treat 401/403/404 as "session expired" rather than a cryptic error.
+  function _isAuthFail(status) { return status === 401 || status === 403 || status === 404; }
+  async function _readJson(r) { try { return await r.json(); } catch (_) { return null; } }
+  const _SESSION_MSG = 'Your admin session has expired — reload the page and sign in again.';
+
+  async function load2fa() {
+    let r;
+    try {
+      r = await fetch(NS + '/secured/2fa-status', {credentials:'include'});
+    } catch (e) {
+      badge.textContent = '⚠ offline';
+      badge.title = 'Network error reading 2FA status: ' + e;
+      badge.style.background = 'var(--line)'; badge.style.color = 'var(--dim)';
+      return;
+    }
+    if (!r.ok) {
+      badge.textContent = _isAuthFail(r.status) ? '⚠ sign in again' : ('⚠ error ' + r.status);
+      badge.title = _isAuthFail(r.status) ? _SESSION_MSG
+                                          : ('2FA status request failed (HTTP ' + r.status + ').');
+      badge.style.background = 'var(--line)'; badge.style.color = 'var(--dim)';
+      enableBtn.style.display = 'none'; disableBtn.style.display = 'none';
+      // also surface globally on the Health pill (top-right)
+      if (_isAuthFail(r.status) && window._gwPillAuthError) window._gwPillAuthError();
+      return;
+    }
+    const j = (await _readJson(r)) || {};
+    const on = !!j.enabled;
+    badge.textContent = on ? '● Enabled' : '○ Disabled';
+    badge.title = '';
+    badge.style.background = on ? 'var(--green,#238636)' : 'var(--line)';
+    badge.style.color = on ? '#fff' : 'var(--dim)';
+    enableBtn.style.display  = on ? 'none' : '';
+    disableBtn.style.display = on ? '' : 'none';
+    if (!on) { setupArea.style.display = 'none'; qrWrap.style.display = 'none'; qrImg.src = ''; }
+  }
+
+  enableBtn.addEventListener('click', async () => {
+    try {
+      const r = await fetch(NS + '/secured/2fa-setup', {method:'POST', credentials:'include'});
+      if (!r.ok) { msgEl.textContent = _isAuthFail(r.status) ? _SESSION_MSG : ('Setup failed (HTTP ' + r.status + ').'); return; }
+      const j = (await _readJson(r)) || {};
+      if (j.qr_data_url) {
+        qrImg.src = j.qr_data_url;
+        qrWrap.style.display = '';
+      }
+      qrUri.textContent = j.provisioning_uri || '';
+      setupArea.style.display = '';
+      enableBtn.style.display = 'none';
+    } catch(e) { msgEl.textContent = String(e); }
+  });
+
+  document.getElementById('twofa-confirm').addEventListener('click', async () => {
+    const code = codeInput.value.trim();
+    if (!code) { msgEl.textContent = 'Enter the 6-digit code from your app.'; return; }
+    try {
+      const r = await fetch(NS + '/secured/2fa-confirm', {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf()},
+        body: JSON.stringify({code}),
+      });
+      const j = (await _readJson(r)) || {};
+      if (r.ok) {
+        codesList.textContent = (j.backup_codes || []).join('\n');
+        backupDiv.style.display = '';
+        msgEl.textContent = '2FA enabled.';
+        await load2fa();
+      } else { msgEl.textContent = _isAuthFail(r.status) ? _SESSION_MSG : (j.error || 'Confirm failed'); }
+    } catch(e) { msgEl.textContent = String(e); }
+    setTimeout(() => { msgEl.textContent = ''; }, 5000);
+  });
+
+  disableBtn.addEventListener('click', async () => {
+    const code = prompt('Enter your current TOTP code or a backup code to disable 2FA:');
+    if (!code) return;
+    try {
+      const r = await fetch(NS + '/secured/2fa-disable', {
+        method: 'POST', credentials: 'include',
+        headers: {'Content-Type':'application/json', 'X-CSRF-Token': csrf()},
+        body: JSON.stringify({code: code.trim()}),
+      });
+      const j = (await _readJson(r)) || {};
+      if (r.ok) { msgEl.textContent = '2FA disabled.'; await load2fa(); }
+      else { msgEl.textContent = _isAuthFail(r.status) ? _SESSION_MSG : (j.error || 'Disable failed'); }
+    } catch(e) { msgEl.textContent = String(e); }
+    setTimeout(() => { msgEl.textContent = ''; }, 4000);
+  });
+
+  load2fa();
+})();
+</script>
+<script>
+// ── Infrastructure, DB backend, Credentials, Logging ────────────────
+(function(){
+  const _esc = (s) => String(s==null?'':s).replace(/[&<>"'`/]/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]));
+  const _u = (path) => path;
+  const $ = (id) => document.getElementById(id);
+
+  // ── Infrastructure ─────────────────────────────────────────────
+  const INFRA_KNOBS = [
+    {key:'ALLOW_PRIVATE_UPSTREAM', kind:'bool', restart:false,
+     desc:'Allow upstream URLs resolving to RFC-1918/loopback (e.g. host.docker.internal). Disables SSRF guard — only for trusted internal deployments.'},
+    {key:'STRICT_VHOST', kind:'bool', restart:false,
+     desc:'Return 502 for inbound Host not registered as a vhost. Prevents global UPSTREAM acting as catch-all for unknown hostnames.'},
+    {key:'PRESERVE_HOST', kind:'bool', restart:false,
+     desc:'Forward the client\'s original Host, Origin, and Referer headers to upstream unchanged (skip the proxy\'s netloc rewrite). Enable only when upstream routes by the public hostname. Default off — the proxy rewrites Host to upstream\'s netloc for correct TLS SNI and CORS.'},
+    {key:'UPSTREAM_REWRITE_BASE', kind:'text', restart:false,
+     ph:'e.g. http://host.docker.internal:8093',
+     desc:'Strip this base URL from response bodies and Location/Link headers. Fixes CSP violations when upstream embeds its own hostname. Hot-reloadable.'},
+    {key:'TRUST_XFF', kind:'select', options:['none','first','last'], restart:false,
+     desc:'Which X-Forwarded-For hop to trust for client IP resolution. "none" (default) ignores XFF entirely. "first" trusts the leftmost entry (only safe when the front proxy strips/rewrites XFF). "last" trusts the rightmost entry added by the trusted proxy. Requires TRUSTED_PROXIES to be set.'},
+    {key:'TRUSTED_PROXIES', kind:'list', restart:false,
+     ph:'10.0.0.0/8, 172.16.0.0/12',
+     desc:'Comma-separated CIDRs of reverse proxies/CDN nodes whose X-Forwarded-For header the gateway trusts. Only the immediate TCP peer is checked. Must be set for TRUST_XFF to take effect (fail-closed: empty = XFF always ignored). Example: 172.18.0.0/16,103.21.244.0/22'},
+  ];
+  let _infraState = {};
+  let _infraDirty = {};
+
+  async function loadInfra(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = d.state || d;
+      INFRA_KNOBS.forEach(k => { if (k.key in st) _infraState[k.key] = st[k.key]; });
+      renderInfra();
+    } catch(e) { const b = $('infra-body'); if(b) b.textContent = 'Load failed: '+e.message; }
+  }
+
+  function renderInfra(){
+    _infraDirty = {};
+    const box = $('infra-body');
+    if (!box) return;
+    box.innerHTML = _dp(INFRA_KNOBS.map(k => {
+      const val = k.key in _infraDirty ? _infraDirty[k.key] : _infraState[k.key];
+      const restart = k.restart
+        ? `<span style="font-size:9.5px;color:var(--yellow);background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);padding:1px 6px;border-radius:3px;margin-left:6px">REQUIRES RESTART</span>`
+        : '';
+      if (k.kind === 'bool') {
+        const on = !!val;
+        const ikey = k.restart ? '' : `data-ikey="${_esc(k.key)}"`;
+        const cur = k.restart ? 'cursor:not-allowed;opacity:.5' : 'cursor:pointer';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--line)">
+          <div style="flex:1;min-width:0">
+            <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg)">${_esc(k.key)}${restart}</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:3px">${_esc(k.desc)}</div>
+          </div>
+          <div ${ikey} style="position:relative;width:42px;height:22px;background:${on?'var(--green)':'#30363d'};border-radius:11px;${cur};transition:background .15s;flex-shrink:0;margin-left:14px">
+            <span style="position:absolute;top:2px;left:${on?'22px':'2px'};width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s;display:block"></span>
+          </div>
+        </div>`;
+      }
+      if (k.kind === 'text') {
+        const ro = k.restart ? 'disabled style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
+                             : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" data-iset="${_esc(k.key)}"`;
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <input type="text" value="${_esc(val||'')}" placeholder="${_esc(k.ph||'')}" ${ro}>
+        </div>`;
+      }
+      if (k.kind === 'number') {
+        const mib = (val && !isNaN(val)) ? ' (~' + (Math.round(val/1048576*10)/10) + ' MiB)' : '';
+        const ro = k.restart
+          ? 'disabled style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
+          : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" data-iset="${_esc(k.key)}"`;
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}<span style="color:var(--dim);font-weight:400">${mib}</span>${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <input type="number" min="1024" step="1" value="${_esc(val||'')}" placeholder="${_esc(k.ph||'')}" ${ro}>
+        </div>`;
+      }
+      if (k.kind === 'select') {
+        const opts = (k.options||[]).map(o =>
+          `<option value="${_esc(o)}"${o===(val||'')?' selected':''}>${_esc(o)}</option>`
+        ).join('');
+        const roDis = k.restart ? 'disabled ' : '';
+        const roEvt = k.restart ? '' : `data-iset="${_esc(k.key)}"`;
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <select ${roDis}style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+                  ${roEvt}>${opts}</select>
+        </div>`;
+      }
+      if (k.kind === 'list') {
+        const dispVal = Array.isArray(val) ? val.join(', ') : (val||'');
+        const ro = k.restart ? 'disabled style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;opacity:.5;cursor:not-allowed"'
+                             : `style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px" data-iset="${_esc(k.key)}"`;
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}${restart}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <input type="text" value="${_esc(dispVal)}" placeholder="${_esc(k.ph||'')}" ${ro}>
+        </div>`;
+      }
+      return '';
+    }).join(''));
+    box.querySelectorAll('[data-ikey]').forEach(el => {
+      el.addEventListener('click', () => window._infraToggle(el.dataset.ikey, el));
+    });
+    // _dp (DOMPurify) strips inline oninput/onchange — bind text/number/select/list here.
+    box.querySelectorAll('[data-iset]').forEach(el => {
+      const fire = () => window._infraChange(el.dataset.iset, el.value);
+      el.addEventListener('input', fire);
+      el.addEventListener('change', fire);
+    });
+    $('btn-infra-apply').disabled = true;
+    $('btn-infra-reset').disabled = true;
+  }
+
+  window._infraToggle = function(key, el){
+    const cur = key in _infraDirty ? _infraDirty[key] : !!_infraState[key];
+    const nv = !cur;
+    _infraDirty[key] = nv;
+    el.style.background = nv ? 'var(--green)' : '#30363d';
+    el.querySelector('span').style.left = nv ? '22px' : '2px';
+    $('btn-infra-apply').disabled = false;
+    $('btn-infra-reset').disabled = false;
+  };
+  window._infraChange = function(key, val){
+    const orig = _infraState[key] || '';
+    // String() compare so number knobs (orig is a Number, val is the input string)
+    // don't register as dirty when unchanged.
+    if (String(val) === String(orig)) delete _infraDirty[key]; else _infraDirty[key] = val;
+    const has = Object.keys(_infraDirty).length > 0;
+    $('btn-infra-apply').disabled = !has;
+    $('btn-infra-reset').disabled = !has;
+  };
+
+  $('btn-infra-apply').addEventListener('click', async function(){
+    if (!Object.keys(_infraDirty).length) return;
+    this.disabled = true;
+    try {
+      const _iCsrf = (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'');
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':_iCsrf},credentials:'include',body:JSON.stringify(_infraDirty)});
+      const d = await r.json();
+      const n = d.applied ? Object.keys(d.applied).length : 0;
+      if (r.ok && n) { toast('Applied '+n+' change(s)','ok'); await loadInfra(); }
+      else { toast('Rejected — '+JSON.stringify(d.rejected||{}),'err'); this.disabled=false; }
+    } catch(e) { toast('Network error: '+e.message,'err'); this.disabled=false; }
+  });
+  $('btn-infra-reset').addEventListener('click', () => loadInfra());
+
+  loadInfra();
+
+  // ── Service owner (1.8.11) — footer note, stored in config_kv ──────
+  async function loadServiceOwner(){
+    const inp = $('svc-owner-input');
+    if (!inp) return;
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+      if (!r.ok) return;
+      const d = await r.json();
+      const st = d.state || d;
+      inp.value = st.SERVICE_OWNER || '';
+    } catch(e) { /* leave blank */ }
+  }
+  const _ownBtn = $('btn-svc-owner-save');
+  if (_ownBtn) {
+    _ownBtn.addEventListener('click', async () => {
+      const inp = $('svc-owner-input');
+      const st  = $('svc-owner-status');
+      const val = (inp.value || '').trim();
+      _ownBtn.disabled = true;
+      try {
+        const _c = (window.__AGW_CSRF__ || (document.cookie.match(/agw_csrf=([^;]+)/)||[])[1] || '');
+        const r = await fetch('/antibot-appsec-gateway/secured/config',
+          {method:'POST', credentials:'include',
+           headers:{'Content-Type':'application/json','X-CSRF-Token':_c},
+           body: JSON.stringify({SERVICE_OWNER: val})});
+        const d = await r.json();
+        if (r.ok && d.applied && ('SERVICE_OWNER' in d.applied)) {
+          if (st) st.textContent = 'Saved — reload dashboards to see the footer update.';
+          toast('Service owner saved', 'ok');
+        } else {
+          if (st) st.textContent = 'Rejected: ' + JSON.stringify(d.rejected || {});
+          toast('Save rejected', 'err');
+        }
+      } catch(e) { if (st) st.textContent = 'Network error: ' + e.message; toast('Network error','err'); }
+      finally { _ownBtn.disabled = false; }
+    });
+    loadServiceOwner();
+  }
+
+  // Deep-link: #knob=NAME (from the Risk-breakdown control link) → scroll to the
+  // Infrastructure knob (or the Admin-IPs card for ADMIN_ALLOWED_IPS) + flash.
+  // Infra rows render async, so retry briefly until present.
+  function _settingsDeepLink() {
+    const m = (location.hash || '').match(/[#&]knob=([A-Za-z0-9_]+)/);
+    if (!m) return;
+    const knob = m[1];
+    let tries = 0;
+    (function find() {
+      let el = document.querySelector(`[data-ikey="${knob}"]`);
+      if (!el && knob === 'ADMIN_ALLOWED_IPS')
+        el = document.getElementById('admin-ips-card') || document.getElementById('admin-ips');
+      if (!el) el = document.getElementById('infra-body');   // fallback: the card
+      if (!el) { if (tries++ < 12) setTimeout(find, 300); return; }
+      const row = el.closest('div[style*="border-bottom"]') || el;
+      row.scrollIntoView({behavior: 'smooth', block: 'center'});
+      row.classList.add('knob-deeplink-flash');
+      setTimeout(() => row.classList.remove('knob-deeplink-flash'), 2600);
+    })();
+  }
+  _settingsDeepLink();
+  window.addEventListener('hashchange', _settingsDeepLink);
+
+  // ── DB Backend ────────────────────────────────────────────────────
+  let _dbOrig = 'sqlite';
+  let _dbTarget = 'sqlite';
+  let _dbSvcCache = {};      // last services.db / services.db_postgres from /config
+  let _migPollTimer = null;
+
+  const _DB_INFO = {
+    sqlite: `<strong style="font-size:13px">📦 SQLite — Embedded, zero-dependency</strong>
+<hr style="border:none;border-top:1px solid var(--line);margin:8px 0">
+<div style="display:grid;gap:3px">
+  <div><span style="color:var(--green)">✓</span> No external server — single file at <code>/data/antibot.db</code></div>
+  <div><span style="color:var(--green)">✓</span> WAL mode for concurrent reads with minimal locking</div>
+  <div><span style="color:var(--green)">✓</span> Bans, config_kv and admin IPs always live here regardless of backend</div>
+  <div><span style="color:var(--green)">✓</span> Auto-vacuum and WAL checkpoint managed automatically</div>
+  <div><span style="color:var(--green)">✓</span> Zero configuration — works out-of-the-box on a fresh volume</div>
+  <div style="margin-top:6px"><span style="color:var(--yellow)">⚠</span> Not suitable for multi-instance or high-write deployments</div>
+  <div><span style="color:var(--yellow)">⚠</span> WAL file may grow large under sustained write bursts</div>
+  <div><span style="color:var(--yellow)">⚠</span> TimescaleDB hypertables and time-series compression unavailable</div>
+</div>`,
+    postgres: `<strong style="font-size:13px">🐘 PostgreSQL / TimescaleDB — High-volume, multi-instance</strong>
+<hr style="border:none;border-top:1px solid var(--line);margin:8px 0">
+<div style="display:grid;gap:3px">
+  <div><span style="color:var(--green)">✓</span> TimescaleDB hypertables for automatic time-partitioned event storage</div>
+  <div><span style="color:var(--green)">✓</span> Efficient time-range queries — events table never needs manual VACUUM</div>
+  <div><span style="color:var(--green)">✓</span> Scales across multiple gateway instances sharing one database</div>
+  <div><span style="color:var(--green)">✓</span> Optional data retention and compression policies via TimescaleDB</div>
+  <div><span style="color:var(--green)">✓</span> psycopg3 async driver — low latency, connection pooling built-in</div>
+  <div style="margin-top:6px"><span style="color:var(--blue)">ℹ</span> Bans, config, admin IPs remain in SQLite — never migrated to Postgres</div>
+  <div><span style="color:var(--yellow)">⚠</span> Requires <code>POSTGRES_DSN</code> to be configured and reachable</div>
+  <div><span style="color:var(--yellow)">⚠</span> psycopg package must be present in the container image</div>
+</div>`
+  };
+
+  function dbSetTarget(val){
+    _dbTarget = val;
+    // 1.9.3 — exit the loading state: the real backend is now known, so hide
+    // the ⏳ hourglass and reveal the toggle thumb (both neutral until here so
+    // the control never flashes "SQLite active" before loadDb() resolves).
+    const _ld = document.getElementById('db-loading'); if (_ld) _ld.style.display = 'none';
+    const _th0 = document.getElementById('db-thumb');  if (_th0) _th0.style.display = '';
+    const isPg = val === 'postgres';
+    $('db-track').style.background = isPg ? '#79c0ff' : 'var(--green)';
+    $('db-thumb').style.left = isPg ? '32px' : '4px';
+    $('db-lbl-sqlite').style.color = isPg ? 'var(--dim)' : 'var(--fg)';
+    $('db-lbl-pg').style.color    = isPg ? 'var(--fg)' : 'var(--dim)';
+    $('btn-db-apply').disabled = val === _dbOrig;
+    _dbHideTip();
+  }
+  window.dbSetTarget = dbSetTarget;
+  function dbToggle(){
+    dbSetTarget(_dbTarget === 'postgres' ? 'sqlite' : 'postgres');
+  }
+  window.dbToggle = dbToggle;
+
+  function _dbUpdateActiveBadges(backend){
+    const isSql = backend !== 'postgres';
+    $('db-badge-sqlite').style.display = isSql ? '' : 'none';
+    $('db-badge-pg').style.display     = isSql ? 'none' : '';
+    // 1.8.14 — VACUUM is a SQLite-only operation. Hide the manual button +
+    // history when Postgres is active, surface a short note in their place.
+    const vcr = document.getElementById('vacuum-controls-row');
+    const vhw = document.getElementById('vacuum-history-wrap');
+    const vpn = document.getElementById('vacuum-pg-note');
+    if (vcr) vcr.style.display = isSql ? '' : 'none';
+    if (vhw) vhw.style.display = isSql ? '' : 'none';
+    if (vpn) vpn.style.display = isSql ? 'none' : '';
+  }
+
+  // ── DB click popover ─────────────────────────────────────────────
+  let _dbTipType = null;   // which side's popover is open, or null
+
+  function _dbHideTip(){
+    const tip = document.getElementById('db-hover-tip');
+    if (tip) tip.style.display = 'none';
+    _dbTipType = null;
+  }
+
+  function _dbGetTip(){
+    let tip = document.getElementById('db-hover-tip');
+    if (!tip){
+      tip = document.createElement('div');
+      tip.id = 'db-hover-tip';
+      tip.style.cssText = 'position:fixed;background:var(--card);border:1px solid rgba(121,192,255,.35);'
+        + 'border-radius:8px;padding:14px 16px;font-size:12px;color:var(--fg);'
+        + 'min-width:290px;max-width:360px;max-height:82vh;overflow-y:auto;line-height:1.6;'
+        + 'z-index:900;box-shadow:0 8px 30px rgba(0,0,0,.65);display:none;pointer-events:auto';
+      document.body.appendChild(tip);
+    }
+    return tip;
+  }
+
+  function _dbPositionTip(tip, anchor){
+    const rect = anchor.getBoundingClientRect();
+    const tw = Math.min(360, window.innerWidth - 20);
+    const th = Math.min(tip.scrollHeight, window.innerHeight * 0.82);
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - tw - 10));
+    const top  = rect.top > th + 14 ? rect.top - th - 10 : rect.bottom + 10;
+    tip.style.left = left + 'px';
+    tip.style.top  = Math.max(8, top) + 'px';
+  }
+
+  // Click-outside closes the popover
+  document.addEventListener('click', function(e){
+    const tip = document.getElementById('db-hover-tip');
+    if (!tip || tip.style.display === 'none') return;
+    const sq = document.getElementById('db-side-sqlite');
+    const pg = document.getElementById('db-side-pg');
+    if (!tip.contains(e.target) && !(sq&&sq.contains(e.target)) && !(pg&&pg.contains(e.target)))
+      _dbHideTip();
+  }, true);
+
+  function _dbSideClick(type, anchor){
+    // Toggle: same side clicked while popover open → close; otherwise open
+    if (_dbTipType === type){
+      _dbHideTip();
+      dbSetTarget(type);
+    } else {
+      dbSetTarget(type);
+      window._dbShowTip(type, anchor);
+    }
+  }
+  window._dbSideClick = _dbSideClick;
+
+  function _tipInp(id, label, val, type, ph){
+    const isPw = type === 'password';
+    return `<div style="display:flex;flex-direction:column;gap:2px;margin-bottom:6px">
+      <span style="font-size:9.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px">${label}</span>
+      <div style="${isPw?'position:relative':''}">
+        <input id="${id}" type="${type}" value="${(val||'').replace(/"/g,'&quot;')}"
+               placeholder="${ph||''}" autocomplete="off" autocapitalize="off" spellcheck="false"
+               style="width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);
+                      border:1px solid var(--line);padding:4px 7px${isPw?';padding-right:28px':''};
+                      border-radius:4px;font-family:ui-monospace,monospace;font-size:11.5px;outline:none">
+        ${isPw?`<span data-eye="${id}" style="position:absolute;right:7px;top:50%;transform:translateY(-50%);
+                cursor:pointer;color:var(--dim);font-size:12px;user-select:none;opacity:.5">👁</span>`:''}
+      </div>
+    </div>`;
+  }
+
+  window._dbShowTip = function(type, anchor){
+    _dbTipType = type;
+    const tip = _dbGetTip();
+
+    const isActive   = _dbOrig === type;
+    const statusCol  = isActive ? 'var(--green)' : 'var(--dim)';
+    const statusLbl  = isActive ? '● Active' : '○ Inactive';
+
+    // ── Header ──
+    const hdrHtml = `<div style="display:flex;justify-content:space-between;align-items:center;
+        padding-bottom:9px;margin-bottom:10px;border-bottom:1px solid var(--line)">
+      <span style="font-weight:700;font-size:13px">${type === 'sqlite' ? '📦 SQLite' : '🐘 PostgreSQL / TimescaleDB'}</span>
+      <span style="font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:3px;
+            background:${isActive?'rgba(63,185,80,.12)':'rgba(139,148,158,.1)'};
+            color:${statusCol};border:1px solid ${isActive?'rgba(63,185,80,.3)':'rgba(139,148,158,.25)'}">${statusLbl}</span>
+    </div>`;
+
+    // ── Stats ──
+    let statsHtml = '';
+    if (type === 'sqlite' && _dbSvcCache.db) {
+      const s = _dbSvcCache.db;
+      const cells = [];
+      if (s.size_bytes != null) cells.push(['DB size', `${(s.size_bytes/1048576).toFixed(1)} MB`]);
+      if (s.wal_size_bytes != null && s.wal_size_bytes > 0)
+        cells.push(['WAL', `${(s.wal_size_bytes/1048576).toFixed(1)} MB`]);
+      if (cells.length)
+        statsHtml = `<div style="display:grid;grid-template-columns:repeat(${cells.length},1fr);gap:6px;margin-bottom:10px">
+          ${cells.map(([k,v])=>`<div style="background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:6px 8px">
+            <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
+            <div style="font-size:13px;font-weight:700">${v}</div>
+          </div>`).join('')}</div>`;
+    } else if (type === 'postgres' && _dbSvcCache.db_postgres) {
+      const p = _dbSvcCache.db_postgres;
+      const cells = [];
+      if (p.events_rows != null) cells.push(['Events', p.events_rows.toLocaleString()]);
+      if (p.db_bytes    != null) cells.push(['DB size', `${(p.db_bytes/1048576).toFixed(1)} MB`]);
+      const rc  = p.available ? 'var(--green)' : 'var(--red)';
+      cells.unshift(['Status', `<span id="_tip-pg-status-val" style="color:${rc}">${p.available?'✓ reachable':'✗ unreachable'}</span>`]);
+      statsHtml = `<div id="_tip-pg-stats"><div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
+        ${cells.map(([k,v])=>`<div style="background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:6px 8px">
+          <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
+          <div style="font-size:12px;font-weight:700">${v}</div>
+        </div>`).join('')}</div></div>
+        <div id="_tip-pg-lag" style="font-size:10.5px;margin:0 0 6px 0;min-height:13px"></div>`;
+    }
+
+    // ── Config section ──
+    let configHtml = '';
+    if (type === 'sqlite') {
+      const path = (_dbSvcCache.db && _dbSvcCache.db.path) || '/data/antibot.db';
+      const exists = _dbSvcCache.db ? _dbSvcCache.db.exists !== false : true;
+      configHtml = `<div style="border-top:1px solid var(--line);padding-top:9px;margin-top:2px">
+        <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);font-weight:700;margin-bottom:7px">Configuration</div>
+        <div style="font-size:11px;margin-bottom:4px">
+          <span style="color:var(--dim)">File: </span>
+          <code style="font-family:ui-monospace,monospace;font-size:10.5px;color:var(--blue)">${path}</code>
+          <span style="margin-left:6px;font-size:9.5px;color:${exists?'var(--green)':'var(--red)'}">${exists?'✓ exists':'✗ not found'}</span>
+        </div>
+        <div style="font-size:11px;color:var(--dim)">WAL mode · auto-vacuum · zero configuration</div>
+      </div>`;
+    } else {
+      // Pre-populate from existing form fields
+      const host = ($('pg-host')||{}).value||'';
+      const port = ($('pg-port')||{}).value||'5432';
+      const db   = ($('pg-db')||{}).value||'';
+      const user = ($('pg-user')||{}).value||'';
+      const credsOk = _dbSvcCache.db_postgres && _dbSvcCache.db_postgres.configured;
+      configHtml = `<div style="border-top:1px solid var(--line);padding-top:9px;margin-top:2px">
+        <div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--dim);font-weight:700;margin-bottom:8px">Connection</div>
+        <div style="display:grid;grid-template-columns:1fr 80px;gap:6px">
+          ${_tipInp('_tip-pg-host','Host',host,'text','postgres')}
+          ${_tipInp('_tip-pg-port','Port',port,'text','5432')}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${_tipInp('_tip-pg-db','Database',db,'text','appsecgw')}
+          ${_tipInp('_tip-pg-user','User',user,'text','appsecgw')}
+        </div>
+        ${_tipInp('_tip-pg-pass','Password','','password',credsOk?'leave blank to keep current':'required')}
+        <div style="display:flex;gap:6px;align-items:center;margin-top:8px;flex-wrap:wrap">
+          <button id="_tip-pg-save" style="font-size:11px;padding:4px 12px;background:var(--blue);
+            color:#000;border:1px solid var(--blue);border-radius:4px;cursor:pointer;font-weight:600">Save DSN</button>
+          <button id="_tip-pg-test" style="font-size:11px;padding:4px 10px;background:var(--bg-elevated);
+            color:var(--fg);border:1px solid var(--line);border-radius:4px;cursor:pointer">Test</button>
+          <button id="_tip-pg-load" title="Reload host/port/db/user from the saved DSN"
+            style="font-size:11px;padding:4px 10px;background:var(--bg-elevated);
+            color:var(--fg);border:1px solid var(--line);border-radius:4px;cursor:pointer">Load DSN</button>
+          <span id="_tip-pg-res" style="font-size:10.5px;color:var(--dim);flex:1;min-width:100%"></span>
+        </div>
+        <div id="_tip-pg-msg" style="font-size:10.5px;min-height:14px;margin-top:5px"></div>
+      </div>`;
+    }
+
+    tip.innerHTML = hdrHtml + statsHtml + configHtml;
+    tip.style.display = 'block';
+    _dbPositionTip(tip, anchor);
+
+    // On popup open: load current config + refresh status + stats from /db-test
+    if (type === 'postgres') {
+      (async () => {
+        const sv     = document.getElementById('_tip-pg-status-val');
+        const resEl0 = document.getElementById('_tip-pg-res');
+        if (sv) sv.style.opacity = '0.5';
+        // Helper: surface a UI-can't-read-status error WITHOUT lying about DB state
+        const showUiError = (label, detail) => {
+          if (sv) {
+            sv.style.color = 'var(--dim)';
+            sv.textContent = `⚠ status unknown (${label})`;
+            sv.style.opacity = '1';
+          }
+          if (resEl0) {
+            resEl0.style.color = 'var(--dim)';
+            resEl0.textContent = `⚠ cannot read DB status: ${detail}. The DB itself may still be fine — this only means the UI couldn't query /db-test.`;
+          }
+        };
+        let r;
+        try {
+          r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials: 'include'});
+        } catch (netErr) {
+          return showUiError('network', netErr && netErr.message ? netErr.message : 'fetch failed');
+        }
+        if (!r.ok) {
+          const ct = (r.headers.get('content-type') || '').toLowerCase();
+          const hint = r.status === 404 || r.status === 403
+            ? `HTTP ${r.status} — likely blocked by admin IP allowlist or session expired`
+            : `HTTP ${r.status}`;
+          return showUiError(`HTTP ${r.status}`, hint + (ct.includes('json') ? '' : ' (non-JSON response)'));
+        }
+        let j;
+        try {
+          j = await r.json();
+        } catch (parseErr) {
+          return showUiError('parse', `response was not valid JSON (${parseErr && parseErr.message ? parseErr.message : 'parse failed'})`);
+        }
+        try {
+          const pg = j.postgres || {};
+          const isActiveBackend = j.active_backend === 'postgres';
+          const reachable = pg.available || pg.ok;
+
+          // 1. Update status tile
+          if (sv) {
+            if (reachable) {
+              sv.style.color = 'var(--green)'; sv.textContent = '✓ reachable';
+            } else if (!pg.dsn_masked) {
+              sv.style.color = 'var(--red)'; sv.textContent = '✗ DSN not configured';
+            } else {
+              sv.style.color = 'var(--red)';
+              sv.textContent = isActiveBackend ? '⚠ active · not reachable' : '✗ unreachable';
+            }
+          }
+
+          // 2. Rebuild stats cells with fresh data
+          const statsEl = document.getElementById('_tip-pg-stats');
+          if (statsEl) {
+            const cells = [];
+            if (pg.events_rows != null) cells.push(['Events', pg.events_rows.toLocaleString()]);
+            if (pg.db_bytes    != null) cells.push(['DB size', `${(pg.db_bytes/1048576).toFixed(1)} MB`]);
+            if (pg.round_trip_ms != null) cells.push(['Latency', `${pg.round_trip_ms} ms`]);
+            const rc  = reachable ? 'var(--green)' : 'var(--red)';
+            const lbl = sv ? sv.textContent : (reachable ? '✓ reachable' : '✗ unreachable');
+            cells.unshift(['Status', `<span id="_tip-pg-status-val" style="color:${rc}">${lbl}</span>`]);
+            statsEl.innerHTML = `<div style="display:grid;grid-template-columns:repeat(${Math.min(cells.length,3)},1fr);gap:6px;margin-bottom:10px">
+              ${cells.map(([k,v])=>`<div style="background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:6px 8px">
+                <div style="font-size:9.5px;color:var(--dim);margin-bottom:2px">${k}</div>
+                <div style="font-size:12px;font-weight:700">${v}</div>
+              </div>`).join('')}</div>`;
+          }
+
+          // 2b. 1.8.8 — surface dual-write lag warning (silent breakage detection)
+          const wh = j.write_health || {};
+          const lagEl = document.getElementById('_tip-pg-lag');
+          if (lagEl) {
+            if (wh.healthy === false && wh.lag_seconds != null) {
+              // 1.8.9 (L2) — server now returns trailing_backend directly
+              // (computed from the directional ts diff, not abs()), so
+              // clock-skew between hosts doesn't flip the displayed side.
+              const trailing = wh.trailing_backend === 'sqlite' ? 'SQLite'
+                              : wh.trailing_backend === 'postgres' ? 'PostgreSQL'
+                              : 'one backend';
+              lagEl.style.color = 'var(--orange,#d29922)';
+              lagEl.textContent = `⚠ Dual-write lag: ${trailing} is ${wh.lag_seconds.toFixed(0)}s behind. Events may be missing from dashboards.`;
+            } else if (wh.healthy === false && wh.active_backend === 'postgres' && wh.postgres?.available === false) {
+              lagEl.style.color = 'var(--orange,#d29922)';
+              lagEl.textContent = '⚠ Active backend is postgres but unavailable — writes are SQLite-only until reconnect.';
+            } else {
+              lagEl.textContent = '';
+            }
+          }
+
+          // 3. Auto-populate form fields from saved DSN (password stays blank)
+          const masked = pg.dsn_masked || '';
+          if (masked && masked !== '(redacted)') {
+            const m = masked.match(/^postgres(?:ql)?:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+            if (m) {
+              const [, u, h, p, d] = m;
+              const setVal = (id, val) => { const el = document.getElementById(id); if (el && val) el.value = val; };
+              setVal('_tip-pg-host', h);
+              setVal('_tip-pg-port', p || '5432');
+              setVal('_tip-pg-db',   d);
+              setVal('_tip-pg-user', u);
+              if (resEl0){ resEl0.style.color='var(--dim)'; resEl0.textContent=`ℹ loaded saved DSN — ${u}@${h}:${p||'5432'}/${d}`; }
+            }
+          } else if (resEl0) {
+            resEl0.style.color='var(--dim)';
+            resEl0.textContent='ℹ no saved DSN — enter values to configure';
+          }
+        } catch (e) {
+          showUiError('render', e && e.message ? e.message : 'unexpected error');
+          return;
+        }
+        if (sv) sv.style.opacity = '1';
+      })();
+    }
+
+    // Wire 👁 toggles
+    tip.querySelectorAll('[data-eye]').forEach(eye => {
+      const inp = document.getElementById(eye.dataset.eye);
+      if (!inp) return;
+      eye.onclick = () => { inp.type = inp.type==='password'?'text':'password'; eye.style.opacity=inp.type==='text'?'1':'.5'; };
+    });
+
+    // Wire PG save/test
+    if (type === 'postgres'){
+      const getFields = () => ({
+        h: (document.getElementById('_tip-pg-host')||{}).value?.trim()||'',
+        p: (document.getElementById('_tip-pg-port')||{}).value?.trim()||'5432',
+        d: (document.getElementById('_tip-pg-db')||{}).value?.trim()||'',
+        u: (document.getElementById('_tip-pg-user')||{}).value?.trim()||'',
+        w: (document.getElementById('_tip-pg-pass')||{}).value||'',
+      });
+      document.getElementById('_tip-pg-save').onclick = async function(){
+        const f = getFields(); const msg = document.getElementById('_tip-pg-msg');
+        const credsOk2 = _dbSvcCache.db_postgres && _dbSvcCache.db_postgres.configured;
+        if (!f.h||!f.d||!f.u){ msg.style.color='var(--red)'; msg.textContent='Host, database and user required.'; return; }
+        if (!f.w && !credsOk2){ msg.style.color='var(--red)'; msg.textContent='Password required.'; return; }
+        const wEnc = f.w ? encodeURIComponent(f.w) : '****';
+        const dsn = `postgresql://${encodeURIComponent(f.u)}:${wEnc}@${encodeURIComponent(f.h)}:${encodeURIComponent(f.p)}/${encodeURIComponent(f.d)}`;
+        this.disabled=true; msg.style.color='var(--dim)'; msg.textContent='Saving…';
+        try {
+          const r = await fetch('/antibot-appsec-gateway/secured/secrets',
+            {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({POSTGRES_DSN:dsn})});
+          const j = await r.json();
+          msg.style.color = r.ok&&j.ok?'var(--green)':'var(--red)';
+          msg.textContent  = r.ok&&j.ok?'✓ DSN saved — applied immediately':'✗ '+(j.error||j.detail||'Failed');
+        } catch(e){ msg.style.color='var(--red)'; msg.textContent='✗ Network error'; }
+        this.disabled=false;
+      };
+      document.getElementById('_tip-pg-test').onclick = async function(){
+        const f = getFields(); const res = document.getElementById('_tip-pg-res');
+        const credsOk2 = _dbSvcCache.db_postgres && _dbSvcCache.db_postgres.configured;
+        if (!f.h||!f.d||!f.u){ res.style.color='var(--red)'; res.textContent='Host, database and user required.'; return; }
+        if (!f.w && !credsOk2){ res.style.color='var(--red)'; res.textContent='Password required to test.'; return; }
+        this.disabled=true; res.style.color='var(--dim)'; res.textContent='testing…';
+        // If password supplied, probe with an explicit DSN.
+        // If password empty but creds already saved, test the stored DSN (no ?dsn= param).
+        const testUrl = f.w
+          ? '/antibot-appsec-gateway/secured/db-test?dsn='+encodeURIComponent(`postgresql://${encodeURIComponent(f.u)}:${encodeURIComponent(f.w)}@${f.h}:${f.p}/${f.d}`)
+          : '/antibot-appsec-gateway/secured/db-test';
+        let r;
+        try {
+          r = await fetch(testUrl, {credentials:'include'});
+        } catch(e){
+          res.style.color='var(--dim)'; res.textContent='⚠ cannot reach gateway (network) — DB state unknown';
+          this.disabled=false; return;
+        }
+        if (!r.ok) {
+          const hint = r.status === 404 || r.status === 403
+            ? 'admin endpoint blocked (allowlist or session)'
+            : `HTTP ${r.status}`;
+          res.style.color='var(--dim)';
+          res.textContent=`⚠ HTTP ${r.status} — ${hint}. UI cannot verify DB; the DB itself may still be fine.`;
+          this.disabled=false; return;
+        }
+        let j;
+        try { j = await r.json(); }
+        catch(e){
+          res.style.color='var(--dim)';
+          res.textContent='⚠ response was not JSON — DB state unknown (likely admin endpoint returned a decoy page)';
+          this.disabled=false; return;
+        }
+        // ?dsn= path returns {ok, probe:{...}}; no-dsn path returns {postgres:{ok,...}}
+        const p = j.probe || j.postgres || {};
+        if (j.ok || p.ok) {
+          const ver = p.version ? ` — PostgreSQL ${p.version}` : '';
+          const db  = (p.db||p.db_name) ? ` · db ${p.db||p.db_name}` : '';
+          const ms  = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
+          res.style.color='var(--green)'; res.textContent=`✓ connected${ver}${db}${ms}`;
+          // Sync the Status tile — test succeeded so mark available in cache + live span
+          if (_dbSvcCache.db_postgres) _dbSvcCache.db_postgres.available = true;
+          const sv = document.getElementById('_tip-pg-status-val');
+          if (sv){ sv.style.color='var(--green)'; sv.textContent='✓ reachable'; }
+        } else {
+          // This is a REAL DB-side failure (gateway tried to connect, postgres said no)
+          res.style.color='var(--red)'; res.textContent='✗ '+(j.reason||p.reason||'unreachable');
+        }
+        this.disabled=false;
+      };
+      // Explicit Load DSN button — re-fetches saved DSN and repopulates fields
+      const loadBtn = document.getElementById('_tip-pg-load');
+      if (loadBtn) loadBtn.onclick = async function(){
+        const res = document.getElementById('_tip-pg-res');
+        this.disabled = true;
+        if (res){ res.style.color='var(--dim)'; res.textContent='loading saved DSN…'; }
+        let r;
+        try {
+          r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+        } catch(e) {
+          if (res){ res.style.color='var(--dim)'; res.textContent='⚠ cannot reach gateway (network) — saved DSN unknown'; }
+          this.disabled = false; return;
+        }
+        if (!r.ok) {
+          const hint = r.status === 404 || r.status === 403
+            ? 'admin endpoint blocked (allowlist or session)'
+            : `HTTP ${r.status}`;
+          if (res){ res.style.color='var(--dim)'; res.textContent=`⚠ HTTP ${r.status} — ${hint}. Cannot read saved DSN.`; }
+          this.disabled = false; return;
+        }
+        try {
+          const j = await r.json();
+          const masked = (j.postgres||{}).dsn_masked || '';
+          if (!masked || masked === '(redacted)') {
+            if (res){ res.style.color='var(--dim)'; res.textContent='ℹ no saved DSN — enter values and Save'; }
+          } else {
+            const m = masked.match(/^postgres(?:ql)?:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+            if (!m) {
+              if (res){ res.style.color='var(--red)'; res.textContent='✗ could not parse saved DSN'; }
+            } else {
+              const [, u, h, p, d] = m;
+              const setVal = (id, val) => { const el=document.getElementById(id); if (el && val) el.value=val; };
+              setVal('_tip-pg-host', h);
+              setVal('_tip-pg-port', p || '5432');
+              setVal('_tip-pg-db',   d);
+              setVal('_tip-pg-user', u);
+              if (res){ res.style.color='var(--green)'; res.textContent=`✓ loaded — ${u}@${h}:${p||'5432'}/${d} · enter password to test`; }
+            }
+          }
+        } catch(e){
+          if (res){ res.style.color='var(--dim)'; res.textContent='⚠ response was not JSON — admin endpoint may have returned a decoy'; }
+        }
+        this.disabled = false;
+      };
+    }
+  };
+
+  // ── Migration status row ──────────────────────────────────────────
+  function _renderMigStatusRow(mig){
+    const el = $('db-mig-status-row');
+    if (!el) return;
+    if (!mig || (!mig.running && !mig.done)) { el.innerHTML = ''; return; }
+    const pct = mig.pct != null ? mig.pct : (mig.total > 0 ? +(mig.copied/mig.total*100).toFixed(1) : 0);
+    const col = mig.error ? 'var(--red)' : mig.running ? 'var(--blue)' : 'var(--green)';
+    const lbl = mig.error
+      ? `Migration error: ${String(mig.error).slice(0,80)}`
+      : mig.running
+        ? `Migrating ${mig.direction||''} — ${(mig.copied||0).toLocaleString()} / ${(mig.total||0).toLocaleString()} rows${mig.eta_secs?' · ETA '+mig.eta_secs+' s':''}`
+        : `Migration complete — ${(mig.copied||0).toLocaleString()} rows copied`;
+    el.innerHTML = `<div style="margin-top:6px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+        <span style="font-size:10.5px;color:${col}">${lbl}</span>
+        <span style="font-size:10px;color:${col};font-weight:600">${(+pct).toFixed(0)}%</span>
+      </div>
+      <div style="height:4px;border-radius:2px;background:rgba(255,255,255,.08);overflow:hidden">
+        <div style="height:100%;border-radius:2px;background:${col};width:${pct}%;transition:width .4s"></div>
+      </div>
+    </div>`;
+  }
+
+  async function _pollMigOnce(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/db-migration-status',{credentials:'include'});
+      if (!r.ok) return null;
+      return await r.json();
+    } catch { return null; }
+  }
+
+  function _startMigPoll(){
+    if (_migPollTimer) return;
+    _migPollTimer = setInterval(async () => {
+      const mig = await _pollMigOnce();
+      _renderMigStatusRow(mig);
+      if (mig && !mig.running){
+        clearInterval(_migPollTimer); _migPollTimer = null;
+      }
+    }, 3000);
+    // track in _timers so beforeunload cancels it (otherwise the
+    // interval keeps polling /secured/db-migration-status after navigation).
+    if (typeof _timers !== "undefined") _timers.push(_migPollTimer);
+  }
+
+  // ── Load DB state ─────────────────────────────────────────────────
+  async function loadDb(){
+    try {
+      const [rCfg, rSvc] = await Promise.all([
+        fetch('/antibot-appsec-gateway/secured/config',{credentials:'include'}),
+        fetch('/antibot-appsec-gateway/secured/metrics?range=1&bucket=60&cats=allowed',{credentials:'include'}),
+      ]);
+      if (!rCfg.ok) return;
+      const d    = await rCfg.json();
+      const svcD = rSvc.ok ? await rSvc.json() : {};
+      const svc  = svcD.services || {};
+      _dbSvcCache = { db: svc.db, db_postgres: svc.db_postgres };
+      _dbOrig = (d.state||d).DB_BACKEND || 'sqlite';
+      _dbTarget = _dbOrig;
+      dbSetTarget(_dbOrig);
+      _dbUpdateActiveBadges(_dbOrig);
+      $('btn-db-apply').disabled = true;
+      // 1.8.14 — fetch VACUUM history only when sqlite is active. Runs after
+      // _dbUpdateActiveBadges() so the wrap visibility reflects the live
+      // backend (otherwise the initial pre-loadDb fetch races vs. hide).
+      if (_dbOrig === 'sqlite' && typeof loadVacuumHistory === 'function') {
+        loadVacuumHistory();
+      }
+    } catch(_){}
+    // Check if a migration is already in progress
+    const mig = await _pollMigOnce();
+    _renderMigStatusRow(mig);
+    if (mig && mig.running) _startMigPoll();
+  }
+
+  // ── Rich confirmation modal ───────────────────────────────────────
+  function _openDbModal(target){
+    const dbName = target === 'postgres' ? 'PostgreSQL / TimescaleDB' : 'SQLite';
+    const impactLines = [
+      `<b>Switch is applied immediately — no container restart required.</b> All in-flight
+       requests complete normally; the new backend is active within seconds.`,
+      `<b>Configurations are preserved.</b> <code>config_kv</code>, <code>secrets_kv</code>,
+       admin IPs, bans, clients — all live in SQLite and survive any backend swap.`,
+      `<b>All event history is migrated in the background.</b> The full copy runs
+       non-blocking after the switch — progress is shown in the DB card.
+       The last 60 s are available immediately; the rest follows automatically.`,
+      target === 'postgres'
+        ? `<b>Postgres readiness probed before commit.</b> If the gateway can't reach
+           the DSN, the swap is rejected and you stay on SQLite.`
+        : `<b>SQLite is single-file zero-deps</b> — correct for the default deployment.`,
+    ];
+    const needsTest = target === 'postgres';
+    // Set synchronously in the input listener so the async auto-fill IIFE can never
+    // overwrite a value the user has already started editing, regardless of timing.
+    let _dsnUserTouched = false;
+    const dsnInput = needsTest ? `<div style="margin-top:14px">
+      <label style="font-size:11px;color:var(--dim);display:block;margin-bottom:4px">
+        PostgreSQL DSN — <span id="db-dsn-label-hint" style="color:var(--dim)">loading current value…</span>
+      </label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="db-switch-dsn" type="text" data-masked="0" autocomplete="off"
+               style="flex:1;background:var(--bg);border:1px solid var(--line);color:var(--fg);
+                      padding:7px 10px;border-radius:5px;font-family:ui-monospace,monospace;font-size:11px"
+               placeholder="postgresql://user:pass@host:5432/db">
+        <button id="db-test-btn" style="flex-shrink:0;white-space:nowrap">Test connection</button>
+      </div>
+      <div id="db-test-result" style="margin-top:8px;font-size:11.5px;min-height:20px"></div>
+    </div>` : '';
+
+    const html = `
+      <h3 style="color:var(--yellow)">⚠ Switch active DB backend → ${dbName}</h3>
+      <ul style="margin:10px 0;padding-left:18px;font-size:12.5px;line-height:1.7;color:var(--fg)">
+        ${impactLines.map(l=>'<li>'+l+'</li>').join('')}
+      </ul>
+      ${dsnInput}
+      <div style="margin-top:14px;padding:8px 11px;background:rgba(63,185,80,.06);
+                  border:1px solid rgba(63,185,80,.2);border-radius:5px;font-size:12px">
+        <span style="color:var(--green)">✓</span>
+        <b>Full history migration</b> will run in the background automatically.
+        <span style="color:var(--dim);font-size:10.5px">Progress shown in the DB card below.</span>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+        <button class="secondary" id="db-switch-cancel">Cancel</button>
+        <button id="db-switch-ok" style="background:var(--yellow);color:#000;border-color:var(--yellow)"
+                ${needsTest?'disabled title="Run connection test first"':''}>Yes, switch</button>
+      </div>`;
+    showSimpleModal(html);
+    document.getElementById('db-switch-cancel').onclick = closeSimpleModal;
+
+    // _resolveModalDsn: returns "" when field still shows server's own masked DSN
+    // (so the server uses its stored real credentials), or the user-typed value otherwise.
+    // Requires _dsnUserTouched to be false AND data-masked='1' — both must hold.
+    function _resolveModalDsn(){
+      const f = document.getElementById('db-switch-dsn');
+      if (!f) return '';
+      if (f.dataset.masked === '1' && !_dsnUserTouched) return ''; // server already has the real DSN
+      return f.value || '';
+    }
+
+    function _fmtTestResult(p){
+      const ver  = p.version        ? `<b>PostgreSQL ${p.version}</b>` : '';
+      const db   = p.db             ? ` · db <code>${p.db}</code>`
+                 : p.db_name        ? ` · db <code>${p.db_name}</code>` : '';
+      const ms   = p.round_trip_ms != null ? ` · ${p.round_trip_ms} ms` : '';
+      const rows = p.events_rows   != null ? ` · ${p.events_rows} events` : '';
+      return `<span style="color:var(--green)">✓ Connected — ${ver}${db}${ms}${rows}</span>`;
+    }
+
+    if (needsTest){
+      const dsnField  = document.getElementById('db-switch-dsn');
+      const resultEl  = document.getElementById('db-test-result');
+      const okBtn     = document.getElementById('db-switch-ok');
+      const hintEl    = document.getElementById('db-dsn-label-hint');
+
+      // Auto-check stored DSN on modal open: populate field with masked value +
+      // show connection status so the operator knows before they even click Test.
+      (async () => {
+        try {
+          resultEl.innerHTML = '<span style="color:var(--dim)">Checking stored connection…</span>';
+          const r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+          if (!r.ok && !(r.headers.get('content-type')||'').includes('json'))
+            throw new Error(`Server error HTTP ${r.status}`);
+          const j = await r.json();
+          const p = j.postgres || {};
+          const masked = p.dsn_masked || '';
+          // Populate field only when user hasn't touched it yet (closure flag, set
+          // synchronously by the input listener — immune to async timing races).
+          if (masked && masked !== '(redacted)' && dsnField && !_dsnUserTouched && !dsnField.value) {
+            dsnField.value = masked;
+            dsnField.dataset.masked = '1';
+            if (hintEl) hintEl.innerHTML =
+              'current value shown masked — edit to override, or leave as-is to use stored credentials';
+          } else {
+            if (hintEl) hintEl.innerHTML = _dsnUserTouched
+              ? 'custom DSN — click Test to verify before switching'
+              : !masked
+              ? 'no DSN configured — enter one below'
+              : 'current value shown masked — edit to override, or leave as-is to use stored credentials';
+          }
+          // Show current connectivity status
+          if (p.ok){
+            resultEl.innerHTML = _fmtTestResult(p)
+              .replace('✓ Connected', '✓ Stored DSN connected');
+            okBtn.disabled = false; okBtn.title = '';
+          } else {
+            const reason = p.reason || j.reason || 'unreachable';
+            resultEl.innerHTML = masked
+              ? `<span style="color:var(--yellow)">⚠ Stored DSN not reachable: ${reason} — edit the field or enter a new DSN</span>`
+              : `<span style="color:var(--dim)">No stored DSN — enter one above and click Test</span>`;
+          }
+        } catch(e){
+          if (hintEl) hintEl.textContent = 'enter connection string below';
+          resultEl.innerHTML = `<span style="color:var(--dim)">Could not check stored connection: ${e.message}</span>`;
+        }
+      })();
+
+      // Test button: use _resolveModalDsn() — "" = server tests with its own DSN
+      document.getElementById('db-test-btn').onclick = async () => {
+        const testBtn = document.getElementById('db-test-btn');
+        const dsnVal  = _resolveModalDsn();
+        testBtn.disabled=true; testBtn.textContent='Testing…'; resultEl.textContent=''; okBtn.disabled=true;
+        try {
+          const qs = dsnVal ? '?dsn='+encodeURIComponent(dsnVal) : '';
+          const r  = await fetch('/antibot-appsec-gateway/secured/db-test'+qs, {credentials:'include'});
+          if (!r.ok && !(r.headers.get('content-type')||'').includes('json'))
+            throw new Error(`Server error HTTP ${r.status}`);
+          const j  = await r.json();
+          const p  = j.postgres || j.probe || {};
+          if (j.ok || p.ok){
+            resultEl.innerHTML = _fmtTestResult(p);
+            okBtn.disabled=false; okBtn.title='';
+          } else {
+            const reason = j.reason || p.reason || 'unreachable';
+            resultEl.innerHTML = `<span style="color:var(--red)">✗ ${reason}</span>`;
+          }
+        } catch(e){
+          resultEl.innerHTML = `<span style="color:var(--red)">✗ Network error: ${e.message}</span>`;
+        } finally { testBtn.disabled=false; testBtn.textContent='Test connection'; }
+      };
+
+      // When user edits the field, mark synchronously so the async IIFE guard sees it.
+      if (dsnField) dsnField.addEventListener('input', () => {
+        _dsnUserTouched = true;
+        dsnField.dataset.masked = '0';
+        okBtn.disabled = true;
+        resultEl.textContent = '';
+        if (hintEl) hintEl.textContent = 'custom DSN — click Test to verify before switching';
+      });
+    }
+
+    document.getElementById('db-switch-ok').onclick = async () => {
+      const okBtn = document.getElementById('db-switch-ok');
+      okBtn.disabled=true; okBtn.textContent='Switching…';
+      const dsn = _resolveModalDsn();
+      const fullMigrate = true;
+      try {
+        const r = await fetch('/antibot-appsec-gateway/secured/db-switch?target='+encodeURIComponent(target),
+          {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
+           body:JSON.stringify({dsn,full_migrate:fullMigrate})});
+        const j = await r.json();
+        if (!r.ok || !j.ok){
+          okBtn.disabled=false; okBtn.textContent='Yes, switch';
+          toast('Switch rejected: '+(j.reason||`HTTP ${r.status}`),'err'); return;
+        }
+        closeSimpleModal();
+        _dbOrig=target; _dbTarget=target;
+        dbSetTarget(target);
+        _dbUpdateActiveBadges(target);
+        $('btn-db-apply').disabled=true;
+        // 1.8.14 — refresh VACUUM history when switching INTO sqlite so the
+        // newly-revealed wrap isn't stuck on "Loading…".
+        if (target === 'sqlite' && typeof loadVacuumHistory === 'function') {
+          loadVacuumHistory();
+        }
+        if (j.full_migrate_scheduled){
+          toast(`Switched to ${target} — migrating all data in background.`,'ok');
+          _startMigPoll();
+        } else {
+          toast(`Switched to ${target} — active immediately.`,'ok');
+        }
+      } catch(e){
+        okBtn.disabled=false; okBtn.textContent='Yes, switch';
+        toast('Network error: '+e.message,'err');
+      }
+    };
+  }
+
+  $('btn-db-apply').addEventListener('click', function(){
+    const val = _dbTarget;
+    if (!val || val === _dbOrig) return;
+    _openDbModal(val);
+  });
+
+  $('btn-db-load-dsn').addEventListener('click', async function(){
+    const msg = $('db-msg');
+    this.disabled = true;
+    if (msg){ msg.style.color='var(--dim)'; msg.textContent='loading saved DSN…'; }
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/db-test', {credentials:'include'});
+      if (!r.ok) throw new Error('http '+r.status);
+      const j = await r.json();
+      const masked = (j.postgres||{}).dsn_masked || '';
+      if (!masked || masked === '(redacted)') {
+        if (msg){ msg.style.color='var(--dim)'; msg.textContent='ℹ no saved DSN — configure in PostgreSQL section above'; }
+      } else {
+        const m = masked.match(/^postgres(?:ql)?:\/\/([^:@]+):.*?@([^:/@]+)(?::(\d+))?\/([^?#/\s]+)/);
+        if (!m) {
+          if (msg){ msg.style.color='var(--red)'; msg.textContent='✗ could not parse saved DSN'; }
+        } else {
+          const [, u, h, p, d] = m;
+          if (msg){ msg.style.color='var(--green)'; msg.textContent=`✓ ${u}@${h}:${p||'5432'}/${d}`; }
+        }
+      }
+    } catch(e){
+      if (msg){ msg.style.color='var(--red)'; msg.textContent='✗ load failed: '+(e.message||'network'); }
+    }
+    this.disabled = false;
+  });
+
+  loadDb();
+
+  // ── Integration credentials ────────────────────────────────────────
+  // Only keys that exist in _SECRET_KEYS on the server are manageable here.
+  // WEBHOOK_URL / WEBHOOK_SECRET / JWT_HMAC_SECRET are env-var only.
+  // POSTGRES_DSN is managed in the Database-backend card above (with a structured
+  // host/port/user/pass form, mig-status, test-roundtrip) — NOT here, to avoid
+  // two save surfaces for the same value.
+  const CREDS = [
+    {key:'TURNSTILE_SITEKEY',   label:'Cloudflare Turnstile — Site key',  ph:'0x4AAAAAA…',           type:'text'},
+    {key:'TURNSTILE_SECRET',    label:'Cloudflare Turnstile — Secret key', ph:'0x4AAAAAA…',           type:'password'},
+    {key:'ABUSEIPDB_KEY',       label:'AbuseIPDB v2 API key',              ph:'API key',               type:'password'},
+    {key:'CROWDSEC_LAPI_URL',   label:'CrowdSec LAPI URL',                 ph:'http://crowdsec:8080',  type:'text'},
+    {key:'CROWDSEC_LAPI_KEY',   label:'CrowdSec bouncer key',              ph:'Bouncer key',           type:'password'},
+    {key:'MAXMIND_LICENSE_KEY', label:'MaxMind license key',               ph:'License key',           type:'password'},
+  ];
+
+  async function loadCreds(){
+    const box=$('creds-body'); if(!box) return;
+    box.textContent='Loading…';
+    let st={};
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets',{credentials:'include'});
+      if(r.ok){ const d=await r.json(); st=d.secrets||{}; }
+    } catch(_){}
+    // st[key] = {configured, source, length}
+    box.innerHTML=_dp(CREDS.map(c=>{
+      const s=st[c.key]||{}; const isSet=!!(s.configured);
+      const isEnv=isSet && s.source==='env';   // immutable from UI — env-var wins
+      const srcBadge=isSet
+        ?(isEnv
+          ?'<span style="font-size:10px;color:var(--blue);background:rgba(121,192,255,.1);border:1px solid rgba(121,192,255,.25);padding:1px 6px;border-radius:3px;margin-left:6px">env</span>'
+          :'<span style="font-size:10px;color:var(--green);background:rgba(63,185,80,.1);border:1px solid rgba(63,185,80,.25);padding:1px 6px;border-radius:3px;margin-left:6px">saved</span>')
+        :'<span style="font-size:10px;color:var(--dim);background:var(--bg-elevated);border:1px solid var(--line);padding:1px 6px;border-radius:3px;margin-left:6px">not set</span>';
+      // env-pinned values are immutable from the UI — the runtime config writer
+      // rejects a config_kv write for any key that's also in the env, so showing
+      // an editable input + Save here is misleading (the save would be a no-op).
+      // Clear is also pointless: there's nothing in secrets_kv to clear, the env
+      // var is the source. Disable both and explain.
+      const clrBtn = (isSet && !isEnv)
+        ? `<button class="secondary" style="font-size:11px;padding:5px 10px;white-space:nowrap" data-cred-clear="${_esc(c.key)}">Clear</button>`
+        : '';
+      const inputAttrs = isEnv
+        ? `disabled aria-disabled="true" title="Set via env var — immutable from the UI" style="flex:1;background:var(--card);border:1px solid var(--line);color:var(--dim);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px;cursor:not-allowed;opacity:.7"`
+        : `style="flex:1;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"`;
+      const envHint = isEnv
+        ? `<div style="font-size:11px;color:var(--dim);margin-top:4px">Set via env var (immutable from the UI). To manage here, unset the env var and restart.</div>`
+        : '';
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--line)" data-cred-row="${_esc(c.key)}">
+        <div style="display:flex;align-items:center;margin-bottom:6px">
+          <span style="font-family:ui-monospace,Menlo,monospace;font-size:12px;color:var(--fg)">${_esc(c.label)}</span>${srcBadge}
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="${c.type}" data-cred="${_esc(c.key)}" placeholder="${isSet?'••••••':_esc(c.ph)}" ${inputAttrs}>
+          ${clrBtn}
+        </div>
+        ${envHint}
+      </div>`;
+    }).join(''));
+    box.querySelectorAll('[data-cred-clear]').forEach(btn => {
+      btn.addEventListener('click', () => window._clearCred(btn.dataset.credClear, btn));
+    });
+  }
+
+  window._clearCred=async function(name,btn){
+    if(!confirm('Clear '+name+'? This reverts to the environment-variable fallback.')) return;
+    btn.disabled=true;
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets?name='+encodeURIComponent(name),
+        {method:'DELETE',credentials:'include'});
+      const d=await r.json();
+      if(r.ok&&d.ok){ toast(name+' cleared','ok'); loadCreds(); }
+      else{ toast('Clear failed: '+(d.error||'?'),'err'); btn.disabled=false; }
+    } catch(e){ toast('Network error: '+e.message,'err'); btn.disabled=false; }
+  };
+
+  $('btn-creds-save').addEventListener('click', async function(){
+    const fields=document.querySelectorAll('#creds-body input[data-cred]');
+    const payload={};
+    // Skip disabled inputs — those are env-pinned values; writing to secrets_kv
+    // wouldn't take effect (the env var still wins on next reload), so a save
+    // attempt would be a misleading no-op.
+    fields.forEach(f=>{ if(!f.disabled && f.value.trim()) payload[f.dataset.cred]=f.value.trim(); });
+    if(!Object.keys(payload).length){ toast('No values entered (env-pinned fields are read-only)','err'); return; }
+    this.disabled=true;
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/secrets',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});
+      const d=await r.json();
+      if(r.ok&&d.ok){ toast('Credentials saved','ok'); loadCreds(); }
+      else toast('Save failed: '+(d.error||d.detail||'?'),'err');
+    } catch(e){ toast('Network error: '+e.message,'err'); }
+    this.disabled=false;
+  });
+
+  loadCreds();
+
+  // ── System logging & webhook filter ────────────────────────────────
+  const LOG_KNOBS = [
+    {key:'LOG_LEVEL',  kind:'select', options:['debug','info','warn','error','critical'],
+     desc:'Filter for stdout structured log emission.'},
+    {key:'LOG_FORMAT', kind:'select', options:['text','json'],
+     desc:'Log output format. text = human-readable; json = structured JSON lines for Loki / Splunk / etc.'},
+    {key:'WEBHOOK_EVENT_FILTER', kind:'list', ph:'ban,canary-echo,honeypot (empty = all events)',
+     desc:'CSV of reasons (fnmatch globs OK) for which webhook calls fire. Empty = every event fires.'},
+  ];
+  let _logState={}, _logDirty={};
+
+  async function loadLogging(){
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/config',{credentials:'include'});
+      if(!r.ok) return;
+      const st=(await r.json()).state||{};
+      LOG_KNOBS.forEach(k=>{
+        if(k.key in st) _logState[k.key]=Array.isArray(st[k.key])?st[k.key].join(','):st[k.key];
+      });
+      renderLogging();
+    } catch(_){}
+  }
+
+  function renderLogging(){
+    _logDirty={};
+    const box=$('logging-body'); if(!box) return;
+    box.innerHTML=_dp(LOG_KNOBS.map(k=>{
+      const val=_logState[k.key]||'';
+      if(k.kind==='select'){
+        const opts=k.options.map(o=>`<option value="${_esc(o)}"${o===val?' selected':''}>${_esc(o)}</option>`).join('');
+        return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+          <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}</div>
+          <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+          <select style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;font-size:12px"
+                  data-lset="${_esc(k.key)}">${opts}</select>
+        </div>`;
+      }
+      return `<div style="padding:10px 0;border-bottom:1px solid var(--line)">
+        <div style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:var(--fg);margin-bottom:4px">${_esc(k.key)}</div>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:6px">${_esc(k.desc)}</div>
+        <input type="text" value="${_esc(val)}" placeholder="${_esc(k.ph||'')}"
+               style="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:7px 10px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12px"
+               data-lset="${_esc(k.key)}">
+      </div>`;
+    }).join(''));
+    // _dp (DOMPurify) strips inline oninput/onchange — bind here.
+    box.querySelectorAll('[data-lset]').forEach(el => {
+      const fire = () => window._logChange(el.dataset.lset, el.value);
+      el.addEventListener('input', fire);
+      el.addEventListener('change', fire);
+    });
+    $('btn-logging-apply').disabled=true; $('btn-logging-reset').disabled=true;
+  }
+
+  window._logChange=function(key,val){
+    if(val===(_logState[key]||'')) delete _logDirty[key]; else _logDirty[key]=val;
+    const has=Object.keys(_logDirty).length>0;
+    $('btn-logging-apply').disabled=!has; $('btn-logging-reset').disabled=!has;
+  };
+
+  $('btn-logging-apply').addEventListener('click', async function(){
+    if(!Object.keys(_logDirty).length) return;
+    this.disabled=true;
+    const payload={};
+    for(const [k,v] of Object.entries(_logDirty)){
+      const knob=LOG_KNOBS.find(x=>x.key===k);
+      payload[k]=knob&&knob.kind==='list' ? v.split(',').map(s=>s.trim()).filter(Boolean) : v;
+    }
+    try {
+      const r=await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(payload)});
+      const d=await r.json();
+      const n=d.applied?Object.keys(d.applied).length:0;
+      if(r.ok&&n){ toast('Applied '+n+' change(s)','ok'); await loadLogging(); }
+      else{ toast('Rejected — '+JSON.stringify(d.rejected||{}),'err'); this.disabled=false; }
+    } catch(e){ toast('Network error: '+e.message,'err'); this.disabled=false; }
+  });
+  $('btn-logging-reset').addEventListener('click', ()=>loadLogging());
+
+  loadLogging();
+})();
+
+// ── Redis shared store ────────────────────────────────────────────────────
+(function(){
+  let _redisOrig = '';
+
+  function _sanitiseUrl(url){
+    if(!url) return '';
+    try {
+      const u = new URL(url);
+      if(u.password) u.password = '***';
+      return u.toString();
+    } catch(_){ return url.replace(/:\/\/[^@]+@/, '://***@'); }
+  }
+
+  async function loadRedis(){
+    try {
+      const [r, rSvc] = await Promise.all([
+        fetch('/antibot-appsec-gateway/secured/config',{credentials:'include'}),
+        fetch('/antibot-appsec-gateway/secured/metrics?range=1&bucket=60&cats=allowed',{credentials:'include'}),
+      ]);
+      if(!r.ok) return;
+      const d    = await r.json();
+      const svcD = rSvc.ok ? await rSvc.json() : {};
+      const st = d.state || d;
+
+      // Status pill — services data lives in /secured/metrics, not /secured/config
+      const connected = svcD.services && svcD.services.redis && svcD.services.redis.connected;
+      const redisUrl   = (svcD.services && svcD.services.redis && svcD.services.redis.url) || '';
+      const pill = $('redis-status-pill');
+      const dot  = $('redis-status-dot');
+      const txt  = $('redis-status-text');
+      if(!redisUrl){
+        dot.style.color='var(--dim)'; txt.textContent='disabled — REDIS_URL not set';
+        pill.style.background='var(--bg-inset)'; pill.style.borderColor='var(--line)';
+      } else if(connected){
+        dot.style.color='var(--green)'; txt.textContent='connected';
+        pill.style.background='rgba(63,185,80,0.12)'; pill.style.borderColor='var(--green)';
+      } else {
+        dot.style.color='var(--red)'; txt.textContent='unreachable';
+        pill.style.background='rgba(248,81,73,0.12)'; pill.style.borderColor='var(--red)';
+      }
+      $('redis-url-display').textContent = redisUrl ? _sanitiseUrl(redisUrl) : '';
+
+      // Security flags
+      const flags = [];
+      if(redisUrl && redisUrl.startsWith('rediss://'))
+        flags.push({ok:true,  label:'TLS enabled'});
+      else if(redisUrl)
+        flags.push({ok:false, label:'No TLS — use rediss:// for cross-host'});
+      const al = st.REDIS_ALLOW_LIST;
+      const hasAllowlist = al && (Array.isArray(al) ? al.length>0 : String(al).trim().length>0);
+      if(hasAllowlist)
+        flags.push({ok:true, label:'IP allowlist active'});
+      else
+        flags.push({ok:false, label:'No allowlist — Docker isolation only'});
+      $('redis-sec-flags').innerHTML = flags.map(f=>
+        `<span style="font-size:10.5px;padding:2px 8px;border-radius:4px;
+          background:${f.ok?'rgba(63,185,80,0.12)':'rgba(210,153,34,0.12)'};
+          color:${f.ok?'var(--green)':'var(--yellow)'};
+          border:1px solid ${f.ok?'var(--green)':'var(--yellow)'}">${f.label}</span>`
+      ).join('');
+
+      // Allowlist textarea
+      const rawList = al ? (Array.isArray(al) ? al.join('\n') : String(al).split(',').map(s=>s.trim()).join('\n')) : '';
+      _redisOrig = rawList;
+      $('redis-allowlist-input').value = rawList;
+      $('redis-allowlist-status').textContent = hasAllowlist
+        ? `${(Array.isArray(al)?al:String(al).split(',')).filter(s=>String(s).trim()).length} CIDR(s) configured`
+        : 'No restriction';
+      $('btn-redis-apply').disabled = true;
+      $('btn-redis-reset').disabled = true;
+    } catch(_){}
+  }
+
+  $('redis-allowlist-input').addEventListener('input', function(){
+    const changed = this.value.trim() !== _redisOrig.trim();
+    $('btn-redis-apply').disabled = !changed;
+    $('btn-redis-reset').disabled = !changed;
+  });
+
+  $('btn-redis-apply').addEventListener('click', async function(){
+    this.disabled = true;
+    const raw = $('redis-allowlist-input').value;
+    const cidrs = raw.replace(/\n/g,',').split(',').map(s=>s.trim()).filter(Boolean);
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST',credentials:'include',
+         headers:{'Content-Type':'application/json'},
+         body:JSON.stringify({REDIS_ALLOW_LIST: cidrs.join(',')})});
+      const d = await r.json();
+      const applied = d.applied && Object.keys(d.applied).includes('REDIS_ALLOW_LIST');
+      if(r.ok && applied){ toast('Allowlist updated','ok'); await loadRedis(); }
+      else { toast('Rejected: '+(d.rejected&&d.rejected.REDIS_ALLOW_LIST||JSON.stringify(d)),'err'); this.disabled=false; }
+    } catch(e){ toast('Network error: '+e.message,'err'); this.disabled=false; }
+  });
+
+  $('btn-redis-reset').addEventListener('click', ()=>loadRedis());
+
+  loadRedis();
+})();
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
+</script>
 </body></html>

@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 identity.py — Session cookie + browser fingerprint identity logic.
 Extracted from proxy.py as part of Phase 3 modular refactoring.
@@ -15,21 +13,22 @@ import secrets
 import time as _t
 from collections import defaultdict, deque
 
-from config import (
+from config import (  # noqa: F401 — re-exported via identity.* for callers
     SESSION_KEY,
     SESSION_COOKIE,
     SESSION_TTL_SECS,
     SESSION_SAMESITE,
     SESSION_SECURE,
     NEW_SESSIONS_PER_IP_PER_MIN,
+    SESSION_CHURN_ENABLED,
 )
-from state import (
+from state import (  # noqa: F401 — re-exported via identity.*
     state_lock,
     ip_state,
     ip_new_sessions,
     db_queue,
 )
-from helpers import slog, get_ip, now
+from helpers import slog, get_ip, now  # noqa: F401 — re-exported via identity.*
 
 # ── Session HMAC helpers ───────────────────────────────────────────────────
 
@@ -71,7 +70,7 @@ def browser_fingerprint(request) -> str:
         request.headers.get("Accept-Language", ""),
         request.headers.get("Accept-Encoding", ""),
     ]
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:12]
+    return hashlib.sha256("|".join(parts).encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 # ── Header-order library fingerprint helpers ───────────────────────────────
@@ -82,7 +81,7 @@ def browser_fingerprint(request) -> str:
 
 def _header_order_sig(request) -> str:
     names = ":".join(k.lower() for k in request.headers.keys() if k.lower() != "host")
-    return hashlib.sha256(names[:300].encode()).hexdigest()[:12]
+    return hashlib.sha256(names[:300].encode("utf-8", errors="replace")).hexdigest()[:12]
 
 
 _LIBRARY_HEADER_SIGS: frozenset = frozenset({
@@ -163,8 +162,37 @@ def _fp_hash(ua: str, ip_tier: str, ja4: str) -> str:
     """Opaque hash of the request's (UA + IP-tier + JA4) — used as the
     ban-keying identity for fingerprints that are minting many cookies."""
     return hmac.new(SESSION_KEY,
-                    f"fp|{ua[:200]}|{ip_tier}|{ja4}".encode(),
+                    f"fp|{ua[:200]}|{ip_tier}|{ja4}".encode("utf-8", errors="replace"),
                     hashlib.sha256).hexdigest()[:24]
+
+
+def compute_ja4h(request) -> str:
+    """JA4H: HTTP request fingerprint.
+    Format: <method2><version><body><referer>_<hdr_count><ck_count>_<hdr_hash>_<ck_hash>
+    """
+    import hashlib as _hl
+    try:
+        method  = (request.method or "")[:2].lower().ljust(2, "_")
+        ver     = request.version
+        version = "20" if (hasattr(ver, "major") and ver.major == 2) else "11"
+        has_body = "y" if (getattr(request, "content_length", None) or 0) > 0 else "n"
+        hdrs    = dict(request.headers) if hasattr(request, "headers") else {}
+        has_ref = "r" if any(h.lower() == "referer" for h in hdrs) else "n"
+        # Header names (exclude cookie and host, lowercase, original order)
+        hdr_names = ",".join(
+            h.lower() for h in hdrs
+            if h.lower() not in ("cookie", "host")
+        )
+        # Cookie names
+        cookies = dict(request.cookies) if hasattr(request, "cookies") else {}
+        ck_names = ",".join(sorted(cookies.keys()))
+        hdr_count = min(len([h for h in hdrs if h.lower() not in ("cookie", "host")]), 99)
+        ck_count  = min(len(cookies), 99)
+        hdr_hash  = _hl.sha256(hdr_names.encode("utf-8", errors="replace")).hexdigest()[:12]
+        ck_hash   = _hl.sha256(ck_names.encode("utf-8", errors="replace")).hexdigest()[:12] if ck_names else "000000000000"
+        return f"{method}{version}{has_body}{has_ref}_{hdr_count:02d}{ck_count:02d}_{hdr_hash}_{ck_hash}"
+    except Exception:
+        return "error"
 
 
 async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
@@ -177,7 +205,7 @@ async def _record_chal_mint(ua: str, ip_tier: str, ja4: str, ip: str,
     q.append(n)
     while q and q[0] < n - SESSION_CHURN_WINDOW_S:
         q.popleft()
-    if len(q) > SESSION_CHURN_MAX:
+    if SESSION_CHURN_ENABLED and len(q) > SESSION_CHURN_MAX:
         slog("session_churn", level="warn", rid=rid, fp_hash=fp_h,
              ip_tier=ip_tier, ja4=ja4, count=len(q),
              window_s=SESSION_CHURN_WINDOW_S)

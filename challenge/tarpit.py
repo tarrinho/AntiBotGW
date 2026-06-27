@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 challenge/tarpit.py — AI-labyrinth / tarpit maze endpoint.
 Extracted from proxy.py as part of Phase 6 modular refactoring.
@@ -26,6 +24,14 @@ from config import *   # noqa: F401,F403
 from config import _TARPIT_TOPICS, _TARPIT_SENTENCES  # noqa: F401 — leading _ not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip
+
+
+# ── Per-IP concurrency cap ────────────────────────────────────────────────
+# Prevents a single IP from holding many open slow-drip connections at once
+# (resource exhaustion via deliberate tarpit self-targeting).
+_TARPIT_IP_SLOTS: dict[str, int] = {}
+_TARPIT_IP_LOCK = asyncio.Lock()
+_TARPIT_MAX_PER_IP = 4
 
 
 # ── Token helpers ─────────────────────────────────────────────────────────
@@ -119,6 +125,24 @@ async def tarpit_endpoint(request: web.Request) -> web.Response:
         raise web.HTTPNotFound()
 
     ip     = get_ip(request)
+
+    # Per-IP concurrency cap — reject fast if slot is full
+    async with _TARPIT_IP_LOCK:
+        if _TARPIT_IP_SLOTS.get(ip, 0) >= _TARPIT_MAX_PER_IP:
+            raise web.HTTPTooManyRequests()
+        _TARPIT_IP_SLOTS[ip] = _TARPIT_IP_SLOTS.get(ip, 0) + 1
+
+    try:
+        return await _tarpit_stream(request, ip, token, depth)
+    finally:
+        async with _TARPIT_IP_LOCK:
+            _TARPIT_IP_SLOTS[ip] = max(0, _TARPIT_IP_SLOTS.get(ip, 1) - 1)
+            if _TARPIT_IP_SLOTS[ip] == 0:
+                _TARPIT_IP_SLOTS.pop(ip, None)
+
+
+async def _tarpit_stream(request: web.Request, ip: str, token: str, depth: int) -> web.Response:
+    """Inner handler — called after the per-IP slot is acquired."""
     ua     = request.headers.get("User-Agent", "")
     # Late imports to avoid circular dependency (these live in proxy.py still)
     from identity import get_identity
@@ -157,8 +181,11 @@ async def tarpit_endpoint(request: web.Request) -> web.Response:
                  "X-Robots-Tag": "noindex,nofollow"}
     )
     await response.prepare(request)
-    for chunk in chunks:
-        await response.write(chunk)
-        await asyncio.sleep(delay)
-    await response.write_eof()
+    try:
+        for chunk in chunks:
+            await response.write(chunk)
+            await asyncio.sleep(delay)
+        await response.write_eof()
+    except ConnectionResetError:
+        pass  # bot disconnected mid-stream — normal for a tarpit
     return response

@@ -33,7 +33,6 @@ from config import (
     REDIRECT_MAZE_ENABLED,
     REDIRECT_MAZE_DEPTH,
     REDIRECT_MAZE_MIN_MS,
-    REDIRECT_MAZE_SCORE,
     ADMIN_NS,
 )
 from helpers import slog, get_ip

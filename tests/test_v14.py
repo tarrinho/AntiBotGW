@@ -41,8 +41,14 @@ def test_is_suspicious_body(proxy_module, body, ctype, expected):
 
 
 def test_body_pattern_off_by_default(proxy_module):
+    _fn_globals = proxy_module.is_suspicious_body.__globals__
+    _saved = _fn_globals.get("BODY_PATTERN_MATCH", False)
+    _fn_globals["BODY_PATTERN_MATCH"] = False
     proxy_module.BODY_PATTERN_MATCH = False
-    assert proxy_module.is_suspicious_body(b"' OR 1=1 --", "application/json") is False
+    try:
+        assert proxy_module.is_suspicious_body(b"' OR 1=1 --", "application/json") is False
+    finally:
+        _fn_globals["BODY_PATTERN_MATCH"] = _saved
 
 
 def test_body_pattern_decodes_percent_encoded_form(proxy_module):
@@ -518,6 +524,7 @@ def test_js_challenge_target_blocks_open_redirect(proxy_module):
             self.cookies = {}
             self.method = "GET"
             self.path = pq.split("?")[0]
+            self.remote = "1.2.3.4"
 
     try:
         # M1 protects against protocol-relative redirects (//host).

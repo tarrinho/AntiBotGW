@@ -1,4 +1,4 @@
-# AppSecGW 1.6.8 — turnkey docker-compose deployment.
+# AntiBot/WAF GW 1.6.8 — turnkey docker-compose deployment.
 #
 # What's bundled
 # ──────────────
@@ -46,7 +46,7 @@
 
 services:
   appsec-timescaledb:
-    image: timescale/timescaledb:latest-pg16
+    image: timescale/timescaledb:latest-pg16@sha256:51eb3bcdfc41f481c797026813d9d457fb5cbc8ea370a65640d8cda13a4040c1
     container_name: appsec-timescaledb
     restart: unless-stopped
     environment:
@@ -86,7 +86,16 @@ services:
   # header). The single volume holds /etc/crowdsec (config) + the local
   # decisions DB so bans persist across compose recreate.
   crowdsec:
-    image: crowdsecurity/crowdsec:latest
+    # 1.8.14 iter-18 — wrapped image with a `cscli` shim that skips
+    # `hub update` / `hub upgrade` calls when today's stamp already exists in
+    # /var/lib/crowdsec/data/.hub_update_stamp. Persistent volume holds the
+    # stamp, so a same-day restart re-downloads nothing; the next UTC midnight
+    # naturally invalidates it and the next start fetches fresh feeds.
+    # See ./crowdsec/Dockerfile.crowdsec-cached + cscli-shim.sh.
+    build:
+      context: ./crowdsec
+      dockerfile: Dockerfile.crowdsec-cached
+    image: crowdsec-cached:latest
     container_name: crowdsec
     restart: unless-stopped
     environment:
@@ -103,8 +112,8 @@ services:
       retries:  5
 
   appsec-antibot-gw:
-    image: appsec-antibot-gw:1.8.5
-    container_name: appsec-antibot-gw1.8.5
+    image: appsec-antibot-gw:1.9.8
+    container_name: appsec-antibot-gw1.9.8
     restart: unless-stopped
     depends_on:
       appsec-timescaledb:
@@ -152,6 +161,11 @@ services:
       # in .env to point elsewhere (e.g. managed Redis cloud).
       REDIS_URL: ${REDIS_URL:-redis://:${REDIS_PASSWORD}@appsecgw-redis:6379}
 
+      # ── 1.8.8 — Redis TLS enforcement ────────────────────────────────
+      # REDIS_REQUIRE_TLS defaults to true. Set false for local dev where
+      # the bundled Redis sidecar uses plain redis:// (no TLS).
+      REDIS_REQUIRE_TLS: ${REDIS_REQUIRE_TLS:-false}
+
       # ── 1.6.8 — CrowdSec (community blocklist) ───────────────────────
       # Default URL is the bundled sidecar. The bouncer key has to be
       # generated post-up (see compose header) — operator pastes it into
@@ -159,12 +173,17 @@ services:
       CROWDSEC_LAPI_URL: ${CROWDSEC_LAPI_URL:-http://crowdsec:8080}
       CROWDSEC_LAPI_KEY: ${CROWDSEC_LAPI_KEY:-}
 
-      # ── Pluggable event store (1.6.4 / 1.6.5) ────────────────────────
-      # Default backend is sqlite (zero-deps single-file). Flip to postgres
-      # via /__controls — the Timescale sidecar above is always running so
-      # the switch is one click + ~2 s container restart, no migration step
-      # required (events accumulate fresh in the chosen backend).
-      DB_BACKEND:   ${DB_BACKEND:-sqlite}
+      # ── Event store: POSTGRES-ONLY ───────────────────────────────────
+      # Single-DB mode: the active backend is auto-derived from POSTGRES_DSN.
+      #   POSTGRES_DSN set  → Postgres-only (this deployment).
+      #   POSTGRES_DSN unset → SQLite-only.
+      # The legacy DB_BACKEND env is IGNORED while POSTGRES_DSN is set, so it
+      # is intentionally NOT mapped here — setting it would be a no-op and
+      # misleading. SQLite is never a selectable backend in this mode; it is
+      # only an in-process emergency fallback if Postgres becomes unreachable,
+      # and the gateway auto-recovers back to Postgres once it is healthy again
+      # (no restart needed). To run SQLite-only instead, delete the
+      # appsec-timescaledb service + this POSTGRES_DSN line.
       POSTGRES_DSN: postgresql://${POSTGRES_USER:-appsec}:${POSTGRES_PASSWORD}@appsec-timescaledb:5432/${POSTGRES_DB:-appsec}
 
       # ── Logging ──────────────────────────────────────────────────────
@@ -180,7 +199,7 @@ services:
 
     read_only: true
     tmpfs:
-      - /tmp:size=16m,mode=1777,nosuid,nodev,noexec
+      - /tmp:size=64m,mode=1777,nosuid,nodev,noexec
     cap_drop:
       - ALL
     security_opt:
@@ -188,7 +207,12 @@ services:
     deploy:
       resources:
         limits:
-          memory: 256M
+          # 1.8.15 — raised 256M → 512M. With Postgres backend, ~170 hot-reload
+          # knobs, Redis mesh client, Tor exit list (~1.2k entries), and the
+          # ip_state/timeline structures, the previous 256M caused the kernel
+          # to swap-page the process under load — gateway felt sluggish. RSS
+          # high-water-mark is ~180M; 512M leaves real headroom.
+          memory: 512M
           cpus: "1.0"
           pids: 200
     volumes:

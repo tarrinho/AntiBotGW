@@ -60,6 +60,16 @@ def _make_admin_session(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
 def _run(coro):
     return asyncio.new_event_loop().run_until_complete(coro)
 
@@ -69,21 +79,36 @@ ADMIN_NS = "/antibot-appsec-gateway"
 
 
 def _seed_events(proxy_module, rows):
-    """Insert raw event rows into the test SQLite DB.
+    """Insert raw event rows into the active-backend events table.
     Each row: (ts, ip, ua, path, status, reason)
+
+    The agents-bucket endpoint reads events from the active backend, so under
+    the PG-mode test harness (POSTGRES_DSN set) these rows must land in
+    Postgres. db.conn.conn() targets the active backend and rewrites `?` → `%s`
+    on PG. The events table already exists on both backends (created at
+    startup), so we only need the CREATE on the SQLite path for the legacy
+    standalone-DB case.
     """
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS events "
-        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-        "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
-    )
-    conn.executemany(
-        "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
-        rows,
-    )
-    conn.commit()
-    conn.close()
+    from db.conn import active_backend
+    if active_backend() == "postgres":
+        # PG events.ts is timestamptz; the production path uses
+        # to_timestamp(epoch). Reuse pg_insert_event so the conversion + column
+        # set match production exactly. Row tuple: (ts, ip, ua, path, status, reason)
+        from db.postgres import pg_insert_event
+        for ts, ip, ua, path, status, reason in rows:
+            pg_insert_event(ts, ip, ua, path, int(status), reason)
+    else:
+        from db.conn import conn as _backend_conn
+        with _backend_conn(timeout=10) as conn:
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS events "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+                "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
+            )
+            conn.executemany(
+                "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
+                rows,
+            )
 
 
 # ── 1. agents-bucket returns gwmgmt key ──────────────────────────────────────
@@ -116,6 +141,12 @@ class TestAgentsBucketGwmgmt:
         """When no admin-namespace events exist in the bucket window,
         gwmgmt must be an empty list, not absent or None."""
         now = time.time()
+        # Establish the "no admin events" precondition on the active backend.
+        # In PG-only mode the events table lives in Postgres (not the per-test
+        # SQLite file the conftest wipes), so clear it here first.
+        from db.conn import conn as _backend_conn
+        with _backend_conn(timeout=10) as _wc:
+            _wc.execute("DELETE FROM events")
         _seed_events(proxy_module, [
             (now - 10, "1.2.3.4", "Mozilla/5.0", "/blog/post", 200, ""),
             (now - 20, "1.2.3.5", "Mozilla/5.0", "/about",     200, ""),
@@ -296,19 +327,35 @@ class TestServeMirrored404EmptyCache:
 
     def test_serve_mirrored_404_repopulates_cache_after_clear(self, proxy_module):
         """After _upstream_404_cache is cleared and _serve_mirrored_404 runs,
-        the cache must be repopulated (fetched_at and body keys present)."""
+        the cache must be repopulated.
+
+        iter-15 refactored `_upstream_404_cache` from a flat `{body, ctype,
+        status, fetched_at}` dict to a per-upstream nested dict
+        `{<upstream_url>: {body, ctype, status, fetched_at}}` so multi-vhost
+        deployments don't cross-pollute mirror bodies. The test now checks
+        the nested structure: at least one upstream entry must exist, and
+        that entry must carry both `body` and `fetched_at`.
+        """
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     proxy_module._upstream_404_cache.clear()
                     await c.get(NS + "/metrics")
-                    # After the request, cache should be repopulated
-                    assert "body" in proxy_module._upstream_404_cache, (
-                        "_upstream_404_cache must have 'body' after _serve_mirrored_404 refetch"
+                    # After the request, at least one per-upstream entry exists.
+                    cache = proxy_module._upstream_404_cache
+                    assert len(cache) > 0, (
+                        "_upstream_404_cache empty after request — "
+                        "_serve_mirrored_404 did not repopulate any vhost entry"
                     )
-                    assert "fetched_at" in proxy_module._upstream_404_cache, (
-                        "_upstream_404_cache must have 'fetched_at' after refetch"
+                    entry = next(iter(cache.values()))
+                    assert isinstance(entry, dict), (
+                        "_upstream_404_cache values must be per-vhost dicts "
+                        f"(got {type(entry).__name__})"
                     )
+                    assert "body" in entry, \
+                        "vhost entry must carry 'body' after refetch"
+                    assert "fetched_at" in entry, \
+                        "vhost entry must carry 'fetched_at' after refetch"
         _run(go())
 
 
@@ -329,7 +376,8 @@ class TestPathCategoryConfigToggle:
                     r = await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": ["/test-bypass/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -354,14 +402,16 @@ class TestPathCategoryConfigToggle:
                     await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": ["/to-remove/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     # Then clear
                     r = await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": []}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -383,7 +433,8 @@ class TestPathCategoryConfigToggle:
                     r = await c.post(
                         NS + "/config",
                         data=json.dumps({"JS_CHAL_OPEN_PATHS": ["/public-api/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200
@@ -425,7 +476,8 @@ class TestPathCategoryConfigToggle:
                     await c.post(
                         NS + "/config",
                         data=json.dumps({"BYPASS_PATHS": ["/reflected/"]}),
-                        headers={"Content-Type": "application/json"},
+                        headers={"Content-Type": "application/json",
+                                 **_csrf_hdr(proxy_module, cookie)},
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     r = await c.get(

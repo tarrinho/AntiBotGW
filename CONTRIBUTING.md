@@ -1,4 +1,4 @@
-# Contributing to AppSecGW
+# Contributing to AntiBot/WAF GW
 
 Thanks for helping out! This guide covers how to contribute and the one
 agreement you need to accept first.

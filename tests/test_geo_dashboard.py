@@ -179,18 +179,24 @@ class TestGeoPillHTML:
     def test_js_flip_logic_present(self, html):
         assert "classList.add('ready')" in html or 'classList.add("ready")' in html
 
-    def test_js_flip_sets_loading_ready_text(self, html):
-        assert "Loading Ready" in html
+    def test_js_flip_sets_ready_text(self, html):
+        # 1.9.5 — done-state text is "Ready" (was the "Loading Ready" typo, fixed).
+        assert '<span class="dot"></span>Ready' in html
+        assert "Loading Ready" not in html
 
     def test_js_flip_inside_double_raf(self, html):
         """Flip must be wrapped in double requestAnimationFrame to ensure DOM
         paint before state change (matching controls.html pattern)."""
         assert html.count("requestAnimationFrame") >= 2
 
-    def test_js_flip_idempotent_check(self, html):
-        """Guard with !s.classList.contains('ready') prevents re-ticks from
-        resetting the text after it has already been set."""
-        assert "classList.contains('ready')" in html
+    def test_ready_guard_only_protects_error_warning_states(self, html):
+        """1.9.5 — the `ready` class no longer latches the LOADING progress
+        (that froze the pill on 'Ready' and starved slow window-changes of
+        'Loading…' feedback). It now only guards the error / 'not loaded'
+        states from being overwritten by a stale ready-flip, and `_startLoadPct`
+        clears it on every fetch so progress shows again."""
+        assert "classList.contains('ready')" in html      # error/warning guards
+        assert "s.classList.remove('ready')" in html       # cleared on each fetch
 
     def test_pill_positioned_before_world_map_text(self, html):
         """The pill must appear before 'World-map of accesses' in source order
@@ -663,7 +669,7 @@ class TestGeoPillRegression:
     def test_geo_html_version_string_correct(self):
         """Version banner must match docker-compose image tag."""
         html = _GEO_HTML.read_text()
-        assert "AppSecGW_1.8.5" in html
+        assert "AntiBotWaf_GW_1.9.8" in html
 
     def test_geo_html_tick_function_present(self):
         """tick() is the polling function — the pill flip hangs off it."""

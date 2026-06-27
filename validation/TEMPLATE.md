@@ -1,4 +1,4 @@
-# AppSecGW build validation — v<VERSION>
+# AntiBot/WAF GW build validation — v<VERSION>
 
 | Field       | Value                          |
 |-------------|--------------------------------|

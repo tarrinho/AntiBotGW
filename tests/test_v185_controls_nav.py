@@ -112,10 +112,20 @@ def _dcl_block(src: str) -> str:
 
 
 def _split_pane_script(src: str) -> str:
-    """Return the Controls split-pane script block (the IIFE at the end)."""
+    """Return the Controls split-pane script block (the IIFE only).
+
+    Contract change (1.8.7+): additional <script> blocks (grouped-view engine,
+    posture radar) were appended AFTER the split-pane IIFE, each with its own
+    DOMContentLoaded. The helper must bound the returned slice to the split-pane
+    block's own </script> so _dcl_block()'s rfind() anchors on the split-pane
+    DOMContentLoaded — not the file's last one (which belongs to a later block).
+    """
     # The split-pane nav block starts with a distinctive comment
     idx = src.find("Controls split-pane navigation")
-    return src[idx:] if idx != -1 else ""
+    if idx == -1:
+        return ""
+    end = src.find("</script>", idx)
+    return src[idx:end] if end != -1 else src[idx:]
 
 
 # ═════════════════════════════════════════════════════════════════════════════

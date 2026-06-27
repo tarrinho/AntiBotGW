@@ -427,22 +427,30 @@ def test_path_hits_responds_quickly_with_large_dataset(proxy_module):
     Root cause of slowness: missing idx_events_path_ts index on events(path, ts)
     caused a full table scan; now offloaded to run_in_executor so the event loop
     is not blocked either."""
-    import sqlite3, time
-    db = proxy_module.DB_PATH
+    import time
     path = "/__qa_stress_path_hits__"
     now_ts = time.time()
-    conn = sqlite3.connect(db)
-    conn.executemany(
-        "INSERT INTO events(ts, ip, ua, path, method, status, reason) "
-        "VALUES (?,?,?,?,?,?,?)",
-        [
-            (now_ts - i * 17, f"10.{i//65536%256}.{i//256%256}.{i%256}",
-             "stress-UA", path, "GET", 200, "")
-            for i in range(5000)
-        ],
-    )
-    conn.commit()
-    conn.close()
+    # Backend-aware: path-hits reads events from the active backend, so under
+    # the PG-mode harness the seed must land in Postgres. PG events.ts is
+    # timestamptz; pg_insert_event applies to_timestamp(epoch).
+    from db.conn import conn as _backend_conn, active_backend
+    if active_backend() == "postgres":
+        from db.postgres import pg_insert_event
+        for i in range(5000):
+            pg_insert_event(now_ts - i * 17,
+                            f"10.{i//65536%256}.{i//256%256}.{i%256}",
+                            "stress-UA", path, 200, "", method="GET")
+    else:
+        with _backend_conn(timeout=30) as conn:
+            conn.executemany(
+                "INSERT INTO events(ts, ip, ua, path, method, status, reason) "
+                "VALUES (?,?,?,?,?,?,?)",
+                [
+                    (now_ts - i * 17, f"10.{i//65536%256}.{i//256%256}.{i%256}",
+                     "stress-UA", path, "GET", 200, "")
+                    for i in range(5000)
+                ],
+            )
     try:
         async def go():
             async with _spin_upstream() as up:
@@ -465,10 +473,8 @@ def test_path_hits_responds_quickly_with_large_dataset(proxy_module):
                     )
         _run(go())
     finally:
-        conn2 = sqlite3.connect(db)
-        conn2.execute("DELETE FROM events WHERE path = ?", (path,))
-        conn2.commit()
-        conn2.close()
+        with _backend_conn(timeout=30) as conn2:
+            conn2.execute("DELETE FROM events WHERE path = ?", (path,))
 
 
 # ── /secured/whoami ──────────────────────────────────────────────────────

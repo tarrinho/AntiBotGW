@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
-Anti-bot reverse proxy v1.8.4 — entry point only.
+Anti-bot reverse proxy v1.9.8 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -23,7 +21,6 @@ Internal endpoints (not proxied to upstream):
 
 import asyncio
 import json
-import sqlite3
 
 from aiohttp import web
 
@@ -59,7 +56,7 @@ from helpers import (  # noqa: F401
     _strip_admin_key_from_qs, _strip_own_session_cookie,
     _is_admin_path, _admin_path_is_public,
 )
-from identity import _sign_session, _verify_session
+from identity import _sign_session, _verify_session  # noqa: F401 — re-exported via proxy.* for tests + dashboard handlers
 from detection.canary import (  # noqa: F401
     _inject_honey_links, _inject_botd, _botd_token_for,
     inject_canary_probe, canary_probe_endpoint, check_canary_probe,
@@ -71,6 +68,7 @@ from detection.redirect_maze import (  # noqa: F401
 import detection.llm_heuristic as _llm_heuristic  # noqa: F401
 from core.proxy_handler import honey_probe_endpoint  # noqa: F401
 from detection.automation import automation_report_endpoint  # noqa: F401
+from detection.interaction import interaction_report_endpoint  # noqa: F401 — 1.8.6 interaction probe
 from detection.fp_enrichment import (  # noqa: F401
     fp_report_endpoint, _fp_token_for, _is_soft_renderer, _inject_fp_probe,
 )
@@ -82,7 +80,7 @@ from detection.cookie_lifecycle import (  # noqa: F401
 from detection.referer_chain import referer_ghost_check  # noqa: F401
 from detection.impossible_travel import impossible_travel_check  # noqa: F401
 from detection.paths import _bot_trap_triggered  # noqa: F401
-from admin.auth import _internal_authed, _admin_ip_allowed
+from admin.auth import _internal_authed, _admin_ip_allowed  # noqa: F401 — re-exported via proxy.*
 from admin.users import (  # noqa: F401
     _SESSION_CACHE, _SESSION_CACHE_READY, _SESSION_TTL,
     _new_sid, _session_sign, _session_parse, _session_revoke,
@@ -129,6 +127,7 @@ from config import (  # noqa: F401 — body/DLP functions with leading _ not in 
 from integrations.jwt import JWT_VALIDATE_PATHS  # noqa: F401 — tests access proxy.JWT_VALIDATE_PATHS
 from core.proxy_handler import (  # noqa: F401 — proxy handler private symbols
     _HOT_RELOAD_KNOBS, _ENV_PROVIDED_KNOBS,
+    _DB_LOAD_DENY,  # iter-9: trust-topology knobs that db_load_config refuses
     _detector_hits, _detector_latency, _detector_record,
     _reason_method,
 )
@@ -138,6 +137,13 @@ from reputation.maxmind import (  # noqa: F401
     _city_reader, _init_maxmind, _maxmind_refresh_loop, _refresh_ai_crawler_ranges,
 )
 from reputation.tor import _tor_refresh_loop  # noqa: F401
+from reputation.feeds import (  # noqa: F401
+    _feodo_refresh_loop, _cins_refresh_loop, _urlhaus_refresh_loop,
+    FEODO_ENABLED, CINS_ENABLED, URLHAUS_ENABLED,
+)
+from integrations.fingerproxy import (  # noqa: F401 — 1.8.14 Week 2
+    h2fp_signals, h2fp_stats, H2_SETTINGS_FP_ENABLED,
+)
 from integrations.ja4 import _refresh_ja4_denylist_loop  # noqa: F401
 from integrations.redis import _shared_init  # noqa: F401
 from dashboards.agents import _stealth_score  # noqa: F401 — tests access proxy._stealth_score
@@ -154,19 +160,117 @@ from admin.mesh import (  # noqa: F401 — gateway registry private symbols
     _GW_ID_RE, _MESH_SYNC_ELIGIBLE_KEYS, _mesh_sync_loop,
 )
 
+# ── Active-sessions dict unification ──────────────────────────────────────────
+# state._ACTIVE_SESSIONS is the canonical online-user dict; admin.users keeps a
+# private copy that gets bumped by _internal_authed / login / OIDC. The dashboard
+# user-list reads admin.users._ACTIVE_SESSIONS but auth code writes through
+# state._ACTIVE_SESSIONS, so the indicator silently shows everyone offline.
+# Force both modules to share the same dict object so writes via either path
+# are visible to readers via either path.
+try:
+    import state as _state_mod_active
+    import admin.users as _users_mod_active
+    import admin.auth as _auth_mod_active
+    import admin.oidc as _oidc_mod_active
+    _users_mod_active._ACTIVE_SESSIONS = _state_mod_active._ACTIVE_SESSIONS
+    _auth_mod_active._ACTIVE_SESSIONS  = _state_mod_active._ACTIVE_SESSIONS
+    _oidc_mod_active._ACTIVE_SESSIONS  = _state_mod_active._ACTIVE_SESSIONS
+except Exception:
+    pass
+
 # ── Module __setattr__ hook: propagate test patches to all submodules ─────────
 # When tests do `proxy_module.FLAG = value`, propagate to every loaded submodule
 # that has the same attribute so late-bound reads in those modules see the change.
 import sys as _sys_proxy
 import types as _types_proxy
 
+import builtins as _builtins_proxy
+
+# SECURITY: names that must NEVER propagate through _ProxyModule.__setattr__.
+# Setting these on proxy (e.g. test does `proxy.open = mock`) must NOT cascade
+# into other submodules where they could overwrite builtins-by-name reference
+# and break unrelated code.
+#
+# L7 fix: extended to cover scope-introspection / attribute helpers that a
+# test or compromised module could weaponise — overwriting `globals` /
+# `setattr` in a submodule could grant sandbox-escape primitives. Defence-
+# in-depth: a future-added builtin we forget is still blocked by the
+# __file__ first-party-only filter in __setattr__.
+_PROPAGATE_NEVER = frozenset({
+    # Code-execution primitives
+    "open", "exec", "eval", "compile", "breakpoint", "__import__",
+    # Scope / introspection
+    "globals", "locals", "vars", "dir",
+    # Attribute mutation
+    "getattr", "setattr", "delattr", "hasattr",
+    # Object construction
+    "__build_class__", "type", "object",
+    # Module-level dunders (proxy.py is a module, not a package —
+    # `__path__` only exists on packages; the dead-entries lint guard
+    # would flag it as a typo).
+    "__builtins__", "__name__", "__file__", "__loader__", "__spec__",
+    "__package__", "__doc__",
+})
+
+# M4 fix: derive the project root ONCE and check submodule files are
+# under it. Previous `/site-packages/` + `/python3` substring filter was
+# brittle: missed venv layouts at `/opt/myvenv/...`, false-positives on
+# any project file path containing `/python3`, false-negatives on Windows.
+import os as _os_proxy
+# NOTE: realpath() must apply to the FILE (which may be a symlink), then
+# dirname() of the result. The pytest conftest symlinks proxy.py into a
+# tmpdir; resolving the directory first would freeze on the tmpdir,
+# breaking propagation to submodules in the real project tree.
+# M7 fix: cover BOTH the symlink dir (proxy.py's lexical location) AND the
+# real source dir (after resolving symlinks). Modules may load from either
+# path depending on how they were imported. Previously both vars used
+# `dirname(realpath(...))` → identical values → the second entry in
+# _PROJECT_ROOTS was a wasted duplicate.
+#
+# Conftest scenario:
+#   /tmp/test-XXX/proxy.py  → symlink → /media/.../anti-bot-proxy/proxy.py
+#   _PROJECT_ROOT      = /media/.../anti-bot-proxy  (realpath; real source)
+#   _PROJECT_ROOT_LEX  = /tmp/test-XXX              (abspath; symlink dir)
+# Both must be in _PROJECT_ROOTS so submodules loaded from either path are
+# recognised as first-party.
+_PROJECT_ROOT = _os_proxy.path.dirname(
+    _os_proxy.path.realpath(_os_proxy.path.abspath(__file__))
+)
+_PROJECT_ROOT_LEX = _os_proxy.path.dirname(
+    _os_proxy.path.abspath(__file__)
+)
+# Deduplicate so the propagator's `any(...)` short-circuits on a real hit,
+# not on an identical compare. dict.fromkeys preserves order.
+_PROJECT_ROOTS = tuple(
+    dict.fromkeys((_PROJECT_ROOT, _PROJECT_ROOT_LEX)))
+
+
 class _ProxyModule(_types_proxy.ModuleType):
     def __setattr__(self, name, value):
         super().__setattr__(name, value)
+        if name in _PROPAGATE_NEVER:
+            return  # do not cascade dangerous builtins
         for _m in list(_sys_proxy.modules.values()):
             if (_m is not None
                     and _m is not _sys_proxy.modules.get(__name__)
+                    and _m is not _builtins_proxy
                     and hasattr(_m, name)):
+                _mn = getattr(_m, "__name__", "")
+                if _mn in ("builtins", "__main__"):
+                    continue
+                # First-party only: the module's __file__ must resolve
+                # under this project's root. Stdlib + venv + third-party
+                # packages live elsewhere and are skipped.
+                _mf = getattr(_m, "__file__", None)
+                if not _mf:
+                    continue  # built-in / frozen module — never first-party
+                try:
+                    _mf_real = _os_proxy.path.realpath(_mf)
+                except (OSError, ValueError):
+                    continue
+                if not any(_mf_real.startswith(_r + _os_proxy.sep)
+                           for _r in _PROJECT_ROOTS):
+                    continue
                 try:
                     setattr(_m, name, value)
                 except (AttributeError, TypeError):
@@ -179,6 +283,254 @@ if _this_proxy_mod is not None:
 
 # ── Startup / cleanup ──────────────────────────���──────────────────────────────
 
+async def _resume_pending_bg_migration():
+    """1.9.0 (F12) — execute a /__db-switch-scheduled historical-events
+    migration on the post-restart side. Reads the `pending_bg_migration`
+    config_kv marker (written by db_switch_endpoint before the os._exit),
+    claims the single-flight lock, runs the COPY in an executor against
+    the now-current backend, and clears the marker on success.
+
+    No-op when:
+      - marker absent (normal boot)
+      - _try_claim_bg_migration returns False (another worker already
+        claimed it)
+      - cutoff_ts older than 24 h (stale; clear and skip)"""
+    # iter-5 fix: read the marker from SQLite DIRECTLY, NOT via
+    # `open_conn()`. After db_load_secrets ran, POSTGRES_DSN is set and
+    # `active_backend()` returns "postgres" — but the F12 marker was
+    # written to SQLite config_kv (config_kv stays in SQLite across
+    # backends per the dual-write design). Routing through open_conn()
+    # would query PG config_kv, which is empty, and the marker would
+    # never be consumed.
+    try:
+        # iter-7: use _sqlite_connect() for WAL/pragma parity with the
+        # writer loop's own connection.
+        from db.sqlite import _sqlite_connect as _mig_sq
+        from config import DB_PATH as _DB_PATH_LOCAL
+        sconn = _mig_sq(_DB_PATH_LOCAL)
+        row = sconn.execute(
+            "SELECT value FROM config_kv WHERE key = ?",
+            ("pending_bg_migration",)
+        ).fetchone()
+        sconn.close()
+    except Exception:
+        return
+    if not row:
+        return
+    raw = row[0]
+    if not raw:
+        return
+    try:
+        pending = json.loads(raw)
+    except (ValueError, TypeError):
+        return
+    target = pending.get("target", "")
+    cutoff_ts = float(pending.get("cutoff_ts") or 0)
+    direction = pending.get("direction") or ""
+    if target not in ("sqlite", "postgres") or not cutoff_ts or not direction:
+        return
+    age_s = max(0.0, _t.time() - float(pending.get("scheduled_ts") or 0))
+    if age_s > 86_400:
+        print(f"[bg-migrate] dropping stale pending marker "
+              f"(age={age_s/3600:.1f}h, direction={direction})", flush=True)
+        if db_queue is not None:
+            try:
+                db_queue.put_nowait(("del_config", ("pending_bg_migration",)))
+            except asyncio.QueueFull:
+                pass
+        return
+    from db.postgres import (_try_claim_bg_migration,
+                              _full_migrate_background)
+    if not _try_claim_bg_migration(direction):
+        print(f"[bg-migrate] another worker already claimed "
+              f"{direction}; skipping", flush=True)
+        return
+    print(f"[bg-migrate] resuming deferred {direction} "
+          f"(cutoff_ts={cutoff_ts:.0f}, marker age={age_s:.0f}s)",
+          flush=True)
+
+    # 1.8.15 — flag the in-memory guard so an operator VACUUM (or DB switch)
+    # fired mid-migration short-circuits with 409 instead of contending for
+    # the exclusive lock. Cleared in the finally below.
+    try:
+        from core.proxy_handler import _BG_MIGRATION as _BGM
+        _BGM["running"] = True
+    except Exception:
+        _BGM = None
+
+    def _runner():
+        try:
+            _full_migrate_background(target, cutoff_ts)
+        finally:
+            if _BGM is not None:
+                _BGM["running"] = False
+            # iter-5 fix: clear the marker from SQLite directly (writer
+            # queue route via `del_config` would clear PG, not SQLite).
+            try:
+                # iter-7: _sqlite_connect() for WAL/pragma parity.
+                from db.sqlite import _sqlite_connect as _clr_sq
+                from config import DB_PATH as _DB_PATH_C
+                cconn = _clr_sq(_DB_PATH_C)
+                cconn.execute("DELETE FROM config_kv WHERE key = ?",
+                              ("pending_bg_migration",))
+                cconn.commit()
+                cconn.close()
+            except Exception as _del_err:
+                # Fall back to writer queue if direct write fails.
+                if db_queue is not None:
+                    try:
+                        db_queue.put_nowait(
+                            ("del_config", ("pending_bg_migration",)))
+                    except Exception:
+                        pass
+    # M-6 — Redis ban-flush retry loop (no-op when Redis unreachable).
+    await _startup_integrations_and_tasks()
+
+    asyncio.get_running_loop().run_in_executor(None, _runner)
+
+
+def _auto_import_on_first_pg_boot():
+    """1.9.1 — auto-run db.import on first boot after a 1.8.15→1.9.x
+    PG-mode upgrade, when:
+      • POSTGRES_DSN is set (callers guarantee this)
+      • Local SQLite at DB_PATH has user OR event rows (worth migrating)
+      • PG observational tables (clients + audit_events) are BOTH empty
+        — conservative: any pre-existing rows means we DON'T overwrite
+      • The `<DB_PATH>.pg_migrated` marker does NOT exist
+
+    Operator state (users / config / secrets / bans / ACLs / DLP / SIEM
+    / mesh) was mirrored to PG in 1.8.15's dual-write mode so it
+    survives the upgrade. This function specifically rescues the
+    observational tables (audit_events, clients, timeline, metrics_kv,
+    svc_metrics, abuseipdb_cache) that lived only in SQLite until 1.9.0
+    promoted them.
+
+    On success: writes the marker so subsequent boots skip. On error:
+    raises so the caller can log + carry on (boot must not crash).
+    """
+    import sqlite3 as _sq_ai
+    from pathlib import Path as _Path_ai
+
+    if not os.path.exists(DB_PATH):
+        return  # nothing to migrate
+    marker = DB_PATH + ".pg_migrated"
+    if os.path.exists(marker):
+        return  # already migrated (or operator opted out)
+
+    # Check (b) — SQLite worth migrating?
+    try:
+        _sc = _sq_ai.connect(DB_PATH, timeout=2)
+        _users = _sc.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        _events = _sc.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        _sc.close()
+    except Exception:
+        return  # SQLite unreadable → nothing to do
+    if _users == 0 and _events == 0:
+        # Empty SQLite — no point importing. Still stamp the marker
+        # so subsequent boots skip the check.
+        try:
+            with open(marker, "w") as _mf:
+                _mf.write("source SQLite was empty on first PG boot\n")
+        except OSError:
+            pass  # nosec B110
+        return
+
+    # Check (c) — PG observational tables truly empty?
+    from db.postgres import _postgres_load_module, POSTGRES_DSN as _pg_dsn
+    _pg = _postgres_load_module()
+    if _pg is None or not _pg_dsn:
+        return  # PG unavailable → defer to manual run
+    try:
+        with _pg.connect(_pg_dsn, connect_timeout=5) as _pc:
+            with _pc.cursor() as _cur:
+                _cur.execute("SELECT COUNT(*) FROM clients")
+                _clients_n = _cur.fetchone()[0]
+                _cur.execute("SELECT COUNT(*) FROM audit_events")
+                _audit_n = _cur.fetchone()[0]
+    except Exception as _e:
+        # Tables don't exist yet? db_init_postgres ran above so they
+        # should. If they don't, abort cleanly.
+        print(f"[db-import] PG observational table check failed: "
+              f"{type(_e).__name__}: {str(_e)[:120]} — skipping "
+              f"auto-import.", flush=True)
+        return
+    if _clients_n > 0 or _audit_n > 0:
+        # PG has pre-existing data — don't risk merge surprises. Mark
+        # so we don't re-check every boot.
+        try:
+            with open(marker, "w") as _mf:
+                _mf.write(
+                    f"PG already had observational data on first 1.9.1 "
+                    f"boot (clients={_clients_n}, audit={_audit_n})\n")
+        except OSError:
+            pass  # nosec B110
+        return
+
+    # All four conditions met — run db.import in-process.
+    print(f"[db-import] auto-import: SQLite has {_users} users + "
+          f"{_events} events; PG observational tables empty; running "
+          f"`python -m db.import` automatically.", flush=True)
+
+    # Load db.import module by path (its package name `db.import` uses
+    # the `import` reserved word so we go via importlib).
+    import importlib.util
+    _spec = importlib.util.spec_from_file_location(
+        "_db_import_autoboot",
+        str(_Path_ai(__file__).resolve().parent / "db" / "import.py"))
+    _mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_mod)
+    # Run the import. main() reads $DB_PATH + $POSTGRES_DSN from env;
+    # those are already set in this process. Returns 0 on success.
+    _rc = _mod.main([DB_PATH, "--skip-events"])
+    if _rc == 0:
+        print(f"[db-import] auto-import SUCCESS — stamping marker "
+              f"{marker}", flush=True)
+        try:
+            with open(marker, "w") as _mf:
+                _mf.write(
+                    "auto-imported from SQLite on first 1.9.1 boot\n")
+        except OSError:
+            pass  # nosec B110
+    else:
+        # Non-zero exit code — surface but don't crash.
+        print(f"[db-import] auto-import returned rc={_rc}. PG may be "
+              f"in a partially-imported state. Investigate, fix, then "
+              f"re-run `python -m db.import`. Marker NOT created so "
+              f"next boot will retry.", flush=True)
+
+
+async def _pg_recovery_loop():
+    """1.9.2 iter-21 — Postgres auto-recovery watchdog. When a Postgres failure (PG
+    container restart, network blip, password drift) disables the backend for
+    this process, the gateway silently degrades to SQLite — empty dashboards,
+    dead geo-data/event reads — and historically only an operator restart
+    brought it back. This loop probes the disabled backend every
+    PG_RECOVERY_PROBE_SECS and re-enables it automatically the moment a
+    `SELECT 1` succeeds. The probe is a no-op (returns instantly) while PG is
+    healthy, so there is zero steady-state cost. The blocking connect runs in a
+    thread executor so it never stalls the event loop."""
+    import asyncio as _aio
+    try:
+        from db.postgres import pg_maybe_recover, _PG_RECOVERY_PROBE_SECS
+    except Exception:
+        return
+    interval = _PG_RECOVERY_PROBE_SECS
+    loop = _aio.get_running_loop()
+    while True:
+        try:
+            await _aio.sleep(interval)
+            recovered = await loop.run_in_executor(None, pg_maybe_recover)
+            if recovered:
+                print("[db-pg] auto-recovery: Postgres backend re-enabled "
+                      "without restart", flush=True)
+        except _aio.CancelledError:
+            raise
+        except Exception:
+            # Never let the watchdog die — a transient error this tick must not
+            # stop future recovery attempts.
+            pass
+
+
 async def on_startup(app):
     """Initialise SQLite DB + spawn the async writer + load saved state."""
     global db_queue, db_writer_task, prune_task, service_metrics_task
@@ -186,8 +538,20 @@ async def on_startup(app):
     # proxy(), etc.) see any value set by tests or hot-reload, not the import-time snapshot.
     import core.proxy_handler as _cph
     _cph.UPSTREAM = UPSTREAM
+    # 1.9.7 — resolve OFFLINE_BG_TASKS early; it now also gates whether the
+    # heavy state rehydrate runs synchronously (tests) or is deferred to a
+    # background task (production, Option B — see the rehydrate block below).
+    import os as _os_offl
+    _offline_bg = _os_offl.environ.get(
+        "OFFLINE_BG_TASKS", "").lower() in ("1", "true", "yes")
     db_init()
-    db_load_state()
+    # 1.9.7 (Option B) — in production db_load_state is DEFERRED (background
+    # task scheduled after the bans rehydrate) so its full-table scans don't
+    # block aiohttp from accepting connections. Tests load it synchronously
+    # here, before _rehydrate_bans, so ip_state.clear() (clear_first=True)
+    # can't wipe rehydrated bans and each test sees a clean slate.
+    if _offline_bg:
+        db_load_state()
     # 1.6.5 — initialise MaxMind FIRST so that knob validators which gate on
     # `_city_reader is not None` (notably COUNTRY_BLOCK_ENABLED) see the
     # readers as loaded when db_load_config applies persisted values.
@@ -208,25 +572,202 @@ async def on_startup(app):
                     setattr(_mm_m, _mm_attr, _mm_val)
                 except (AttributeError, TypeError):
                     pass
+    # 1.9.0 (iter-5 ordering fix) — load DB-persisted secrets BEFORE the
+    # `if POSTGRES_DSN:` gate so a DSN persisted via /__db-switch (F14,
+    # lives in secrets_kv) is in scope when the schema-version check,
+    # db_init_postgres, and the F12 boot-resume hook run. Previously
+    # `db_load_secrets()` ran AFTER this block, so a restart following a
+    # SQLite→PG switch saw an empty env var, skipped the whole PG-init
+    # path, and the gateway came up on PG without re-running schema /
+    # without consuming the F12 deferred-migration marker.
+    db_load_secrets()
+    # Re-read POSTGRES_DSN from the (now propagated) module globals so the
+    # rest of this function uses the post-load value, not the import-time
+    # snapshot.
+    POSTGRES_DSN_NOW = globals().get("POSTGRES_DSN", "") or ""
     # 1.6.5 — initialise the Postgres event store schema whenever
     # POSTGRES_DSN is configured. Even when SQLite is the active backend,
     # the standby Postgres has its schema ready so the operator can flip
     # the switch on the Controls dashboard without first running migrate
     # commands. Best-effort: a misconfigured DSN logs a warning but the
     # gateway boots fine.
-    if POSTGRES_DSN and _postgres_available:
+    if POSTGRES_DSN_NOW:
+        # Upgrade-safety banner: if local SQLite still has user / config /
+        # event rows AND PG is being used as primary, the operator may be
+        # mid-upgrade from the iter-18 dual-write architecture. The SQLite
+        # file is preserved (no data loss) but is no longer read — dashboards
+        # repopulate from fresh PG writes. Critical operator state (users,
+        # sessions, config, secrets, bans, ACLs, DLP/SIEM rules) was already
+        # mirrored to PG in dual-write so it survives the upgrade.
+        # L2 fix: print the banner only ONCE per /data volume. After the
+        # operator has seen + acknowledged the upgrade, subsequent restarts
+        # are silent. The marker file lives next to DB_PATH so it travels
+        # with the volume — a fresh /data wipe will show the banner again,
+        # which is correct (operator should re-validate).
+        try:
+            import sqlite3 as _sq_upgrade
+            _marker = DB_PATH + ".pg_migrated"
+            if (os.path.exists(DB_PATH)
+                    and not os.path.exists(_marker)):
+                _c = _sq_upgrade.connect(DB_PATH, timeout=2)
+                _local_users = _c.execute(
+                    "SELECT COUNT(*) FROM users").fetchone()[0]
+                _local_events = _c.execute(
+                    "SELECT COUNT(*) FROM events").fetchone()[0]
+                _c.close()
+                if _local_users > 0 or _local_events > 0:
+                    print(f"[db-upgrade] POSTGRES_DSN is now set: PG is the "
+                          f"sole backend. Local SQLite at {DB_PATH} "
+                          f"({_local_users} users, {_local_events} events) "
+                          f"is preserved but unused. To downgrade, unset "
+                          f"POSTGRES_DSN. To migrate SQLite data into PG: "
+                          f"`python -m db.import`. To back PG up to SQLite: "
+                          f"`python -m db.export`. "
+                          f"(This banner won't repeat — see {_marker}.)",
+                          flush=True)
+                # Drop the marker so future restarts stay quiet.
+                try:
+                    with open(_marker, "w") as _mf:
+                        _mf.write("PG-only mode banner shown\n")
+                except OSError:
+                    pass  # nosec B110 — read-only /data is fine
+        except Exception:
+            pass  # nosec B110 — informational only
+        # PG-only migration Phase 4: when POSTGRES_DSN is set, PG is the
+        # sole backend. Fail-fast at boot if PG is unreachable so the
+        # orchestrator restarts us instead of silently degrading.
+        from db.postgres import _postgres_load_module as _pg_load_check
+        _pg_module = _pg_load_check()
+        if _pg_module is None:
+            print("FATAL: POSTGRES_DSN is set but psycopg is not installed. "
+                  "Install psycopg[binary] (or unset POSTGRES_DSN for "
+                  "SQLite mode).", flush=True)
+            raise SystemExit(2)
+        # H3 fix: on_startup is async — use `await asyncio.sleep` between
+        # retries instead of synchronous `time.sleep`, so the event loop
+        # can service other startup tasks scheduled concurrently and
+        # external observers (signal handlers, health probes) get cycles.
+        # L9 fix: reuse module-level _os_proxy instead of a function-local
+        # `import os as _os_pg` (lint smell, no shadow risk here).
+        _max_attempts = int(_os_proxy.environ.get("POSTGRES_BOOT_MAX_ATTEMPTS", "30"))
+        _backoff_s    = float(_os_proxy.environ.get("POSTGRES_BOOT_BACKOFF_S", "1.0"))
+        _last_err = None
+        for _att in range(1, _max_attempts + 1):
+            try:
+                with _pg_module.connect(POSTGRES_DSN_NOW, connect_timeout=5) as _probe:
+                    with _probe.cursor() as _cur:
+                        _cur.execute("SELECT 1")
+                        _cur.fetchone()
+                _last_err = None
+                break
+            except Exception as _e:
+                _last_err = _e
+                if _att < _max_attempts:
+                    if _att == 1 or _att % 5 == 0:
+                        print(f"[db-pg] boot-guard waiting for PG "
+                              f"(attempt {_att}/{_max_attempts}): "
+                              f"{type(_e).__name__}: {str(_e)[:100]}",
+                              flush=True)
+                    await asyncio.sleep(_backoff_s)
+        if _last_err is not None:
+            print(f"FATAL: POSTGRES_DSN is set but PG is unreachable after "
+                  f"{_max_attempts} attempts ({_backoff_s}s backoff). "
+                  f"Last error: {type(_last_err).__name__}: "
+                  f"{str(_last_err)[:200]}", flush=True)
+            raise SystemExit(3)
+        # Mark _postgres_available across modules.
+        import state as _state_pg, sys as _sys_pg
+        _state_pg._postgres_available = True
+        for _m in list(_sys_pg.modules.values()):
+            if _m is not None and hasattr(_m, '_postgres_available'):
+                try:
+                    setattr(_m, '_postgres_available', True)
+                except (AttributeError, TypeError):
+                    pass
+        # A5 fix — read pg_schema_versions BEFORE db_init_postgres
+        # re-stamps the current version. Compares MAX(version) against
+        # PG_SCHEMA_VERSION and refuses to boot on a multi-version
+        # skip (data-loss risk). Pure read; never mutates PG state.
+        try:
+            from db.postgres import check_pg_schema_version
+            _sv = check_pg_schema_version()
+            _sv_msg = _sv.get("msg") or ""
+            _sv_sev = _sv.get("severity", "info")
+            if _sv_sev == "error":
+                print(f"[db-pg] {_sv_msg}", flush=True)
+            elif _sv_sev == "warn":
+                print(f"[db-pg] {_sv_msg}", flush=True)
+            else:
+                print(f"[db-pg] schema-version: {_sv_msg}", flush=True)
+            if _sv.get("should_exit"):
+                raise SystemExit(
+                    int(_sv.get("exit_code") or 5))
+        except SystemExit:
+            raise
+        except Exception as _sv_err:
+            # A5 must never block boot for a check-side bug; log and
+            # carry on to db_init_postgres which has its own retry/heal.
+            print(f"[db-pg] schema-version check error "
+                  f"(non-fatal): {type(_sv_err).__name__}: "
+                  f"{str(_sv_err)[:120]}", flush=True)
         if db_init_postgres():
-            print(f"[db-pg] event store ready (active={DB_BACKEND})",
-                  flush=True)
+            print("[db-pg] PG-only mode active (POSTGRES_DSN set, "
+                  "schema ready)", flush=True)
         else:
-            print("[db-pg] init failed — events will only land in the "
-                  "active backend (SQLite) until a fresh restart", flush=True)
-    # Secrets first: credential-gated knob validators (e.g. ABUSEIPDB_ENABLED,
-    # TURNSTILE_ENABLED) read globals() of core.proxy_handler to check whether
-    # the matching API key is present. Loading secrets first + propagating via
-    # _refresh_integration_state ensures those values are in every module
-    # namespace before db_load_config runs its validators.
-    db_load_secrets()
+            print("FATAL: PG schema init failed. Check role privileges + "
+                  "psql logs for the DDL error.", flush=True)
+            raise SystemExit(4)
+        # 1.9.1 — auto-import from SQLite on first boot after upgrade.
+        # Triggers ONLY when:
+        #   1. POSTGRES_DSN is set (already true in this branch)
+        #   2. Local SQLite at DB_PATH exists with data
+        #   3. PG observational tables are completely empty
+        #   4. The `.pg_migrated` marker does NOT exist (one-shot per
+        #      /data volume; deleting the marker re-arms it)
+        # Auto-import failures NEVER crash boot — operator can run
+        # `python -m db.import` manually.
+        try:
+            _auto_import_on_first_pg_boot()
+        except Exception as _ai_err:
+            print(f"[db-import] auto-import skipped due to error: "
+                  f"{type(_ai_err).__name__}: {str(_ai_err)[:200]}. "
+                  f"Run `python -m db.import` manually if needed.",
+                  flush=True)
+        # 1.9.2 iter-23 — close any SQLite→Postgres event gap on boot. If the
+        # gateway was running on SQLite while POSTGRES_DSN was set (e.g. a stale
+        # DB_BACKEND=sqlite), events piled up locally and never reached PG. This
+        # imports every local event newer than PG's max(ts). No-op when there's
+        # no gap or no local SQLite; never crashes boot (auto-import above only
+        # fires when PG is empty, so this handles the non-empty case too).
+        try:
+            from db.postgres import _backfill_events_gap_from_sqlite
+            _bf = _backfill_events_gap_from_sqlite()
+            if _bf.get("copied"):
+                print(f"[db-backfill] imported {_bf['copied']} gap event(s) "
+                      f"from local SQLite into Postgres "
+                      f"(gap_total={_bf.get('gap_total')}, "
+                      f"capped={_bf.get('capped')})", flush=True)
+                if _bf.get("capped"):
+                    print("[db-backfill] WARNING: row cap hit — run "
+                          "`python -m db.import` to copy the remainder.",
+                          flush=True)
+            elif not _bf.get("ok"):
+                print(f"[db-backfill] skipped: {_bf.get('reason')}", flush=True)
+        except Exception as _bf_err:
+            print(f"[db-backfill] error (non-fatal): "
+                  f"{type(_bf_err).__name__}: {str(_bf_err)[:160]}", flush=True)
+    # 1.9.0 (iter-5) — db_load_secrets() now runs BEFORE the `if POSTGRES_DSN:`
+    # gate above. Don't re-run it here; the values are already propagated.
+    # 1.9.0 (F12) — resume any deferred full_migrate scheduled by the
+    # previous run's /__db-switch. The handler can no longer run the bg
+    # copy itself (os._exit(0) was racing the executor) so it persists a
+    # `pending_bg_migration` config_kv marker; we claim + execute here
+    # against the now-current backend, then clear the marker.
+    try:
+        await _resume_pending_bg_migration()
+    except Exception as _e:
+        print(f"[db-pg] WARN bg migrate resume failed: "
+              f"{type(_e).__name__}: {str(_e)[:120]}", flush=True)
     # 1.5.5 — load DB-persisted hot-reload knobs over env defaults so live
     # changes pushed via /__config survive restart.
     db_load_config()
@@ -246,8 +787,58 @@ async def on_startup(app):
                 pass
     db_writer_task = asyncio.create_task(db_writer_loop())
     # 1.8.5 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
+    # SECURITY-CRITICAL: stays SYNCHRONOUS (runs before the server accepts) so a
+    # banned IP can never slip through during the post-restart warm-up window.
     from db.sqlite import _rehydrate_bans
     _rehydrate_bans()
+    # 1.9.7 (Option B) — the remaining rehydrate work is dashboard-cosmetic and
+    # was the dominant cost of a slow boot (~17s db_load_state full-table scans
+    # + ~35s unbounded events scan on a large Postgres deployment), all of it
+    # blocking aiohttp from accepting → a Cloudflare 502 window on every
+    # upgrade. Defer it to a background task so the server accepts in ~3s; the
+    # dashboards fill in within a few seconds of serving. Bans (above) and the
+    # security path are unaffected. Tests run it synchronously (OFFLINE_BG_TASKS)
+    # for deterministic assertions; db_load_state already ran in that path.
+    #   - db_load_state(clear_first=False): never wipe the bans just rehydrated.
+    #   - rehydrate_timeline / rehydrate_events: trend chart + recent-event ring.
+    async def _deferred_state_rehydrate():
+        # Each step is a SYNCHRONOUS blocking DB read (full-table scans / an
+        # unbounded events query that can take tens of seconds on a large
+        # Postgres deployment). Run them in the default thread-pool executor
+        # via run_in_executor so the event loop keeps serving requests the
+        # whole time — running them inline here would block the loop and just
+        # convert the 502 into a multi-second stall. Steps run sequentially
+        # (one worker thread at a time). Note: these populate shared state
+        # dicts (ip_state/metrics/timeline) that dashboard *aggregation*
+        # endpoints iterate; during this one-time boot window a dashboard read
+        # could hit a mid-write dict and 500 (per-request isolated, self-heals
+        # on retry). The proxy decision path only does single-key ip_state
+        # lookups (GIL-atomic) and bans already rehydrated synchronously, so
+        # request filtering is unaffected. See validation §11b (residual risk).
+        import asyncio as _aio
+        import functools as _ft
+        from helpers import slog as _slog
+        from db.sqlite import (db_load_state as _dls,
+                               _rehydrate_timeline as _rht,
+                               _rehydrate_events as _rhe)
+        loop = _aio.get_event_loop()
+        for _name, _call in (("db_load_state", _ft.partial(_dls, clear_first=False)),
+                             ("rehydrate_timeline", _rht),
+                             ("rehydrate_events", _rhe)):
+            try:
+                await loop.run_in_executor(None, _call)
+            except Exception as _e:  # never let a rehydrate error kill serving
+                _slog("deferred_rehydrate_step_failed", level="warn",
+                      step=_name, error=str(_e)[:200])
+        _slog("deferred_rehydrate_done", level="info")
+    if _offline_bg:
+        # Tests: synchronous, original order. db_load_state already ran above
+        # (before bans); now seed the trend chart + recent-event ring.
+        from db.sqlite import _rehydrate_timeline, _rehydrate_events
+        _rehydrate_timeline()
+        _rehydrate_events()
+    else:
+        asyncio.create_task(_deferred_state_rehydrate())
     # 1.8.5 — start ip_state LRU eviction loop.
     from state import _ip_state_evict_loop as _evict_loop
     import state as _state_mod
@@ -271,7 +862,7 @@ async def on_startup(app):
     # message disappears once any user has actually logged in (same
     # condition as the login-page bootstrap hint).
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         seen = conn.execute(
             "SELECT COUNT(*) FROM users WHERE last_login_ts IS NOT NULL"
         ).fetchone()[0]
@@ -286,7 +877,10 @@ async def on_startup(app):
         if ADMIN_KEY_FROM_ENV:
             _bootstrap_pw_line = "   pass: see your ADMIN_KEY env var"
         else:
-            _bootstrap_pw_line = f"   pass: {INTERNAL_KEY[:4]}***  (read {_KEY_FILE})"
+            # Info-leak fix: never print any prefix of INTERNAL_KEY to the
+            # container log. Operator reads the full key from the on-disk
+            # file. Even 4 chars leak ~24 bits of entropy.
+            _bootstrap_pw_line = f"   pass: (auto-generated; read {_KEY_FILE})"
         print(f"  ║ {_bootstrap_pw_line:<57}║")
         print("  ║   then change the password in Settings → Users           ║")
         print("  ╚══════════════════════════════════════════════════════════╝",
@@ -300,36 +894,88 @@ async def on_startup(app):
               f"cache {CROWDSEC_CACHE_SECS}s", flush=True)
     # 1.5.4: prime upstream 404 cache so blocked admin requests mirror it
     if await _fetch_upstream_404():
-        print(f"[upstream-404] cached: status={_upstream_404_cache['status']} "
-              f"size={len(_upstream_404_cache['body'])}b "
-              f"ctype={_upstream_404_cache['ctype'][:40]}", flush=True)
+        # 1.8.15 — cache is keyed by upstream (vhost isolation); pick any slot
+        _slot = next(iter(_upstream_404_cache.values()), None) if _upstream_404_cache else None
+        if _slot and _slot.get("body") is not None:
+            print(f"[upstream-404] cached: status={_slot.get('status', 0)} "
+                  f"size={len(_slot.get('body') or b'')}b "
+                  f"ctype={(_slot.get('ctype') or '')[:40]}", flush=True)
+        else:
+            print("[upstream-404] cached (empty body)", flush=True)
     else:
         print("[upstream-404] WARN: prime fetch failed; will retry hourly. "
               "Falling back to plain 'Not Found' until refreshed.", flush=True)
-    asyncio.create_task(_periodic_404_refresh_loop())
+    # OFFLINE_BG_TASKS=1 (set by tests/conftest.py) skips every periodic
+    # loop that issues outbound HTTPS so the test suite doesn't leak
+    # aiohttp ClientSessions to Cloudflare anycast IPs.
+    # (_offline_bg is resolved once at the top of on_startup — see 1.9.7 note.)
+    if not _offline_bg:
+        asyncio.create_task(_periodic_404_refresh_loop())
+        # 1.8.15 — daily scheduled VACUUM (no-op when VACUUM_DAILY_AT="" or
+        # backend != sqlite). Respects manual-VACUUM + migration locks.
+        from core.proxy_handler import _vacuum_scheduler_loop
+        asyncio.create_task(_vacuum_scheduler_loop())
     prune_task = asyncio.create_task(_prune_state_loop())
     service_metrics_task = asyncio.create_task(_sample_service_metrics_loop())
     # 1.8.5 Week 4 — Task K: alerting thresholds background task
     from core.alerting import _alerting_loop
     asyncio.create_task(_alerting_loop())
-    # 1.5.4 — self-maintaining MaxMind dbs (no host-side cron needed when
-    # MAXMIND_LICENSE_KEY is set; checks daily, refreshes when >30d old).
-    asyncio.create_task(_maxmind_refresh_loop())
-    # 1.6.0 — Tor exit-list weekly refresh (no-op until TOR_BLOCK_ENABLED=1).
-    asyncio.create_task(_tor_refresh_loop())
+    # 1.9.2 iter-21 — Postgres auto-recovery watchdog. Re-enables the PG backend without
+    # an operator restart once Postgres is reachable again after a failure
+    # (container restart / network blip / fixed password). Started whenever a
+    # Postgres DSN is configured; it self-no-ops while PG is healthy.
+    try:
+        import db.postgres as _pgmod_for_recovery
+        _pg_dsn_for_recovery = getattr(_pgmod_for_recovery, "POSTGRES_DSN", "") or ""
+    except Exception:
+        _pg_dsn_for_recovery = ""
+    if _pg_dsn_for_recovery:
+        pg_recovery_task = asyncio.create_task(_pg_recovery_loop())  # noqa: F841
+    if not _offline_bg:
+        # 1.5.4 — self-maintaining MaxMind dbs.
+        asyncio.create_task(_maxmind_refresh_loop())
+        # 1.6.0 — Tor exit-list weekly refresh.
+        asyncio.create_task(_tor_refresh_loop())
+        # 1.8.14 — threat-intel feed refresh loops
+        if FEODO_ENABLED:
+            asyncio.create_task(_feodo_refresh_loop())
+        if CINS_ENABLED:
+            asyncio.create_task(_cins_refresh_loop())
+        if URLHAUS_ENABLED:
+            asyncio.create_task(_urlhaus_refresh_loop())
     # 1.5.0: optional shared-state connect. Failures degrade to no-op so
     # an unreachable Redis never prevents the gateway from coming up.
     await _shared_init()
-    # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
-    asyncio.create_task(_refresh_ja4_denylist_loop())
-    # 1.6.10 — fetch AI crawler IP ranges (OpenAI gptbot-ranges.txt) at startup;
-    # refreshes every 24 h. No-op when AI_CRAWLER_VERIFY_ENABLED=0.
-    if AI_CRAWLER_VERIFY_ENABLED:
-        asyncio.create_task(_refresh_ai_crawler_ranges())
-    # 1.6.7 — mesh-sync of integration secrets (no-op without REDIS_URL).
-    global _mesh_sync_task
-    _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
-    print(f"[db] persistence active → {DB_PATH}")
+    if not _offline_bg:
+        # 1.5.0: poll the shared JA4_DENY_LIST every 30 s (no-op when no Redis).
+        asyncio.create_task(_refresh_ja4_denylist_loop())
+        # 1.6.10 — fetch AI crawler IP ranges (OpenAI gptbot-ranges.txt) at startup;
+        # refreshes every 24 h. No-op when AI_CRAWLER_VERIFY_ENABLED=0.
+        if AI_CRAWLER_VERIFY_ENABLED:
+            asyncio.create_task(_refresh_ai_crawler_ranges())
+        # 1.6.7 — mesh-sync of integration secrets (no-op without REDIS_URL).
+        global _mesh_sync_task
+        _mesh_sync_task = asyncio.create_task(_mesh_sync_loop())
+    else:
+        print("[bg-tasks] OFFLINE_BG_TASKS=1 — skipping net refresh loops "
+              "(MaxMind/Tor/JA4/AI-crawler/mesh)", flush=True)
+    # Backend-aware banner. In PG-only mode the local SQLite file at DB_PATH
+    # STILL exists (it backs the DSN/secrets bootstrap + the dual-write standby
+    # schema) but it is NOT the active event store — printing only its path here
+    # made operators think the gateway runs on SQLite when it doesn't. We reach
+    # this line only after db_init_postgres() succeeded (a PG init failure exits
+    # earlier), so active_backend()=="postgres" reliably means PG is live.
+    try:
+        from db import active_backend as _active_be
+        _db_backend = _active_be()
+    except Exception:
+        _db_backend = "sqlite"
+    if _db_backend == "postgres":
+        print(f"[db] persistence active → Postgres (active event store; "
+              f"POSTGRES_DSN set) · local SQLite {DB_PATH} retained for "
+              f"bootstrap/standby only, not the live DB")
+    else:
+        print(f"[db] persistence active → SQLite {DB_PATH}")
     print(f"[svc-metrics] sampling every {SERVICE_METRICS_INTERVAL}s, "
           f"keeping {SERVICE_METRICS_RETENTION} samples")
     if JS_CHALLENGE and not TURNSTILE_ENABLED:
@@ -344,10 +990,54 @@ async def on_startup(app):
         print("[js-challenge] active (Turnstile-backed cookie gate)",
               flush=True)
 
+    # 1.8.14 — register detector health surfaces for the threat-intel feeds
+    # (and a few related integrations) so the dashboards reflect live state.
+    try:
+        from state import set_detector_health
+        set_detector_health("feodo_feed",   FEODO_ENABLED)
+        set_detector_health("cins_feed",    CINS_ENABLED)
+        set_detector_health("urlhaus_feed", URLHAUS_ENABLED)
+        set_detector_health("h2_settings_fp", H2_SETTINGS_FP_ENABLED)
+    except Exception:
+        pass
+
+
+async def _redis_ban_flush_loop() -> None:
+    """M-6 — Background coroutine: retry pending Redis bans after transient failures.
+
+    Stub wrapper — delegates to integrations.redis._redis_ban_flush_loop when
+    available, otherwise no-ops so the gateway boots cleanly without Redis.
+    """
+    try:
+        from integrations.redis import _redis_ban_flush_loop as _impl
+    except Exception:
+        return
+    try:
+        await _impl()
+    except Exception:
+        return
+
+
+async def _startup_integrations_and_tasks():
+    """Spawn background tasks that depend on third-party integrations.
+
+    Currently just starts the Redis ban-flush retry loop — the rest of the
+    integration warm-up still lives in on_startup() for historical reasons,
+    but this helper is the canonical place new periodic tasks should hang
+    off so on_startup stays readable.
+    """
+    asyncio.create_task(_redis_ban_flush_loop())
+
 
 async def on_cleanup(app):
     """Flush queue and close DB writer cleanly."""
     global prune_task, service_metrics_task
+    # 1.9.5 perf #1 — close the shared pooled upstream session on shutdown.
+    try:
+        from core.proxy_handler import _close_upstream_session
+        await _close_upstream_session()
+    except Exception:
+        pass
     if prune_task:
         prune_task.cancel()
     if service_metrics_task:
@@ -372,7 +1062,9 @@ async def on_cleanup(app):
 # ── Application factory ───────────────────────────────────────────────────────
 
 def make_app() -> web.Application:
-    app = web.Application(middlewares=[cost_meter, session_cookie_finalizer, protect])
+    # 1.9.7 — security_headers is OUTERMOST so it stamps baseline headers on
+    # every final response (including the proxied upstream root).
+    app = web.Application(middlewares=[security_headers, cost_meter, session_cookie_finalizer, protect])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
@@ -395,6 +1087,8 @@ def make_app() -> web.Application:
         ("solver",             "GET",  solver_endpoint,               False),
         ("botd-report",        "POST", botd_report_endpoint,          False),
         ("automation-report",  "POST", automation_report_endpoint,    False),
+        # 1.8.6 — behavioural interaction probe (mouse/scroll/keys telemetry)
+        ("interaction-report", "POST", interaction_report_endpoint,   False),
         # 1.7.2 — canvas/WebGL fingerprint report + Service Worker
         ("fp-report",          "POST", fp_report_endpoint,            False),
         ("sw.js",              "GET",  sw_js_endpoint,                False),
@@ -411,6 +1105,8 @@ def make_app() -> web.Application:
         ("metrics",           "GET",    metrics_endpoint,                      True),
         ("unban",             "GET",    unban_endpoint,                        True),
         ("unban",             "POST",   unban_endpoint,                        True),
+        ("bans",              "DELETE", bulk_unban_endpoint,                   True),
+        ("bans",              "POST",   bulk_unban_endpoint,                   True),
         ("ban",               "GET",    ban_endpoint,                          True),
         ("ban",               "POST",   ban_endpoint,                          True),
         ("scoring",           "GET",    scoring_endpoint,                      True),
@@ -429,8 +1125,12 @@ def make_app() -> web.Application:
         ("lists-snapshot",    "GET",    lists_snapshot_endpoint,               True),
         ("db-test",           "GET",    db_test_endpoint,                      True),
         ("db-switch",         "POST",   db_switch_endpoint,                    True),
+        # 1.9.0 — operator-visible progress of the bg DB migration launched
+        # by /db-switch?full_migrate=true. Read-only — reads db.postgres._BG_MIGRATION.
+        ("db-migration-status", "GET",  db_migration_status_endpoint,          True),
         ("disk-stats",        "GET",    disk_stats_endpoint,                   True),
         ("db-vacuum",         "POST",   db_vacuum_endpoint,                    True),
+        ("db-vacuum-history", "GET",    db_vacuum_history_endpoint,            True),
         ("maxmind-fetch",     "POST",   maxmind_fetch_endpoint,                True),
         ("external",          "GET",    external_endpoint,                     True),
         ("integration-check", "GET",    integration_check_endpoint,            True),
@@ -446,11 +1146,17 @@ def make_app() -> web.Application:
         ("secrets",           "DELETE", secrets_endpoint,                      True),
         ("config",            "GET",    config_endpoint,                       True),
         ("config",            "POST",   config_endpoint,                       True),
+        ("ui-theme",          "GET",    ui_theme_endpoint,                     True),
+        ("ui-theme",          "POST",   ui_theme_endpoint,                     True),
         ("agents",            "GET",    agents_dashboard_endpoint,             True),
         ("agents-data",       "GET",    agents_data_endpoint,                  True),
         ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),
         ("service",           "GET",    service_dashboard_endpoint,            True),
         ("service-data",      "GET",    service_metrics_data_endpoint,         True),
+        ("honeypots",         "GET",    honeypots_dashboard_endpoint,          True),
+        ("honeypots-data",    "GET",    honeypots_data_endpoint,               True),
+        ("attack-playbook",   "GET",    attack_playbook_endpoint,              True),
+        ("honey-suggest",     "GET",    honey_suggest_endpoint,                True),
         ("controls",          "GET",    controls_dashboard_endpoint,           True),
         ("settings",          "GET",    settings_dashboard_endpoint,           True),
         ("settings-export",   "GET",    settings_export_endpoint,              True),
@@ -482,6 +1188,8 @@ def make_app() -> web.Application:
         # ── 1.8.4 — SIEM Security Event Center ──────────────────────────
         ("siem",                     "GET",    siem_dashboard_endpoint,               True),
         ("siem-data",                "GET",    siem_data_endpoint,                    True),
+        # ── 1.8.11 QW-4 — Audit log export ─────────────────────────────
+        ("audit-log-export",         "GET",    audit_log_export_endpoint,             True),
     ]
 
     _METHOD_MAP = {
@@ -516,6 +1224,7 @@ def make_app() -> web.Application:
     # 1.6.7 — Login flow + Users CRUD ────────────────────────────────
     app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
+    app.router.add_post (PUBLIC + "/login/totp", totp_verify_endpoint)  # 1.9.8 — 2FA step-2 (login.html posts here)
     app.router.add_post (PUBLIC + "/logout", logout_endpoint)
     # 1.8.5 — OIDC/Keycloak SSO (both public — no session cookie before login)
     app.router.add_get  (PUBLIC + "/auth/oidc/login",    oidc_login_endpoint)
@@ -619,9 +1328,12 @@ def _admin_ip_allowed(request) -> bool:
     """_admin_ip_allowed reading ADMIN_ALLOWED_NETS from proxy globals."""
     import ipaddress as _ipa
     from helpers import get_ip as _get_ip_helper
+    # F-06: fail-CLOSED when the allowlist is empty. Previously this
+    # returned True (everyone admin), turning the gateway into an open
+    # control plane the moment an operator forgot to populate the list.
     nets = globals().get("ADMIN_ALLOWED_NETS", [])
     if not nets:
-        return True
+        return False
     try:
         ip = _ipa.ip_address(_get_ip_helper(request))
     except (ValueError, TypeError):
@@ -713,6 +1425,15 @@ def _eval_custom_rules(request, ip: str):
                 hdr_name = k[7:]
                 hdr_val = (headers.get(hdr_name) or "")
                 if str(want).lower() not in hdr_val.lower():
+                    ok = False
+                    break
+        if ok:
+            for k, want in cond.items():
+                if not k.startswith("query."):
+                    continue
+                qname = k[6:]
+                qval = (query.get(qname) or "") if hasattr(query, "get") else ""
+                if str(want) != str(qval):
                     ok = False
                     break
         if ok:
@@ -978,10 +1699,23 @@ if _cph_gip.__dict__.get("get_ip") is _h_gip_patch.__dict__.get("get_ip"):
 
 
 if __name__ == "__main__":
+    # 1.9.7 — SIGUSR1 dumps ALL thread stacks to stderr (→ docker logs) WITHOUT
+    # stopping the process. Lets an operator capture exactly what the single
+    # event loop is stuck on during a stall (e.g. a synchronous psycopg call):
+    #     docker kill -s USR1 <container>     # then read `docker logs`
+    # `chain=False` so we don't disturb any default handler; safe in prod.
+    try:
+        import faulthandler as _fh, signal as _sig
+        _fh.register(_sig.SIGUSR1, all_threads=True, chain=False)
+        print("[diag] SIGUSR1 → thread-stack dump enabled "
+              "(docker kill -s USR1 <container> to capture a stall)", flush=True)
+    except Exception:
+        pass
     if ADMIN_KEY_FROM_ENV:
         key_line = "supplied via ADMIN_KEY env"
     else:
-        key_line = f"auto-generated; first 4 chars: {INTERNAL_KEY[:4]}***  (read /data/.admin_key)"
+        # Info-leak fix: do not print any prefix of INTERNAL_KEY.
+        key_line = "auto-generated  (read /data/.admin_key)"
     print(f"  ╔══════════════════════════════════════════════════════════╗")
     print(f"  ║ {GW_VERSION:<10}     →  {UPSTREAM:<37} ║")
     print(f"  ║ Listen: http://{LISTEN_HOST}:{LISTEN_PORT}{' '*36}║")
