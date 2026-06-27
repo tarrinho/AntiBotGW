@@ -1,5 +1,10 @@
 # AntiBot/WAF GW — Improvement Proposals
 
+> **Historical snapshot — point-in-time review as of v1.8.9 (2026-05-22).**
+> This is a dated proposals document, intentionally **not** maintained per release;
+> some items may already be implemented in later versions. For current state see
+> `CHANGELOG.md` and `MANUAL.md`.
+
 Reviewed against v1.8.9. Organized by tier: **quick win** (1–2 days), **medium** (1 week),
 **strategic** (2+ weeks). Within each tier, ordered by impact.
 
