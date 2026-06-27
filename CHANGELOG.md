@@ -37,6 +37,17 @@ Author: Pedro Tarrinho
     `_validate_vhost_hostname`, `core/proxy_handler.py` `_HOT_RELOAD_KNOBS`.)
 
 ### Fixed
+- **Publish pipeline now reliably updates BOTH GitHub repos.** `copy-to-github.sh`
+  hard-assigned `DEST` to the corporate path unconditionally, ignoring the
+  `DEST=` override `publish.sh` passes per repo — so every copy (including the
+  "personal" pass) landed in corporate and the personal repo silently drifted
+  ~13 versions behind (stuck at `AppSecGW_1.8.5`). Now `DEST="${DEST:-…}"` honors
+  the override. Also: `publish.sh apply_one` pushes whenever local is ahead of
+  origin (self-heals a prior failed push, not just new staged changes); a
+  per-repo **version gate** (aborts if the copied `config.py` version ≠ source)
+  and a **cross-repo parity** check (both staged trees compared by path+hash)
+  were added; and the `copy-to-github.sh` "Next steps" commit hint is derived
+  from `config.py` instead of a frozen `v1.8.7`.
 - **Default ports (`:80`/`:443`) are normalised to portless in port-aware mode.**
   Browsers and reverse proxies (incl. Cloudflare) send `Host: site.com` — no
   port — for default-port traffic, so a port-aware vhost keyed `site.com:443`
