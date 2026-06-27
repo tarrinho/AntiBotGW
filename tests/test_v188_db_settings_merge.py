@@ -130,14 +130,19 @@ class TestDbLoadDbEnhanced:
     def test_load_db_checks_migration_on_load(self):
         idx = _SRC.find("async function loadDb")
         assert idx != -1
-        snippet = _SRC[idx:idx+800]
+        # iter-18: 1.8.14-era VACUUM history block was inserted into loadDb()
+        # before the migration-poll call (loadVacuumHistory + comments now
+        # occupy ~250 extra chars). Bumped 800 → 1500 so `_pollMigOnce`
+        # stays in frame; intent (must poll on initial load) preserved.
+        snippet = _SRC[idx:idx+1500]
         assert "_pollMigOnce" in snippet, \
             "loadDb() must poll migration status on initial load"
 
     def test_load_db_starts_poll_if_running(self):
         idx = _SRC.find("async function loadDb")
         assert idx != -1
-        snippet = _SRC[idx:idx+1100]
+        # iter-18: same widening as test_load_db_checks_migration_on_load.
+        snippet = _SRC[idx:idx+1500]
         assert "_startMigPoll" in snippet, \
             "loadDb() must start the migration poll if mig.running is true"
 

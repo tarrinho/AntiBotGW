@@ -1,10 +1,9 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # admin/users.py — Phase 8: dashboard user accounts + session management
 # Extracted from proxy.py lines 11621–13155 area
 import base64 as _b64  # noqa: F401
 import time as _t  # noqa: F401
 from config import *   # noqa: F401,F403
+from db import open_conn
 from config import _DASHBOARDS_DIR  # noqa: F401 — underscore not exported by *
 from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip  # noqa: F401
@@ -166,6 +165,17 @@ def _session_verify(token: str) -> str | None:
         return None
     if cached.get("expires_ts", 0) < _t.time():
         return None
+    # 1.9.8 SECURITY — absolute session lifetime. Even if the sliding
+    # expires_ts keeps getting refreshed, a session must die
+    # SESSION_ABSOLUTE_TIMEOUT seconds after it was first created. Read via the
+    # config module so a runtime/Settings change (and tests) take effect.
+    # created_ts==0 (legacy rows minted before this field was persisted) is
+    # treated as "unknown" and not rejected.
+    import config as _cfg_abs
+    _created = cached.get("created_ts", 0) or 0
+    _abs = getattr(_cfg_abs, "SESSION_ABSOLUTE_TIMEOUT", 8 * 3600)
+    if _created and (_t.time() - _created) > _abs:
+        return None
     return username
 
 
@@ -178,10 +188,14 @@ def _session_cache_load() -> None:
     and after a writer-loop refresh. O(active_sessions) reads."""
     global _SESSION_CACHE_READY
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            "SELECT sid, username, expires_ts, status FROM user_sessions "
+            # 1.9.8 — also load created_ts + csrf_nonce so the absolute-timeout
+            # clock survives a restart (otherwise it silently reset to "now" on
+            # every boot) and the csrf_nonce isn't dropped on rehydrate.
+            "SELECT sid, username, expires_ts, status, created_ts, csrf_nonce "
+            "FROM user_sessions "
             "WHERE status = 'active' AND expires_ts > ?",
             (_t.time(),)).fetchall()
         conn.close()
@@ -191,10 +205,13 @@ def _session_cache_load() -> None:
         return
     fresh = {}
     for r in rows:
+        _keys = r.keys()
         fresh[r["sid"]] = {
             "username":   r["username"],
             "expires_ts": float(r["expires_ts"] or 0),
             "revoked":    False,
+            "created_ts": float((r["created_ts"] if "created_ts" in _keys else 0) or 0),
+            "csrf_nonce": (r["csrf_nonce"] if "csrf_nonce" in _keys else "") or "",
         }
     _SESSION_CACHE.clear()
     _SESSION_CACHE.update(fresh)
@@ -209,17 +226,29 @@ def _session_create(username: str, ip: str, user_agent: str) -> str:
     sid = _new_sid()
     n = _t.time()
     expires_ts = n + _SESSION_TTL
+    # 1.9.7 SECURITY — per-session random CSRF nonce (independent of
+    # SESSION_KEY/sid), stored in the cache + persisted so it survives a
+    # restart. The agw_csrf cookie is set to this value; _csrf_token_valid
+    # compares against it. Replaces the derivable HMAC(SESSION_KEY, sid) token
+    # (defence in depth — a leaked SESSION_KEY no longer yields valid CSRF
+    # tokens for every sid).
+    import secrets as _secrets_sc
+    csrf_nonce = _secrets_sc.token_urlsafe(24)
     if db_queue is not None:
         try:
             db_queue.put_nowait((
                 "user_session_create",
+                # 8-tuple — trailing slot is the csrf_nonce (PG drops it,
+                # SQLite stores it; rehydrated by _session_cache_load).
                 (sid, username, ip or "", (user_agent or "")[:512],
-                 n, n, expires_ts),
+                 n, n, expires_ts, csrf_nonce),
             ))
         except asyncio.QueueFull:
             pass
     _SESSION_CACHE[sid] = {
         "username": username, "expires_ts": expires_ts, "revoked": False,
+        # created_ts powers the absolute-timeout check in _session_verify.
+        "created_ts": n, "csrf_nonce": csrf_nonce,
     }
     return _session_sign(username, sid=sid)
 
@@ -280,7 +309,7 @@ def _session_touch(sid: str) -> None:
 
 def _user_load(username: str) -> dict | None:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM users WHERE username = ?",
                             (username,)).fetchone()
@@ -292,7 +321,7 @@ def _user_load(username: str) -> dict | None:
 
 def _user_load_all() -> list[dict]:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT username, role, status, created_ts, updated_ts, "
@@ -306,7 +335,7 @@ def _user_load_all() -> list[dict]:
 
 def _user_count() -> int:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         n = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
         conn.close()
         return int(n or 0)
@@ -337,7 +366,7 @@ def _user_bootstrap() -> None:
     n = _t.time()
     pw_hash = _password_hash(INTERNAL_KEY)
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.execute(
             "INSERT INTO users (username, password_hash, role, status, "
             "created_ts, updated_ts) VALUES (?, ?, 'admin', 'active', ?, ?)",
@@ -377,7 +406,7 @@ def _bootstrap_hint_html() -> str:
     bootstrap message is suppressed so a returning operator doesn't see
     the "Sign in as admin using the startup-issued key" hint indefinitely."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         seen = conn.execute(
             "SELECT COUNT(*) FROM users WHERE last_login_ts IS NOT NULL"
         ).fetchone()[0]
@@ -405,24 +434,40 @@ async def login_page_endpoint(request: web.Request):
         if not next_url.startswith("/") or next_url.startswith("//"):
             next_url = "/antibot-appsec-gateway/secured/control-center"
         return web.HTTPFound(next_url)
-    from admin.oidc import oidc_button_html
-    from urllib.parse import unquote
+    from admin.oidc import oidc_button_html, _ERROR_CODES
     oidc_error = request.query.get("oidc_error", "")
     oidc_error_html = ""
     if oidc_error:
         import html as _html
+        # AUTH4-13 — resolve the opaque code to a fixed safe message. An unknown
+        # or attacker-supplied value falls back to err_generic and is NEVER
+        # reflected verbatim into the page.
+        msg = _ERROR_CODES.get(oidc_error, _ERROR_CODES["err_generic"])
         oidc_error_html = (
             f'<div id="err" class="err show">'
-            f'SSO: {_html.escape(unquote(oidc_error)[:200])}'
+            f'SSO: {_html.escape(msg)}'
             f'</div>')
+    # F-11 — strict CSP (no 'unsafe-inline'). login.html ships an inline
+    # <script nonce="__CSP_NONCE__">; substitute a fresh per-request nonce and
+    # allow exactly that nonce in script-src so the Sign-in handler can attach
+    # while injected inline scripts stay blocked.
+    nonce = secrets.token_urlsafe(16)
     body = ((_DASHBOARDS_DIR / "login.html").read_text(encoding="utf-8")
             .replace("__BOOTSTRAP_HINT__", _bootstrap_hint_html())
             .replace("__OIDC_BUTTON__", oidc_button_html())
-            .replace("__OIDC_ERROR__", oidc_error_html))
+            .replace("__OIDC_ERROR__", oidc_error_html)
+            .replace("__CSP_NONCE__", nonce))
     return web.Response(
         text=body, content_type="text/html",
         headers={
             "Cache-Control": "no-store",
+            "Content-Security-Policy": (
+                "default-src 'self'; "
+                f"script-src 'self' 'nonce-{nonce}'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; base-uri 'none'; "
+                "form-action 'self'; frame-ancestors 'none'"
+            ),
             "X-Frame-Options": "DENY",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
@@ -473,6 +518,26 @@ async def login_submit_endpoint(request: web.Request):
              reason="bad-password")
         return web.json_response({"error": "invalid credentials"}, status=401,
                                   headers={"Cache-Control": "no-store"})
+    # 1.9.8 SECURITY — 2FA step-up. If the user enrolled TOTP, password alone
+    # must NOT mint a session (closes the login-time 2FA bypass). Issue an
+    # unpredictable, server-stored partial_token (secrets.token_urlsafe, NOT an
+    # enumerable HMAC of username|window) and require a second POST to
+    # /totp-verify carrying that token + the TOTP (or a one-time backup) code.
+    if user.get("totp_enabled"):
+        import secrets as _secrets
+        partial_token = _secrets.token_urlsafe(32)
+        _ua_pending = (request.headers.get("User-Agent") or "")[:512]
+        from state import _TOTP_PENDING, _TOTP_PENDING_LOCK
+        async with _TOTP_PENDING_LOCK:
+            _TOTP_PENDING[partial_token] = {
+                "token": partial_token, "username": username,
+                "ip": ip, "ua": _ua_pending, "next": next_url,
+                "ts": _t.time(),
+            }
+        slog("login_totp_required", level="warn", username=username, ip=ip)
+        return web.json_response(
+            {"step": "totp_required", "partial_token": partial_token},
+            headers={"Cache-Control": "no-store"})
     # 1.6.7 — mint a fresh per-session cookie (sid embedded). Captures
     # the source IP and User-Agent for the session ledger so the
     # operator can spot unfamiliar sessions and revoke them.
@@ -491,7 +556,137 @@ async def login_submit_endpoint(request: web.Request):
     _enforce_session_limit(username)
     token = _session_create(username, ip, ua)
     sid = token.split("|")[1]
-    csrf_token = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    # 1.9.7 — agw_csrf carries the per-session random nonce (set by
+    # _session_create); fall back to the legacy HMAC only if the cache entry is
+    # somehow absent (keeps the cookie non-empty).
+    csrf_token = (_SESSION_CACHE.get(sid, {}).get("csrf_nonce")
+                  or hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32])
+    resp = web.json_response({"ok": True, "redirect": next_url, "username": username},
+                              headers={"Cache-Control": "no-store"})
+    resp.set_cookie(_SESSION_COOKIE, token,
+                     max_age=_SESSION_TTL, httponly=True,
+                     samesite="Strict", path="/",
+                     secure=SESSION_SECURE)
+    resp.set_cookie("agw_csrf", csrf_token,
+                     max_age=_SESSION_TTL, httponly=False,
+                     samesite="Strict", path="/",
+                     secure=SESSION_SECURE)
+    return resp
+
+
+async def totp_verify_endpoint(request: web.Request):
+    """POST /antibot-appsec-gateway/totp-verify — step 2 of two-step login.
+
+    Body (form): partial_token, code. Validates the server-stored partial_token
+    (timing-safe) issued by login_submit, then the TOTP code (or a one-time
+    backup code), and only then mints the session. No @_require_csrf: like
+    /login this is a pre-session bootstrap with no cookie to protect yet; it is
+    IP-rate-limited via _login_rate_limit instead."""
+    import json
+    ip = get_ip(request)
+    if not await _login_rate_limit(ip):
+        return web.json_response({"error": "too many attempts; wait 60s"},
+                                  status=429,
+                                  headers={"Cache-Control": "no-store",
+                                           "Retry-After": "60"})
+    try:
+        raw = await asyncio.wait_for(request.content.read(8 * 1024),
+                                      timeout=BODY_TIMEOUT)
+    except asyncio.TimeoutError:
+        return web.json_response({"error": "timeout"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    # login.html posts JSON ({partial_token, code}); also accept form-encoded.
+    _txt = raw.decode("utf-8", errors="replace")
+    partial_token = ""
+    code = ""
+    try:
+        _body = json.loads(_txt or "{}")
+        if isinstance(_body, dict):
+            partial_token = str(_body.get("partial_token", "") or "").strip()
+            code = str(_body.get("code", "") or "").strip()
+    except (ValueError, json.JSONDecodeError):
+        from urllib.parse import parse_qs
+        _params = parse_qs(_txt, keep_blank_values=True)
+        partial_token = (_params.get("partial_token", [""])[0] or "").strip()
+        code = (_params.get("code", [""])[0] or "").strip()
+    if not partial_token or not code:
+        return web.json_response({"error": "partial_token and code required"},
+                                  status=400,
+                                  headers={"Cache-Control": "no-store"})
+    from state import _TOTP_PENDING, _TOTP_PENDING_LOCK
+    async with _TOTP_PENDING_LOCK:
+        entry = _TOTP_PENDING.get(partial_token)
+        # Prune a stale pending entry (>5 min) so an old token can't be replayed.
+        if entry and (_t.time() - entry.get("ts", 0) > 300):
+            _TOTP_PENDING.pop(partial_token, None)
+            entry = None
+    # Timing-safe match of the stored random token. A login-pending entry stores
+    # {"token", "username", ...}; a setup-pending entry stores {"secret"} keyed
+    # by username, so .get("token","") is "" there and never matches.
+    if not entry or not hmac.compare_digest(str(entry.get("token", "")), partial_token):
+        slog("totp_verify_failed", level="warn", ip=ip, reason="bad-token")
+        return web.json_response({"error": "invalid or expired token"},
+                                  status=401,
+                                  headers={"Cache-Control": "no-store"})
+    username = entry.get("username", "")
+    user = _user_load(username)
+    if user is None or user.get("status") != "active":
+        async with _TOTP_PENDING_LOCK:
+            _TOTP_PENDING.pop(partial_token, None)
+        slog("totp_verify_failed", level="warn", username=username, ip=ip,
+             reason="no-user")
+        return web.json_response({"error": "invalid or expired token"},
+                                  status=401,
+                                  headers={"Cache-Control": "no-store"})
+    # Verify the TOTP code; fall back to a one-time backup code (constant-time).
+    secret = user.get("totp_secret") or ""
+    verified = _totp_verify(secret, code)
+    used_backup = False
+    if not verified:
+        import json as _json
+        try:
+            backup_codes = _json.loads(user.get("totp_backup_codes") or "[]")
+        except Exception:
+            backup_codes = []
+        code_norm = code.upper().replace(" ", "").replace("-", "")
+        if any(hmac.compare_digest(str(_bc), code_norm) for _bc in backup_codes):
+            verified = True
+            used_backup = True
+            # Consume the backup code (one-time) and persist the remainder.
+            backup_codes = [_bc for _bc in backup_codes
+                            if not hmac.compare_digest(str(_bc), code_norm)]
+            if db_queue is not None:
+                try:
+                    db_queue.put_nowait((
+                        "user_update",
+                        (username, {"totp_backup_codes": _json.dumps(backup_codes)}),
+                    ))
+                except asyncio.QueueFull:
+                    pass
+    if not verified:
+        slog("totp_verify_failed", level="warn", username=username, ip=ip,
+             reason="bad-code")
+        return web.json_response({"error": "invalid code"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    # Success — consume the pending token and mint the session (mirrors the
+    # login_submit success path exactly).
+    async with _TOTP_PENDING_LOCK:
+        _TOTP_PENDING.pop(partial_token, None)
+    next_url = entry.get("next") or "/antibot-appsec-gateway/secured/control-center"
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/antibot-appsec-gateway/secured/control-center"
+    ua = (request.headers.get("User-Agent") or "")[:512]
+    _ACTIVE_SESSIONS[username] = _t.time()
+    _enforce_session_limit(username)
+    token = _session_create(username, ip, ua)
+    sid = token.split("|")[1]
+    # 1.9.7 — agw_csrf carries the per-session random nonce (set by
+    # _session_create); fall back to the legacy HMAC only if the cache entry is
+    # somehow absent (keeps the cookie non-empty).
+    csrf_token = (_SESSION_CACHE.get(sid, {}).get("csrf_nonce")
+                  or hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32])
+    slog("totp_verify_success", level="warn", username=username, ip=ip,
+         backup=used_backup)
     resp = web.json_response({"ok": True, "redirect": next_url, "username": username},
                               headers={"Cache-Control": "no-store"})
     resp.set_cookie(_SESSION_COOKIE, token,
@@ -525,6 +720,9 @@ async def logout_endpoint(request: web.Request):
             _session_revoke(sid, by_username=user)
     resp = web.HTTPFound("/antibot-appsec-gateway/login")
     resp.del_cookie(_SESSION_COOKIE, path="/")
+    # 1.9.7 — also clear agw_csrf (set with path="/" at login, line ~520) so a
+    # stale CSRF token can't survive logout into a fresh re-login.
+    resp.del_cookie("agw_csrf", path="/")
     return resp
 
 
@@ -591,7 +789,7 @@ async def ip_intel_endpoint(request: web.Request):
     last_path = None
     blocks_by_reason: dict = {}
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         b = conn.execute(
             "SELECT banned_until, reason FROM bans WHERE ip = ?",
@@ -626,12 +824,17 @@ async def ip_intel_endpoint(request: web.Request):
     # for entries whose `last_ip` matches and take the maximum — multiple
     # identities can share an IP (NAT, shared device).
     risk_score = 0
+    risk_breakdown: list = []
     try:
         for s in ip_state.values():
             if getattr(s, "last_ip", "") == ip:
                 rs = int(s.risk_score or 0)
                 if rs > risk_score:
                     risk_score = rs
+                    risk_breakdown = sorted(
+                        ((r, round(v, 1)) for r, v in s.risk_by_reason.items() if v >= 0.5),
+                        key=lambda x: x[1], reverse=True,
+                    )
     except Exception:
         pass
 
@@ -642,6 +845,7 @@ async def ip_intel_endpoint(request: web.Request):
                                    if banned_until else None),
         "ban_reason": ban_reason,
         "risk_score": risk_score,
+        "risk_breakdown": risk_breakdown,
         "first_seen_ts": first_seen_ts,
         "last_seen_ts":  last_seen_ts,
         "requests_24h":  requests_24h,
@@ -685,6 +889,28 @@ async def whoami_endpoint(request: web.Request):
     operator's identity. Used by the dashboard's top-right strip."""
     username = _request_username(request)
     via = "session" if request.get("_session_user") else "admin-key"
+    # 1.9.2 iter-27 — operator-reported: Settings shows "Unknown (via key)"
+    # despite a successful username/password login. The handler can only be
+    # reached when the protect middleware's `_internal_authed(request)`
+    # returned True (see core/proxy_handler.py:3540), which means the same
+    # function stamped `_session_user` right before returning. If we see
+    # _session_user missing HERE, either (a) the stamp was eaten by a
+    # request-object that doesn't support __setitem__ (silently caught
+    # except), or (b) a route alias is bypassing protect. Log it so the
+    # operator can correlate against the session-cache + Cloudflare cookie
+    # path in /__logs?event=whoami_no_session.
+    if not request.get("_session_user"):
+        try:
+            _has_cookie = bool(
+                request.cookies.get(_SESSION_COOKIE, "")) \
+                if hasattr(request, "cookies") else False
+        except Exception:
+            _has_cookie = False
+        slog("whoami_no_session", level="warn",
+             ip=get_ip(request)[:64],
+             path=request.path,
+             has_session_cookie=_has_cookie,
+             ua=(request.headers.get("User-Agent", "") or "")[:80])
     user_row = None
     if username and username not in ("admin-key", "unknown"):
         u = _user_load(username)
@@ -842,8 +1068,12 @@ async def users_update_endpoint(request: web.Request):
         fields["password_hash"] = _password_hash(pw)
         audit_fields["password_changed"] = True
     if "role" in data:
-        if caller_role == "viewer":
-            return web.json_response({"error": "forbidden: viewers cannot change roles"},
+        # S-C1 fix — role changes are ADMIN-ONLY. Previously this gate only
+        # rejected viewers, so a maintainer could PATCH another user's role to
+        # admin (privilege escalation). Password/status edits by maintainers are
+        # unaffected — only the role field is restricted.
+        if caller_role != "admin":
+            return web.json_response({"error": "forbidden: only admins can change roles"},
                                       status=403, headers={"Cache-Control": "no-store"})
         if data["role"] not in _USER_ROLES:
             return web.json_response({"error": "invalid role"}, status=400,
@@ -899,7 +1129,7 @@ async def user_sessions_list_endpoint(request: web.Request):
         return web.json_response({"error": "not found"}, status=404,
                                   headers={"Cache-Control": "no-store"})
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT sid, username, ip, user_agent, created_ts, last_seen_ts, "
@@ -961,6 +1191,69 @@ async def user_session_revoke_endpoint(request: web.Request):
         {"username": username, "sid": sid, "revoked": True,
          "self_revoke": self_revoke},
         headers={"Cache-Control": "no-store"})
+
+
+# ── 1.8.6 — TOTP Two-Factor Authentication ──────────────────────────────────
+
+
+def _totp_generate_secret() -> str:
+    import pyotp
+    return pyotp.random_base32()
+
+
+def _totp_verify(secret: str, code: str) -> bool:
+    import pyotp
+    try:
+        return pyotp.TOTP(secret).verify(code.strip(), valid_window=1)
+    except Exception:
+        return False
+
+
+def _totp_provisioning_uri(secret: str, username: str) -> str:
+    import pyotp
+    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name="AntiBot/WAF GW")
+
+
+def _generate_backup_codes() -> list:  # F-08: 10 bytes = 80 bits per code
+    import secrets as _sec
+    return [_sec.token_hex(10).upper() for _ in range(8)]
+
+
+async def totp_setup_endpoint(request: web.Request):
+    """GET /antibot-appsec-gateway/secured/2fa-setup — generate a new TOTP secret.
+    Stores it temporarily in _TOTP_PENDING[username] and returns the provisioning URI
+    plus a base64-encoded SVG QR code data URL."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    username = _request_username(request)
+    if not username or username in ("admin-key", "unknown"):
+        return web.json_response({"error": "session required for 2FA setup"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
+    from state import _TOTP_PENDING, _TOTP_PENDING_LOCK
+    import io as _io
+    import qrcode as _qrcode
+    import qrcode.image.svg as _qrsvg
+    secret = _totp_generate_secret()
+    async with _TOTP_PENDING_LOCK:  # W-4 fix: consistent locking with login/verify paths
+        _TOTP_PENDING[username] = {"secret": secret, "ts": _t.time()}
+    uri = _totp_provisioning_uri(secret, username)
+    import qrcode.constants as _qrconst  # explicit import so pyright sees it
+    qr_obj = _qrcode.QRCode(error_correction=_qrconst.ERROR_CORRECT_M)
+    qr_obj.add_data(uri)
+    qr_obj.make(fit=True)
+    img = qr_obj.make_image(image_factory=_qrsvg.SvgImage)
+    buf = _io.BytesIO()
+    img.save(buf)
+    # Inject white background rect so the QR is scannable on dark UIs.
+    svg_str = buf.getvalue().decode()
+    svg_open_end = svg_str.index('>', svg_str.index('<svg')) + 1
+    svg_str = (svg_str[:svg_open_end]
+               + '<rect width="100%" height="100%" fill="white"/>'
+               + svg_str[svg_open_end:])
+    qr_data_url = "data:image/svg+xml;base64," + _b64.b64encode(svg_str.encode()).decode()
+    return web.json_response({"provisioning_uri": uri, "qr_data_url": qr_data_url},
+                              headers={"Cache-Control": "no-store"})
 
 
 @_require_csrf

@@ -513,8 +513,10 @@ class TestDbTestProbeDsnPatch:
     def test_b01_probe_mode_patches_pg_mod(self):
         src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
         code = src.read_text(encoding="utf-8")
-        # Probe block must assign to _pg_mod_dbt.POSTGRES_DSN (not just globals())
-        assert "_pg_mod_dbt.POSTGRES_DSN = probe_dsn" in code, (
+        # Contract-rename align (1.9.x): the probe block aliases db.postgres as
+        # `_pg_for_probe` (not the historical `_pg_mod_dbt`). Behaviour is
+        # unchanged — it still patches db.postgres.POSTGRES_DSN before the call.
+        assert "_pg_for_probe.POSTGRES_DSN = probe_dsn" in code, (
             "db_test_endpoint probe mode must patch db.postgres.POSTGRES_DSN "
             "before calling pg_test_roundtrip() — globals() patch alone is insufficient"
         )
@@ -522,7 +524,9 @@ class TestDbTestProbeDsnPatch:
     def test_b02_probe_mode_restores_pg_mod(self):
         src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
         code = src.read_text(encoding="utf-8")
-        assert "_pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn" in code, (
+        # Contract-rename align (1.9.x): restore uses `saved_pg_dsn` (was
+        # `_pg_mod_dbt_saved_dsn`). Still restores db.postgres.POSTGRES_DSN in finally.
+        assert "_pg_for_probe.POSTGRES_DSN = saved_pg_dsn" in code, (
             "db_test_endpoint probe mode must restore db.postgres.POSTGRES_DSN "
             "in the finally block to avoid leaking the probe DSN into the live process"
         )
@@ -534,17 +538,21 @@ class TestDbTestProbeDsnPatch:
         marker = "1.6.10 — pre-flight probe mode"
         idx = code.find(marker)
         assert idx != -1, "probe mode comment not found in proxy_handler.py"
-        blk = code[idx: idx + 1500]
-        # Both the set and restore must be present in the same block
-        assert "_pg_mod_dbt.POSTGRES_DSN = probe_dsn" in blk, (
+        # Widened window (was 1500): the probe block grew with the 1.9.2
+        # iter-25 executor-offload + 25s-timeout comment, pushing the finally
+        # restore to ~offset 2266. The set/restore are still in the same block.
+        blk = code[idx: idx + 2800]
+        # Contract-rename align (1.9.x): `_pg_for_probe` / `saved_pg_dsn`.
+        # Both the set and restore must be present in the same block.
+        assert "_pg_for_probe.POSTGRES_DSN = probe_dsn" in blk, (
             "probe DSN assignment to db.postgres missing from probe block"
         )
-        assert "_pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn" in blk, (
+        assert "_pg_for_probe.POSTGRES_DSN = saved_pg_dsn" in blk, (
             "probe DSN restore in finally missing from probe block"
         )
         # Restore must come AFTER set
-        idx_set     = blk.index("_pg_mod_dbt.POSTGRES_DSN = probe_dsn")
-        idx_restore = blk.index("_pg_mod_dbt.POSTGRES_DSN = _pg_mod_dbt_saved_dsn")
+        idx_set     = blk.index("_pg_for_probe.POSTGRES_DSN = probe_dsn")
+        idx_restore = blk.index("_pg_for_probe.POSTGRES_DSN = saved_pg_dsn")
         assert idx_set < idx_restore, (
             "DSN restore must appear after the DSN set in the probe block"
         )
@@ -568,12 +576,15 @@ class TestDbTestProbeDsnPatch:
         """Both endpoints that call pg_test_roundtrip with a caller DSN must patch db.postgres."""
         src = Path(__file__).resolve().parent.parent / "core" / "proxy_handler.py"
         code = src.read_text(encoding="utf-8")
+        # Contract-rename align (1.9.x): both probe sites alias db.postgres as
+        # `_pg_for_probe` (was `_pg_mod` / `_pg_mod_dbt`). Both still patch the
+        # module-level POSTGRES_DSN so pg_test_roundtrip sees the caller DSN.
         # db-switch probe (existing, correct)
-        assert "_pg_mod.POSTGRES_DSN = dsn" in code, (
+        assert "_pg_for_probe.POSTGRES_DSN = dsn" in code, (
             "db-switch probe must patch db.postgres.POSTGRES_DSN (existing fix must be intact)"
         )
         # db-test probe (new fix)
-        assert "_pg_mod_dbt.POSTGRES_DSN = probe_dsn" in code, (
+        assert "_pg_for_probe.POSTGRES_DSN = probe_dsn" in code, (
             "db-test probe must patch db.postgres.POSTGRES_DSN (new fix)"
         )
 
@@ -1306,18 +1317,30 @@ class TestBackendAwareReads:
         "metrics_endpoint",
     ])
     def test_p05_to_p11_endpoints_use_db_read_events(self, fn):
-        """Each affected dashboard endpoint must use db_read_events (not
-        hardcoded sqlite3.connect for the events table). The metrics
-        endpoint's `timeline` table read is intentionally SQLite-only and
-        not counted here (it's pre-aggregated, no Postgres mirror exists)."""
+        """Each affected dashboard endpoint must read events in a backend-aware
+        way (so postgres dashboards aren't empty on armv7). The original
+        contract required the db_read_events dispatcher, but the 1.9.1 (iter-17)
+        redesign routes these endpoints through the backend-aware open_conn()
+        helper + dialect-aware SQL (active_backend()=='postgres' branches with
+        to_timestamp()/EXTRACT) instead. open_conn() returns a Postgres-backed
+        _PgConnWrapper when DB_BACKEND=postgres, so the read is backend-aware
+        either way — the failure the test guards against (hardcoded
+        sqlite3.connect(DB_PATH)) is gone. Accept either mechanism; what must
+        NOT appear is a hardcoded sqlite3.connect(DB_PATH).
+        The metrics endpoint's `timeline` table read is intentionally
+        SQLite-only and not counted here (pre-aggregated, no Postgres mirror)."""
         fn_start = self.ph_src.find(f"async def {fn}")
         assert fn_start != -1, f"{fn} must exist in core/proxy_handler.py"
         # Pull the function body up to the next async def.
         next_fn = self.ph_src.find("async def ", fn_start + 1)
         body = self.ph_src[fn_start: next_fn if next_fn != -1 else fn_start + 8000]
-        assert "db_read_events" in body, (
-            f"{fn} must call db_read_events for events reads — found stale "
-            f"hardcoded sqlite3.connect(DB_PATH) pattern instead"
+        assert "sqlite3.connect(DB_PATH)" not in body, (
+            f"{fn} must NOT use a hardcoded sqlite3.connect(DB_PATH) — "
+            f"that leaves postgres dashboards empty"
+        )
+        assert ("db_read_events" in body) or ("open_conn(" in body), (
+            f"{fn} must read events in a backend-aware way — via db_read_events "
+            f"or the backend-aware open_conn() helper"
         )
 
     def test_p12_db_test_response_includes_write_health(self):

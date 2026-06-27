@@ -66,7 +66,7 @@ def _extract_fn_body(src: str, fn_name: str) -> str:
 
 def _extract_dcl_body(src: str) -> str:
     """Return the DOMContentLoaded callback body."""
-    idx = src.find("DOMContentLoaded")
+    idx = src.rfind("DOMContentLoaded")  # 1.8.12: last DOMContentLoaded = chart/init block (sidebar accordion adds an earlier one)
     assert idx != -1, "DOMContentLoaded not found in control_center.html"
     end = src.find("});", idx)
     return src[idx:end]
@@ -454,14 +454,22 @@ async def test_d04_vhost_breakdown_seeded_event_appears_in_dataset(proxy_module)
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                "VALUES (?, '1.2.3.4', 'bot', '/', 200, 'ua-block', 'qa.example.com')",
-                (now - 30,),
-            )
-            conn.commit()
-            conn.close()
+            # Backend-aware: /vhost-breakdown reads events from the active
+            # backend, so under the PG-mode harness the seed must land in PG.
+            # PG events.ts is timestamptz; pg_insert_event applies to_timestamp.
+            from db.conn import active_backend
+            if active_backend() == "postgres":
+                from db.postgres import pg_insert_event
+                pg_insert_event(now - 30, "1.2.3.4", "bot", "/", 200,
+                                "ua-block", vhost="qa.example.com")
+            else:
+                from db.conn import conn as _backend_conn
+                with _backend_conn(timeout=10) as conn:
+                    conn.execute(
+                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                        "VALUES (?, '1.2.3.4', 'bot', '/', 200, 'ua-block', 'qa.example.com')",
+                        (now - 30,),
+                    )
 
             r = await cli.get(
                 f"{NS}/vhost-breakdown?range=120&bucket=300",
@@ -486,14 +494,20 @@ async def test_d05_vhost_stats_fields_required_by_charts(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                "VALUES (?, '10.0.0.1', 'b', '/x', 200, 'ua-block', 'chart-test.local')",
-                (now - 60,),
-            )
-            conn.commit()
-            conn.close()
+            # Backend-aware: /vhost-stats reads events from the active backend.
+            from db.conn import active_backend
+            if active_backend() == "postgres":
+                from db.postgres import pg_insert_event
+                pg_insert_event(now - 60, "10.0.0.1", "b", "/x", 200,
+                                "ua-block", vhost="chart-test.local")
+            else:
+                from db.conn import conn as _backend_conn
+                with _backend_conn(timeout=10) as conn:
+                    conn.execute(
+                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                        "VALUES (?, '10.0.0.1', 'b', '/x', 200, 'ua-block', 'chart-test.local')",
+                        (now - 60,),
+                    )
 
             r = await cli.get(f"{NS}/vhost-stats",
                               cookies=cookies)
@@ -517,14 +531,20 @@ async def test_d06_vhost_stats_bans_is_integer(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                "VALUES (?, '99.0.0.1', 'b', '/', 200, 'ua-block', 'bans-test.local')",
-                (now - 10,),
-            )
-            conn.commit()
-            conn.close()
+            # Backend-aware: /vhost-stats reads events from the active backend.
+            from db.conn import active_backend
+            if active_backend() == "postgres":
+                from db.postgres import pg_insert_event
+                pg_insert_event(now - 10, "99.0.0.1", "b", "/", 200,
+                                "ua-block", vhost="bans-test.local")
+            else:
+                from db.conn import conn as _backend_conn
+                with _backend_conn(timeout=10) as conn:
+                    conn.execute(
+                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                        "VALUES (?, '99.0.0.1', 'b', '/', 200, 'ua-block', 'bans-test.local')",
+                        (now - 10,),
+                    )
 
             r = await cli.get(f"{NS}/vhost-stats",
                               cookies=cookies)
@@ -554,7 +574,12 @@ async def test_d07_vhost_breakdown_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (401, 403, 302, 301), (
+                # 404 is the deliberate silent-decoy status: blocked admin
+                # endpoints mirror the upstream's real 404 so the gateway is
+                # indistinguishable from "this path does not exist"
+                # (_serve_mirrored_404 / _silent_decoy_response). It is a valid
+                # deflection — no labels/datasets are returned.
+                assert r.status in (401, 403, 404, 302, 301), (
                     f"/vhost-breakdown: unexpected status {r.status} for unauthenticated request."
                 )
 
@@ -843,3 +868,117 @@ async def test_d08_vhost_breakdown_cache_control_no_store(proxy_module):
             assert "no-store" in cc, (
                 f"/vhost-breakdown Cache-Control header is '{cc}', expected 'no-store'."
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Static tests — sidebar show/hide submenu (S45–S52)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def test_s45_sidebar_toggle_button_present():
+    src = _src()
+    assert 'id="sidebar-toggle"' in src, (
+        "control_center.html: sidebar collapse toggle button (#sidebar-toggle) missing. "
+        "The ‹ button inside #sidebar-brand collapses the sidebar on desktop."
+    )
+    assert 'onclick="_sbToggle()"' in src, (
+        "control_center.html: sidebar-toggle onclick must call _sbToggle(). "
+        "The toggle button is wired to _sbToggle() which adds/removes .sb-collapsed."
+    )
+
+
+def test_s46_sidebar_reopen_button_present():
+    src = _src()
+    assert 'id="sidebar-reopen"' in src, (
+        "control_center.html: #sidebar-reopen floating ☰ button missing. "
+        "When the sidebar is hidden, this button is the only way to restore it."
+    )
+
+
+def test_s47_sbtoggle_defined_and_runs_before_sidebar():
+    src = _src()
+    assert "window._sbToggle" in src, (
+        "control_center.html: _sbToggle() function not defined. "
+        "Both #sidebar-toggle and #sidebar-reopen call _sbToggle()."
+    )
+    init_idx = src.index("localStorage.getItem('agw_sb_collapsed')")
+    bar_idx  = src.index('<div id="sidebar">')
+    assert init_idx < bar_idx, (
+        "control_center.html: sidebar-collapse init script runs AFTER #sidebar element. "
+        "The script must precede the sidebar so .sb-collapsed is applied before "
+        "the element is parsed — otherwise there is a flash of the expanded sidebar."
+    )
+
+
+def test_s48_sidebar_collapse_css_rules_present():
+    src = _src()
+    assert "body.sb-collapsed #sidebar{display:none}" in src, (
+        "control_center.html: 'body.sb-collapsed #sidebar{display:none}' CSS rule missing. "
+        "This rule hides the sidebar when the ‹ toggle is clicked."
+    )
+    assert "@media(min-width:601px){body.sb-collapsed" in src, (
+        "control_center.html: sidebar collapse must be desktop-only "
+        "(@media min-width:601px). Mobile uses the off-canvas #mob-menu instead."
+    )
+    assert "@media(max-width:600px){#sidebar-toggle{display:none}}" in src, (
+        "control_center.html: #sidebar-toggle must be hidden on mobile "
+        "(@media max-width:600px) so the ‹ button does not appear on small screens."
+    )
+    assert "#sidebar-nav a.sub.sub-hidden{display:none}" in src, (
+        "control_center.html: '.sub.sub-hidden{display:none}' CSS rule missing. "
+        "_subToggle() adds sub-hidden to collapse child items under each nav-parent."
+    )
+
+
+def test_s49_three_nav_parents_with_correct_groups():
+    src = _src()
+    for grp in ("control-center", "controls", "settings"):
+        assert f'class="nav-parent" data-group="{grp}"' in src, (
+            f"control_center.html: nav-parent wrapper for group '{grp}' missing. "
+            "Each collapsible section (Control Center, Controls, Settings) must be "
+            "wrapped in a div.nav-parent with its data-group attribute."
+        )
+    caret_count = src.count('class="nav-caret"')
+    assert caret_count == 3, (
+        f"control_center.html: expected exactly 3 .nav-caret buttons, got {caret_count}. "
+        "One caret per collapsible nav-parent group."
+    )
+    assert src.count('onclick="_subToggle(this)"') == 3, (
+        "control_center.html: expected 3 caret onclick='_subToggle(this)' handlers, "
+        "one per nav-parent group."
+    )
+
+
+def test_s50_control_center_nav_parent_has_active_link():
+    src = _src()
+    # The control-center group link must carry class="active" (this is the current page)
+    cc_group_start = src.index('data-group="control-center"')
+    cc_group_end   = src.index('</div>', cc_group_start)
+    snippet = src[cc_group_start:cc_group_end]
+    assert 'class="active"' in snippet, (
+        "control_center.html: the Control Center nav-parent link is missing class='active'. "
+        "The active class highlights the current page in the sidebar."
+    )
+
+
+def test_s51_geomap_has_no_caret():
+    src = _src()
+    assert 'data-group="geo"' not in src, (
+        "control_center.html: GeoMap is wrapped in a nav-parent with data-group='geo'. "
+        "GeoMap has no sub-items and must remain a plain <a> link without a caret."
+    )
+
+
+def test_s52_subtoggle_persists_state_via_localstorage():
+    src = _src()
+    assert "window._subToggle" in src, (
+        "control_center.html: _subToggle() function not defined. "
+        "Caret buttons call _subToggle(this) to expand/collapse sub-items."
+    )
+    assert "agw_sub_" in src, (
+        "control_center.html: 'agw_sub_' localStorage key prefix missing. "
+        "_subToggle() persists each group's collapsed state under 'agw_sub_<group>'."
+    )
+    assert "localStorage.getItem('agw_sub_" in src or "agw_sub_'+g" in src, (
+        "control_center.html: _subToggle does not restore per-group state from localStorage. "
+        "Collapsed groups must survive page reload."
+    )

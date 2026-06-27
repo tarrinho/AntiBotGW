@@ -6,5 +6,6 @@
 
 from reputation.abuseipdb import *
 from reputation.crowdsec import *
+from reputation.feeds import *
 from reputation.maxmind import *
 from reputation.tor import *

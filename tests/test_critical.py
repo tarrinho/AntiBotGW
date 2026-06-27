@@ -1,4 +1,4 @@
-"""Unit tests for AppSecGW critical paths.
+"""Unit tests for AntiBot/WAF GW critical paths.
 
 Run with:  pytest tests/test_critical.py -v
 Requires:  pytest, the proxy.py module on PYTHONPATH, UPSTREAM=http://x.test (any URL).
@@ -21,11 +21,24 @@ os.environ.setdefault("DB_PATH", "/tmp/pytest_antibot.db")
 if os.path.exists("/tmp/pytest_antibot.db"):
     os.remove("/tmp/pytest_antibot.db")
 
+# Ensure project root is in sys.path so proxy.py's subpackage imports
+# (admin.oidc, etc.) resolve correctly at collection time — conftest.py
+# also does this, but exec_module below runs at import time and we need
+# this to be set before the call, independent of conftest load ordering.
+_PROJ_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PROJ_ROOT not in sys.path:
+    sys.path.insert(0, _PROJ_ROOT)
+
 # Load proxy.py as module
 PROXY_PATH = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
 spec = importlib.util.spec_from_file_location("proxy", PROXY_PATH)
 proxy = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(proxy)
+# JWT verifier knobs live in the integrations.jwt namespace (where _verify_jwt_hs256
+# and _jwt_required_for read them); production sets JWT_HMAC_SECRET via env at startup
+# and the JWT_* knobs via hot-reload propagation. Tests must set them there, not on
+# proxy's separate `from config import *` binding.
+import integrations.jwt as _jwt  # noqa: E402
 
 
 # ── Risk model ─────────────────────────────────────────────────────────────
@@ -183,13 +196,14 @@ def test_scoring_signals_have_cost():
 
 # ── 1.5.5 — Promoted hot-reload knobs ─────────────────────────────────────
 def test_15_promoted_knobs_in_hot_reload():
-    """All 14 Tier 1+2+3 knobs must be in _HOT_RELOAD_KNOBS."""
+    """All Tier 1+2+3 knobs must be in _HOT_RELOAD_KNOBS."""
     promoted = [
         "JS_CHALLENGE_TTL", "ENUM_THRESHOLD", "TIMELINE_RETAIN_SECS",
         "SVC_DB_RETENTION_HOURS", "COST_RETAIN_SECS", "LOG_FORMAT",
         "POW_REQUIRED_PATHS", "ALLOWED_METHODS", "ALLOWED_HOSTS",
         "MAX_IDENTITIES", "PRUNE_IDLE_SECS",
         "UPSTREAM_MAX_BODY", "UPSTREAM_MAX_RESP",
+        "HONEYPOT_CLUSTER_THRESHOLD",
     ]
     for k in promoted:
         assert k in proxy._HOT_RELOAD_KNOBS, f"missing knob {k!r}"
@@ -260,8 +274,144 @@ def test_env_precedence_marker():
             assert k in os.environ
             assert k in proxy._HOT_RELOAD_KNOBS
     else:
-        # default: empty set (DB takes precedence)
-        assert proxy._ENV_PROVIDED_KNOBS == set()
+        # default (non-strict): DB takes precedence, so the set is only the
+        # knobs actually provided in the process env (it is NOT the full
+        # hot-reload set). With no knobs in env it is empty; under the PG-mode
+        # test harness POSTGRES_DSN is exported and is legitimately pinned.
+        # Every entry must therefore correspond to a real env-provided knob.
+        import core.proxy_handler as _cph
+        for k in proxy._ENV_PROVIDED_KNOBS:
+            assert _cph._env_knob_is_provided(k) or k in os.environ, (
+                f"{k} in _ENV_PROVIDED_KNOBS but not actually set in env"
+            )
+
+
+def test_env_provided_knobs_falsy_values_not_pinned():
+    """Falsy env values ("0", "false", "no", "off") must NOT add a bool knob
+    to _ENV_PROVIDED_KNOBS.  Non-bool knobs (int/float/str/list parsers) just
+    need a non-empty env value — their "falsy" concept doesn't apply.
+    Regression test for the bug where "0" (truthy as a Python string) was
+    treated as an env pin, causing disabled-by-test env vars to prevent DB
+    values from overriding them in non-strict mode."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    for k in _cph._ENV_PROVIDED_KNOBS:
+        raw = os.environ.get(k, "")
+        spec = _cph._HOT_RELOAD_KNOBS.get(k)
+        if spec is not None and spec[0] is _to_bool:
+            # Bool knob: must be affirmatively truthy
+            assert _to_bool(raw), (
+                f"_ENV_PROVIDED_KNOBS contains bool knob {k!r} with env value "
+                f"{raw!r} which is falsy — only truthy env values should pin it"
+            )
+        else:
+            # Non-bool knob: any non-empty value is fine
+            assert raw.strip(), (
+                f"_ENV_PROVIDED_KNOBS contains non-bool knob {k!r} with empty "
+                "env value — should not be pinned"
+            )
+
+
+def test_env_knob_is_provided_bool_falsy_returns_false():
+    """_env_knob_is_provided must return False for bool knobs set to "0" / "false".
+    Regression: bare os.environ.get() truthiness treated "0" as truthy, pinning
+    disabled-by-env knobs and preventing DB from re-enabling them."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    # Pick any bool knob from _HOT_RELOAD_KNOBS
+    bool_knobs = [k for k, spec in _cph._HOT_RELOAD_KNOBS.items()
+                  if spec[0] is _to_bool]
+    assert bool_knobs, "Expected at least one bool knob in _HOT_RELOAD_KNOBS"
+    k = bool_knobs[0]
+    for falsy_val in ("0", "false", "no", "off", "False", "NO"):
+        prev = os.environ.pop(k, None)
+        try:
+            os.environ[k] = falsy_val
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True for {falsy_val!r} "
+                "— falsy bool env values must not pin the knob"
+            )
+        finally:
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
+
+
+def test_env_knob_is_provided_bool_truthy_returns_true():
+    """_env_knob_is_provided must return True for bool knobs set to "1" / "true"."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    bool_knobs = [k for k, spec in _cph._HOT_RELOAD_KNOBS.items()
+                  if spec[0] is _to_bool]
+    k = bool_knobs[0]
+    for truthy_val in ("1", "true", "yes", "on", "True", "YES"):
+        prev = os.environ.pop(k, None)
+        try:
+            os.environ[k] = truthy_val
+            assert _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned False for {truthy_val!r} "
+                "— truthy bool env values must pin the knob"
+            )
+        finally:
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
+
+
+def test_env_knob_is_provided_non_bool_string_returns_true():
+    """_env_knob_is_provided must not call _to_bool on non-bool knobs.
+    Regression: calling _to_bool("postgresql://...") raised ValueError and
+    crashed the module at import time when POSTGRES_DSN was set in env."""
+    import core.proxy_handler as _cph
+    from integrations.endpoint_policy import _to_bool
+    # Use POSTGRES_DSN — a str-parser knob that can hold a connection URL
+    k = "POSTGRES_DSN"
+    assert k in _cph._HOT_RELOAD_KNOBS, f"{k} must be in _HOT_RELOAD_KNOBS"
+    spec = _cph._HOT_RELOAD_KNOBS[k]
+    assert spec[0] is not _to_bool, f"{k} must use a non-bool parser"
+    prev = os.environ.pop(k, None)
+    try:
+        conn_str = "postgresql://user:pass@localhost:5432/testdb"
+        os.environ[k] = conn_str
+        # Must not raise — before the fix this raised ValueError
+        result = _cph._env_knob_is_provided(k)
+        assert result is True, (
+            f"_env_knob_is_provided({k!r}) with connection string returned False"
+        )
+    finally:
+        if prev is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = prev
+
+
+def test_env_knob_is_provided_empty_returns_false():
+    """Empty env value must never pin any knob regardless of parser type."""
+    import core.proxy_handler as _cph
+    for k in list(_cph._HOT_RELOAD_KNOBS)[:5]:
+        prev = os.environ.pop(k, None)
+        try:
+            # No env var set
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True with no env var"
+            )
+            # Explicit empty string
+            os.environ[k] = ""
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True for empty string"
+            )
+            # Whitespace-only
+            os.environ[k] = "   "
+            assert not _cph._env_knob_is_provided(k), (
+                f"_env_knob_is_provided({k!r}) returned True for whitespace-only"
+            )
+        finally:
+            if prev is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = prev
 
 
 # ── 1.5.5 — config_kv persistence ─────────────────────────────────────────
@@ -515,6 +665,7 @@ def test_161_endpoint_rule_lookup():
 # ── 1.6.1 — Tier B: managed body-pattern groups ─────────────────────────
 def test_161_body_groups_match():
     """Each managed group must catch its target attack family."""
+    _saved_bpm = proxy.BODY_PATTERN_MATCH
     proxy.BODY_PATTERN_MATCH = True
     proxy.BODY_GROUP_SQLI_ENABLED = True
     proxy.BODY_GROUP_XSS_ENABLED  = True
@@ -530,8 +681,11 @@ def test_161_body_groups_match():
         (b"u=http://169.254.169.254/latest/",        "text/plain",                        "ssrf"),
         (b"; whoami",                                "text/plain",                        "cmd"),
     ]
-    for body, ctype, expected in cases:
-        assert proxy.match_body_group(body, ctype) == expected, (body, expected)
+    try:
+        for body, ctype, expected in cases:
+            assert proxy.match_body_group(body, ctype) == expected, (body, expected)
+    finally:
+        proxy.BODY_PATTERN_MATCH = _saved_bpm
 
 
 def test_161_body_group_disabled():
@@ -558,10 +712,21 @@ def _mk_jwt(payload, secret):
     return f"{h}.{p}.{b64u(sig)}"
 
 
+def _set_jwt_secret(secret, **claims):
+    """1.9.0+ contract: `proxy._verify_jwt_hs256` reads JWT_* from
+    `proxy.globals()` (which is `proxy` module's attribute dict). The
+    runtime propagator pushes changes to both `proxy` and
+    `integrations.jwt`; tests must do the same explicitly."""
+    _jwt.JWT_HMAC_SECRET = secret
+    proxy.JWT_HMAC_SECRET = secret
+    for k, v in claims.items():
+        setattr(_jwt, k, v)
+        setattr(proxy, k, v)
+
+
 def test_161_jwt_signature_verify():
-    proxy.JWT_HMAC_SECRET = "test-secret"
-    proxy.JWT_REQUIRED_ISSUER = ""
-    proxy.JWT_REQUIRED_AUDIENCE = ""
+    _set_jwt_secret("test-secret",
+                    JWT_REQUIRED_ISSUER="", JWT_REQUIRED_AUDIENCE="")
     tok = _mk_jwt({"sub": "u", "exp": int(time.time()) + 60}, "test-secret")
     ok, _ = proxy._verify_jwt_hs256(tok)
     assert ok
@@ -569,16 +734,14 @@ def test_161_jwt_signature_verify():
     ok, err = proxy._verify_jwt_hs256(tok[:-2] + "AB")
     assert not ok and err == "bad-signature"
     # Wrong secret
-    proxy.JWT_HMAC_SECRET = "different-secret"
+    _set_jwt_secret("different-secret")
     ok, err = proxy._verify_jwt_hs256(tok)
     assert not ok and err == "bad-signature"
 
 
 def test_161_jwt_expiry_and_claims():
-    proxy.JWT_HMAC_SECRET = "s"
-    proxy.JWT_REQUIRED_ISSUER = "iss-x"
-    proxy.JWT_REQUIRED_AUDIENCE = "aud-y"
-    proxy.JWT_LEEWAY_SECS = 30
+    _set_jwt_secret("s", JWT_REQUIRED_ISSUER="iss-x",
+                    JWT_REQUIRED_AUDIENCE="aud-y", JWT_LEEWAY_SECS=30)
     # All good
     tok = _mk_jwt({"sub": "u", "iss": "iss-x", "aud": "aud-y",
                    "exp": int(time.time()) + 60}, "s")
@@ -602,15 +765,20 @@ def test_161_jwt_expiry_and_claims():
 
 
 def test_161_jwt_required_for():
-    save = proxy.JWT_VALIDATE_PATHS
+    # 1.9.0+: must set on BOTH `proxy` and `integrations.jwt` modules —
+    # the propagator does this at runtime; tests must mirror.
+    save = _jwt.JWT_VALIDATE_PATHS
     try:
+        _jwt.JWT_VALIDATE_PATHS = ["/api/v1/*", "/admin/*"]
         proxy.JWT_VALIDATE_PATHS = ["/api/v1/*", "/admin/*"]
         assert proxy._jwt_required_for("/api/v1/users")
         assert proxy._jwt_required_for("/admin/dashboard")
         assert not proxy._jwt_required_for("/public")
+        _jwt.JWT_VALIDATE_PATHS = []
         proxy.JWT_VALIDATE_PATHS = []
         assert not proxy._jwt_required_for("/api/v1/users")
     finally:
+        _jwt.JWT_VALIDATE_PATHS = save
         proxy.JWT_VALIDATE_PATHS = save
 
 
@@ -833,8 +1001,17 @@ def test_163_geo_drill_payload_shape():
 # ── 1.6.4 — DB_BACKEND knob + GW health-score ──────────────────────────
 def test_164_db_backend_default_sqlite():
     """Default backend is sqlite — preserves the zero-deps single-container
-    posture for low-volume operators."""
-    assert proxy.DB_BACKEND == "sqlite"
+    posture for low-volume operators.
+
+    The active backend is auto-derived from POSTGRES_DSN (config.py): DSN set
+    → postgres-only, DSN unset → sqlite-only. So the *default* (no DSN) is
+    sqlite, while a configured DSN correctly selects postgres. Assert that
+    contract rather than a hardcoded value so the PG-mode test harness
+    (POSTGRES_DSN exported) is not a false failure."""
+    if os.environ.get("POSTGRES_DSN", "").strip():
+        assert proxy.DB_BACKEND == "postgres"
+    else:
+        assert proxy.DB_BACKEND == "sqlite"
 
 
 def test_164_db_backend_falls_back_when_psycopg_missing():
@@ -991,7 +1168,8 @@ def test_165_every_knob_persists_round_trip():
     test_values = {
         # Booleans — flip to opposite of env default
         "JS_CHALLENGE": False, "BOT_TRAP_FORMS": False, "BODY_PATTERN_MATCH": False,
-        "CANARY_ECHO_DETECTION": False, "STRICT_ORIGIN": True,
+        "CANARY_ECHO_DETECTION": False, "STRICT_ORIGIN": True, "PRESERVE_HOST": False,
+        "VHOST_PORT_AWARE": True,   # 1.9.8 — host:port as a distinct vhost
         "INJECT_SECURITY_HEADERS": False, "JS_CHAL_BIND_JA4": False,
         "JS_CHAL_REQUIRE_JA4": False, "JS_CHAL_STRICT_STATIC": False,
         "ABUSEIPDB_ENABLED": False, "CROWDSEC_ENABLED": False,
@@ -1003,6 +1181,8 @@ def test_165_every_knob_persists_round_trip():
         "AI_NO_ASSETS_ENABLED": False, "SESSION_FLOOD_ENABLED": False,
         "UPSTREAM_404_TRACKING_ENABLED": False, "ANUBIS_ENABLED": False,
         "ANUBIS_DIFFICULTY_BOOST": 2,
+        # 1.8.9 — knob added without an entry here; flip to True
+        "ALLOW_PRIVATE_UPSTREAM": True,
         "TURNSTILE_RISK_THRESHOLD": 25.0,
         "RISK_BAN_THRESHOLD": 75, "SOFT_CHALLENGE_SCORE": 6.0,
         "RATE_LIMIT_BURST": 88, "RATE_LIMIT_REFILL": 7.0,
@@ -1012,6 +1192,9 @@ def test_165_every_knob_persists_round_trip():
         "SESSION_CHURN_MAX": 50, "JA4_AUTODENY_THRESHOLD": 5,
         "JS_CHAL_OPEN_PATHS": ["/api/v1/", "/health"],
         "JA4_DENY_LIST": {"t13d1516h2_8daaf6152771_b186095e22b6"},
+        # 1.8.14 — newly promoted env knobs (now hot-reloadable)
+        "JA4H_DENY_LIST": {"ge11nn060000_c48a6182b93a"},
+        "ABUSEIPDB_CACHE_HOURS": 12,
         "LOG_LEVEL": "warn",
         "JS_CHALLENGE_TTL": 1800, "ENUM_THRESHOLD": 500,
         "TIMELINE_RETAIN_SECS": 86400, "SVC_DB_RETENTION_HOURS": 168,
@@ -1051,6 +1234,8 @@ def test_165_every_knob_persists_round_trip():
         "LABYRINTH_ENABLED": True, "LABYRINTH_SLOW_MS": 400,
         "LABYRINTH_MAX_DEPTH": 3, "LABYRINTH_LINKS_PER": 2,
         "LABYRINTH_JITTER_ENABLED": True,
+        "REDIRECT_MAZE_ENABLED": True, "REDIRECT_MAZE_THRESHOLD": 75.0,
+        "REDIRECT_MAZE_DEPTH": 4, "REDIRECT_MAZE_MIN_MS": 600,
         "ACCEPT_FP_ENABLED": True,
         "HEADER_CANARY_ENABLED": True,
         # 1.6.10
@@ -1061,6 +1246,12 @@ def test_165_every_knob_persists_round_trip():
         "LOCALE_GEO_CHECK_ENABLED": True,
         "ROBOTS_MONITOR_ENABLED": True,
         "H2_FP_ENABLED": False,
+        # 1.8.14 — threat-intel feed toggles and sidecar/JS-consistency knobs
+        "FEODO_ENABLED": False,
+        "CINS_ENABLED": False,
+        "URLHAUS_ENABLED": False,
+        "H2_SETTINGS_FP_ENABLED": False,
+        "JS_CONSISTENCY_ENABLED": True,
         "POW_MIN_SOLVE_MS": 200,
         # 1.7.2
         "COOKIE_GHOST_ENABLED": True,
@@ -1082,9 +1273,61 @@ def test_165_every_knob_persists_round_trip():
         "BYPASS_PATHS": ["/static/", "/assets/"],
         "BYPASS_MODE": False,
         "UPSTREAM": "https://test-upstream.example.com",
-        "ALLOW_PRIVATE_UPSTREAM": True,
         "STRICT_VHOST": True,
         "UPSTREAM_REWRITE_BASE": "http://host.docker.internal:8080",
+        "REDIS_ALLOW_LIST": ["172.18.0.0/16", "10.0.0.1/32"],
+        # 1.8.9 — always-on-to-knob conversions
+        "WAF_BODY_ENABLED": False, "WAF_SMUGGLING_ENABLED": False,
+        "WAF_VERB_OVERRIDE_ENABLED": False, "WAF_HEADER_INJECTION_ENABLED": False,
+        "WAF_GRAPHQL_ENABLED": False, "WAF_UPLOAD_ENABLED": False,
+        "WAF_SLOWLORIS_ENABLED": False, "ACCEPT_WILDCARD_CHECK_ENABLED": False,
+        "SESSION_CHURN_ENABLED": False, "JA4H_DENY_ENABLED": False,
+        "HOST_BLOCKING_ENABLED": False, "REQUIRED_HEADERS_ENABLED": False,
+        "JA4_REQUIRED_ENABLED": False, "UPSTREAM_AUTH_FAIL_ENABLED": False,
+        "RATE_LIMIT_IP_ENABLED": False, "RATE_LIMIT_ENABLED": False,
+        "FP_BAN_CHECK_ENABLED": False, "TRAFFIC_THRESHOLD_ENABLED": False,
+        "TLS_FP_BLOCK_ENABLED": False, "JWT_VALIDATION_ENABLED": False,
+        "CUSTOM_RULES_ENABLED": False, "ENDPOINT_RATE_LIMIT_ENABLED": False,
+        "HONEY_CRED_ENABLED": False, "CANARY_PROBE_ENABLED": False, "LLM_HEURISTIC_ENABLED": False,
+        "AUTOMATION_PROBE_ENABLED": False, "INTERACTION_PROBE_ENABLED": False,
+        "COORDINATED_ATTACK_ENABLED": False, "JOURNEY_CHECK_ENABLED": False,
+        # 1.8.10
+        "BOT_DETECTION_ENABLED": False,
+        "TRUST_XFF": "first",
+        "TRUSTED_PROXIES": ["10.0.0.0/8"],
+        # 1.8.11 QW-1/QW-6
+        "HONEYPOT_EXTRA_PATHS": ["/test-extra-trap"],
+        # 1.8.12 — honeypot learning subsystem
+        "HONEYPOT_CLUSTER_THRESHOLD": 5,
+        "BEHAVIORAL_SAMPLE_N": 20,
+        "BEHAVIORAL_COV_THRESHOLD": 0.04,
+        "BEHAVIORAL_R1_THRESHOLD": 0.80,
+        "BEHAVIORAL_BIN_PCT_THRESHOLD": 0.65,
+        "BEHAVIORAL_MAX_INTERVAL_S": 1.5,
+        "BEHAVIORAL_SKIP_INTERVAL_S": 4.0,
+        "SERVICE_OWNER": "secops@example.com",
+        "PATH_SWEEP_ENABLED": True,
+        # 1.8.x — security-response-header overrides (all str, no validator)
+        "SEC_X_FRAME_OPTIONS": "DENY",
+        "SEC_X_CONTENT_TYPE_OPTIONS": "nosniff",
+        "SEC_REFERRER_POLICY": "no-referrer",
+        "SEC_X_PERMITTED_XDP": "none",
+        "SEC_PERMISSIONS_POLICY": "geolocation=()",
+        "SEC_HSTS": "max-age=63072000; includeSubDomains",
+        "SEC_CSP": "default-src 'self'",
+        "SEC_COOP": "same-origin",
+        "SEC_CORP": "same-origin",
+        "SEC_SERVER_OVERRIDE": "nginx",
+        "BLOCK_RESPONSE_MODE": "404",
+        "ALLOW_BYPASS_SECS": 600,
+        "UPSTREAM_TIMEOUT_SECS": 15,
+        "UPSTREAM_CONNECT_TIMEOUT_SECS": 5,
+        "CIRCUIT_FAIL_THRESHOLD": 20,
+        "CIRCUIT_OPEN_SECS": 60,
+        "CIRCUIT_HALF_OPEN_MAX": 5,
+        # 1.8.15 — daily scheduled VACUUM hot-reload knob (HH:MM 24h string or "")
+        "VACUUM_DAILY_AT": "03:30",
+        "BAN_SCOPE": "vhost",
     }
     # Coverage: every knob that exists must have a test value
     missing = set(proxy._HOT_RELOAD_KNOBS) - set(test_values)
@@ -1098,20 +1341,24 @@ def test_165_every_knob_persists_round_trip():
                 if hasattr(proxy, k)}
 
     # Wipe + re-seed config_kv with our test values.
-    conn = sqlite3.connect(proxy.DB_PATH)
-    conn.execute("DELETE FROM config_kv")
-    for k, v in test_values.items():
-        # Mimic what /antibot-appsec-gateway/secured/config does on POST: serialise sets as sorted lists,
-        # then json-encode.
-        if isinstance(v, set):
-            ser = sorted(v)
-        else:
-            ser = v
-        conn.execute(
-            "INSERT INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
-            (k, json.dumps(ser), 0.0))
-    conn.commit()
-    conn.close()
+    # Backend-aware: db_load_config() reads config_kv from the ACTIVE backend
+    # (Postgres when POSTGRES_DSN is set, else SQLite). Writing straight to the
+    # SQLite file would leave the PG-mode read empty, so use db.conn.conn()
+    # which targets the same backend db_load_config() reads (commits on exit,
+    # `?` placeholders rewritten to `%s` on PG).
+    from db.conn import conn as _backend_conn
+    with _backend_conn(timeout=10) as _seed:
+        _seed.execute("DELETE FROM config_kv")
+        for k, v in test_values.items():
+            # Mimic what /antibot-appsec-gateway/secured/config does on POST:
+            # serialise sets as sorted lists, then json-encode.
+            if isinstance(v, set):
+                ser = sorted(v)
+            else:
+                ser = v
+            _seed.execute(
+                "INSERT INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
+                (k, json.dumps(ser), 0.0))
 
     # Reset _ENV_PROVIDED_KNOBS so DB wins (test is checking persistence,
     # not env precedence).
@@ -1123,9 +1370,25 @@ def test_165_every_knob_persists_round_trip():
     proxy._city_reader = object()  # truthy marker
     try:
         proxy.db_load_config()
+        # iter-9 (HIGH-1): trust-topology knobs are now refused by
+        # `db_load_config` even when present in config_kv. They live in
+        # `_DB_LOAD_DENY` and must be set via env at deploy time.
+        # Exclude them from this round-trip assertion (the security
+        # contract overrides hot-reload).
+        _deny = getattr(proxy, "_DB_LOAD_DENY", frozenset())
+        # When Postgres is the active backend (POSTGRES_DSN set), the single-DB
+        # contract makes DB_BACKEND auto-derived from the DSN (self-healed to
+        # 'postgres') and POSTGRES_DSN a secret that config_kv must not stomp.
+        # The SQLite-oriented seed values ('sqlite' / '') therefore cannot — and
+        # MUST not — round-trip; that refusal is the correct security behaviour,
+        # so exclude these two knobs from the round-trip check in PG mode.
+        _pg_active = bool(os.environ.get("POSTGRES_DSN", "").strip())
+        _pg_skip = {"DB_BACKEND", "POSTGRES_DSN"} if _pg_active else set()
         # Verify each knob loaded correctly.
         rejected = []
         for k, expected in test_values.items():
+            if k in _deny or k in _pg_skip:
+                continue
             actual = getattr(proxy, k, "<missing>")
             # Normalise sets / lists / objects for comparison.
             if isinstance(expected, set):
@@ -1152,13 +1415,21 @@ def test_165_every_knob_persists_round_trip():
         # Restore originals so other tests aren't polluted.
         proxy._ENV_PROVIDED_KNOBS = saved_env_set
         proxy._city_reader = saved_city_reader
+        import sys as _sys_restore
         for k, v in original.items():
             setattr(proxy, k, v)
-        # Wipe config_kv so other tests start clean.
-        conn = sqlite3.connect(proxy.DB_PATH)
-        conn.execute("DELETE FROM config_kv")
-        conn.commit()
-        conn.close()
+            # Also restore all other loaded modules that db_load_config propagated to.
+            for _m in list(_sys_restore.modules.values()):
+                if (_m is not None and _m is not proxy
+                        and hasattr(_m, k)):
+                    try:
+                        setattr(_m, k, v)
+                    except (AttributeError, TypeError):
+                        pass
+        # Wipe config_kv so other tests start clean (backend-aware).
+        from db.conn import conn as _backend_conn_cleanup
+        with _backend_conn_cleanup(timeout=10) as _wipe:
+            _wipe.execute("DELETE FROM config_kv")
 
 
 def test_165_admin_ip_bypasses_country_block():
@@ -1204,8 +1475,17 @@ def test_165_country_block_enabled_validator_after_maxmind_loaded():
 
 
 def test_165_db_switch_endpoint_registered():
-    """1.6.5 — /antibot-appsec-gateway/secured/db-switch endpoint exists, validates target, returns
-    explicit reason on rejection paths."""
+    """1.6.5 — db-switch endpoint exists, validates target, returns
+    explicit reason on rejection paths.
+
+    Updated for 1.9.0+ architecture: the 1.8.7 hot-swap pattern
+    (`_propagate_global` via sys.modules, no restart) was replaced in
+    1.9.0 by an explicit `os._exit(0)` + docker `--restart=unless-stopped`
+    cycle. F12 (iter-4) added the `pending_bg_migration` config_kv marker
+    consumed by `proxy._resume_pending_bg_migration` on the post-restart
+    side. The restart pattern is required by the single-DB contract:
+    in-process hot-swap couldn't atomically re-route active queue items
+    to the new backend's writer loop."""
     assert hasattr(proxy, "db_switch_endpoint")
     assert callable(proxy.db_switch_endpoint)
     import inspect
@@ -1214,10 +1494,23 @@ def test_165_db_switch_endpoint_registered():
     assert '"sqlite"' in src and '"postgres"' in src
     # Must reject postgres without psycopg
     assert "_postgres_load_module" in src
-    # Must persist via config_kv
-    assert "set_config" in src
-    # Must self-exit so docker restarts
-    assert "os._exit(0)" in src
+    # 1.9.0 — must persist DB_BACKEND. iter-5 B5 switched the path
+    # from `db_queue.put_nowait(("set_config", ...))` to a direct
+    # `INSERT OR REPLACE INTO config_kv` so the value survives the
+    # `os._exit(0)` race.
+    assert "DB_BACKEND" in src and "config_kv" in src
+    # 1.9.0 — single-DB contract requires a clean container restart
+    # to re-route the writer loop. Hot-swap removed; os._exit(0)
+    # required.
+    assert "os._exit" in src, (
+        "db_switch_endpoint must use os._exit(0) to trigger a clean "
+        "container restart — the single-DB writer loop can't hot-swap "
+        "backends mid-flight"
+    )
+    # F12 (iter-4) — deferred bg-migrate via pending_bg_migration marker
+    assert "pending_bg_migration" in src, (
+        "F12 deferred bg-migration marker must be written by the handler"
+    )
 
 
 def test_165_pg_size_sampled_in_svc_metrics():
@@ -1392,7 +1685,7 @@ def test_167_gw_id_from_domain():
     f = proxy._gw_id_from_domain
     # Typical hostnames.
     assert f("gw-prod.example.com")        == "gw-prod-example-com"
-    assert f("Fin-Video.Trycloudflare.COM") == "fin-video-trycloudflare-com"
+    assert f("Demo-Tunnel.Trycloudflare.COM") == "demo-tunnel-trycloudflare-com"
     assert f("gw.local")                   == "gw-local"
     # Edge: empty / None / pure-punctuation collapses.
     assert f("")          == ""
@@ -1406,8 +1699,8 @@ def test_167_gw_id_from_domain():
     assert 2 <= len(out) <= 63
     assert out.startswith("a" * 60)
     # Result must round-trip through the validator.
-    for d in ["gw-prod.example.com", "fin-video-code-harold.trycloudflare.com",
-              "node1.test-env.cfappsecurity.com"]:
+    for d in ["gw-prod.example.com", "demo-tunnel-abc123.trycloudflare.com",
+              "node1.test-env.example.com"]:
         derived = f(d)
         ok, _ = proxy._gw_validate_id(derived)
         assert ok, f"derived {derived!r} from {d!r} fails validator"

@@ -299,7 +299,14 @@ class TestControlsHtml:
         ), "Valid-view guard must whitelist only default/accordion/grid"
 
     def test_c08_valid_view_guard_in_dcl(self):
-        dcl_idx = _CONTROLS_HTML.rfind("DOMContentLoaded")
+        # Contract change: the view-restore guard lives in the DOMContentLoaded
+        # block that reads 'agw_ctrl_view', not the LAST DCL block. The page
+        # gained a later posture-radar DCL boot block, so rfind('DOMContentLoaded')
+        # now lands on unrelated code. Anchor on the restore DCL block instead.
+        restore_idx = _CONTROLS_HTML.find("agw_ctrl_view")
+        assert restore_idx != -1, "view-restore code must read 'agw_ctrl_view'"
+        dcl_idx = _CONTROLS_HTML.rfind("DOMContentLoaded", 0, restore_idx)
+        assert dcl_idx != -1, "view-restore must run inside a DOMContentLoaded block"
         dcl_block = _CONTROLS_HTML[dcl_idx:]
         assert "_validView" in dcl_block or "includes(_savedView)" in dcl_block, (
             "DCL boot code must guard against invalid stored view values"

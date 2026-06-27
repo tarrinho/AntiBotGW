@@ -183,10 +183,10 @@ class TestJa4h:
         assert 0 <= int(hdr_count_str) <= 99
 
     def test_ja4h_deny_list_field_exists(self):
-        """config.JA4H_DENY_LIST must exist and be a frozenset."""
+        """config.JA4H_DENY_LIST must exist and be a mutable set (not frozenset — JSON serialisation)."""
         import config
         assert hasattr(config, "JA4H_DENY_LIST")
-        assert isinstance(config.JA4H_DENY_LIST, frozenset)
+        assert isinstance(config.JA4H_DENY_LIST, set)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

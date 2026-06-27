@@ -48,7 +48,7 @@ def _tor_fetch():
         return
     ctx = ssl.create_default_context()
     req = urllib.request.Request(TOR_FEED_URL, headers={
-        "User-Agent": "AppSecGW/1.6.7 (anti-bot-gw)"
+        "User-Agent": "AntiBotWaf_GW/1.6.7 (anti-bot-gw)"
     })
     new_set = set()
     try:

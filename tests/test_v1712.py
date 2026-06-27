@@ -265,29 +265,39 @@ class TestQ4DeadInnerTryExcept:
         )
 
     def test_load_cache_except_leads_directly_to_return(self):
-        """After removing the dead inner try, the except block in
-        _load_signal_order_cache must go straight to 'return'."""
+        """After removing the dead inner try, the import-guard except block in
+        _load_signal_order_cache must lead to 'return', not another try block.
+        Contract change (v1.7.12 shipped form): the except binds the error
+        ('except Exception as exc:') and logs via slog(...) before returning,
+        rather than going bare-'except Exception:'→'return'. The real intent —
+        no nested 'try:' inside the except — is what is asserted here."""
         src = self._fn_source("_load_signal_order_cache")
-        # Pattern: 'except Exception:' followed by optional whitespace then 'return'
-        # with no nested 'try:' in between
+        # Pattern: 'except Exception[ as exc]:' → a slog(...) log line → 'return'
+        # with no nested 'try:' in between.
         except_to_return = re.search(
-            r'except Exception:\s*\n\s*return', src
+            r'except Exception(?: as \w+)?:\s*\n\s*slog\([^\n]*\n\s*return', src
         )
         assert except_to_return, (
-            "_load_signal_order_cache: 'except Exception:' must be followed "
-            "directly by 'return', not another try block"
+            "_load_signal_order_cache: import-guard 'except' must lead to "
+            "'return' (after logging), not another try block"
         )
 
     def test_save_signal_except_leads_directly_to_return(self):
-        """After removing the dead inner try, the except block in
-        _save_signal_order must go straight to 'return'."""
+        """After removing the dead inner try, the import-guard except block in
+        _save_signal_order must lead to 'return', not another try block.
+        Contract change (v1.7.12 shipped form): the except binds the error
+        ('except Exception as exc:') and logs via slog(...) before returning,
+        rather than going bare-'except Exception:'→'return'. The real intent —
+        no nested 'try:' inside the except — is what is asserted here."""
         src = self._fn_source("_save_signal_order")
+        # Pattern: 'except Exception[ as exc]:' → a slog(...) log line → 'return'
+        # with no nested 'try:' in between.
         except_to_return = re.search(
-            r'except Exception:\s*\n\s*return', src
+            r'except Exception(?: as \w+)?:\s*\n\s*slog\([^\n]*\n\s*return', src
         )
         assert except_to_return, (
-            "_save_signal_order: 'except Exception:' must be followed "
-            "directly by 'return', not another try block"
+            "_save_signal_order: import-guard 'except' must lead to "
+            "'return' (after logging), not another try block"
         )
 
 
@@ -483,11 +493,14 @@ class TestS2InternalKeyNotPrinted:
         )
 
     def test_proxy_source_truncates_key_to_4_chars(self):
-        """proxy.py must use INTERNAL_KEY[:4] for the boot banner."""
+        """proxy.py boot banner must NOT expose INTERNAL_KEY bytes (F-14 info-leak fix)."""
         import proxy
         src = inspect.getsource(proxy)
-        assert "INTERNAL_KEY[:4]" in src, (
-            "proxy.py must show only INTERNAL_KEY[:4] in the boot banner — S2 fix"
+        assert "INTERNAL_KEY[:4]" not in src, (
+            "proxy.py must NOT print INTERNAL_KEY[:4] in the boot banner — F-14 info-leak"
+        )
+        assert "_KEY_FILE" in src, (
+            "proxy.py boot banner must reference _KEY_FILE for operator guidance — S2"
         )
 
     def test_proxy_source_references_key_file_path(self):
@@ -739,7 +752,7 @@ class TestP4SharedHttpSession:
     def test_webhook_source_uses_get_session(self):
         """webhook delivery must use _get_session() (shared session reuse)."""
         import integrations.webhook as wh
-        # 1.8.5: delivery moved to _webhook_worker (queue+retry); _get_session()
+        # 1.8.6: delivery moved to _webhook_worker (queue+retry); _get_session()
         # is still called there — check the worker instead of _post_webhook.
         worker_src = inspect.getsource(wh._webhook_worker)
         post_src = inspect.getsource(wh._post_webhook)
@@ -1189,18 +1202,68 @@ _DASH_FILES = [
 ]
 
 
+def _strip_js_comments(s: str) -> str:
+    """Replace JS line and block comments with same-length whitespace runs so
+    line numbers and offsets are preserved.
+
+    iter-18: needed by `_dp_calls_with_onclick` because the original
+    bracket-matcher was thrown off by apostrophes inside `// operator's …`
+    comments (phantom string-open that never closed → captured chunk ran to
+    EOF, false-positiving every later `onclick=` in unrelated HTML markup).
+
+    Strategy — to avoid the very same desync trap I'd be patching against,
+    this stripper does NOT track string state. Instead:
+      • `// …\\n` is stripped only when the `//` starts a logical line
+        (preceded by start-of-line + whitespace only) — that pattern is
+        what real JS comments look like, while URL-in-string `https://...`
+        would have non-whitespace before the `//`.
+      • `/* … */` blocks are stripped wherever they appear; the `/* */`
+        token pair is rarely valid inside a JS string.
+    Newlines are preserved so line numbers stay aligned for the caller."""
+    # Block comments first: `/* ... */`, possibly multi-line.
+    def _block_repl(m):
+        return ''.join(ch if ch == '\n' else ' ' for ch in m.group())
+    s = _re.sub(r'/\*[\s\S]*?\*/', _block_repl, s)
+    # Line comments only at column-0 (after optional leading whitespace) —
+    # avoids stripping `://` in URL string literals.
+    def _line_repl(m):
+        # Keep the leading whitespace, blank the rest of the line.
+        ws = m.group(1)
+        return ws + ' ' * (len(m.group()) - len(ws))
+    s = _re.sub(r'(?m)^([ \t]*)//[^\n]*', _line_repl, s)
+    return s
+
+
 def _dp_calls_with_onclick(html: str) -> list[int]:
-    """Return line numbers of _dp() calls whose argument contains 'onclick'."""
+    """Return line numbers of _dp() calls whose argument contains an HTML
+    `onclick="…"` / `onclick='…'` attribute (the kind DOMPurify strips).
+
+    iter-18 hardening:
+      • the substring check `'onclick' in chunk` was too broad — flagged
+        JS property assignments (`el.onclick = ()=>{…}`) as false
+        positives. Replaced with an attribute-form regex requiring the
+        `="` / `='` syntax and rejecting dotted access (`.onclick`).
+      • the bracket-matcher's string-state tracking did not understand JS
+        comments. An apostrophe inside `// foo's bar` opened a phantom
+        string that never closed — depth-tracking ran off the end of the
+        file, capturing every later `onclick="…"` in unrelated HTML
+        markup as a "match". Now we strip comments first with
+        `_strip_js_comments` (preserving line numbers + offsets) so the
+        match accurately reflects the actual `_dp()` argument."""
+    stripped = _strip_js_comments(html)
     bad_lines = []
-    for m in _re.finditer(r'_dp\(', html):
+    # Match HTML attribute form: `onclick="…"` or `onclick='…'`, not
+    # preceded by a `.` (which would make it a JS property access).
+    attr_re = _re.compile(r'(?<!\.)\bonclick\s*=\s*["\']')
+    for m in _re.finditer(r'_dp\(', stripped):
         start = m.start()
         depth = 0
         i = start + 4
         in_str = None
-        while i < len(html) and depth >= 0:
-            c = html[i]
+        while i < len(stripped) and depth >= 0:
+            c = stripped[i]
             if in_str:
-                if c == in_str and html[i - 1] != '\\':
+                if c == in_str and stripped[i - 1] != '\\':
                     in_str = None
             else:
                 if c in ('"', "'", '`'):
@@ -1210,9 +1273,9 @@ def _dp_calls_with_onclick(html: str) -> list[int]:
                 elif c == ')':
                     depth -= 1
             i += 1
-        chunk = html[start:i]
-        if 'onclick' in chunk:
-            bad_lines.append(html[:start].count('\n') + 1)
+        chunk = stripped[start:i]
+        if attr_re.search(chunk):
+            bad_lines.append(stripped[:start].count('\n') + 1)
     return bad_lines
 
 

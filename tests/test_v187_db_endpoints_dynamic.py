@@ -103,21 +103,29 @@ def _csrf_hdr(proxy_module, cookie):
 
 
 def _make_viewer_cookie(proxy_module):
-    """Prime a viewer-role session. Insert the user directly into the DB."""
-    import sqlite3, hashlib
-    db_path = proxy_module.DB_PATH
-    # Insert viewer user if not already present
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS users "
-        "(username TEXT PRIMARY KEY, password_hash TEXT, role TEXT, "
-        "status TEXT, created_ts REAL, updated_ts REAL)"
-    )
+    """Prime a viewer-role session. Insert the user via the gateway's own
+    backend-aware connection.
+
+    _request_role() -> _user_load() reads users via db.open_conn() (PG in
+    PG-only mode, SQLite otherwise). Seeding a raw sqlite3.connect(DB_PATH)
+    here wrote to an unused local file in PG mode, so _user_load() returned
+    None and _request_role() fell back to the key-only 'admin' default — the
+    viewer was silently treated as admin and the role-gate test saw a 200
+    instead of the expected 403. Route the seed through open_conn so the user
+    lands in the SAME backend the role check reads. (1.9.1 iter-18 backend-
+    aware reads.)
+    """
+    import hashlib
+    from db import open_conn as _open_conn
     pw_hash = hashlib.sha256(b"Viewer-QA-pass1!").hexdigest()
     n = proxy_module._t.time()
+    # users table already exists (db_init ran on proxy boot). DELETE+INSERT is
+    # dialect-neutral; the open_conn wrapper rewrites ? -> %s on PG.
+    conn = _open_conn()
+    conn.execute("DELETE FROM users WHERE username=?", ("viewer_qa",))
     conn.execute(
-        "INSERT OR REPLACE INTO users (username, password_hash, role, status, created_ts, updated_ts) "
-        "VALUES (?, ?, 'viewer', 'active', ?, ?)",
+        "INSERT INTO users (username, password_hash, role, status, "
+        "created_ts, updated_ts) VALUES (?, ?, 'viewer', 'active', ?, ?)",
         ("viewer_qa", pw_hash, n, n),
     )
     conn.commit()
@@ -174,14 +182,12 @@ class TestDbMigrationStatusEndpoint:
         _run(go())
 
     def test_dbqa03_never_run_state(self, proxy_module):
-        """DBQA-03: Fresh state → running=False, done=False."""
-        import db.postgres as pg
-        pg._BG_MIGRATION.update({
-            "running": False, "done": False, "error": None,
-            "direction": "", "total": 0, "copied": 0,
-            "started_at": 0.0, "finished_at": 0.0,
-        })
+        """DBQA-03: Fresh state (no pending marker) → running=False, marker=None.
 
+        Contract change (1.9.0 F12): the endpoint no longer polls the in-memory
+        _BG_MIGRATION dict; it reads the durable `pending_bg_migration` config_kv
+        marker. "Never run" means no marker row, so running=False / marker=None.
+        (proxy_handler.py:4768 db_migration_status_endpoint)."""
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -192,7 +198,7 @@ class TestDbMigrationStatusEndpoint:
                     )
                     d = await r.json()
                     assert d["running"] is False, f"DBQA-03: running should be False, got {d['running']}"
-                    assert d["done"] is False,    f"DBQA-03: done should be False, got {d['done']}"
+                    assert d.get("marker") is None, f"DBQA-03: marker should be None when never run, got {d}"
         _run(go())
 
     def test_dbqa04_cache_control_no_store(self, proxy_module):
@@ -210,14 +216,111 @@ class TestDbMigrationStatusEndpoint:
                         f"DBQA-04: Cache-Control must contain 'no-store', got '{cc}'"
         _run(go())
 
-    def test_dbqa05_pct_eta_rate_zero_when_idle(self, proxy_module):
-        """DBQA-05: pct/rate_per_sec/elapsed_secs are 0.0 and eta_secs is None when idle."""
-        import db.postgres as pg
-        pg._BG_MIGRATION.update({
-            "running": False, "done": False, "error": None,
-            "direction": "", "total": 0, "copied": 0,
-            "started_at": 0.0, "finished_at": 0.0,
-        })
+    def test_dbqa05_idle_payload_shape(self, proxy_module):
+        """DBQA-05: idle (no pending marker) → running=False and no marker payload.
+
+        Contract change (1.9.0 F12): progress fields (pct/rate_per_sec/
+        elapsed_secs/eta_secs) were dropped when the endpoint stopped polling the
+        in-memory _BG_MIGRATION dict and became a thin reader over the durable
+        `pending_bg_migration` config_kv marker. When idle there is no marker, so
+        the payload carries no progress numbers at all.
+        (proxy_handler.py:4768 db_migration_status_endpoint)."""
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    cookie = self._cookie(proxy_module)
+                    r = await c.get(
+                        NS + "/db-migration-status",
+                        cookies={proxy_module._SESSION_COOKIE: cookie},
+                    )
+                    d = await r.json()
+                    assert d.get("running") is False,  f"DBQA-05: running should be False when idle, got {d}"
+                    assert d.get("marker") is None,    f"DBQA-05: marker should be None when idle, got {d}"
+        _run(go())
+
+    def test_dbqa11_running_state_exposes_marker(self, proxy_module):
+        """DBQA-11: Pending/in-flight marker → running=True and decoded marker.
+
+        Contract change (1.9.0 F12): a deferred migration is signalled by a
+        durable `pending_bg_migration` config_kv row (written at db-switch time,
+        claimed by the boot hook). The endpoint surfaces it as
+        {"running": True, "marker": <decoded dict>}; the old in-memory progress
+        numbers (pct/elapsed_secs/eta_secs/rate_per_sec) no longer exist.
+        (proxy_handler.py:4768 db_migration_status_endpoint; marker writer
+        proxy_handler.py:4619)."""
+        import sqlite3, json as _json
+        marker = {
+            "target":       "postgres",
+            "direction":    "sqlite->postgres",
+            "cutoff_ts":    time.time(),
+            "scheduled_ts": time.time(),
+            "actor":        "admin",
+        }
+
+        async def go():
+            async with _spin_upstream() as up:
+                async with _spin_proxy(proxy_module, up) as c:
+                    # Write the F12 marker AFTER startup so the config_kv table
+                    # (created during proxy boot/migration) exists.
+                    # db_migration_status_endpoint reads config_kv via
+                    # db.open_conn() (PG in PG-only mode), so seed through the
+                    # SAME backend — a raw sqlite3.connect(DB_PATH) wrote an
+                    # unused local row in PG mode and the endpoint reported
+                    # running=False/marker=None.
+                    from db import open_conn as _open_conn
+                    conn = _open_conn()
+                    conn.execute(
+                        "DELETE FROM config_kv WHERE key=?",
+                        ("pending_bg_migration",),
+                    )
+                    conn.execute(
+                        "INSERT INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
+                        ("pending_bg_migration", _json.dumps(marker), time.time()),
+                    )
+                    conn.commit()
+                    conn.close()
+                    cookie = self._cookie(proxy_module)
+                    r = await c.get(
+                        NS + "/db-migration-status",
+                        cookies={proxy_module._SESSION_COOKIE: cookie},
+                    )
+                    d = await r.json()
+                    assert d["running"] is True,        f"DBQA-11: running should be True with a pending marker, got {d}"
+                    assert isinstance(d.get("marker"), dict), f"DBQA-11: marker dict missing: {d}"
+                    assert d["marker"].get("direction") == "sqlite->postgres", \
+                        f"DBQA-11: marker direction not surfaced: {d}"
+        _run(go())
+
+        # Restore clean state: remove the marker row via the active backend.
+        from db import open_conn as _open_conn
+        conn = _open_conn()
+        try:
+            conn.execute("DELETE FROM config_kv WHERE key = ?", ("pending_bg_migration",))
+            conn.commit()
+        except Exception:
+            pass
+        conn.close()
+
+    def test_dbqa12_done_state_clears_marker(self, proxy_module):
+        """DBQA-12: Completed migration → marker cleared → running=False, marker=None.
+
+        Contract change (1.9.0 F12): completion is not reported as a done=True/
+        pct=100 payload anymore. When the boot hook (proxy._resume_pending_bg_
+        migration) finishes the copy it DELETEs the `pending_bg_migration`
+        config_kv marker (proxy.py:338), so a finished migration is observable
+        only as the absence of the marker: running=False, marker=None — the same
+        terminal shape as never-run.
+        (proxy_handler.py:4768 db_migration_status_endpoint)."""
+        import sqlite3
+        # Simulate the post-completion state: boot hook has deleted the marker.
+        conn = sqlite3.connect(proxy_module.DB_PATH)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS config_kv "
+            "(key TEXT PRIMARY KEY, value TEXT, ts REAL)"
+        )
+        conn.execute("DELETE FROM config_kv WHERE key = ?", ("pending_bg_migration",))
+        conn.commit()
+        conn.close()
 
         async def go():
             async with _spin_upstream() as up:
@@ -228,88 +331,9 @@ class TestDbMigrationStatusEndpoint:
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     d = await r.json()
-                    assert d.get("pct") == 0.0,            f"DBQA-05: pct should be 0.0 when idle, got {d}"
-                    assert d.get("rate_per_sec") == 0.0,   f"DBQA-05: rate_per_sec should be 0.0 when idle, got {d}"
-                    assert d.get("elapsed_secs") == 0.0,   f"DBQA-05: elapsed_secs should be 0.0 when idle, got {d}"
-                    assert d.get("eta_secs") is None,      f"DBQA-05: eta_secs should be None when idle, got {d}"
+                    assert d["running"] is False,    f"DBQA-12: running should be False after completion, got {d}"
+                    assert d.get("marker") is None,  f"DBQA-12: marker should be cleared after completion, got {d}"
         _run(go())
-
-    def test_dbqa11_running_state_has_progress_fields(self, proxy_module):
-        """DBQA-11: Simulated running state → pct + elapsed_secs + eta_secs + rate_per_sec."""
-        import db.postgres as pg
-        pg._BG_MIGRATION.update({
-            "running":    True,
-            "done":       False,
-            "error":      None,
-            "direction":  "sqlite->postgres",
-            "total":      1000,
-            "copied":     500,
-            "started_at": time.time() - 10.0,
-            "finished_at": 0.0,
-        })
-
-        async def go():
-            async with _spin_upstream() as up:
-                async with _spin_proxy(proxy_module, up) as c:
-                    cookie = self._cookie(proxy_module)
-                    r = await c.get(
-                        NS + "/db-migration-status",
-                        cookies={proxy_module._SESSION_COOKIE: cookie},
-                    )
-                    d = await r.json()
-                    assert d["running"] is True,        f"DBQA-11: running should be True, got {d}"
-                    assert "pct" in d,                  f"DBQA-11: pct missing from running state: {d}"
-                    assert "elapsed_secs" in d,         f"DBQA-11: elapsed_secs missing: {d}"
-                    assert "eta_secs" in d,             f"DBQA-11: eta_secs missing: {d}"
-                    assert "rate_per_sec" in d,         f"DBQA-11: rate_per_sec missing: {d}"
-                    assert 45.0 <= d["pct"] <= 55.0,   f"DBQA-11: pct should be ~50, got {d['pct']}"
-                    assert d["elapsed_secs"] >= 5.0,   f"DBQA-11: elapsed_secs should be >=5, got {d['elapsed_secs']}"
-        _run(go())
-
-        # Restore clean state
-        pg._BG_MIGRATION.update({
-            "running": False, "done": False, "error": None,
-            "direction": "", "total": 0, "copied": 0,
-            "started_at": 0.0, "finished_at": 0.0,
-        })
-
-    def test_dbqa12_done_state_fields(self, proxy_module):
-        """DBQA-12: Simulated done state → done=True, pct=100 (if total>0), finished_at present."""
-        import db.postgres as pg
-        finished = time.time() - 2.0
-        pg._BG_MIGRATION.update({
-            "running":    False,
-            "done":       True,
-            "error":      None,
-            "direction":  "postgres->sqlite",
-            "total":      200,
-            "copied":     200,
-            "started_at": finished - 5.0,
-            "finished_at": finished,
-        })
-
-        async def go():
-            async with _spin_upstream() as up:
-                async with _spin_proxy(proxy_module, up) as c:
-                    cookie = self._cookie(proxy_module)
-                    r = await c.get(
-                        NS + "/db-migration-status",
-                        cookies={proxy_module._SESSION_COOKIE: cookie},
-                    )
-                    d = await r.json()
-                    assert d["done"] is True,           f"DBQA-12: done should be True, got {d}"
-                    assert d["running"] is False,       f"DBQA-12: running should be False, got {d}"
-                    assert "pct" in d,                  f"DBQA-12: pct missing from done state: {d}"
-                    assert d["pct"] == 100.0,           f"DBQA-12: pct should be 100, got {d['pct']}"
-                    assert "finished_at" in d,          f"DBQA-12: finished_at missing: {d}"
-        _run(go())
-
-        # Restore
-        pg._BG_MIGRATION.update({
-            "running": False, "done": False, "error": None,
-            "direction": "", "total": 0, "copied": 0,
-            "started_at": 0.0, "finished_at": 0.0,
-        })
 
 
 # ── DBQA-06 through DBQA-10 + 19-20: POST /secured/db-switch ─────────────────
@@ -392,8 +416,21 @@ class TestDbSwitchEndpoint:
                         f"DBQA-09: full_migrate_scheduled should be False, got {d}"
         _run(go())
 
-    def test_dbqa10_full_migrate_already_running_not_double_started(self, proxy_module):
-        """DBQA-10: full_migrate=true but migration already running → not rescheduled."""
+    def test_dbqa10_full_migrate_already_running_defers_safely(self, proxy_module):
+        """DBQA-10 (1.9.0 F12): full_migrate=true even while a migration is
+        currently running must still persist the deferred-migration marker —
+        the boot-time resumer (_resume_deferred_full_migrate) uses an atomic
+        _try_claim_bg_migration check so two markers can never both run.
+
+        Pre-F12 contract refused the second schedule outright
+        (`full_migrate_scheduled=False`). The new F12 contract accepts it
+        and queues the resume on next restart, because:
+          • the marker write is idempotent (latest wins)
+          • boot-resume single-flights via _try_claim_bg_migration
+          • restarting mid-run would have aborted the first migration
+            anyway under the single-DB contract
+
+        So `full_migrate_scheduled=True` is the correct response."""
         import db.postgres as pg
         pg._BG_MIGRATION["running"] = True
 
@@ -402,7 +439,6 @@ class TestDbSwitchEndpoint:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = self._cookie(proxy_module)
                     with patch("os._exit"):
-                        # target via query param; full_migrate in body
                         r = await c.post(
                             NS + "/db-switch?target=sqlite",
                             json={"full_migrate": True},
@@ -410,8 +446,16 @@ class TestDbSwitchEndpoint:
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                     d = await r.json()
-                    assert d.get("full_migrate_scheduled") is False, \
-                        f"DBQA-10: should not double-start migration, got {d}"
+                    # F12: deferred marker writes succeed regardless of
+                    # current-running state. full_migrate_scheduled tracks
+                    # "the marker was persisted" — NOT "the bg thread
+                    # started right now".
+                    assert d.get("full_migrate_scheduled") is True, (
+                        f"DBQA-10: with F12 deferred-migration, marker write "
+                        f"must succeed even when a migration is currently "
+                        f"running. Boot-resume single-flights via "
+                        f"_try_claim_bg_migration. Got: {d}"
+                    )
         _run(go())
         pg._BG_MIGRATION["running"] = False
 

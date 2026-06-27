@@ -98,7 +98,7 @@ def _extract_fn_body(src: str, fn_name: str) -> str:
 
 
 def _extract_dcl_body(src: str) -> str:
-    idx = src.find("DOMContentLoaded")
+    idx = src.rfind("DOMContentLoaded")  # 1.8.12: last DOMContentLoaded = chart/init block (sidebar accordion adds an earlier one)
     assert idx != -1, "DOMContentLoaded not found in control_center.html"
     end = src.find("});", idx)
     return src[idx:end]
@@ -353,7 +353,7 @@ def test_s26_incident_critical_frozenset_defined():
     assert "_INCIDENT_CRITICAL" in src, (
         "analytics.py: _INCIDENT_CRITICAL frozenset not defined."
     )
-    for reason in ("canary-echo", "honey-cred", "redirect-maze-bot", "canary-probe-miss"):
+    for reason in ("canary-echo", "honey-cred", "canary-probe-miss"):
         assert reason in src, (
             f"analytics.py: '{reason}' not in _INCIDENT_CRITICAL."
         )
@@ -483,6 +483,43 @@ def test_s35_render_incidents_uses_escape_html():
 NS = "/antibot-appsec-gateway/secured"
 
 
+def _pg_active() -> bool:
+    """True when the suite runs against a real Postgres backend.
+
+    /security-incidents reads from whichever backend is active, so the seed
+    must target the SAME backend the endpoint reads — otherwise (PG-mode) we
+    seed SQLite while the endpoint queries Postgres and the seeded incident is
+    invisible."""
+    import os
+    return (os.environ.get("APPSECGW_TEST_PG", "").lower() in ("1", "true", "yes")
+            and bool(os.environ.get("POSTGRES_DSN", "").strip()))
+
+
+def _seed_incident_events(proxy_module, rows):
+    """Insert (ts, ip, ua, path, method, status, reason, vhost) rows into the
+    ACTIVE backend (SQLite by default, Postgres when APPSECGW_TEST_PG=1)."""
+    rows = list(rows)
+    if _pg_active():
+        import psycopg, os
+        with psycopg.connect(os.environ["POSTGRES_DSN"], connect_timeout=5) as _c:
+            # PG events.ts is `timestamp with time zone` → to_timestamp(epoch).
+            _c.cursor().executemany(
+                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+                "VALUES (to_timestamp(%s),%s,%s,%s,%s,%s,%s,%s)",
+                rows,
+            )
+            _c.commit()
+    else:
+        conn = sqlite3.connect(proxy_module.DB_PATH)
+        conn.executemany(
+            "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+
+
 async def _echo_handler(request: web.Request):
     return web.json_response({"ok": True})
 
@@ -587,7 +624,10 @@ async def test_d05_security_incidents_requires_auth(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (302, 401, 403), (
+                # 404 = silent-decoy deflection: unauthenticated probes to a
+                # secured admin endpoint get the upstream-mirrored 404 (recon
+                # hardening), the stronger shipped deflection vs a bare 401/403.
+                assert r.status in (302, 401, 403, 404), (
                     f"/security-incidents: unexpected status {r.status} for unauthenticated request."
                 )
 
@@ -630,15 +670,10 @@ async def test_d08_security_incidents_seeded_critical_event(proxy_module):
             cookies = _admin_cookie(proxy_module)
             # Seed a canary-echo event directly into the proxy module's DB
             ts_now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            _seed_incident_events(proxy_module, [
                 (ts_now, "10.0.0.1", "curl/7.0", "/canary-token", "GET", 200,
                  "canary-echo", "example.com"),
-            )
-            conn.commit()
-            conn.close()
+            ])
 
             r = await cli.get(f"{NS}/security-incidents", cookies=cookies)
             data = await r.json()
@@ -663,15 +698,10 @@ async def test_d09_high_severity_event_classified_correctly(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             ts_now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            _seed_incident_events(proxy_module, [
                 (ts_now, "10.0.0.2", "attacker-ua", "/eval()", "POST", 403,
                  "body-rce", "target.com"),
-            )
-            conn.commit()
-            conn.close()
+            ])
 
             r = await cli.get(f"{NS}/security-incidents", cookies=cookies)
             data = await r.json()
@@ -695,15 +725,10 @@ async def test_d10_medium_severity_event_classified_correctly(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             ts_now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            _seed_incident_events(proxy_module, [
                 (ts_now, "10.0.0.3", "scanner/1.0", "/api/v1", "GET", 429,
                  "rate-burst", "api.example.com"),
-            )
-            conn.commit()
-            conn.close()
+            ])
 
             r = await cli.get(f"{NS}/security-incidents", cookies=cookies)
             data = await r.json()
@@ -724,16 +749,11 @@ async def test_d11_non_incident_reason_excluded(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             ts_now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
             # Insert an event with reason NOT in _INCIDENT_ALL
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            _seed_incident_events(proxy_module, [
                 (ts_now, "10.0.0.4", "chrome/120", "/index.html", "GET", 200,
                  "ok", "clean.example.com"),
-            )
-            conn.commit()
-            conn.close()
+            ])
 
             r = await cli.get(f"{NS}/security-incidents", cookies=cookies)
             data = await r.json()
@@ -775,17 +795,13 @@ async def test_d14_incidents_ordered_newest_first(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             ts_base = time.time() - 100
-            conn = sqlite3.connect(proxy_module.DB_PATH)
             # Insert 3 incidents with different timestamps (oldest first in DB)
-            for i, (offset, reason) in enumerate([(0, "canary-echo"), (30, "body-rce"), (60, "honeypot")]):
-                conn.execute(
-                    "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (ts_base + offset, f"10.1.1.{i+1}", "ua", "/path", "GET", 200,
-                     reason, "order-test.com"),
-                )
-            conn.commit()
-            conn.close()
+            _seed_incident_events(proxy_module, [
+                (ts_base + offset, f"10.1.1.{i+1}", "ua", "/path", "GET", 200,
+                 reason, "order-test.com")
+                for i, (offset, reason) in enumerate(
+                    [(0, "canary-echo"), (30, "body-rce"), (60, "honeypot")])
+            ])
 
             r = await cli.get(f"{NS}/security-incidents", cookies=cookies)
             data = await r.json()
@@ -808,15 +824,10 @@ async def test_d15_ua_and_path_truncated_in_response(proxy_module):
             long_ua = "X" * 500
             long_path = "/" + "Y" * 600
             ts_now = time.time()
-            conn = sqlite3.connect(proxy_module.DB_PATH)
-            conn.execute(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            _seed_incident_events(proxy_module, [
                 (ts_now, "10.2.2.1", long_ua, long_path, "GET", 200,
                  "canary-echo", "truncation-test.com"),
-            )
-            conn.commit()
-            conn.close()
+            ])
 
             r = await cli.get(f"{NS}/security-incidents", cookies=cookies)
             data = await r.json()

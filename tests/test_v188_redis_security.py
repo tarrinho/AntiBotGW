@@ -149,7 +149,7 @@ class TestRedisBanHmac:
         signed = m._hmac_sign("1748000000|reason")
         parts = signed.rsplit("|", 1)
         assert len(parts) == 2
-        assert len(parts[1]) == 16, f"sig should be 16 hex chars, got {parts[1]!r}"
+        assert len(parts[1]) == 32, f"sig should be 32 hex chars (F-09: 128-bit), got {parts[1]!r}"
 
     def test_verify_roundtrip(self):
         m = self._with_key(b"secret")

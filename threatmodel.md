@@ -1,8 +1,8 @@
-# Threat Model — AppSecGW 1.6.7
+# Threat Model — AntiBot/WAF GW 1.6.7
 
 Author: Pedro Tarrinho
 Date: 2026-05-01
-Scope: AppSecGW 1.6.7 (post-1.6.7-revalidation cut)
+Scope: AntiBot/WAF GW 1.6.7 (post-1.6.7-revalidation cut)
 
 ---
 

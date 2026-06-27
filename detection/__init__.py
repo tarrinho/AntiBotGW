@@ -14,6 +14,7 @@ from detection.cookie_lifecycle import *
 from detection.referer_chain import *
 from detection.impossible_travel import *
 from detection.fp_enrichment import *
+from detection.js_consistency import *
 
 # Standard Detector interface + reference implementations.
 from detection.base import Detector, REGISTRY, register  # noqa: F401

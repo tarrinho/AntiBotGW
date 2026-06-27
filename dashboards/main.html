@@ -1,44 +1,58 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
+<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Live Feed</title>
+<title>AntiBotWaf_GW_1.9.8 · Live Feed</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}html[data-theme="light"] #stale-banner{background:#fde8e8!important;border-bottom-color:var(--red)!important;color:#991b1b!important}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);
   display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;
   font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;
   padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:#1f2730}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Compact topbar ── */
 #topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;
-  padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+  padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
-#vhost-select{background:#161b22;border:1px solid var(--line);color:var(--fg);
+#vhost-select{background:var(--card);border:1px solid var(--line);color:var(--fg);
   border-radius:5px;padding:4px 10px;font-size:12px;font-family:inherit;cursor:pointer;
-  display:none;max-width:260px}
+  display:none;max-width:220px}
 #vhost-select:focus{outline:none;border-color:var(--blue)}
+#vhost-search-inp{display:none;background:var(--card);border:1px solid var(--line);color:var(--fg);
+  border-radius:5px;padding:4px 8px;font-size:12px;font-family:inherit;width:110px}
+#vhost-search-inp:focus{outline:none;border-color:var(--blue)}
 /* ── Page content ── */
 #page-content{flex:1;padding:14px}
 .btn-unban{background:var(--yellow);color:#000;border:none;padding:3px 9px;
@@ -55,25 +69,25 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .ban-btn.allow.active{background:rgba(63,185,80,.2);color:#3fb950}
 .ban-btn.banned.active{background:rgba(210,153,34,.2);color:#d29922}
 .ban-btn.really-banned.active{background:rgba(248,81,73,.2);color:#f85149}
-.ban-btn.authorized-bot.active{background:rgba(88,166,255,.2);color:var(--blue)}
+.ban-btn.authorized-bot.active{background:rgba(121,192,255,.2);color:var(--blue)}
 .grid{display:grid;gap:14px;margin-top:14px}
 .row{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
-.metric{font-size:30px;font-weight:600;color:#fff;line-height:1}
+.metric{font-size:30px;font-weight:600;color:var(--bright);line-height:1}
 .metric.allowed{color:var(--green)}
 .metric.blocked{color:var(--red)}
 .metric.total{color:var(--blue)}
 .metric.uptime{color:var(--yellow);font-size:18px}
 .metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
 table{width:100%;border-collapse:collapse;font-size:12px}
-table th{background:#21262d;color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
+table th{background:var(--bg-elevated);color:var(--dim);text-align:left;padding:6px 8px;font-weight:500;
          text-transform:uppercase;letter-spacing:.5px;font-size:10px}
 #clients-tbl thead th{position:sticky;top:0;z-index:1}
 th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
 th.sortable:hover{color:var(--fg,#e6edf3)}
 th.sortable::after{content:' ↕';opacity:.55;font-size:10px;text-transform:none}
-th.sort-asc::after{content:' ▲';opacity:1;color:var(--blue,#58a6ff);text-transform:none}
-th.sort-desc::after{content:' ▼';opacity:1;color:var(--blue,#58a6ff);text-transform:none}
+th.sort-asc::after{content:' ▲';opacity:1;color:var(--blue,#79c0ff);text-transform:none}
+th.sort-desc::after{content:' ▼';opacity:1;color:var(--blue,#79c0ff);text-transform:none}
 table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;font-family:ui-monospace}
 .tag.OK{background:#1f4830;color:var(--green)}
@@ -96,13 +110,22 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .tag.honeypot-silent{background:#2d1a4a;color:#a78bfa}
 .tag.authorized-robot{background:#2d1a4a;color:#bc8cff}
 .tag.gwmgmt-tag{background:#0d2340;color:#e4f0ff}
+/* light-theme tag overrides — pale bg + darker fg (dark defaults above stay dark) */
+html[data-theme="light"] .tag.OK{background:#e6f6ec;color:#1a7f37}
+html[data-theme="light"] .tag.banned,html[data-theme="light"] .tag.ua-blocked,html[data-theme="light"] .tag.ua-empty,html[data-theme="light"] .tag.ua-too-short,html[data-theme="light"] .tag.ua-non-browser{background:#fff8c5;color:#9a6700}
+html[data-theme="light"] .tag.really-banned,html[data-theme="light"] .tag.rate-limit{background:#ffebe9;color:#cf222e}
+html[data-theme="light"] .tag.honeypot,html[data-theme="light"] .tag.pow-required,html[data-theme="light"] .tag.ai-probe,html[data-theme="light"] .tag.ai-headers-incomplete,html[data-theme="light"] .tag.ai-headers-empty,html[data-theme="light"] .tag.banned-silent,html[data-theme="light"] .tag.honeypot-silent,html[data-theme="light"] .tag.authorized-robot{background:#f3e8ff;color:#8250df}
+html[data-theme="light"] .tag.behavior{background:#ddf4ff;color:#0e7490}
+html[data-theme="light"] .tag.ai-enumeration,html[data-theme="light"] .tag.ai-no-assets{background:#ffeff7;color:#bf3989}
+html[data-theme="light"] .tag.gwmgmt-tag{background:#ddf4ff;color:#0969da}
+html[data-theme="light"] .act.authbot{background:rgba(188,140,255,.15);color:#8250df}
 .info-icon{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
   border-radius:50%;border:1px solid var(--dim);color:var(--dim);font-size:9px;font-weight:700;
   cursor:default;margin-left:6px;vertical-align:middle;line-height:1;font-style:normal;
   position:relative;font-family:ui-sans-serif,sans-serif}
 .info-icon:hover{border-color:var(--blue);color:var(--blue)}
 .info-icon .info-tip{display:none;position:absolute;top:18px;left:0;z-index:999;
-  background:#161b22;border:1px solid var(--line);border-radius:6px;padding:10px 12px;
+  background:var(--card);border:1px solid var(--line);border-radius:6px;padding:10px 12px;
   min-width:320px;max-width:420px;font-size:11px;font-weight:400;text-transform:none;
   letter-spacing:0;line-height:1.6;color:var(--fg);white-space:normal;box-shadow:0 4px 16px #0008;
   font-family:ui-sans-serif,sans-serif}
@@ -115,30 +138,42 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 .bar>div{height:100%;background:var(--blue)}
 .reasons{display:grid;grid-template-columns:1fr auto;gap:4px 8px;font-size:11.5px}
 .reasons .lbl{color:var(--dim)}
-.reasons .val{font-family:ui-monospace;color:#fff;font-weight:600;text-align:right}
+.reasons .val{font-family:ui-monospace;color:var(--bright);font-weight:600;text-align:right}
 code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 .dim{color:var(--dim)}
-.evt,.evt-hdr{font-size:11px;display:grid;grid-template-columns:70px 90px 120px 52px 45px 1fr 205px;gap:8px;
+/* 8-col grid (Time · Verdict · IP · Domain · Status · Score · Path · Action).
+   Path is capped at 360px max so long paths ellipsis instead of pushing the
+   Action column off-screen. All cells get min-width:0 + overflow:hidden so
+   any cell that exceeds its track ellipsises rather than overflowing into
+   the next column. */
+.evt,.evt-hdr{font-size:11px;display:grid;grid-template-columns:70px 90px 120px 110px 52px 45px minmax(0,360px) 205px;gap:8px;
      padding:3px 6px;border-bottom:1px solid var(--line);font-family:ui-monospace;
-     border-left:3px solid transparent}
+     border-left:3px solid transparent;min-width:890px}
+.evt > span, .evt-hdr > span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* The Action column hosts buttons; let them lay out naturally without ellipsis. */
+.evt > span:last-child, .evt-hdr > span:last-child{overflow:visible;text-overflow:clip;white-space:normal}
+@media(max-width:1100px){
+  #events-wrap{overflow-x:auto}
+  .evt,.evt-hdr{min-width:1010px}
+}
 .evt-hdr{color:var(--dim);font-size:10px;font-weight:600;text-transform:uppercase;
      letter-spacing:.05em;border-left-color:transparent;border-bottom:1px solid var(--line);
      padding-bottom:5px;margin-bottom:2px}
-.evt:nth-child(even){background:#0a0e13}
+.evt:nth-child(even){background:var(--bg-inset)}
 .evt.evt-ok{border-left-color:var(--green);background:rgba(63,185,80,0.06)}
 .evt.evt-ok:nth-child(even){background:rgba(63,185,80,0.10)}
-.evt.evt-authorized{border-left-color:var(--blue);background:rgba(88,166,255,0.06)}
-.evt.evt-authorized:nth-child(even){background:rgba(88,166,255,0.10)}
+.evt.evt-authorized{border-left-color:var(--blue);background:rgba(121,192,255,0.06)}
+.evt.evt-authorized:nth-child(even){background:rgba(121,192,255,0.10)}
 .evt.evt-block{border-left-color:var(--red)}
 .evt.evt-warn{border-left-color:var(--yellow)}
 .foot{margin-top:14px;text-align:right;font-size:10px;color:var(--dim)}
-.ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+.ctrl{background:var(--bg);color:var(--fg);border:1px solid var(--line);
       border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;
       font-family:inherit;line-height:1.4}
 .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
 .ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:#0e2c4a;border-color:#1f5fa6;color:#79c0ff}
-.ctrl-now:hover{background:#1c3d5a}
+.ctrl-now{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:var(--blue)}
+.ctrl-now:hover{background:rgba(121,192,255,.25)}
 @media (max-width:900px){.row{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:600px){
   #sidebar{position:fixed;top:0;left:0;height:100%;z-index:200;width:200px;transform:translateX(-100%);transition:transform .2s ease;display:flex}
@@ -149,6 +184,21 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* -- Sidebar collapse (desktop hide/unhide) -- */
+#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
+/* -- Submenu collapse (accordion) -- */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -162,6 +212,11 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
 /* 1.5.4 — clickable cells (identity / risk drill-downs) */
 .cell-click{cursor:pointer;border-bottom:1px dotted var(--blue);position:relative}
 .cell-click:hover{color:var(--blue)}
+/* filter-cell affordance (IP/UA/Domain in Clients + Live events).
+   Extracted from per-row inline styles to keep refresh payloads small. */
+.lf-click{cursor:pointer;text-decoration:underline dotted;text-decoration-color:var(--dim);text-underline-offset:2px}
+.lf-click.mono{font-family:ui-monospace,Menlo,monospace;font-size:11px}
+.lf-click.dom-clip{max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block;vertical-align:bottom}
 /* Persistent ↗ link-icon — signals the value is clickable for a popover. */
 .cell-click::after{
   content:'';display:inline-block;width:10px;height:10px;margin-left:4px;
@@ -181,24 +236,69 @@ code{font-family:ui-monospace;font-size:11px;color:var(--blue)}
        padding:16px 18px;min-width:520px;max-width:88vw;max-height:80vh;
        overflow:auto;box-shadow:0 10px 40px rgba(0,0,0,.6);z-index:100;display:none}
 .modal.show{display:block}
-.modal h3{font-size:13px;color:#fff;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
-.modal h3 .x{cursor:pointer;color:var(--dim);font-size:18px;line-height:1;font-weight:400}
+.modal h3{font-size:13px;color:var(--bright);margin-bottom:10px;display:flex;justify-content:space-between;align-items:center}
+/* U-H9 fix: .x is now applied to <button> elements so keyboard users can close modals */
+.modal h3 .x{cursor:pointer;color:var(--dim);font-size:18px;line-height:1;font-weight:400;background:none;border:none;padding:0 4px;font-family:inherit}
 .modal h3 .x:hover{color:var(--red)}
+.modal h3 .x:focus{outline:2px solid var(--blue);outline-offset:2px}
 .modal table{width:100%}
 .modal td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-monospace;font-size:11.5px}
 .modal .empty{color:var(--dim);text-align:center;padding:20px;font-style:italic}
 .modal .kv{display:grid;grid-template-columns:100px 1fr;gap:4px 12px;font-family:ui-monospace,Menlo,monospace;font-size:11.5px}
 .modal .kv .k{color:var(--dim);text-align:right}
 .modal .kv .v{color:var(--fg);word-break:break-all}
-.modal .rsn{display:grid;grid-template-columns:1fr 60px 50px;gap:8px;align-items:center;
+.modal .rsn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 54px 44px;gap:8px;align-items:center;
             padding:5px 0;border-bottom:1px solid var(--line)}
 .modal .rsn:last-child{border-bottom:0}
-.modal .rsn-name{color:var(--fg)}
-.modal .rsn-bar{height:8px;background:#0a0e13;border-radius:3px;overflow:hidden}
+.modal .rsn-name{color:var(--fg);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal .rsn-ctrl{color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.modal .rsn-ctrl.dim{color:var(--dim)}
+.modal .rsn-head{border-bottom:1px solid var(--line)}
+.modal .rsn-head .rsn-name,.modal .rsn-head .rsn-ctrl,.modal .rsn-head .rsn-val{
+  color:var(--dim);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+.modal .rsn-bar{height:8px;background:var(--bg-inset);border-radius:3px;overflow:hidden}
 .modal .rsn-bar>div{height:100%;background:var(--red)}
 .modal .rsn-val{color:var(--red);text-align:right;font-weight:600}
+/* risk-breakdown control column enrichments (shared by .modal / #risk-pop) */
+a.rsn-ctrl{text-decoration:none}
+a.rsn-ctrl:hover{text-decoration:underline}
+.rsn-dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:5px;background:#6e7681;vertical-align:middle}
+.rsn-dot.on{background:var(--green)}
+.rsn-dot.off{background:#6e7681}
+.rsn-kv{display:inline-block;font-size:9.5px;background:var(--bg-elevated);color:var(--dim);padding:0 5px;border-radius:3px;margin-left:6px;vertical-align:middle;font-weight:600}
+/* round-3: control cell as flex (dot/link/value), inline quick-toggle, ban header */
+.rsn-ctrl{display:flex;align-items:center;min-width:0}
+.rsn-ctrl-link{color:var(--blue);text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:ui-monospace,Menlo,monospace;font-size:10.5px}
+.rsn-ctrl-link:hover{text-decoration:underline}
+.gw-qd{border:none;padding:0;cursor:pointer;flex-shrink:0}
+.gw-qd:hover{box-shadow:0 0 0 2px rgba(121,192,255,.55)}
+.gw-qd.busy{opacity:.4;cursor:wait}
+.gw-ban-hdr{background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.32);border-radius:6px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.45}
+.gw-ban-line{color:var(--red);font-weight:700;margin-bottom:4px}
+.gw-self{color:var(--yellow);margin-bottom:4px}
+.gw-ban-note{color:var(--dim);margin-bottom:8px}
+.gw-unban{background:var(--red);color:var(--bright);border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer}
+.gw-unban:hover{filter:brightness(1.12)}
+.gw-unban:disabled{opacity:.55;cursor:default}
+/* 1.8.14 iter15 — Reset risk button in score breakdown popover */
+.gw-reset-risk{background:transparent;color:var(--amber);border:1px solid var(--amber);border-radius:5px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;margin-left:10px;vertical-align:middle}
+.gw-reset-risk:hover{background:rgba(255,176,0,.12)}
+.gw-reset-risk:disabled{opacity:.55;cursor:default}
+.gw-view-logs{background:var(--dim-bg,#555);color:var(--bright);border:none;border-radius:5px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;margin-left:8px}
+.gw-view-logs:hover{filter:brightness(1.18)}
+.gw-ban-hdr.gw-cleared{opacity:.6;border-color:var(--green)}
+.gw-expired-ban{background:rgba(210,153,34,.08);border:1px solid rgba(210,153,34,.32);border-radius:6px;padding:9px 11px;margin-bottom:10px;font-size:12px;line-height:1.5}
+.gw-expired-ban-line{color:var(--yellow);font-weight:700;margin-bottom:4px}
+.gw-outcome-label{font-size:9px;text-transform:uppercase;font-weight:700;letter-spacing:.3px;color:var(--dim);margin-right:5px;opacity:.7}
+.rsn-tier{display:inline-block;font-size:8.5px;line-height:1.5;text-transform:uppercase;padding:0 4px;border-radius:3px;margin-left:6px;font-weight:700;vertical-align:middle}
+.rsn-tier.t-info{background:var(--line);color:var(--dim)}
+.rsn-tier.t-soft{background:rgba(210,153,34,.16);color:var(--yellow)}
+.rsn-tier.t-med{background:rgba(219,109,40,.18);color:#e0823a}
+.rsn-tier.t-hard{background:rgba(248,81,73,.16);color:var(--red)}
+.rsn-tier.t-modifier{background:rgba(121,192,255,.14);color:var(--blue)}
 .act{border:none;border-radius:3px;padding:1px 6px;font-size:10px;font-weight:600;cursor:pointer;font-family:ui-monospace}
-.act.ban{background:#3d1f1f;color:#f85149}.act.hban{background:#1f1f3d;color:#a371f7}.act.allow{background:#1f3d1f;color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
+.act.ban{background:rgba(248,81,73,.15);color:#f85149}.act.hban{background:rgba(163,113,247,.15);color:#a371f7}.act.allow{background:rgba(63,185,80,.15);color:#3fb950}.act.authbot{background:#1f1a2e;color:#bc8cff}
 
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
@@ -238,31 +338,63 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 .cat-pill[data-cat="path"]{border-color:#e3b341;color:#e3b341}
 .cat-pill.active[data-cat="path"]{background:#e3b341;color:#000}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
-.cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
-.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
+.cat-pill.active[data-cat="ban"]{background:#f85149;color:var(--bright)}
+.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:var(--bright)}
 .cat-pill.active[data-cat="missed"]{background:#ff7b3a;color:#000}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
-.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:#0a1628}
+.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:var(--bg-deep)}
+/* 1.8.14 — mobile horizontal-scroll defensive: prevent <body> overflow; allow wide cards to scroll horizontally in-place without breaking table layout */
+@media(max-width:600px){
+  html,body{overflow-x:hidden;max-width:100vw}
+  .card,.panel,.tbl-wrap{max-width:100vw;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{max-width:100%}
+  pre{max-width:100%;overflow-x:auto}
+  /* inline min-width:Npx on flex children forces overflow at 390px viewport; relax + allow wrap (scope-wide, not just .card) */
+  [style*="min-width:260px"],[style*="min-width:180px"],[style*="min-width:160px"]{min-width:0!important}
+  [style*="display:flex"]{flex-wrap:wrap}
+  /* belt-and-suspenders: any element wider than viewport gets a horizontal scroll inside the safe zone */
+  #main-area,#page-content,.row{max-width:100vw;overflow-x:auto}
+}
+/* Chart loading overlay — covers the blank-canvas window before first paint.
+   Sits inside each chart's position:relative wrapper. */
+.chart-overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  gap:8px;background:rgba(13,17,23,0.55);z-index:5;font-size:12px;color:var(--dim);
+  transition:opacity .2s ease;pointer-events:none}
+html[data-theme="light"] .chart-overlay{background:rgba(255,255,255,0.6)}
+.chart-overlay.hide{opacity:0;visibility:hidden}
+.chart-spinner{width:15px;height:15px;border:2px solid var(--line);border-top-color:var(--blue);
+  border-radius:50%;animation:agw-spin .7s linear infinite}
+@keyframes agw-spin{to{transform:rotate(360deg)}}
 </style></head>
 <body>
-<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<!-- 1.9.2 UX — shared progress bar + escapeHtml -->
+<script src="/antibot-appsec-gateway/assets/dashboard-common.js"></script>
+
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div>
+      <div id="sidebar-brand-name">AntiBot/WAF GW</div>
+      <div id="sidebar-brand-ver">1.9.8</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
-  <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+  <nav id="sidebar-nav" aria-label="Main navigation">
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub active">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/service">Service</a>
-    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/logs">Logs</a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub">Logs</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -272,24 +404,30 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
 </div>
 <div id="main-area">
-<div id="stale-banner">⚠ Data may be stale — last fetch failed. Retrying…</div>
+<div id="stale-banner" role="alert" aria-live="assertive">⚠ Data may be stale — last fetch failed. Retrying…</div>
   <div id="topbar">
     <div id="topbar-title">Live Feed <span class="pill" id="live">● LIVE</span></div>
     <div id="topbar-right">
+      <input id="vhost-search-inp" type="text" placeholder="filter vhosts…" autocomplete="off" style="display:none"
+        oninput="(function(i){var q=i.value.toLowerCase();[].forEach.call(document.getElementById('vhost-select').options,function(o){o.hidden=q&&o.value&&o.textContent.toLowerCase().indexOf(q)===-1;});})(this)">
       <select id="vhost-select">
         <option value="">All vhosts</option>
       </select>
-      <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
-        <label for="gw-loglvl">log</label>
-        <select id="gw-loglvl">
-          <option value="debug">debug</option>
+      <div id="gw-loglvl-wrap" title="Server LOG_LEVEL — change persists across restarts and affects ALL gateway logging. Lower levels (debug/info) generate much more output.">
+        <label for="gw-loglvl" style="font-weight:700">LOG_LEVEL ⚠</label>
+        <select id="gw-loglvl" aria-label="Server log level (persistent across restarts)">
+          <option value="debug">debug (verbose · for troubleshooting)</option>
           <option value="info">info</option>
           <option value="warn">warn</option>
           <option value="error">error</option>
           <option value="critical">critical</option>
         </select>
       </div>
-      <div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:1px">
+        <div id="gw-status-pill" title="Gateway health score — click for breakdown">● —</div>
+        <span style="font-size:10px;color:#6e7681;white-space:nowrap;line-height:1.2">refreshes every 15 s</span>
+      </div>
+      <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
     </div>
   </div>
   <div id="page-content">
@@ -322,7 +460,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
 <!-- 1.5.4 — reason drill-down modal (hidden) -->
 <div class="modal-back" id="modal-back"></div>
 <div class="modal" id="modal">
-  <h3 id="modal-title">Drill-down <span class="x" id="modal-close">×</span></h3>
+  <h3 id="modal-title">Drill-down <button class="x" id="modal-close" aria-label="Close drill-down">×</button></h3>
   <div id="modal-body"></div>
 </div>
 
@@ -342,7 +480,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Timeline · total / allowed / blocked <span id="window-label" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px"></span><i class="info-icon">i<span class="info-tip"><table>
-        <tr><td><span class="swatch" style="background:#58a6ff"></span><b>Total</b></td><td>Sum of all active filter bands</td></tr>
+        <tr><td><span class="swatch" style="background:#79c0ff"></span><b>Total</b></td><td>Sum of all active filter bands</td></tr>
         <tr><td><span class="swatch" style="background:#3fb950"></span><b>Allowed</b></td><td>Requests that reached upstream — no threat detected</td></tr>
         <tr><td><span class="swatch" style="background:#f85149"></span><b>Blocked</b></td><td>Ban + Really Ban — requests rejected or decoyed</td></tr>
         <tr><td><span class="swatch" style="background:#ff7b3a"></span><b>Missed</b></td><td>Allowed through but identity is in the medium-risk band</td></tr>
@@ -397,7 +535,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <!-- 1.5.4: Defense thresholds — live-tunable medium / block bands -->
   <div class="card" id="thr-card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:8px">
-      <h2 style="margin:0">Defense thresholds <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">drag the markers to change live · 0 = off</span></h2>
+      <h2 style="margin:0">Defense thresholds <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0;margin-left:8px">drag the markers or type a value (0–100, where 0 = off · typical: soft=10, ban=50)</span></h2>
       <span id="thr-msg" class="dim" style="font-size:11.5px"></span>
     </div>
     <div id="thr-slider" style="position:relative;height:60px;margin:8px 4px">
@@ -409,24 +547,24 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         <div class="dim">requests pass without extra checks</div>
       </div>
       <div>
-        <span style="color:var(--orange,#ff7b3a)">●</span> <b>orange</b> = soft challenge (score ≥ <span id="thr-soft-val" style="font-weight:700">—</span>)
+        <span style="color:var(--orange,#ff7b3a)">●</span> <b>orange</b> = soft challenge (score ≥ <input id="thr-soft-val" type="number" min="0" step="1" class="thr-inp" title="SOFT_CHALLENGE_SCORE — press Enter to apply">)
         <div class="dim">passes but flagged "missed" — soft PoW served</div>
       </div>
       <div>
-        <span style="color:var(--red)">●</span> <b>red</b> = blocked (score ≥ <span id="thr-ban-val" style="font-weight:700">—</span>)
+        <span style="color:var(--red)">●</span> <b>red</b> = blocked (score ≥ <input id="thr-ban-val" type="number" min="0" step="1" class="thr-inp" title="RISK_BAN_THRESHOLD — press Enter to apply">)
         <div class="dim">silent decoy + 24h hostile ban</div>
       </div>
     </div>
   </div>
   <style>
   /* threshold slider */
-  #thr-slider .track{position:absolute;left:0;right:0;top:22px;height:14px;border-radius:7px;
+  #thr-slider .track{position:absolute;left:0;right:0;top:22px;height:14px;border-radius:7px;cursor:pointer;
     background:linear-gradient(to right,#3fb950 0%,#3fb950 var(--soft-pct,5%),#ff7b3a var(--soft-pct,5%),#ff7b3a var(--ban-pct,50%),#f85149 var(--ban-pct,50%),#f85149 100%);
     border:1px solid var(--line)}
   #thr-slider .scale{position:absolute;left:0;right:0;top:42px;display:flex;justify-content:space-between;font:10px ui-monospace;color:var(--dim)}
   #thr-slider .knob{position:absolute;top:14px;width:30px;height:30px;border-radius:50%;
-    background:#161b22;border:3px solid #fff;cursor:grab;transform:translateX(-50%);
-    display:flex;align-items:center;justify-content:center;font:600 10px ui-monospace;color:#fff;
+    background:var(--card);border:3px solid #fff;cursor:grab;transform:translateX(-50%);
+    display:flex;align-items:center;justify-content:center;font:600 10px ui-monospace;color:var(--bright);
     box-shadow:0 2px 6px rgba(0,0,0,.4);z-index:2;user-select:none;transition:transform .08s}
   #thr-slider .knob:hover{transform:translateX(-50%) scale(1.08)}
   #thr-slider .knob.drag{cursor:grabbing;transform:translateX(-50%) scale(1.12);box-shadow:0 4px 12px rgba(0,0,0,.6)}
@@ -436,6 +574,11 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     transform:translateX(-50%);white-space:nowrap;pointer-events:none}
   #thr-slider .knob-val.soft{color:#ff7b3a}
   #thr-slider .knob-val.ban{color:#f85149}
+  .thr-inp{width:52px;background:var(--bg,var(--bg));color:inherit;border:1px solid var(--line,var(--line));
+    border-radius:4px;padding:1px 4px;font:600 11px ui-monospace,Menlo,monospace;
+    text-align:right;-moz-appearance:textfield;vertical-align:baseline}
+  .thr-inp::-webkit-outer-spin-button,.thr-inp::-webkit-inner-spin-button{-webkit-appearance:none}
+  .thr-inp:focus{outline:1px solid var(--dim,#8b949e);border-color:var(--dim,#8b949e)}
   </style>
 
   <!-- 1.5.1: live throughput + operator-controlled global RPS limit -->
@@ -461,13 +604,13 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <input id="rps-input" type="number" min="0" max="100000" step="10"
-             style="background:#0d1117;border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;width:130px;font-family:ui-monospace,Menlo,monospace;font-size:13px">
+             style="background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:6px 10px;border-radius:5px;width:130px;font-family:ui-monospace,Menlo,monospace;font-size:13px">
       <button id="rps-apply"
-              style="background:var(--blue);color:#fff;border:none;padding:7px 14px;border-radius:5px;font-weight:600;cursor:pointer">
+              style="background:var(--blue);color:var(--bright);border:none;padding:7px 14px;border-radius:5px;font-weight:600;cursor:pointer">
         Apply
       </button>
       <button id="rps-disable"
-              style="background:#30363d;color:var(--fg);border:none;padding:7px 12px;border-radius:5px;cursor:pointer">
+              style="background:var(--bg-hover);color:var(--fg);border:none;padding:7px 12px;border-radius:5px;cursor:pointer">
         Disable
       </button>
     </div>
@@ -481,8 +624,13 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </div>
     <div class="card">
       <h2>HTTP status distribution</h2>
-      <div class="reasons" id="statuses"></div>
+      <div class="reasons" id="statuses"><span class="dim">no traffic yet</span></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h2>Top controls by blocks <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">reasons aggregated to the control that fires them · click to open · spot an over-aggressive control</span></h2>
+    <div class="reasons" id="top-controls"><span class="dim">Loading…</span></div>
   </div>
 
   <!-- 1.5.4: Service health + per-detector counters -->
@@ -490,25 +638,49 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     <div class="card">
       <h2>External services</h2>
       <div id="services" style="display:grid;grid-template-columns:1fr auto;gap:5px 10px;font-size:11.5px">
-        <span class="dim">loading…</span>
+        <span class="dim">Loading…</span>
       </div>
     </div>
     <div class="card">
       <h2>Per-detector hits</h2>
       <div id="detector-hits" style="display:grid;grid-template-columns:1fr auto;gap:4px 10px;font-size:11.5px;max-height:240px;overflow:auto">
-        <span class="dim">loading…</span>
+        <span class="dim">Loading…</span>
       </div>
     </div>
   </div>
 
   <div class="card">
-    <h2>Clients <span id="clients-count" class="dim" style="font-size:12px;font-weight:400"></span><span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
+    <h2>Clients <span id="clients-count" class="dim" style="font-size:12px;font-weight:400"></span><span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="missed — allowed through but risk score in the medium band [SOFT_CHALLENGE_SCORE, BAN_THRESHOLD). Request was served to the upstream. A spike here means bots are passing detection — lower BAN_THRESHOLD or raise signal weights to convert misses to blocks. Click to filter.">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
+    <!-- Live Feed filter: IP / UA / Domain (wildcards: * ? ; no wildcard = substring).
+         Applies to BOTH the Clients table and the Live events stream below. -->
+    <div id="lf-search" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 10px;font-size:11.5px">
+      <span class="dim" style="font-size:11px">Filter:</span>
+      <label style="display:flex;align-items:center;gap:4px">
+        <span class="dim" style="font-size:10.5px">IP</span>
+        <input id="lf-filter-ip" type="text" placeholder="114.119.* or 1.2.3.4" autocomplete="off"
+          style="background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 7px;font-family:ui-monospace,Menlo,monospace;font-size:11px;width:140px">
+      </label>
+      <label style="display:flex;align-items:center;gap:4px">
+        <span class="dim" style="font-size:10.5px">UA</span>
+        <input id="lf-filter-ua" type="text" placeholder="*ChatGPT* or curl/*" autocomplete="off"
+          style="background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 7px;font-family:ui-monospace,Menlo,monospace;font-size:11px;width:160px">
+      </label>
+      <label style="display:flex;align-items:center;gap:4px">
+        <span class="dim" style="font-size:10.5px">Domain</span>
+        <input id="lf-filter-domain" type="text" placeholder="*.example.com" autocomplete="off"
+          style="background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 7px;font-family:ui-monospace,Menlo,monospace;font-size:11px;width:140px">
+      </label>
+      <button id="lf-filter-search" type="button" style="background:var(--blue);border:1px solid var(--blue);color:var(--bright);border-radius:4px;padding:3px 12px;font-size:11px;font-weight:600;cursor:pointer">Search</button>
+      <button id="lf-filter-clear" type="button" style="background:none;border:1px solid var(--line);color:var(--dim);border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer">Clear</button>
+      <span id="lf-filter-count" class="dim" style="font-size:10.5px"></span>
+      <span class="dim" style="font-size:10px;margin-left:auto">click cells to fill · Shift+click IP → /16 glob</span>
+    </div>
     <div style="max-height:420px;overflow-y:auto">
     <table id="clients-tbl">
       <thead><tr>
-        <th data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
-        <th data-col-tip="Last IP|Most recently observed source IP address for this identity.">Last IP<span class="col-tip-i">ℹ</span></th>
-        <th data-col-tip="Domain|Virtual host this identity was last seen accessing.">Domain<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="id" data-col-tip="Identity|HMAC of session cookie + browser fingerprint. Stable per device across IPs. Used as the primary tracking key instead of IP.">Identity<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="ip" data-col-tip="Last IP|Most recently observed source IP address for this identity.">Last IP<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="domain" data-col-tip="Domain|Virtual host this identity was last seen accessing.">Domain<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="requests" data-col-tip="Total|Total requests seen from this identity (allowed + blocked).">Total<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="allowed" data-col-tip="Allowed|Requests that passed all controls and were proxied to the upstream application.">Allowed<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="blocked" data-col-tip="Blocked|Requests caught by a detector and silently served a decoy response instead of the real upstream.">Blocked<span class="col-tip-i">ℹ</span></th>
@@ -516,8 +688,8 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         <th class="sortable" data-sort="banned" data-col-tip="Banned|Whether this identity is currently banned and the remaining duration.">Banned<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="tokens" data-col-tip="Tokens|Number of Cloudflare Turnstile tokens successfully validated for this identity.">Tokens<span class="col-tip-i">ℹ</span></th>
         <th class="sortable" data-sort="last_seen" data-col-tip="Last seen|Time elapsed since the last request from this identity.">Last seen<span class="col-tip-i">ℹ</span></th>
-        <th data-col-tip="Last UA|Most recently observed User-Agent string.">Last UA<span class="col-tip-i">ℹ</span></th>
-        <th data-col-tip="Last path|Most recently observed request path.">Last path<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="ua" data-col-tip="Last UA|Most recently observed User-Agent string.">Last UA<span class="col-tip-i">ℹ</span></th>
+        <th class="sortable" data-sort="last_path" data-col-tip="Last path|Most recently observed request path.">Last path<span class="col-tip-i">ℹ</span></th>
         <th>Action</th>
       </tr></thead>
       <tbody></tbody>
@@ -532,7 +704,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </h2>
     <div style="max-height:320px;overflow-y:auto">
       <table id="path-events-tbl" style="width:100%;border-collapse:collapse;font-size:12px">
-        <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;background:#161b22">
+        <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;position:sticky;top:0;background:var(--card)">
           <th style="padding:5px 8px">Time</th>
           <th style="padding:5px 8px">IP</th>
           <th style="padding:5px 8px">Path</th>
@@ -542,19 +714,19 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
         </tr></thead>
         <tbody id="path-events-body"></tbody>
       </table>
-      <div id="path-events-empty" style="display:none;padding:16px;color:var(--dim);font-size:12px;text-align:center">No events found for this path.</div>
+      <div id="path-events-empty" role="status" aria-live="polite" style="display:none;padding:16px;color:var(--dim);font-size:12px;text-align:center">No events found for this path.</div>
     </div>
   </div>
 
   <div class="row" style="grid-template-columns:1fr">
     <div class="card">
-      <h2>Top paths<span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
+      <h2>Top paths<span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="missed — allowed through but risk score in the medium band [SOFT_CHALLENGE_SCORE, BAN_THRESHOLD). Request was served to the upstream. A spike here means bots are passing detection — lower BAN_THRESHOLD or raise signal weights to convert misses to blocks. Click to filter.">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span></h2>
       <table id="paths-tbl"><thead><tr><th>Domain</th><th>Path</th><th>Hits</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 
   <div class="card" style="margin-top:14px">
-    <h2>Live events <span id="events-count" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span><span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Missed">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span><i class="info-icon">i<span class="info-tip"><table>
+    <h2>Live events <span id="events-count" class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span><span class="panel-legend"><span class="panel-leg-item" data-leg-cats="allowed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Allowed">● allowed</span><span class="panel-leg-item" data-leg-cats="ban,reallyban" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Blocked">● blocked</span><span class="panel-leg-item" data-leg-cats="missed" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="missed — allowed through but risk score in the medium band [SOFT_CHALLENGE_SCORE, BAN_THRESHOLD). Request was served to the upstream. A spike here means bots are passing detection — lower BAN_THRESHOLD or raise signal weights to convert misses to blocks. Click to filter.">● missed</span><span class="panel-leg-item" data-leg-cats="authbots" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle Auth Bots">● auth bots</span><span class="panel-leg-item" data-leg-cats="gwmgmt" onclick="_toggleCatFilter(this.dataset.legCats.split(','))" title="Toggle GW Mgmt">● gw mgmt</span></span><i class="info-icon">i<span class="info-tip"><table>
       <tr><td><span class="swatch" style="background:#3fb950"></span><b>Delivered</b></td><td>Passed all detectors — reached upstream</td></tr>
       <tr><td><span class="swatch" style="background:#e4f0ff"></span><b>GW Mgmt</b></td><td>Admin namespace path (/antibot-appsec-gateway/…)</td></tr>
       <tr><td><span class="swatch" style="background:#bc8cff"></span><b>authorized-robot</b></td><td>Whitelisted monitoring bot — bypassed detection</td></tr>
@@ -565,8 +737,8 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
       <tr><td colspan=2 style="padding-top:6px;color:var(--dim)">Click any red verdict tag to see offending IPs. Use filter pills to hide/show categories.</td></tr>
     </table></span></i></h2>
     <div style="max-height:420px;overflow-y:auto">
-      <div class="evt-hdr" style="position:sticky;top:0;background:#161b22;z-index:1">
-        <span>Time</span><span>Verdict</span><span>IP</span><span>Status</span><span>Score</span><span>Path</span><span>Action</span>
+      <div class="evt-hdr" style="position:sticky;top:0;background:var(--card);z-index:1">
+        <span>Time</span><span>Verdict</span><span>IP</span><span>Domain</span><span>Status</span><span>Score</span><span>Path</span><span>Action</span>
       </div>
       <div id="events"></div>
     </div>
@@ -577,7 +749,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     <div class="card">
       <h2>Detection methods <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">total blocks per layer · since boot</span></h2>
       <div id="method-bars"
-           style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:6px">loading…</div>
+           style="font-family:ui-monospace,Menlo,monospace;font-size:11px;margin-top:6px">Loading…</div>
     </div>
     <div class="card">
       <h2>Top methods <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">which technique catches most bots</span></h2>
@@ -633,23 +805,23 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     </div>
     <!-- KPI row -->
     <div id="risk-kpi-row" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px;margin-bottom:8px">
-      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+      <div style="background:var(--bg);border-radius:6px;padding:8px 10px;text-align:center">
         <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Median P50</div>
         <div id="kpi-p50" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--fg)">—</div>
       </div>
-      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+      <div style="background:var(--bg);border-radius:6px;padding:8px 10px;text-align:center">
         <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">P95</div>
         <div id="kpi-p95" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--yellow)">—</div>
       </div>
-      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+      <div style="background:var(--bg);border-radius:6px;padding:8px 10px;text-align:center">
         <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">% ≥ Block</div>
         <div id="kpi-pct-ban" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--red)">—</div>
       </div>
-      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+      <div style="background:var(--bg);border-radius:6px;padding:8px 10px;text-align:center">
         <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">% ≥ Soft</div>
         <div id="kpi-pct-soft" style="font:700 18px ui-monospace,Menlo,monospace;color:var(--yellow)">—</div>
       </div>
-      <div style="background:#0d1117;border-radius:6px;padding:8px 10px;text-align:center">
+      <div style="background:var(--bg);border-radius:6px;padding:8px 10px;text-align:center">
         <div style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px">Trend</div>
         <div id="kpi-trend" style="font:700 20px ui-monospace,Menlo,monospace;color:var(--fg)">—</div>
       </div>
@@ -673,7 +845,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   <div class="card" id="card-ban-timeline">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Ban Events Timeline <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">IP bans · session bans · challenge issued · bypass</span></h2>
-      <select id="ban-range-select" style="background:#161b22;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit">
+      <select id="ban-range-select" style="background:var(--card);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit">
         <option value="60">Last 1h</option>
         <option value="120" selected>Last 2h</option>
         <option value="360">Last 6h</option>
@@ -695,7 +867,7 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
       <h2 style="margin:0">Top Attackers <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">sorted by risk score · enriched with ASN / AbuseIPDB / ban state</span></h2>
       <div style="display:flex;gap:8px;align-items:center">
-        <select id="attackers-sort" style="background:#161b22;border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit">
+        <select id="attackers-sort" style="background:var(--card);border:1px solid var(--line);color:var(--fg);border-radius:4px;padding:3px 8px;font-size:11px;font-family:inherit">
           <option value="risk_score" selected>Sort: Risk Score</option>
           <option value="request_count">Sort: Requests</option>
           <option value="blocked_count">Sort: Blocks</option>
@@ -727,10 +899,58 @@ th[data-col-tip]:hover .col-tip-i{opacity:.9}
   </div>
 </div>
 
-<div class="foot">refreshes every 2s · <code id="ts"></code></div>
+<div class="foot">refreshes every 2s · <code id="ts"></code> · <span id="staleness-counter" style="color:var(--dim)" aria-live="polite"></span></div>
 
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
 <script src="/antibot-appsec-gateway/assets/chart.umd.min.js"></script>
+<script>
+// Chart loading overlay: ensure/toggle a spinner inside a canvas's
+// position:relative wrapper. show=false fades it out (first paint done).
+window._chartLoading = function(canvasId, show){
+  var cv = document.getElementById(canvasId);
+  if (!cv) return;
+  var wrap = cv.parentElement;
+  if (!wrap) return;
+  var ov = wrap.querySelector('.chart-overlay');
+  if (!ov){
+    ov = document.createElement('div');
+    ov.className = 'chart-overlay';
+    ov.innerHTML = '<span class="chart-spinner"></span><span>Loading…</span>';
+    wrap.appendChild(ov);
+  }
+  ov.classList.toggle('hide', !show);
+};
+// Canvases that get an overlay on cold load. Each is hidden once its chart
+// first paints; a failsafe sweep clears any still-spinning after 8s so a
+// hidden/empty card never spins forever.
+window._CHART_IDS = ['chart','cost-chart','blockrate-chart','vhost-breakdown-chart',
+  'risk-ribbon-chart','risk-hist-chart','ban-timeline-chart'];
+document.addEventListener('DOMContentLoaded', function(){
+  window._CHART_IDS.forEach(function(id){ window._chartLoading(id, true); });
+  // one-shot failsafe (self-clears) — no _timers tracking needed
+  setTimeout(function(){
+    window._CHART_IDS.forEach(function(id){ window._chartLoading(id, false); });
+  }, 8000);
+});
+window._applyChartColorsToInstance=function(c,theme){
+  var L=theme==='light',gc=L?'rgba(0,0,0,.08)':'#21262d',tc=L?'#636e7b':'#8b949e',lc=L?'#636e7b':'#c9d1d9',tbg=L?'#ffffff':'#161b22',tbc=L?'#d0d7de':'#30363d',ttc=L?'#1f2328':'#c9d1d9';
+  try{
+    var sc=c.options.scales||{};
+    Object.keys(sc).forEach(function(k){if(sc[k].grid)sc[k].grid.color=gc;if(sc[k].ticks)sc[k].ticks.color=tc;});
+    var p=c.options.plugins||{};
+    if(p.legend&&p.legend.labels)p.legend.labels.color=lc;
+    if(p.tooltip){p.tooltip.backgroundColor=tbg;p.tooltip.borderColor=tbc;p.tooltip.titleColor=ttc;p.tooltip.bodyColor=ttc;}
+    c.update('none');
+  }catch(e){}
+};
+if(typeof Chart!=='undefined'){
+  Chart.register({id:'_gwTheme',afterInit:function(c){
+    window._applyChartColorsToInstance(c,document.documentElement.getAttribute('data-theme')||'dark');
+  }});
+}
+</script>
+<script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 <script>
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
@@ -755,10 +975,24 @@ function _syncVhostSelect() {
   if (!sel) return;
   var cur = sel.value || sessionStorage.getItem('gw_vhost') || '';
   Promise.all([
-    fetch('/antibot-appsec-gateway/secured/vhosts', {credentials:'include'}).then(function(r){return r.ok?r.json():{vhosts:[]};}).catch(function(){return {vhosts:[]};}),
-    fetch('/antibot-appsec-gateway/secured/vhost-stats', {credentials:'include'}).then(function(r){return r.ok?r.json():{stats:[]};}).catch(function(){return {stats:[]};})
+    // U-H2 fix: don't silently swallow vhost fetch errors — set _error so the
+    // UI can show "could not load vhosts" instead of an empty dropdown.
+    fetch('/antibot-appsec-gateway/secured/vhosts', {credentials:'include'})
+      .then(function(r){return r.ok?r.json():{vhosts:[], _error:'HTTP '+r.status};})
+      .catch(function(e){return {vhosts:[], _error:(e&&e.message)||'network'};}),
+    fetch('/antibot-appsec-gateway/secured/vhost-stats', {credentials:'include'})
+      .then(function(r){return r.ok?r.json():{stats:[], _error:'HTTP '+r.status};})
+      .catch(function(e){return {stats:[], _error:(e&&e.message)||'network'};})
   ]).then(function(results) {
     var vd=results[0], sd=results[1];
+    if (vd._error || sd._error) {
+      var _sel = document.getElementById('vhost-select');
+      if (_sel && _sel.options.length <= 1) {
+        var _opt = document.createElement('option');
+        _opt.value = ''; _opt.textContent = '⚠ vhost list unavailable ('+(vd._error||sd._error)+')';
+        _opt.disabled = true; _sel.appendChild(_opt);
+      }
+    }
     var cfgMap={};
     (vd.vhosts||[]).forEach(function(v){cfgMap[v.hostname]=v;});
     var _now=Date.now()/1000;
@@ -782,6 +1016,8 @@ function _syncVhostSelect() {
     [].slice.call(sel.options).forEach(function(o){if(o.value&&!fresh.has(o.value))o.remove();});
     if(cur) sel.value=cur;
     sel.style.display='block';
+    var _si=document.getElementById('vhost-search-inp');
+    if(_si) _si.style.display=allHosts.length>=8?'inline-block':'none';
   });
 }
 document.addEventListener('DOMContentLoaded', function() {
@@ -791,6 +1027,7 @@ document.addEventListener('DOMContentLoaded', function() {
   sel.value = cur;
   sel.addEventListener('change', function() {
     sessionStorage.setItem('gw_vhost', sel.value);
+    if (window._renderPill) window._renderPill();  // instant pill update, no fetch needed
     tick();
   });
   _syncVhostSelect();
@@ -799,6 +1036,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 // 1.7.6 — category filter state
+// Note: GW Mgmt is intentionally OFF by default in main.html to reduce noise
+// from the gateway's own admin traffic. agents.html includes it by design.
 window._activeFilters = new Set(['allowed','ban','reallyban','missed','authbots']);
 const _cfgUrl = '/antibot-appsec-gateway/secured/config';
 window._authBotPatch = window._authBotPatch || {};
@@ -813,9 +1052,10 @@ function _clientCats(c) {
   if (c.is_authorized_bot) return ['authbots'];
   if ((c.last_path||'').startsWith('/antibot-appsec-gateway/')) return ['gwmgmt'];
   const cats = [];
-  if ((c.banned_secs||0) > 0) {
+  if ((c.banned_secs||0) > 0 || c.ip_banned) {
     const br = c.blocks_by_reason || {};
-    const isHard = Object.keys(br).some(r => _HARD_BAN_REASONS.has(r));
+    // A persistent raw-IP ban (ip_bans table) is the hostile-pool ban → really-banned.
+    const isHard = c.ip_banned || Object.keys(br).some(r => _HARD_BAN_REASONS.has(r));
     cats.push(isHard ? 'reallyban' : 'ban');
   }
   if ((c.stealth_score||0) >= 20) cats.push('missed');
@@ -905,12 +1145,30 @@ function _renderClientsTable(list) {
   const tbody = document.querySelector('#clients-tbl tbody');
   window._clientsView = list;
   const cntEl = document.getElementById('clients-count');
-  if (cntEl) cntEl.textContent = `(${list.length})`;
+  // U-H3 fix: tell the operator how many of the total were rendered, not just
+  // the matching count. A silent cap of 100 hides the scale of an attack.
+  const _CAP = 100;
+  if (cntEl) {
+    cntEl.textContent = list.length > _CAP
+      ? `(showing top ${_CAP} of ${list.length} — use filters to narrow)`
+      : `(${list.length})`;
+  }
 
-  tbody.innerHTML = _dp(list.slice(0, 100).map((c, i) => {
+  // 1.8.14 — read live HOSTILE_BAN_SECS / REALLY_BAN_SECS from the cache
+  // populated by _gwLoadBanCfg(). Reflects operator's Thresholds-card
+  // configuration everywhere (badge classification, button data-secs,
+  // titles, aria-labels) — not the historical 86400 / 2592000 constants.
+  const _banSecs       = (window._gwBanCfg && window._gwBanCfg.banSecs)       || 86400;
+  const _reallyBanSecs = (window._gwBanCfg && window._gwBanCfg.reallyBanSecs) || 2592000;
+  const _banH    = Math.round(_banSecs / 3600);
+  const _reallyD = Math.round(_reallyBanSecs / 86400);
+  const _banTitle    = `Ban for ${_banSecs.toLocaleString()} seconds (${_banH} h)`;
+  const _reallyTitle = `Ban for ${_reallyBanSecs.toLocaleString()} seconds (${_reallyD} d)`;
+
+  tbody.innerHTML = _dp(list.slice(0, _CAP).map((c, i) => {
     const _bsec = c.banned_secs || 0;
     const banned = c.is_authorized_bot ? `<span class="tag authorized-robot">auth-bot</span>`
-                 : _bsec > 86400 ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
+                 : _bsec > _banSecs ? `<span class="tag really-banned">${(_bsec/86400).toFixed(0)}d</span>`
                  : _bsec > 0    ? `<span class="tag banned">${(_bsec/3600).toFixed(0)}h</span>`
                  : '<span class="dim">—</span>';
     const id = (c.id || c.ip || '');
@@ -919,23 +1177,26 @@ function _renderClientsTable(list) {
     const scoreColor = score >= 80 ? 'var(--red)'
                      : score >= 60 ? 'var(--orange,#ff7b3a)'
                      : score >= 40 ? 'var(--yellow)'
-                     : score >= 20 ? 'var(--blue)'
+                     : score >= 20 ? '#79c0ff'
                      : 'var(--dim)';
     const _mbs = c.banned_secs || 0;
     const _abPatchM = window._authBotPatch;
     const _isAuthBotM = (_abPatchM && id in _abPatchM) ? _abPatchM[id] : !!c.is_authorized_bot;
-    const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > 86400 ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
+    const _mst = _isAuthBotM ? 'authorized-bot' : _mbs > _banSecs ? 'really-banned' : _mbs > 0 ? 'banned' : 'allow';
+    // U-H11 fix: per-identity aria-label so screen readers say "Allow identity abc12345"
+    // instead of just "Allow" repeated for every row.
+    const _shortId = escapeHtml(id.slice(0,16));
     const switchHtml = `
-      <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}">
-        <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
-        <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban for 86,400 seconds (24 hours)">Banned</button>
-        <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban for 2,592,000 seconds (30 days)">Really Banned</button>
-        <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list">Auth Bot</button>
+      <div class="ban-ctrl" data-id="${escapeHtml(id)}" data-ua="${escapeHtml(c.last_ua||'')}" role="group" aria-label="Ban controls for identity ${_shortId}">
+        <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0" aria-label="Allow identity ${_shortId}">Allow</button>
+        <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="${_banSecs}" title="${_banTitle}" aria-label="Ban identity ${_shortId} for ${_banH} hours">Banned</button>
+        <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="${_reallyBanSecs}" title="${_reallyTitle}" aria-label="Ban identity ${_shortId} for ${_reallyD} days">Really Banned</button>
+        <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots list" aria-label="Mark identity ${_shortId} as authorized bot">Auth Bot</button>
       </div>`;
     return `<tr>
-      <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${escapeHtml(id.slice(0,16))}</b></td>
-      <td class="dim">${escapeHtml(lastIp)}</td>
-      <td class="dim" style="font-size:11px;max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(c.vhost||'')}">${escapeHtml(c.vhost||'—')}</td>
+      <td><b class="cell-click" data-pop="id-main" data-i="${i}" title="click for identity details">${_shortId}</b></td>
+      <td>${lastIp && lastIp !== '?' ? `<span class="lf-click mono" data-lf-filter-kind="ip" data-lf-filter-value="${escapeHtml(lastIp)}" title="Click to filter · Shift+click for /16 glob">${escapeHtml(lastIp)}</span>` : '<span class="dim">—</span>'}</td>
+      <td>${c.vhost ? `<span class="lf-click dom-clip dim" data-lf-filter-kind="domain" data-lf-filter-value="${escapeHtml(c.vhost)}" title="Click to filter by ${escapeHtml(c.vhost)}">${escapeHtml(c.vhost)}</span>` : '<span class="dim">—</span>'}</td>
       <td>${c.requests}</td>
       <td style="color:var(--green)">${c.allowed}</td>
       <td style="color:${c.blocked?'var(--red)':'var(--dim)'}">${c.blocked}</td>
@@ -947,7 +1208,7 @@ function _renderClientsTable(list) {
       <td>${banned}</td>
       <td>${c.tokens}</td>
       <td class="dim">${fmtAgo(c.last_seen_secs_ago)}</td>
-      <td class="dim" title="${escapeHtml(c.last_ua)}">${escapeHtml((c.last_ua||'').slice(0,30))}</td>
+      <td>${c.last_ua ? `<span class="lf-click dim" data-lf-filter-kind="ua" data-lf-filter-value="${escapeHtml(c.last_ua)}" title="${escapeHtml(c.last_ua)} · click to filter">${escapeHtml((c.last_ua||'').slice(0,30))}</span>` : '<span class="dim">—</span>'}</td>
       <td class="dim">${escapeHtml((c.last_path||'').slice(0,30))}</td>
       <td>${switchHtml}</td>
     </tr>`;
@@ -972,7 +1233,7 @@ async function _fetchPathEvents(pathQ) {
   const count = document.getElementById('path-events-count');
   if (!pathQ) { card.style.display = 'none'; return; }
   card.style.display = 'block';
-  body.innerHTML = '<tr><td colspan="6" style="padding:12px;color:var(--dim);text-align:center">loading…</td></tr>';
+  body.innerHTML = '<tr><td colspan="6" style="padding:12px;color:var(--dim);text-align:center">Loading…</td></tr>';
   empty.style.display = 'none';
   try {
     const params = new URLSearchParams({ kind: 'requests', q: pathQ, limit: '200', level: 'debug' });
@@ -992,7 +1253,7 @@ async function _fetchPathEvents(pathQ) {
     empty.style.display = 'none';
     const reasonColor = (reason) => {
       if (!reason || reason === 'OK') return 'var(--green)';
-      if (reason === 'bypass-path') return 'var(--blue)';
+      if (reason === 'bypass-path') return '#79c0ff';
       return 'var(--red)';
     };
     body.innerHTML = _dp(rows.map(e => {
@@ -1020,6 +1281,7 @@ function _renderEvents(events) {
     const p = e.path || '';
     if (!showGwMgmt && p.startsWith('/antibot-appsec-gateway/')) return false;
     if (pathQ && !p.toLowerCase().includes(pathQ)) return false;
+    if (!_lfMatchEvent(e)) return false;  // IP/UA/Domain filter
     return true;
   });
   const cntEl = document.getElementById('events-count');
@@ -1052,27 +1314,39 @@ function _renderEvents(events) {
       else if (e.status === 429) statusHint = ' · rate-limited';
       else if (e.status === 402) statusHint = ' · PoW required';
     }
-    const statusColor = (e.status||0) >= 500 ? 'var(--red)' : (e.status||0) >= 400 ? 'var(--yellow)' : (e.status||0) >= 300 ? 'var(--blue)' : 'var(--green)';
+    const statusColor = (e.status||0) >= 500 ? 'var(--red)' : (e.status||0) >= 400 ? 'var(--yellow)' : (e.status||0) >= 300 ? '#79c0ff' : 'var(--green)';
     const score = e.score || 0;
-    const scoreColor = score >= 80 ? 'var(--red)' : score >= 60 ? 'var(--orange,#ff7b3a)' : score >= 40 ? 'var(--yellow)' : score >= 20 ? 'var(--blue)' : 'var(--dim)';
+    const scoreColor = score >= 80 ? 'var(--red)' : score >= 60 ? 'var(--orange,#ff7b3a)' : score >= 40 ? 'var(--yellow)' : score >= 20 ? '#79c0ff' : 'var(--dim)';
     const trackKey = e.track_key || e.ip || '';
     const clients = window._clientsList || [];
     const cl = clients.find(c => (c.id || c.ip) === trackKey);
     const _abPatchM = window._authBotPatch || {};
     const _isAuthBot = (trackKey in _abPatchM) ? _abPatchM[trackKey] : !!(cl && cl.is_authorized_bot);
     const _bsec = cl ? (cl.banned_secs || 0) : 0;
-    const _mst = _isAuthBot ? 'authorized-bot' : _bsec > 86400 ? 'really-banned' : _bsec > 0 ? 'banned' : 'allow';
+    // 1.8.14 — live-feed ban control: use cached HOSTILE/REALLY thresholds.
+    const _lfBanSecs       = (window._gwBanCfg && window._gwBanCfg.banSecs)       || 86400;
+    const _lfReallyBanSecs = (window._gwBanCfg && window._gwBanCfg.reallyBanSecs) || 2592000;
+    const _lfBanH    = Math.round(_lfBanSecs / 3600);
+    const _lfReallyD = Math.round(_lfReallyBanSecs / 86400);
+    const _mst = _isAuthBot ? 'authorized-bot' : _bsec > _lfBanSecs ? 'really-banned' : _bsec > 0 ? 'banned' : 'allow';
     const banCtrl = `<div class="ban-ctrl" data-id="${escapeHtml(trackKey)}" data-ua="${escapeHtml((e.ua||'').slice(0,120))}">
       <button class="ban-btn allow${_mst==='allow'?' active':''}" data-secs="0">Allow</button>
-      <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="86400" title="Ban 24h">Banned</button>
-      <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="2592000" title="Ban 30d">Really Banned</button>
+      <button class="ban-btn banned${_mst==='banned'?' active':''}" data-secs="${_lfBanSecs}" title="Ban ${_lfBanH}h">Banned</button>
+      <button class="ban-btn really-banned${_mst==='really-banned'?' active':''}" data-secs="${_lfReallyBanSecs}" title="Ban ${_lfReallyD}d">Really Banned</button>
       <button class="ban-btn authorized-bot${_mst==='authorized-bot'?' active':''}" data-action="auth-bot" title="Add UA to authorized bots">Auth Bot</button>
     </div>`;
-    return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint} · rid:${escapeHtml(e.rid||'')}">
+    const _ipSpan = e.ip
+      ? `<span class="lf-click" data-lf-filter-kind="ip" data-lf-filter-value="${escapeHtml(e.ip)}" title="Click to filter · Shift+click for /16">${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</span>`
+      : `<span class="dim">—</span>`;
+    const _vhostSpan = e.vhost
+      ? `<span class="lf-click dom-clip dim" data-lf-filter-kind="domain" data-lf-filter-value="${escapeHtml(e.vhost)}" style="font-size:10.5px" title="${escapeHtml(e.vhost)} · click to filter">${escapeHtml(e.vhost)}</span>`
+      : `<span class="dim" style="font-size:10.5px"></span>`;
+    // UA hint: title-only on the event div; user filters UA via the search bar.
+    return `<div class="evt ${evtCls}" title="HTTP ${e.status||'?'}${statusHint} · rid:${escapeHtml(e.rid||'')}${e.ua?' · UA: '+escapeHtml(e.ua):''}">
       <span class="dim">${escapeHtml(time)}</span>
       <span>${tagHtml}</span>
-      <span>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</span>
-      <span class="dim" style="font-size:10.5px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(e.vhost||'')}">${escapeHtml(e.vhost||'')}</span>
+      <span>${_ipSpan}</span>
+      <span>${_vhostSpan}</span>
       <span style="color:${statusColor};font-weight:600">${e.status||'?'}</span>
       <span style="color:${scoreColor};font-weight:600">${score > 0 ? score : '<span class="dim">—</span>'}</span>
       <span class="dim" title="${escapeHtml(e.path||'')}">${escapeHtml((e.path||'').slice(0,50))}</span>
@@ -1146,9 +1420,15 @@ function _applyFilters() {
     for (const cat of cats) if (window._activeFilters.has(cat)) { catMatch = true; break; }
     if (!catMatch) return false;
     if (pathQ && !(cl.last_path || '').toLowerCase().includes(pathQ)) return false;
+    if (!_lfMatchClient(cl)) return false;  // IP/UA/Domain filter
     return true;
   });
   _renderClientsTable(filtered);
+  // Live-feed filter count badge
+  const _lfFc = document.getElementById('lf-filter-count');
+  if (_lfFc) _lfFc.textContent = _lfAnyFilter()
+    ? `${filtered.length} of ${all.length} clients match`
+    : '';
   _renderEvents(window._lastEvents || []);
   // Debounce path-event log fetch + chart refresh (300 ms) so we don't hammer on every keystroke
   clearTimeout(_pathEventsTimer);
@@ -1187,6 +1467,7 @@ function _tooltipTitle(tl, bs, items) {
 function ensureCostChart() {
   if (costChart) return costChart;
   const ctx = document.getElementById('cost-chart').getContext('2d');
+  window._chartLoading('cost-chart', false);
   costChart = new Chart(ctx, {
     type: 'line',
     data: { labels: [], datasets: [
@@ -1238,8 +1519,8 @@ function ensureChart() {
     data: {
       labels: [],
       datasets: [
-        { label: 'total', data: [], borderColor: '#58a6ff',
-          backgroundColor: 'rgba(88,166,255,0.35)',
+        { label: 'total', data: [], borderColor: '#79c0ff',
+          backgroundColor: 'rgba(121,192,255,0.35)',
           tension: 0.25, fill: 'origin', borderWidth: 2, pointRadius: 0, pointHoverRadius: 4 },
         { label: 'allowed (good)', data: [], borderColor: '#3fb950',
           backgroundColor: 'rgba(63,185,80,0.35)',
@@ -1310,21 +1591,85 @@ function ensureChart() {
 
 // ── Client table sort state ───────────────────────────────────────────────
 let _cliSort = { col: 'requests', dir: 'desc' };
+// IPv4 string → numeric for stable ordering; IPv6 / hash → -1.
+function _lfIpNumeric(ip) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip || '');
+  if (!m) return -1;
+  return (+m[1] << 24) + (+m[2] << 16) + (+m[3] << 8) + (+m[4]);
+}
 const _CLI_KEY = {
-  requests: c => c.requests || 0,
-  allowed:  c => c.allowed  || 0,
-  blocked:  c => c.blocked  || 0,
-  score:    c => c.stealth_score || 0,
-  banned:   c => c.banned_secs || 0,
-  tokens:   c => c.tokens  || 0,
+  id:        c => (c.id || '').toLowerCase(),
+  ip:        c => _lfIpNumeric(c.ip || c.last_ip || ''),
+  // The metrics endpoint emits `vhost` (from s.last_vhost). Earlier code
+  // read `last_vhost || domain` — neither exists in the API response, so
+  // sorting by Domain column was a no-op. Read `vhost` first; keep the old
+  // fallbacks for any caller still emitting them.
+  domain:    c => (c.vhost || c.last_vhost || c.domain || '').toLowerCase(),
+  requests:  c => c.requests || 0,
+  allowed:   c => c.allowed  || 0,
+  blocked:   c => c.blocked  || 0,
+  score:     c => c.stealth_score || 0,
+  banned:    c => c.banned_secs || 0,
+  tokens:    c => c.tokens  || 0,
   last_seen: c => -(c.last_seen_secs_ago ?? 1e9),  // negate: most recent = highest
+  ua:        c => (c.last_ua || '').toLowerCase(),
+  last_path: c => (c.last_path || '').toLowerCase(),
 };
 function _sortClients(arr) {
   const fn = _CLI_KEY[_cliSort.col];
   if (!fn) return arr;
   const d = _cliSort.dir === 'asc' ? 1 : -1;
-  return [...arr].sort((a, b) => d * ((fn(a) ?? -1e9) - (fn(b) ?? -1e9)));
+  return [...arr].sort((a, b) => {
+    const va = fn(a), vb = fn(b);
+    if (typeof va === 'string' || typeof vb === 'string') {
+      return d * String(va).localeCompare(String(vb));
+    }
+    return d * ((va ?? -1e9) - (vb ?? -1e9));
+  });
 }
+
+// ── Live-Feed search/filter state (shared by Clients + Live events) ─────────
+// Wildcards: '*' = any chars, '?' = one char. No wildcard = case-insensitive substring.
+// compiled-regex cache rebuilt only when filter inputs change (see
+// _lfRebuildRegexes called from _wireLfFilter._apply). Was: 3 compiles × 200
+// rows × 5s = 3000/min. Now per-row matching is a cheap RegExp.test() call.
+const _lfFilter = { ip: '', ua: '', domain: '' };
+const _lfRe     = { ip: null, ua: null, domain: null };
+function _lfGlobRegex(pat) {
+  if (!pat) return null;
+  let re = '';
+  for (const ch of pat) {
+    if (ch === '*') re += '.*';
+    else if (ch === '?') re += '.';
+    else re += ch.replace(/[\\^$+(){}|[\]\.]/g, '\\$&');
+  }
+  const isGlob = /[*?]/.test(pat);
+  return new RegExp(isGlob ? '^' + re + '$' : re, 'i');
+}
+function _lfRebuildRegexes() {
+  _lfRe.ip     = _lfGlobRegex(_lfFilter.ip);
+  _lfRe.ua     = _lfGlobRegex(_lfFilter.ua);
+  _lfRe.domain = _lfGlobRegex(_lfFilter.domain);
+}
+function _lfMatchClient(c) {
+  if (_lfRe.ip     && !_lfRe.ip.test(c.ip || c.last_ip || ''))            return false;
+  if (_lfRe.ua     && !_lfRe.ua.test(c.last_ua || ''))                    return false;
+  // The metrics endpoint emits `vhost` (from s.last_vhost). Prior code only
+  // checked `last_vhost || domain` — neither field exists in the response,
+  // so the regex was always tested against `''` → every row filtered out
+  // the moment an operator typed a domain in the filter bar OR clicked a
+  // domain cell. Read `vhost` first; keep legacy fallbacks for safety.
+  if (_lfRe.domain
+      && !_lfRe.domain.test(c.vhost || c.last_vhost || c.domain || '')) return false;
+  return true;
+}
+function _lfMatchEvent(e) {
+  if (_lfRe.ip     && !_lfRe.ip.test(e.ip || ''))         return false;
+  if (_lfRe.ua     && !_lfRe.ua.test(e.ua || ''))         return false;
+  if (_lfRe.domain && !_lfRe.domain.test(e.vhost || ''))  return false;
+  return true;
+}
+function _lfAnyFilter() { return !!(_lfFilter.ip || _lfFilter.ua || _lfFilter.domain); }
 function _updateCliSortHeaders() {
   document.querySelectorAll('#clients-tbl th[data-sort]').forEach(th => {
     th.classList.remove('sort-asc', 'sort-desc');
@@ -1345,6 +1690,64 @@ document.querySelectorAll('#clients-tbl th[data-sort]').forEach(th => {
   });
 });
 _updateCliSortHeaders();
+
+// Live Feed filter bar wiring (Clients + Live events).
+(function _wireLfFilter(){
+  const _ipIn   = document.getElementById('lf-filter-ip');
+  const _uaIn   = document.getElementById('lf-filter-ua');
+  const _domIn  = document.getElementById('lf-filter-domain');
+  const _btn    = document.getElementById('lf-filter-search');
+  const _clr    = document.getElementById('lf-filter-clear');
+  if (!_ipIn) return;
+  let _t = null;
+  const _apply = () => {
+    _lfFilter.ip     = _ipIn.value.trim();
+    _lfFilter.ua     = _uaIn.value.trim();
+    _lfFilter.domain = _domIn.value.trim();
+    _lfRebuildRegexes();  // cache compiled regexes; per-row matching is now O(1) per row
+    clearTimeout(_t);
+    // Re-render with current data; tick() is the heavy fetcher, we don't need
+    // to refetch — just re-filter what we have.
+    if (window._clientsList) {
+      _applyFilters();  // re-runs Clients filter + Live events render with current data
+    }
+  };
+  const _live = () => { clearTimeout(_t); _t = setTimeout(_apply, 200); };
+  [_ipIn, _uaIn, _domIn].forEach(el => {
+    if (!el) return;
+    el.addEventListener('input', _live);
+    el.addEventListener('keydown', ev => {
+      if (ev.key === 'Enter') { ev.preventDefault(); _apply(); }
+    });
+  });
+  if (_btn) _btn.addEventListener('click', _apply);
+  if (_clr) _clr.addEventListener('click', () => {
+    _ipIn.value = ''; _uaIn.value = ''; _domIn.value = '';
+    _apply();
+  });
+  window._setLfFilter = (kind, value) => {
+    if (kind === 'ip')     { _ipIn.value  = value; }
+    if (kind === 'ua')     { _uaIn.value  = value; }
+    if (kind === 'domain') { _domIn.value = value; }
+    _apply();
+  };
+})();
+
+// Delegated click handler: any element with data-lf-filter-kind in the
+// Clients table or Live events feed populates the search bar.
+// Shift+click on an IPv4 cell switches to /16 glob (e.g. 114.119.*).
+document.addEventListener('click', function(ev){
+  const cell = ev.target.closest('[data-lf-filter-kind]');
+  if (!cell) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  let value = cell.dataset.lfFilterValue || '';
+  if (ev.shiftKey && cell.dataset.lfFilterKind === 'ip') {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+    if (m) value = `${m[1]}.${m[2]}.*`;
+  }
+  if (window._setLfFilter) window._setLfFilter(cell.dataset.lfFilterKind, value);
+});
 
 // Timeline navigation state
 let endEpoch = null;   // null = live (now); number = scrolled-back epoch (right edge of window)
@@ -1408,10 +1811,33 @@ function refreshControls() {
 }
 refreshControls();
 
+// 1.8.14 — operator-configurable ban durations. Cache HOSTILE_BAN_SECS /
+// REALLY_BAN_SECS from /secured/config; the live feed + clients table
+// pick the values up so the Banned/Really-Banned buttons match what the
+// operator set in the Thresholds card.
+window._gwBanCfg = window._gwBanCfg || {
+  banSecs:        86400,
+  reallyBanSecs:  2592000,
+  loaded:         false,
+};
+async function _gwLoadBanCfg(){
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/config',
+                          {credentials:'include', cache:'no-store'});
+    if (!r.ok) return;
+    const j = await r.json();
+    const st = (j && j.state) || j || {};
+    const _b = parseInt(st.HOSTILE_BAN_SECS, 10);
+    const _r = parseInt(st.REALLY_BAN_SECS,  10);
+    if (Number.isFinite(_b) && _b > 0)  window._gwBanCfg.banSecs       = _b;
+    if (Number.isFinite(_r) && _r > 0)  window._gwBanCfg.reallyBanSecs = _r;
+    window._gwBanCfg.loaded = true;
+  } catch(_){}
+}
+
 async function tick() {
-  // M2 — show fetching state so user knows the page is live
-  const _liveElPre = document.getElementById('live');
-  if (_liveElPre) { _liveElPre.textContent = '↻ …'; _liveElPre.style.background = 'var(--dim)'; }
+  // The "● LIVE" pill is steady: it is repainted ONLY on a state change
+  // (live vs error), never on every poll — so it no longer flaps live/reloading.
   try {
     const params = new URLSearchParams({
       range:  getRangeMin().toString(),
@@ -1425,11 +1851,18 @@ async function tick() {
     const r = await fetch('/antibot-appsec-gateway/secured/metrics?' + params.toString() + window._vhostParam(), {cache: 'no-store', credentials: 'include'});
     const d = await r.json();
     const _liveEl = document.getElementById('live');
-    _liveEl.style.background='var(--green)';
-    _liveEl.textContent='● LIVE';
-    _liveEl.title='Gateway reachable · metrics OK · updated ' + new Date().toLocaleTimeString();
-    document.getElementById('page-content').classList.remove('data-stale');
-    document.getElementById('stale-banner').classList.remove('show');
+    // Repaint only when RECOVERING from a problem; steady-state polls leave the
+    // pill untouched (no flicker).
+    // U-H1: record last-good fetch so the stale banner can display elapsed time
+    window._lastSuccessfulFetchTs = Date.now();
+    if (_liveEl && _liveEl.dataset.state !== 'live') {
+      _liveEl.dataset.state = 'live';
+      _liveEl.style.background = 'var(--green)';
+      _liveEl.textContent = '● LIVE';
+      document.getElementById('page-content').classList.remove('data-stale');
+      document.getElementById('stale-banner').classList.remove('show');
+    }
+    if (_liveEl) _liveEl.title = 'Gateway reachable · metrics OK · updated ' + new Date().toLocaleTimeString();
 
     document.getElementById('total').textContent = d.total.toLocaleString();
     document.getElementById('allowed').textContent = d.allowed.toLocaleString();
@@ -1450,7 +1883,12 @@ async function tick() {
     const c = d.config;
     document.getElementById('config').textContent = `burst=${c.burst} refill=${c.refill}/s xff=${c.trust_xff}`;
 
-    // Reasons
+    // Block reasons: render EVERY reason that has hits.
+    // The legacy hardcoded `reasonOrder` filter silently dropped any reason
+    // not in its list (host-not-allowed, tarpit-walk, ip-ban, dlp-*, honey-*,
+    // redirect-maze, body-* SQLi/XSS, h2-settings-*, …) — i.e. most modern
+    // detectors. Now sort by hit count desc (curated order kept as a tie-
+    // break / priority hint for the traditional family).
     const reasonOrder = ['banned-silent','honeypot-silent','banned','honeypot',
                          'ua-empty','ua-too-short','ua-blocked','ua-non-browser',
                          'ai-probe','ai-headers-incomplete','ai-headers-empty',
@@ -1462,14 +1900,54 @@ async function tick() {
     // Hand the full clients[] payload to the click handler so we can filter
     // locally without an extra round-trip.
     window._lastClients = d.clients || [];
-    if (Object.keys(reasons).length === 0) {
+    const allReasons = Object.entries(reasons)
+      .filter(([_, cnt]) => (cnt | 0) > 0)
+      .sort((a, b) => {
+        // Higher hits first; ties resolved by curated reasonOrder index.
+        if (b[1] !== a[1]) return b[1] - a[1];
+        const pa = reasonOrder.indexOf(a[0]);
+        const pb = reasonOrder.indexOf(b[0]);
+        if (pa !== -1 && pb !== -1) return pa - pb;
+        if (pa !== -1) return -1;
+        if (pb !== -1) return 1;
+        return a[0].localeCompare(b[0]);
+      });
+    if (!allReasons.length) {
       rEl.innerHTML = '<span class="dim">no blocks yet</span>';
     } else {
-      rEl.innerHTML = _dp(reasonOrder.filter(k => reasons[k])
-        .map(k => `<span class="lbl"><a href="#" class="reason-drill" data-reason="${escapeHtml(k)}" title="click to see offending identities"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></a></span><span class="val">${reasons[k]|0}</span>`).join(''));
+      rEl.innerHTML = _dp(allReasons.map(([k, cnt]) =>
+        `<span class="lbl"><a href="#" class="reason-drill" data-reason="${escapeHtml(k)}" title="click to see offending identities"><span class="tag ${safeClass(k)}">${escapeHtml(k)}</span></a></span><span class="val">${cnt | 0}</span>`
+      ).join(''));
       rEl.querySelectorAll('.reason-drill').forEach(el => {
         el.onclick = e => { e.preventDefault(); openReasonDrill(el.dataset.reason); };
       });
+    }
+
+    // Top controls by blocks — aggregate by_reason → the control that fires it.
+    const tcEl = document.getElementById('top-controls');
+    if (tcEl) {
+      const km = (window._gwIdentityPopover && window._gwIdentityPopover.signalKnob)
+        ? window._gwIdentityPopover.signalKnob() : {};
+      const pm = (window._gwIdentityPopover && window._gwIdentityPopover.knobPage)
+        ? window._gwIdentityPopover.knobPage() : {};
+      if (!Object.keys(km).length) {
+        tcEl.innerHTML = '<span class="dim">Loading…</span>';
+      } else {
+        const agg = {};
+        for (const [rsn, cnt] of Object.entries(reasons)) {
+          const knob = km[rsn];           // null = always-on, undefined = unmapped
+          if (!knob) continue;
+          agg[knob] = (agg[knob] || 0) + (cnt | 0);
+        }
+        const top = Object.entries(agg).sort((a, b) => b[1] - a[1]).slice(0, 10);
+        tcEl.innerHTML = top.length
+          ? _dp(top.map(([knob, cnt]) => {
+              const page = (pm[knob] === 'settings') ? 'settings' : 'controls';
+              const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(knob);
+              return `<span class="lbl"><a href="${href}" title="open ${escapeHtml(knob)} in ${page==='settings'?'Settings':'Controls'}">${escapeHtml(knob)}</a></span><span class="val">${cnt}</span>`;
+            }).join(''))
+          : '<span class="dim">no control-attributed blocks yet</span>';
+      }
     }
 
     // Statuses
@@ -1488,7 +1966,7 @@ async function tick() {
     const pBody = document.querySelector('#paths-tbl tbody');
     pBody.innerHTML = _dp((d.top_paths || []).map(p => {
       const isGw = p.path.startsWith('/antibot-appsec-gateway/');
-      const rowColor = isGw ? '#e4f0ff' : 'var(--blue)';
+      const rowColor = isGw ? '#e4f0ff' : '#79c0ff';
       const rowTip = isGw ? 'click to see requestors' : 'click to see offender IPs / identities';
       return `<tr class="path-row" data-path="${escapeHtml(p.path)}" style="cursor:pointer" title="${rowTip}">
         <td style="color:var(--dim);font-size:11px;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(p.vhost||'')}">${escapeHtml(p.vhost||'—')}</td>
@@ -1533,6 +2011,7 @@ async function tick() {
       chart.data.datasets.forEach(ds => { ds.data = []; });
       chart.update('none');
     }
+    window._chartLoading('chart', false);  // first paint done — drop overlay
 
     // 1.5.4 — render services + detector hits cards
     try {
@@ -1609,15 +2088,29 @@ async function tick() {
     document.getElementById('ts').textContent = new Date().toISOString();
   } catch (err) {
     const _errEl = document.getElementById('live');
-    _errEl.style.background='var(--red)';
-    _errEl.textContent='○ ERR';
-    _errEl.title='Error fetching metrics: ' + (err && err.message ? err.message : String(err));
-    document.getElementById('page-content').classList.add('data-stale');
-    document.getElementById('stale-banner').classList.add('show');
+    // Repaint only when ENTERING the error state (a problem exists).
+    if (_errEl && _errEl.dataset.state !== 'error') {
+      _errEl.dataset.state = 'error';
+      _errEl.style.background = 'var(--red)';
+      _errEl.textContent = '○ ERR';
+      document.getElementById('page-content').classList.add('data-stale');
+      // U-H1 fix: include endpoint + status + elapsed in the banner so the
+      // operator can tell whether the gateway is down or only the dashboard
+      // connection broke. Updates every poll so the elapsed counter advances.
+      const _staleEl = document.getElementById('stale-banner');
+      const _eMsg = (err && err.message ? err.message : String(err)).slice(0, 100);
+      const _lastOkMs = window._lastSuccessfulFetchTs || 0;
+      const _elapsed = _lastOkMs ? Math.round((Date.now() - _lastOkMs) / 1000) : null;
+      _staleEl.textContent = '⚠ /metrics fetch failed (' + _eMsg + ')'
+        + (_elapsed != null ? ' · last good ' + _elapsed + 's ago' : '')
+        + ' · retrying…';
+      _staleEl.classList.add('show');
+    }
+    if (_errEl) _errEl.title = 'Error fetching metrics: ' + (err && err.message ? err.message : String(err));
   }
 }
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
-function _gwAlert(msg){var d=document.createElement('div');d.textContent=msg;d.style.cssText='position:fixed;top:16px;right:16px;z-index:99999;background:var(--card,#161b22);border:1px solid var(--red,#f85149);color:var(--fg,#c9d1d9);padding:10px 16px;border-radius:6px;font-size:13px;max-width:360px;word-break:break-word';document.body.appendChild(d);setTimeout(()=>d.remove(),7000);}
+
+function _gwAlert(msg){var d=document.createElement('div');d.setAttribute('role','alert');d.setAttribute('aria-live','assertive');d.textContent=msg;d.style.cssText='position:fixed;top:16px;right:16px;z-index:99999;background:var(--card,#161b22);border:1px solid var(--red,#f85149);color:var(--fg,#c9d1d9);padding:10px 16px;border-radius:6px;font-size:13px;max-width:360px;word-break:break-word';document.body.appendChild(d);setTimeout(()=>d.remove(),7000);}
 const _timers=[];
 function _cidrContains(cidr, ip){
   try {
@@ -1667,7 +2160,11 @@ document.getElementById('range').addEventListener('change', () => {
   refreshControls(); tick();
 });
 document.getElementById('bucket').addEventListener('change', tick);
-tick();
+// 1.8.14 — warm the ban-duration cache BEFORE the first tick() so the
+// initial render uses operator-configured durations. Refresh every 60 s
+// so a Thresholds change reflects without a full page reload.
+_gwLoadBanCfg().then(() => tick());
+_timers.push(setInterval(_gwLoadBanCfg, 60000));
 // 1.5.5 — skip auto-refresh while the user is typing in any input /
 // textarea / contenteditable, so a tick() doesn't blow away their input
 // mid-edit.
@@ -1682,51 +2179,78 @@ window._userIsTyping = _userIsTyping;
 // the data is static and refreshing would just repaint the same window.
 _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick(); }, 2000));
 
+// U-M: staleness counter — show "last updated Ns ago" with color escalation
+_timers.push(setInterval(() => {
+  const _el = document.getElementById('staleness-counter');
+  if (!_el || !window._lastSuccessfulFetchTs) return;
+  const _age = Math.round((Date.now() - window._lastSuccessfulFetchTs) / 1000);
+  _el.textContent = '(last good ' + _age + 's ago)';
+  if (_age > 30) _el.style.color = 'var(--red)';
+  else if (_age > 10) _el.style.color = 'var(--yellow)';
+  else _el.style.color = 'var(--dim)';
+}, 1000));
+
 // 1.6.5 — bot/AI detection breakdown + top methods + block-rate trend.
 // Pulls from /antibot-appsec-gateway/secured/detector-stats (fast in-memory) + the timeline data already
 // drawn above. Re-paints every 5 s.
 (function(){
   const COL = {
-    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
+    ua:'#f85149', body:'#ff7b3a', intel:'#79c0ff', behavior:'#bc8cff',
     cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
     operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
   };
 
   let blockRateChart = null;
-  function paintMethodBars(methods){
+  function _otherTip(method, signals){
+    if (method !== 'other') return '';
+    const rows = (signals || []).filter(s => s.method === 'other' && s.hits > 0)
+                               .sort((a,b) => b.hits - a.hits);
+    if (!rows.length) return '';
+    return 'Grouped into "other":\n' + rows.map(s => `  ${s.reason}: ${s.hits}×`).join('\n');
+  }
+  function paintMethodBars(methods, signals){
     const div = document.getElementById('method-bars');
     if (!div) return;
     if (!methods.length){ div.innerHTML = '<div class="dim">no detector hits yet</div>'; return; }
     const max = Math.max(...methods.map(m => m.hits));
     div.innerHTML = _dp(methods.map(m => {
       const pct = max ? (m.hits / max) * 100 : 0;
+      const tip = _otherTip(m.method, signals);
+      const tipAttr = tip ? ` title="${escapeHtml(tip)}" style="color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px;cursor:help;border-bottom:1px dotted #8b949e"` : ` style="color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px"`;
       return `<div style="display:grid;grid-template-columns:80px 1fr 50px;gap:8px;align-items:center;margin-bottom:4px">
-        <span style="color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(m.method)}</span>
+        <span${tipAttr}>${escapeHtml(m.method)}</span>
         <span style="background:#21262d;border-radius:3px;height:12px;position:relative">
           <span style="position:absolute;left:0;top:0;height:100%;width:${pct}%;background:${COL[m.method]||'#8b949e'};border-radius:3px;opacity:.7"></span>
         </span>
-        <span style="text-align:right;color:#fff;font-weight:600">${m.hits}</span>
+        <span style="text-align:right;color:var(--bright);font-weight:600">${m.hits}</span>
       </div>`;
     }).join(''));
   }
-  function paintTopMethods(methods){
+  function paintTopMethods(methods, signals){
     const tbody = document.querySelector('#top-methods-tbl tbody');
     if (!tbody) return;
     if (!methods.length){ tbody.innerHTML = '<tr><td colspan="3" class="dim" style="padding:8px">no hits</td></tr>'; return; }
-    tbody.innerHTML = _dp(methods.slice(0, 8).map(m => `
+    tbody.innerHTML = _dp(methods.slice(0, 8).map(m => {
+      const tip = _otherTip(m.method, signals);
+      const tdStyle = `padding:4px 6px;color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10.5px`;
+      const nameCell = tip
+        ? `<td style="${tdStyle};cursor:help" title="${escapeHtml(tip)}">${escapeHtml(m.method)} <span style="font-size:9px;opacity:.6;text-transform:none;font-weight:400">(${((signals||[]).filter(s=>s.method==='other'&&s.hits>0).length)} reasons)</span></td>`
+        : `<td style="${tdStyle}">${escapeHtml(m.method)}</td>`;
+      return `
       <tr style="border-bottom:1px solid var(--line)">
-        <td style="padding:4px 6px;color:${COL[m.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10.5px">${escapeHtml(m.method)}</td>
+        ${nameCell}
         <td style="padding:4px 6px;text-align:right;font-weight:600">${m.hits}</td>
         <td style="padding:4px 6px;text-align:right;font-family:ui-monospace,monospace;color:var(--dim)">${m.p99_ms}</td>
-      </tr>`).join(''));
+      </tr>`;
+    }).join(''));
   }
   async function loadDetectorStats(){
     if (_userIsTyping()) return;
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/detector-stats', {credentials:'include'});
       const d = await r.json();
-      paintMethodBars(d.methods || []);
-      paintTopMethods(d.methods || []);
+      paintMethodBars(d.methods || [], d.signals || []);
+      paintTopMethods(d.methods || [], d.signals || []);
     } catch(e){}
   }
 
@@ -1747,6 +2271,7 @@ _timers.push(setInterval(() => { if (endEpoch === null && !_userIsTyping()) tick
     });
     const ctx = document.getElementById('blockrate-chart');
     if (!ctx) return;
+    window._chartLoading('blockrate-chart', false);
     if (blockRateChart) {
       blockRateChart.data.labels = labels;
       blockRateChart.data.datasets[0].data = data;
@@ -1881,6 +2406,55 @@ window._gwIdentityPopover = (function(){
     if (s < 86400)return (s/3600).toFixed(1)+'h ago';
     return (s/86400).toFixed(1)+'d ago';
   }
+  function _fmtdur(s){ s=Math.max(0,s|0);
+    if(s>=86400)return (s/86400).toFixed(1)+'d';
+    if(s>=3600)return (s/3600).toFixed(1)+'h';
+    if(s>=60)return Math.round(s/60)+'m';
+    return s+'s'; }
+  // reason → controlling knob map, lazily loaded from the scoring endpoint.
+  // null value = detection signal with no kill-switch (always-on); a reason
+  // absent from the map is not a tunable detection (e.g. a ban outcome).
+  let _knobMap = null;
+  let _knobState = {};
+  let _knobPage = {};
+  let _signalMeta = {};
+  function _loadKnobs(force){
+    if (_knobMap !== null && !force) return Promise.resolve();
+    if (_knobMap === null) _knobMap = {};  // mark in-flight so we don't double-fetch
+    return fetch('/antibot-appsec-gateway/secured/scoring', {credentials:'include'})
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        if (!d) return;
+        // Prefer the full reason→knob map (covers synthetic reasons like
+        // chal-required / pow-required); fall back to weights[].toggle.
+        if (d.signal_knob && typeof d.signal_knob === 'object') {
+          _knobMap = d.signal_knob;
+        } else if (Array.isArray(d.weights)) {
+          const m = {};
+          d.weights.forEach(w => { if (w && w.signal) m[w.signal] = w.toggle || null; });
+          _knobMap = m;
+        }
+        if (d.knob_state  && typeof d.knob_state  === 'object') _knobState  = d.knob_state;
+        if (d.knob_page   && typeof d.knob_page   === 'object') _knobPage   = d.knob_page;
+        if (d.signal_meta && typeof d.signal_meta === 'object') _signalMeta = d.signal_meta;
+      })
+      .catch(() => {});
+  }
+  function _ctrlCell(reason){
+    // {knob, kind, on, display, page, text, dim} for the control column.
+    if (_knobMap && (reason in _knobMap)) {
+      const knob = _knobMap[reason];
+      if (knob) {
+        const st = _knobState[knob] || {};
+        return {knob: knob, kind: st.kind || 'bool', on: !!st.on,
+                display: st.display || '', page: _knobPage[knob] || 'controls',
+                text: knob, dim: false};
+      }
+      return {knob: null, on: null, text: 'always-on', dim: true};  // mandatory gate
+    }
+    return {knob: null, on: null, text: '—', dim: true};
+  }
+  function _reasonMeta(reason){ return _signalMeta[reason] || {}; }
   function normalizeId(raw){
     const bbd = Array.isArray(raw.blocks_breakdown)
       ? raw.blocks_breakdown
@@ -1895,6 +2469,8 @@ window._gwIdentityPopover = (function(){
       stealth_score:    raw.stealth_score != null ? raw.stealth_score : null,
       risk_score:       raw.metrics ? raw.metrics.risk_score : (raw.risk_score || 0),
       banned_secs:      raw.banned_secs || 0,
+      ip_banned:        raw.ip_banned || false,
+      bypass_secs:      raw.bypass_secs || 0,
       is_authorized_bot:raw.is_authorized_bot || false,
       is_admin_ip:      raw.is_admin_ip || false,
       first_seen_secs_ago: raw.first_seen_secs_ago,
@@ -1906,16 +2482,26 @@ window._gwIdentityPopover = (function(){
       tokens:           raw.tokens != null ? raw.tokens : null,
       blocks_breakdown: bbd,
       risk_breakdown:   raw.risk_breakdown || null,
+      components:       raw.components || {},
+      metrics:          raw.metrics    || {},
+      score_source:     raw.score_source || 'stealth',
     };
   }
   function buildIdHtml(d){
     const bsec = d.banned_secs;
+    const bpass = d.bypass_secs || 0;
+    // 1.8.14 — Really-vs-standard threshold tracks live HOSTILE_BAN_SECS.
+    const _hostileBanSecs = (window._gwBanCfg && window._gwBanCfg.banSecs) || 86400;
     const banLine = d.is_authorized_bot
       ? `<span style="color:var(--blue);font-weight:600">Authorized Bot · UA matched bot list</span>`
-      : bsec > 86400
+      : bsec > _hostileBanSecs
       ? `<span style="color:var(--red);font-weight:600">Really Banned · ~${(bsec/86400).toFixed(1)}d remaining</span>`
       : bsec > 0
       ? `<span style="color:#d29922;font-weight:600">Banned · ~${(bsec/3600).toFixed(1)}h remaining</span>`
+      : d.ip_banned
+      ? `<span style="color:var(--red);font-weight:600">IP-Banned · raw IP in persistent ban list — every request silent-decoyed</span>`
+      : bpass > 0
+      ? `<span style="color:var(--green);font-weight:600">Allowed (grace window · ${bpass}s remaining — detection bypassed)</span>`
       : `<span style="color:var(--green)">allowed</span>`;
     const blocksRows = d.blocks_breakdown.map(([r,c]) =>
       `<div class="rsn"><span class="rsn-name">${escapeHtml(r)}</span>
@@ -1941,33 +2527,214 @@ window._gwIdentityPopover = (function(){
       </div>
       <div id="ip-intel-section" style="margin-top:14px">
         <h3 style="margin:0 0 6px 0">IP intelligence
-          <span class="dim" style="font-weight:400;font-size:11px">· loading…</span></h3>
+          <span class="dim" style="font-weight:400;font-size:11px">· Loading…</span></h3>
       </div>
-      ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3>${blocksRows}` : ''}`;
+      ${blocksRows ? `<h3 style="margin-top:14px">Blocks by reason</h3>${blocksRows}` : ''}
+      ${(bsec > 0 || (d.blocked||0) > 0) ? `
+        <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="gw-unban" data-unban-id="${escapeHtml(d.id)}" data-unban-ip="${escapeHtml(d.ip)}">${bsec > 0 ? 'Unban this identity' : 'Reset risk + grace'}</button>
+          <button class="gw-view-logs" data-logs-ip="${escapeHtml(d.ip)}" title="Open Logs filtered to this IP">View requests →</button>
+          <span class="dim" style="font-size:10.5px">${bsec > 0 ? 'Clears the ban + risk score, opens a ' + ((window._gwBanCfg && window._gwBanCfg.allowBypassSecs) || 300) + 's grace window.' : 'Identity has past blocks but no active ban. Reset clears risk + opens grace window.'}</span>
+        </div>` : ''}`;
   }
+  // Signals that are ban-outcome records, not scoring triggers.
+  // They add 0 risk; the control column shows the ban threshold knob for reference.
+  const _BAN_OUTCOME_SIGNALS = new Set(['banned-silent', 'fp-banned']);
+
   function buildRiskHtml(d){
     const breakdown = d.risk_breakdown || d.blocks_breakdown || [];
     const isWeighted = !!d.risk_breakdown;
     const total = breakdown.reduce((a,b)=>a+b[1], 0) || 1;
     const rs = typeof d.risk_score === 'number' ? d.risk_score.toFixed(1) : d.risk_score;
+    // Count ban-outcome hits so we can surface contextual guidance.
+    const outcomeHits = breakdown.filter(([r])=>_BAN_OUTCOME_SIGNALS.has(r)).reduce((s,[,v])=>s+v,0);
+    const head = breakdown.length
+      ? `<div class="rsn rsn-head">
+           <span class="rsn-name">signal</span>
+           <span class="rsn-ctrl">control</span>
+           <span></span>
+           <span class="rsn-val">${isWeighted?'risk':'hits'}</span></div>`
+      : '';
     const rows = breakdown.length
       ? breakdown.map(([reason, val])=>{
           const pct = (val/total*100).toFixed(0);
+          const ctrl = _ctrlCell(reason);
+          const meta = _reasonMeta(reason);
+          const tier = meta.tier ? `<span class="rsn-tier t-${escapeHtml(meta.tier)}">${escapeHtml(meta.tier)}</span>` : '';
+          const rdesc = meta.desc ? escapeHtml(meta.desc) : escapeHtml(reason);
+          let ctrlHtml;
+          if (_BAN_OUTCOME_SIGNALS.has(reason)) {
+            // Outcome signal: adds 0 risk. Show threshold as reference, not as a cost.
+            if (ctrl.knob) {
+              const page = (ctrl.page === 'settings') ? 'settings' : 'controls';
+              const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(ctrl.knob);
+              const threshVal = ctrl.display ? `<span class="rsn-kv" title="current ban threshold">&#8805;${escapeHtml(ctrl.display)}</span>` : '';
+              const lnk = `<a class="rsn-ctrl-link" href="${href}"
+                title="${escapeHtml(ctrl.knob)} — ban threshold, not a signal cost; identity was already banned"
+                >${escapeHtml(ctrl.knob)}</a>`;
+              ctrlHtml = `<span class="rsn-ctrl"><span class="gw-outcome-label" title="outcome — adds 0 risk; request was silently served a decoy">outcome</span>${lnk}${threshVal}</span>`;
+            } else {
+              ctrlHtml = `<span class="rsn-ctrl dim">outcome · 0 pts</span>`;
+            }
+          } else if (ctrl.knob) {
+            const page = (ctrl.page === 'settings') ? 'settings' : 'controls';
+            const href = '/antibot-appsec-gateway/secured/' + page + '#knob=' + encodeURIComponent(ctrl.knob);
+            const lnk = `<a class="rsn-ctrl-link" href="${href}" title="${escapeHtml(ctrl.knob)} · open in ${page==='settings'?'Settings':'Controls'}">${escapeHtml(ctrl.knob)}</a>`;
+            if (ctrl.kind === 'bool') {
+              // the dot doubles as a quick-toggle button (disable/enable in place)
+              const qd = `<button class="gw-qd rsn-dot ${ctrl.on?'on':'off'}" data-qd-knob="${escapeHtml(ctrl.knob)}" data-qd-on="${ctrl.on?'1':'0'}" title="${ctrl.on?'Disable':'Enable'} ${escapeHtml(ctrl.knob)} now"></button>`;
+              ctrlHtml = `<span class="rsn-ctrl">${qd}${lnk}</span>`;
+            } else {
+              const vb = ctrl.display ? `<span class="rsn-kv">${escapeHtml(ctrl.display)}</span>` : '';
+              ctrlHtml = `<span class="rsn-ctrl">${lnk}${vb}</span>`;
+            }
+          } else {
+            ctrlHtml = `<span class="rsn-ctrl dim" title="${escapeHtml(ctrl.text)}">${escapeHtml(ctrl.text)}</span>`;
+          }
           return `<div class="rsn">
-            <span class="rsn-name">${escapeHtml(reason)}</span>
+            <span class="rsn-name" title="${rdesc}">${escapeHtml(reason)}${tier}</span>
+            ${ctrlHtml}
             <div class="rsn-bar"><div style="width:${pct}%"></div></div>
             <span class="rsn-val">${isWeighted?'+':''}${val}${isWeighted?'':'×'}</span></div>`;
         }).join('')
       : `<div class="empty">no contributing signals (score may be from already-decayed events)</div>`;
+    let banHdr = '';
+    if (d.banned_secs > 0) {
+      // 1.8.14 — really-vs-standard threshold tracks live HOSTILE_BAN_SECS.
+      const _hostileBanSecs = (window._gwBanCfg && window._gwBanCfg.banSecs) || 86400;
+      const really = d.banned_secs > _hostileBanSecs;
+      // Skip outcome signals (banned-silent etc.) when surfacing "tripped by" — circular.
+      const topRsnEntry = breakdown.find(([r])=>!_BAN_OUTCOME_SIGNALS.has(r));
+      const topRsn = topRsnEntry ? escapeHtml(topRsnEntry[0]) : '';
+      banHdr = `<div class="gw-ban-hdr">
+        <div class="gw-ban-line">\ud83d\udd34 ${really?'Really Banned':'Banned'} · ≈${_fmtdur(d.banned_secs)} left${topRsn?` · tripped <b>${topRsn}</b>`:''}</div>
+        ${(() => {
+          // _admin_authed_bypass requires admin-allowed IP AND a valid
+          // agw_session cookie on the request. is_admin_ip alone is the IP check
+          // only — if the user hits honeypot/suspicious-path from a logged-out
+          // browser tab, curl without --cookie, or mobile app without auth, the
+          // bypass won't fire and detection bans them. Surface the actual cause.
+          if (!d.is_admin_ip) return '';
+          const sessSeen = !!(d.session && String(d.session).length > 0);
+          return sessSeen
+            ? `<div class="gw-self">⚠ Admin IP — bypass requires session cookie too. Some requests on this identity came in unauthenticated and tripped detection. Probably a self-ban from testing.</div>`
+            : `<div class="gw-self">⚠ Admin IP — but no session cookie observed on this identity. The detection bypass needs both. Likely an unauthenticated probe / logged-out tab / curl from your machine.</div>`;
+        })()}
+        <div class="gw-ban-note">Live risk <b>${rs}</b> is the decaying score; the ban is a separate ${really?'extended':'24h'} entry and does <b>not</b> decay with it.</div>
+        <button class="gw-unban" data-unban-id="${escapeHtml(d.id)}" data-unban-ip="${escapeHtml(d.ip)}">Unban this identity</button>
+        <button class="gw-view-logs" data-logs-ip="${escapeHtml(d.ip)}" title="Open Logs filtered to this IP">View requests →</button>
+      </div>`;
+    }
+    // Expired-ban: outcome events exist but ban has already elapsed.
+    // Operator sees banned-silent + live risk 0.0 with no active ban — explain why.
+    let expiredBanNote = '';
+    if (outcomeHits > 0 && !(d.banned_secs > 0)) {
+      expiredBanNote = `<div class="gw-expired-ban">
+        <div class="gw-expired-ban-line">⚠ Ban has expired (or was already cleared)</div>
+        <div>These ${outcomeHits} request(s) were silently served a decoy <b>while the identity was banned</b>. The ban has since elapsed — live risk has decayed to <b>${rs}</b>.</div>
+        <div style="margin-top:6px;color:var(--dim)">If still misbehaving: wait for new signals to accumulate above <b>RISK_BAN_THRESHOLD</b>, or re-ban from the Bans panel. Use <b>View requests →</b> to check current activity.</div>
+        <button class="gw-view-logs" data-logs-ip="${escapeHtml(d.ip)}" style="margin-top:8px" title="Open Logs filtered to this IP">View requests →</button>
+      </div>`;
+    }
+    // 1.8.14 iter15 — Reset risk button (parity with agents.html). Backend full-scrubs.
+    const resetBtn = (typeof d.risk_score === 'number' && d.risk_score > 0)
+      ? `<button class="gw-reset-risk" data-reset-id="${escapeHtml(d.id||'')}" data-reset-ip="${escapeHtml(d.ip||'')}" title="Zero this identity's risk score, clear reason breakdown, and grant a brief grace window so it can re-establish without instant re-ban">Reset risk</button>`
+      : '';
     return `
+      ${banHdr}
+      ${expiredBanNote}
       <div class="dim" style="margin-bottom:8px">
         Live risk: <b style="color:var(--red)">${rs}</b> ·
         decays at half-life 1h ·
         ban threshold ≥ 50 (≥100 for NAT)
+        ${resetBtn}
       </div>
-      ${rows}`;
+      ${head}${rows}`;
   }
-  return { normalizeId, buildIdHtml, buildRiskHtml };
+  // Wire interactive actions inside a freshly-rendered risk modal (DOMPurify
+  // strips inline handlers, so we attach them to the live nodes here).
+  function wireRiskActions(container, d){
+    if (!container) return;
+    container.querySelectorAll('.gw-unban').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const id = btn.getAttribute('data-unban-id') || '';
+        const ip = btn.getAttribute('data-unban-ip') || '';
+        if (!window.confirm('Unban this identity?\n\n' + (id || ip))) return;
+        btn.disabled = true; btn.textContent = 'Unbanning…';
+        const payload = id ? {id:id} : {ip:ip};
+        fetch('/antibot-appsec-gateway/secured/unban', {method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(j){
+            if (j && j.cleared !== undefined){
+              btn.textContent = '✓ Unbanned (' + (j.cleared||0) + ')';
+              const hdr = btn.closest('.gw-ban-hdr'); if (hdr) hdr.classList.add('gw-cleared');
+            } else { btn.textContent = 'Failed'; btn.disabled = false; }
+          })
+          .catch(function(){ btn.textContent = 'Failed'; btn.disabled = false; });
+      });
+    });
+    // 1.8.14 iter15 — Reset risk handler (parity with agents.html)
+    container.querySelectorAll('.gw-reset-risk').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const id = btn.getAttribute('data-reset-id') || '';
+        const ip = btn.getAttribute('data-reset-ip') || '';
+        if (!window.confirm('Reset risk score for this identity?\n\n' + (id || ip) + '\n\nClears the scalar score, per-reason breakdown, block counters, and grants a brief grace window so this identity can re-establish without an instant re-ban.')) return;
+        btn.disabled = true; btn.textContent = 'Resetting…';
+        const payload = id ? {id:id} : {ip:ip};
+        fetch('/antibot-appsec-gateway/secured/unban', {method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(j){
+            if (j && j.cleared !== undefined){
+              btn.textContent = '✓ Reset (' + (j.cleared||0) + (j.bypass_secs ? ' · ' + j.bypass_secs + 's grace' : '') + ')';
+              setTimeout(function(){ if (typeof tick === 'function') tick(); }, 1200);
+            } else { btn.textContent = 'Failed'; btn.disabled = false; }
+          })
+          .catch(function(){ btn.textContent = 'Failed'; btn.disabled = false; });
+      });
+    });
+    // T3-3: "View requests →" — prefill Logs filter with this IP then navigate.
+    container.querySelectorAll('.gw-view-logs').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const ip = btn.getAttribute('data-logs-ip') || '';
+        if (!ip) return;
+        try {
+          const prefs = JSON.parse(sessionStorage.getItem('appsecgw.logs.prefs.v1') || '{}');
+          prefs.q = ip;
+          sessionStorage.setItem('appsecgw.logs.prefs.v1', JSON.stringify(prefs));
+        } catch(e){}
+        window.location.href = '/antibot-appsec-gateway/secured/logs';
+      });
+    });
+    container.querySelectorAll('.gw-qd').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        const knob = btn.getAttribute('data-qd-knob');
+        const on = btn.getAttribute('data-qd-on') === '1';
+        const next = !on;
+        if (!window.confirm((next?'Enable':'Disable') + ' ' + knob + ' now?')) return;
+        btn.classList.add('busy');
+        const body = {}; body[knob] = next;
+        fetch('/antibot-appsec-gateway/secured/config', {method:'POST', credentials:'include',
+          headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)})
+          .then(function(r){ return r.ok ? r.json() : null; })
+          .then(function(j){
+            btn.classList.remove('busy');
+            if (j && j.applied && Object.keys(j.applied).length){
+              btn.classList.toggle('on', next); btn.classList.toggle('off', !next);
+              btn.setAttribute('data-qd-on', next?'1':'0');
+              btn.title = (next?'Disable':'Enable') + ' ' + knob + ' now';
+            }
+          })
+          .catch(function(){ btn.classList.remove('busy'); });
+      });
+    });
+  }
+  _loadKnobs();  // warm the reason→control map so it's ready when a modal opens
+  return { normalizeId, buildIdHtml, buildRiskHtml, wireRiskActions,
+           refreshKnobs: function(){ return _loadKnobs(true); },
+           signalKnob: function(){ return _knobMap || {}; },
+           knobPage: function(){ return _knobPage || {}; } };
 })();
 
 // ── 1.5.4 Reason drill-down + identity popovers ─────────────────────
@@ -1986,14 +2753,48 @@ window._gwIdentityPopover = (function(){
     else if (kind === 'risk-main') { title = 'Risk score breakdown'; body = window._gwIdentityPopover.buildRiskHtml(d); }
     else { return; }
     document.getElementById('modal-title').innerHTML =
-      `${title} <span class="x" id="modal-close">×</span>`;
+      `${title} <button class="x" id="modal-close" aria-label="Close drill-down">×</button>`;
     document.getElementById('modal-close').onclick = close;
     document.getElementById('modal-body').innerHTML = _dp(body);
     back.classList.add('show'); modal.classList.add('show');
+    if (kind === 'risk-main') {
+      window._gwIdentityPopover.wireRiskActions(document.getElementById('modal-body'), d);
+      // Refresh live control state so the on/off dots reflect current toggles
+      // (not whatever was cached at page load), then re-render if still open.
+      if (window._gwIdentityPopover.refreshKnobs) {
+        window._gwIdentityPopover.refreshKnobs().then(() => {
+          const mb = document.getElementById('modal-body');
+          if (mb && modal.classList.contains('show')) {
+            mb.innerHTML = _dp(window._gwIdentityPopover.buildRiskHtml(d));
+            window._gwIdentityPopover.wireRiskActions(mb, d);
+          }
+        });
+      }
+    }
+    // Identity Details popover also has Unban + View-Logs buttons
+    // (for banned identities) — wire them via the same handler used by the
+    // Risk popover. wireRiskActions is a misnomer; it wires .gw-unban /
+    // .gw-view-logs / .gw-reset-risk regardless of which popover hosts them.
+    if (kind === 'id-main') {
+      window._gwIdentityPopover.wireRiskActions(document.getElementById('modal-body'), d);
+    }
     if (kind === 'id-main' && d.ip) {
       window.fetchIpIntel(d.ip).then(html => {
         const node = document.getElementById('ip-intel-section');
-        if (node) node.innerHTML = _dp(html);
+        if (node) {
+          node.innerHTML = _dp(html);
+          // 1.8.6 — wire risk-breakdown triggers in the injected ip-intel HTML
+          node.querySelectorAll('.risk-breakdown-trigger').forEach(el => {
+            el.onclick = ev => {
+              ev.stopPropagation();
+              try {
+                const bd = JSON.parse(el.dataset.breakdown || '[]');
+                const rs = el.dataset.riskscore;
+                window.showRiskPop(bd, rs, el);
+              } catch(_){}
+            };
+          });
+        }
       }).catch(() => {});
     }
   };
@@ -2052,7 +2853,7 @@ window._gwIdentityPopover = (function(){
     const refsHtml = refs.map(([name, url]) =>
       `<a href="${escapeHtml(url)}" target="_blank" rel="noopener"
           style="color:var(--blue);text-decoration:none;
-                 background:#0a0e13;border:1px solid #21262d;
+                 background:var(--bg-inset);border:1px solid var(--line);
                  padding:2px 8px;border-radius:3px;font-size:11px;
                  margin-right:5px;display:inline-block;margin-bottom:4px">
          ${escapeHtml(name)} ↗</a>`).join('');
@@ -2071,7 +2872,14 @@ window._gwIdentityPopover = (function(){
         <tr><td class="dim" style="text-align:right">AbuseIPDB</td>   <td>${fmtScore(ab.score)}/100 ${ab.country?('· '+escapeHtml(ab.country)):''} <span class="dim" style="font-size:10px">(${escapeHtml(ab.source||'?')})</span></td></tr>
         <tr><td class="dim" style="text-align:right">CrowdSec</td>    <td>${cs.decision?`<span style="color:var(--red);font-weight:600">${escapeHtml(cs.decision)}</span>`:'<span class="dim">clean</span>'} <span class="dim" style="font-size:10px">(${escapeHtml(cs.source||'?')})</span></td></tr>
         <tr><td class="dim" style="text-align:right">internal ban</td><td>${it.banned?`<span style="color:var(--red);font-weight:600">YES · ${it.banned_remaining_secs}s left</span> <span class="dim" style="font-size:10px">${escapeHtml(it.ban_reason||'')}</span>`:'<span class="dim">no</span>'}</td></tr>
-        <tr><td class="dim" style="text-align:right">risk</td>        <td>${fmtScore(it.risk_score)}/100</td></tr>
+        <tr><td class="dim" style="text-align:right">risk</td>        <td>${
+          (it.risk_score > 0 && (it.risk_breakdown||[]).length)
+            ? `<span class="risk-breakdown-trigger" style="color:var(--red);font-weight:600"
+                     data-breakdown="${escapeHtml(JSON.stringify(it.risk_breakdown))}"
+                     data-riskscore="${it.risk_score}"
+                     title="click for score breakdown">${fmtScore(it.risk_score)}/100 ↗</span>`
+            : `${fmtScore(it.risk_score)}/100`
+        }</td></tr>
         <tr><td class="dim" style="text-align:right">activity</td>    <td>${it.requests_24h||0} reqs (${it.allowed_24h||0} ok / ${it.blocked_24h||0} blocked)</td></tr>
       </table>
       <div style="margin-top:10px">
@@ -2158,7 +2966,7 @@ window._gwIdentityPopover = (function(){
     const ips = d.ips || [];
     const totalRows = d.total_rows || 0;
     const isGwMgmt = path.startsWith('/antibot-appsec-gateway/');
-    const pathColor = isGwMgmt ? '#e4f0ff' : 'var(--blue)';
+    const pathColor = isGwMgmt ? '#e4f0ff' : '#79c0ff';
 
     // Path category control helpers
     let _bypassList = cfgState.BYPASS_PATHS || [];
@@ -2177,14 +2985,14 @@ window._gwIdentityPopover = (function(){
     const _jsLabel    = (state) =>
       state === 'exact' ? 'JS chal: open' : state === 'prefix' ? 'JS chal: open ↑' : 'JS chal: gated';
 
-    const pathCtrlsHtml = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding:6px 10px;background:#0a0e13;border-radius:4px;border:1px solid var(--line)">
+    const pathCtrlsHtml = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap;padding:6px 10px;background:var(--bg-inset);border-radius:4px;border:1px solid var(--line)">
       <span style="font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px;white-space:nowrap">Path category:</span>
       <button id="pd-bypass" style="font-size:11px;padding:2px 10px;border-radius:12px;border:1px solid;cursor:pointer;${_catBtnStyle(_pathMatch(_bypassList,path))}" title="Add/remove this path from BYPASS_PATHS — bypassed paths skip all bot detection">${_bypassLabel(_pathMatch(_bypassList,path))}</button>
       <button id="pd-jschal" style="font-size:11px;padding:2px 10px;border-radius:12px;border:1px solid;cursor:pointer;${_catBtnStyle(_pathMatch(_jsOpenList,path))}" title="Add/remove from JS_CHAL_OPEN_PATHS — open paths are not gated by the JS challenge">${_jsLabel(_pathMatch(_jsOpenList,path))}</button>
     </div>`;
 
     const explainBlock = `
-      <div style="border-left:3px solid ${pathColor};padding:8px 12px;margin-bottom:12px;background:#0a0e13;border-radius:0 4px 4px 0">
+      <div style="border-left:3px solid ${pathColor};padding:8px 12px;margin-bottom:12px;background:var(--bg-inset);border-radius:0 4px 4px 0">
         <code style="color:${pathColor};font-weight:600">${escapeHtml(path)}</code>
         <div class="dim" style="font-size:11.5px;margin-top:4px">
           ${totalRows} total events from ${ips.length} unique IP${ips.length===1?'':'s'} in the last 24 h.
@@ -2233,7 +3041,7 @@ window._gwIdentityPopover = (function(){
         </tr></thead><tbody>${rows}</tbody></table>`;
     }
     document.getElementById('modal-title').innerHTML =
-      `Path drill-down · <code style="color:${pathColor}">${escapeHtml(path.length>50?path.slice(0,50)+'…':path)}</code> <span class="x" id="modal-close">×</span>`;
+      `Path drill-down · <code style="color:${pathColor}">${escapeHtml(path.length>50?path.slice(0,50)+'…':path)}</code> <button class="x" id="modal-close" aria-label="Close drill-down">×</button>`;
     document.getElementById('modal-close').onclick = close;
     const modalBody = document.getElementById('modal-body');
     modalBody.innerHTML = _dp(body);
@@ -2354,7 +3162,14 @@ window._gwIdentityPopover = (function(){
         <td title="${escapeHtml(e.id)}"><b>${escapeHtml((e.id||'').slice(0,12))}</b></td>
         <td>${_adminLock(e.ip, e.is_admin_ip)}${escapeHtml(e.ip)}</td>
         <td style="color:var(--orange,#ff7b3a);font-weight:600;text-align:right">${e.stealth_score}</td>
-        <td style="text-align:right">${e.risk_score}</td>
+        <td style="text-align:right">${
+          (e.risk_score > 0 && (e.risk_breakdown||[]).length)
+            ? `<span class="risk-breakdown-trigger" style="color:var(--red);font-weight:600"
+                     data-breakdown="${escapeHtml(JSON.stringify(e.risk_breakdown))}"
+                     data-riskscore="${e.risk_score}"
+                     title="click for score breakdown">${e.risk_score}</span>`
+            : e.risk_score
+        }</td>
         <td class="dim">${escapeHtml((e.last_path||'').slice(0,40))}</td>
         <td>${_actionBtns(e.ip, e.id, e.ua)}</td>
       </tr>`).join('') + '</tbody></table>';
@@ -2396,7 +3211,7 @@ window._gwIdentityPopover = (function(){
       const body = sections.map(s => {
         const isFocus = s.kind === focusKind;
         const border = isFocus ? `border:2px solid ${s.color};` : 'border:1px solid var(--line);';
-        return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:#0d1117">
+        return `<div style="${border}border-radius:6px;padding:10px 12px;margin-bottom:10px;background:var(--bg)">
           <h3 style="margin:0 0 8px 0;color:${s.color};font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">
             ${escapeHtml(s.label)}
             <span class="dim" style="color:var(--dim);font-weight:400;text-transform:none;letter-spacing:0">${s.list.length} entries${isFocus?' · clicked':''}</span>
@@ -2406,7 +3221,7 @@ window._gwIdentityPopover = (function(){
       }).join('');
       document.getElementById('modal-title').innerHTML =
         `Bucket · ${fmt(t)} +${bucketSecs}s · ${totalCount} entries (${focusKind||'all'} clicked)
-         <span class="x" id="modal-close">×</span>`;
+         <button class="x" id="modal-close" aria-label="Close drill-down">×</button>`;
       document.getElementById('modal-close').onclick = close;
       const modalBody = document.getElementById('modal-body');
       modalBody.innerHTML = _dp((_fetchErr ? `<div class="empty" style="color:var(--red);margin-bottom:10px">Fetch error: ${escapeHtml(_fetchErr)}</div>` : '') + body);
@@ -2429,6 +3244,17 @@ window._gwIdentityPopover = (function(){
         };
         const abBtn = span.querySelector('.authbot');
         if (abBtn) _wireAuthBot(abBtn, ip, _moveEntry, _renderAndWire);
+      });
+      // 1.8.6 — wire risk-breakdown triggers inside this modal render
+      modalBody.querySelectorAll('.risk-breakdown-trigger').forEach(el => {
+        el.onclick = ev => {
+          ev.stopPropagation();
+          try {
+            const bd = JSON.parse(el.dataset.breakdown || '[]');
+            const rs = el.dataset.riskscore;
+            window.showRiskPop(bd, rs, el);
+          } catch(_){}
+        };
       });
     }
     _renderAndWire();
@@ -2480,8 +3306,11 @@ window._gwIdentityPopover = (function(){
     "traffic-threshold":     {tier:"info", weight:0,  text:"Operator-set `GLOBAL_RPS_LIMIT` cap reached — silent decoy until traffic drops."},
     // Synthetic reasons (not in RISK_WEIGHTS — emitted by middleware directly)
     "banned-silent":         {tier:"info", weight:0,  text:"Identity is currently in the hostile pool (24-h ban after risk crossed threshold OR honeypot/AI-flagged hit). Every request returns the upstream's homepage so the bot can't tell it was caught."},
+    "ip-ban":                {tier:"hard", weight:0,  text:"Raw source IP is in the PERSISTENT ban list (`ip_bans` table — survives session-cookie/fingerprint rotation, unlike the in-memory identity ban). Set by hostile-pool escalation or an operator Really-Ban. Every request is silent-decoyed (upstream homepage / 404 per BLOCK_RESPONSE_MODE) and never reaches real content. Weight 0 because it's a terminal block, not a risk-scoring signal — so an IP-banned identity whose risk has since decayed now shows as 'Banned' (not 'allowed') thanks to the ip_banned flag."},
     "chal-required":         {tier:"info", weight:0,  text:"Cookie gate (`JS_CHALLENGE=1`) requires a valid `chal` cookie and this request didn't carry one. Browser solves Turnstile / heuristic auto-mint to get the cookie; pure-HTTP bots get silent-decoyed."},
-    "internal-probe":        {tier:"info", weight:0,  text:"A request to `/__*` admin path without a valid admin key. Returns the upstream's 404 page — the existence of `/antibot-appsec-gateway/secured/metrics`, `/antibot-appsec-gateway/secured/live-feed`, etc. is never confirmed to outsiders."},
+    "internal-probe":        {tier:"info", weight:0,  text:"Legacy (pre-1.8.10) reason for an unauthenticated admin-path hit. Now split into `operator-self` (benign) and `admin-probe` (recon). Returns the upstream's 404 page."},
+    "operator-self":         {tier:"info", weight:0,  text:"Operator's OWN browser hitting an admin path with a genuinely-issued but lapsed session (expired/revoked/cache-evicted) — typically XHRs fired after the session dropped. Decoyed with upstream-404 but benign: NOT counted as a block. Re-login to clear it."},
+    "admin-probe":           {tier:"warn", weight:0,  text:"Anonymous request to an admin path with NO valid `agw_session` cookie — external reconnaissance of `/antibot-appsec-gateway/secured/*`, `/__config`, etc. Returns the upstream's 404 (existence never confirmed) and IS counted as a block so recon shows up in threat metrics."},
     "admin-ip-blocked":      {tier:"info", weight:0,  text:"`ADMIN_ALLOWED_IPS` is configured and the source IP is not on the list. Admin endpoints return upstream-404 (mirrors a real not-found, no leak)."},
     "pow-required":          {tier:"info", weight:0,  text:"`POW_REQUIRED_PATHS` includes this path and the request didn't carry a valid `X-PoW-Token`/`X-PoW-Solution`. Returns 402 with a fresh challenge."},
     "OK":                    {tier:"info", weight:0,  text:"Request was forwarded to the upstream. No detector fired."},
@@ -2494,7 +3323,7 @@ window._gwIdentityPopover = (function(){
   window.openReasonDrill = function(reason){
     const info = REASON_INFO[reason] || {tier:"info", weight:0, text:"No description available for this reason yet."};
     const explainBlock = `
-      <div style="border-left:3px solid ${TIER_COLOR[info.tier]||'var(--dim)'};padding:8px 12px;margin-bottom:12px;background:#0a0e13;border-radius:0 4px 4px 0">
+      <div style="border-left:3px solid ${TIER_COLOR[info.tier]||'var(--dim)'};padding:8px 12px;margin-bottom:12px;background:var(--bg-inset);border-radius:0 4px 4px 0">
         <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
           <code style="color:${TIER_COLOR[info.tier]||'var(--fg)'};font-weight:700;font-size:12.5px">${escapeHtml(reason)}</code>
           <div style="display:flex;gap:10px;font-size:10.5px">
@@ -2513,12 +3342,12 @@ window._gwIdentityPopover = (function(){
         risk: c.risk_score,
         score: c.stealth_score,            // 1.5.5 — show stealth score, not multiplied weight
         last_seen: c.last_seen_secs_ago,
-        banned: c.banned_secs > 0,
+        banned: c.banned_secs > 0 || c.ip_banned,
       }))
       .sort((a,b)=>b.count - a.count);
     document.getElementById('modal-title').innerHTML =
       `Reason details · <code style="color:${TIER_COLOR[info.tier]||'var(--red)'}">${escapeHtml(reason)}</code>` +
-      ` <span class="x" id="modal-close">×</span>`;
+      ` <button class="x" id="modal-close" aria-label="Close drill-down">×</button>`;
     document.getElementById('modal-close').onclick = close;
     let body = explainBlock;
     if (!offenders.length){
@@ -2539,7 +3368,7 @@ window._gwIdentityPopover = (function(){
         const scoreColor = ss >= 80 ? 'var(--red)'
                          : ss >= 60 ? 'var(--orange,#ff7b3a)'
                          : ss >= 40 ? 'var(--yellow)'
-                         : ss >= 20 ? 'var(--blue)'
+                         : ss >= 20 ? '#79c0ff'
                          : 'var(--dim)';
         return `
           <tr>
@@ -2575,29 +3404,39 @@ window._gwIdentityPopover = (function(){
 (function(){
   const sliderEl = document.getElementById('thr-slider');
   const msgEl    = document.getElementById('thr-msg');
-  const MAX = 100;          // visual scale upper bound (1.5.5 — 0..100)
+  let MAX = 100;            // visual scale upper bound — auto-expands to fit values
   let SOFT = 4, BAN = 50;   // current values, fetched on first tick
   let dragging = null;      // 'soft' | 'ban' | null
 
   // Build static DOM once
   sliderEl.innerHTML = `
     <div class="track" id="thr-track"></div>
-    <div class="scale"><span>0</span><span>20</span><span>40</span><span>60</span><span>80</span><span>${MAX}</span></div>
+    <div class="scale" id="thr-scale"></div>
     <div class="knob soft" id="thr-knob-soft"  title="soft challenge threshold (orange band)">S</div>
     <div class="knob ban"  id="thr-knob-ban"   title="ban threshold (red band)">B</div>
     <div class="knob-val soft" id="thr-knob-soft-val">—</div>
     <div class="knob-val ban"  id="thr-knob-ban-val">—</div>`;
-  const knobSoft = document.getElementById('thr-knob-soft');
-  const knobBan  = document.getElementById('thr-knob-ban');
+  const knobSoft    = document.getElementById('thr-knob-soft');
+  const knobBan     = document.getElementById('thr-knob-ban');
   const knobSoftVal = document.getElementById('thr-knob-soft-val');
   const knobBanVal  = document.getElementById('thr-knob-ban-val');
-  const track    = document.getElementById('thr-track');
+  const track       = document.getElementById('thr-track');
+  const scaleEl     = document.getElementById('thr-scale');
+  const inpSoft     = document.getElementById('thr-soft-val');
+  const inpBan      = document.getElementById('thr-ban-val');
+
+  function recomputeMax(){
+    const hi = Math.max(SOFT, BAN);
+    MAX = Math.max(100, Math.ceil(hi * 1.5 / 10) * 10);
+  }
 
   function render(){
+    recomputeMax();
+    scaleEl.innerHTML = [0,1,2,3,4,5].map(i => `<span>${Math.round(i*MAX/5)}</span>`).join('');
     const softOff = SOFT <= 0;
     const banOff  = BAN  <= 0;
-    const softPct = softOff ? 0 : Math.max(0, Math.min(100, (SOFT/MAX)*100));
-    const banPct  = banOff  ? 0 : Math.max(0, Math.min(100, (BAN/MAX)*100));
+    const softPct = softOff ? 0 : Math.max(0, (SOFT/MAX)*100);
+    const banPct  = banOff  ? 0 : Math.max(0, (BAN/MAX)*100);
 
     // When soft=0 (off), collapse the orange band so track goes green→red directly
     track.style.setProperty('--soft-pct', softOff ? banPct + '%' : softPct + '%');
@@ -2610,16 +3449,20 @@ window._gwIdentityPopover = (function(){
     knobSoftVal.textContent = softOff ? 'off' : SOFT;
     knobBanVal.textContent  = banOff  ? 'off' : BAN;
 
-    // Dim knob + disable drag when value = 0 (off state)
-    knobSoft.style.opacity       = softOff ? '0.3' : '1';
-    knobSoft.style.pointerEvents = softOff ? 'none' : '';
+    // Dim the knob as a visual "off" cue when value = 0, but KEEP it
+    // draggable. The old code set pointer-events:none here, which made a
+    // 0-value knob impossible to grab — so an operator could never drag a
+    // threshold UP off the off-state (had to use the number box). Both
+    // knobs stay interactive at all times now.
+    knobSoft.style.opacity       = softOff ? '0.5' : '1';
+    knobSoft.style.pointerEvents = '';
     knobSoftVal.style.opacity    = softOff ? '0'   : '1';
-    knobBan.style.opacity        = banOff  ? '0.3' : '1';
-    knobBan.style.pointerEvents  = banOff  ? 'none': '';
+    knobBan.style.opacity        = banOff  ? '0.5' : '1';
+    knobBan.style.pointerEvents  = '';
     knobBanVal.style.opacity     = banOff  ? '0'   : '1';
 
-    document.getElementById('thr-soft-val').textContent = softOff ? 'off' : SOFT;
-    document.getElementById('thr-ban-val').textContent  = banOff  ? 'off' : BAN;
+    inpSoft.value = softOff ? 0 : SOFT;
+    inpBan.value  = banOff  ? 0 : BAN;
   }
 
   function dragStart(which, ev){
@@ -2677,10 +3520,57 @@ window._gwIdentityPopover = (function(){
   knobBan .addEventListener('mousedown', e => dragStart('ban',  e));
   knobSoft.addEventListener('touchstart', e => dragStart('soft', e), {passive:false});
   knobBan .addEventListener('touchstart', e => dragStart('ban',  e), {passive:false});
+
+  // Click anywhere on the slider (not on a knob) to grab the NEAREST knob
+  // and jump it to the click position — then keep dragging. Makes the
+  // control usable without precisely hitting the 30px knob, and lets you
+  // pull a knob off the left edge when it's parked at 0 (off).
+  function grabNearest(ev){
+    if (ev.target === knobSoft || ev.target === knobBan) return; // knob owns it
+    const rect = sliderEl.getBoundingClientRect();
+    const clientX = ev.touches ? ev.touches[0].clientX : ev.clientX;
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const v = pct * MAX;
+    const softPos = SOFT <= 0 ? 0 : SOFT;
+    const banPos  = BAN  <= 0 ? 0 : BAN;
+    const which = Math.abs(v - softPos) <= Math.abs(v - banPos) ? 'soft' : 'ban';
+    dragStart(which, ev);
+    dragMove(ev);   // position to the click immediately
+  }
+  sliderEl.addEventListener('mousedown', grabNearest);
+  sliderEl.addEventListener('touchstart', grabNearest, {passive:false});
+
   document.addEventListener('mousemove', dragMove);
   document.addEventListener('touchmove', dragMove, {passive:false});
   document.addEventListener('mouseup', dragEnd);
   document.addEventListener('touchend', dragEnd);
+
+  async function applyInputChange(which){
+    const raw = which === 'soft' ? inpSoft.value : inpBan.value;
+    const v = parseInt(raw, 10);
+    if (isNaN(v) || v < 0) return;
+    if (which === 'soft') { SOFT = Math.min(v, BAN > 0 ? BAN - 1 : v); }
+    else                  { BAN  = Math.max(v, SOFT > 0 ? SOFT + 1 : v); }
+    render();
+    const body = which === 'soft' ? {SOFT_CHALLENGE_SCORE: SOFT} : {RISK_BAN_THRESHOLD: BAN};
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(body), credentials:'include',
+      });
+      const b = await r.json();
+      if (r.ok && b.applied && Object.keys(b.applied).length){
+        msgEl.style.color = 'var(--green)';
+        msgEl.textContent = `${which === 'soft' ? 'Soft' : 'Ban'} = ${which === 'soft' ? SOFT : BAN}`;
+      } else {
+        msgEl.style.color = 'var(--red)'; msgEl.textContent = 'rejected';
+        await syncFromConfig();
+      }
+      setTimeout(() => msgEl.textContent = '', 2500);
+    } catch(e){ msgEl.style.color='var(--red)'; msgEl.textContent='error: '+e.message; }
+  }
+  inpSoft.addEventListener('change', () => applyInputChange('soft'));
+  inpBan .addEventListener('change', () => applyInputChange('ban'));
 
   async function syncFromConfig(){
     try{
@@ -2722,46 +3612,83 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-status-pill{
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
   padding:5px 10px;border-radius:14px;cursor:pointer;user-select:none;white-space:nowrap;
-  background:#161b22;color:#fff;border:1px solid #30363d;
-  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s;flex-shrink:0}
+  background:var(--card);color:var(--bright);border:1px solid var(--line);
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s,background .2s,color .2s,border-color .2s;flex-shrink:0}
 #gw-status-pill:hover{transform:scale(1.04)}
+@keyframes gw-pill-pulse{0%,100%{opacity:1}50%{opacity:.55}}
 #gw-loglvl-wrap{display:flex;align-items:center;gap:5px;flex-shrink:0;
-  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
   font-size:10.5px;color:#8b949e;
   box-shadow:0 2px 6px rgba(0,0,0,.3)}
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
-#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+#gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #58a6ff}
+#gw-loglvl:focus{outline:1px solid #79c0ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
 .gw-modal-overlay.show{display:flex}
-.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+.gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
   padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
-.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+.gw-modal-card h3{margin:0 0 8px 0;color:var(--bright);font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
-.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
-  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
-.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row{display:grid;grid-template-columns:130px 56px 1fr 44px 70px;gap:10px;
+  padding:8px 4px;border-bottom:1px solid var(--bg-hover);align-items:center;font-size:12px}
+.gw-row .key{font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;font-weight:600;font-size:12px}
 .gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
 .gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
 .gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
-.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+.gw-row .penalty{font-family:ui-monospace,monospace;color:#f85149;font-weight:700;font-size:11px;text-align:right}
+.gw-row .val{font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;text-align:right}
+.gw-ok-summary{padding:10px 4px;color:#6e7681;font-size:11px;border-top:1px solid var(--bg-hover);margin-top:4px}
+.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--bg-hover);margin-bottom:8px}
+.gw-meta .chip{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
+.gw-row.row-ok{opacity:.6}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
+/* 1.8.6 — risk-breakdown floating tooltip */
+#risk-pop{display:none;position:fixed;z-index:500;background:var(--bg);
+  border:1px solid var(--line);border-radius:6px;padding:12px 14px;
+  min-width:260px;max-width:340px;font-size:12px;box-shadow:0 4px 20px #0009;
+  font-family:ui-monospace,Menlo,monospace}
+#risk-pop.show{display:block}
+#risk-pop h3{font-size:10px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.6px;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
+#risk-pop .x{cursor:pointer;color:var(--dim);font-size:15px;line-height:1;font-weight:400}
+#risk-pop .x:hover{color:var(--red)}
+#risk-pop .rsn{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr) 50px 40px;gap:6px;
+  align-items:center;padding:4px 0;border-bottom:1px solid var(--line)}
+#risk-pop .rsn:last-child{border-bottom:0}
+#risk-pop .rsn-name{color:var(--fg);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#risk-pop .rsn-ctrl{color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-size:10px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#risk-pop .rsn-ctrl.dim{color:var(--dim)}
+#risk-pop .rsn-head .rsn-name,#risk-pop .rsn-head .rsn-ctrl,#risk-pop .rsn-head .rsn-val{
+  color:var(--dim);font-weight:600;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px}
+#risk-pop .rsn-bar{height:7px;background:var(--bg-inset);border-radius:3px;overflow:hidden}
+#risk-pop .rsn-bar>div{height:100%;background:var(--red)}
+#risk-pop .rsn-val{color:var(--red);text-align:right;font-weight:600;font-size:11px}
+#risk-pop .empty{color:var(--dim);font-style:italic;text-align:center;padding:6px}
+#risk-pop .meta{color:var(--dim);font-size:10.5px;margin-bottom:8px}
+.risk-breakdown-trigger{cursor:pointer;text-decoration:underline dotted;text-underline-offset:2px}
 </style>
 <!-- 1.6.5 — server-LOG_LEVEL combo + health pill moved into #topbar-right -->
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
-    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+    <div style="height:5px;background:#1f2730;border-radius:3px;margin:6px 0 12px;overflow:hidden">
+      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
+    </div>
+    <div id="gw-modal-body" style="color:#8b949e">Loading…</div>
   </div>
 </div>
 <script>
@@ -2770,50 +3697,130 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const modal = document.getElementById('gw-status-modal');
   const modalScore = document.getElementById('gw-modal-score');
   const modalBody = document.getElementById('gw-modal-body');
+  const scoreBar  = document.getElementById('gw-score-bar');
   const lvlSelect = document.getElementById('gw-loglvl');
-  function colorFor(score){
-    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
-    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
-    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)',
+    upstream:'Upstream reachability'
+  };
+  const KEY_HINTS = {
+    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
+    memory:'Consider restarting the container or increasing container memory limits',
+    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
+    integrations:'Check API keys in Settings → Integration Credentials',
+    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
+    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign',
+    upstream:'Check upstream service health; circuit will auto-recover after CIRCUIT_OPEN_SECS'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
+  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
+  function fmtUptime(secs){
+    if(!secs) return '?';
+    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
+    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
+  }
+function colorFor(score){
+    const L=document.documentElement.getAttribute('data-theme')==='light';
+    if(score>=80)return L?{bg:'#f0fdf4',fg:'#166534',edge:'#22c55e'}:{bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if(score>=50)return L?{bg:'#fef3c7',fg:'#92400e',edge:'#f59e0b'}:{bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return   L?{bg:'#fde8e8',fg:'#991b1b',edge:'#ef4444'}:{bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
   }
   let lastData = null;
+  function _pillVhost(){
+    const sel = document.getElementById('vhost-select');
+    return (sel && sel.value) ? sel.value : '';
+  }
+  function _renderPill(){
+    if (!lastData) return;
+    const vh = _pillVhost();
+    // pill text is set via .textContent (NOT innerHTML), so the
+    // browser shows the raw string. escapeHtml() here would produce visible
+    // entity sequences (e.g. `a&amp;b.com` instead of `a&b.com`).
+    const vhSuffix = vh ? (' · ' + (vh.length>22?vh.slice(0,22)+'…':vh)) : '';
+    if (lastData.upstream_down) {
+      const L = document.documentElement.getAttribute('data-theme') === 'light';
+      pill.style.background = L ? '#fde8e8' : '#3d1a1a';
+      pill.style.color = '#f85149';
+      pill.style.borderColor = '#f85149';
+      pill.style.animation = 'gw-pill-pulse 1.4s ease-in-out infinite';
+      pill.textContent = '● UPSTREAM DOWN' + vhSuffix;
+      pill.title = 'Upstream is unreachable — circuit breaker open. Click for details.';
+    } else {
+      pill.style.animation = '';
+      pill.title = 'Gateway health score — click for breakdown' + (vh ? ` (vhost: ${vh})` : '');
+      const s = lastData.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● Health ${s}/100${vhSuffix}`;
+    }
+  }
   async function tick(){
     try {
       const r = await fetch('/antibot-appsec-gateway/secured/health-score',
                             {credentials:'include'});
       const d = await r.json();
       lastData = d;
-      const s = d.score|0;
-      const c = colorFor(s);
-      pill.style.background = c.bg;
-      pill.style.color = c.fg;
-      pill.style.borderColor = c.edge;
-      pill.textContent = `● GW ${s}/100`;
+      _renderPill();
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
+      pill.style.animation = '';
       pill.textContent = '● ERR';
     }
   }
   pill.onclick = () => {
-    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    modalScore.textContent = lastData.score|0;
-    modalScore.style.color = colorFor(lastData.score).fg;
-    const rows = (lastData.reasons||[]).map(r => `
-      <div class="gw-row">
-        <span class="key">${escapeHtml(r.key)}</span>
+    if (!lastData){ modalBody.textContent='Loading…'; modal.classList.add('show'); return; }
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    const lbl = document.getElementById('gw-score-label');
+    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
+    const bar = document.getElementById('gw-score-bar');
+    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
+    const ver = (lastData.version||'').replace('AntiBotWaf_GW_','v');
+    const up = fmtUptime(lastData.uptime_secs||0);
+    const db = lastData.db_backend||'?';
+    const rawUp = lastData.upstream||'';
+    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
+    const metaHtml = `<div class="gw-meta">
+      <span class="chip">${escapeHtml(ver)}</span>
+      <span class="chip">${escapeHtml(db)}</span>
+      <span class="chip">↑ ${escapeHtml(up)}</span>
+      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
+    </div>`;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
+      return sd!==0?sd:(b.weight||0)-(a.weight||0);
+    });
+    const rowsHtml = sorted.map(r=>{
+      const label = KEY_LABELS[r.key]||r.key;
+      const isOk = r.status==='ok';
+      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
+      return `<div class="gw-row${isOk?' row-ok':''}">
+        <span class="key">${escapeHtml(label)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
-        <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
+        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`).join('');
-    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
-      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+      </div>`;
+    }).join('');
+    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
+    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
+    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
+      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
+      <span>checked ${escapeHtml(ageStr)}</span>
     </div>`);
     modal.classList.add('show');
   };
   document.addEventListener('keydown', e => {
     if (e.key==='Escape') modal.classList.remove('show');
   });
+  window._renderPill = _renderPill;
   tick();
   _timers.push(setInterval(tick, 15000));
 
@@ -2852,7 +3859,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   var _vhRawData = null;   // {labels, datasets} from last API response
   var _vhSelectedIdx = -1; // currently pinned bucket index (-1 = none)
   var _PALETTE = [
-    '#58a6ff','#3fb950','#f85149','#d29922','#bc8cff',
+    '#79c0ff','#3fb950','#f85149','#d29922','#bc8cff',
     '#56d364','#ff7b3a','#a371f7','#79c0ff','#ffb3c8',
   ];
 
@@ -2908,6 +3915,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 
         var ctx = document.getElementById('vhost-breakdown-chart');
         if(!ctx) return;
+        window._chartLoading('vhost-breakdown-chart', false);
         if(_vhChart){
           _vhChart.data.labels   = labels;
           _vhChart.data.datasets = chartDatasets;
@@ -3048,6 +4056,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   function _renderRibbonChart(history, soft, ban) {
     var ctx = document.getElementById('risk-ribbon-chart');
     if (!ctx) return;
+    window._chartLoading('risk-ribbon-chart', false);
     if (ribbonChart) ribbonChart.destroy();
 
     var labels = history.map(function(h) {
@@ -3073,7 +4082,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
           { label:'P99', data: p99, borderColor:'rgba(248,81,73,0.7)',  backgroundColor:'rgba(248,81,73,0.30)', fill:'-1', tension:0.3, pointRadius:0, borderWidth:1.5 },
           { label:'P95', data: p95, borderColor:'rgba(248,81,73,0.9)',  backgroundColor:'rgba(210,153,34,0.30)', fill:'-1', tension:0.3, pointRadius:0, borderWidth:2 },
           { label:'P75', data: p75, borderColor:'rgba(210,153,34,0.8)', backgroundColor:'rgba(63,185,80,0.30)', fill:'-1', tension:0.3, pointRadius:0, borderWidth:1.5 },
-          { label:'P50', data: p50, borderColor:'rgba(88,166,255,0.9)', backgroundColor:'transparent',           fill:false, tension:0.3, pointRadius:0, borderWidth:2 },
+          { label:'P50', data: p50, borderColor:'rgba(121,192,255,0.9)', backgroundColor:'transparent',           fill:false, tension:0.3, pointRadius:0, borderWidth:2 },
           { label:'P25', data: p25, borderColor:'rgba(63,185,80,0.6)', backgroundColor:'transparent',            fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
           { label:'P5',  data: p5,  borderColor:'rgba(63,185,80,0.3)', backgroundColor:'transparent',            fill:false, tension:0.3, pointRadius:0, borderWidth:1 },
         ]
@@ -3101,6 +4110,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   function _renderHistogram(bins, soft, ban) {
     var ctx = document.getElementById('risk-hist-chart');
     if (!ctx) return;
+    window._chartLoading('risk-hist-chart', false);
     if (histChart) histChart.destroy();
     var labels = bins.map(function(b){ return b.bin; });
     var counts  = bins.map(function(b){ return b.count; });
@@ -3177,6 +4187,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   function _renderBanTimeline(series, bucket_secs) {
     var ctx = document.getElementById('ban-timeline-chart');
     if (!ctx) return;
+    window._chartLoading('ban-timeline-chart', false);
     if (banTimelineChart) banTimelineChart.destroy();
 
     var labels = series.map(function(s){
@@ -3214,7 +4225,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
     var mx = Math.max(f.issued, f.ips_challenged, f.ips_passed, 1);
     var items = [
       { label:'Challenges issued',    val: f.issued,        color:'var(--yellow)' },
-      { label:'Unique IPs challenged', val: f.ips_challenged, color:'#58a6ff' },
+      { label:'Unique IPs challenged', val: f.ips_challenged, color:'#79c0ff' },
       { label:'IPs that passed',      val: f.ips_passed,    color:'var(--green)' },
       { label:'Still banned',         val: f.ips_banned,    color:'var(--red)' },
     ];
@@ -3299,16 +4310,18 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   }
 
   function _quickActions(rec) {
-    var ip = rec.ip;
+    // NOTE: inline onclick= is stripped by _dp (DOMPurify); use data-attrs +
+    // delegated listeners bound after _dp(rows) is inserted (see _renderLeaderboard).
+    var ip = escapeHtml(rec.ip);
     var btns = '';
     if (!rec.is_banned) {
-      btns += '<button onclick="_attackerBan(' + JSON.stringify(ip) + ',86400)" title="IP ban 24h" '
+      btns += '<button class="qa-btn" data-qa="ban" data-ip="' + ip + '" title="IP ban 24h" '
         + 'style="font-size:9px;padding:2px 5px;background:rgba(248,81,73,0.15);color:var(--red);border:1px solid var(--red);border-radius:3px;cursor:pointer;white-space:nowrap">Ban</button> ';
     } else {
-      btns += '<button onclick="_attackerUnban(' + JSON.stringify(ip) + ')" title="Unban" '
+      btns += '<button class="qa-btn" data-qa="unban" data-ip="' + ip + '" title="Unban" '
         + 'style="font-size:9px;padding:2px 5px;background:rgba(63,185,80,0.15);color:var(--green);border:1px solid var(--green);border-radius:3px;cursor:pointer;white-space:nowrap">Unban</button> ';
     }
-    btns += '<button onclick="_attackerChallenge(' + JSON.stringify(ip) + ')" title="Force challenge" '
+    btns += '<button class="qa-btn" data-qa="chal" data-ip="' + ip + '" title="Force challenge" '
       + 'style="font-size:9px;padding:2px 5px;background:rgba(210,153,34,0.15);color:var(--yellow);border:1px solid var(--yellow);border-radius:3px;cursor:pointer;white-space:nowrap">Chal</button> ';
     return btns;
   }
@@ -3332,7 +4345,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       var flag = rec.flag || '';
 
       return '<tr style="border-bottom:1px solid var(--line)">'
-        + '<td style="padding:4px 6px;white-space:nowrap"><span style="font:700 11px ui-monospace,Menlo,monospace;cursor:pointer" title="Click to copy" onclick="navigator.clipboard&&navigator.clipboard.writeText(' + JSON.stringify(rec.ip) + ')">'
+        + '<td style="padding:4px 6px;white-space:nowrap"><span class="ip-copy" data-ip="' + escapeHtml(rec.ip) + '" style="font:700 11px ui-monospace,Menlo,monospace;cursor:pointer" title="Click to copy">'
         + escapeHtml(rec.ip) + '</span></td>'
         + '<td style="padding:4px 6px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' + escapeHtml(orgDisplay) + '">'
         + escapeHtml(orgDisplay) + hostingBadge + '</td>'
@@ -3350,6 +4363,20 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         + '</tr>';
     }).join('');
     tbody.innerHTML = _dp(rows);
+    // _dp (DOMPurify) strips inline onclick — bind the quick-actions + copy here.
+    tbody.querySelectorAll('.qa-btn').forEach(function(b){
+      b.addEventListener('click', function(){
+        var ip = b.dataset.ip, a = b.dataset.qa;
+        if (a === 'ban') _attackerBan(ip, 86400);
+        else if (a === 'unban') _attackerUnban(ip);
+        else if (a === 'chal') _attackerChallenge(ip);
+      });
+    });
+    tbody.querySelectorAll('.ip-copy').forEach(function(s){
+      s.addEventListener('click', function(){
+        if (navigator.clipboard) navigator.clipboard.writeText(s.dataset.ip);
+      });
+    });
   }
 
   function loadTopAttackers() {
@@ -3399,7 +4426,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 })();
 </script>
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
   <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -3430,7 +4457,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
       var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
@@ -3458,7 +4485,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:var(--bright);border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>');
         el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
@@ -3472,4 +4499,51 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->
+<!-- 1.8.6 — floating risk-breakdown tooltip -->
+<div id="risk-pop">
+  <h3>Risk score breakdown <button class="x" id="risk-pop-x" aria-label="Close risk breakdown">×</button></h3>
+  <div id="risk-pop-body"></div>
+</div>
+<script>
+(function(){
+  const pop = document.getElementById('risk-pop');
+  const popBody = document.getElementById('risk-pop-body');
+  document.getElementById('risk-pop-x').onclick = () => pop.classList.remove('show');
+  document.addEventListener('click', e => {
+    if (!pop.contains(e.target) && !e.target.classList.contains('risk-breakdown-trigger'))
+      pop.classList.remove('show');
+  });
+
+  window.showRiskPop = function(breakdown, riskScore, anchorEl){
+    const rs = parseFloat(riskScore) || 0;
+    const total = breakdown.reduce((a, b) => a + b[1], 0) || 1;
+    const rows = breakdown.length
+      ? breakdown.map(([reason, val]) => {
+          const pct = (val / total * 100).toFixed(0);
+          return `<div class="rsn">
+            <span class="rsn-name">${escapeHtml(reason)}</span>
+            <div class="rsn-bar"><div style="width:${pct}%"></div></div>
+            <span class="rsn-val">+${val}</span></div>`;
+        }).join('')
+      : '<div class="empty">no active signals (may have decayed)</div>';
+    popBody.innerHTML =
+      `<div class="meta">Live: <b style="color:var(--red)">${rs.toFixed(1)}</b> · half-life 1h · ban ≥ 50 (≥100 NAT)</div>${rows}`;
+    const rect = anchorEl.getBoundingClientRect();
+    const left = Math.min(rect.left, window.innerWidth - 360);
+    const top  = rect.bottom + 6 + window.scrollY;
+    pop.style.left = left + 'px';
+    pop.style.top  = (rect.bottom + 6) + 'px';
+    pop.style.position = 'fixed';
+    pop.classList.add('show');
+  };
+})();
+</script>
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
+</script>
 </body></html>

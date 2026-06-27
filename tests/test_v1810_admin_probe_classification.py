@@ -103,13 +103,27 @@ class TestBlockedConsistency:
         )
 
     def test_x04_settings_blocked_sql_excludes_operator_self_counts_admin_probe(self):
-        # Every blocked_1h/24h SUM must exclude operator-self but NOT admin-probe.
-        sums = re.findall(r"reason NOT IN \([^)]*\)", self._SETTINGS)
-        blocked_sums = [s for s in sums if "operator-passthrough" in s]
-        assert blocked_sums, "no blocked SUM directives found in settings.py"
-        for s in blocked_sums:
-            assert "'operator-self'" in s, f"blocked SUM must exclude operator-self: {s}"
-            assert "'admin-probe'" not in s, f"blocked SUM must COUNT admin-probe: {s}"
+        # Contract change (post-1.8.10): admin/settings.py's vhost-stats blocked
+        # SUM no longer inlines reason literals into the SQL — it parameterises
+        # them via the _PASSTHROUGH_REASONS tuple and `reason NOT IN ({_ph_passthru})`
+        # placeholders. The shipped invariant (operator-self excluded from blocked,
+        # admin-probe still counted) now lives in that tuple, so assert against it
+        # rather than against an inline `reason NOT IN ('...')` literal list.
+        m = re.search(r"_PASSTHROUGH_REASONS\s*=\s*\([^)]*\)", self._SETTINGS, re.S)
+        assert m, "_PASSTHROUGH_REASONS tuple not found in settings.py"
+        passthru = m.group()
+        # The blocked SUM is `reason NOT IN (_PASSTHROUGH_REASONS)`, so membership
+        # in this tuple == excluded from blocked.
+        assert '"operator-self"' in passthru, (
+            "operator-self must be a passthrough reason (excluded from blocked SUM)"
+        )
+        assert '"admin-probe"' not in passthru, (
+            "admin-probe must NOT be passthrough — it must count as a block"
+        )
+        # And confirm the SUM actually filters on this parameterised tuple.
+        assert "reason NOT IN ({_ph_passthru})" in self._SETTINGS, (
+            "blocked SUM must filter via the parameterised _PASSTHROUGH_REASONS list"
+        )
 
     # -- dashboards/service_metrics.py: per-vhost blocked SQL --
     def test_x05_service_blocked_sql_consistent(self):

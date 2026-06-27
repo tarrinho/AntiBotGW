@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 reputation/abuseipdb.py — AbuseIPDB integration (free tier 1000 lookups/day).
 Extracted from proxy.py as part of Phase 5 modular refactoring.
@@ -29,6 +27,7 @@ def _get_session() -> ClientSession:
     return _http_session
 
 from config import *   # noqa: F401,F403
+from db import open_conn
 from state import *    # noqa: F401,F403
 from helpers import slog, now
 
@@ -76,7 +75,7 @@ async def _abuseipdb_lookup(ip: str):
     n = _t.time()
     # Cache check — run in executor so sqlite3 does not block the event loop
     def _cache_lookup():
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         try:
             return conn.execute(

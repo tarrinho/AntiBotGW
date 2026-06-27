@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 vhost.py — Per-inbound-domain config overrides (Option C multi-vhost).
 
@@ -30,23 +28,34 @@ import config as _cfg
 _LABEL_RE = re.compile(r'^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$')
 
 
-def _validate_vhost_hostname(hostname: str) -> "tuple[bool, str]":
+def _validate_vhost_hostname(hostname: str, allow_port: bool = False) -> "tuple[bool, str]":
     """Validate an inbound vhost hostname.
 
     Accepts:
       - plain FQDNs:   example.com, sub.example.com
       - single labels: localhost, myapp  (for local/dev setups)
       - wildcards:     *.example.com
+      - with `allow_port=True` (1.9.8, VHOST_PORT_AWARE): an optional
+        `:PORT` suffix (1-65535), e.g. `challenges.site.com:8008`.
 
     Rejects:
-      - bare IPs, hostnames with port numbers, consecutive dots,
-        labels > 63 chars, total > 253 chars, invalid characters.
+      - bare IPs, consecutive dots, labels > 63 chars, total > 253 chars,
+        invalid characters; port numbers unless `allow_port=True`.
     """
     h = hostname.strip().lower()
     if not h:
         return False, "hostname is empty"
     if ":" in h:
-        return False, f"hostname must not include a port number: {h!r}"
+        if not allow_port:
+            return False, f"hostname must not include a port number: {h!r}"
+        # 1.9.8 — split the optional :PORT suffix and validate it; the host part
+        # falls through to the normal hostname checks below.
+        _hostpart, _, _portpart = h.rpartition(":")
+        if not _hostpart:
+            return False, f"hostname has no host part before the port: {h!r}"
+        if not _portpart.isdigit() or not (1 <= int(_portpart) <= 65535):
+            return False, f"port must be an integer 1-65535, got: {_portpart!r}"
+        h = _hostpart
     if len(h) > 253:
         return False, f"hostname too long ({len(h)} chars, max 253)"
     # Strip single trailing dot (FQDN notation)
@@ -79,6 +88,25 @@ def _validate_vhost_hostname(hostname: str) -> "tuple[bool, str]":
     return True, ""
 
 
+_DEFAULT_PORTS = ("80", "443")
+
+
+def _strip_default_port(key: str) -> str:
+    """Collapse a default-port suffix (``:80``/``:443``) to portless (1.9.8).
+
+    Browsers and reverse proxies (incl. Cloudflare) send ``Host: site.com`` —
+    with no port — for traffic on the default ports. Without this, a port-aware
+    vhost keyed ``site.com:443`` would never match real traffic. Treating the two
+    default ports as portless makes ``site.com``, ``site.com:80`` and
+    ``site.com:443`` one and the same vhost, while non-default ports
+    (e.g. ``:8008``) stay distinct. No-op when the key has no default-port suffix.
+    """
+    host, sep, port = key.rpartition(":")
+    if sep and host and port in _DEFAULT_PORTS:
+        return host
+    return key
+
+
 # RFC-1918, loopback, link-local, CGNAT, multicast, and reserved ranges
 # that must never be reachable as an UPSTREAM target.
 _PRIVATE_NETS = [
@@ -104,7 +132,9 @@ def _assert_upstream_public(upstream: str, key: str = "UPSTREAM") -> None:
 
     Prevents accidental or malicious VHOSTS configs from turning the gateway
     into an SSRF vector that leaks internal infrastructure over public tunnels.
-    Skipped when ALLOW_PRIVATE_UPSTREAM=1 is set in the environment.
+    Default ALLOW_PRIVATE_UPSTREAM=0 (guard armed). Set =1 in trusted
+    internal deployments (e.g. lab using host.docker.internal) where SSRF
+    risk from a misconfigured vhost UPSTREAM is acceptable.
     """
     if _cfg.ALLOW_PRIVATE_UPSTREAM:
         return
@@ -152,9 +182,52 @@ def _to_json_list(v: Any) -> list:
     return _json.loads(v) if isinstance(v, str) else []
 
 
+def _to_bool(v: Any) -> bool:
+    """String-aware boolean coercion for per-vhost overrides.
+
+    Bare ``bool`` is wrong here: ``bool("false")`` is ``True`` (any non-empty
+    string is truthy), so an override sent as the string ``"false"`` by the
+    policy UI would be stored as ``True`` — silently dropping the change. This
+    parser treats the usual textual forms correctly while passing real bools
+    and numbers through unchanged.
+    """
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _to_risk_overrides(v: Any) -> dict:
+    """Coerce a per-vhost RISK_OVERRIDES override (1.8.14 M-1).
+
+    Maps signal name → integer weight. Accepts string weights from the policy
+    UI (``"10"`` → ``10``). A weight of 0 is valid and deliberately suppresses
+    the signal on that vhost. Anything that is not a dict (None, str, int)
+    collapses to an empty dict so a malformed override is a no-op, never a
+    crash. Entries whose value will not parse as an int are dropped.
+    """
+    if not isinstance(v, dict):
+        return {}
+    out: dict = {}
+    for k, val in v.items():
+        try:
+            iv = int(val)
+        except (TypeError, ValueError):
+            continue
+        # Clamp to a sane non-negative range: a weight is additive risk, so a
+        # negative value is meaningless (0 already fully suppresses a signal)
+        # and an absurdly large one would just instantly ban — cap both ends.
+        out[str(k)] = max(0, min(iv, 10000))
+    return out
+
+
 _VHOST_COERCE: Dict[str, Any] = {
     # ── Routing ───────────────────────────────────────────────────────────────
     "UPSTREAM":                      str,
+    "PRESERVE_HOST":                 bool,
     # ── JS challenge ──────────────────────────────────────────────────────────
     "JS_CHALLENGE":                  bool,
     "JS_CHAL_BIND_JA4":              bool,
@@ -198,6 +271,7 @@ _VHOST_COERCE: Dict[str, Any] = {
     "IMPOSSIBLE_TRAVEL_WINDOW_SECS": int,
     "FP_ENRICHMENT_ENABLED":         bool,
     "SW_CHALLENGE_ENABLED":          bool,
+    "PATH_SWEEP_ENABLED":            bool,
     # ── Anubis ────────────────────────────────────────────────────────────────
     "ANUBIS_ENABLED":                bool,
     "ANUBIS_DIFFICULTY_BOOST":       int,
@@ -220,6 +294,10 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Ban durations ─────────────────────────────────────────────────────────
     "HOSTILE_BAN_SECS":              int,
     "REALLY_BAN_SECS":               int,
+    # 1.9.1 iter-11 — per-vhost ban blast-radius ("global" | "vhost")
+    "BAN_SCOPE":                     lambda v: str(v).strip().lower(),
+    # 1.8.14 M-1 — per-vhost risk-weight overrides (signal → weight)
+    "RISK_OVERRIDES":                _to_risk_overrides,
     "CANARY_TTL_S":                  int,
     "SESSION_CHURN_WINDOW_S":        int,
     "SESSION_CHURN_MAX":             int,
@@ -249,14 +327,27 @@ _VHOST_COERCE: Dict[str, Any] = {
     "BODY_GROUP_RCE_ENABLED":        bool,
     "BODY_GROUP_SSRF_ENABLED":       bool,
     "BODY_GROUP_CMD_ENABLED":        bool,
-    # ── Tarpit / labyrinth ────────────────────────────────────────────────────
+    # ── Tarpit / labyrinth / block-response / allow-bypass ───────────────────
     "TARPIT_ENABLED":                bool,
     "TARPIT_DELAY_MS":               int,
+    "BLOCK_RESPONSE_MODE":           str,
+    "PRESERVE_HOST":                 bool,
+    "ALLOW_BYPASS_SECS":             int,
+    "UPSTREAM_TIMEOUT_SECS":         int,
+    "UPSTREAM_CONNECT_TIMEOUT_SECS": int,
+    "CIRCUIT_FAIL_THRESHOLD":        int,
+    "CIRCUIT_OPEN_SECS":             int,
+    "CIRCUIT_HALF_OPEN_MAX":         int,
     "LABYRINTH_ENABLED":             bool,
     "LABYRINTH_SLOW_MS":             int,
     "LABYRINTH_MAX_DEPTH":           int,
     "LABYRINTH_LINKS_PER":           int,
     "LABYRINTH_JITTER_ENABLED":      bool,
+    # 1.7.3 P2 — redirect maze (per-vhost overridable)
+    "REDIRECT_MAZE_ENABLED":         bool,
+    "REDIRECT_MAZE_THRESHOLD":       float,
+    "REDIRECT_MAZE_DEPTH":           int,
+    "REDIRECT_MAZE_MIN_MS":          int,
     # ── JWT ───────────────────────────────────────────────────────────────────
     "JWT_VALIDATE_PATHS":            _to_path_list,
     "JWT_REQUIRED_ISSUER":           str,
@@ -282,6 +373,19 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Integration kill-switches (credentials stay global) ───────────────────
     "ABUSEIPDB_ENABLED":             bool,
     "CROWDSEC_ENABLED":              bool,
+    # ── Threat-intel feed kill-switches (1.8.14) ──────────────────────────────
+    "FEODO_ENABLED":                 bool,
+    "CINS_ENABLED":                  bool,
+    "URLHAUS_ENABLED":               bool,
+    # ── fingerproxy H2 SETTINGS fingerprint kill-switches (1.8.14 Week 2) ────
+    "H2_SETTINGS_FP_ENABLED":        bool,
+    "H2_FP_DENY_ENABLED":            bool,
+    "H2_SETTINGS_MISMATCH_ENABLED":  bool,
+    # ── JS multi-vector consistency kill-switches (1.8.14 Week 3) ────────────
+    "JS_CONSISTENCY_ENABLED":              bool,
+    "JS_CUA_VERSION_CHECK_ENABLED":        bool,
+    "JS_MOBILE_HINT_CHECK_ENABLED":        bool,
+    "JS_FETCH_IMPOSSIBLE_CHECK_ENABLED":   bool,
     "MAXMIND_ENABLED":               bool,
     "TURNSTILE_ENABLED":             bool,
     # ── Origin / headers ─────────────────────────────────────────────────────
@@ -292,7 +396,58 @@ _VHOST_COERCE: Dict[str, Any] = {
     # ── Upstream limits ───────────────────────────────────────────────────────
     "UPSTREAM_MAX_BODY":             int,
     "UPSTREAM_MAX_RESP":             int,
+    # ── WAF module kill-switches (1.8.9) ──────────────────────────────────────
+    "WAF_BODY_ENABLED":              bool,
+    "WAF_SMUGGLING_ENABLED":         bool,
+    "WAF_GRAPHQL_ENABLED":           bool,
+    "WAF_UPLOAD_ENABLED":            bool,
+    "WAF_VERB_OVERRIDE_ENABLED":     bool,
+    "WAF_HEADER_INJECTION_ENABLED":  bool,
+    "WAF_SLOWLORIS_ENABLED":         bool,
+    "ACCEPT_WILDCARD_CHECK_ENABLED": bool,
+    # ── Probe / interaction detectors (1.8.9) ─────────────────────────────────
+    "HONEY_CRED_ENABLED":            bool,
+    "CANARY_PROBE_ENABLED":          bool,
+    "INTERACTION_PROBE_ENABLED":     bool,
+    "AUTOMATION_PROBE_ENABLED":      bool,
+    "LLM_HEURISTIC_ENABLED":         bool,
+    # ── Session / journey detectors (1.8.9) ───────────────────────────────────
+    "COORDINATED_ATTACK_ENABLED":    bool,
+    "JOURNEY_CHECK_ENABLED":         bool,
+    "SESSION_CHURN_ENABLED":         bool,
+    # ── Network / TLS / JA4 (1.8.9) ──────────────────────────────────────────
+    "TLS_FP_BLOCK_ENABLED":          bool,
+    "JA4H_DENY_ENABLED":             bool,
+    "JA4_REQUIRED_ENABLED":          bool,
+    "HOST_BLOCKING_ENABLED":         bool,
+    # ── Rate limiting / threshold detectors (1.8.9) ───────────────────────────
+    "RATE_LIMIT_ENABLED":            bool,
+    "RATE_LIMIT_IP_ENABLED":         bool,
+    "ENDPOINT_RATE_LIMIT_ENABLED":   bool,
+    "TRAFFIC_THRESHOLD_ENABLED":     bool,
+    "PATH_SWEEP_ENABLED":            bool,
+    # ── Auth / header enforcement (1.8.9) ─────────────────────────────────────
+    "JWT_VALIDATION_ENABLED":        bool,
+    "REQUIRED_HEADERS_ENABLED":      bool,
+    "UPSTREAM_AUTH_FAIL_ENABLED":    bool,
+    "FP_BAN_CHECK_ENABLED":          bool,
+    "CUSTOM_RULES_ENABLED":          bool,
+    # ── Per-vhost risk weight overrides (1.8.14 M-1) ─────────────────────────
+    # Dict mapping signal name → integer weight, merged over global RISK_WEIGHTS
+    # for requests matching this vhost.  Stored as a plain dict; the vhost-policy
+    # API serialises it to/from JSON.  An empty dict means "use global defaults".
+    "RISK_OVERRIDES":                lambda v: {str(k): int(w) for k, w in
+                                               (v if isinstance(v, dict) else {}).items()
+                                               if int(w) >= 0},
 }
+
+# 1.8.10 — replace every bare ``bool`` coercer with the string-aware ``_to_bool``.
+# The policy UI may send a boolean override as the string "true"/"false"; bare
+# ``bool("false")`` is ``True``, which silently dropped such changes. Done as a
+# post-pass so the table above stays readable.
+for _vk, _vc in list(_VHOST_COERCE.items()):
+    if _vc is bool:
+        _VHOST_COERCE[_vk] = _to_bool
 
 # ── Parse VHOSTS env var ───────────────────────────────────────────────────────
 _VHOSTS_RAW = os.environ.get("VHOSTS", "").strip()
@@ -306,7 +461,10 @@ if _VHOSTS_RAW:
         for _host, _overrides in _parsed.items():
             if not isinstance(_overrides, dict):
                 raise ValueError(f"VHOSTS[{_host!r}] must be a JSON object")
-            _hvalid, _herr = _validate_vhost_hostname(_host)
+            # 1.9.8 — read VHOST_PORT_AWARE from config directly (this runs at
+            # import, before _port_aware() is defined) so `host:port` keys load.
+            _hvalid, _herr = _validate_vhost_hostname(
+                _host, allow_port=bool(getattr(_cfg, "VHOST_PORT_AWARE", False)))
             if not _hvalid:
                 raise ValueError(f"VHOSTS[{_host!r}] invalid hostname: {_herr}")
             _norm: Dict[str, Any] = {}
@@ -324,10 +482,13 @@ if _VHOSTS_RAW:
                         f"VHOSTS[{_host!r}][{_ku!r}] coerce error: {_ce}") from _ce
             if "UPSTREAM" in _norm:
                 _assert_upstream_public(_norm["UPSTREAM"], key=f"VHOSTS[{_host!r}].UPSTREAM")
-            VHOSTS[_host.lower()] = _norm
+            _key = _host.lower()
+            if bool(getattr(_cfg, "VHOST_PORT_AWARE", False)):
+                _key = _strip_default_port(_key)   # 1.9.8 — :80/:443 → portless
+            VHOSTS[_key] = _norm
     except (json.JSONDecodeError, ValueError) as _e:
         print(f"FATAL: VHOSTS parse error — {_e}", flush=True)
-        raise SystemExit(2)
+        raise SystemExit(2) from _e
 
 if VHOSTS:
     _upstream_info = {h: v.get("UPSTREAM", "(global)") for h, v in VHOSTS.items()}
@@ -416,7 +577,9 @@ def _save_vhosts_file() -> None:
 def vhost_set(hostname: str, overrides: dict) -> "tuple[bool, str]":
     """Add or replace a vhost entry. Returns (True, '') on success or (False, error)."""
     h = hostname.strip().lower()
-    valid, err = _validate_vhost_hostname(h)
+    if _port_aware():
+        h = _strip_default_port(h)   # 1.9.8 — store :80/:443 as portless
+    valid, err = _validate_vhost_hostname(h, allow_port=_port_aware())
     if not valid:
         return False, f"invalid hostname: {err}"
     _norm: Dict[str, Any] = {}
@@ -444,6 +607,8 @@ def vhost_set(hostname: str, overrides: dict) -> "tuple[bool, str]":
 def vhost_delete(hostname: str) -> bool:
     """Remove a vhost entry. Returns True if it existed, False otherwise."""
     h = hostname.strip().lower()
+    if _port_aware():
+        h = _strip_default_port(h)   # 1.9.8 — match the normalised stored key
     existed = h in VHOSTS
     VHOSTS.pop(h, None)
     _vhost_rps_windows.pop(h, None)
@@ -476,11 +641,64 @@ _vhost_host_ctx: contextvars.ContextVar[str] = \
     contextvars.ContextVar("_vhost_host_ctx", default="")
 
 
+def _port_aware() -> bool:
+    """Live read of the global ``VHOST_PORT_AWARE`` knob (hot-reloadable). Reads
+    from ``core.proxy_handler`` first (the merged namespace tests / hot-reload
+    patch), then ``config``. NOT per-vhost — port-awareness is a gateway-wide
+    keying mode, so it must be resolved before any per-vhost context exists."""
+    import sys as _s
+    _cph = _s.modules.get("core.proxy_handler")
+    if _cph is not None and hasattr(_cph, "VHOST_PORT_AWARE"):
+        return bool(getattr(_cph, "VHOST_PORT_AWARE"))
+    return bool(getattr(_cfg, "VHOST_PORT_AWARE", False))
+
+
+def _resolve_vhost_entry(key: str) -> Optional[Dict[str, Any]]:
+    """Resolve the override dict for a vhost ``key`` (``host`` or ``host:port``).
+
+    Precedence (most → least specific):
+      1. exact literal (``host:port`` or ``host``)
+      2. portless ``host`` — an all-ports fallback for a ported request (1.9.8)
+      3. ``*.<parent>:<port>`` then ``*.<parent>`` wildcards, for each parent label
+    Returns None when nothing matches → ``vc()`` falls back to globals.
+    """
+    if not key:
+        return None
+    entry = VHOSTS.get(key)                     # 1. exact host[:port]
+    if entry is not None:
+        return entry
+    host, sep, port = key.partition(":")
+    if sep:                                     # 2. portless host (all-ports fallback)
+        entry = VHOSTS.get(host)
+        if entry is not None:
+            return entry
+    labels = host.split(".")                    # 3. wildcard parents
+    for i in range(1, len(labels)):
+        parent = ".".join(labels[i:])
+        if sep:
+            entry = VHOSTS.get(f"*.{parent}:{port}")
+            if entry is not None:
+                return entry
+        entry = VHOSTS.get(f"*.{parent}")
+        if entry is not None:
+            return entry
+    return None
+
+
 def set_vhost(host: str) -> None:
-    """Set per-request vhost override context from the Host header value."""
-    h = (host or "").split(":", 1)[0].lower()
-    _vhost_host_ctx.set(h)
-    _vhost_ctx.set(VHOSTS.get(h))  # None when no match → vc() falls back to globals
+    """Set per-request vhost override context from the Host header value.
+    1.8.15 — match wildcard entries (``*.example.com``) against subdomains.
+    1.9.8 — ``VHOST_PORT_AWARE``: when on, the vhost key keeps the ``:PORT`` so
+    ``host:port`` pairs are distinct vhosts (exact host:port wins, portless host
+    is the all-ports fallback). When off, the port is stripped (historical).
+    1.9.8 — the default ports ``:80``/``:443`` are normalised to portless even
+    when port-aware, so a ``site.com:443`` config entry still matches the
+    ``Host: site.com`` that browsers / Cloudflare send for default-port traffic.
+    """
+    raw = (host or "").strip().lower()
+    key = _strip_default_port(raw) if _port_aware() else raw.split(":", 1)[0]
+    _vhost_host_ctx.set(key)
+    _vhost_ctx.set(_resolve_vhost_entry(key))  # None when no match → vc() globals
 
 
 def current_vhost_host() -> str:
@@ -493,6 +711,17 @@ def vhost_is_configured() -> bool:
     return _vhost_ctx.get() is not None
 
 
+# 1.8.15 (perf P0) — `vc()` is called ~40×/request. Worst-case fallback was a
+# linear `sys.modules` scan (500-1000 modules), so a single miss on a name not
+# present in `core.proxy_handler`/`config` cost ~ms per request. Memoize the
+# resolving module per attribute name. Tests + hot-reload that override values
+# on `core.proxy_handler` still work because (a) the memo holds the MODULE,
+# not the value; getattr() at lookup time re-reads, and (b) when a vhost ctx
+# overrides a name, the ctx wins before the memo is consulted. The memo only
+# resolves the FALLBACK module.
+_VC_MEMO: dict[str, Any] = {}
+
+
 def vc(name: str) -> Any:
     """Config accessor: returns vhost override if present, else global config value.
 
@@ -501,8 +730,9 @@ def vc(name: str) -> Any:
       2. core.proxy_handler module namespace — the merged star-import namespace
          where tests apply patches and all sub-module exports land
       3. config module (most settings live here)
-      4. sys.modules scan — handles settings in sub-modules not yet in proxy_handler
-         (e.g. COUNTRY_BLOCK_ENABLED lives in reputation.maxmind, not config)
+      4. sys.modules scan (cached after first miss) — handles settings in
+         sub-modules not yet in proxy_handler (e.g. COUNTRY_BLOCK_ENABLED
+         lives in reputation.maxmind, not config)
     """
     import sys as _sys
     ctx = _vhost_ctx.get()
@@ -515,11 +745,20 @@ def vc(name: str) -> Any:
         return getattr(_cph, name)
     if hasattr(_cfg, name):
         return getattr(_cfg, name)
-    # Scan loaded modules for the attribute (covers sub-package exports)
+    # Memoized fallback module — re-read attribute at lookup time so live
+    # hot-reload writes to that module are visible.
+    _memo_mod = _VC_MEMO.get(name)
+    if _memo_mod is not None:
+        try:
+            return getattr(_memo_mod, name)
+        except AttributeError:
+            _VC_MEMO.pop(name, None)  # stale; fall through and re-scan
+    # Cold scan of loaded modules for the attribute (covers sub-package exports)
     _skip = {id(_cfg), id(_cph)} if _cph is not None else {id(_cfg)}
     for _mod in list(_sys.modules.values()):
         if _mod is None or id(_mod) in _skip:
             continue
         if hasattr(_mod, name):
+            _VC_MEMO[name] = _mod
             return getattr(_mod, name)
     raise AttributeError(f"vhost.vc: config attribute {name!r} not found in any loaded module")

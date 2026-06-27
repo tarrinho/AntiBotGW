@@ -276,13 +276,14 @@ class TestM7SessionCacheRestore:
         conn.execute(
             "CREATE TABLE user_sessions (sid TEXT PRIMARY KEY, username TEXT, "
             "ip TEXT, user_agent TEXT, created_ts REAL, last_seen_ts REAL, "
-            "expires_ts REAL, status TEXT, revoked_ts REAL, revoked_by TEXT)"
+            "expires_ts REAL, status TEXT, revoked_ts REAL, revoked_by TEXT, "
+            "csrf_nonce TEXT)"  # 1.8.14 T0-2: per-session CSRF nonce column
         )
         now = time.time()
         conn.execute(
-            "INSERT INTO user_sessions VALUES (?,?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO user_sessions VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             ("sid1", "admin", "203.0.113.9", "ua", now, now - 5,
-             now + 3600, "active", None, None),
+             now + 3600, "active", None, None, None),
         )
         conn.commit(); conn.close()
 
@@ -309,18 +310,21 @@ class TestUpstreamMaxRespUX:
         assert "UPSTREAM_MAX_BODY" in proxy_handler._HOT_RELOAD_KNOBS
 
     def test_controls_ui_exposes_max_resp_fields(self):
-        """Both upstream size caps must be editable in Controls → Thresholds
-        (surfaced via thresholds_endpoint SPECS + KNOB_META, not Settings)."""
-        import inspect as _ins
-        src = _ins.getsource(proxy_handler.thresholds_endpoint)
-        assert "UPSTREAM_MAX_BODY" in src, \
-            "UPSTREAM_MAX_BODY must be in thresholds_endpoint SPECS"
-        assert "UPSTREAM_MAX_RESP" in src, \
-            "UPSTREAM_MAX_RESP must be in thresholds_endpoint SPECS"
+        """Both upstream size caps must be editable in Controls → Thresholds.
+        Contract change: the editable-knob surfacing moved from the Python
+        thresholds_endpoint SPECS / KNOB_META to the controls.html client-side
+        KNOB descriptor map (card:'thresholds'). thresholds_endpoint is now only
+        the read-only enriched min/max/impact view for detector thresholds, so
+        the size caps live in the controls.html descriptor with card:'thresholds'."""
         c = open(os.path.join(os.path.dirname(__file__), "..", "dashboards",
                               "controls.html"), encoding="utf-8").read()
-        assert "UPSTREAM_MAX_BODY" in c
-        assert "UPSTREAM_MAX_RESP" in c
+        for knob in ("UPSTREAM_MAX_BODY", "UPSTREAM_MAX_RESP"):
+            assert knob in c, f"{knob} must be exposed in controls.html"
+            i = c.find(knob + ":")
+            assert i != -1 and "card:'thresholds'" in c[i:i + 400], (
+                f"{knob} must be editable under Controls → Thresholds "
+                f"(card:'thresholds' in its controls.html KNOB descriptor)"
+            )
 
     def test_oversize_upstream_response_returns_413(self):
         """An upstream response exceeding UPSTREAM_MAX_RESP must return 413

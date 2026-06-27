@@ -109,26 +109,86 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
+def _invalidate_vhost_stats_cache():
+    """Contract change (1.9.2): vhost_stats_endpoint serves a 15 s cached
+    aggregation (_VHOST_STATS_CACHE) instead of reading the events table
+    fresh on every request. These tests seed the DB then query immediately,
+    so within the 15 s window a prior test's empty/stale result would be
+    returned. Invalidate the cache after every DB mutation to mirror a cold
+    cache / post-TTL request — which is what the endpoint genuinely serves
+    once the freshly-seeded data is older than the TTL."""
+    try:
+        from admin import settings as _s
+        _s._VHOST_STATS_CACHE["ts"] = 0.0
+        _s._VHOST_STATS_CACHE["value"] = []
+    except Exception:
+        pass
+
+
+def _pg_active() -> bool:
+    """True when the suite is running against a real Postgres backend.
+
+    vhost_stats / vhost_breakdown read from whichever backend is active, so
+    the seed/wipe helpers must target the SAME backend the endpoint reads —
+    otherwise (PG-mode) we'd seed SQLite while the endpoint queries Postgres
+    and every aggregation assertion sees zero rows (or stale rows that PG's
+    own truncate fixture, not _wipe_events, governs)."""
+    import os
+    return (os.environ.get("APPSECGW_TEST_PG", "").lower() in ("1", "true", "yes")
+            and bool(os.environ.get("POSTGRES_DSN", "").strip()))
+
+
 def _wipe_events(proxy_module):
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.execute("DELETE FROM events")
-    conn.commit()
-    conn.close()
+    if _pg_active():
+        import psycopg, os
+        with psycopg.connect(os.environ["POSTGRES_DSN"], connect_timeout=5) as _c:
+            _c.execute("DELETE FROM events")
+            _c.commit()
+    else:
+        conn = sqlite3.connect(proxy_module.DB_PATH)
+        conn.execute("DELETE FROM events")
+        conn.commit()
+        conn.close()
     # clear in-memory ip_state so ban counts from prior tests don't leak
     import state as _st
     _st.ip_state.clear()
+    _invalidate_vhost_stats_cache()
 
 
 def _seed_events(proxy_module, rows):
-    """Insert (ts, ip, ua, path, method, status, reason, vhost) rows."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.executemany(
-        "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-        "VALUES (?,?,?,?,?,?,?,?)",
-        rows,
-    )
-    conn.commit()
-    conn.close()
+    """Insert (ts, ip, ua, path, method, status, reason, vhost) rows into the
+    ACTIVE backend (SQLite by default, Postgres when APPSECGW_TEST_PG=1)."""
+    if _pg_active():
+        import psycopg, os
+        with psycopg.connect(os.environ["POSTGRES_DSN"], connect_timeout=5) as _c:
+            # PG events.ts is `timestamp with time zone`; convert the float
+            # epoch exactly as pg_insert_event does (to_timestamp).
+            _c.cursor().executemany(
+                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+                "VALUES (to_timestamp(%s),%s,%s,%s,%s,%s,%s,%s)",
+                list(rows),
+            )
+            _c.commit()
+    else:
+        conn = sqlite3.connect(proxy_module.DB_PATH)
+        conn.executemany(
+            "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            rows,
+        )
+        conn.commit()
+        conn.close()
+    _invalidate_vhost_stats_cache()
 
 
 def _seed_banned_client(proxy_module, ip, vhost, ban_level=1):
@@ -855,7 +915,7 @@ class TestF13F17VhostPolicyEndpoints:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/vhost-policy")
                     body = await r.text()
-                    assert "AppSecGW" not in body or "Vhost Policy" not in body, (
+                    assert "AntiBot/WAF GW" not in body or "Vhost Policy" not in body, (
                         "unauthenticated /vhost-policy must not serve the admin dashboard"
                     )
         _run(go())
@@ -941,6 +1001,7 @@ class TestRegressions:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/vhost-stats", json={},
+                                     headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     # 405 from aiohttp router (GET-only route); or 404/200 decoy if
                     # the route is not registered at all — either way NOT real admin data.
@@ -1037,6 +1098,7 @@ class TestRegressions:
                 async with _spin_proxy(proxy_module, up) as c:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/vhost-breakdown", json={},
+                                     headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                                      cookies={proxy_module._SESSION_COOKIE: cookie})
                     body = await r.text()
                     if r.status == 200:
@@ -1368,16 +1430,22 @@ class TestRVRefreshVhosts:
     def test_rv3_refresh_vhosts_called_on_domcontentloaded(self):
         """refreshVhosts() must be called in the DOMContentLoaded Promise.all block."""
         src = (DASHBOARDS / "controls.html").read_text()
-        # Anchor search to after DOMContentLoaded so we skip the inner Promise.all
-        # inside refreshVhosts() itself and find the startup block
-        dcl_idx = src.find("DOMContentLoaded")
-        assert dcl_idx != -1, "controls.html must have DOMContentLoaded listener"
-        pa_idx = src.find("Promise.all([", dcl_idx)
-        assert pa_idx != -1, "controls.html must have Promise.all startup block after DOMContentLoaded"
-        pa_block = src[pa_idx: pa_idx + 400]
-        assert "refreshVhosts()" in pa_block, (
-            "Promise.all startup block must call refreshVhosts() so the selector "
-            "is populated immediately on page load, not only after the first interval"
+        assert "DOMContentLoaded" in src, "controls.html must have DOMContentLoaded listener"
+        # 1.8.10 — the shared sidebar accordion adds its own DOMContentLoaded near
+        # the top, so we can't anchor on the first one. Scan every Promise.all
+        # block for the startup one that calls refreshVhosts().
+        pa_idx = src.find("Promise.all([")
+        pa_block = ""
+        while pa_idx != -1:
+            chunk = src[pa_idx: pa_idx + 400]
+            if "refreshVhosts()" in chunk:
+                pa_block = chunk
+                break
+            pa_idx = src.find("Promise.all([", pa_idx + 1)
+        assert pa_block, (
+            "controls.html must call refreshVhosts() in a Promise.all startup block "
+            "so the selector is populated immediately on page load, not only after "
+            "the first interval"
         )
 
     def test_rv4_refresh_vhosts_interval_5s(self):
@@ -1482,6 +1550,7 @@ class TestRVRefreshVhosts:
                             r_post = await c.post(
                                 NS + "/vhosts",
                                 json={"hostname": "dynamic.test", "UPSTREAM": up},
+                                headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                                 cookies={proxy_module._SESSION_COOKIE: cookie},
                             )
                         assert r_post.status == 200, (
@@ -1511,6 +1580,7 @@ class TestRVRefreshVhosts:
                         r_del = await c.delete(
                             NS + "/vhosts",
                             json={"hostname": "todelete.test"},
+                            headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r_del.status == 200
@@ -1835,6 +1905,7 @@ class TestConfigVhostWrite:
                         r = await c.post(
                             NS + "/config?vhost=writevh.internal",
                             json={"UA_FILTER_ENABLED": False},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r.status == 200, f"POST /config?vhost: expected 200, got {r.status}"
@@ -1869,6 +1940,7 @@ class TestConfigVhostWrite:
                         r = await c.post(
                             NS + "/config?vhost=rej.internal",
                             json={"RISK_BAN_THRESHOLD_NAT": 90},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r.status == 200
@@ -1894,6 +1966,7 @@ class TestConfigVhostWrite:
                         r = await c.post(
                             NS + "/config?vhost=isolate.internal",
                             json={"RATE_LIMIT_BURST": 9999},
+                            headers=_csrf_hdr(proxy_module, cookie),
                             cookies={proxy_module._SESSION_COOKIE: cookie},
                         )
                         assert r.status == 200
@@ -1948,6 +2021,7 @@ class TestConfigVhostWrite:
                     r = await c.post(
                         NS + "/config",
                         json={"LOG_LEVEL": original},
+                        headers=_csrf_hdr(proxy_module, cookie),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200

@@ -1,4 +1,4 @@
-"""Functional / integration tests for AppSecGW.
+"""Functional / integration tests for AntiBot/WAF GW.
 
 These spin up the real aiohttp app from proxy.py inside an
 aiohttp.test_utils.TestServer, then exercise the full middleware chain
@@ -91,6 +91,14 @@ async def gw_client(fake_upstream, aiohttp_client):
     proxy.metrics["by_reason"].clear()
     proxy.metrics["by_status"].clear()
     proxy.timeline.clear()
+    # M-4: clear ip_bans table so persistent hostile bans from prior tests
+    # don't short-circuit the ip_ban early-return in protect().
+    import sqlite3 as _sq
+    try:
+        with _sq.connect(TEST_DB) as _c:
+            _c.execute("DELETE FROM ip_bans")
+    except Exception:
+        pass
     return client
 
 
@@ -152,6 +160,30 @@ async def test_honeypot_path_blocked(gw_client):
     assert _has_block_reason(proxy, "honeypot-silent")
 
 
+# ── F3b — honeypot path is exempt from the challenge gate (1.8.13) ─────────
+@pytest.mark.asyncio
+async def test_honeypot_path_exempt_from_challenge_gate(gw_client, monkeypatch):
+    """With JS_CHALLENGE ON (challenge-first mode), a cookieless honeypot-path
+    probe must STILL reach the honeypot detector and fire honeypot-silent —
+    not be shadowed by the challenge gate as a generic chal-required.
+
+    Regression for the empty-Honeypots-dashboard bug: before the trap-path gate
+    exemption, the JS challenge gate silent-decoyed cookieless scanners before
+    the honeypot detector ran, so no honeypot event was ever recorded.
+    """
+    import core.proxy_handler as ph
+    monkeypatch.setattr(ph, "JS_CHALLENGE", True)   # vc('JS_CHALLENGE') reads here
+    monkeypatch.setattr(proxy, "JS_CHALLENGE", True)
+    await gw_client.get("/.env", headers={
+        "User-Agent": "python-requests/2.31.0",     # non-browser, no chal cookie
+        "Accept": "*/*",
+    })
+    assert _has_block_reason(proxy, "honeypot-silent"), (
+        "honeypot-silent must fire even under JS_CHALLENGE=on — trap paths are "
+        "exempt from the challenge gate so they reach the honeypot detector"
+    )
+
+
 # ── F4 — suspicious-path catches CTF / SQLi markers ──────────────────────
 @pytest.mark.asyncio
 async def test_suspicious_path_blocked(gw_client):
@@ -175,6 +207,17 @@ def _admin_cookie():
     }
     proxy._SESSION_CACHE_READY = True
     return {proxy._SESSION_COOKIE: proxy._session_sign("admin", sid=sid)}
+
+
+def _csrf_hdr(cookies=None):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    cookie = cookies.get(proxy._SESSION_COOKIE, "") if cookies else ""
+    if not cookie:
+        return {}
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
 
 
 @pytest.mark.asyncio
@@ -227,20 +270,29 @@ async def test_live_probe(gw_client):
 @pytest.mark.asyncio
 async def test_config_post_persists(gw_client):
     """POST /antibot-appsec-gateway/secured/config writes to config_kv table."""
-    import sqlite3
+    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"RISK_BAN_THRESHOLD": 42, "ENUM_THRESHOLD": 250},
-        cookies=_admin_cookie(),
+        headers=_csrf_hdr(_ck),
+        cookies=_ck,
     )
     body = await resp.json()
     assert resp.status == 200
     assert body["applied"] == {"RISK_BAN_THRESHOLD": 42, "ENUM_THRESHOLD": 250}
-    # Allow the async db_writer to drain
-    await asyncio.sleep(0.1)
-    conn = sqlite3.connect(proxy.DB_PATH)
-    rows = dict(conn.execute("SELECT key, value FROM config_kv").fetchall())
-    conn.close()
+    # Backend-aware read: in PG-only mode the writer loop persists config_kv to
+    # Postgres and never touches SQLite, so a raw sqlite3.connect(DB_PATH) read
+    # would be empty. db.conn.conn() targets the active backend. The PG mirror
+    # runs off-loop (asyncio.to_thread), so poll briefly for the drain instead
+    # of a single fixed sleep.
+    from db.conn import conn as _backend_conn
+    rows = {}
+    for _ in range(40):  # up to ~4s
+        await asyncio.sleep(0.1)
+        with _backend_conn(timeout=10) as _c:
+            rows = dict(_c.execute("SELECT key, value FROM config_kv").fetchall())
+        if "RISK_BAN_THRESHOLD" in rows and "ENUM_THRESHOLD" in rows:
+            break
     assert json.loads(rows["RISK_BAN_THRESHOLD"]) == 42
     assert json.loads(rows["ENUM_THRESHOLD"]) == 250
 
@@ -248,10 +300,12 @@ async def test_config_post_persists(gw_client):
 @pytest.mark.asyncio
 async def test_config_rejects_unknown(gw_client):
     """POST /antibot-appsec-gateway/secured/config rejects keys not in _HOT_RELOAD_KNOBS."""
+    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"BOGUS_KNOB": 1},
-        cookies=_admin_cookie(),
+        headers=_csrf_hdr(_ck),
+        cookies=_ck,
     )
     body = await resp.json()
     assert "BOGUS_KNOB" in body["rejected"]
@@ -260,10 +314,12 @@ async def test_config_rejects_unknown(gw_client):
 @pytest.mark.asyncio
 async def test_config_validator_rejects_out_of_range(gw_client):
     """Out-of-range values must hit the validator."""
+    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"RISK_BAN_THRESHOLD": 0},     # below min
-        cookies=_admin_cookie(),
+        headers=_csrf_hdr(_ck),
+        cookies=_ck,
     )
     body = await resp.json()
     assert "RISK_BAN_THRESHOLD" in body["rejected"]
@@ -398,6 +454,14 @@ def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
     os.environ["ABUSEIPDB_KEY"] = "fake-test-key-12345"
+    # This test exercises the SQLite config_kv read path with a temp DB_PATH.
+    # db_load_config() is backend-aware (db.conn.active_backend()), so under the
+    # PG-mode test harness (POSTGRES_DSN set) it would read PG and ignore this
+    # temp SQLite file. Pin config.POSTGRES_DSN empty for the duration so the
+    # SQLite path under test actually runs — restored in finally.
+    import config as _cfg
+    _orig_pg_dsn = _cfg.POSTGRES_DSN
+    _cfg.POSTGRES_DSN = ""
     try:
         proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
         spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb2", proxy_path)
@@ -415,6 +479,7 @@ def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
             "ABUSEIPDB_ENABLED should be applied when ABUSEIPDB_KEY is present."
         )
     finally:
+        _cfg.POSTGRES_DSN = _orig_pg_dsn
         os.environ.pop("ABUSEIPDB_KEY", None)
         if _orig_db_path is not None:
             os.environ["DB_PATH"] = _orig_db_path
@@ -594,10 +659,12 @@ async def test_bypass_mode_not_written_to_db(gw_client):
     """Setting BYPASS_MODE via the config endpoint must NOT persist it to config_kv."""
     import sqlite3
 
+    _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
         json={"BYPASS_MODE": True},
-        cookies=_admin_cookie(),
+        headers=_csrf_hdr(_ck),
+        cookies=_ck,
     )
     assert resp.status == 200
     body = await resp.json()
@@ -711,7 +778,20 @@ async def test_bypass_paths_traffic_appears_in_timeline(gw_client):
 # runs without a browser.
 
 _BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-_BROWSER_HDR = {"User-Agent": _BROWSER_UA, "Accept": "text/html", "Accept-Language": "en-US,en;q=0.9"}
+_BROWSER_HDR = {
+    "User-Agent": _BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    # Sec-Fetch-* required for Chrome UA to not trigger sec-fetch-nav-absent (B-01)
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-Dest": "document",
+    # Sec-Ch-Ua consistent with Chrome 120 Windows UA (prevents ua-platform-mismatch)
+    "Sec-Ch-Ua": '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"Windows"',
+}
 _ADMIN_NS = "/antibot-appsec-gateway"
 
 

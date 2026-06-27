@@ -114,7 +114,7 @@ def test_dashboard_silent_decoy_without_key(proxy_module):
                 # would set X-Proxy via the dashboard response on real flows;
                 # the decoy doesn't).
                 assert r.status == 200
-                assert "AppSecGW · Live Feed" not in await r.text()
+                assert "AntiBot/WAF GW · Live Feed" not in await r.text()
     _run(go())
 
 
@@ -138,7 +138,7 @@ def test_dashboard_works_with_session_cookie(proxy_module, url_safe_key):
                     cookies={proxy_module._SESSION_COOKIE: cookie})
                 body = await r.text()
                 assert r.status == 200
-                assert "AppSecGW" in body
+                assert "AntiBot/WAF GW" in body
                 assert "Live Feed" in body
     _run(go())
 
@@ -190,7 +190,7 @@ def test_x_proxy_header_on_allowed_response(proxy_module):
                 # The proxy adds X-Proxy on responses that came from the
                 # actual proxy() handler (not silent decoys).
                 if r.status == 200:
-                    assert r.headers.get("X-Proxy", "").startswith("AppSecGW")
+                    assert r.headers.get("X-Proxy", "").startswith("AntiBotWaf_GW_")
     _run(go())
 
 
@@ -207,7 +207,15 @@ def test_location_rewrite_and_set_cookie_domain_strip(proxy_module):
             # the assertion below passes by coincidence on a fresh module
             # but breaks once any earlier test mutates os.environ.
             os.environ["UPSTREAM"] = up
-            async with _spin_proxy(proxy_module, up) as client:
+            # Pin ALLOWED_HOSTS empty: this test exercises the default
+            # (no host-allowlist) Location-rewrite path, where the request Host
+            # is trusted and reflected. A non-empty value leaked from an earlier
+            # test would trip the 1.9.2 host-header guard (fall back to the
+            # upstream netloc) and make the rewrite assertion below fail.
+            _saved_ah = proxy_module.ALLOWED_HOSTS
+            proxy_module.ALLOWED_HOSTS = set()
+            try:
+              async with _spin_proxy(proxy_module, up) as client:
                 r = await client.get("/redirect", headers=_browser_headers(),
                                      allow_redirects=False)
                 # Location must NOT contain the upstream's full netloc
@@ -225,6 +233,8 @@ def test_location_rewrite_and_set_cookie_domain_strip(proxy_module):
                 upstream_cookie = next((c for c in cookies if c.startswith("sessid=")), None)
                 assert upstream_cookie is not None
                 assert "Domain=" not in upstream_cookie
+            finally:
+                proxy_module.ALLOWED_HOSTS = _saved_ah
     _run(go())
 
 
@@ -532,7 +542,11 @@ def test_lifecycle_cookie_injected_in_html_response(proxy_module):
                         "Sec-Fetch-Dest": "document",
                     })
                 text = await r.text()
-                assert "agw_lc=1" in text, f"lifecycle script not injected; body={text[:300]!r}"
+                # B-04: agw_lc now carries a 16-char HMAC token, not static "1"
+                assert "agw_lc=" in text, f"lifecycle script not injected; body={text[:300]!r}"
+                import re as _re
+                m = _re.search(r'agw_lc=([0-9a-f]+)', text)
+                assert m and len(m.group(1)) == 16, f"expected 16-char hex lc token; got {m!r}"
         finally:
             await html_srv.close()
     _run(go())

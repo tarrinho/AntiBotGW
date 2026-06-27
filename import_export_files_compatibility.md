@@ -227,7 +227,7 @@ Bundled snapshots shipped in image at `/usr/local/share/maxmind/` — copied to 
 
 **Content-Type:** `application/json`  
 **Introduced:** 1.6.0  
-**Signature header:** `X-AppSecGW-Signature: <HMAC-SHA256 hex>` (when `WEBHOOK_SECRET` set)
+**Signature header:** `X-AntiBot/WAF GW-Signature: <HMAC-SHA256 hex>` (when `WEBHOOK_SECRET` set)
 
 ```json
 {

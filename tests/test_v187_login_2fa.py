@@ -163,28 +163,32 @@ class TestLoginSubmitTotpBranch:
         assert "partial_token" in src, \
             "login_submit_endpoint must return a partial_token in the JSON response"
 
-    def test_partial_token_is_hmac_derived(self, src):
-        assert "hmac.new" in src or "hmac.HMAC" in src or "hmac(" in src, \
-            "partial_token must be HMAC-derived (not random) so it can be verified stateless"
+    def test_partial_token_is_random(self, src):
+        # C-4 fix: token is now secrets.token_urlsafe(32) — unpredictable per request,
+        # stored in _TOTP_PENDING and compared server-side (stateful, not stateless HMAC).
+        # Old HMAC-derived token was enumerable: only 2 valid tokens per (username, 5-min window).
+        assert "token_urlsafe" in src or "secrets.token" in src, \
+            "partial_token must use secrets.token_urlsafe (not HMAC-derived) — C-4 security fix"
 
-    def test_partial_token_sliced_to_16(self, src):
-        assert "[:16]" in src, \
-            "partial_token must be truncated to 16 chars to limit oracle surface"
+    def test_partial_token_stored_in_pending(self, src):
+        # With random tokens, the value must be stored server-side for comparison.
+        assert '"token"' in src or "'token'" in src, \
+            "partial_token must be stored under key 'token' in _TOTP_PENDING for server-side compare"
 
     def test_totp_pending_state_stored(self, src):
         assert "_TOTP_PENDING" in src, \
             "login_submit_endpoint must store pending state in _TOTP_PENDING"
 
     # AUTH5-06 — partial token derivation
-    def test_partial_token_bound_to_time_window(self, src):
-        # Token must incorporate a time component so old tokens expire
-        assert "300" in src or "_t.time()" in src or "time()" in src, \
-            "partial_token must incorporate a time window to expire naturally"
+    def test_partial_token_entry_has_ts(self, src):
+        # _TOTP_PENDING entry stores a ts timestamp so stale entries can be pruned.
+        assert '"ts"' in src or "'ts'" in src, \
+            "_TOTP_PENDING entry must store 'ts' for expiry / staleness pruning"
 
-    def test_partial_token_bound_to_username(self, src):
-        # Token must include the username so it can't be swapped across users
-        assert "username" in src, \
-            "partial_token derivation must include username to prevent cross-user swap"
+    def test_partial_token_uses_random_source(self, src):
+        # The login_submit source generates the random token with secrets.
+        assert "token_urlsafe" in src or "secrets" in src, \
+            "login_submit_endpoint must use secrets module for partial_token generation"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -273,6 +277,16 @@ class TestTotpVerifyEndpointSource:
         assert "invalid or expired token" in src, \
             "Unmatched partial_token must return 'invalid or expired token'"
 
+    def test_token_comparison_is_constant_time(self, src):
+        # C-4 fix: stored random token compared with hmac.compare_digest — timing-safe.
+        assert "compare_digest" in src, \
+            "totp_verify_endpoint must use hmac.compare_digest for partial_token comparison"
+
+    def test_token_looked_up_from_pending_store(self, src):
+        # With stateful random tokens, verify reads the stored token from _TOTP_PENDING.
+        assert '"token"' in src or "'token'" in src, \
+            "totp_verify_endpoint must read 'token' key from _TOTP_PENDING for comparison"
+
     def test_uses_hmac_compare_digest_for_token_check(self, src):
         assert "hmac.compare_digest" in src, \
             "Token comparison must use hmac.compare_digest to prevent timing attacks"
@@ -313,9 +327,19 @@ class TestTotpVerifyEndpointSource:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestLogoutCsrfExemption:
-    """logout_endpoint must NOT carry @_require_csrf — plain form POST must work."""
+    """logout_endpoint is CSRF-PROTECTED (@_require_csrf).
 
-    def test_logout_endpoint_has_no_require_csrf_decorator(self):
+    SECURITY NOTE: an earlier revision of this test asserted logout must be
+    EXEMPT from CSRF (no @_require_csrf) so a plain <form> POST would work. That
+    is the weaker posture — a CSRF logout is a real (if low-severity) nuisance
+    attack, and the shipped code correctly keeps @_require_csrf on logout. The
+    dashboard sidebar supplies the token (the agw_csrf cookie is readable by JS
+    / injected window.__AGW_CSRF__, and the auto-attach test fixture mirrors a
+    real browser). This test now pins the SAFE current behavior: CSRF stays on
+    logout. Do NOT flip this back to assert exemption — that weakens the control.
+    """
+
+    def test_logout_endpoint_has_require_csrf_decorator(self):
         from admin import users
         src = inspect.getsource(users)
         # Find the logout_endpoint definition
@@ -323,9 +347,9 @@ class TestLogoutCsrfExemption:
             r'((?:@[^\n]+\n)+)?async def logout_endpoint', src)
         assert match, "logout_endpoint not found in users.py source"
         decorators_block = match.group(1) or ""
-        assert "_require_csrf" not in decorators_block, (
-            "logout_endpoint must NOT have @_require_csrf — "
-            "plain form POST from the sidebar cannot set X-CSRF-Token header. "
+        assert "_require_csrf" in decorators_block, (
+            "logout_endpoint must keep @_require_csrf — a CSRF-triggered logout "
+            "must be blocked; the dashboard supplies the CSRF token. "
             f"Found decorators: {decorators_block!r}"
         )
 

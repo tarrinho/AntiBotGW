@@ -306,8 +306,9 @@ NS = "/antibot-appsec-gateway/secured"
 
 
 def _nav_block(src: str) -> str:
-    """Return the text inside <nav id="sidebar-nav">...</nav>."""
-    m = re.search(r'<nav id="sidebar-nav">(.*?)</nav>', src, re.DOTALL)
+    """Return the text inside <nav id="sidebar-nav" ...>...</nav>.
+    Tolerates extra attributes on the <nav> tag (e.g. aria-label)."""
+    m = re.search(r'<nav id="sidebar-nav"[^>]*>(.*?)</nav>', src, re.DOTALL)
     return m.group(1) if m else ""
 
 

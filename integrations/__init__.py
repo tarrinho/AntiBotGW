@@ -18,3 +18,4 @@ from integrations.webhook import *          # noqa: F401,F403
 from integrations.ja4 import *              # noqa: F401,F403
 from integrations.jwt import *              # noqa: F401,F403
 from integrations.endpoint_policy import *  # noqa: F401,F403
+from integrations.fingerproxy import *      # noqa: F401,F403
