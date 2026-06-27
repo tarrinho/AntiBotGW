@@ -1,9 +1,9 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/agents.py — Phase 8: stealth-agent analytics dashboard
 # Extracted from proxy.py lines 10853–11150
 import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
+from db import open_conn
+from db.sqlite import inject_theme  # noqa: F401 — 1.9.6 per-dashboard theme bake
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
@@ -74,8 +74,8 @@ AGENT_BLOCK_REASONS = (
     "ua-blocked", "ua-empty", "ua-too-short", "ua-non-browser",
     "ai-probe", "ai-headers-empty", "ai-headers-incomplete",
     "ai-enumeration", "ai-no-assets", "behavior",
-    "banned", "banned-silent", "honeypot", "honeypot-silent",
-    "suspicious-path", "session-flood",
+    "banned", "banned-silent", "ip-ban", "honeypot", "honeypot-silent",
+    "suspicious-path", "session-flood", "tarpit-walk", "redirect-maze-bot",
     "rate-limit-ip", "rate-limit", "host-not-allowed",
     "admin-ip-blocked",
     "suspicious-body", "bot-trap", "js-challenge",
@@ -112,7 +112,11 @@ async def agents_timeline_endpoint(request: web.Request):
     _atl_vhost = request.query.get("vhost", "").strip().lower()
     async with state_lock:
         stealth_ips = set()
-        for k, s in ip_state.items():
+        # Snapshot before iterating: state_lock only serialises coroutines, not
+        # the worker threads (rehydrate / db offload) that also mutate ip_state,
+        # so iterating the live dict can raise "OrderedDict mutated during
+        # iteration" — seen during the post-restart warm-up window.
+        for k, s in list(ip_state.items()):
             if _atl_vhost and s.last_vhost != _atl_vhost:
                 continue
             if s.allowed_count and _stealth_score(s)[0] >= min_score:
@@ -125,32 +129,49 @@ async def agents_timeline_endpoint(request: web.Request):
 
     detected, allowed_total, missed, authorized_robot, gwmgmt = {}, {}, {}, {}, {}
     _vc = (" AND vhost = ?", [_atl_vhost]) if _atl_vhost else ("", [])
+    # 1.9.1 iter-17 PG-mode sweep — pick the right SQL flavour up-front
+    # so the five bucketed reads below stay readable. On PG, `events.ts`
+    # is TIMESTAMPTZ so we wrap the bounds in `to_timestamp(?)` and
+    # project the column via `EXTRACT(EPOCH FROM ts)` for the divide-
+    # then-floor bucket arithmetic. SQLite path unchanged.
+    from db import active_backend as _active_a
+    _be_a = _active_a()
+    if _be_a == "postgres":
+        _bucket_expr = (
+            f"(CAST(EXTRACT(EPOCH FROM ts)/{bucket_secs} AS INTEGER)*{bucket_secs})"
+        )
+        _ts_lb = "ts >= to_timestamp(?)"
+        _ts_ub = "ts <= to_timestamp(?)"
+    else:
+        _bucket_expr = f"(CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs})"
+        _ts_lb = "ts >= ?"
+        _ts_ub = "ts <= ?"
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
         for r in conn.execute(
-            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant; agent_q is "?,?,?" placeholders
+            f"SELECT {_bucket_expr} AS b, "  # nosec B608 — bucket_secs is int constant; agent_q is "?,?,?" placeholders
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND reason IN ({agent_q}){_vc[0]} "
+            f"WHERE {_ts_lb} AND {_ts_ub} AND reason IN ({agent_q}){_vc[0]} "
             f"GROUP BY b",
             (start_b, end_b + bucket_secs, *AGENT_BLOCK_REASONS, *_vc[1]),
         ):
             detected[int(r["b"])] = r["n"]
 
         for r in conn.execute(
-            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant
+            f"SELECT {_bucket_expr} AS b, "  # nosec B608 — bucket_secs is int constant
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK'){_vc[0]} "
+            f"WHERE {_ts_lb} AND {_ts_ub} AND (reason='' OR reason='OK'){_vc[0]} "
             f"GROUP BY b",
             (start_b, end_b + bucket_secs, *_vc[1]),
         ):
             allowed_total[int(r["b"])] = r["n"]
 
         for r in conn.execute(
-            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant
+            f"SELECT {_bucket_expr} AS b, "  # nosec B608 — bucket_secs is int constant
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND reason='authorized-robot'{_vc[0]} "
+            f"WHERE {_ts_lb} AND {_ts_ub} AND reason='authorized-robot'{_vc[0]} "
             f"GROUP BY b",
             (start_b, end_b + bucket_secs, *_vc[1]),
         ):
@@ -159,25 +180,35 @@ async def agents_timeline_endpoint(request: web.Request):
         if stealth_ips:
             ip_q = ",".join("?" * len(stealth_ips))
             for r in conn.execute(
-                f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "  # nosec B608 — bucket_secs is int constant; ip_q is "?,?,?" placeholders
+                f"SELECT {_bucket_expr} AS b, "  # nosec B608 — bucket_secs is int constant; ip_q is "?,?,?" placeholders
                 f"COUNT(*) AS n FROM events "
-                f"WHERE ts >= ? AND ts <= ? AND (reason='' OR reason='OK') "
+                f"WHERE {_ts_lb} AND {_ts_ub} AND (reason='' OR reason='OK') "
                 f"AND ip IN ({ip_q}){_vc[0]} GROUP BY b",
                 (start_b, end_b + bucket_secs, *stealth_ips, *_vc[1]),
             ):
                 missed[int(r["b"])] = r["n"]
 
         for r in conn.execute(  # nosec B608 — bucket_secs is int constant
-            f"SELECT (CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs}) AS b, "
+            f"SELECT {_bucket_expr} AS b, "
             f"COUNT(*) AS n FROM events "
-            f"WHERE ts >= ? AND ts <= ? AND path LIKE ?{_vc[0]} "
+            f"WHERE {_ts_lb} AND {_ts_ub} AND path LIKE ?{_vc[0]} "
             f"GROUP BY b",
             (start_b, end_b + bucket_secs, ADMIN_NS + "%", *_vc[1]),
         ):
             gwmgmt[int(r["b"])] = r["n"]
         conn.close()
     except Exception as e:
-        print(f"[agents-timeline] db error: {e}")
+        # 1.9.2 iter-20 — operator-visible diagnostic. Previously this used
+        # `print()` so the failure only showed in docker logs (not in the
+        # in-process /__logs ring) — making "chart stopped showing events"
+        # bugs untriagable without container shell access. Now slog at
+        # error level with the active backend so the operator can correlate
+        # against the SQLite/Postgres split and the PG-mirrored-table guard
+        # set without spelunking through stdout.
+        from helpers import slog as _slog_atl
+        _slog_atl("agents_timeline_db_err", level="error",
+                  backend=locals().get("_be_a", "unknown"),
+                  exc_type=type(e).__name__, error=str(e)[:240])
 
     series = []
     tot_d = tot_m = tot_c = tot_ar = tot_gw = 0
@@ -223,7 +254,7 @@ async def agents_data_endpoint(request: web.Request):
         suspects = []
         clean = 0
         total_allowed_identities = 0
-        for key, s in ip_state.items():
+        for key, s in list(ip_state.items()):   # snapshot: see agents_timeline note
             if _ad_vhost and s.last_vhost != _ad_vhost:
                 continue
             # 1.5.5 — broaden criteria.  Old logic skipped any identity
@@ -346,7 +377,7 @@ AGENTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "agents.html").read_text(encoding="ut
 
 
 async def agents_dashboard_endpoint(request: web.Request):
-    body = AGENTS_DASHBOARD_HTML
+    body = inject_theme(AGENTS_DASHBOARD_HTML, DB_PATH)  # 1.9.6 — honour saved theme
     return web.Response(
         text=body, content_type="text/html",
         headers={

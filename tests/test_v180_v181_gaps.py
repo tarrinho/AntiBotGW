@@ -249,10 +249,10 @@ def test_portal_footer_css_defined(page):
 
 @pytest.mark.parametrize("page", _ALL_DASH)
 def test_portal_footer_copyright_text(page):
-    """Portal footer must contain the copyright / confidentiality notice."""
+    """Portal footer must contain the copyright / license notice."""
     src = _dash(page)
-    assert "Confidential" in src or "pt4.tech" in src, (
-        f"{page}: portal-footer missing expected copyright/confidentiality text"
+    assert "Pedro Tarrinho" in src or "Apache-2.0" in src, (
+        f"{page}: portal-footer missing expected copyright/license text"
     )
 
 
@@ -296,8 +296,8 @@ class TestControlCenterPage:
 
     def test_version_string_in_title(self):
         src = _dash("control_center.html")
-        assert "AppSecGW_1.8.5" in src, (
-            "control_center.html: version string AppSecGW_1.8.5 missing from <title>"
+        assert "AntiBotWaf_GW_1.9.8" in src, (
+            "control_center.html: version string AntiBotWaf_GW_1.9.8 missing from <title>"
         )
 
     def test_active_nav_link_is_control_center(self):

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AppSecGW HTML/JS design-flaw scanner
+# AntiBot/WAF GW HTML/JS design-flaw scanner
 # Combines: semgrep (custom rules) + retire.js (known-vuln libs) + CSP audit
 set -uo pipefail
 

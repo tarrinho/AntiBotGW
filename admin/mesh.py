@@ -1,13 +1,12 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # admin/mesh.py — Phase 8: gateway registry + mesh-sync
 # Extracted from proxy.py lines 11914–13539
 import base64 as _b64  # noqa: F401
 import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
+from db import open_conn
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
-from admin.auth import _internal_authed, _request_username, _role_denied  # noqa: F401
+from admin.auth import _internal_authed, _request_username, _role_denied, _require_csrf  # noqa: F401
 from integrations.redis import _redis  # noqa: F401 — lazy singleton, may be None
 from aiohttp import web
 
@@ -59,24 +58,97 @@ def _gw_id_from_domain(domain: str) -> str:
     return s if (s and _GW_ID_RE.match(s)) else ""
 
 
+def _b64u_enc(raw: bytes) -> str:
+    """base64url, no padding (32-byte key → 43 chars, 64-byte sig → 86)."""
+    return _b64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _b64u_dec(s: str) -> bytes:
+    """Inverse of _b64u_enc — restores padding before decoding."""
+    return _b64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
+
+
 def _gw_generate_keypair() -> tuple[str, str]:
-    """Mint a new (private_key, public_key) pair. Private is 32-byte
-    URL-safe random; public is a SHA256-derived verification handle so
-    peers can authenticate signatures without holding the private key.
-    Both are base64url-encoded so they round-trip in JSON / XML cleanly."""
-    private_key = secrets.token_urlsafe(32)
-    public_key  = _gw_derive_pubkey(private_key)
-    return private_key, public_key
+    """1.8.8 — mint a real Ed25519 (private_key, public_key) pair. Both are the
+    raw 32-byte keys, base64url-encoded (no padding → 43 chars). Asymmetric:
+    peers hold only the PUBLIC key and verify offer signatures without ever
+    seeing the private key (replaces the old symmetric-HMAC model). Falls back
+    to ('', '') when the `cryptography` package is absent (e.g. armv7) — that
+    node simply can't participate in signed mesh, which is fail-closed."""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization as _ser
+    except Exception:
+        return "", ""
+    sk = Ed25519PrivateKey.generate()
+    priv_raw = sk.private_bytes(_ser.Encoding.Raw, _ser.PrivateFormat.Raw,
+                                _ser.NoEncryption())
+    pub_raw = sk.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
+    return _b64u_enc(priv_raw), _b64u_enc(pub_raw)
 
 
 def _gw_derive_pubkey(private_key: str) -> str:
-    """SHA256 fingerprint of the private secret — used as the public
-    verification handle. Peers receive this, and verify HMAC-SHA256
-    signatures on inbound block records by recomputing locally with the
-    SAME secret (mesh participants share the secret out-of-band), which
-    is the symmetric-HMAC mesh model we ship until proper Ed25519 lands."""
-    h = hashlib.sha256(private_key.encode("utf-8")).digest()
-    return _b64.urlsafe_b64encode(h).rstrip(b"=").decode("ascii")
+    """Derive the Ed25519 public key (base64url) from a base64url private key.
+    Returns '' for empty/invalid input (not 32 raw bytes) or when crypto is
+    unavailable — never raises."""
+    if not private_key:
+        return ""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives import serialization as _ser
+        raw = _b64u_dec(private_key)
+        if len(raw) != 32:
+            return ""
+        sk = Ed25519PrivateKey.from_private_bytes(raw)
+        pub_raw = sk.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
+        return _b64u_enc(pub_raw)
+    except Exception:
+        return ""
+
+
+def _canonical_offer_bytes(offers: dict) -> bytes:
+    """Deterministic byte serialisation of a mesh offer for signing/verifying.
+    Excludes the `_sig` field (the signature can't sign itself), sorts keys, and
+    uses compact separators so both ends produce identical bytes regardless of
+    dict insertion order. Empty / _sig-only → b'{}'."""
+    import json as _json
+    clean = {k: v for k, v in (offers or {}).items() if k != "_sig"}
+    return _json.dumps(clean, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def _gw_sign_offers(private_key: str, offers: dict) -> str:
+    """Ed25519-sign the canonical offer bytes; return the base64url signature
+    (86 chars). '' for empty/invalid private key or when crypto is absent."""
+    if not private_key:
+        return ""
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        raw = _b64u_dec(private_key)
+        if len(raw) != 32:
+            return ""
+        sk = Ed25519PrivateKey.from_private_bytes(raw)
+        return _b64u_enc(sk.sign(_canonical_offer_bytes(offers)))
+    except Exception:
+        return ""
+
+
+def _gw_verify_offers(public_key: str, signature: str, offers: dict) -> bool:
+    """Verify an Ed25519 offer signature. Returns True only when `signature`
+    (base64url) is a valid signature over `_canonical_offer_bytes(offers)` by
+    `public_key` (base64url). Any tamper / wrong key / bad input / missing
+    crypto → False (fail-closed); never raises."""
+    if not public_key or not signature:
+        return False
+    try:
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        pub_raw = _b64u_dec(public_key)
+        if len(pub_raw) != 32:
+            return False
+        Ed25519PublicKey.from_public_bytes(pub_raw).verify(
+            _b64u_dec(signature), _canonical_offer_bytes(offers))
+        return True
+    except Exception:
+        return False
 
 
 def _gw_fingerprint(public_key: str, length: int = 12) -> str:
@@ -86,6 +158,101 @@ def _gw_fingerprint(public_key: str, length: int = 12) -> str:
     return h[:length]
 
 
+# In-process cache for _mesh_fernet_key — ensures wrap/unwrap use the same
+# key within a process lifetime even if the key file is unwritable.
+_MESH_FERNET_KEY_CACHE: "bytes | None" = None
+
+
+# Secret-class keys that must NEVER be sync'd via mesh-redis to other
+# gateways — those keys identify *this* operator's third-party
+# integrations and leaking them across the mesh would compromise the
+# linked accounts. Mesh-sync filters them out on both ingress + egress.
+_MESH_REDIS_EXCLUDED_KEYS = frozenset({
+    "TURNSTILE_SECRET",
+    "ABUSEIPDB_KEY",
+    "CROWDSEC_LAPI_KEY",
+    "MAXMIND_LICENSE_KEY",
+    "POSTGRES_DSN",
+    "OIDC_CLIENT_SECRET",
+})
+
+
+def _mesh_fernet_key() -> bytes:
+    """Return a stable Fernet-ready 32-byte key for mesh private key encryption.
+    Uses MESH_FERNET_KEY env var when set; otherwise persists a generated key
+    in /app/.mesh_fernet_key so it survives SESSION_KEY rotations.
+    Falls back to an in-process cached key when the file is unwritable."""
+    global _MESH_FERNET_KEY_CACHE
+    import base64 as _b64x
+    import os as _os
+    env_key = _os.environ.get("MESH_FERNET_KEY", "").strip()
+    if env_key:
+        try:
+            raw = _b64x.urlsafe_b64decode(env_key + "=" * (-len(env_key) % 4))
+            if len(raw) == 32:
+                return _b64x.urlsafe_b64encode(raw)
+        except Exception:
+            pass
+    key_path = "/app/.mesh_fernet_key"
+    try:
+        if _os.path.exists(key_path):
+            stored_str = open(key_path).read().strip()
+            raw = _b64x.urlsafe_b64decode(stored_str + "=" * (-len(stored_str) % 4))
+            if len(raw) == 32:
+                fk = _b64x.urlsafe_b64encode(raw)
+                _MESH_FERNET_KEY_CACHE = fk
+                return fk
+    except Exception:
+        pass
+    if _MESH_FERNET_KEY_CACHE is not None:
+        return _MESH_FERNET_KEY_CACHE
+    import secrets as _sec
+    new_key = _sec.token_bytes(32)
+    try:
+        with open(key_path, "w") as f:
+            f.write(_b64x.urlsafe_b64encode(new_key).rstrip(b"=").decode())
+        import stat as _stat
+        _os.chmod(key_path, _stat.S_IRUSR | _stat.S_IWUSR)
+        slog("mesh_fernet_key_autogenerated", level="warn",
+             path=key_path,
+             note="set MESH_FERNET_KEY env var to avoid disk-stored key")
+    except Exception:
+        pass
+    fk = _b64x.urlsafe_b64encode(new_key)
+    _MESH_FERNET_KEY_CACHE = fk
+    return fk
+
+
+def _gw_wrap_private_key(raw_b64: str) -> str:
+    """Encrypt an Ed25519 private key for at-rest storage.
+    Returns 'fernet:<ciphertext>' using Fernet keyed from _mesh_fernet_key().
+    Falls back to plaintext when the cryptography package is absent (armv7)."""
+    if not raw_b64:
+        return raw_b64
+    try:
+        from cryptography.fernet import Fernet as _Fernet
+        fk = _mesh_fernet_key()
+        return "fernet:" + _Fernet(fk).encrypt(raw_b64.encode()).decode()
+    except ImportError:
+        return raw_b64  # cryptography absent — armv7 single-instance, no mesh signing
+
+
+def _gw_unwrap_private_key(stored: str) -> str:
+    """Decrypt a private key stored by _gw_wrap_private_key.
+    Accepts legacy plaintext rows (no 'fernet:' prefix) for backward compat."""
+    if not stored:
+        return ""
+    if not stored.startswith("fernet:"):
+        return stored  # legacy plaintext row — still usable
+    try:
+        from cryptography.fernet import Fernet as _Fernet
+        fk = _mesh_fernet_key()
+        return _Fernet(fk).decrypt(stored[7:].encode()).decode()
+    except Exception as _e:
+        slog("gw_key_unwrap_failed", level="error", err=str(_e)[:80])
+        return ""
+
+
 def _gw_local_id() -> str:
     """Lazy resolver for the LOCAL gateway's id. Falls back to the
     container hostname / 'gw-local' until the operator registers one."""
@@ -93,7 +260,7 @@ def _gw_local_id() -> str:
     if _LOCAL_GW_ID:
         return _LOCAL_GW_ID
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         row = conn.execute(
             "SELECT gw_id FROM gw_registry WHERE is_local = 1 LIMIT 1"
         ).fetchone()
@@ -131,11 +298,11 @@ def _gw_audit(action: str, gw_id: str, actor: str, **details) -> None:
 
 
 def _gw_actor(request: web.Request) -> str:
-    """Identify the operator behind a registry request. Uses the source
-    IP after TRUSTED_PROXIES filtering — same source the audit log uses
-    everywhere else."""
-    from helpers import get_ip  # noqa: F401
-    return get_ip(request) or "unknown"
+    """Identify the operator behind a registry request via
+    _request_username (admin attribution); falls back to source IP."""
+    from helpers import get_ip
+    username = _request_username(request) or ""
+    return username or (get_ip(request) or "unknown")
 
 
 def _gw_load_one(gw_id: str, include_private: bool = False) -> dict | None:
@@ -143,7 +310,7 @@ def _gw_load_one(gw_id: str, include_private: bool = False) -> dict | None:
     Detail GETs may opt in to seeing the local row's private key by
     passing `include_private=True`."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT * FROM gw_registry WHERE gw_id = ?", (gw_id,)
@@ -179,7 +346,7 @@ def _gw_row_to_dict(r: dict, include_private: bool = False) -> dict:
 
 def _gw_load_all() -> list[dict]:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT * FROM gw_registry ORDER BY created_ts ASC"
@@ -193,7 +360,7 @@ def _gw_load_all() -> list[dict]:
 
 def _gw_load_distribution() -> list[tuple[str, str]]:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         rows = conn.execute(
             "SELECT source_gw_id, target_gw_id FROM gw_distribution"
         ).fetchall()
@@ -281,6 +448,12 @@ async def gw_registry_get_endpoint(request: web.Request):
         return web.json_response({"error": msg}, status=400,
                                   headers={"Cache-Control": "no-store"})
     reveal = (request.query.get("reveal") or "").lower() in ("1", "true", "yes")
+    # S-W3 fix — revealing the local gateway PRIVATE KEY is ADMIN-ONLY. The
+    # handler is admin+maintainer (metadata read), but a maintainer must not be
+    # able to exfiltrate the private key via ?reveal=1.
+    if reveal:
+        if denied := _role_denied(request, "admin"):
+            return denied
     row = _gw_load_one(gw_id, include_private=reveal)
     if row is None:
         return web.json_response({"error": "not found"}, status=404,
@@ -290,6 +463,7 @@ async def gw_registry_get_endpoint(request: web.Request):
     return web.json_response(row, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_create_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -377,6 +551,7 @@ async def gw_registry_create_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_update_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -437,6 +612,7 @@ async def gw_registry_update_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_can_distribute_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}/can-distribute"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -470,6 +646,7 @@ async def gw_registry_can_distribute_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_auto_apply_endpoint(request: web.Request):
     """PATCH <NS>/secured/admin/gw-registry/{gw_id}/auto-apply
 
@@ -510,6 +687,7 @@ async def gw_registry_auto_apply_endpoint(request: web.Request):
                               headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_rotate_key_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/{gw_id}/rotate-key"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -549,6 +727,7 @@ async def gw_registry_rotate_key_endpoint(request: web.Request):
     return web.json_response(out, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_delete_endpoint(request: web.Request):
     """DELETE <NS>/secured/admin/gw-registry/{gw_id}"""
     if denied := _role_denied(request, "admin", "maintainer"):
@@ -596,6 +775,7 @@ async def gw_registry_distribution_matrix_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def gw_registry_distribution_rules_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/distribution/rules
     Body: {"rules": [{"source": "gw-a", "target": "gw-b"}, ...]}
@@ -677,7 +857,7 @@ async def gw_registry_audit_log_endpoint(request: web.Request):
            f"ORDER BY ts DESC LIMIT ? OFFSET ?")
     args.extend([limit, offset])
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(sql, args).fetchall()
         total = conn.execute("SELECT COUNT(*) FROM gw_audit").fetchone()[0]
@@ -851,7 +1031,7 @@ def _mesh_sync_apply_value(key: str, value: str) -> None:
 
 def _mesh_load_pending(status: str = "pending") -> list[dict]:
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
             "SELECT id, received_ts, source_gw_id, key_name, value, "
@@ -928,7 +1108,7 @@ async def mesh_sync_confirm_endpoint(request: web.Request):
     # Fetch the row so we can apply the actual value (not echoed in the
     # listing endpoint to avoid casual leaks).
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT id, source_gw_id, key_name, value, status "
@@ -975,7 +1155,7 @@ async def mesh_sync_reject_endpoint(request: web.Request):
         return web.json_response({"error": "bad id"}, status=400,
                                   headers={"Cache-Control": "no-store"})
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         row = conn.execute(
             "SELECT key_name, source_gw_id, status FROM gw_sync_pending "
@@ -1023,12 +1203,31 @@ async def _mesh_sync_loop():
         try:
             if _redis is not None:
                 src = _gw_local_id() or "gw-local"
-                # 1. publish own offers
+                # 1. publish own offers (1.8.8 — Ed25519-signed so peers verify
+                # provenance without holding our private key).
                 offers = {k: _mesh_sync_get_value(k)
                           for k in _mesh_sync_enabled_set()
                           if _mesh_sync_get_value(k)}
+                # L01 — fetch + unwrap this gw's private key from the local
+                # gw_registry row before publishing.
+                local_private_key = ""
+                try:
+                    _cpk = open_conn()
+                    _rpk = _cpk.execute(
+                        "SELECT private_key FROM gw_registry WHERE is_local = 1"
+                    ).fetchone()
+                    _cpk.close()
+                    if _rpk and _rpk[0]:
+                        local_private_key = _gw_unwrap_private_key(_rpk[0])
+                except Exception:
+                    pass
                 key = f"{REDIS_NS}:{_MESH_REDIS_NS}:{src}"
                 if offers:
+                    # L02/L03 — sign the canonical offers and attach _sig so
+                    # peers can verify before applying.
+                    _offer_sig = _gw_sign_offers(local_private_key, offers)
+                    if _offer_sig:
+                        offers["_sig"] = _offer_sig
                     try:
                         await asyncio.wait_for(_redis.delete(key),
                                                 timeout=REDIS_TIMEOUT)
@@ -1043,13 +1242,16 @@ async def _mesh_sync_loop():
                              err=str(e)[:120])
                 # 2. snapshot peer trust state once per cycle. Avoids a
                 # SQLite round-trip per peer-key inside the inner loop.
-                trust_map: dict = {}   # peer_gw -> auto-apply allowed?
+                # L04/L05 — peer_gw -> (auto_ok, peer_pub_key). public_key is
+                # needed to verify inbound offer signatures (1.8.8).
+                trust_map: dict = {}
                 try:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = open_conn()
                     for r in conn.execute(
-                            "SELECT gw_id, status, auto_apply "
+                            "SELECT gw_id, status, auto_apply, public_key "
                             "FROM gw_registry WHERE is_local = 0"):
-                        trust_map[r[0]] = (r[1] == "active" and r[2] == 1)
+                        auto_ok, peer_pub_key = (r[1] == "active" and r[2] == 1), (r[3] or "")
+                        trust_map[r[0]] = (auto_ok, peer_pub_key)
                     conn.close()
                 except Exception:
                     pass
@@ -1073,6 +1275,12 @@ async def _mesh_sync_loop():
                                                           timeout=REDIS_TIMEOUT)
                     except Exception:
                         continue
+                    # L06 — pop the signature off before processing so it isn't
+                    # treated as an offered key and isn't part of the signed
+                    # canonical payload.
+                    offered_data = dict(offered or {})
+                    sig_b64 = offered_data.pop("_sig", "")
+                    auto_ok, peer_pub_key = trust_map.get(peer_gw, (False, ""))
                     # Auto-discover: insert placeholder if missing + bump
                     # last_seen_ts. Idempotent — handler does INSERT OR
                     # IGNORE then UPDATE.
@@ -1083,8 +1291,24 @@ async def _mesh_sync_loop():
                             ))
                         except asyncio.QueueFull:
                             pass
-                    auto_ok = trust_map.get(peer_gw, False)
-                    for kname, kval in (offered or {}).items():
+                    # 1.8.8 — Ed25519 signature gate. Only KNOWN (registered)
+                    # peers' offers are processed, and only after the signature
+                    # verifies against their registered public key. An unknown
+                    # peer is just discovered above (placeholder) — its offers
+                    # are NOT applied until an operator registers it + its key.
+                    if peer_gw not in trust_map:
+                        continue
+                    if not sig_b64:
+                        slog("mesh_sync_no_sig", level="warn", source_gw=peer_gw)
+                        continue
+                    if not peer_pub_key:
+                        slog("mesh_sync_no_pubkey", level="warn", source_gw=peer_gw)
+                        continue
+                    # L10 — verify (peer_pub_key, sig_b64, offered_data).
+                    if not _gw_verify_offers(peer_pub_key, sig_b64, offered_data):
+                        slog("mesh_sync_sig_invalid", level="warn", source_gw=peer_gw)
+                        continue
+                    for kname, kval in offered_data.items():
                         if kname not in _MESH_SYNC_ELIGIBLE_KEYS:
                             continue
                         if not kval:

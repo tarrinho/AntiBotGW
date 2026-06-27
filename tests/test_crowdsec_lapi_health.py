@@ -281,7 +281,11 @@ async def test_d02_lapi_404_reports_reachable_unknown_version():
 @pytest.mark.asyncio
 async def test_d03_lapi_down_reports_unreachable():
     """Connection refused to LAPI → reachable=False, error non-empty."""
-    async with _patched_cs("http://127.0.0.1:19999", "testkey"):
+    import socket as _sock
+    with _sock.socket() as _s:
+        _s.bind(("127.0.0.1", 0))
+        _closed_port = _s.getsockname()[1]
+    async with _patched_cs(f"http://127.0.0.1:{_closed_port}", "testkey"):
         result = await _crowdsec_lapi_health()
 
     assert result["reachable"] is False, \

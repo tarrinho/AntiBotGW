@@ -1,14 +1,12 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/webhook.py — Webhook fan-out (operator awareness across N gateways).
 
 Fires a signed HTTP POST to WEBHOOK_URL on ban/detection events.
-Includes HMAC-SHA-256 signature in X-AppSecGW-Signature when WEBHOOK_SECRET
+Includes HMAC-SHA-256 signature in X-AntiBot/WAF GW-Signature when WEBHOOK_SECRET
 is set so the receiver can authenticate the gateway. Cross-instance dedup
 via Redis SETNX when available. Best-effort: failures never block traffic.
 
-1.8.5 — rewrote to use asyncio.Queue worker with exponential backoff and
+1.8.6 — rewrote to use asyncio.Queue worker with exponential backoff and
 circuit breaker instead of fire-and-forget to avoid silent delivery failures.
 
 Extracted from proxy.py as part of Phase 7 modular refactoring.
@@ -47,6 +45,10 @@ _CB_OPEN_UNTIL = 0.0
 _CB_THRESHOLD = 5
 _CB_RESET_SECS = 60.0
 
+# 1.8.14 (T1-3): webhook delivery health counters exposed in /__metrics.
+_WEBHOOK_LAST_SUCCESS_TS: float = 0.0
+_WEBHOOK_CONSECUTIVE_FAILURES: int = 0
+
 
 def _webhook_event_allowed(event: dict) -> bool:
     """1.6.2 — apply WEBHOOK_EVENT_FILTER."""
@@ -66,9 +68,11 @@ def _webhook_event_allowed(event: dict) -> bool:
 
 
 def _webhook_url_safe(url: str) -> bool:
-    """Reject URLs that could SSRF to private/loopback addresses (CWE-918)."""
+    """Reject URLs that could SSRF to private/loopback addresses (CWE-918).
+    INT4-05: DNS-resolves hostnames so a private IP behind a public name is caught."""
     from urllib.parse import urlparse
     import ipaddress
+    import socket
     try:
         p = urlparse(url)
         if p.scheme not in ("http", "https"):
@@ -76,20 +80,39 @@ def _webhook_url_safe(url: str) -> bool:
         host = p.hostname or ""
         if not host:
             return False
+        # Check bare-IP literals first (fast path, no DNS needed)
         try:
-            ip = ipaddress.ip_address(host)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            ip_lit = ipaddress.ip_address(host)
+            if (ip_lit.is_private or ip_lit.is_loopback
+                    or ip_lit.is_link_local or ip_lit.is_reserved):
                 return False
+            return True
         except ValueError:
-            pass  # hostname, not a bare IP — allowed
+            pass  # not a bare IP — fall through to DNS resolution
+        # INT4-05: resolve hostname and check all returned addresses
+        try:
+            infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+            for _fam, _type, _proto, _cname, sockaddr in infos:
+                resolved = ipaddress.ip_address(sockaddr[0])
+                if (resolved.is_private or resolved.is_loopback
+                        or resolved.is_link_local or resolved.is_reserved):
+                    return False
+        except OSError:
+            return True  # DNS failure → hostname unresolvable, no SSRF risk; actual POST will also fail
         return True
     except Exception:
         return False
 
 
+async def _webhook_url_safe_async(url: str) -> bool:
+    """Async version of _webhook_url_safe — runs DNS in executor to avoid blocking."""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _webhook_url_safe, url)
+
+
 async def _webhook_worker() -> None:
     """Background worker: dequeues events and POSTs with retry + circuit breaker."""
-    global _CB_FAILURES, _CB_OPEN_UNTIL
+    global _CB_FAILURES, _CB_OPEN_UNTIL, _WEBHOOK_LAST_SUCCESS_TS, _WEBHOOK_CONSECUTIVE_FAILURES
     while True:
         try:
             event = await _WEBHOOK_QUEUE.get()
@@ -102,18 +125,31 @@ async def _webhook_worker() -> None:
         if _CB_OPEN_UNTIL > now:
             _WEBHOOK_QUEUE.task_done()
             continue
+        if not await _webhook_url_safe_async(WEBHOOK_URL):
+            slog("webhook_blocked_ssrf_worker", level="warn", url=WEBHOOK_URL,
+                 reason="WEBHOOK_URL re-validated as private/loopback before POST (DNS rebind guard)")
+            _WEBHOOK_QUEUE.task_done()
+            continue
         delays = [0, 2, 4]
         success = False
         for attempt, delay in enumerate(delays):
             if delay > 0:
                 await asyncio.sleep(delay)
             try:
+                import time as _wh_time, secrets as _wh_sec
                 body = json.dumps(event, separators=(",", ":"),
                                   default=str, ensure_ascii=False).encode()
                 headers = {"Content-Type": "application/json"}
                 if WEBHOOK_SECRET:
-                    headers["X-AppSecGW-Signature"] = hmac.new(
-                        WEBHOOK_SECRET.encode(), body, hashlib.sha256).hexdigest()
+                    # F-10: include timestamp + nonce in signature so receivers
+                    # can reject replays (signatures are unique per delivery).
+                    _ts  = str(int(_wh_time.time()))
+                    _nonce = _wh_sec.token_hex(8)
+                    _signed = _ts.encode() + b"|" + _nonce.encode() + b"|" + body
+                    headers["X-AntiBot/WAF GW-Timestamp"] = _ts
+                    headers["X-AntiBot/WAF GW-Nonce"]     = _nonce
+                    headers["X-AntiBot/WAF GW-Signature"] = hmac.new(
+                        WEBHOOK_SECRET.encode(), _signed, hashlib.sha256).hexdigest()
                 async with _get_session().post(
                         WEBHOOK_URL, data=body, headers=headers,
                         timeout=ClientTimeout(total=5)) as r:
@@ -121,12 +157,15 @@ async def _webhook_worker() -> None:
                     if r.status < 500:
                         success = True
                         _CB_FAILURES = 0
+                        _WEBHOOK_LAST_SUCCESS_TS = asyncio.get_event_loop().time()
+                        _WEBHOOK_CONSECUTIVE_FAILURES = 0
                         break
             except Exception as e:
                 slog("webhook_attempt_failed", level="warn", attempt=attempt,
                      url=WEBHOOK_URL, error=str(e)[:120])
         if not success:
             _CB_FAILURES += 1
+            _WEBHOOK_CONSECUTIVE_FAILURES += 1
             if _CB_FAILURES >= _CB_THRESHOLD:
                 _CB_OPEN_UNTIL = asyncio.get_event_loop().time() + _CB_RESET_SECS
                 slog("webhook_circuit_open", level="warn",
@@ -138,7 +177,7 @@ async def _post_webhook(event: dict) -> None:
     """Enqueue event for fire-with-retry delivery. Non-blocking."""
     if not WEBHOOK_URL:
         return
-    if not _webhook_url_safe(WEBHOOK_URL):
+    if not await _webhook_url_safe_async(WEBHOOK_URL):
         slog("webhook_blocked_ssrf", level="warn", url=WEBHOOK_URL,
              reason="WEBHOOK_URL resolves to a private/loopback address — set a public endpoint")
         return
@@ -164,6 +203,14 @@ async def _post_webhook(event: dict) -> None:
 
 async def start_webhook_worker() -> None:
     """Start the background webhook worker. Call from on_startup()."""
-    global _WEBHOOK_WORKER_TASK
+    global _WEBHOOK_WORKER_TASK, _WEBHOOK_QUEUE
+    # Re-create the queue bound to the current event loop.  asyncio.Queue is a
+    # _LoopBoundMixin in Python 3.12+: it raises RuntimeError when accessed
+    # from a different event loop than the one it was first used in.  In tests
+    # (and any scenario where on_startup is called more than once in a process)
+    # the module-level queue created at import time is bound to the first loop;
+    # subsequent on_startup calls run in a different loop and must use a fresh
+    # queue or _webhook_worker spins in an infinite except-continue loop.
+    _WEBHOOK_QUEUE = asyncio.Queue(maxsize=500)
     if _WEBHOOK_WORKER_TASK is None or _WEBHOOK_WORKER_TASK.done():
         _WEBHOOK_WORKER_TASK = asyncio.create_task(_webhook_worker())

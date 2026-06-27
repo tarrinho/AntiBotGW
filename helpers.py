@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 helpers.py — Pure utility functions used across the proxy.
 Extracted from proxy.py as part of Phase 1 modular refactoring.
@@ -8,7 +6,6 @@ Dependency rule: imports from config.py and state.py only.
 """
 
 import json
-import re
 import secrets
 import time
 
@@ -47,14 +44,31 @@ def slog(event: str, level: str = "info", **fields) -> None:
     /__logs dashboard can tail config_changed / ban / webhook_failed / etc.
     Capture happens BEFORE the level filter so the ring keeps a richer
     history than stdout (operators rarely run the gateway at debug level)."""
-    # Capture into the ring first — full fidelity.
+    # Capture into the ring — redact fields that may carry secrets so
+    # viewer-role users cannot extract credentials from /__logs (F-17).
     if event != "request":
         try:
+            _ring_fields = {}
+            for _k, _v in fields.items():
+                if _k in ("url", "allowed_list") and isinstance(_v, str):
+                    # Strip credentials from URLs (e.g. WEBHOOK_URL, REDIS_URL)
+                    try:
+                        from urllib.parse import urlparse, urlunparse
+                        _p = urlparse(_v)
+                        if _p.password:
+                            _p = _p._replace(netloc=f"{_p.hostname}:{_p.port}" if _p.port
+                                             else _p.hostname)
+                            _v = urlunparse(_p)
+                    except Exception:
+                        _v = "<redacted-url>"
+                elif _k == "error" and isinstance(_v, str) and ("://" in _v or "password" in _v.lower()):
+                    _v = "<redacted>"
+                _ring_fields[_k] = _v
             _GW_LOG_RING.append({
                 "ts":    _t.time(),
                 "level": level,
                 "event": event,
-                **fields,
+                **_ring_fields,
             })
         except Exception:
             pass  # nosec B110 — log ring is best-effort; drop on overflow or dict errors
@@ -93,6 +107,12 @@ def _peer_is_trusted_proxy(remote: str) -> bool:
     return any(ip in net for net in TRUSTED_PROXIES_NETS)
 
 
+# 1.8.8 — one-shot log de-dup for `xff_ignored_proxy_untrusted` warnings.
+# Without this, every request from an untrusted-but-private peer would
+# spam the log. Set is bounded to ~256 unique peers before reset.
+_XFF_UNTRUSTED_PEERS_WARNED: set = set()
+
+
 def get_ip(request) -> str:
     """
     TRUST_XFF=first  → vulnerable: attacker-controlled (default, for bypass demos)
@@ -102,12 +122,58 @@ def get_ip(request) -> str:
     1.5.4 — XFF is now ONLY honoured when the immediate peer is in
     TRUSTED_PROXIES (otherwise we fall back to the raw socket IP, ignoring
     any client-supplied X-Forwarded-For header).
+
+    1.8.8 — when XFF is present but the peer is **private** RFC1918 AND
+    not in TRUSTED_PROXIES, slog `xff_ignored_proxy_untrusted` once per
+    peer. Catches the operator misconfiguration where a sidecar (e.g.
+    cloudflared on the Docker bridge) is forwarding traffic with XFF but
+    the gateway doesn't recognise it as trusted, so every event gets
+    recorded with the bridge gateway IP and dashboards lose all geo.
     """
     xff = request.headers.get("X-Forwarded-For")
-    if xff and TRUST_XFF != "none" and _peer_is_trusted_proxy(request.remote or ""):
+    remote = request.remote or ""
+    if xff and TRUST_XFF != "none" and _peer_is_trusted_proxy(remote):
         parts = [p.strip() for p in xff.split(",")]
         return parts[0] if TRUST_XFF == "first" else parts[-1]
-    return request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
+    # 1.8.8 — alert path: XFF present but peer untrusted. Only fire for
+    # private-range peers (RFC1918) since seeing this from a public IP is
+    # a normal proxy-spoofing rejection, not a misconfig.
+    if xff and TRUST_XFF != "none" and remote and remote not in _XFF_UNTRUSTED_PEERS_WARNED:
+        try:
+            import ipaddress as _ipa
+            ip = _ipa.ip_address(remote)
+            if ip.is_private:
+                if len(_XFF_UNTRUSTED_PEERS_WARNED) >= 256:
+                    _XFF_UNTRUSTED_PEERS_WARNED.clear()
+                _XFF_UNTRUSTED_PEERS_WARNED.add(remote)
+                slog("xff_ignored_proxy_untrusted",
+                     level="warn",
+                     peer=remote,
+                     xff_sample=xff[:80],
+                     hint=("Peer is RFC1918 (likely a Docker sidecar) but not in "
+                           "TRUSTED_PROXIES; XFF will be ignored and all events "
+                           "will record this peer IP. Add the peer's subnet to "
+                           "TRUSTED_PROXIES to fix."))
+        except (ValueError, TypeError):
+            pass  # nosec B110 — non-IP remote (unix socket?); silently skip
+    return remote or "0.0.0.0"  # nosec B104 — fallback sentinel, not a bind address
+
+
+def _ua_of(request) -> str:
+    """1.8.15 perf — cached User-Agent fetch.
+
+    aiohttp's CIMultiDictProxy.get() is O(1) but still costs ~100ns/call due to
+    case-folding + bytes-to-str conversion. The request hot path reads
+    User-Agent ~7× per request (decoy callsites, signal records, deny-list
+    matches). Stash the captured string on request["_ua"] so subsequent calls
+    are a dict lookup. Net saving ~700ns/req on hot path.
+
+    Idempotent and safe to call anywhere — first call captures, subsequent
+    calls return the cached value.
+    """
+    if "_ua" not in request:
+        request["_ua"] = request.headers.get("User-Agent", "")
+    return request["_ua"]
 
 
 def _is_admin_path(p: str) -> bool:
@@ -115,6 +181,23 @@ def _is_admin_path(p: str) -> bool:
     admin namespace). Used by the protect middleware to skip detector
     layers (RPS limit, method allowlist) on operator paths."""
     return p == ADMIN_NS or p.startswith(ADMIN_NS + "/")
+
+
+# 1.8.15 perf — static-asset extensions. Single source of truth; previously
+# inlined in 3 separate hot-path tuples. `endswith()` over this tuple is C-fast.
+_STATIC_ASSET_EXTS = (
+    ".css", ".js", ".mjs",
+    ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico",
+    ".woff", ".woff2", ".ttf", ".otf", ".eot",
+    ".map", ".mp4", ".webm", ".mp3", ".ogg", ".pdf", ".zip",
+)
+
+
+def _is_static_asset_path(p: str) -> bool:
+    """True iff `p` looks like a static asset (CSS/JS/image/font/media).
+    Used in hot path to skip per-request heuristics that can't trigger on
+    sub-resource fetches (e.g. LLM-no-subresource probe)."""
+    return p.endswith(_STATIC_ASSET_EXTS)
 
 
 def _admin_path_is_public(p: str) -> bool:

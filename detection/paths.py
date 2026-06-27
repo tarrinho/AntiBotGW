@@ -9,6 +9,7 @@
 
 import re
 import secrets
+from urllib.parse import unquote
 from config import (
     HONEYPOT_PATHS,
     SUSPICIOUS_PATH_PATTERNS,
@@ -19,7 +20,8 @@ from config import (
 
 
 def is_suspicious_path(path: str) -> bool:
-    return any(p.search(path) for p in SUSPICIOUS_PATH_PATTERNS)
+    decoded = unquote(path)
+    return any(p.search(path) or p.search(decoded) for p in SUSPICIOUS_PATH_PATTERNS)
 
 
 # ── Bot-trap form injection ────────────────────────────────────────────────

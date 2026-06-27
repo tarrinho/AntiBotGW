@@ -532,15 +532,18 @@ class TestPgInsertEvent:
         assert result is False
 
     def test_all_optional_fields_default_to_empty(self, monkeypatch):
-        """Optional fields (track_key, sid, fp, ja4, request_id) default to ''."""
+        """Optional fields (method, track_key, sid, fp, ja4, request_id, vhost) default to ''."""
         _result, conn = self._insert(
             monkeypatch, ts=time.time(), ip="1.2.3.4", ua="UA",
             path="/", status=200, reason="ok")
         args = conn.executions[0][1]
-        # args: (ts, ip, ua, path, status, reason, track_key, sid, fp, ja4, request_id)
-        assert len(args) == 11
-        for field in args[6:]:  # optional fields start at index 6
-            assert field == ""
+        # args: (ts, ip, ua, path, method, status, reason, track_key, sid, fp, ja4, request_id, vhost)
+        # 1.8.13: method + vhost added as real Postgres columns
+        assert len(args) == 13
+        # method is args[4], status is args[5], reason is args[6]
+        # optional string fields: method, track_key, sid, fp, ja4, request_id, vhost
+        for idx in (4, 7, 8, 9, 10, 11, 12):
+            assert args[idx] == ""
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -549,12 +552,17 @@ class TestPgInsertEvent:
 
 class TestKnownSqliteOnlyTables:
     """
-    dlp_patterns, audit_events, and svc_metrics intentionally live ONLY in
-    SQLite and are absent from the Postgres schema (db_init_postgres).
+    audit_events and svc_metrics intentionally live ONLY in SQLite and are
+    absent from the Postgres schema (db_init_postgres).
 
-    These tests assert the gap is explicit. If you are adding Postgres mirror
-    support for any of these tables, remove the corresponding assertion here
-    and add migration coverage in TestMigrateRecentEvents.
+    iter-18 REVIEW-PG-DUAL-WRITE promoted dlp_patterns (along with bans /
+    ip_bans / users.totp_*) into the PG schema so cold-start restore can
+    rebuild SQLite from PG. The `dlp_patterns_present` test below now
+    asserts the inverse of the original gap.
+
+    If you are adding Postgres mirror support for the remaining SQLite-only
+    tables, remove the corresponding assertion here and add migration
+    coverage in TestMigrateRecentEvents.
     """
 
     def _pg_init_src(self):
@@ -562,36 +570,49 @@ class TestKnownSqliteOnlyTables:
         import db.postgres as pgm
         return inspect.getsource(pgm.db_init_postgres)
 
-    def test_dlp_patterns_absent_from_pg_schema(self):
-        assert "dlp_patterns" not in self._pg_init_src(), (
-            "dlp_patterns must NOT appear in db_init_postgres — it is SQLite-only. "
-            "If adding Postgres support, remove this assertion and add migration tests."
+    def test_dlp_patterns_present_in_pg_schema(self):
+        # iter-18: dlp_patterns is now part of the PG schema (was previously
+        # SQLite-only). Restore path needs it so DLP rules persist across
+        # /data wipes when PG is configured.
+        assert "dlp_patterns" in self._pg_init_src(), (
+            "iter-18 REVIEW-PG-DUAL-WRITE promoted dlp_patterns into PG; "
+            "db_init_postgres must include its CREATE TABLE."
         )
 
-    def test_audit_events_absent_from_pg_schema(self):
-        assert "audit_events" not in self._pg_init_src(), (
-            "audit_events must NOT appear in db_init_postgres — it is SQLite-only. "
-            "If adding Postgres support, remove this assertion and add migration tests."
+    def test_audit_events_present_in_pg_schema(self):
+        # PG-only migration Phase 1: audit_events promoted into PG so the
+        # audit trail survives a /data wipe when PG is configured.
+        assert "audit_events" in self._pg_init_src(), (
+            "PG-only migration Phase 1 promoted audit_events into PG; "
+            "db_init_postgres must include its CREATE TABLE."
         )
 
-    def test_svc_metrics_absent_from_pg_schema(self):
-        assert "svc_metrics" not in self._pg_init_src(), (
-            "svc_metrics is a SQLite-only operational scratchpad. "
-            "It must NOT appear in db_init_postgres DDL."
+    def test_svc_metrics_present_in_pg_schema(self):
+        # PG-only migration Phase 1: svc_metrics promoted into PG so the
+        # 26→35-column service-metric time series persists across a /data
+        # wipe and (after Phase 5) becomes the primary store.
+        assert "svc_metrics" in self._pg_init_src(), (
+            "PG-only migration Phase 1 promoted svc_metrics into PG; "
+            "db_init_postgres must include its CREATE TABLE."
         )
 
     def test_schema_migrations_svc_metrics_pg_ddl_all_none(self):
-        """All svc_metrics entries in _SCHEMA_MIGRATIONS must have pg_ddl=None."""
+        """svc_metrics column-extension entries in _SCHEMA_MIGRATIONS still
+        carry pg_ddl=None — the Phase 1 PG DDL embeds the extended schema
+        directly, not via the migration runner. Keeping pg_ddl=None
+        prevents the migration runner from racing the CREATE TABLE."""
         from db.sqlite import _SCHEMA_MIGRATIONS
         for table, col, _sqlite_ddl, pg_ddl in _SCHEMA_MIGRATIONS:
             if table == "svc_metrics":
                 assert pg_ddl is None, (
                     f"svc_metrics.{col} has pg_ddl={pg_ddl!r}; "
-                    "svc_metrics is SQLite-only and must never define Postgres DDL"
+                    "svc_metrics PG DDL is defined inline in "
+                    "db_init_postgres, not via _SCHEMA_MIGRATIONS"
                 )
 
-    def test_dlp_patterns_only_in_sqlite_schema(self):
-        """dlp_patterns table DDL exists in db/sqlite.py but not db/postgres.py."""
+    def test_dlp_patterns_in_both_schemas(self):
+        """iter-18 + PG-only migration: dlp_patterns lives in BOTH SQLite
+        and PG so DLP rules survive a /data wipe / become PG-primary."""
         import inspect
         import db.sqlite as sqm
         import db.postgres as pgm
@@ -600,8 +621,8 @@ class TestKnownSqliteOnlyTables:
         assert "dlp_patterns" in sqlite_src, (
             "dlp_patterns must be defined in db/sqlite.py"
         )
-        assert "dlp_patterns" not in pg_src, (
-            "dlp_patterns must NOT be referenced in db/postgres.py"
+        assert "dlp_patterns" in pg_src, (
+            "dlp_patterns must be defined in db/postgres.py (iter-18)"
         )
 
 
@@ -685,13 +706,16 @@ class TestDbSwitchValidation:
         )
 
     def test_os_exit_used_for_restart(self):
-        """1.8.7 — hot-swap: no restart needed; uses _propagate_global instead of os._exit."""
+        """1.9.0 contract — backend switch persists the new DB_BACKEND and then
+        re-execs the process via a deferred ``os._exit(0)`` (docker's
+        restart policy rebrings it bound to the new backend). This SUPERSEDES
+        the 1.8.7 in-process ``_propagate_global`` hot-swap, which was dropped
+        because a live hot-swap could not safely re-open every module-level DB
+        handle. Locked here and in test_critical::test_165 + test_response_before_exit."""
         src = self._src()
-        assert "os._exit" not in src, (
-            "db_switch_endpoint must NOT call os._exit — 1.8.7 uses _propagate_global hot-swap"
-        )
-        assert "_propagate_global" in src, (
-            "db_switch_endpoint must use _propagate_global for in-process backend switch"
+        assert "os._exit" in src, (
+            "db_switch_endpoint must os._exit(0) so the restart policy rebinds "
+            "the process to the new backend (1.9.0 restart-based switch)"
         )
 
     def test_response_before_exit(self):
@@ -733,44 +757,36 @@ class TestDbSwitchValidation:
 class TestStartupPostgresPath:
 
     def test_on_startup_calls_db_init_postgres(self):
-        """on_startup delegates to _startup_postgres_schema which calls
-        db_init_postgres(). Verified via source inspection of both functions."""
+        """on_startup initialises the Postgres schema on boot. 1.9.0 inlined the
+        former ``_startup_postgres_schema`` helper directly into on_startup's
+        Postgres branch (the restart-based switch made the standalone helper
+        redundant), so the contract is now verified directly on on_startup."""
         import inspect
         import proxy
-        # on_startup must delegate to _startup_postgres_schema
         on_startup_src = inspect.getsource(proxy.on_startup)
-        assert "_startup_postgres_schema" in on_startup_src, (
-            "on_startup must call _startup_postgres_schema() (which calls "
-            "db_init_postgres) so the Postgres schema is initialised on first boot"
-        )
-        # _startup_postgres_schema must call db_init_postgres
-        helper_src = inspect.getsource(proxy._startup_postgres_schema)
-        assert "db_init_postgres" in helper_src, (
-            "_startup_postgres_schema must call db_init_postgres() so the Postgres "
-            "schema is initialised on first boot with DB_BACKEND=postgres"
+        assert "db_init_postgres" in on_startup_src, (
+            "on_startup must call db_init_postgres() so the Postgres schema is "
+            "initialised on first boot when bound to the Postgres backend"
         )
 
     def test_db_init_postgres_called_regardless_of_backend(self):
-        """db_init_postgres should be called even with DB_BACKEND=sqlite so
-        the standby schema is ready for an operator-triggered switch.
-        Verified via source: no DB_BACKEND guard immediately before the call."""
+        """db_init_postgres() runs in on_startup's Postgres branch and is not
+        short-circuited by a ``DB_BACKEND == 'sqlite'`` skip on the same line.
+        (1.9.0 switches backend by restart, so the schema is initialised under
+        whichever backend the freshly-booted process is bound to.)"""
         import inspect
         import proxy
-        src = inspect.getsource(proxy._startup_postgres_schema)
-        # The call must exist in the helper
-        assert "db_init_postgres" in src
-        # Find the call site and verify there's no 'if DB_BACKEND' guard
-        # immediately before it (it was intentionally made unconditional in 1.6.5)
+        src = inspect.getsource(proxy.on_startup)
         lines = src.split("\n")
         call_idx = next(
             (i for i, ln in enumerate(lines) if "db_init_postgres" in ln), None)
-        assert call_idx is not None
-        # Check the line just before the call is not a 'if DB_BACKEND' guard
+        assert call_idx is not None, "on_startup must call db_init_postgres()"
         if call_idx > 0:
             prev_line = lines[call_idx - 1].strip()
-            assert not (prev_line.startswith("if") and "DB_BACKEND" in prev_line), (
-                "db_init_postgres() must NOT be guarded by DB_BACKEND — it must "
-                "always run so the standby Postgres schema stays ready for a switch"
+            assert not (prev_line.startswith("if") and 'DB_BACKEND' in prev_line
+                        and "sqlite" in prev_line), (
+                "db_init_postgres() must not be gated by an inline "
+                "DB_BACKEND=='sqlite' skip immediately preceding the call"
             )
 
     def test_db_init_postgres_idempotent_source(self):

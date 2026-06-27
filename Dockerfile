@@ -1,17 +1,21 @@
 # ─── Stage 1: build deps using Chainguard's Wolfi-based python:latest-dev.
 # Same Python interpreter as the runtime stage so wheels match exactly.
 # Chainguard ships fixes for OS-level CVEs typically within hours of disclosure.
-FROM cgr.dev/chainguard/python:latest-dev@sha256:6766a166e2a242a14d3b1505fca8de6c81825ee361cc850fa0e78b01cc738f32 AS builder
+FROM cgr.dev/chainguard/python:latest-dev@sha256:1ee5a8796e78035f548c584e469ed318f7e40cced89d26c6e43d48e935a3e801 AS builder
 
 USER root
 WORKDIR /tmp
 
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
  && python3 -m pip install --no-cache-dir --target /pydeps \
-       'aiohttp==3.13.5' \
+       'aiohttp==3.14.1' \
        'maxminddb==2.8.2' \
        'psycopg[binary]==3.3.4' \
-       'redis==5.3.1'
+       'redis==5.3.1' \
+       'pyotp>=2.9.0' \
+       'qrcode>=7.0' \
+       'cryptography>=46.0.5' \
+       'PyJWT>=2.13.0'
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.
@@ -48,7 +52,7 @@ USER nonroot
 # ─── Stage 2: Chainguard's distroless python runtime (Wolfi). No shell, no
 # apt, no systemd, no ncurses, no util-linux, no expat-side-tools. Built
 # from upstream sources with continuous security patching. ───
-FROM cgr.dev/chainguard/python:latest@sha256:daab958311b820bc98b7896df8e306ddb0c842b934453c91fb540008b1684f0c
+FROM cgr.dev/chainguard/python:latest@sha256:79dc146af52dbbaece4c9aed21bec2579742f3f90a222e9e5bc6f976cf508189
 
 COPY --from=builder --chown=65532:65532 /rootfs /
 

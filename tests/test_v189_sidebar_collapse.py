@@ -89,8 +89,19 @@ def test_no_rail_or_icon_markup(name):
 @pytest.mark.parametrize("name", REAL)
 def test_brand_version_current(name):
     h = _html(name)
-    assert '<div id="sidebar-brand-ver">1.8.12</div>' in h, \
-        f"{name}: brand version not 1.8.10"
+    # contract: brand version tracks GW_VERSION (config.py); bump-version.sh
+    # keeps sidebar-brand-ver in sync. Derive the expected numeric version from
+    # config.GW_VERSION rather than hard-coding it so this test does not go
+    # stale on every release bump (was anchored to 1.8.14, then 1.9.5).
+    import re
+    import sys
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+    import config
+    m = re.search(r"(\d+\.\d+\.\d+)", config.GW_VERSION)
+    assert m, f"could not parse numeric version from GW_VERSION={config.GW_VERSION!r}"
+    expected = m.group(1)
+    assert f'<div id="sidebar-brand-ver">{expected}</div>' in h, \
+        f"{name}: brand version not {expected}"
 
 
 def test_collapse_init_before_sidebar():

@@ -294,18 +294,31 @@ class TestM7VacuumInWriterLoop:
         )
 
     def test_last_vacuum_initialized_in_writer_loop(self):
-        """db_writer_loop source must initialize last_vacuum before the while loop."""
+        """db_writer_loop source must initialize last_vacuum before its writer loop.
+
+        Contract change (post-1.7.11 PG-primary refactor): db_writer_loop now
+        contains TWO `while True` loops — an early PG-primary branch and the
+        SQLite-primary writer loop. `last_vacuum` belongs to (and is initialized
+        immediately before) the SQLite-primary loop, not the first `while True`.
+        The old `src.index("while True")` matched the unrelated PG-branch loop.
+        Assert against the `last_vacuum = ` initialization preceding the loop it
+        guards instead. (VACUUM execution itself was intentionally moved to
+        core/proxy_handler.py:_vacuum_scheduler_loop in 1.8.15; last_vacuum is
+        retained as the init anchor.)
+        """
         import inspect
         import db.sqlite as dbs
         src = inspect.getsource(dbs.db_writer_loop)
-        assert "last_vacuum" in src, (
-            "db_writer_loop must declare last_vacuum (M7 fix)"
+        assert "last_vacuum = " in src, (
+            "db_writer_loop must initialize last_vacuum (M7 anchor)"
         )
-        # last_vacuum must appear before 'while True'
-        vacuum_idx = src.index("last_vacuum")
-        while_idx = src.index("while True")
-        assert vacuum_idx < while_idx, (
-            "last_vacuum must be initialized before the 'while True' loop"
+        # The `last_vacuum = ` assignment must come before the SQLite writer
+        # loop. That loop is the LAST `while True` in the function (the one that
+        # `last_vacuum` is scoped to); the initialization sits directly above it.
+        init_idx = src.index("last_vacuum = ")
+        sqlite_loop_idx = src.rindex("while True")
+        assert init_idx < sqlite_loop_idx, (
+            "last_vacuum must be initialized before the SQLite-primary writer loop"
         )
 
 
@@ -349,15 +362,30 @@ class TestM1PrintToSlog:
         )
 
     def test_sqlite_no_print_statements(self):
-        """db/sqlite.py must contain no bare print() calls."""
+        """db/sqlite.py must contain no bare print() calls on normal paths.
+
+        Contract change (post-1.7.11 PG-primary refactor): the PG-primary writer
+        coverage guard deliberately retains ONE fatal-startup `print(...FATAL:`
+        banner that fires *alongside* a slog() call (db/sqlite.py ~line 614/618)
+        immediately before `raise SystemExit(5)`. It is an intentional loud
+        fail-fast banner so operators see the refusal-to-start even if structured
+        logging isn't wired yet — not a stray logging print that M1 should have
+        swept. Exempt that single FATAL-banner line; every other bare print()
+        must still route through slog().
+        """
         import inspect
         import db.sqlite as dbs
         import re
         src = inspect.getsource(dbs)
-        bare_prints = re.findall(r'^\s*print\(', src, re.MULTILINE)
-        assert not bare_prints, (
-            f"db/sqlite.py still has {len(bare_prints)} bare print() call(s) — "
-            "all must be converted to slog()"
+        # Capture each bare print() line so we can exempt the documented banner.
+        bare_print_lines = [
+            ln for ln in src.splitlines()
+            if re.match(r'^\s*print\(', ln)
+        ]
+        offending = [ln for ln in bare_print_lines if "FATAL:" not in ln]
+        assert not offending, (
+            f"db/sqlite.py still has {len(offending)} non-banner bare print() "
+            "call(s) — all must be converted to slog()"
         )
 
     def test_tor_no_print_statements(self):

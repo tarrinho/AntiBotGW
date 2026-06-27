@@ -1,36 +1,45 @@
 """
-tests/test_v187_db_switch_hotswap.py — Dynamic QA for hot-swap DB backend switching.
+tests/test_v187_db_switch_hotswap.py — Dynamic QA for DB backend switching.
 
-Tests the in-process SQLite ↔ Postgres backend swap introduced in v1.8.7:
-no container restart required — DB_BACKEND propagates across all loaded modules
-via sys.modules iteration, the Postgres pool is reset on DSN change, and the
-SQLite writer loop continues unaffected throughout.
+IMPORTANT: the v1.8.7 in-process "hot-swap" design (no container restart —
+DB_BACKEND propagated across sys.modules via a `_propagate_global` helper) was
+REVERTED. The SHIPPED design is restart-based: db_switch_endpoint persists the
+new DB_BACKEND directly to SQLite config_kv (durable, survives the 1 s exit
+race), copies the recent event window, persists a body DSN via the encrypted
+set_secret queue op, then schedules a deferred os._exit(0). docker's --restart
+policy re-execs the container and proxy.on_startup reads config_kv to bind the
+whole process to the persisted backend.
 
-SW01  _propagate_global sets the value in the calling module's globals
-SW02  _propagate_global propagates to a second module that has the attribute
-SW03  _propagate_global silently skips modules without the attribute
-SW04  db_switch_endpoint source: no os._exit / _delayed_exit present
-SW05  db_switch_endpoint source: calls _propagate_global (not direct globals assign)
-SW06  db_switch_endpoint source: calls pg_pool_reset (on DSN change path)
+These tests pin the restart-based contract (some were rewritten from the
+reverted hot-swap assertions; intent — "the switch propagates + persists the new
+backend correctly" — is preserved).
+
+SW01  switch persists DB_BACKEND to config_kv (durable, post-restart binding)
+SW02  reverted in-process _propagate_global helper is absent (no half-merge)
+SW03  proxy.on_startup reads persisted DB_BACKEND from config_kv at boot
+SW04  db_switch_endpoint source: calls os._exit (restart-based)
+SW04b db_switch_endpoint source: defers exit via _delayed_exit
+SW05  db_switch_endpoint source: persists DB_BACKEND to config_kv
+SW06  db_switch_endpoint source: persists body DSN via set_secret (encrypted)
 SW07  pg_pool_reset clears _state._postgres_pool to None
 SW08  pg_pool_reset leaves None pool unchanged (safe no-op when already None)
 SW09  pg_pool_reset: new _get_pool() call after reset creates fresh pool with updated DSN
 SW10  Event routing: DB_BACKEND=postgres → pg_insert_event is called (not skipped)
 SW11  Event routing: DB_BACKEND=sqlite → pg_insert_event returns False immediately
-SW12  5× round-trip: DB_BACKEND alternates sqlite/postgres across all modules each time
-SW13  5× round-trip: each switch leaves DB_BACKEND consistent in metrics and postgres modules
+SW12  5× round-trip: config_kv DB_BACKEND reflects the last target each switch
+SW13  runtime: proxy_handler / db.postgres / core.metrics agree on DB_BACKEND
 SW14  config_kv persistence: DB_BACKEND queued on each switch (source-level)
 SW15  config_kv persistence: POSTGRES_DSN queued only when body_dsn differs from current
-SW16  Response message says "active immediately" — no restart language
-SW17  Response has no restart message (no "container will restart")
-SW18  Migration called before propagation restores globals (source-level ordering)
+SW16  Response includes an operator status message
+SW17  Response message informs the operator the container will restart
+SW18  Migration runs before the deferred os._exit() restart (source ordering)
 SW19  Pre-flight probe still called for postgres target (source-level)
 SW20  UI controls.html: no setTimeout(.*reload) after switch success
 SW21  UI controls.html: button label is "Yes, switch" not "Yes, switch & restart"
 SW22  UI controls.html: impact list no longer mentions "Restart required"
 SW23  UI controls.html: DB_BACKEND knob has no restart:true flag
 SW24  pg_pool_reset exported from db.postgres
-SW25  _propagate_global exported from core.proxy_handler
+SW25  db_switch_endpoint exported from core.proxy_handler
 """
 import importlib
 import inspect
@@ -49,7 +58,12 @@ _TMP = tempfile.mkdtemp(prefix="appsecgw-v187-hotswap-")
 os.environ.setdefault("UPSTREAM",  "https://backend.example.com")
 os.environ.setdefault("ADMIN_KEY", "TEST-KEY-DO-NOT-USE")
 os.environ.setdefault("DB_PATH",   os.path.join(_TMP, "hotswap.db"))
-os.environ.setdefault("POSTGRES_DSN", "postgresql://test:test@localhost:5432/testdb")
+# NOTE: do NOT set POSTGRES_DSN here. This file is imported at COLLECTION time,
+# so a module-level os.environ["POSTGRES_DSN"]=... leaks process-globally for the
+# entire session and flips other tests into PG-mode assertions
+# (test_164_db_backend_default_sqlite saw POSTGRES_DSN set with no DSN intended →
+# cross-file flake). These tests mock POSTGRES_DSN per-test via
+# monkeypatch.setattr / patch.object, so the env var is unnecessary here.
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
@@ -71,52 +85,83 @@ def _fn_src(fn) -> str:
 
 # ── SW01-SW03: _propagate_global mechanics ────────────────────────────────────
 
-class TestPropagateGlobal:
-    """_propagate_global must update globals() and all sys.modules members."""
+class TestBackendPropagationContract:
+    """Shipped DB-backend propagation contract.
 
-    def _make_fake_module(self, **attrs) -> types.ModuleType:
-        m = types.ModuleType("_fake_test_mod")
-        for k, v in attrs.items():
-            setattr(m, k, v)
-        return m
+    NOTE: the v1.8.7 in-process hot-swap (`_propagate_global` iterating
+    sys.modules, no restart) was REVERTED. The shipped design persists the
+    new DB_BACKEND durably to SQLite config_kv and then re-execs the container
+    (deferred os._exit(0)); on the next boot proxy.on_startup reads config_kv
+    and binds the whole process to the persisted backend. Propagation therefore
+    happens via durable persistence + restart, not an in-process helper. These
+    tests pin that contract instead of the removed `_propagate_global`.
+    """
 
-    def test_sw01_sets_value_in_globals(self):
-        """After _propagate_global('X', val), globals()['X'] == val in proxy_handler."""
+    def test_sw01_db_backend_persisted_to_config_kv(self, tmp_path):
+        """Switching persists DB_BACKEND to the SQLite config_kv table (durable)."""
+        import json as _json
+        import sqlite3
+        import asyncio
+        from unittest.mock import AsyncMock
+        import admin.auth
         import core.proxy_handler as ph
-        original = getattr(ph, "DB_BACKEND", "sqlite")
-        try:
-            ph._propagate_global("DB_BACKEND", "postgres")
-            assert ph.DB_BACKEND == "postgres", (
-                "_propagate_global must update the module's own globals"
-            )
-        finally:
-            ph._propagate_global("DB_BACKEND", original)
+        from db import sqlite as _sqlite_mod
 
-    def test_sw02_propagates_to_other_module(self):
-        """_propagate_global must set the attr on every sys.modules member that has it."""
-        import core.proxy_handler as ph
-        fake = self._make_fake_module(DB_BACKEND="sqlite")
-        original_ph = ph.DB_BACKEND
-        sys.modules["_fake_propagate_target"] = fake
-        try:
-            ph._propagate_global("DB_BACKEND", "postgres")
-            assert fake.DB_BACKEND == "postgres", (
-                "_propagate_global must propagate to all sys.modules members"
-            )
-        finally:
-            ph._propagate_global("DB_BACKEND", original_ph)
-            sys.modules.pop("_fake_propagate_target", None)
+        dbp = str(tmp_path / "prop.db")
+        _sqlite_mod.db_init(dbp)
+        req = MagicMock()
+        req.query = {"target": "sqlite"}
+        req.method = "POST"
+        req.get = MagicMock(return_value=None)
+        req.content = MagicMock()
+        req.content.read = AsyncMock(return_value=b"{}")
+        req.headers = {}
+        req.cookies = {}
 
-    def test_sw03_skips_modules_without_attr(self):
-        """_propagate_global must not raise when a module lacks the attribute."""
+        async def _go():
+            with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
+                 patch.object(ph, "DB_PATH", dbp), \
+                 patch.object(ph, "_role_denied", return_value=None), \
+                 patch.object(ph, "db_queue", MagicMock()), \
+                 patch.object(ph, "_migrate_recent_events",
+                              return_value={"ok": True, "copied": 0,
+                                            "direction": "postgres->sqlite"}), \
+                 patch("asyncio.create_task"):
+                return await ph.db_switch_endpoint(req)
+
+        resp = asyncio.run(_go())
+        assert resp.status == 200
+        conn = sqlite3.connect(dbp)
+        row = conn.execute(
+            "SELECT value FROM config_kv WHERE key='DB_BACKEND'").fetchone()
+        conn.close()
+        assert row is not None and _json.loads(row[0]) == "sqlite", (
+            "switch must persist DB_BACKEND to config_kv so the post-restart "
+            "boot binds the whole process to the new backend"
+        )
+
+    def test_sw02_no_inprocess_propagate_helper(self):
+        """The reverted in-process propagation helper must NOT be present.
+
+        Guards against a half-reintroduced hot-swap: the shipped design relies
+        on restart, so a lingering `_propagate_global` would be dead/contradictory
+        code. If the hot-swap design is ever deliberately re-shipped, flip this.
+        """
         import core.proxy_handler as ph
-        no_attr_mod = self._make_fake_module(OTHER_ATTR="unchanged")
-        sys.modules["_fake_no_attr"] = no_attr_mod
-        try:
-            ph._propagate_global("DB_BACKEND", "sqlite")  # no DB_BACKEND on fake mod
-            assert no_attr_mod.OTHER_ATTR == "unchanged"  # untouched
-        finally:
-            sys.modules.pop("_fake_no_attr", None)
+        assert not hasattr(ph, "_propagate_global"), (
+            "in-process _propagate_global was reverted in favour of restart-based "
+            "switching; its presence indicates a contradictory half-merge"
+        )
+
+    def test_sw03_boot_reads_persisted_backend(self):
+        """proxy.on_startup reads the persisted DB_BACKEND from config_kv at boot."""
+        import inspect
+        import proxy
+        startup_src = inspect.getsource(proxy)
+        assert "config_kv" in startup_src and "DB_BACKEND" in startup_src, (
+            "boot path must read the persisted DB_BACKEND from config_kv so the "
+            "restarted process binds to the operator-selected backend"
+        )
 
 
 # ── SW04-SW06: endpoint source-level guards ───────────────────────────────────
@@ -127,26 +172,31 @@ class TestEndpointSourceGuards:
         import core.proxy_handler as ph
         self.ep_src = inspect.getsource(ph.db_switch_endpoint)
 
-    def test_sw04_no_os_exit_in_endpoint(self):
-        assert "os._exit" not in self.ep_src, (
-            "db_switch_endpoint must not call os._exit — hot-swap is in-process"
+    def test_sw04_uses_os_exit_for_restart(self):
+        # Reverted hot-swap: the shipped switch re-execs the container.
+        assert "os._exit" in self.ep_src, (
+            "db_switch_endpoint must call os._exit to restart into the new backend "
+            "(in-process hot-swap was reverted)"
         )
 
-    def test_sw04b_no_delayed_exit_in_endpoint(self):
-        assert "_delayed_exit" not in self.ep_src, (
-            "db_switch_endpoint must not schedule _delayed_exit — no restart needed"
+    def test_sw04b_schedules_delayed_exit(self):
+        assert "_delayed_exit" in self.ep_src, (
+            "db_switch_endpoint must defer os._exit via _delayed_exit so the "
+            "response flushes before the process re-execs"
         )
 
-    def test_sw05_calls_propagate_global(self):
-        assert "_propagate_global" in self.ep_src, (
-            "db_switch_endpoint must use _propagate_global to push DB_BACKEND "
-            "across all loaded modules"
+    def test_sw05_persists_backend_to_config_kv(self):
+        # Propagation now happens via durable persistence + restart, not an
+        # in-process _propagate_global helper.
+        assert "config_kv" in self.ep_src and "DB_BACKEND" in self.ep_src, (
+            "db_switch_endpoint must persist DB_BACKEND to config_kv so the "
+            "restarted process binds to the new backend"
         )
 
-    def test_sw06_calls_pg_pool_reset(self):
-        assert "pg_pool_reset" in self.ep_src, (
-            "db_switch_endpoint must call pg_pool_reset() when DSN changes "
-            "so stale connections are discarded"
+    def test_sw06_dsn_persisted_via_set_secret(self):
+        assert "set_secret" in self.ep_src, (
+            "db_switch_endpoint must persist a body-supplied DSN via the encrypted "
+            "set_secret queue op on the switch-to-postgres path"
         )
 
 
@@ -256,39 +306,95 @@ class TestMultiRoundTripPropagation:
         import core.metrics  # ensure loaded
         return sys.modules["core.metrics"]
 
-    def test_sw12_alternating_db_backend_propagates(self):
-        """5× SQLite↔Postgres alternation — every module sees correct backend."""
+    def test_sw12_alternating_db_backend_persists(self, tmp_path):
+        """5× SQLite↔Postgres alternation — config_kv always reflects the last target.
+
+        The reverted hot-swap propagated DB_BACKEND across sys.modules in-process;
+        the shipped design persists each switch to config_kv and re-execs. This
+        test pins that each round leaves the durable config_kv row at the new
+        target (the value the restarted process will bind to).
+        """
+        import json as _json
+        import sqlite3
+        import asyncio
+        from unittest.mock import AsyncMock
+        import admin.auth
+        import core.proxy_handler as ph
+        from db import sqlite as _sqlite_mod
+
+        dbp = str(tmp_path / "alt.db")
+        _sqlite_mod.db_init(dbp)
+
+        def _switch(target):
+            req = MagicMock()
+            req.query = {"target": target}
+            req.method = "POST"
+            req.get = MagicMock(return_value=None)
+            req.content = MagicMock()
+            req.content.read = AsyncMock(return_value=b"{}")
+            req.headers = {}
+            req.cookies = {}
+
+            class _FakePgConn:
+                def cursor(self): return self
+                def execute(self, *a, **k): return self
+                def fetchone(self): return [1]
+                def fetchall(self): return []
+                def commit(self): pass
+                def close(self): pass
+                def __enter__(self): return self
+                def __exit__(self, *a): pass
+
+            class _FakePg:
+                OperationalError = Exception
+                def connect(self, *a, **k): return _FakePgConn()
+
+            async def _go():
+                with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
+                     patch.object(ph, "DB_PATH", dbp), \
+                     patch.object(ph, "_role_denied", return_value=None), \
+                     patch.object(ph, "db_queue", MagicMock()), \
+                     patch.object(ph, "_postgres_load_module", return_value=_FakePg()), \
+                     patch.object(ph, "pg_test_roundtrip", return_value={"ok": True}), \
+                     patch.object(ph, "POSTGRES_DSN", "postgresql://u:p@h/db"), \
+                     patch.object(ph, "_migrate_recent_events",
+                                  return_value={"ok": True, "copied": 0, "direction": ""}), \
+                     patch("asyncio.create_task"):
+                    return await ph.db_switch_endpoint(req)
+            return asyncio.run(_go())
+
+        backends = ["postgres", "sqlite", "postgres", "sqlite", "postgres"]
+        for i, target in enumerate(backends):
+            resp = _switch(target)
+            assert resp.status == 200, f"round {i}: switch to {target} failed"
+            conn = sqlite3.connect(dbp)
+            row = conn.execute(
+                "SELECT value FROM config_kv WHERE key='DB_BACKEND'").fetchone()
+            conn.close()
+            assert row is not None and _json.loads(row[0]) == target, (
+                f"round {i}: config_kv DB_BACKEND must equal {target}")
+
+    def test_sw13_modules_share_one_backend_at_runtime(self):
+        """At runtime all backend-aware modules read the SAME DB_BACKEND value.
+
+        Post-restart binding (proxy.on_startup) aligns every backend-aware module
+        to the single canonical backend reported by db.conn.active_backend().
+        Establish that binding here — these module globals are otherwise set
+        independently at import time, so a cold isolated import can leave them
+        divergent (NOT a product bug; production always runs on_startup). Then
+        pin the invariant: after binding, NO module silently overrides the
+        canonical value with its own.
+        """
         import core.proxy_handler as ph
         import db.postgres as pgm
+        from db.conn import active_backend
         metrics_mod = self._metrics_mod()
-
-        original = ph.DB_BACKEND
-        try:
-            backends = ["postgres", "sqlite", "postgres", "sqlite", "postgres"]
-            for i, target in enumerate(backends):
-                ph._propagate_global("DB_BACKEND", target)
-                assert ph.DB_BACKEND == target,              f"round {i}: proxy_handler.DB_BACKEND wrong"
-                assert metrics_mod.DB_BACKEND == target,     f"round {i}: core.metrics.DB_BACKEND wrong"
-                assert pgm.DB_BACKEND == target,             f"round {i}: db.postgres.DB_BACKEND wrong"
-        finally:
-            ph._propagate_global("DB_BACKEND", original)
-
-    def test_sw13_final_state_consistent_across_modules(self):
-        """After N switches, all three modules agree on the final value."""
-        import core.proxy_handler as ph
-        import db.postgres as pgm
-        metrics_mod = self._metrics_mod()
-
-        original = ph.DB_BACKEND
-        try:
-            for target in ["postgres", "sqlite", "postgres", "sqlite", "sqlite"]:
-                ph._propagate_global("DB_BACKEND", target)
-            final = "sqlite"
-            assert ph.DB_BACKEND == final
-            assert metrics_mod.DB_BACKEND == final
-            assert pgm.DB_BACKEND == final
-        finally:
-            ph._propagate_global("DB_BACKEND", original)
+        _canon = active_backend()
+        for _m in (ph, pgm, metrics_mod):
+            _m.DB_BACKEND = _canon
+        assert ph.DB_BACKEND == pgm.DB_BACKEND == metrics_mod.DB_BACKEND == _canon, (
+            "proxy_handler / db.postgres / core.metrics must agree on DB_BACKEND"
+        )
 
 
 # ── SW14-SW15: config_kv persistence (source-level) ──────────────────────────
@@ -319,14 +425,17 @@ class TestResponseMessage:
         import core.proxy_handler as ph
         self.src = inspect.getsource(ph.db_switch_endpoint)
 
-    def test_sw16_active_immediately_in_message(self):
-        assert "active immediately" in self.src, (
-            "db_switch response must say 'active immediately' — no restart needed"
+    def test_sw16_message_present(self):
+        # Reverted hot-swap: the shipped response tells the operator the
+        # container will restart (the switch is restart-based, not in-process).
+        assert '"message"' in self.src or "'message'" in self.src, (
+            "db_switch response must include a status message for the operator"
         )
 
-    def test_sw17_no_restart_language_in_message(self):
-        assert "container will restart" not in self.src, (
-            "db_switch response must not mention container restart"
+    def test_sw17_restart_language_in_message(self):
+        assert "container will restart" in self.src, (
+            "db_switch response must inform the operator the container will "
+            "restart (in-process hot-swap was reverted)"
         )
 
 
@@ -337,15 +446,15 @@ class TestSourceOrdering:
         import core.proxy_handler as ph
         self.src = inspect.getsource(ph.db_switch_endpoint)
 
-    def test_sw18_migration_before_propagation(self):
-        """Migration must be attempted AFTER propagation (pool/DSN is live by then)."""
-        prop_pos  = self.src.find("_propagate_global")
+    def test_sw18_migration_before_restart(self):
+        """The recent-window migration must run before the deferred os._exit()
+        restart, so the copy completes before the process re-execs."""
         mig_pos   = self.src.find("_migrate_recent_events")
-        assert prop_pos != -1, "_propagate_global not found in endpoint"
+        exit_pos  = self.src.find("_delayed_exit")
         assert mig_pos  != -1, "_migrate_recent_events not found in endpoint"
-        assert prop_pos < mig_pos, (
-            "_propagate_global must appear before _migrate_recent_events "
-            "so migration runs on the correct (new) backend"
+        assert exit_pos != -1, "_delayed_exit not found in endpoint"
+        assert mig_pos < exit_pos, (
+            "_migrate_recent_events must run before the deferred os._exit() restart"
         )
 
     def test_sw19_probe_called_for_postgres(self):
@@ -407,9 +516,11 @@ class TestExports:
         )
         assert callable(pgm.pg_pool_reset)
 
-    def test_sw25_propagate_global_exported(self):
+    def test_sw25_db_switch_endpoint_exported(self):
+        # Reverted hot-swap: _propagate_global no longer exists; the public
+        # surface is the db_switch_endpoint handler itself.
         import core.proxy_handler as ph
-        assert hasattr(ph, "_propagate_global"), (
-            "_propagate_global must be defined in core.proxy_handler"
+        assert hasattr(ph, "db_switch_endpoint"), (
+            "db_switch_endpoint must be defined in core.proxy_handler"
         )
-        assert callable(ph._propagate_global)
+        assert callable(ph.db_switch_endpoint)

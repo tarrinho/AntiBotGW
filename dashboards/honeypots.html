@@ -1,10 +1,12 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
+<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.13 · Honeypots</title>
+<title>AntiBotWaf_GW_1.9.8 · Honeypots</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
@@ -37,6 +39,7 @@ body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
 /* ── Topbar ── */
 #topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
 #topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 #page-content{flex:1;padding:14px}
 /* ── Cards / grid ── */
@@ -57,8 +60,8 @@ table tr:last-child td{border-bottom:0}
 table tbody tr:hover{background:rgba(255,255,255,.03)}
 /* ── Buttons ── */
 .btn{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;transition:background .1s,border-color .1s}
-.btn:hover{background:#2d333b;border-color:#58a6ff;color:var(--bright)}
-.btn.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue);font-weight:600}
+.btn:hover{background:#2d333b;border-color:#79c0ff;color:var(--bright)}
+.btn.active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:var(--blue);font-weight:600}
 .btn-sm{font-size:10px;padding:2px 8px}
 /* ── Portal footer ── */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
@@ -105,7 +108,7 @@ html[data-theme="light"] .btn:hover{background:var(--bg-hover);border-color:var(
 .hp-tab:hover{color:var(--fg)}
 .hp-tab.active{color:var(--bright);border-bottom-color:var(--blue)}
 .hp-tab .cnt{font-size:10px;background:var(--bg-elevated);color:var(--dim);border-radius:8px;padding:0 6px;font-weight:700;min-width:18px;text-align:center}
-.hp-tab.active .cnt{background:rgba(88,166,255,.15);color:var(--blue)}
+.hp-tab.active .cnt{background:rgba(121,192,255,.15);color:var(--blue)}
 .hp-section{display:none}
 .hp-section.active{display:block}
 /* ── Trap effectiveness bars ── */
@@ -123,7 +126,7 @@ html[data-theme="light"] .btn:hover{background:var(--bg-hover);border-color:var(
 .story.open .story-caret{transform:rotate(90deg)}
 .story-ip{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--fg);font-size:12px}
 .story-meta{margin-left:auto;display:flex;gap:8px;align-items:center;font-size:10px;color:var(--dim)}
-.story-scan{background:#1f4e79;color:#58a6ff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}
+.story-scan{background:#1f4e79;color:#79c0ff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}
 html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 .story-steps{padding:6px 12px 10px;display:none}
 .story.open .story-steps{display:block}
@@ -146,6 +149,14 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 .scan-lb-bar{flex:1;height:8px;background:var(--bg-inset);border-radius:4px;overflow:hidden}
 .scan-lb-bar>div{height:100%;background:var(--blue);border-radius:4px;min-width:2px}
 .scan-cnt{font-size:11px;color:var(--blue);font-weight:700;white-space:nowrap}
+/* ── Vhost selector bar (1.8.0) ── */
+#vhost-bar{display:none;gap:6px;margin:0 0 6px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;scrollbar-width:thin;padding-bottom:2px}
+#vhost-bar-label{font-size:11px;color:var(--dim);margin-right:2px}
+.vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #79c0ff;color:#79c0ff;
+  background:transparent;cursor:pointer;font-size:12px;font-weight:600;
+  transition:background .15s,color .15s;line-height:1.6;max-width:220px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vhost-pill.active{background:#79c0ff;color:var(--bg-deep)}
 </style>
 </head>
 <body>
@@ -157,12 +168,12 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div>
-      <div id="sidebar-brand-name">AppSecGW</div>
-      <div id="sidebar-brand-ver">1.8.13</div>
+      <div id="sidebar-brand-name">AntiBot/WAF GW</div>
+      <div id="sidebar-brand-ver">1.9.8</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
-  <nav id="sidebar-nav">
+  <nav id="sidebar-nav" aria-label="Main navigation">
     <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
@@ -184,12 +195,14 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 </div>
 <div id="main-area">
 <div id="topbar">
-  <div id="topbar-title">🍯 Honeypots</div>
+  <div id="topbar-title">🍯 Honeypots <span class="pill" id="live">● LIVE</span></div>
   <div id="topbar-right">
     <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">🌙</button>
   </div>
 </div>
 <div id="page-content">
+
+<div id="vhost-bar"><span id="vhost-bar-label">Vhost:</span><button class="vhost-pill active" data-vhost="">All</button></div>
 
 <!-- 1. Summary strip -->
 <div id="summary-strip">
@@ -248,20 +261,20 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
     <div class="card">
       <h2>🎯 Trap effectiveness — top trap paths by hits
         <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">which traps are actually catching traffic</span></h2>
-      <div id="trap-eff-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="trap-eff-body"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
     </div>
 
     <!-- Active trap paths -->
     <div class="card">
       <h2>Active trap paths <span class="dim" id="trap-count-label" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0"></span></h2>
-      <div id="trap-paths-list"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="trap-paths-list"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
     </div>
 
     <!-- Honeypot path suggestions -->
     <div class="card" id="honey-suggest-card">
       <h2>💡 Honeypot path suggestions
         <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">frequently probed paths not yet in the trap set · last 7 days</span></h2>
-      <div id="honey-suggest-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="honey-suggest-body"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
     </div>
   </div>
 </div>
@@ -273,7 +286,7 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
     <div class="card">
       <h2>🎬 Attacker storyboard — per-IP attack journeys
         <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">click an attacker to replay how they probed you, step by step</span></h2>
-      <div id="storyboard-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="storyboard-body"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
     </div>
 
     <!-- Top caught IPs table -->
@@ -285,7 +298,7 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
             <tr><th>IP</th><th>Hits</th><th>Techniques</th><th>Last seen</th></tr>
           </thead>
           <tbody id="top-ips-body">
-            <tr><td colspan="4" class="dim" style="padding:8px">loading…</td></tr>
+            <tr><td colspan="4" class="dim" style="padding:8px">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -311,14 +324,14 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
           <button class="btn btn-sm" data-mins="10080" onclick="_setPlaybookMins(this)">7d</button>
         </div>
       </div>
-      <div id="playbook-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="playbook-body"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
     </div>
 
     <!-- Scanner-tool leaderboard (NEW) -->
     <div class="card">
       <h2>🔍 Scanner tools detected
         <span class="dim" style="font-size:10px;font-weight:400;text-transform:none;letter-spacing:0">IPs fingerprinted to a known scanner by their trap-path signature</span></h2>
-      <div id="scanner-lb-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="scanner-lb-body"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
       <div id="scanner-hits-body" style="margin-top:10px"></div>
     </div>
 
@@ -330,7 +343,7 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
         </h2>
         <button class="btn btn-sm" id="pp-trap-all" onclick="trapAllPredicted(this)" style="display:none">+ Trap all</button>
       </div>
-      <div id="predicted-probes-body"><div class="dim" style="font-size:11px;padding:6px 0">loading…</div></div>
+      <div id="predicted-probes-body"><div class="dim" style="font-size:11px;padding:6px 0">Loading…</div></div>
     </div>
   </div>
 </div>
@@ -394,6 +407,47 @@ window.addEventListener('beforeunload', function() {
   _timers.forEach(function(t) { clearInterval(t); });
 });
 
+// ── Vhost selector (1.8.0) ───────────────────────────────────────────────────
+window._vhostParam = function() {
+  var v = sessionStorage.getItem('gw_vhost') || '';
+  return v ? '&vhost=' + encodeURIComponent(v) : '';
+};
+document.addEventListener('DOMContentLoaded', function() {
+  Promise.all([
+    fetch('/antibot-appsec-gateway/secured/vhosts',{credentials:'include'}).then(function(r){return r.ok?r.json():{vhosts:[]};}).catch(function(){return {vhosts:[]};}),
+    fetch('/antibot-appsec-gateway/secured/vhost-stats',{credentials:'include'}).then(function(r){return r.ok?r.json():{stats:[]};}).catch(function(){return {stats:[]};})
+  ]).then(function(results){
+    var _now=Date.now()/1000;
+    var _pinned=new Set();try{_pinned=new Set(JSON.parse(localStorage.getItem('vhost_pinned')||'[]'));}catch(e){}
+    var statsMap={};(results[1].stats||[]).forEach(function(s){if(s.hostname)statsMap[s.hostname]=s.last_seen_ts||0;});
+    var cfgd=(results[0].vhosts||[]).filter(function(v){var age=statsMap[v.hostname]>0?(_now-statsMap[v.hostname]):Infinity;return age<300||_pinned.has(v.hostname);}).map(function(v){return {hostname:v.hostname,tip:v.hostname+(v.UPSTREAM?' → '+v.UPSTREAM:'')};});
+    var seen=new Set(cfgd.map(function(v){return v.hostname;}));
+    Object.keys(statsMap).forEach(function(h){if(!seen.has(h)&&_pinned.has(h)){seen.add(h);cfgd.push({hostname:h,tip:h});}});
+    if(cfgd.length===0)return;
+    var bar=document.getElementById('vhost-bar');
+    bar.style.display='flex';
+    var cur=sessionStorage.getItem('gw_vhost')||'';
+    var allPill=bar.querySelector('[data-vhost=""]');
+    if(allPill&&cur)allPill.classList.remove('active');
+    cfgd.forEach(function(v){
+      var btn=document.createElement('button');
+      btn.className='vhost-pill'+(v.hostname===cur?' active':'');
+      btn.dataset.vhost=v.hostname;
+      btn.textContent=v.hostname.split('.')[0];
+      btn.title=v.tip;
+      bar.appendChild(btn);
+    });
+    bar.addEventListener('click',function(e){
+      var btn=e.target.closest('.vhost-pill');
+      if(!btn)return;
+      bar.querySelectorAll('.vhost-pill').forEach(function(b){b.classList.remove('active');});
+      btn.classList.add('active');
+      sessionStorage.setItem('gw_vhost',btn.dataset.vhost);
+      loadData(); loadPlaybook(); loadSuggest();
+    });
+  });
+});
+
 // ── Hourly chart setup ─────────────────────────────────────────────────────
 var _hourlyChart = null;
 (function(){
@@ -447,9 +501,12 @@ window._setHpMins = function(btn){
 // ── Data fetching ──────────────────────────────────────────────────────────
 async function loadData() {
   try {
-    const r = await fetch('/antibot-appsec-gateway/secured/honeypots-data?mins=' + _hpMins, {credentials:'include', cache:'no-store'});
+    const r = await fetch('/antibot-appsec-gateway/secured/honeypots-data?mins=' + _hpMins + window._vhostParam(), {credentials:'include', cache:'no-store'});
     if (!r.ok) return;
     const d = await r.json();
+
+    // LIVE pill — change-detect so we don't repaint every poll (avoids flicker)
+    const _liveEl=document.getElementById('live'); if(_liveEl && _liveEl.dataset.state!=='live'){_liveEl.dataset.state='live'; _liveEl.style.background='var(--green)'; _liveEl.textContent='● LIVE';} if(_liveEl)_liveEl.title='Honeypot data refreshed · '+new Date().toLocaleTimeString();
 
     // Window labels (track the selected range)
     var _wl = _HP_WIN_LABEL[_hpMins] || (_hpMins + 'm');
@@ -530,6 +587,7 @@ async function loadData() {
     if (taC) taC.textContent = (d.attackers || []).length;
 
   } catch(e) {
+    const _errEl=document.getElementById('live'); if(_errEl && _errEl.dataset.state!=='error'){_errEl.dataset.state='error'; _errEl.style.background='var(--red)'; _errEl.textContent='○ ERR';}
     console.warn('honeypots-data error:', e);
   }
 }
@@ -642,7 +700,7 @@ function renderPlaybook(d){
 async function loadPlaybook(){
   try {
     if (typeof _gwLoadKnobState === 'function') { try { await _gwLoadKnobState(); } catch(_){} }
-    const r = await fetch('/antibot-appsec-gateway/secured/attack-playbook?mins=' + _playbookMins, {credentials:'include', cache:'no-store'});
+    const r = await fetch('/antibot-appsec-gateway/secured/attack-playbook?mins=' + _playbookMins + window._vhostParam(), {credentials:'include', cache:'no-store'});
     if (!r.ok){ playbookBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Could not load attack playbook (HTTP ' + r.status + ').</div>'; return; }
     renderPlaybook(await r.json());
   } catch(e){ playbookBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Error: ' + escapeHtml(String(e)) + '</div>'; }
@@ -673,7 +731,7 @@ function renderSuggest(d){
 
 async function loadSuggest(){
   try {
-    const r = await fetch('/antibot-appsec-gateway/secured/honey-suggest', {credentials:'include', cache:'no-store'});
+    const r = await fetch('/antibot-appsec-gateway/secured/honey-suggest' + window._vhostParam().replace(/^&/,'?'), {credentials:'include', cache:'no-store'});
     if (!r.ok){ sBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Could not load suggestions (HTTP ' + r.status + ').</div>'; return; }
     renderSuggest(await r.json());
   } catch(e){ sBody.innerHTML = '<div class="dim" style="font-size:11px;padding:6px 0">Error: ' + escapeHtml(String(e)) + '</div>'; }
@@ -811,13 +869,13 @@ function classifyIntent(steps){
   if(has(['/shell','/cmd','cgi-bin','/upload','etc/passwd','proc/self']))
     return {label:'Remote Code Execution',color:'#f85149',icon:'💥'};
   if(has(['graphql','swagger','api-docs']))
-    return {label:'API Enumeration',color:'#58a6ff',icon:'🔍'};
+    return {label:'API Enumeration',color:'#79c0ff',icon:'🔍'};
   if(has(['/login','/signin','/auth']))
     return {label:'Credential Brute-Force',color:'#d29922',icon:'🔨'};
   if(hasR('honey-cred')||hasR('bot-trap'))
     return {label:'Automated Form-Filling',color:'#bc8cff',icon:'🤖'};
   if(steps.length>=6)
-    return {label:'Path Enumeration',color:'#58a6ff',icon:'🔎'};
+    return {label:'Path Enumeration',color:'#79c0ff',icon:'🔎'};
   return {label:'Reconnaissance',color:'#8b949e',icon:'👁️'};
 }
 
@@ -830,7 +888,7 @@ function killChainPhase(step){
     return {phase:'Access',color:'#d29922'};
   if(['actuator','swagger','graphql','api-docs','server-status','server-info','robots','sitemap','config','metrics','health','/api/'].some(function(k){return p.indexOf(k)!==-1;}))
     return {phase:'Discovery',color:'#bc8cff'};
-  return {phase:'Recon',color:'#58a6ff'};
+  return {phase:'Recon',color:'#79c0ff'};
 }
 
 // ── Goal narrative synthesis ───────────────────────────────────────────────
@@ -968,6 +1026,208 @@ _timers.push(setInterval(loadPlaybook, 30000));
 _timers.push(setInterval(loadSuggest, 120000));
 </script>
 
+<!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
+<style>
+#gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
+  font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
+  padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
+  background:var(--card);color:var(--bright);border:1px solid var(--line);
+  box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
+#gw-status-pill:hover{transform:scale(1.04)}
+/* 1.8.10 fix — reserve right space so the fixed Health pill + log selector never overlap topbar buttons */
+@media(min-width:601px){#topbar{padding-right:280px}}
+#gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
+  display:flex;align-items:center;gap:5px;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
+  padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
+  font-size:10.5px;color:#8b949e;
+  box-shadow:0 2px 6px rgba(0,0,0,.3)}
+#gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
+#gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
+  border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
+#gw-loglvl:focus{outline:1px solid #79c0ff}
+.gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
+  display:none;align-items:flex-start;justify-content:center;z-index:2200;
+  padding:60px 20px 20px}
+.gw-modal-overlay.show{display:flex}
+.gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
+  padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
+  font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
+.gw-modal-card h3{margin:0 0 8px 0;color:var(--bright);font-size:15px;font-weight:700;
+  display:flex;justify-content:space-between;align-items:center}
+.gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
+.gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
+  padding:8px 4px;border-bottom:1px solid var(--bg-hover);align-items:center;font-size:12px}
+.gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
+.gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
+.gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
+.gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
+.gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
+.gw-row .det{color:#8b949e;font-size:11.5px}
+.gw-row .val{font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;text-align:right}
+.gw-row.row-ok{opacity:.6}
+.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--bg-hover);margin-bottom:8px}
+.gw-meta .chip{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
+</style>
+<!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
+<div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
+  <label for="gw-loglvl">log</label>
+  <select id="gw-loglvl">
+    <option value="debug">debug</option>
+    <option value="info">info</option>
+    <option value="warn">warn</option>
+    <option value="error">error</option>
+    <option value="critical">critical</option>
+  </select>
+</div>
+<div id="gw-status-pill" title="Gateway health — click for details">● —</div>
+<div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="gw-modal-card">
+    <h3>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
+      <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
+    </h3>
+    <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
+      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
+    </div>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">Loading…</div>
+  </div>
+</div>
+<script>
+(function(){
+  const pill = document.getElementById('gw-status-pill');
+  const modal = document.getElementById('gw-status-modal');
+  const modalScore = document.getElementById('gw-modal-score');
+  const modalBody = document.getElementById('gw-modal-body');
+  const lvlSelect = document.getElementById('gw-loglvl');
+  function colorFor(score){
+    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+  }
+  let lastData = null;
+  async function tick(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/health-score',
+                            {credentials:'include'});
+      const d = await r.json();
+      lastData = d;
+      const s = d.score|0;
+      const c = colorFor(s);
+      pill.style.background = c.bg;
+      pill.style.color = c.fg;
+      pill.style.borderColor = c.edge;
+      pill.textContent = `● GW ${s}/100`;
+    } catch(e){
+      pill.style.background = 'rgba(248,81,73,0.12)';
+      pill.style.color = '#f85149';
+      pill.textContent = '● ERR';
+    }
+  }
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  const KEY_HINTS = {
+    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
+    memory:'Consider restarting the container or increasing container memory limits',
+    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
+    integrations:'Check API keys in Settings → Integration Credentials',
+    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
+    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
+  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
+  function fmtUptime(secs){
+    if(!secs) return '?';
+    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
+    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
+  }
+  pill.onclick = () => {
+    if (!lastData){ modalBody.textContent='Loading…'; modal.classList.add('show'); return; }
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    const lbl = document.getElementById('gw-score-label');
+    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
+    const bar = document.getElementById('gw-score-bar');
+    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
+    const ver = (lastData.version||'').replace('AntiBotWaf_GW_','v');
+    const up = fmtUptime(lastData.uptime_secs||0);
+    const db = lastData.db_backend||'?';
+    const rawUp = lastData.upstream||'';
+    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
+    const metaHtml = `<div class="gw-meta">
+      <span class="chip">${escapeHtml(ver)}</span>
+      <span class="chip">${escapeHtml(db)}</span>
+      <span class="chip">↑ ${escapeHtml(up)}</span>
+      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
+    </div>`;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
+      return sd!==0?sd:(b.weight||0)-(a.weight||0);
+    });
+    const rowsHtml = sorted.map(r=>{
+      const label = KEY_LABELS[r.key]||r.key;
+      const isOk = r.status==='ok';
+      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
+      return `<div class="gw-row${isOk?' row-ok':''}">
+        <span class="key">${escapeHtml(label)}</span>
+        <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
+        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
+        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
+        <span class="val">${escapeHtml(r.value||'')}</span>
+      </div>`;
+    }).join('');
+    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
+    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
+    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
+      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
+      <span>checked ${escapeHtml(ageStr)}</span>
+    </div>`);
+    modal.classList.add('show');
+  };
+  document.addEventListener('keydown', e => {
+    if (e.key==='Escape') modal.classList.remove('show');
+  });
+  tick();
+  _timers.push(setInterval(tick, 15000));
+
+  // 1.6.5 — log-level combo box: read current value, push on change, persist.
+  async function loadLogLevel(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/config', {credentials:'include'});
+      const d = await r.json();
+      const cur = ((d.state||{}).LOG_LEVEL || 'info').toLowerCase();
+      lvlSelect.value = cur;
+    } catch(e){}
+  }
+  lvlSelect.onchange = async () => {
+    const lvl = lvlSelect.value;
+    try {
+      const csrf = (window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'');
+      const r = await fetch('/antibot-appsec-gateway/secured/config',
+        {method:'POST', credentials:'include',
+         headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},
+         body: JSON.stringify({LOG_LEVEL: lvl})});
+      const d = await r.json();
+      if (!(d.applied && d.applied.LOG_LEVEL)) {
+        _gwAlert('Rejected — ' + JSON.stringify(d.rejected||{}));
+        loadLogLevel();
+      }
+    } catch(e){ _gwAlert('Network error: ' + e.message); }
+  };
+  loadLogLevel();
+  _timers.push(setInterval(loadLogLevel, 30000));
+})();
+</script>
+<!-- /1.6.5 GW status pill + log-level combo -->
+
 <!-- My Account modal JS -->
 <script>
 (function(){
@@ -1035,7 +1295,7 @@ _timers.push(setInterval(loadSuggest, 120000));
 })();
 </script>
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

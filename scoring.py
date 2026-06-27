@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 scoring.py — Risk scoring, ban management, and signal-order helpers.
 Extracted from proxy.py as part of Phase 5 modular refactoring.
@@ -9,12 +7,22 @@ Layer 2: depends on config, state, helpers, db (Layer 1).
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import sqlite3
 import time as _t
 
 from config import *   # noqa: F401,F403
 from config import _HOSTILE_REASONS  # noqa: F401 — underscore not in import *
 from config import REALLY_BAN_SECS   # noqa: F401 — hot-reload propagated via proxy __setattr__
+
+# 1.8.14 M-1: per-vhost RISK_OVERRIDES. protect() reads the matched vhost's
+# RISK_OVERRIDES dict (signal → weight) via vc() and stashes it here for the
+# duration of the request; update_risk_and_maybe_ban() prefers an override
+# weight over the global RISK_WEIGHTS one. Task-scoped, so concurrent requests
+# on different vhosts never see each other's overrides. Default None = use
+# the global weights unchanged.
+_vhost_risk_ctx: contextvars.ContextVar = contextvars.ContextVar(
+    "_vhost_risk_ctx", default=None)
 
 # Signals that are definitive proof of an automated agent — earn REALLY_BAN_SECS.
 # Subset of _HOSTILE_REASONS; other hostile reasons earn HOSTILE_BAN_SECS.
@@ -53,12 +61,15 @@ def _should_run_signal(sig: str, esc_score: float) -> bool:
 
 
 def _load_signal_order_cache() -> None:
-    """Load per-gateway signal-order overrides from SQLite into _signal_order_cache."""
+    """Load per-gateway signal-order overrides into _signal_order_cache.
+    Uses sqlite3.connect(DB_PATH) directly so the loader can be patched
+    in tests via monkeypatch on the module-level `sqlite3` and `DB_PATH`."""
     global _signal_order_cache
     try:
         from admin.mesh import _gw_local_id
         gw_id = _gw_local_id()
-    except Exception:
+    except Exception as exc:
+        slog("signal_orders_load_failed", level="warn", error=str(exc))
         return
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -76,12 +87,15 @@ def _load_signal_order_cache() -> None:
 
 
 def _save_signal_order(sig: str, order: int, actor: str) -> None:
-    """Persist a single signal-order override to SQLite (and mirror to PG)."""
+    """Persist a single signal-order override to SQLite (and mirror to PG).
+    Uses sqlite3.connect(DB_PATH) directly + psycopg.connect(POSTGRES_DSN)
+    so the helper is fully monkeypatchable in tests."""
     global _signal_order_cache
     try:
         from admin.mesh import _gw_local_id
         gw_id = _gw_local_id()
-    except Exception:
+    except Exception as exc:
+        slog("signal_orders_save_failed", level="warn", error=str(exc))
         return
     ts = _t.time()
     try:
@@ -101,7 +115,9 @@ def _save_signal_order(sig: str, order: int, actor: str) -> None:
         slog("signal_orders_save_failed", level="warn", error=str(exc))
         return
     _signal_order_cache[sig] = order
-    # Mirror to Postgres if available
+    # Mirror to Postgres if available + configured. Loaded via
+    # `db.postgres._postgres_load_module` so tests can swap it via
+    # `monkeypatch.setitem(sys.modules, 'db.postgres', ...)`.
     try:
         from db.postgres import _postgres_load_module
         pg = _postgres_load_module()
@@ -122,7 +138,7 @@ def _save_signal_order(sig: str, order: int, actor: str) -> None:
                         (gw_id, sig, order, ts, actor),
                     )
         except Exception:
-            pass  # nosec B110 — PG mirror is best-effort; SQLite is authoritative
+            pass  # nosec B110 — PG mirror best-effort; SQLite is authoritative
 
 
 # ── Escalation score helper ────────────────────────────────────────────────
@@ -151,10 +167,25 @@ def _decay_risk(state, now_ts: float):
                 state.risk_by_reason[r] *= factor
                 if state.risk_by_reason[r] < 0.5:
                     del state.risk_by_reason[r]
+        # iter-11b: decay per-vhost accumulators in lockstep too.
+        if getattr(state, "risk_by_vhost", None):
+            for v in list(state.risk_by_vhost.keys()):
+                state.risk_by_vhost[v] *= factor
+                if state.risk_by_vhost[v] < 0.5:
+                    del state.risk_by_vhost[v]
         if state.risk_score < 0.5:
             state.risk_score = 0.0
             if getattr(state, "risk_by_reason", None):
                 state.risk_by_reason.clear()
+    # iter-11b: per-vhost scores decay independently of the global score; a vhost
+    # whose accumulator alone fell below noise is pruned even if other vhosts (or
+    # the global score) are still hot.
+    elif elapsed > 0 and getattr(state, "risk_by_vhost", None):
+        factor = 0.5 ** (elapsed / RISK_DECAY_HALFLIFE_SECS)
+        for v in list(state.risk_by_vhost.keys()):
+            state.risk_by_vhost[v] *= factor
+            if state.risk_by_vhost[v] < 0.5:
+                del state.risk_by_vhost[v]
     state.last_risk_update = now_ts
 
 
@@ -164,11 +195,19 @@ async def is_banned(ip: str) -> tuple[bool, float]:
     """Fast local check first (zero-RTT for the hot path), Redis only when
     local says 'no'. The Redis check piggy-backs the operator's intent of
     sharing bans across instances."""
+    # iter-11 — when BAN_SCOPE="vhost", an identity banned on the CURRENT vhost
+    # is blocked here too. The global scalar ban still wins if set (a global
+    # ban always applies); the per-vhost map only gates the matching hostname.
+    _scope, _bvhost = _resolve_ban_scope()
     async with state_lock:
         s = ip_state[ip]
         n = now()
         if s.banned_until > n:
             return True, s.banned_until - n
+        if _scope == "vhost" and _bvhost:
+            _vu = s.banned_until_by_vhost.get(_bvhost, 0.0)
+            if _vu > n:
+                return True, _vu - n
     # Ask the shared store (Redis integration)
     try:
         from integrations.redis import _shared_ban_get
@@ -183,15 +222,49 @@ async def is_banned(ip: str) -> tuple[bool, float]:
     return False, 0.0
 
 
+def _resolve_ban_scope() -> tuple:
+    """iter-11 — return (ban_scope, vhost) for the current request context.
+    ban_scope ∈ {"global","vhost"} resolved via vc() so a per-vhost override
+    wins over the global default; vhost is the current request's hostname.
+    Falls back to ("global","") if the vhost module isn't importable (test
+    harness / early boot) so the default behaviour is never broken."""
+    try:
+        from vhost import vc as _vc, current_vhost_host as _cvh
+        return (_vc("BAN_SCOPE") or "global"), (_cvh() or "")
+    except Exception:
+        return "global", ""
+
+
 async def ban(ip: str, secs: int = HONEYPOT_BAN_SECS, reason: str = "honeypot"):
     until = now() + secs
+    # iter-11 — resolve ban blast-radius for the current request's vhost.
+    # "vhost" → record the ban against (raw_ip, vhost) only; "global" (default)
+    # → fleet-wide, unchanged. vc() reads the per-vhost override if present.
+    _scope, _bvhost = _resolve_ban_scope()
+    _vhost_scoped = (_scope == "vhost" and _bvhost)
     async with state_lock:
-        ip_state[ip].banned_until = until
+        if _vhost_scoped:
+            ip_state[ip].banned_until_by_vhost[_bvhost] = until
+        else:
+            ip_state[ip].banned_until = until
+        _raw_ip = ip_state[ip].last_ip or ip
     if db_queue is not None:
-        try:
-            db_queue.put_nowait(("ban", (ip, _t.time() + secs, reason, _t.time())))
-        except asyncio.QueueFull:
-            pass
+        if _vhost_scoped:
+            try:
+                db_queue.put_nowait(("ip_ban_vhost",
+                    (_raw_ip, _bvhost, _t.time() + secs, reason, _t.time())))
+            except asyncio.QueueFull:
+                pass
+        else:
+            try:
+                db_queue.put_nowait(("ban", (ip, _t.time() + secs, reason, _t.time())))
+            except asyncio.QueueFull:
+                pass
+            if secs >= HOSTILE_BAN_SECS:
+                try:
+                    db_queue.put_nowait(("ip_ban", (_raw_ip, _t.time() + secs, reason, _t.time())))
+                except asyncio.QueueFull:
+                    pass
     # Propagate to shared store (best-effort, never blocks)
     try:
         from integrations.redis import _shared_ban_set
@@ -208,7 +281,11 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
     using a higher threshold when the IP appears to be a NAT (many identities).
     Returns True if a ban was applied.
     """
-    weight = RISK_WEIGHTS.get(reason, 0)
+    # Per-vhost override (1.8.14 M-1) wins over the global weight when present;
+    # a 0 override deliberately suppresses the signal on that vhost.
+    _overrides = _vhost_risk_ctx.get()
+    weight = (_overrides.get(reason, RISK_WEIGHTS.get(reason, 0))
+              if _overrides else RISK_WEIGHTS.get(reason, 0))
     if weight == 0:
         return False
     async with state_lock:
@@ -231,23 +308,58 @@ async def update_risk_and_maybe_ban(track_key: str, reason: str, ip: str) -> boo
             RISK_BAN_THRESHOLD_NAT if identities_at_ip >= NAT_IDENTITIES_THRESHOLD
             else RISK_BAN_THRESHOLD
         )
-        if s.risk_score >= threshold and s.banned_until <= n:
+        # iter-11 — resolve blast-radius. For BAN_SCOPE="vhost" the "already
+        # banned?" gate checks the per-vhost expiry for THIS vhost, so the
+        # same identity can independently trip on different vhosts.
+        _scope, _bvhost = _resolve_ban_scope()
+        _vhost_scoped = (_scope == "vhost" and _bvhost)
+        # iter-11b — TRUE isolation: under vhost scope the ban decision is driven
+        # by the risk EARNED ON THIS VHOST, not the global score. Otherwise an
+        # identity that built up risk on vhost A would be banned on vhost B the
+        # moment it touches it (carry-over), defeating per-vhost isolation.
+        if _vhost_scoped:
+            s.risk_by_vhost[_bvhost] = s.risk_by_vhost.get(_bvhost, 0.0) + weight
+            _eval_score = s.risk_by_vhost[_bvhost]
+        else:
+            _eval_score = s.risk_score
+        _gate_open = (
+            (s.banned_until_by_vhost.get(_bvhost, 0.0) <= n) if _vhost_scoped
+            else (s.banned_until <= n))
+        if _eval_score >= threshold and _gate_open:
             ban_secs = (REALLY_BAN_SECS  if reason in _REALLY_BAN_REASONS
                         else HOSTILE_BAN_SECS if reason in _HOSTILE_REASONS
                         else RISK_BAN_DURATION_SECS)
-            s.banned_until = n + ban_secs
+            if _vhost_scoped:
+                s.banned_until_by_vhost[_bvhost] = n + ban_secs
+            else:
+                s.banned_until = n + ban_secs
             triggered = True
             ban_dur = ban_secs
         else:
             triggered = False
             ban_dur = 0
     if triggered and db_queue is not None:
-        try:
-            db_queue.put_nowait(("ban",
-                (track_key, _t.time() + ban_dur,
-                 f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
-        except asyncio.QueueFull:
-            pass
+        if _vhost_scoped:
+            try:
+                db_queue.put_nowait(("ip_ban_vhost",
+                    (ip, _bvhost, _t.time() + ban_dur,
+                     f"risk-score:{int(_eval_score)}:{reason}", _t.time())))
+            except asyncio.QueueFull:
+                pass
+        else:
+            try:
+                db_queue.put_nowait(("ban",
+                    (track_key, _t.time() + ban_dur,
+                     f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
+            except asyncio.QueueFull:
+                pass
+            if ban_dur >= HOSTILE_BAN_SECS:
+                try:
+                    db_queue.put_nowait(("ip_ban",
+                        (ip, _t.time() + ban_dur,
+                         f"risk-score:{int(s.risk_score)}:{reason}", _t.time())))
+                except asyncio.QueueFull:
+                    pass
     if triggered:
         # Propagate risk-driven bans to the shared store (cross-instance)
         try:

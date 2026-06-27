@@ -113,40 +113,54 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
+def _csrf_hdr(proxy_module, cookie):
+    """Return X-CSRF-Token header dict for CSRF-protected endpoints."""
+    import hashlib, hmac as _hmac
+    if isinstance(cookie, dict):
+        cookie = next(iter(cookie.values()))
+    sid = cookie.split("|")[1]
+    token = _hmac.new(proxy_module.SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    return {"X-CSRF-Token": token}
+
+
+# gw_audit is mirrored to the active backend. Under the PG-mode test harness
+# (POSTGRES_DSN set) the config endpoint and gw_audit_add writer op persist to
+# Postgres and never touch SQLite, so raw sqlite3.connect(DB_PATH) reads/writes
+# would miss the rows. db.conn.conn() targets whatever backend is active (it
+# rewrites `?` → `%s` and commits on clean exit) keeping these helpers correct
+# in both modes.
 def _audit_rows(proxy_module, action=None):
     """Query gw_audit table directly; optionally filter by action."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.row_factory = sqlite3.Row
-    if action:
-        rows = conn.execute(
-            "SELECT * FROM gw_audit WHERE action=? ORDER BY ts", (action,)
-        ).fetchall()
-    else:
-        rows = conn.execute("SELECT * FROM gw_audit ORDER BY ts").fetchall()
-    conn.close()
+    from db.conn import conn as _backend_conn
+    with _backend_conn(timeout=10) as conn:
+        conn.row_factory = sqlite3.Row
+        if action:
+            rows = conn.execute(
+                "SELECT * FROM gw_audit WHERE action=? ORDER BY ts", (action,)
+            ).fetchall()
+        else:
+            rows = conn.execute("SELECT * FROM gw_audit ORDER BY ts").fetchall()
     return [dict(r) for r in rows]
 
 
 def _seed_audit(proxy_module, action="test_action", actor="admin",
                 details=None, ts=None):
     """Insert a row directly into gw_audit for query-side tests."""
-    conn = sqlite3.connect(proxy_module.DB_PATH)
-    conn.execute(
-        "INSERT INTO gw_audit (ts, action, gw_id, actor, details) VALUES (?,?,?,?,?)",
-        (ts or time.time(), action, "gw-test", actor,
-         json.dumps(details or {"key": "val"})),
-    )
-    conn.commit()
-    conn.close()
+    from db.conn import conn as _backend_conn
+    with _backend_conn(timeout=10) as conn:
+        conn.execute(
+            "INSERT INTO gw_audit (ts, action, gw_id, actor, details) VALUES (?,?,?,?,?)",
+            (ts or time.time(), action, "gw-test", actor,
+             json.dumps(details or {"key": "val"})),
+        )
 
 
 def _wipe_audit(proxy_module):
+    from db.conn import conn as _backend_conn
     try:
-        conn = sqlite3.connect(proxy_module.DB_PATH)
-        conn.execute("DELETE FROM gw_audit")
-        conn.commit()
-        conn.close()
-    except sqlite3.OperationalError:
+        with _backend_conn(timeout=10) as conn:
+            conn.execute("DELETE FROM gw_audit")
+    except Exception:
         pass
 
 
@@ -171,10 +185,25 @@ def _make_config_zip(knobs: dict) -> bytes:
 
 @pytest.fixture(autouse=True)
 def _isolate_audit_table():
-    import proxy as _p
+    import sys, proxy as _p
     _wipe_audit(_p)
+    # Snapshot hot-reloadable knobs that config-endpoint tests modify so they
+    # don't leak into later tests (config_endpoint propagates to all modules).
+    import config as _cfg
+    _snap = {k: getattr(_cfg, k) for k in dir(_cfg)
+             if not k.startswith("_") and isinstance(getattr(_cfg, k), (int, float, bool, str, list))}
     yield
     _wipe_audit(_p)
+    # Restore snapshotted config values across all loaded modules.
+    for k, v in _snap.items():
+        if getattr(_cfg, k, None) != v:
+            setattr(_cfg, k, v)
+            for _m in list(sys.modules.values()):
+                if _m is not None and _m is not _cfg and hasattr(_m, k):
+                    try:
+                        setattr(_m, k, v)
+                    except (AttributeError, TypeError):
+                        pass
 
 
 # ── U1: gw_audit table schema ─────────────────────────────────────────────────
@@ -390,7 +419,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RISK_BAN_THRESHOLD": 75},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie})
+                                     cookies={proxy_module._SESSION_COOKIE: cookie},
+                                     headers=_csrf_hdr(proxy_module, cookie))
                     assert r.status == 200
                     d = await r.json()
                     assert "RISK_BAN_THRESHOLD" in d.get("applied", {}), \
@@ -408,7 +438,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 30},
-                                 cookies={proxy_module._SESSION_COOKIE: cookie})
+                                 cookies={proxy_module._SESSION_COOKIE: cookie},
+                                 headers=_csrf_hdr(proxy_module, cookie))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
                     assert rows, "expected audit row"
@@ -423,7 +454,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     await c.post(NS + "/config",
                                  json={"RATE_LIMIT_BURST": 42},
-                                 cookies={proxy_module._SESSION_COOKIE: cookie})
+                                 cookies={proxy_module._SESSION_COOKIE: cookie},
+                                 headers=_csrf_hdr(proxy_module, cookie))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
                     assert rows, "expected at least one config_change audit row"
@@ -442,7 +474,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"RATE_LIMIT_BURST": 25, "IP_BURST": 40},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie})
+                                     cookies={proxy_module._SESSION_COOKIE: cookie},
+                                     headers=_csrf_hdr(proxy_module, cookie))
                     n_applied = len((await r.json()).get("applied", {}))
                     await asyncio.sleep(0.3)
                     rows = _audit_rows(proxy_module, action="config_change")
@@ -458,7 +491,8 @@ class TestF1ConfigEndpointAudit:
                     cookie = _make_admin_cookie(proxy_module)
                     r = await c.post(NS + "/config",
                                      json={"TOTALLY_FAKE_KNOB_XYZ_999": True},
-                                     cookies={proxy_module._SESSION_COOKIE: cookie})
+                                     cookies={proxy_module._SESSION_COOKIE: cookie},
+                                     headers=_csrf_hdr(proxy_module, cookie))
                     d = await r.json()
                     assert "TOTALLY_FAKE_KNOB_XYZ_999" in d.get("rejected", {}), \
                         "precondition: unknown knob must be rejected"
@@ -486,6 +520,7 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "audit-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200, f"POST /vhosts returned {r.status}"
@@ -505,6 +540,7 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "actor-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -525,6 +561,7 @@ class TestF2VhostsEndpointAudit:
                         NS + "/vhosts",
                         json={"hostname": "detail-post.example.com",
                               "UPSTREAM": self._SAFE_UPSTREAM},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -548,6 +585,7 @@ class TestF2VhostsEndpointAudit:
                     r = await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "del-audit.example.com"},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     assert r.status == 200, f"DELETE /vhosts returned {r.status}"
@@ -566,6 +604,7 @@ class TestF2VhostsEndpointAudit:
                     await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "delactor.example.com"},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -585,6 +624,7 @@ class TestF2VhostsEndpointAudit:
                     await c.delete(
                         NS + "/vhosts",
                         json={"hostname": "deldetail.example.com"},
+                        headers=_csrf_hdr(proxy_module, {proxy_module._SESSION_COOKIE: cookie}),
                         cookies={proxy_module._SESSION_COOKIE: cookie},
                     )
                     await asyncio.sleep(0.3)
@@ -869,13 +909,19 @@ class TestRSourceGuards:
     # ── db/postgres.py ────────────────────────────────────────────────────────
 
     def test_postgres_has_gw_audit_add_case(self):
+        # A4 refactor — the op→handler ladder became a registry
+        # (_PG_OP_HANDLERS + _h_<op> handlers), so dispatch is a handler fn + a
+        # registry entry rather than an `op == "gw_audit_add"` branch. Assert the
+        # handler exists and is registered.
         src = self._src("db", "postgres.py")
-        assert 'op == "gw_audit_add"' in src, \
-            "db/postgres.py _pg_mirror_kv must handle 'gw_audit_add' op"
+        assert "def _h_gw_audit_add" in src, \
+            "db/postgres.py must define a _h_gw_audit_add handler"
+        assert '"gw_audit_add":' in src, \
+            "db/postgres.py must register gw_audit_add in _PG_OP_HANDLERS"
 
     def test_postgres_gw_audit_add_uses_percent_s_placeholders(self):
         src = self._src("db", "postgres.py")
-        pos = src.find('op == "gw_audit_add"')
+        pos = src.find("def _h_gw_audit_add")
         assert pos != -1
         block = src[pos:pos + 300]
         assert "%s" in block, \
@@ -890,9 +936,12 @@ class TestRSourceGuards:
         audit_pos = src.find('"gw_audit_add"')
         assert audit_pos != -1
         block = src[audit_pos:audit_pos + 400]
-        assert '_pg_mirror_kv("gw_audit_add"' in block, \
-            "db/sqlite.py must call _pg_mirror_kv('gw_audit_add', args) " \
-            "after the SQLite INSERT"
+        # REVIEW-H2: the mirror is now invoked via _pg_mirror_bg (off-loop),
+        # which itself dispatches to _pg_mirror_kv. Accept either form.
+        assert ('_pg_mirror_kv("gw_audit_add"' in block
+                or '_pg_mirror_bg("gw_audit_add"' in block), \
+            "db/sqlite.py must call _pg_mirror_kv (or _pg_mirror_bg) " \
+            "for gw_audit_add after the SQLite INSERT"
 
     # ── core/proxy_handler.py ─────────────────────────────────────────────────
 

@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 integrations/endpoint_policy.py — Per-endpoint policy engine + custom rules.
 
@@ -97,6 +95,32 @@ def _to_country_set(v) -> set:
     else:
         items = [c.strip().upper() for c in str(v).split(",") if c.strip()]
     return {c for c in items if len(c) == 2 and c.isalpha()}
+
+
+def _to_ip_net_list(v) -> list:
+    """Comma/newline-separated IPs or CIDRs → list of normalised CIDR strings.
+    Drops invalid entries so a typo never blocks startup BUT logs each
+    rejection so the operator sees `TRUSTED_PROXIES=10.0.0.0/33` actually
+    landed as an empty list (iter-9 code-review MED-1)."""
+    import ipaddress as _ipmod
+    if isinstance(v, list):
+        items = [str(x).strip() for x in v if str(x).strip()]
+    else:
+        items = [x.strip() for x in str(v).replace("\n", ",").split(",") if x.strip()]
+    result = []
+    for item in items:
+        try:
+            result.append(str(_ipmod.ip_network(item, strict=False)))
+        except ValueError as _e:
+            try:
+                slog("ip_net_list_rejected_entry", level="warn",
+                     entry=item[:80], reason=str(_e)[:120],
+                     note="silent drop is by design (a typo must not "
+                          "block boot) but each rejection is logged so "
+                          "operators see why their CIDR list looks empty")
+            except Exception:
+                pass  # nosec B110 — never block on a log path
+    return result
 
 
 def _to_endpoint_policies(v):

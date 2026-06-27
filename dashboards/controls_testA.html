@@ -2,10 +2,11 @@
 <html lang="en">
 <head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png">
 <meta charset="UTF-8">
+<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Controls · Test A · Split pane</title>
 <style>
-:root{--bg:#0d1117;--fg:#c9d1d9;--card:#161b22;--line:#21262d;--blue:#58a6ff;--green:#3fb950;--red:#f85149;--yellow:#d2993a;--dim:#8b949e;--panel:#1c2128--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+:root{--bg:#0d1117;--fg:#c9d1d9;--card:#161b22;--line:#21262d;--blue:#79c0ff;--green:#3fb950;--red:#f85149;--yellow:#d2993a;--dim:#8b949e;--panel:#1c2128--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
@@ -40,8 +41,8 @@ body{background:var(--bg);color:var(--fg);font-family:-apple-system,'SF Pro',ui-
 .sidebar-search input::placeholder{color:var(--dim)}
 nav{padding:6px 0}
 .sec-item{display:flex;align-items:center;gap:8px;padding:8px 14px;cursor:pointer;border-radius:0;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .12s,color .12s}
-.sec-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
-.sec-item.active{background:rgba(88,166,255,.1);color:var(--blue);border-left-color:var(--blue)}
+.sec-item:hover{background:rgba(121,192,255,.06);color:var(--fg)}
+.sec-item.active{background:rgba(121,192,255,.1);color:var(--blue);border-left-color:var(--blue)}
 .sec-item .sec-icon{font-size:14px;width:18px;text-align:center;flex-shrink:0}
 .sec-item .sec-label{flex:1}
 .sec-dirty{background:var(--yellow);color:#000;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;min-width:18px;text-align:center;display:none}
@@ -493,7 +494,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 </script>
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

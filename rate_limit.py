@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 rate_limit.py — Token-bucket rate limiting + background prune loop.
 Extracted from proxy.py as part of Phase 3 modular refactoring.
@@ -28,6 +26,7 @@ from state import (
     _ACTIVE_SESSIONS,
     _signal_order_cache,
     _asn_path_clusters,
+    _TOTP_PENDING,
 )
 from helpers import slog, now
 from vhost import vc as _vc_rl
@@ -99,9 +98,13 @@ async def take_token(ip: str) -> tuple:
 
 # ── Background prune loop ──────────────────────────────────────────────────
 
+# Stage 20a: last-run timestamp for the SQLite events prune. Hourly cadence.
+_LAST_EVENTS_PRUNE_TS: float = 0.0
+
 async def _prune_state_loop():
     """Background coroutine: evict idle identities + cap total count.
     Defends against unbounded growth from XFF spoofing or UA rotation."""
+    global _LAST_EVENTS_PRUNE_TS
     while True:
         try:
             await asyncio.sleep(PRUNE_INTERVAL_SECS)
@@ -186,7 +189,20 @@ async def _prune_state_loop():
                                       key=lambda kv: kv[1], reverse=True)[:500]
                         _cat_dict.clear()
                         _cat_dict.update(keep)
-                # 9. Prune expired CrowdSec cache entries + recount active_bans.
+                # REVIEW-M1: DB prunes are deferred until AFTER state_lock is
+                # released — see "Post-lock DB prunes" block below. Holding the
+                # lock across `DELETE FROM events WHERE …` (potentially seconds
+                # on a large table) blocks every request's rate-limit take.
+                _prune_ip_bans_due = True
+                _prune_events_due = False
+                try:
+                    from config import EVENTS_PRUNE_INTERVAL_SECS
+                    _now_wall_check = _time.time()
+                    if _now_wall_check - _LAST_EVENTS_PRUNE_TS >= EVENTS_PRUNE_INTERVAL_SECS:
+                        _prune_events_due = True
+                except Exception:
+                    pass
+                # 10. Prune expired CrowdSec cache entries + recount active_bans.
                 try:
                     from reputation.crowdsec import _crowdsec_cache, _crowdsec_stats
                     _cs_now = _time.time()
@@ -199,7 +215,7 @@ async def _prune_state_loop():
                         if _v[0] is not None and _v[1] > _cs_now)
                 except ImportError:
                     pass
-                # 10. H5: prune remaining unbounded dicts.
+                # 11. H5: prune remaining unbounded dicts.
                 # _ACTIVE_SESSIONS: username → last_seen_ts (wall clock from _t.time()).
                 # Use _time.time() not n (which is monotonic) for the comparison.
                 _AS_PRUNE_TTL = 43200  # 12 h — matches _SESSION_TTL in admin/users.py
@@ -223,7 +239,7 @@ async def _prune_state_loop():
                              if _ck[2] < _now_min - 10]
                 for _ck in _stale_ck:
                     _asn_path_clusters.pop(_ck, None)
-                # 11. _fp_session_creations: fingerprint → deque[timestamps].
+                # 12. _fp_session_creations: fingerprint → deque[timestamps].
                 # Never pruned elsewhere; evict stale fingerprints (all timestamps
                 # older than SESSION_CHURN_WINDOW_S) to prevent UA-rotating attackers
                 # from inflating memory indefinitely.
@@ -235,6 +251,111 @@ async def _prune_state_loop():
                     for _fp in _stale_fp:
                         _fp_session_creations.pop(_fp, None)
                 except ImportError:
+                    pass
+                # 13. PROXY4-07: _PROBE_RL — ip → [window_start, count].
+                # Entries are never evicted by the hot path; prune when the
+                # window_start is older than the rate-limit window so stale IPs
+                # do not accumulate indefinitely.
+                try:
+                    from core.proxy_handler import _PROBE_RL, PROBE_RL_WINDOW
+                    _probe_cutoff = _time.time() - PROBE_RL_WINDOW
+                    _stale_probe = [_ip for _ip, _e in list(_PROBE_RL.items())
+                                    if not _e or _e[0] < _probe_cutoff]
+                    for _ip in _stale_probe:
+                        _PROBE_RL.pop(_ip, None)
+                except ImportError:
+                    pass
+                # SH-3: prune _POW_RL + _POW_CHAL_CACHE idle entries.
+                try:
+                    from core.proxy_handler import (_POW_RL, _POW_CHAL_CACHE,
+                                                     POW_RL_WINDOW)
+                    _pow_cutoff = _time.time() - POW_RL_WINDOW
+                    for _ip in [_k for _k, _e in list(_POW_RL.items())
+                                 if not _e or _e[0] < _pow_cutoff]:
+                        _POW_RL.pop(_ip, None)
+                    for _ip in [_k for _k, _e in list(_POW_CHAL_CACHE.items())
+                                 if not _e or _e[1] < _pow_cutoff]:
+                        _POW_CHAL_CACHE.pop(_ip, None)
+                except ImportError:
+                    pass
+                # 13c. 1.8.15 — _pow_seen ((token,solution) → expires_at):
+                # entries are seen-replay records. Their value IS the wall-time
+                # expiry. Drop everything past expiry.
+                try:
+                    from state import _pow_seen as _ps
+                    _ps_now = _time.time()
+                    _stale_ps = [_k for _k, _exp in list(_ps.items())
+                                 if _exp < _ps_now]
+                    for _k in _stale_ps:
+                        _ps.pop(_k, None)
+                except Exception:
+                    pass
+                # 13d. 1.8.15 — _honeypot_ip_clusters ((path, 5min-bucket) →
+                # set of IPs): time-bucketed key. Anything older than 30 min
+                # is no longer useful for coordinated-attack detection.
+                try:
+                    from state import _honeypot_ip_clusters as _hic
+                    _bucket_cutoff = int(_time.time() // 300) - 6  # 30 min back
+                    _stale_hic = [_k for _k in list(_hic) if _k[1] < _bucket_cutoff]
+                    for _k in _stale_hic:
+                        _hic.pop(_k, None)
+                except Exception:
+                    pass
+                # 13e. 1.8.15 — _LOGIN_BUCKET (ip → (window_start, count)):
+                # entries with stale window_start are no longer counted.
+                try:
+                    from state import _LOGIN_BUCKET as _lb
+                    _lb_cutoff = _time.time() - 600  # 10 min back
+                    _stale_lb = [_ip for _ip, _v in list(_lb.items())
+                                 if not _v or _v[0] < _lb_cutoff]
+                    for _ip in _stale_lb:
+                        _lb.pop(_ip, None)
+                except Exception:
+                    pass
+                # 14. PROXY4-10: _TOTP_PENDING — username → {ts, step/secret, …}.
+                # Scratch dict for the TOTP login / provisioning flow; prune entries
+                # older than 10 minutes to prevent unbounded growth from abandoned flows.
+                _totp_cutoff = _time.time() - 600
+                _stale_totp = [_u for _u, _p in list(_TOTP_PENDING.items())
+                               if isinstance(_p, dict) and _p.get("ts", 0) < _totp_cutoff]
+                for _u in _stale_totp:
+                    _TOTP_PENDING.pop(_u, None)
+            # ── Post-lock DB prunes (REVIEW-M1) ─────────────────────────────
+            # state_lock is released; these sync SQLite DELETEs no longer block
+            # `take_token` / `take_socket_ip_token` callers. Run in a thread so
+            # the event loop also stays free during the DELETE itself.
+            if _prune_ip_bans_due:
+                try:
+                    from db import prune_ip_bans as _prune_ip_bans
+                    await asyncio.to_thread(_prune_ip_bans)
+                except Exception:
+                    pass
+            if _prune_events_due:
+                try:
+                    from db.sqlite import prune_old_events as _prune_old_events
+                    await asyncio.to_thread(_prune_old_events)
+                    _LAST_EVENTS_PRUNE_TS = _time.time()
+                except Exception:
+                    pass
+            # 1.8.15 — prune gw_audit rows past retention. Same cadence as
+            # events prune (hourly); cheap DELETE keyed by indexed `ts`.
+            if _prune_events_due:
+                try:
+                    from config import GW_AUDIT_RETENTION_DAYS
+                    if GW_AUDIT_RETENTION_DAYS > 0:
+                        # 1.9.0 (F4) — dispatch on active backend so PG-only
+                        # deployments actually prune (the SQLite prune is a
+                        # no-op there because gw_audit only lives in PG).
+                        from db.conn import active_backend as _ab
+                        if _ab() == "postgres":
+                            from db.postgres import prune_gw_audit_postgres as _prune_pg
+                            await asyncio.to_thread(_prune_pg,
+                                                     GW_AUDIT_RETENTION_DAYS)
+                        else:
+                            from db.sqlite import prune_gw_audit as _prune_gw_audit
+                            await asyncio.to_thread(_prune_gw_audit,
+                                                     GW_AUDIT_RETENTION_DAYS)
+                except Exception:
                     pass
         except asyncio.CancelledError:
             break

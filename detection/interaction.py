@@ -296,9 +296,9 @@ async def interaction_report_endpoint(request: web.Request) -> web.Response:
         duration_ms = 0
     # DET4-05: wrap analysis in try/except so malformed events never crash the endpoint
     try:
-        reason, detail = interaction_analyze(events, duration_ms)
+        reason, _detail = interaction_analyze(events, duration_ms)
     except Exception:
-        reason, detail = None, ""
+        reason, _detail = None, ""
     if reason:
         from scoring import update_risk_and_maybe_ban
         from core.metrics import record

@@ -1,0 +1,60 @@
+[tool.mutmut]
+# Mutation testing configuration — AntiBot/WAF GW anti-bot proxy
+# mutmut v3 — always uses pytest as runner.
+#
+# Usage:
+#   mutmut run          # run all mutations
+#   mutmut results      # summarise results
+#   mutmut show <id>    # show specific mutant diff
+#
+# Scope: pure-logic core (detection/, scoring.py, endpoint_policy.py).
+# Exclude admin UI and integration glue — too many side effects to test cheaply.
+
+paths_to_mutate = [
+    "detection/llm_heuristic.py",
+    "detection/path_sweep.py",
+    "detection/ua.py",
+    "scoring.py",
+    "identity.py",
+]
+
+# Run fast pure tests + fuzzing suite (test_pure.py is the largest pure-logic suite).
+pytest_add_cli_args = ["-x", "-q", "--tb=no"]
+pytest_add_cli_args_test_selection = [
+    "tests/test_pure.py",
+    "tests/test_custom_rules_fuzzing.py",
+]
+
+do_not_mutate = [
+    "tests/*",
+    "*/__pycache__/*",
+    "detection/__init__.py",
+    "detection/base.py",
+    "detection/detectors.py",
+]
+
+# All project dependencies that tests import — mutmut only copies
+# paths_to_mutate into mutants/; everything else must be listed here
+# so pytest can find modules when run from the mutants/ subdirectory.
+also_copy = [
+    "config.py",
+    "state.py",
+    "proxy.py",
+    "helpers.py",
+    "identity.py",
+    "rate_limit.py",
+    "vhost.py",
+    "scoring.py",
+    "Dockerfile",
+    "Dockerfile.armv7",
+    "rules.md",
+    "core",
+    "admin",
+    "challenge",
+    "db",
+    "reputation",
+    "dashboards",
+    "integrations",
+    "detection",
+    "validation",
+]

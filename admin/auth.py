@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # admin/auth.py — Phase 8: admin IP allowlist + internal-auth helpers
 # Extracted from proxy.py lines 167–360
 import asyncio
@@ -9,6 +7,7 @@ import hmac
 import time as _t  # noqa: F401
 from collections import deque
 from config import *   # noqa: F401,F403
+from db import open_conn
 from state import *    # noqa: F401,F403
 from helpers import slog, get_ip, _is_admin_path  # noqa: F401
 from aiohttp import web
@@ -20,9 +19,14 @@ _ADMIN_RL_LOCK = asyncio.Lock()
 _ADMIN_RL_BUCKETS: dict = {}
 
 
-def _csrf_token_valid(request) -> bool:
-    """Validate the X-CSRF-Token header against the HMAC of the session sid."""
-    if request.method in ("GET", "HEAD", "OPTIONS"):
+def _csrf_token_valid(request, require_for_safe: bool = False) -> bool:
+    """Validate the X-CSRF-Token header against the HMAC of the session sid.
+
+    `require_for_safe=True` forces the check even on GET/HEAD/OPTIONS — used
+    by sensitive read-side endpoints (e.g. settings-export with
+    include_secrets=1) that would otherwise be triggerable from a tab the
+    operator opened by accident."""
+    if not require_for_safe and request.method in ("GET", "HEAD", "OPTIONS"):
         return True
     from admin.users import _SESSION_COOKIE, _session_parse
     cookies = getattr(request, "cookies", None)
@@ -33,7 +37,15 @@ def _csrf_token_valid(request) -> bool:
     if not parsed:
         return False
     _, sid, _ = parsed
-    expected = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    # 1.9.7 — compare against the per-session random CSRF nonce stored in the
+    # session cache (not a recomputed HMAC). Fall back to the legacy
+    # HMAC(SESSION_KEY, sid) when the cache has no nonce for this sid — i.e.
+    # sessions minted before this change (db csrf_nonce='') or a cold cache in
+    # the boot window — so existing cookies keep working.
+    from admin.users import _SESSION_CACHE
+    _entry = _SESSION_CACHE.get(sid)
+    _nonce = (_entry.get("csrf_nonce") if _entry else "") or ""
+    expected = _nonce or hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
     provided = request.headers.get("X-CSRF-Token", "")
     if not provided:
         return False
@@ -44,12 +56,16 @@ def _csrf_token_valid(request) -> bool:
 
 
 def _require_csrf(handler):
-    """Decorator: reject non-safe methods with missing/wrong CSRF token."""
+    """Decorator: reject non-safe methods with missing/wrong CSRF token.
+    1.9.0 (F13) — response shape normalised to `{"error":"forbidden"}` to
+    match `_role_denied`'s shape. The previous distinct shape leaked
+    information that let an authenticated low-priv probe map which endpoints
+    are role-gated vs only CSRF-gated."""
     @functools.wraps(handler)
     async def _wrapped(request):
         if request.method not in ("GET", "HEAD", "OPTIONS"):
             if not _csrf_token_valid(request):
-                return web.json_response({"error": "CSRF token invalid"}, status=403,
+                return web.json_response({"error": "forbidden"}, status=403,
                                           headers={"Cache-Control": "no-store"})
         return await handler(request)
     return _wrapped
@@ -108,7 +124,7 @@ if _admin_ips_raw:
         except ValueError as _e:
             print(f"FATAL: invalid ADMIN_ALLOWED_IPS entry {_entry!r} — {_e}",
                   flush=True)
-            raise SystemExit(2)
+            raise SystemExit(2) from _e
 
 
 def _internal_authed(request) -> bool:
@@ -179,13 +195,24 @@ def _request_role(request) -> str:
 
 def _role_denied(request, *allowed_roles: str):
     """Return a 403 response if the caller's role is not in allowed_roles,
-    else return None so callers can use `if denied := _role_denied(...)`."""
+    else return None so callers can use `if denied := _role_denied(...)`.
+
+    1.9.0 (F13) — response shape simplified to `{"error":"forbidden"}` (no
+    `role` / `required` echo). The previous shape leaked which endpoints
+    are role-gated vs only CSRF-gated to authenticated low-priv probes
+    (reconnaissance). The caller's role is still logged via slog for
+    operator forensics."""
     from aiohttp import web as _web
     role = _request_role(request)
     if role in allowed_roles:
         return None
+    try:
+        slog("role_denied", level="info", role=role or "",
+             required=",".join(allowed_roles), path=request.path)
+    except Exception:
+        pass  # nosec B110 — slog never raises a request, defensive
     return _web.json_response(
-        {"error": "forbidden", "role": role, "required": list(allowed_roles)},
+        {"error": "forbidden"},
         status=403, headers={"Cache-Control": "no-store"})
 
 
@@ -226,15 +253,39 @@ def _rebuild_admin_nets_from_entries():
 
 def db_load_admin_ips():
     """Merge DB-stored admin IPs into in-memory state, seeding env entries on
-    first boot. Idempotent."""
+    first boot. Idempotent.
+
+    1.9.1 fix (LIVE-1/6): `INSERT OR IGNORE` is SQLite-only and was
+    silently failing under PG-only mode, so env-seeded admin CIDRs were
+    never persisted into PG. We now branch the seed DML by backend so the
+    env entries round-trip through whichever DB is active."""
     try:
-        conn = sqlite3.connect(DB_PATH)
+        from db import active_backend as _active
+        _be = _active()
+    except Exception:
+        _be = "sqlite"
+    try:
+        conn = open_conn()
+        # Cross-backend: SQLite uses sqlite3.Row natively; the PG wrapper
+        # detects this and switches its cursor to psycopg.dict_row so
+        # `r["cidr"]` keeps working without touching the read-side code.
         conn.row_factory = sqlite3.Row
-        # Seed env entries once (source='env', upsert)
+        # Seed env entries once (source='env', upsert).
+        # Both branches use `?` placeholders so the PG conn wrapper's
+        # rewriter swaps them to `%s` correctly. Hand-rolling `%s` here
+        # would trip the wrapper's bare-`%` escape and leave the query
+        # with zero placeholders ("0 placeholders but 4 parameters").
+        if _be == "postgres":
+            _seed_sql = (
+                "INSERT INTO admin_ips (cidr, added_ts, note, source, description) "
+                "VALUES (?, ?, ?, 'env', ?) ON CONFLICT (cidr) DO NOTHING")
+        else:
+            _seed_sql = (
+                "INSERT OR IGNORE INTO admin_ips (cidr, added_ts, note, source, description) "
+                "VALUES (?, ?, ?, 'env', ?)")
         for cidr in ADMIN_ENV_SEED:
             conn.execute(
-                "INSERT OR IGNORE INTO admin_ips (cidr, added_ts, note, source, description) "
-                "VALUES (?, ?, ?, 'env', ?)",
+                _seed_sql,
                 (cidr, _t.time(), "from ADMIN_ALLOWED_IPS env",
                  "Seeded from ADMIN_ALLOWED_IPS environment variable"))
         conn.commit()
@@ -253,12 +304,23 @@ def db_load_admin_ips():
         print(f"[admin_ips] load error: {e}", flush=True)
 
 
+def _strip_html_brackets(s: str) -> str:
+    """1.9.1 fix (LIVE-7): server-side defence-in-depth — neutralise raw
+    angle-brackets in operator-supplied free-text fields (note/description)
+    so that any future dashboard innerHTML regression cannot escalate to
+    stored XSS. Dashboards already render via textContent in covered sinks;
+    this guard keeps the DB itself clean."""
+    if not s:
+        return s
+    return s.replace("<", "").replace(">", "")
+
+
 async def admin_ip_add(cidr: str, note: str = "", source: str = "manual",
                         description: str = "") -> tuple[bool, str]:
     """Validate + persist + reload. Returns (ok, message)."""
     cidr = (cidr or "").strip()
-    note = (note or "").strip()[:200]
-    description = (description or "").strip()[:500]
+    note = _strip_html_brackets((note or "").strip()[:200])
+    description = _strip_html_brackets((description or "").strip()[:500])
     if not cidr:
         return False, "empty cidr"
     try:
@@ -284,7 +346,7 @@ async def admin_ip_add(cidr: str, note: str = "", source: str = "manual",
 async def admin_ip_update_description(cidr: str, description: str) -> tuple[bool, str]:
     """Update the description of an existing entry in-place. Returns (ok, msg)."""
     cidr = (cidr or "").strip()
-    description = (description or "").strip()[:500]
+    description = _strip_html_brackets((description or "").strip()[:500])
     try:
         canon = str(_ipaddress.ip_network(cidr, strict=False))
     except ValueError:

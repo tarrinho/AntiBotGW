@@ -1,35 +1,46 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8">
+<html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
+<!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
+<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AppSecGW_1.8.5 · Logs</title>
+<title>AntiBotWaf_GW_1.9.8 · Logs</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
-      --orange:#ff7b3a;--purple:#bc8cff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;
+      --orange:#ff7b3a;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
+html[data-theme="light"] #sidebar{background:#f0f2f4}
+html[data-theme="light"] #topbar{background:#f0f2f4}
+html[data-theme="light"] table th{background:#eaeef2;color:var(--dim)}
+html[data-theme="light"] #sidebar-nav a:hover,html[data-theme="light"] #sidebar-nav a.active,html[data-theme="light"] #sidebar-footer a:hover,html[data-theme="light"] #sidebar-footer button.signout:hover{background:#dde1e6;color:var(--fg)}
+html[data-theme="light"] #mob-menu,html[data-theme="light"] #sidebar-reopen{background:#f0f2f4!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] .card{border-color:var(--line)}
+html[data-theme="light"] input:not([type=range]),html[data-theme="light"] select,html[data-theme="light"] textarea{background:var(--card)!important;color:var(--fg)!important;border-color:var(--line)!important}
+html[data-theme="light"] tr:nth-child(even){background:rgba(0,0,0,.025)}html[data-theme="light"] .log-row:hover{background:rgba(0,0,0,.03)!important}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
 h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px}
 /* ── Sidebar ── */
-#sidebar{width:148px;flex-shrink:0;background:#0a0f16;border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
+#sidebar{width:148px;flex-shrink:0;background:var(--bg-deep);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 0;position:sticky;top:0;height:100vh;overflow-y:auto}
 #sidebar-brand{padding:0 14px 16px;border-bottom:1px solid var(--line);margin-bottom:10px}
-#sidebar-brand-name{font-size:13px;font-weight:700;color:#fff;letter-spacing:.2px}
+#sidebar-brand-name{font-size:13px;font-weight:700;color:var(--bright);letter-spacing:.2px}
 #sidebar-brand-ver{font-size:10px;color:var(--dim);margin-top:2px}
 #sidebar-nav{display:flex;flex-direction:column;gap:1px;padding:0 8px;flex:1}
 #sidebar-nav a{color:var(--dim);text-decoration:none;padding:6px 8px;border-radius:5px;font-size:12.5px;transition:background .1s,color .1s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#sidebar-nav a:hover{color:var(--fg);background:#1f2730}
-#sidebar-nav a.active{color:#fff;background:#1f2730;font-weight:600}
+#sidebar-nav a:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.active{color:var(--bright);background:var(--bg-hover);font-weight:600}
 #sidebar-nav a.sub{padding-left:20px;font-size:11.5px}
 #sidebar-footer{padding:10px 8px 0;border-top:1px solid var(--line);margin-top:6px;display:flex;flex-direction:column;gap:1px}
 #sidebar-footer a{color:var(--dim);text-decoration:none;padding:5px 8px;border-radius:5px;font-size:12px}
-#sidebar-footer a:hover{color:var(--fg);background:#1f2730}
+#sidebar-footer a:hover{color:var(--fg);background:var(--bg-hover)}
 #sidebar-footer button.signout{background:none;border:none;color:var(--red);cursor:pointer;padding:5px 8px;font:inherit;font-size:12px;text-align:left;border-radius:5px;width:100%}
-#sidebar-footer button.signout:hover{background:#1f2730}
+#sidebar-footer button.signout:hover{background:var(--bg-hover)}
 /* ── Main area ── */
 #main-area{flex:1;min-width:0;display:flex;flex-direction:column}
 /* ── Topbar ── */
-#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0a0f16;flex-wrap:wrap}
-#topbar-title{font-size:16px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;white-space:nowrap}
+#topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-deep);flex-wrap:wrap}
+#topbar-title{font-size:16px;font-weight:600;color:var(--bright);display:flex;align-items:center;gap:8px;white-space:nowrap}
 #topbar-title .pill{font-size:10px;background:var(--green);color:#000;padding:2px 8px;border-radius:10px;font-weight:700;cursor:help}
 #topbar-right{display:flex;align-items:center;gap:8px}
 #page-content{flex:1;padding:14px}
@@ -42,6 +53,21 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
   #main-area{margin-left:0}
 }
 @media(min-width:601px){#mob-menu{display:none!important}}
+/* -- Sidebar collapse (desktop hide/unhide) -- */
+#sidebar-brand{display:flex;align-items:flex-start;justify-content:space-between;gap:6px}
+#sidebar-toggle{background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:13px;line-height:1;border-radius:5px;padding:1px 6px;flex-shrink:0}
+#sidebar-toggle:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-reopen{display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line);color:var(--fg);cursor:pointer;font-size:16px;line-height:1;border-radius:5px;padding:8px 11px}
+@media(max-width:600px){#sidebar-toggle{display:none}}
+@media(min-width:601px){body.sb-collapsed #sidebar{display:none}body.sb-collapsed #sidebar-reopen{display:flex;align-items:center;justify-content:center}}
+/* 1.8.10 fix — when the sidebar is hidden, reserve left space so the floating reopen button doesn't overlap the topbar title */
+@media(min-width:601px){body.sb-collapsed #topbar{padding-left:52px}}
+/* -- Submenu collapse (accordion) -- */
+#sidebar-nav .nav-parent{display:flex;align-items:center}
+#sidebar-nav .nav-parent>a{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-caret{background:none;border:none;color:var(--dim);cursor:pointer;font-size:10px;line-height:1;padding:5px 6px;border-radius:4px;flex-shrink:0}
+.nav-caret:hover{color:var(--fg);background:var(--bg-hover)}
+#sidebar-nav a.sub.sub-hidden{display:none}
 @media(max-width:480px){
   .card{padding:12px 10px}
   .card table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
@@ -50,11 +76,11 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 }
 .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
 .tabs{display:flex;gap:4px;margin-bottom:12px}
-.tab{padding:6px 14px;background:#0d1117;border:1px solid var(--line);border-radius:5px;
+.tab{padding:6px 14px;background:var(--bg);border:1px solid var(--line);border-radius:5px;
      cursor:pointer;font-size:12.5px;color:var(--dim);user-select:none}
 .tab.active{background:var(--card);color:var(--fg);border-color:var(--blue);font-weight:600}
 .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-.toolbar .ctrl{background:#0d1117;color:var(--fg);border:1px solid var(--line);
+.toolbar .ctrl{background:var(--bg);color:var(--fg);border:1px solid var(--line);
                border-radius:4px;padding:4px 10px;font-size:11.5px;
                font-family:inherit;cursor:pointer;line-height:1.4}
 .toolbar .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
@@ -68,11 +94,11 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .live-indicator.paused .dot{background:var(--yellow);animation:none}
 @keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
 
-.log-pane{background:#0a0e13;border:1px solid var(--line);border-radius:6px;
+.log-pane{background:var(--bg-inset);border:1px solid var(--line);border-radius:6px;
           font-family:ui-monospace,Menlo,monospace;font-size:11.5px;
           overflow:auto;max-height:62vh;line-height:1.55}
 .log-row{display:grid;grid-template-columns:138px 64px 90px 1fr;gap:10px;
-         padding:4px 10px;border-bottom:1px solid #1f2730;align-items:start}
+         padding:4px 10px;border-bottom:1px solid var(--bg-hover);align-items:start}
 .log-row:hover{background:#0e131a}
 .log-row .ts{color:var(--dim);white-space:nowrap}
 .log-row .lvl{font-weight:700;text-align:left}
@@ -83,7 +109,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .log-row .lvl.critical{color:var(--red)}
 .log-row .meta{color:var(--blue)}
 .log-row .body{color:var(--fg);overflow-wrap:anywhere;white-space:pre-wrap}
-#vhost-select{background:#161b22;border:1px solid var(--line);color:var(--fg);
+#vhost-select{background:var(--card);border:1px solid var(--line);color:var(--fg);
   border-radius:5px;padding:4px 10px;font-size:12px;font-family:inherit;cursor:pointer;
   display:none;max-width:260px}
 #vhost-select:focus{outline:none;border-color:var(--blue)}
@@ -93,7 +119,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .log-row .body .vnum{color:var(--orange)}
 
 .row{display:grid;gap:14px;grid-template-columns:1fr 1fr 1fr 1fr;margin-top:14px}
-.metric{font-size:26px;font-weight:600;color:#fff;line-height:1}
+.metric{font-size:26px;font-weight:600;color:var(--bright);line-height:1}
 .metric.green{color:var(--green)} .metric.orange{color:var(--orange)}
 .metric.red{color:var(--red)} .metric.blue{color:var(--blue)}
 .metric-sub{font-size:11px;color:var(--dim);margin-top:4px}
@@ -102,17 +128,17 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 
 /* Level toggle row — segmented control */
 .lvl-segctl{display:inline-flex;border:1px solid var(--line);border-radius:5px;
-            overflow:hidden;background:#0d1117}
+            overflow:hidden;background:var(--bg)}
 .lvl-segctl button{background:transparent;border:none;color:var(--dim);
                    padding:5px 12px;font-size:11px;cursor:pointer;
                    font-family:inherit;font-weight:600;text-transform:uppercase;
                    letter-spacing:.4px;border-right:1px solid var(--line)}
 .lvl-segctl button:last-child{border-right:none}
-.lvl-segctl button:hover{background:#1f2730;color:var(--fg)}
+.lvl-segctl button:hover{background:var(--bg-hover);color:var(--fg)}
 .lvl-segctl button.on{background:var(--blue);color:#000}
 .lvl-segctl button.warn-on{background:var(--yellow);color:#000}
 .lvl-segctl button.error-on{background:var(--orange);color:#000}
-.lvl-segctl button.crit-on{background:var(--red);color:#fff}
+.lvl-segctl button.crit-on{background:var(--red);color:var(--bright)}
 .lvl-segctl button.dbg-on{background:var(--dim);color:#000}
 
 .label{font-size:11px;color:var(--dim);margin-right:6px}
@@ -126,37 +152,64 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .cat-pill[data-cat="reallyban"]{border-color:#b91c1c;color:#ff4444}
 .cat-pill[data-cat="authbots"]{border-color:#bc8cff;color:#bc8cff}
 .cat-pill[data-cat="gwmgmt"]{border-color:#e4f0ff;color:#e4f0ff}
-.cat-pill[data-cat="missed"]{border-color:var(--dim);color:var(--dim)}
+/* U-M: missed pill is orange in main + agents; match it here for consistency */
+.cat-pill[data-cat="missed"]{border-color:var(--orange,#ff7b3a);color:var(--orange,#ff7b3a)}
 .cat-pill.active[data-cat="allowed"]{background:#3fb950;color:#000}
-.cat-pill.active[data-cat="ban"]{background:#f85149;color:#fff}
-.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:#fff}
+.cat-pill.active[data-cat="ban"]{background:#f85149;color:var(--bright)}
+.cat-pill.active[data-cat="reallyban"]{background:#b91c1c;color:var(--bright)}
 .cat-pill.active[data-cat="authbots"]{background:#bc8cff;color:#000}
-.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:#0a1628}
+.cat-pill.active[data-cat="gwmgmt"]{background:#e4f0ff;color:var(--bg-deep)}
 .cat-pill.active[data-cat="missed"]{background:var(--dim);color:#000}
 
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
 .portal-footer .sep{margin:0 8px;color:var(--line)}
+.audit{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--dim);
+       background:var(--bg-inset);padding:8px 10px;border-radius:5px;border:1px solid var(--line);
+       max-height:160px;overflow:auto;white-space:pre;line-height:1.5}
+.gw-score-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;vertical-align:middle;margin-left:4px}
+.gw-meta{display:flex;gap:8px;flex-wrap:wrap;padding:6px 0 10px;border-bottom:1px solid var(--bg-hover);margin-bottom:8px}
+.gw-meta .chip{background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:2px 7px;font-family:ui-monospace,monospace;font-size:10.5px;color:#8b949e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:200px}
+.gw-hint{display:block;color:#6e7681;font-size:10px;font-style:italic;margin-top:2px}
+.gw-row.row-ok{opacity:.6}
+.gw-footer{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;padding:8px 4px 0;color:#6e7681;font-size:10.5px;border-top:1px solid var(--bg-hover);margin-top:6px}
+/* 1.8.14 — mobile horizontal-scroll defensive: prevent <body> overflow; allow wide cards to scroll horizontally in-place without breaking table layout */
+@media(max-width:600px){
+  html,body{overflow-x:hidden;max-width:100vw}
+  .card,.panel,.tbl-wrap{max-width:100vw;overflow-x:auto;-webkit-overflow-scrolling:touch}
+  table{max-width:100%}
+  pre{max-width:100%;overflow-x:auto}
+}
 </style></head>
 <body>
-<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:#0a0f16;border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
+<!-- 1.9.2 UX — shared progress bar + escapeHtml -->
+<script src="/antibot-appsec-gateway/assets/dashboard-common.js"></script>
+
+<button id="mob-menu" onclick="document.getElementById('sidebar').classList.toggle('mob-open');document.getElementById('mob-overlay').classList.toggle('mob-open')" aria-label="Menu" style="display:none;position:fixed;top:10px;left:10px;z-index:300;background:var(--bg-deep);border:1px solid var(--line,#30363d);color:var(--fg,#c9d1d9);padding:8px 11px;border-radius:5px;cursor:pointer;font-size:16px;line-height:1;align-items:center;justify-content:center">☰</button>
 <div id="mob-overlay" onclick="document.getElementById('sidebar').classList.remove('mob-open');this.classList.remove('mob-open')"></div>
+<button id="sidebar-reopen" onclick="_sbToggle()" title="Show menu" aria-label="Show menu">☰</button>
+<script>(function(){window._sbToggle=function(){var c=!document.body.classList.contains('sb-collapsed');document.body.classList.toggle('sb-collapsed',c);try{localStorage.setItem('agw_sb_collapsed',c?'1':'0');}catch(e){}};try{if(localStorage.getItem('agw_sb_collapsed')==='1')document.body.classList.add('sb-collapsed');}catch(e){}})();</script>
+<script>(function(){function apply(p,h){p.classList.toggle('sub-collapsed',h);var c=p.querySelector('.nav-caret');if(c)c.textContent=h?'▸':'▾';var n=p.nextElementSibling;while(n&&n.classList&&n.classList.contains('sub')){n.classList.toggle('sub-hidden',h);n=n.nextElementSibling;}}window._subToggle=function(btn){var p=btn.closest('.nav-parent');if(!p)return;var g=p.getAttribute('data-group');var h=!p.classList.contains('sub-collapsed');apply(p,h);try{localStorage.setItem('agw_sub_'+g,h?'1':'0');}catch(e){}};document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('.nav-parent').forEach(function(p){var g=p.getAttribute('data-group'),v='0';try{v=localStorage.getItem('agw_sub_'+g)||'0';}catch(e){}if(v==='1')apply(p,true);});});})();</script>
 <div id="sidebar">
   <div id="sidebar-brand">
-    <div id="sidebar-brand-name">AppSecGW</div>
-    <div id="sidebar-brand-ver">1.8.4</div>
+    <div>
+      <div id="sidebar-brand-name">AntiBot/WAF GW</div>
+      <div id="sidebar-brand-ver">1.9.8</div>
+    </div>
+    <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
   <nav id="sidebar-nav">
-    <a href="/antibot-appsec-gateway/secured/control-center">Control Center</a>
+    <div class="nav-parent" data-group="control-center"><a href="/antibot-appsec-gateway/secured/control-center">Control Center</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/live-feed" class="sub">Live Feed</a>
     <a href="/antibot-appsec-gateway/secured/agents" class="sub">Agents</a>
     <a href="/antibot-appsec-gateway/secured/siem" class="sub">SIEM</a>
-    <a href="/antibot-appsec-gateway/secured/service">Service</a>
-    <a href="/antibot-appsec-gateway/secured/controls">Controls</a>
+    <a href="/antibot-appsec-gateway/secured/honeypots" class="sub">Honeypots</a>
+    <div class="nav-parent" data-group="controls"><a href="/antibot-appsec-gateway/secured/controls">Controls</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
     <a href="/antibot-appsec-gateway/secured/vhost-policy" class="sub">Vhost Policy</a>
     <a href="/antibot-appsec-gateway/secured/geo">GeoMap</a>
-    <a href="/antibot-appsec-gateway/secured/logs" class="active">Logs</a>
-    <a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a>
+    <div class="nav-parent" data-group="settings"><a href="/antibot-appsec-gateway/secured/settings" id="nav-settings">Settings</a><button class="nav-caret" onclick="_subToggle(this)" title="Toggle section" aria-label="Toggle section">▾</button></div>
+    <a href="/antibot-appsec-gateway/secured/service" class="sub">Service</a>
+    <a href="/antibot-appsec-gateway/secured/logs" class="sub active">Logs</a>
   </nav>
   <div id="sidebar-footer">
     <a href="#" id="nav-acct" onclick="window._acct.openModal();return false;">My Account</a>
@@ -168,7 +221,9 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 <div id="main-area">
 <div id="topbar">
   <div id="topbar-title">Logs <span class="pill" id="live">● LIVE</span></div>
-  <div id="topbar-right"></div>
+  <div id="topbar-right">
+    <button id="theme-toggle" onclick="window._toggleTheme()" title="Toggle light/dark mode" style="background:none;border:1px solid var(--line);color:var(--dim);cursor:pointer;font-size:15px;line-height:1;border-radius:5px;padding:3px 8px;flex-shrink:0">&#x1F319;</button>
+  </div>
 </div>
 <div id="page-content">
 
@@ -253,7 +308,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
     <button class="cat-pill active" data-cat="gwmgmt">● GW Mgmt</button>
   </div>
 
-  <div class="log-pane" id="pane">loading…</div>
+  <div class="log-pane" id="pane">Loading…</div>
 </div>
 
 <div class="row">
@@ -265,9 +320,49 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 
 <div class="foot">refreshes every 2 s · <code id="ts"></code></div>
 
+<div class="card" id="card-audit-log" style="margin-top:14px">
+  <h2>Recent <code>config_changed</code> events</h2>
+  <div class="audit" id="audit">Loading…</div>
+</div>
+
+<section class="card" style="margin-top:20px" id="card-active-rules">
+  <h2>📋 Active rules <span style="font-size:11px;color:var(--dim);font-weight:400">(traffic % per rule, since process start)</span></h2>
+  <table id="active-rules-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+    <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+      <th style="padding:5px 8px">reason</th>
+      <th style="padding:5px 8px">method</th>
+      <th style="padding:5px 8px;text-align:right">hits</th>
+      <th style="padding:5px 8px;text-align:right">% of blocks</th>
+      <th style="padding:5px 8px;text-align:right">p99 ms</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div id="chal-rate" class="dim" style="font-size:11px;margin-top:10px">chal-cookie mints: —</div>
+</section>
+
+<section class="card" style="margin-top:20px" id="card-lists-snap">
+  <h2>📝 Allow / block lists <span style="font-size:11px;color:var(--dim);font-weight:400">(sizes + last-updated)</span></h2>
+  <div id="lists-snap" style="font-family:ui-monospace,Menlo,monospace;font-size:11.5px;line-height:1.7">Loading…</div>
+</section>
+
+<section class="card" style="margin-top:20px" id="card-ep-policies">
+  <h2>🎯 Per-endpoint rate-limit policies <span style="font-size:11px;color:var(--dim);font-weight:400">(active <code>ENDPOINT_POLICIES</code>)</span></h2>
+  <table id="ep-policies-tbl" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
+    <thead><tr style="text-align:left;color:var(--dim);font-size:10px;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid var(--line)">
+      <th style="padding:5px 8px">path glob</th>
+      <th style="padding:5px 8px">policy</th>
+      <th style="padding:5px 8px;text-align:right">rps</th>
+      <th style="padding:5px 8px;text-align:right">burst</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+</section>
+
 <script src="/antibot-appsec-gateway/assets/purify.min.js"></script>
+<script>function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}</script>
+<script>(function(){var _orig=window.fetch;function _agwTok(){return window.__AGW_CSRF__||(document.cookie.match(/agw_csrf=([^;]+)/)||[])[1]||'';}window.fetch=function(resource,init){var m=((init&&init.method)||'GET').toUpperCase();if(m==='GET'||m==='HEAD')return _orig.call(this,resource,init);init=init||{};init.headers=Object.assign({},init.headers,{'X-CSRF-Token':_agwTok()});var self=this;return _orig.call(self,resource,init).then(function(resp){if(resp.status!==403)return resp;return _orig.call(self,'/antibot-appsec-gateway/secured/csrf',{credentials:'include'}).then(function(r){return r.ok?r.json():null;}).then(function(j){if(!j||!j.token||j.token===_agwTok())return resp;window.__AGW_CSRF__=j.token;init.headers=Object.assign({},init.headers,{'X-CSRF-Token':j.token});return _orig.call(self,resource,init);}).catch(function(){return resp;});});};})();</script>
 <script>
-function escapeHtml(s){return String(s==null?'':s).replace(/[&<>"'`/]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;','/':'&#47;'}[c]))}
+
 const _dp = (h) => {
   if (typeof DOMPurify === "undefined") return h;
   if (/^<t[rhd]/i.test((h||'').trimStart())) {
@@ -277,7 +372,7 @@ const _dp = (h) => {
   }
   return DOMPurify.sanitize(h);
 };
-function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:#1e1e2e;border:1px solid #f85149;color:#e6edf3;padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.5)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
+function _gwAlert(msg){const el=document.createElement('div');el.style.cssText='position:fixed;bottom:20px;right:20px;z-index:9999;background:var(--card,#1e1e2e);border:1px solid var(--red,#f85149);color:var(--fg,#e6edf3);padding:10px 16px;border-radius:6px;max-width:420px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.25)';el.textContent=msg;document.body.appendChild(el);setTimeout(()=>el.remove(),7000);}
 const _timers=[];
 
 let kind = 'requests';
@@ -327,7 +422,7 @@ function renderGwRow(r){
       : `<span class="vstr">${escapeHtml(sv)}</span>`;
     return `<span class="k">${escapeHtml(k)}</span>=<span class="v">${colored}</span>`;
   }).join(' ');
-  const evColor = r.event === 'config_changed' ? 'var(--blue)'
+  const evColor = r.event === 'config_changed' ? '#79c0ff'
                 : r.event === 'ban' ? 'var(--red)'
                 : r.event === 'webhook_failed' ? 'var(--orange)'
                 : r.event === 'shared_store' ? 'var(--green)'
@@ -413,7 +508,7 @@ async function tick(force){
     _applyLogFilters();
     document.getElementById('ts').textContent = new Date().toISOString();
     const _liveEl = document.getElementById('live');
-    _liveEl.style.background = 'var(--blue)';
+    _liveEl.style.background = '#79c0ff';
     _liveEl.textContent = '● LIVE';
     _liveEl.title = 'Log data refreshed · updated ' + new Date().toLocaleTimeString();
   } catch(e) {
@@ -421,6 +516,18 @@ async function tick(force){
     _errEl.style.background = 'var(--red)';
     _errEl.textContent = '○ ERR';
     _errEl.title = 'Error fetching logs: ' + (e && e.message ? e.message : String(e));
+    // U-H8 fix: replace the stuck "Loading…" placeholder with an actionable
+    // error message so the operator knows the request failed (and can refresh).
+    const _pane = document.getElementById('pane');
+    if (_pane && (_pane.textContent || '').trim() === 'Loading…') {
+      const _msg = (e && e.message ? e.message : String(e)).slice(0, 200);
+      _pane.innerHTML = _dp(
+        '<div style="padding:20px;color:var(--red);text-align:center">' +
+        '⚠ Could not load logs: ' + escapeHtml(_msg) +
+        '<br><span style="color:var(--dim);font-size:11px;margin-top:6px;display:inline-block">' +
+        'Session may have expired — refresh the page or sign in again.' +
+        '</span></div>');
+    }
   }
 }
 
@@ -596,13 +703,111 @@ document.querySelectorAll('#lvl-push button').forEach(b => {
   };
 });
 
+async function loadAudit(){
+  try {
+    const r = await fetch('/antibot-appsec-gateway/secured/metrics', {credentials:'include'});
+    if (!r.ok) return;
+    const d = await r.json();
+    const lines = (d.events || [])
+      .filter(e => (e.reason||'').toLowerCase() === 'config_changed' ||
+                   (e.path||'').includes('/antibot-appsec-gateway/secured/config'))
+      .slice(0, 30);
+    document.getElementById('audit').textContent = lines.length
+      ? lines.map(e => {
+          const t = new Date(e.ts*1000).toTimeString().split(' ')[0];
+          return `${t}  ${(e.method||'').padEnd(4)} ${e.path||''}  rid=${e.rid||''}  ip=${e.ip||''}`;
+        }).join('\n')
+      : '(no recent /antibot-appsec-gateway/secured/config interactions captured in events)';
+  } catch(e) { /* ignore */ }
+}
+
 _updateCatBar();
 loadServerState();
+loadAudit();
 tick(true);
 _timers.push(setInterval(tick, 2000));
 // refresh server LOG_LEVEL paint every 10s in case it was changed elsewhere
 _timers.push(setInterval(loadServerState, 10000));
+_timers.push(setInterval(loadAudit, 10000));
 window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
+
+// Monitoring — active rules, allow/block lists, per-endpoint policies
+(function(){
+  const COL_M = {
+    ua:'#f85149', body:'#ff7b3a', intel:'#79c0ff', behavior:'#bc8cff',
+    cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
+    operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
+  };
+  function fmtAge(secs){
+    if (!secs) return 'never';
+    if (secs < 60) return `${secs|0}s ago`;
+    if (secs < 3600) return `${(secs/60)|0} min ago`;
+    if (secs < 86400) return `${(secs/3600)|0} h ago`;
+    return `${(secs/86400)|0} d ago`;
+  }
+  async function loadActiveRules(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/detector-stats', {credentials:'include'});
+      const d = await r.json();
+      const sigs = (d.signals||[]).filter(s => s.hits > 0);
+      const total = sigs.reduce((a,b) => a + b.hits, 0);
+      const tb = document.querySelector('#active-rules-tbl tbody');
+      if (tb){
+        tb.innerHTML = _dp(sigs.length ? sigs.slice(0, 25).map(s => {
+          const pct = total ? (s.hits/total*100).toFixed(1) : 0;
+          return `<tr style="border-bottom:1px solid var(--line)">
+            <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(s.reason)}</code></td>
+            <td style="padding:5px 8px;color:${COL_M[s.method]||'#8b949e'};font-weight:700;text-transform:uppercase;font-size:10px">${escapeHtml(s.method)}</td>
+            <td style="padding:5px 8px;text-align:right;font-weight:600">${s.hits}</td>
+            <td style="padding:5px 8px;text-align:right">${pct}%</td>
+            <td style="padding:5px 8px;text-align:right;color:${s.p99_ms>1?'#d29922':'#3fb950'}">${s.p99_ms}</td>
+          </tr>`;
+        }).join('')
+          : '<tr><td colspan="5" class="dim" style="padding:8px">no detector hits yet</td></tr>');
+      }
+      const ch = d.chal || {};
+      const chalEl = document.getElementById('chal-rate');
+      if (chalEl) chalEl.innerHTML =
+        _dp(`<b>${escapeHtml(String(ch.minted||0))}</b> chal-cookie mints / <b>${escapeHtml(String(ch.required||0))}</b> chal-required hits · mint rate <b style="color:${ch.mint_rate>=50?'#3fb950':'#d29922'}">${escapeHtml(String(ch.mint_rate||0))}%</b>`);
+    } catch(e){ _gwAlert('Active rules load failed: ' + e.message); }
+  }
+  async function loadLists(){
+    try {
+      const r = await fetch('/antibot-appsec-gateway/secured/lists-snapshot', {credentials:'include'});
+      const d = await r.json();
+      const div = document.getElementById('lists-snap');
+      if (!div) return;
+      const lines = [
+        `UA blocklist (legacy CLI/scanners): <code>${d.ua_blocklist_size}</code> entries`,
+        `JA4 deny-list: <code>${d.ja4_deny_size}</code>`,
+        `Honeypot paths: <code>${d.honeypot_paths_size}</code>`,
+        `Suspicious-path patterns: <code>${d.suspicious_path_patterns}</code>`,
+        `Tor exits: <code>${d.tor_exits_size}</code> · refreshed <span style="color:var(--blue)">${fmtAge(d.tor_age_secs)}</span> · ${d.tor_block_enabled?'<span style="color:var(--green)">enforcing</span>':'<span class="dim">off</span>'}`,
+        `Hosting-ASN keywords: <code>${d.hosting_keywords_size}</code> · DC/VPN block ${d.dc_vpn_block_enabled?'<span style="color:var(--green)">on</span>':'<span class="dim">off</span>'}`,
+        `Country denylist: <code>${escapeHtml(String(d.country_denylist_size))}</code>${d.country_denylist.length?' · '+d.country_denylist.map(c=>escapeHtml(c)).join(', '):''}`,
+        `Country allowlist: <code>${escapeHtml(String(d.country_allowlist_size))}</code>${d.country_allowlist.length?' · '+d.country_allowlist.map(c=>escapeHtml(c)).join(', '):''}`,
+        `Custom rules: <code>${d.custom_rules_size}</code> · JWT paths: <code>${(d.jwt_paths||[]).length}</code> · Endpoint policies: <code>${(d.endpoint_policies||[]).length}</code>`,
+        `Webhook event filter: <code>${(d.webhook_event_filter||[]).length || 'all'}</code> · Admin IP allowlist: <code>${d.admin_ip_count}</code>`,
+      ];
+      div.innerHTML = _dp(lines.map(l => `<div>${l}</div>`).join(''));
+
+      const eptb = document.querySelector('#ep-policies-tbl tbody');
+      if (eptb){
+        const eps = d.endpoint_policies || [];
+        eptb.innerHTML = _dp(eps.length ? eps.map(p => `
+          <tr style="border-bottom:1px solid var(--line)">
+            <td style="padding:5px 8px;font-family:ui-monospace,monospace"><code>${escapeHtml(p.path||'')}</code></td>
+            <td style="padding:5px 8px;color:${p.policy==='strict'?'#f85149':p.policy==='challenge'?'#d29922':p.policy==='bypass'?'#3fb950':'#8b949e'};font-weight:700">${escapeHtml(p.policy||'default')}</td>
+            <td style="padding:5px 8px;text-align:right">${p.rps == null ? '<span class="dim">—</span>' : p.rps}</td>
+            <td style="padding:5px 8px;text-align:right">${p.burst == null ? '<span class="dim">—</span>' : p.burst}</td>
+          </tr>`).join('')
+          : '<tr><td colspan="4" class="dim" style="padding:8px">no endpoint policies configured</td></tr>');
+      }
+    } catch(e){ _gwAlert('Lists load failed: ' + e.message); }
+  }
+  loadActiveRules(); loadLists();
+  _timers.push(setInterval(() => { loadActiveRules(); loadLists(); }, 7000));
+})();
 </script>
 
 <!-- 1.6.4 GW status pill (fixed top-right; click for breakdown) + 1.6.5 log-level combo -->
@@ -610,38 +815,40 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-status-pill{position:fixed;top:14px;right:14px;z-index:1500;
   font-family:ui-monospace,Menlo,monospace;font-size:11.5px;font-weight:700;
   padding:6px 12px;border-radius:14px;cursor:pointer;user-select:none;
-  background:#161b22;color:#fff;border:1px solid #30363d;
+  background:var(--card);color:var(--bright);border:1px solid var(--line);
   box-shadow:0 2px 6px rgba(0,0,0,.3);transition:transform .12s}
 #gw-status-pill:hover{transform:scale(1.04)}
+/* 1.8.10 fix — reserve right space so the fixed Health pill + log selector never overlap topbar buttons (e.g. Apply changes) */
+@media(min-width:601px){#topbar{padding-right:280px}}
 #gw-loglvl-wrap{position:fixed;top:14px;right:120px;z-index:1500;
   display:flex;align-items:center;gap:5px;
-  background:#161b22;border:1px solid #30363d;border-radius:14px;
+  background:var(--card);border:1px solid var(--line);border-radius:14px;
   padding:5px 10px;font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;
   font-size:10.5px;color:#8b949e;
   box-shadow:0 2px 6px rgba(0,0,0,.3)}
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
-#gw-loglvl{background:#0d1117;color:#c9d1d9;border:1px solid #30363d;
+#gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #58a6ff}
+#gw-loglvl:focus{outline:1px solid #79c0ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
 .gw-modal-overlay.show{display:flex}
-.gw-modal-card{background:#161b22;border:1px solid #30363d;border-radius:8px;
+.gw-modal-card{background:var(--card);border:1px solid var(--line);border-radius:8px;
   padding:18px 22px;max-width:680px;width:100%;max-height:80vh;overflow:auto;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;color:#c9d1d9;font-size:13px}
-.gw-modal-card h3{margin:0 0 8px 0;color:#fff;font-size:15px;font-weight:700;
+.gw-modal-card h3{margin:0 0 8px 0;color:var(--bright);font-size:15px;font-weight:700;
   display:flex;justify-content:space-between;align-items:center}
 .gw-modal-card .x{cursor:pointer;color:#8b949e;font-size:20px;border:none;background:none}
 .gw-row{display:grid;grid-template-columns:90px 64px 1fr 70px;gap:12px;
-  padding:8px 4px;border-bottom:1px solid #1f2730;align-items:center;font-size:12px}
+  padding:8px 4px;border-bottom:1px solid var(--bg-hover);align-items:center;font-size:12px}
 .gw-row .key{font-family:ui-monospace,monospace;font-weight:700;text-transform:uppercase;font-size:11px}
 .gw-row .badge{padding:2px 8px;border-radius:3px;font-size:10px;font-weight:700;text-transform:uppercase;text-align:center}
 .gw-row .badge.ok{background:rgba(63,185,80,.18);color:#3fb950}
 .gw-row .badge.warn{background:rgba(217,154,32,.18);color:#d29922}
 .gw-row .badge.bad{background:rgba(248,81,73,.18);color:#f85149}
 .gw-row .det{color:#8b949e;font-size:11.5px}
-.gw-row .val{font-family:ui-monospace,monospace;color:#fff;font-weight:600;text-align:right}
+.gw-row .val{font-family:ui-monospace,monospace;color:var(--bright);font-weight:600;text-align:right}
 </style>
 <!-- 1.6.5 — server-LOG_LEVEL combo (push to /antibot-appsec-gateway/secured/config) -->
 <div id="gw-loglvl-wrap" title="Push the server LOG_LEVEL to /antibot-appsec-gateway/secured/config">
@@ -658,10 +865,13 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <div id="gw-status-modal" class="gw-modal-overlay" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="gw-modal-card">
     <h3>
-      <span>Gateway health · score <span id="gw-modal-score" style="color:#fff">—</span> / 100</span>
+      <span>Gateway Health · <span id="gw-modal-score" style="color:var(--bright)">—</span>/100 <span id="gw-score-label" class="gw-score-label"></span></span>
       <button class="x" onclick="document.getElementById('gw-status-modal').classList.remove('show')">×</button>
     </h3>
-    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">loading…</div>
+    <div style="height:5px;background:#1f2730;border-radius:3px;margin:4px 0 10px;overflow:hidden">
+      <div id="gw-score-bar" style="height:100%;width:0%;border-radius:3px;transition:width .4s,background .4s"></div>
+    </div>
+    <div id="gw-modal-body" style="margin-top:6px;color:#8b949e">Loading…</div>
   </div>
 </div>
 <script>
@@ -672,9 +882,10 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
   const modalBody = document.getElementById('gw-modal-body');
   const lvlSelect = document.getElementById('gw-loglvl');
   function colorFor(score){
-    if (score >= 80) return {bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
-    if (score >= 50) return {bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
-    return {bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
+    const L=document.documentElement.getAttribute('data-theme')==='light';
+    if(score>=80)return L?{bg:'#f0fdf4',fg:'#166534',edge:'#22c55e'}:{bg:'#0e3320',fg:'#3fb950',edge:'#3fb950'};
+    if(score>=50)return L?{bg:'#fef3c7',fg:'#92400e',edge:'#f59e0b'}:{bg:'#3d2a1a',fg:'#d29922',edge:'#d29922'};
+    return   L?{bg:'#fde8e8',fg:'#991b1b',edge:'#ef4444'}:{bg:'#3d1a1a',fg:'#f85149',edge:'#f85149'};
   }
   let lastData = null;
   async function tick(){
@@ -690,24 +901,73 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
       pill.style.borderColor = c.edge;
       pill.textContent = `● GW ${s}/100`;
     } catch(e){
-      pill.style.background = '#3d1a1a';
+      pill.style.background = 'rgba(248,81,73,0.12)';
       pill.style.color = '#f85149';
       pill.textContent = '● ERR';
     }
   }
+  const KEY_LABELS = {
+    disk:'Disk space', memory:'Memory (RSS)', db:'Database size',
+    integrations:'External integrations', bans:'Active bans', block_rate:'Block rate (1 h)'
+  };
+  const KEY_HINTS = {
+    disk:'Free space by pruning old events in Storage settings, or switch to PostgreSQL backend',
+    memory:'Consider restarting the container or increasing container memory limits',
+    db:'Switch to PostgreSQL backend in Controls for high-volume deployments',
+    integrations:'Check API keys in Settings → Integration Credentials',
+    bans:'Large NAT group may be triggering shared bans — review RISK_BAN_THRESHOLD',
+    block_rate:'Check Logs → Recent Events for signs of a sustained bot campaign'
+  };
+  const STATUS_ORD = {bad:0, warn:1, ok:2};
+  const SCORE_LABELS = [[90,'Excellent','#3fb950'],[80,'Good','#3fb950'],[65,'Fair','#d29922'],[40,'Degraded','#d29922'],[0,'Critical','#f85149']];
+  function fmtUptime(secs){
+    if(!secs) return '?';
+    const d=Math.floor(secs/86400),h=Math.floor((secs%86400)/3600),m=Math.floor((secs%3600)/60);
+    if(d>0) return d+'d '+h+'h'; if(h>0) return h+'h '+m+'m'; return m+'m';
+  }
   pill.onclick = () => {
-    if (!lastData){ modalBody.textContent='loading…'; modal.classList.add('show'); return; }
-    modalScore.textContent = lastData.score|0;
-    modalScore.style.color = colorFor(lastData.score).fg;
-    const rows = (lastData.reasons||[]).map(r => `
-      <div class="gw-row">
-        <span class="key">${escapeHtml(r.key)}</span>
+    if (!lastData){ modalBody.textContent='Loading…'; modal.classList.add('show'); return; }
+    const s = lastData.score|0;
+    const c = colorFor(s);
+    const sl = SCORE_LABELS.find(([t])=>s>=t)||[0,'Critical','#f85149'];
+    modalScore.textContent = s;
+    modalScore.style.color = c.fg;
+    const lbl = document.getElementById('gw-score-label');
+    if(lbl){ lbl.textContent = sl[1]; lbl.style.color = sl[2]; }
+    const bar = document.getElementById('gw-score-bar');
+    if(bar){ bar.style.width=s+'%'; bar.style.background=c.fg; }
+    const ver = (lastData.version||'').replace('AntiBotWaf_GW_','v');
+    const up = fmtUptime(lastData.uptime_secs||0);
+    const db = lastData.db_backend||'?';
+    const rawUp = lastData.upstream||'';
+    const shortUp = rawUp.replace(/^https?:\/\//,'').replace(/\/$/,'');
+    const metaHtml = `<div class="gw-meta">
+      <span class="chip">${escapeHtml(ver)}</span>
+      <span class="chip">${escapeHtml(db)}</span>
+      <span class="chip">↑ ${escapeHtml(up)}</span>
+      ${rawUp?`<span class="chip" title="${escapeHtml(rawUp)}">→ ${escapeHtml(shortUp.length>28?shortUp.slice(0,28)+'…':shortUp)}</span>`:''}
+    </div>`;
+    const sorted = [...(lastData.reasons||[])].sort((a,b)=>{
+      const sd=(STATUS_ORD[a.status]||0)-(STATUS_ORD[b.status]||0);
+      return sd!==0?sd:(b.weight||0)-(a.weight||0);
+    });
+    const rowsHtml = sorted.map(r=>{
+      const label = KEY_LABELS[r.key]||r.key;
+      const isOk = r.status==='ok';
+      const hint = (!isOk&&KEY_HINTS[r.key])?`<small class="gw-hint">↷ ${escapeHtml(KEY_HINTS[r.key])}</small>`:'';
+      return `<div class="gw-row${isOk?' row-ok':''}">
+        <span class="key">${escapeHtml(label)}</span>
         <span class="badge ${escapeHtml(r.status)}">${escapeHtml(r.status)}</span>
-        <span class="det">${escapeHtml(r.detail||'')}</span>
+        <span class="det">${escapeHtml(r.detail||'')}${hint}</span>
+        <span class="penalty">${r.weight?'−'+r.weight:''}</span>
         <span class="val">${escapeHtml(r.value||'')}</span>
-      </div>`).join('');
-    modalBody.innerHTML = _dp(rows + `<div style="margin-top:14px;color:#6e7681;font-size:11px">
-      Score = 100 − Σ(weight) of any reason that's <code>warn</code> or <code>bad</code>. Refreshes every 15 s.
+      </div>`;
+    }).join('');
+    const age = lastData.ts?Math.round(Date.now()/1000-lastData.ts):0;
+    const ageStr = age<5?'just now':age<60?age+'s ago':Math.round(age/60)+'m ago';
+    modalBody.innerHTML = _dp(metaHtml+rowsHtml+`<div class="gw-footer">
+      <span>Score = 100 − Σ penalties of <code>warn</code>/<code>bad</code> checks</span>
+      <span>checked ${escapeHtml(ageStr)}</span>
     </div>`);
     modal.classList.add('show');
   };
@@ -751,7 +1011,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 <!-- /1.6.5 GW status pill + log-level combo -->
 
 
-<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 pt4.tech, S.A.<span class="sep">·</span>Confidential — Authorized Personnel Only</footer>
+<footer class="portal-footer" role="contentinfo">Antibot AppSec Gateway<span class="sep">·</span>© 2026 Pedro Tarrinho<span class="sep">·</span>Apache-2.0</footer>
 <div id="acct-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;align-items:center;justify-content:center">
   <div style="background:var(--card,#161b22);border:1px solid var(--line,#30363d);border-radius:8px;padding:24px;min-width:0;max-width:min(480px,92vw);max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
@@ -782,7 +1042,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         '<details style="margin-bottom:12px"><summary style="cursor:pointer;font-size:13px;color:var(--dim)">Change password</summary>'+
         '<div style="margin-top:8px"><input id="acct-pw-cur" type="password" placeholder="Current password" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
         '<input id="acct-pw-new" type="password" placeholder="New password (min 8 chars)" style="width:100%;box-sizing:border-box;background:var(--card);border:1px solid var(--line);color:var(--fg);padding:6px 8px;border-radius:4px;font-size:13px;margin-bottom:6px">'+
-        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:#fff;border:none;border-radius:4px;cursor:pointer">Update password</button>'+
+        '<button id="acct-pw-btn" style="font-size:12px;padding:5px 12px;background:var(--blue);color:var(--bright);border:none;border-radius:4px;cursor:pointer">Update password</button>'+
         '<span id="acct-pw-msg" style="font-size:12px;margin-left:8px"></span></div></details>'+
         '<div style="font-size:13px;margin-bottom:8px;color:var(--dim)">Sessions</div><div id="acct-sessions">Loading…</div>');
       var _pb=document.getElementById('acct-pw-btn');if(_pb)_pb.onclick=function(){window._acct.changePw();};
@@ -810,7 +1070,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         if(!sessions.length){el.innerHTML='<div style="color:var(--dim);font-size:12px">No active sessions.</div>';return;}
         el.innerHTML=_dp('<table style="width:100%;font-size:11px;border-collapse:collapse">'+sessions.map(function(s){
           return '<tr style="border-bottom:1px solid var(--line)"><td style="padding:4px 0;color:var(--dim)">'+escapeHtml(s.ip||'')+(s.sid===curSid?' <b style="color:var(--green)">(this)</b>':'')+'</td>'+
-            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:#fff;border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
+            '<td style="padding:4px 0;text-align:right"><button data-revoke-sid="'+escapeHtml(String(s.sid||''))+'" style="font-size:10px;padding:2px 8px;background:#f85149;color:var(--bright);border:none;border-radius:3px;cursor:pointer">Revoke</button></td></tr>';
         }).join('')+'</table>');
         el.querySelectorAll('[data-revoke-sid]').forEach(function(b){b.addEventListener('click',function(){window._acct.revokeSession(b.dataset.revokeSid);});});
       }).catch(function(){if(el)el.textContent='Failed to load sessions.';});
@@ -824,4 +1084,12 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </script>
 </div><!-- /page-content -->
 </div><!-- /main-area -->
+<script>
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
+if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
+if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});
+fetch('/antibot-appsec-gateway/secured/ui-theme',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({theme:next})}).catch(function(){});};
+(function(){var b=document.getElementById('theme-toggle');if(b)b.textContent=document.documentElement.getAttribute('data-theme')==='light'?'☀':'🌙';})();
+</script>
 </body></html>

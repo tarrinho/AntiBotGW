@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 # dashboards/service_metrics.py — Phase 8: service metrics sampling + dashboard
 # Extracted from proxy.py lines 2341–2604, 11154–11317
 import time as _t  # noqa: F401 — used in _sample_service_metrics_loop
@@ -10,6 +8,13 @@ from state import _postgres_available  # noqa: F401 — underscore not exported 
 from helpers import slog, now  # noqa: F401
 from admin.auth import _internal_authed  # noqa: F401
 from aiohttp import web
+
+# 1.8.14 iter-17 — module reference for _PG_AUTH_FAILED diagnostic flag.
+# Imported lazily; will be None when psycopg / Postgres support is absent.
+try:
+    from db import postgres as _pg_module  # noqa: F401
+except Exception:
+    _pg_module = None
 
 SERVICE_METRICS_INTERVAL  = float(os.environ.get("SVC_METRICS_INTERVAL", "5"))   # secs
 SERVICE_METRICS_RETENTION = int(os.environ.get("SVC_METRICS_RETENTION", "8640"))  # in-mem samples
@@ -305,8 +310,12 @@ def _svc_db_history(start_b: int, end_b: int, bucket_secs: int,
     """
     import sqlite3 as _sq3
     b = bucket_secs
+    # CAST AVG -> numeric before 2-arg ROUND: Postgres has no
+    # round(double precision, integer) (only round(numeric, int)), so the bare
+    # 2-arg form 500s on PG. CAST(... AS numeric) is accepted by both backends
+    # (SQLite treats it as numeric affinity). 1-arg ROUND below is fine on PG.
     avg_sel = ", ".join(
-        f"ROUND(AVG(COALESCE({k},0)),2) AS {k}" for k in avg_keys)
+        f"ROUND(CAST(AVG(COALESCE({k},0)) AS numeric),2) AS {k}" for k in avg_keys)
     max_sel = ", ".join(
         f"MAX(COALESCE({k},0)) AS {k}"           for k in max_keys)
     sum_sel = ", ".join(
@@ -318,8 +327,17 @@ def _svc_db_history(start_b: int, end_b: int, bucket_secs: int,
         f"GROUP BY CAST(ts/{b} AS INTEGER) ORDER BY ts"
     )
     db_buckets: dict = {}
+    # 1.9.1 iter-18: route the svc_metrics history read through open_conn so
+    # it works in PG-only mode. svc_metrics IS PG-mirrored (1.6.5 comment
+    # claiming SQLite-only is stale — _h_svc_metric handler exists), so the
+    # old bare `_sq3.connect(_DATA_PATH)` returned an EMPTY local file in
+    # PG-only mode and the Service-page CPU/mem/load history rendered blank.
+    # `svc_metrics.ts` is DOUBLE PRECISION on PG (not TIMESTAMPTZ), so the
+    # `ts >= ?` epoch comparison + `CAST(ts/b)` bucket math work unchanged —
+    # only the connection target needed fixing.
+    from db import open_conn as _open_conn_sm
     try:
-        conn = _sq3.connect(_DATA_PATH)
+        conn = _open_conn_sm()
         conn.row_factory = _sq3.Row
         for row in conn.execute(sql, (start_b, end_b + b)).fetchall():
             bt = int(row["ts"])
@@ -458,22 +476,37 @@ async def service_metrics_data_endpoint(request: web.Request):
         identities = len(ip_state)
         ip_buckets_n = len(ip_buckets)
         if _vhost:
-            identities = sum(1 for s in ip_state.values()
+            identities = sum(1 for s in list(ip_state.values())
                              if (getattr(s, "last_vhost", "") or "").lower() == _vhost)
 
     # Per-vhost traffic counters from events table (when vhost filter is active).
+    # 1.9.1 iter-16: PG-mode fix. Direct sqlite3.connect read silently
+    # returned empty per-vhost totals in PG-only mode (the Service page
+    # showed zeros when an operator filtered by hostname). Branch by
+    # backend; PG wraps the bounds in to_timestamp().
     vhost_total = vhost_allowed = vhost_blocked = None
     if _vhost:
         try:
-            import sqlite3 as _sq3
             _win_start = end_b - window
-            conn = _sq3.connect(_DATA_PATH)
+            from db import open_conn as _open_conn_v, active_backend as _active_v
+            _be_v = _active_v()
+            conn = _open_conn_v()
+            if _be_v == "postgres":
+                sql = (
+                    "SELECT COUNT(*), "
+                    "SUM(CASE WHEN reason IN ('ok','allowed','authorized-robot') THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe','operator-self') THEN 1 ELSE 0 END) "
+                    "FROM events WHERE ts >= to_timestamp(?) AND ts <= to_timestamp(?) AND vhost = ?"
+                )
+            else:
+                sql = (
+                    "SELECT COUNT(*), "
+                    "SUM(CASE WHEN reason IN ('ok','allowed','authorized-robot') THEN 1 ELSE 0 END), "
+                    "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe','operator-self') THEN 1 ELSE 0 END) "
+                    "FROM events WHERE ts >= ? AND ts <= ? AND vhost = ?"
+                )
             row = conn.execute(
-                "SELECT COUNT(*), "
-                "SUM(CASE WHEN reason IN ('ok','allowed','authorized-robot') THEN 1 ELSE 0 END), "
-                "SUM(CASE WHEN reason NOT IN ('ok','allowed','authorized-robot','operator-passthrough','internal-probe') THEN 1 ELSE 0 END) "
-                "FROM events WHERE ts >= ? AND ts <= ? AND vhost = ?",
-                (_win_start, end_b + bucket_secs, _vhost),
+                sql, (_win_start, end_b + bucket_secs, _vhost)
             ).fetchone()
             conn.close()
             if row and row[0]:
@@ -507,6 +540,21 @@ async def service_metrics_data_endpoint(request: web.Request):
         # Service dashboard to hide the TimescaleDB section when no
         # POSTGRES_DSN is configured (or psycopg never loaded).
         "pg_available":     bool(_postgres_available and POSTGRES_DSN),
+        # 1.8.14 iter-17 — surface auth-failure state so the Service page can
+        # show the actionable recovery command instead of a generic "down".
+        # _PG_AUTH_FAILED is set when db_init_postgres detects a wrong-password
+        # / missing-role / pg_hba.conf rejection — gateway is up on SQLite.
+        "pg_auth_failed":   bool(_pg_module._PG_AUTH_FAILED) if _pg_module else False,
+        "pg_auth_failed_ts": float(getattr(_pg_module, "_PG_AUTH_FAILED_TS", 0.0)) if _pg_module else 0.0,
+        "pg_auth_failed_hint": str(getattr(_pg_module, "_PG_AUTH_FAILED_HINT", "")) if _pg_module else "",
+        # 1.9.2 iter-21 — Postgres auto-recovery state. `pg_disabled_by_failure` True
+        # means the backend is currently degraded to SQLite after a failure and
+        # the background watchdog is probing to re-enable it (no operator
+        # restart needed). `pg_recovered_count` is how many times it self-healed.
+        "pg_disabled_by_failure": bool(getattr(_pg_module, "_PG_DISABLED_BY_FAILURE", False)) if _pg_module else False,
+        "pg_disabled_ts": float(getattr(_pg_module, "_PG_DISABLED_TS", 0.0)) if _pg_module else 0.0,
+        "pg_recovered_count": int(getattr(_pg_module, "_PG_RECOVERED_COUNT", 0)) if _pg_module else 0,
+        "pg_recovery_probe_secs": float(getattr(_pg_module, "_PG_RECOVERY_PROBE_SECS", 0.0)) if _pg_module else 0.0,
     }, headers={"Cache-Control": "no-store",
                 "X-Content-Type-Options": "nosniff"})
 
@@ -515,7 +563,9 @@ SERVICE_DASHBOARD_HTML = (_DASHBOARDS_DIR / "service.html").read_text(encoding="
 
 
 async def service_dashboard_endpoint(request: web.Request):
-    body = SERVICE_DASHBOARD_HTML
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = SERVICE_DASHBOARD_HTML.replace('<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1)
     return web.Response(
         text=body, content_type="text/html",
         headers={

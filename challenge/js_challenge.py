@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """
 challenge/js_challenge.py — JS challenge: Turnstile + Anubis cookie gate.
 Extracted from proxy.py as part of Phase 6 modular refactoring.
@@ -147,7 +145,6 @@ def _verify_chal_cookie(value: str, ua: str, ip_tier: str = "",
     # `payload_tier` / `payload_ja4` are what were hashed into the HMAC at
     # mint time. Older cookies omitted these — must reproduce that exact
     # construction or the signature comparison breaks for legacy users.
-    legacy_v9_raw = False
     cookie_ja4_hash = ""
     payload_ja4     = ""
     if len(parts) == 5:
@@ -185,10 +182,11 @@ def _verify_chal_cookie(value: str, ua: str, ip_tier: str = "",
             cookie_tier_hash = ""
             payload_tier     = ""
         else:
-            # V9.0 cookie — raw tier baked into both wire format and payload.
-            cookie_tier_hash = ""
-            payload_tier     = third
-            legacy_v9_raw    = True
+            # V9.0 legacy cookie with raw IP tier — rejected in 1.8.14.
+            # These cookies lack tier-hash binding and can be replayed
+            # from any IP in the same /24. All live cookies are V9.1+
+            # (JS_CHALLENGE_TTL max is 7 days); any older cookie is expired.
+            return False
     elif len(parts) == 3:
         issued, probe_hash, sig = parts
         cookie_tier_hash = ""
@@ -216,10 +214,6 @@ def _verify_chal_cookie(value: str, ua: str, ip_tier: str = "",
     if cookie_tier_hash and ip_tier:
         if not hmac.compare_digest(cookie_tier_hash, _tier_hash(ip_tier)):
             return False
-    # V9.0 legacy raw-tier cookie: also enforce match against current tier
-    # (the sig already binds it via payload_tier=third, but tighten anyway).
-    if legacy_v9_raw and ip_tier and payload_tier != ip_tier:
-        return False
     # V9.2: JA4-hash binding. If the cookie carries a ja4_hash, the
     # request-side JA4 must hash to the same value. Empty cookie_ja4_hash
     # means cookie was minted without JA4 visible — no enforcement.
@@ -244,7 +238,7 @@ align-items:center;justify-content:center;font:14px/1.5 system-ui,sans-serif;
 color:#444;background:#fafafa}.spinner{width:24px;height:24px;border:3px solid #eee;
 border-top-color:#3fb950;border-radius:50%;animation:s 0.8s linear infinite;
 margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8px}</style>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" __TS_INTEGRITY__ async defer onerror="window.__tsLoadFailed=true"></script>
 </head><body>
 <div class=spinner></div>
 <p>Verifying browser...</p>
@@ -271,18 +265,18 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
       const nonce = parts[0];
       const blob = new Blob([`
         const nonce="${nonce}", prefix="${prefix}";
-        let i=0;
-        while(true){
-          const candidate=i.toString(36);
-          const msg=nonce+candidate;
-          // Use SubtleCrypto for SHA-256
-          crypto.subtle.digest('SHA-256', new TextEncoder().encode(msg)).then(buf=>{
+        const enc=new TextEncoder();
+        async function solve(){
+          let i=0;
+          while(true){
+            const candidate=i.toString(36);
+            const buf=await crypto.subtle.digest('SHA-256',enc.encode(nonce+candidate));
             const hex=Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
-            if(hex.startsWith(prefix)){ postMessage(candidate); }
-          });
-          i++;
-          if(i%5000===0){ /* yield */ }
+            if(hex.startsWith(prefix)){ postMessage(candidate); return; }
+            i++;
+          }
         }
+        solve();
       `], {type:'application/javascript'});
       const url = URL.createObjectURL(blob);
       const w = new Worker(url);
@@ -294,6 +288,13 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
     return new Promise((resolve, reject)=>{
       const t0 = Date.now();
       function tick(){
+        // Fail closed + fast: SRI mismatch / blocked / network error on the
+        // Turnstile loader fires the script tag's onerror → reject immediately
+        // (no token can be obtained, so the /challenge POST never happens).
+        if (window.__tsLoadFailed){
+          reject(new Error('security challenge script blocked (failed to load or integrity check)'));
+          return;
+        }
         if(window.turnstile){
           window.turnstile.render('#cf-ts',{
             sitekey: TS_KEY,
@@ -331,7 +332,11 @@ margin-bottom:16px}@keyframes s{to{transform:rotate(360deg)}}#cf-ts{margin-top:8
     else { document.querySelector('p').textContent =
               'Verification failed (' + r.status + ').'; }
   } catch(e) {
-    document.querySelector('p').textContent = 'Verification error: ' + e.message;
+    // Fail closed: no token / blocked script → access is NOT granted. Make the
+    // reason visible instead of a frozen spinner.
+    var sp = document.querySelector('.spinner'); if (sp) sp.style.display = 'none';
+    document.querySelector('p').textContent =
+      'Security verification could not complete — access blocked. (' + e.message + ')';
   }
 })();
 </script></body></html>"""
@@ -372,12 +377,29 @@ def _serve_js_challenge(request: web.Request, pow_challenge: str = ""):
     ts_key_json     = json.dumps(TURNSTILE_SITEKEY)
     pow_chal_json   = json.dumps(pow_challenge)
     sw_enabled_json = "true" if SW_CHALLENGE_ENABLED else "false"
+    # 1.8.13 — optional SRI pin on the Turnstile loader. When TURNSTILE_SRI is
+    # set, emit integrity + crossorigin so the browser refuses a tampered script
+    # (a mismatch fires the tag's onerror → fail-closed). Empty → plain load.
+    _ts_integrity = (f'integrity="{TURNSTILE_SRI}" crossorigin="anonymous"'
+                     if TURNSTILE_SRI else '')
     html = (JS_CHAL_HTML
             .replace('"__NONCE__"',         nonce_json)
             .replace('"__TARGET__"',        target_json)
             .replace('"__TURNSTILE_KEY__"', ts_key_json)
             .replace('"__POW_CHALLENGE__"', pow_chal_json)
-            .replace('__SW_ENABLED__',      sw_enabled_json))
+            .replace('__SW_ENABLED__',      sw_enabled_json)
+            .replace('__TS_INTEGRITY__',    _ts_integrity))
+    # DET4-03: bind probe token to session identity, not IP
+    from detection.interaction import _inject_interaction_probe
+    from identity import get_identity as _get_id_for_probe
+    try:
+        _probe_id, *_ = _get_id_for_probe(request)
+    except Exception:
+        try:
+            _probe_id = get_ip(request)
+        except Exception:
+            _probe_id = ""
+    html = _inject_interaction_probe(html, _probe_id)
     # R7: plant a canary on the challenge page too — the LLM summariser
     # reads the gateway's HTML before it ever reaches upstream content.
     headers = {
@@ -642,7 +664,7 @@ def _js_challenge_applicable(request) -> bool:
 # ── 1.7.2 — Service Worker endpoint ──────────────────────────────────────────
 
 _SW_SCRIPT = """\
-// AppSecGW 1.7.2 — Service Worker (SW_CHALLENGE_ENABLED)
+// AntiBot/WAF GW 1.7.2 — Service Worker (SW_CHALLENGE_ENABLED)
 // Intercepts requests to /antibot-appsec-gateway/* and adds X-SW-Active: 1
 // so the server can confirm the browser executed JS across sessions.
 self.addEventListener('install', function(e) { self.skipWaiting(); });

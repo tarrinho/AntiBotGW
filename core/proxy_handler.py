@@ -1,5 +1,3 @@
-# SPDX-License-Identifier: Apache-2.0
-# Copyright (c) 2026 Pedro Tarrinho
 """core/proxy_handler.py — main proxy handler + gateway admin endpoints.
 
 Extracted from proxy.py (Phase 9).  Contains:
@@ -43,6 +41,7 @@ from rate_limit import *   # noqa: F401,F403
 from detection import *    # noqa: F401,F403
 from scoring import *      # noqa: F401,F403
 from scoring import _escalation_score, _decay_risk  # noqa: F401 — underscore names not in import *
+from scoring import _vhost_risk_ctx  # noqa: F401 — per-vhost RISK_OVERRIDES (1.8.14 M-1)
 from reputation import *   # noqa: F401,F403
 from challenge import *    # noqa: F401,F403
 from integrations import * # noqa: F401,F403
@@ -51,6 +50,7 @@ from integrations.endpoint_policy import (  # noqa: F401
     _to_bool, _to_path_list, _to_ja4_set, _to_method_set,
     _to_host_set, _to_country_set, _to_endpoint_policies,
     _to_custom_rules, _eval_custom_rules,
+    _to_ip_net_list,  # iter-8: hot-reload knob parser for IP CIDR lists
 )
 from admin import *        # noqa: F401,F403
 from vhost import vc, set_vhost, VHOSTS, get_vhost_rps_window, current_vhost_host, vhost_is_configured
@@ -67,7 +67,7 @@ from config import (  # noqa: F401 — more underscore config constants
 )
 from dashboards.agents import _stealth_score, AGENT_BLOCK_REASONS  # noqa: F401
 # Underscore-prefixed functions not exported by import * — explicit imports required
-from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied, _request_username  # noqa: F401
+from admin.auth import _internal_authed, _is_admin_ip, _admin_ip_allowed, _role_denied, _request_username, _require_csrf, _csrf_token_valid  # noqa: F401
 from integrations.ja4 import _request_ja4, _tls_fingerprint_blocked  # noqa: F401
 from integrations.redis import _shared_ban_set  # noqa: F401
 from integrations.webhook import _post_webhook  # noqa: F401
@@ -75,6 +75,9 @@ from reputation.abuseipdb import _abuseipdb_lookup, _abuseipdb_stats  # noqa: F4
 from reputation.maxmind import _asn_lookup, _city_lookup, _asn_stats, _city_reader, _asn_reader  # noqa: F401
 from reputation.crowdsec import _crowdsec_check, _crowdsec_stats, _crowdsec_lapi_health  # noqa: F401
 from reputation.tor import _tor_exits, _tor_feed_stats  # noqa: F401
+from reputation.feeds import feeds_check  # noqa: F401 — 1.9.7 threat-intel feeds (Feodo/CINS/URLhaus)
+from detection.js_consistency import js_consistency_signals  # noqa: F401 — 1.9.7
+from integrations.fingerproxy import h2fp_signals  # noqa: F401 — 1.9.7 H2 SETTINGS fp
 from challenge.js_challenge import (  # noqa: F401
     _js_challenge_applicable, _js_challenge_required,
     _make_chal_cookie, _serve_js_challenge,
@@ -96,6 +99,7 @@ from detection.automation import _inject_automation_probe  # noqa: F401
 from detection.cookie_lifecycle import (  # noqa: F401
     cookie_ghost_check, record_gateway_cookie_set,
     record_html_served, _inject_lifecycle_cookie_script, LIFECYCLE_COOKIE,
+    _make_lc_token,
 )
 from detection.referer_chain import referer_ghost_check  # noqa: F401
 from detection.impossible_travel import impossible_travel_check  # noqa: F401
@@ -109,6 +113,7 @@ from config import (check_xxe_body, check_proto_pollution, check_header_ssti,  #
                     check_host_header_injection, check_file_upload)  # noqa: F401
 from state import _postgres_available, _redis, _global_rps_window, _pow_seen, _canary_tokens, _asn_path_clusters, _GW_LOG_RING, events_by_cat, by_path_by_cat  # noqa: F401
 from db.sqlite import _SECRET_KEYS  # noqa: F401
+from db.sqlite import inject_theme  # noqa: F401 — 1.9.6 per-dashboard theme bake
 from admin.mesh import _gw_local_id  # noqa: F401
 from dashboards.service_metrics import _disk_usage  # noqa: F401
 from dashboards.controls import GEO_DASHBOARD_HTML, LOGS_DASHBOARD_HTML  # noqa: F401
@@ -129,6 +134,17 @@ from db.sqlite import _refresh_integration_state  # noqa: F401
 _PROBE_RL: dict = {}   # ip → [window_start, count]
 PROBE_RL_LIMIT  = 20
 PROBE_RL_WINDOW = 10.0
+
+# SH-3 — PoW issue endpoint rate limiter + idempotent cache.
+# Prevents CPU exhaustion from rapid challenge-farming (each challenge
+# generation is cheap but at scale it adds up; more importantly the endpoint
+# must not be used as an oracle to scan for solvable difficulties).
+# Rate limit: POW_RL_LIMIT requests per POW_RL_WINDOW seconds per source IP.
+# Within the window, the same challenge string is reused (idempotent).
+_POW_RL: dict = {}        # ip → [window_start, count]
+_POW_CHAL_CACHE: dict = {} # ip → (challenge_str, issued_at)
+POW_RL_LIMIT  = int(os.environ.get("POW_ISSUE_RL_LIMIT",  "5"))
+POW_RL_WINDOW = float(os.environ.get("POW_ISSUE_RL_WINDOW", "60.0"))
 
 
 def _probe_rate_limit_ok(ip: str) -> bool:
@@ -153,6 +169,57 @@ _UPSTREAM_CB = {
 CIRCUIT_FAIL_THRESHOLD = int(os.environ.get("CIRCUIT_FAIL_THRESHOLD", "10"))
 CIRCUIT_OPEN_SECS      = int(os.environ.get("CIRCUIT_OPEN_SECS", "30"))
 CIRCUIT_HALF_OPEN_MAX  = int(os.environ.get("CIRCUIT_HALF_OPEN_MAX", "3"))
+
+# 1.9.5 perf #1 — shared, connection-pooled upstream HTTP client.
+# Previously proxy() opened `async with ClientSession(...)` PER REQUEST, so every
+# proxied request paid a fresh TCP connect + TLS handshake to the upstream (no
+# keep-alive). One app-lifetime session with a pooled TCPConnector reuses
+# connections across requests — the single biggest latency/throughput win on the
+# hot path. Created lazily on first use (must be inside the running event loop),
+# closed in on_cleanup. The getter has no `await`, so concurrent first-requests
+# in the single-threaded loop can't race to create two sessions.
+UPSTREAM_POOL_LIMIT      = int(os.environ.get("UPSTREAM_POOL_LIMIT", "200"))       # total pooled conns
+UPSTREAM_POOL_PER_HOST   = int(os.environ.get("UPSTREAM_POOL_PER_HOST", "0"))      # 0 = no per-host cap
+UPSTREAM_KEEPALIVE_SECS  = float(os.environ.get("UPSTREAM_KEEPALIVE_SECS", "30"))  # idle keep-alive
+_UPSTREAM_SESSION = None  # type: ignore  # set lazily by _get_upstream_session()
+
+
+def _get_upstream_session():
+    """Return the shared pooled upstream ClientSession, creating it on first
+    use. Reused across all proxied requests so connections + TLS are kept
+    alive. Re-creates transparently if a prior session was closed."""
+    global _UPSTREAM_SESSION
+    if _UPSTREAM_SESSION is None or _UPSTREAM_SESSION.closed:
+        from aiohttp import TCPConnector
+        connector = TCPConnector(
+            limit=UPSTREAM_POOL_LIMIT,
+            limit_per_host=UPSTREAM_POOL_PER_HOST,
+            keepalive_timeout=UPSTREAM_KEEPALIVE_SECS,
+            ttl_dns_cache=300,
+        )
+        # No session-level total timeout: it's applied per-request at the
+        # .request() call so each forward keeps its own 30s budget.
+        # 1.9.7 SECURITY — DummyCookieJar: this session is shared across ALL
+        # proxied requests, so a default cookie jar would persist an upstream
+        # Set-Cookie from request A and replay it on request B (cross-request
+        # cookie leak). We forward cookies via headers ourselves, so the shared
+        # session must NOT keep a jar of its own.
+        from aiohttp import DummyCookieJar
+        _UPSTREAM_SESSION = ClientSession(connector=connector,
+                                          cookie_jar=DummyCookieJar())
+    return _UPSTREAM_SESSION
+
+
+async def _close_upstream_session():
+    """Close the shared upstream session on shutdown. Best-effort + idempotent."""
+    global _UPSTREAM_SESSION
+    sess = _UPSTREAM_SESSION
+    _UPSTREAM_SESSION = None
+    if sess is not None and not sess.closed:
+        try:
+            await sess.close()
+        except Exception:
+            pass
 
 
 def _circuit_is_open() -> bool:
@@ -262,6 +329,10 @@ HOP_BY_HOP_REQUEST = {
     # Path-rewrite / source-IP spoof headers — proxy sets its own values below.
     "x-forwarded-for", "x-real-ip", "x-forwarded-host", "x-forwarded-proto",
     "x-original-url", "x-rewrite-url", "x-original-host",
+    # 1.9.7 — RFC 7239 Forwarded + X-Forwarded-Prefix: same spoof surface as the
+    # X-Forwarded-* family above; strip so a client can't inject upstream
+    # proxy/path metadata. The proxy emits its own canonical forwarding headers.
+    "forwarded", "x-forwarded-prefix",
     "x-admin-key",  # never forward operator credential
 }
 HOP_BY_HOP_RESPONSE = {
@@ -318,49 +389,121 @@ _REDACT_HEADERS = {"cookie", "authorization", "x-admin-key", "x-pow-token", "x-p
 # previous design hard-coded 200 OK while serving the upstream's 404 body —
 # that status/content mismatch was a clean fingerprint for an agent to
 # detect blocked vs forwarded responses. We now match upstream verbatim.
-_decoy_cache = {"body": None, "ctype": None, "status": 200, "fetched_at": 0.0}
-_DECOY_TTL = 60.0  # cache the homepage for 60s
+# 1.8.15 — per-upstream caches (keyed by upstream URL) so multi-vhost
+# deployments don't share one global homepage entry. Each entry is the same
+# {"body","ctype","status","fetched_at"} shape as before.
+_decoy_cache: dict = {}        # upstream → entry
+_DECOY_TTL = 60.0              # cache the homepage for 60s
 
 # 1.5.4: upstream 404 mirror — blocked admin endpoints serve the upstream's
 # real 404 page so the gateway is indistinguishable from "this path doesn't
 # exist on the upstream". Refreshed hourly.
-_upstream_404_cache = {
-    "body":   None,
-    "ctype":  "text/plain; charset=utf-8",
-    "status": 404,
-    "fetched_at": 0.0,
-}
-_UPSTREAM_404_TTL = 3600  # 1 h
+# 1.8.15 — per-upstream (parity with _decoy_cache).
+_upstream_404_cache: dict = {}  # upstream → entry
+_UPSTREAM_404_TTL = 3600        # 1 h
+
+# 1.9.6 perf — short-TTL response cache for /__metrics. Every open dashboard
+# polls it ~every 2 s, and a full computation iterates all ip_state + events +
+# a SYNCHRONOUS timeline DB query — all on the single event loop, which blocks
+# every other request while it runs. Clicking between two pages fires two such
+# computations back-to-back → the UI stalls. Caching the JSON for ~1 s lets
+# rapid/concurrent loads reuse a recent result instead of recomputing on the
+# loop. Keyed by the full query string (range/bucket/end/cats/path/vhost/view)
+# so views never collide. Admin-only endpoint → no per-user data to leak.
+_metrics_resp_cache: dict = {}     # query_string → (expiry_monotonic, json_body)
+_METRICS_RESP_TTL = float(os.environ.get("METRICS_RESP_TTL", "1.0"))  # <2s poll; tests set 0 to disable
+_METRICS_RESP_CACHE_MAX = 64
+
+def _metrics_cache_put(key: str, payload: dict) -> "web.Response":
+    """Serialise + cache the metrics payload, then return it as a Response.
+    Bounds the cache FIFO so a churn of distinct query strings can't grow it."""
+    import json as _j
+    body = _j.dumps(payload)
+    _metrics_resp_cache[key] = (now() + _METRICS_RESP_TTL, body)
+    if len(_metrics_resp_cache) > _METRICS_RESP_CACHE_MAX:
+        _metrics_resp_cache.pop(next(iter(_metrics_resp_cache)), None)
+    return web.Response(body=body, content_type="application/json",
+                        headers={"Cache-Control": "no-store",
+                                 "X-Content-Type-Options": "nosniff"})
+
+# 1.8.15 — LRU bound for the per-upstream decoy caches. Cap = max(MIN_SLOTS,
+# len(VHOSTS) + 8). Without this, an attacker that can influence the vhost
+# routing path (or a misconfigured router) could grow the dict unbounded.
+_DECOY_CACHE_MIN_SLOTS = 16
 
 
-async def _fetch_upstream_404() -> bool:
+def _decoy_cache_cap() -> int:
+    """Current LRU cap for _decoy_cache / _upstream_404_cache. Always at
+    least _DECOY_CACHE_MIN_SLOTS, with headroom over the registered vhosts."""
+    try:
+        n = len(VHOSTS or {})
+    except Exception:
+        n = 0
+    return max(_DECOY_CACHE_MIN_SLOTS, n + 8)
+
+
+def _decoy_entry(d: dict, key: str) -> dict:
+    """Get-or-create cache slot for `key` (an upstream URL) in dict `d`.
+    1.8.15 — enforces an LRU bound: on insert, if len(d) would exceed
+    `_decoy_cache_cap()`, the entry with the oldest `fetched_at` is evicted.
+    """
+    e = d.get(key)
+    if e is not None:
+        return e
+    # LRU eviction before insert
+    cap = _decoy_cache_cap()
+    if len(d) >= cap:
+        try:
+            # sort by fetched_at ascending → first item is least recently used
+            items = sorted(d.items(), key=lambda kv: kv[1].get("fetched_at", 0.0))
+            for _ek, _ev in items[: len(d) - cap + 1]:
+                d.pop(_ek, None)
+        except Exception:
+            pass
+    e = {"body": None, "ctype": None, "status": 0, "fetched_at": 0.0}
+    d[key] = e
+    return e
+
+
+async def _fetch_upstream_404(upstream: str | None = None) -> bool:
     """GET a guaranteed-non-existent path from upstream and cache the
     response. Returns True on success."""
+    up = (upstream or vc("UPSTREAM") or UPSTREAM).rstrip("/")
     probe = f"/__appsecgw-probe-{secrets.token_hex(8)}"
+    entry = _decoy_entry(_upstream_404_cache, up)
     try:
         timeout = ClientTimeout(total=5)
         async with ClientSession(timeout=timeout) as session:
-            async with session.get(UPSTREAM + probe,
+            async with session.get(up + probe,
                                     allow_redirects=False) as resp:
-                _upstream_404_cache["body"]   = await resp.read()
-                _upstream_404_cache["ctype"]  = resp.headers.get(
+                entry["body"]   = await resp.read()
+                entry["ctype"]  = resp.headers.get(
                     "Content-Type", "text/html; charset=utf-8")
                 # Preserve actual upstream status (almost always 404; some
                 # apps return 200 with an error template — we mirror).
-                _upstream_404_cache["status"] = resp.status
-                _upstream_404_cache["fetched_at"] = _t.time()
+                entry["status"] = resp.status
+                entry["fetched_at"] = _t.time()
                 return True
     except Exception as e:
-        slog("upstream-404-fetch-failed", level="warn", error=str(e)[:120])
+        slog("upstream-404-fetch-failed", level="warn",
+             upstream=up, error=str(e)[:120])
         return False
 
 
 async def _periodic_404_refresh_loop():
-    """Refresh the cached upstream 404 hourly."""
+    """Refresh the cached upstream 404 hourly. 1.8.15 — parallelizes across
+    all known upstreams via asyncio.gather so one slow/stalled upstream
+    cannot block refresh on the others."""
     while True:
         try:
             await asyncio.sleep(_UPSTREAM_404_TTL)
-            await _fetch_upstream_404()
+            ups = list(_upstream_404_cache.keys()) or [
+                (vc("UPSTREAM") or UPSTREAM).rstrip("/")
+            ]
+            await asyncio.gather(
+                *(_fetch_upstream_404(u) for u in ups),
+                return_exceptions=True,
+            )
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -371,20 +514,40 @@ async def _serve_mirrored_404() -> web.Response:
     """Serve a 404 that matches the upstream's 404 page. On first call (cache
     cold) the upstream is fetched synchronously; on cache miss/expiry the
     serving path uses whatever's cached and a background refresh kicks in."""
+    up = (vc("UPSTREAM") or UPSTREAM).rstrip("/")
     n = _t.time()
-    if (not _upstream_404_cache.get("body")
-            or n - _upstream_404_cache.get("fetched_at", 0) > _UPSTREAM_404_TTL):
-        await _fetch_upstream_404()
-    body   = _upstream_404_cache.get("body") or b"Not Found\n"
-    ctype  = _upstream_404_cache.get("ctype") or "text/plain"
-    status = _upstream_404_cache.get("status") or 404
+    entry = _upstream_404_cache.get(up)
+    if (entry is None or not entry.get("body")
+            or n - entry.get("fetched_at", 0) > _UPSTREAM_404_TTL):
+        await _fetch_upstream_404(up)
+        entry = _upstream_404_cache.get(up) or {}
+    body   = entry.get("body") or b"Not Found\n"
+    ctype  = entry.get("ctype") or "text/plain"
+    status = entry.get("status") or 404
     return web.Response(status=status, body=body, headers={
         "Content-Type": ctype,
         "Cache-Control": "no-store",
     })
 
 
-_decoy_fetch_lock = asyncio.Lock()
+_decoy_fetch_lock = asyncio.Lock()  # legacy global lock (kept for back-compat)
+
+# 1.8.15 — per-upstream decoy fetch locks. The global lock serialized ALL
+# upstream homepage refreshes; under multi-vhost deployments one slow upstream
+# stalled refresh on every other vhost. The per-upstream factory lets each
+# upstream's herd-protection lock live independently.
+_DECOY_LOCKS: dict = {}
+
+
+def _decoy_lock_for(upstream: str) -> asyncio.Lock:
+    """Return the asyncio.Lock for `upstream`, creating it on first use.
+    Distinct upstreams get distinct lock objects; the same upstream URL
+    always maps to the same lock so the herd-protection invariant holds."""
+    lk = _DECOY_LOCKS.get(upstream)
+    if lk is None:
+        lk = asyncio.Lock()
+        _DECOY_LOCKS[upstream] = lk
+    return lk
 
 
 async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
@@ -404,44 +567,21 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
     import time
     _decoy_t0 = time.perf_counter()
     n = _t.time()
-    # N2: serialize the upstream fetch — many concurrent blocked requests
-    # mustn't fan out a thundering herd. Double-check inside the lock.
-    if not _decoy_cache["body"] or (n - _decoy_cache["fetched_at"]) > _DECOY_TTL:
-        async with _decoy_fetch_lock:
-            n = _t.time()
-            if not _decoy_cache["body"] or (n - _decoy_cache["fetched_at"]) > _DECOY_TTL:
-                try:
-                    async with ClientSession(timeout=ClientTimeout(total=10)) as session:
-                        async with session.get(UPSTREAM + "/", allow_redirects=False) as resp:
-                            _decoy_cache["body"] = await resp.read()
-                            _decoy_cache["ctype"] = resp.headers.get("Content-Type", "text/html; charset=utf-8")
-                            _decoy_cache["status"] = resp.status
-                            _decoy_cache["fetched_at"] = n
-                except Exception:
-                    _decoy_cache["body"] = (
-                        b"<!doctype html><html><head><title>Welcome</title></head>"
-                        b"<body><h1>Welcome</h1><p>Service operational.</p></body></html>"
-                    )
-                    _decoy_cache["ctype"] = "text/html; charset=utf-8"
-                    _decoy_cache["status"] = 200
-                    _decoy_cache["fetched_at"] = n
-    decoy_status = int(_decoy_cache.get("status") or 200)
-
-    # ── Route-aware decoy body selection ────────────────────────────────────
-    # Returning the identical cached homepage for every blocked path (API
-    # endpoints, admin paths, SQLi probes, etc.) produces a uniform
-    # body-hash fingerprint that automated scanners trivially detect as a
-    # catch-all gate.  Instead, serve a path-appropriate synthetic response
-    # so blocked requests look indistinguishable from a real upstream that
-    # simply doesn't have that path:
-    #   • API / JSON paths → synthetic JSON 404 (not the HTML homepage)
-    #   • Admin / dot paths → synthetic JSON 404
-    #   • Everything else   → homepage (existing behaviour)
-    # Synthetic bodies are used (not _upstream_404_cache) because the cache
-    # content is controlled by the upstream and may carry its own fingerprint.
-    _decoy_body  = _decoy_cache["body"]
-    _decoy_ctype = _decoy_cache["ctype"]
+    # 1.8.15 — resolve current-vhost upstream and use a per-upstream cache slot.
+    # The global _decoy_cache from earlier releases collapsed all vhosts'
+    # homepages into one entry; now each upstream URL owns its own slot under
+    # an LRU cap (`_decoy_cache_cap()`).
+    _vhost_upstream = (vc("UPSTREAM") or UPSTREAM).rstrip("/")
     _path = path or "/"
+    # ── Route-aware decoy body selection ────────────────────────────────────
+    # Returning the identical cached homepage for every blocked path produces a
+    # uniform body-hash fingerprint scanners detect as a catch-all gate. So:
+    #   • API / JSON / admin paths → synthetic JSON 404 (ALWAYS — an HTML
+    #     homepage there is a cleaner scanner tell than a 404).
+    #   • else, BLOCK_RESPONSE_MODE == "404" → upstream's REAL 404 page,
+    #     status 404 (from _upstream_404_cache; _fetch_upstream_404 on a miss).
+    #   • else (homepage, default) → upstream / from _decoy_cache, mirrored
+    #     status (circuit-breaker + per-upstream lock + TTL).
     _looks_like_api = (
         _path.startswith("/api/") or
         _path.startswith("/v1/") or _path.startswith("/v2/") or
@@ -454,10 +594,51 @@ async def _silent_decoy_response(ip: str, ua: str, path: str, reason: str,
         _path.startswith("/debug") or _path.startswith("/console") or
         _path.startswith("/internal")
     )
+    _fallback_home = (
+        b"<!doctype html><html><head><title>Welcome</title></head>"
+        b"<body><h1>Welcome</h1></body></html>"
+    )
+    _decoy_body  = _fallback_home
+    _decoy_ctype = "text/html; charset=utf-8"
+    decoy_status = 200
     if _looks_like_api or _looks_like_admin:
         _decoy_body  = b'{"error":"not found","status":404}'
         _decoy_ctype = "application/json"
         decoy_status = 404
+    elif BLOCK_RESPONSE_MODE == "404":
+        _u404 = _decoy_entry(_upstream_404_cache, _vhost_upstream)
+        if (not _u404.get("body")) and not _circuit_is_open():
+            await _fetch_upstream_404()
+            _u404 = _decoy_entry(_upstream_404_cache, _vhost_upstream)
+        if _u404.get("body") is not None:
+            _decoy_body  = _u404["body"]
+            _decoy_ctype = _u404.get("ctype") or "text/html; charset=utf-8"
+        decoy_status = 404
+    else:
+        # homepage mode — upstream / via _decoy_cache. Short-circuit the refresh
+        # when the breaker is OPEN so N concurrent blocked requests don't each
+        # block ~10 s under the per-upstream lock while the upstream is down.
+        _slot = _decoy_entry(_decoy_cache, _vhost_upstream)
+        if (not _slot["body"] or (n - _slot["fetched_at"]) > _DECOY_TTL) and not _circuit_is_open():
+            async with _decoy_lock_for(_vhost_upstream):
+                n = _t.time()
+                _slot = _decoy_entry(_decoy_cache, _vhost_upstream)
+                if (not _slot["body"] or (n - _slot["fetched_at"]) > _DECOY_TTL) and not _circuit_is_open():
+                    try:
+                        async with ClientSession(timeout=ClientTimeout(total=10)) as session:
+                            async with session.get(_vhost_upstream + "/", allow_redirects=False) as resp:
+                                _slot["body"] = await resp.read()
+                                _slot["ctype"] = resp.headers.get("Content-Type", "text/html; charset=utf-8")
+                                _slot["status"] = resp.status
+                                _slot["fetched_at"] = n
+                    except Exception:
+                        _slot["body"] = _fallback_home
+                        _slot["ctype"] = "text/html; charset=utf-8"
+                        _slot["status"] = 200
+                        _slot["fetched_at"] = n
+        _decoy_body  = _slot.get("body") or _fallback_home
+        _decoy_ctype = _slot.get("ctype") or "text/html; charset=utf-8"
+        decoy_status = int(_slot.get("status") or 200)
 
     await record(ip, ua, path, decoy_status, reason, track_key=track_key, sid=sid,
                  fp=fp, ja4=ja4, request_id=request_id)
@@ -525,32 +706,43 @@ async def proxy_websocket(request: web.Request):
     ws_scheme = "wss" if u.scheme == "https" else "ws"
     target = f"{ws_scheme}://{upstream_host}{_strip_admin_key_from_qs(request.path_qs)}"
 
+    _preserve_host_ws = vc('PRESERVE_HOST')
     fwd_headers = {}
     for k, v in request.headers.items():
         kl = k.lower()
         # Hop-by-hop + WS-specific (aiohttp client sets its own).
         if kl in HOP_BY_HOP_REQUEST or kl.startswith("sec-websocket"):
             continue
+        if kl == "host":
+            continue  # set explicitly below (honours PRESERVE_HOST)
         if kl == "cookie":
             cleaned = _strip_own_session_cookie(v)
             if cleaned:
                 fwd_headers[k] = cleaned
             continue
         if kl == "origin":
-            fwd_headers[k] = upstream_scheme_host
-            continue
+            if not _preserve_host_ws:
+                fwd_headers[k] = upstream_scheme_host
+                continue
         if kl == "referer":
-            try:
-                rp = urlparse(v)
-                if rp.scheme and rp.netloc:
-                    new_ref = upstream_scheme_host + (rp.path or "/")
-                    if rp.query:
-                        new_ref += "?" + rp.query
-                    fwd_headers[k] = new_ref
-                    continue
-            except Exception:
-                pass
+            if not _preserve_host_ws:
+                try:
+                    rp = urlparse(v)
+                    if rp.scheme and rp.netloc:
+                        new_ref = upstream_scheme_host + (rp.path or "/")
+                        if rp.query:
+                            new_ref += "?" + rp.query
+                        fwd_headers[k] = new_ref
+                        continue
+                except Exception:
+                    pass
         fwd_headers[k] = v
+
+    # Host: rewrite to upstream netloc unless PRESERVE_HOST passes the client host.
+    if not _preserve_host_ws and upstream_host:
+        fwd_headers["Host"] = upstream_host
+    elif _preserve_host_ws and request.host:
+        fwd_headers["Host"] = request.host
 
     gw_ip = get_ip(request)
     fwd_headers["X-Forwarded-For"] = gw_ip
@@ -622,24 +814,28 @@ async def proxy(request: web.Request):
         return await proxy_websocket(request)
 
     # M2: method allowlist — block TRACE/CONNECT/anything unusual.
-    if request.method not in ALLOWED_METHODS:
+    # 1.9.7 — read via vc() so a per-vhost ALLOWED_METHODS override is honoured
+    # (falls back to the global set when no override).
+    if request.method not in vc("ALLOWED_METHODS"):
         return web.Response(status=405, text="method not allowed\n")
 
-    # 1.8.5 — HTTP smuggling signal detection
-    _smuggling_signal = check_smuggling(request)
-    if _smuggling_signal:
-        await update_risk_and_maybe_ban(
-            request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
-            _smuggling_signal, get_ip(request))
-        return await _silent_decoy_response(
-            get_ip(request), request.headers.get("User-Agent", ""),
-            request.path, _smuggling_signal,
-            track_key=request.get("_track_key"),
-            sid=request.get("_sid", ""),
-            fp=request.get("_fp", ""))
+    # 1.8.5 — HTTP smuggling signal detection (1.9.7 — gated by the
+    # WAF_SMUGGLING_ENABLED kill-switch; default on, per-vhost overridable).
+    if vc("WAF_SMUGGLING_ENABLED"):
+        _smuggling_signal = check_smuggling(request)
+        if _smuggling_signal:
+            await update_risk_and_maybe_ban(
+                request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
+                _smuggling_signal, get_ip(request))
+            return await _silent_decoy_response(
+                get_ip(request), request.headers.get("User-Agent", ""),
+                request.path, _smuggling_signal,
+                track_key=request.get("_track_key"),
+                sid=request.get("_sid", ""),
+                fp=request.get("_fp", ""))
 
-    # 1.8.5 — verb override detection
-    if check_verb_override(request):
+    # 1.8.5 — verb override detection (1.9.7 — WAF_VERB_OVERRIDE_ENABLED gate)
+    if vc("WAF_VERB_OVERRIDE_ENABLED") and check_verb_override(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
             "method-override-attempt", get_ip(request))
@@ -651,7 +847,8 @@ async def proxy(request: web.Request):
             fp=request.get("_fp", ""))
 
     # 1.8.5 Week 3 — Task C: SSTI in attacker-controlled headers
-    if check_header_ssti(request):
+    # (1.9.7 — WAF_HEADER_INJECTION_ENABLED gate)
+    if vc("WAF_HEADER_INJECTION_ENABLED") and check_header_ssti(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
             "header-ssti", get_ip(request))
@@ -663,7 +860,8 @@ async def proxy(request: web.Request):
             fp=request.get("_fp", ""))
 
     # 1.8.5 Week 4 — Task G: Host header injection
-    if check_host_header_injection(request):
+    # (1.9.7 — also under WAF_HEADER_INJECTION_ENABLED)
+    if vc("WAF_HEADER_INJECTION_ENABLED") and check_host_header_injection(request):
         await update_risk_and_maybe_ban(
             request.get("_track_key") or request.remote or "0.0.0.0",  # nosec B104
             "host-header-injection", get_ip(request))
@@ -713,8 +911,10 @@ async def proxy(request: web.Request):
     except Exception:
         upstream_host, upstream_scheme_host = "", upstream_origin
 
-    if upstream_host:
+    if upstream_host and not vc('PRESERVE_HOST'):
         # Host header MUST match upstream's expected vhost or TLS SNI fails / wrong vhost served.
+        # Skipped when PRESERVE_HOST is set: the client's original Host/Origin/Referer
+        # are forwarded unchanged (X-Forwarded-Host above still carries the client host).
         fwd_headers["Host"] = upstream_host
         if "origin" in {k.lower() for k in fwd_headers}:
             for k in list(fwd_headers):
@@ -776,9 +976,14 @@ async def proxy(request: web.Request):
         except Exception:
             return web.Response(status=400, text="bad request\n")
 
-    # 1.8.5 — ungated first-touch check: high-confidence patterns that bypass
-    # the escalation threshold. Catches first-request injections (Log4Shell, SQLi).
-    if body is not None:
+    # 1.9.4 iter-28 — honor WAF_BODY_ENABLED on the first-touch critical-
+    # injection check too. Before this iter, the comment "ungated first-touch
+    # check" meant the check ran even when the operator had disabled body-WAF
+    # globally — a deliberate design choice (high-confidence patterns bypass
+    # the gate) but operator-surprising: "I disabled WAF body, why am I still
+    # seeing body-critical-injection bans?" Disable now means disable.
+    # The same kill-switch covers the XXE pass below (same gate, same intent).
+    if WAF_BODY_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_always_body(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -791,8 +996,8 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 3 — Task A: XXE detection (ungated, XML-gated)
-    if body is not None:
+    # 1.8.5 Week 3 — Task A: XXE detection (XML-gated AND WAF_BODY_ENABLED-gated as of iter-28)
+    if WAF_BODY_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_xxe_body(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -805,8 +1010,8 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 3 — Task B: Prototype pollution detection
-    if body is not None:
+    # 1.8.5 Week 3 — Task B: Prototype pollution detection (1.9.7 — WAF_BODY_ENABLED gate)
+    if WAF_BODY_ENABLED and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         if check_proto_pollution(body, client_ctype):
             await update_risk_and_maybe_ban(
@@ -819,8 +1024,8 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 4 — Task H: GraphQL protection
-    if body is not None:
+    # 1.8.5 Week 4 — Task H: GraphQL protection (1.9.7 — WAF_GRAPHQL_ENABLED gate)
+    if vc("WAF_GRAPHQL_ENABLED") and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         from detection.graphql import check_graphql
         for _gql_sig in check_graphql(request.path, body, client_ctype):
@@ -834,8 +1039,8 @@ async def proxy(request: web.Request):
                 sid=request.get("_sid", ""),
                 fp=request.get("_fp", ""))
 
-    # 1.8.5 Week 4 — Task I: File upload content validation
-    if body is not None:
+    # 1.8.5 Week 4 — Task I: File upload content validation (1.9.7 — WAF_UPLOAD_ENABLED gate)
+    if vc("WAF_UPLOAD_ENABLED") and body is not None:
         client_ctype = request.headers.get("Content-Type", "")
         _upload_sig = check_file_upload(body, client_ctype)
         if _upload_sig:
@@ -926,10 +1131,15 @@ async def proxy(request: web.Request):
         # Half-open: allow this probe through
 
     try:
-        async with ClientSession(timeout=ClientTimeout(total=30)) as session:
+        # 1.9.5 perf #1 — reuse the shared pooled session (keep-alive to upstream)
+        # instead of opening a new ClientSession (+TCP+TLS handshake) per request.
+        # The `if True:` keeps the (large) forward body at its original indent so
+        # this stays a minimal, low-risk diff rather than a 60-line re-indent.
+        session = _get_upstream_session()
+        if True:  # noqa: SIM103 — intentional indent-preserving block, see above
             async with session.request(
                 request.method, target, headers=fwd_headers, data=body,
-                allow_redirects=False,
+                allow_redirects=False, timeout=ClientTimeout(total=30),
             ) as resp:
                 # H6: bound the upstream response body too — defends the proxy
                 # itself against a malicious upstream sending unbounded data.
@@ -985,7 +1195,14 @@ async def proxy(request: web.Request):
                 up_parsed = _urlparse(_vc_upstream)
                 client_scheme = (request.headers.get("X-Forwarded-Proto")
                                  or ("https" if request.secure else "http"))
-                client_host = request.host or up_parsed.netloc
+                _req_host = request.host or ""
+                client_host = _req_host or up_parsed.netloc
+                # Host-header hardening — when ALLOWED_HOSTS is configured, never
+                # reflect an unlisted (attacker-controlled) Host into the rewritten
+                # Location header (open-redirect / cache-poisoning vector). Fall
+                # back to the upstream netloc instead.
+                if ALLOWED_HOSTS and _req_host not in ALLOWED_HOSTS:
+                    client_host = up_parsed.netloc
 
                 for k, v in resp.headers.items():
                     kl = k.lower()
@@ -1038,7 +1255,7 @@ async def proxy(request: web.Request):
                 # individually via env or overridden by an upstream value
                 # already present in the response.
                 ctype = response_headers.get("Content-Type", "").lower().lstrip()
-                if ctype.startswith("text/html") and INJECT_SECURITY_HEADERS:
+                if ctype.startswith("text/html") and vc("INJECT_SECURITY_HEADERS"):
                     for hk, hv in SECURITY_HEADERS.items():
                         if hv and hk.lower() not in {k.lower() for k in response_headers}:
                             response_headers[hk] = hv
@@ -1180,9 +1397,12 @@ async def proxy(request: web.Request):
                     if AUTOMATION_PROBE_ENABLED:
                         resp_body = _inject_automation_probe(
                             resp_body, request.get("_track_key", ""))
-                    # 1.7.2 — cookie lifecycle JS marker (writes agw_lc cookie)
+                    # 1.7.2 — cookie lifecycle JS marker (writes agw_lc cookie).
+                    # B-04: inject HMAC-signed token (not static "1") so bots
+                    # cannot bypass lifecycle-miss by prefilling agw_lc=1.
                     if COOKIE_LIFECYCLE_ENABLED:
-                        resp_body = _inject_lifecycle_cookie_script(resp_body)
+                        _lc_token = _make_lc_token(_ip_tier(get_ip(request)))
+                        resp_body = _inject_lifecycle_cookie_script(resp_body, _lc_token)
                     # 1.7.2 — canvas + WebGL fingerprint probe
                     if FP_ENRICHMENT_ENABLED:
                         resp_body = _inject_fp_probe(
@@ -1479,7 +1699,7 @@ async def external_endpoint(request: web.Request):
     sqlite_rows = 0
     try:
         if os.path.exists(DB_PATH):
-            _c = sqlite3.connect(DB_PATH)
+            _c = open_conn()
             sqlite_rows = int(_c.execute("SELECT COUNT(*) FROM events").fetchone()[0])
             _c.close()
     except Exception:
@@ -1715,11 +1935,12 @@ async def integration_check_endpoint(request: web.Request):
 # 1.6.10 — Signal activation-order API.
 # GET  /secured/signal-orders  -> {orders: {sig: n, ...}, gw_id: "..."}
 # POST /secured/signal-orders  body: {signal: "...", order: 1|2|3}
+@_require_csrf
 async def signal_orders_endpoint(request: web.Request):
     gw_id = _gw_local_id()
     if request.method == "GET":
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             rows = conn.execute(
                 "SELECT signal, activation_order, updated_ts, updated_by "
                 "FROM signal_orders WHERE gw_id = ?", (gw_id,)
@@ -1753,6 +1974,7 @@ async def signal_orders_endpoint(request: web.Request):
     return web.Response(status=405)
 
 
+@_require_csrf
 async def admin_ips_endpoint(request: web.Request):
     """Admin: read / add / remove entries from the admin-IP allowlist.
 
@@ -1823,16 +2045,45 @@ async def ban_endpoint(request: web.Request):
       &secs=<int>      — ban duration (default HOSTILE_BAN_SECS, max 31 d)
       &reason=<text>   — recorded in audit log + risk-score reasons
     """
+    # 1.9.1 fix (LIVE-4): require CSRF on POST/DELETE. Previously a same-
+    # origin XSS could ban arbitrary IPs (CDN ranges, NOC subnets) and
+    # lock out legitimate traffic.
+    if request.method not in ("GET", "HEAD", "OPTIONS") and not _csrf_token_valid(request):
+        return web.json_response({"error": "forbidden"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
     if denied := _role_denied(request, "admin", "maintainer"):
         return denied
     target_id = request.query.get("id")
     target_ip = request.query.get("ip")
+    # 1.9.1 fix (LIVE-8): validate IP / identity input. Previously a literal
+    # SQLi probe string (e.g. "1.2.3.4' OR '1'='1") was accepted as-is and
+    # silently stored in transient ban-state, polluting operator review.
+    # Track-key identities are 16-32 hex chars; IPs use ipaddress.ip_address.
+    if target_ip:
+        import ipaddress as _ipa
+        try:
+            _ipa.ip_address(target_ip.strip())
+            target_ip = target_ip.strip()
+        except ValueError:
+            return web.json_response({"error": "invalid ip"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+    if target_id:
+        target_id = target_id.strip()
+        if not (target_id and len(target_id) <= 64
+                and all(c.isalnum() or c in "_-:." for c in target_id)):
+            return web.json_response({"error": "invalid id"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
     try:
         secs = int(request.query.get("secs", str(HOSTILE_BAN_SECS)))
     except ValueError:
         secs = HOSTILE_BAN_SECS
     secs = max(60, min(secs, 31 * 86400))
-    reason = (request.query.get("reason", "manual-ban") or "manual-ban")[:64]
+    # 1.9.1 fix (LIVE-7): strip HTML angle brackets from `reason` before it
+    # lands in audit_events / risk-score reasons. Server-side defence in
+    # depth — dashboards already render via textContent in known sinks,
+    # but stripping here neutralises any future innerHTML regressions.
+    _raw_reason = (request.query.get("reason", "manual-ban") or "manual-ban")[:64]
+    reason = _raw_reason.replace("<", "").replace(">", "")
     if not target_id and not target_ip:
         return web.json_response({"error": "provide id= or ip="},
                                   status=400,
@@ -1875,6 +2126,7 @@ async def ban_endpoint(request: web.Request):
         headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def secrets_endpoint(request: web.Request):
     """1.5.5 — runtime integration secret management (admin-gated).
 
@@ -1968,6 +2220,13 @@ async def secrets_endpoint(request: web.Request):
         if len(v) > 1024:
             rejected[k] = "value too long (max 1024 bytes)"
             continue
+        # SH-1: SSRF guard on URL-type secrets.
+        if k in _URL_SECRET_GUARDS:
+            try:
+                _ssrf_guard_url(v, label=k, allow_loopback=_URL_SECRET_GUARDS[k])
+            except ValueError as _ssrf_err:
+                rejected[k] = str(_ssrf_err)[:200]
+                continue
         global_name, _env_name = _SECRET_KEYS[k]
         # POSTGRES_DSN sentinel: if the password component is "****", substitute
         # the password from the currently stored DSN so callers can update
@@ -1983,8 +2242,18 @@ async def secrets_endpoint(request: web.Request):
         g[global_name] = v
         applied[k] = {"length": len(v)}
         if db_queue is not None:
+            # 1.9.0 (F14) — wrap the on-disk DSN in Fernet. In-memory
+            # globals stay plaintext (the gateway needs it raw to open
+            # connections); only the secrets_kv row is encrypted.
+            _store_v = v
+            if k == "POSTGRES_DSN":
+                try:
+                    from db.sqlite import _dsn_encrypt
+                    _store_v = _dsn_encrypt(v)
+                except Exception:
+                    _store_v = v
             try:
-                db_queue.put_nowait(("set_secret", (k, v, _t.time())))
+                db_queue.put_nowait(("set_secret", (k, _store_v, _t.time())))
             except asyncio.QueueFull:
                 pass
 
@@ -2014,6 +2283,7 @@ async def secrets_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def rotate_keys_endpoint(request: web.Request):
     """1.4.5: rotate the SESSION_KEY (and optionally POW key) atomically.
 
@@ -2101,6 +2371,17 @@ _HOT_RELOAD_KNOBS = {
     "CANARY_ECHO_DETECTION":   (_to_bool, None),
     "STRICT_ORIGIN":           (_to_bool, None),
     "INJECT_SECURITY_HEADERS": (_to_bool, None),
+    # 1.8.13 — individual security-header knobs (hot-reloadable)
+    "SEC_X_FRAME_OPTIONS":            (str, None),
+    "SEC_X_CONTENT_TYPE_OPTIONS":     (str, None),
+    "SEC_REFERRER_POLICY":            (str, None),
+    "SEC_X_PERMITTED_XDP":            (str, None),
+    "SEC_PERMISSIONS_POLICY":         (str, None),
+    "SEC_HSTS":                       (str, None),
+    "SEC_CSP":                        (str, None),
+    "SEC_COOP":                       (str, None),
+    "SEC_CORP":                       (str, None),
+    "SEC_SERVER_OVERRIDE":            (str, None),
     "JS_CHAL_BIND_JA4":        (_to_bool, None),
     "JS_CHAL_REQUIRE_JA4":     (_to_bool, None),
     "JS_CHAL_STRICT_STATIC":   (_to_bool, None),
@@ -2148,7 +2429,8 @@ _HOT_RELOAD_KNOBS = {
     "JA4_AUTODENY_THRESHOLD": (int,   lambda v: 1 <= v <= 1000),
     # Lists (comma-separated str -> list/set)
     "AUTHORIZED_BOT_UAS":     (_to_bot_uas_list, None),
-    "BYPASS_PATHS":           (_to_path_list, None),
+    "BYPASS_PATHS":           (_to_path_list,
+                               lambda v: not any(p in ("*", "/*") for p in v)),
     "JS_CHAL_OPEN_PATHS":     (_to_path_list, None),
     "JA4_DENY_LIST":          (_to_ja4_set,   None),
     # 1.6.0 — country-level geo block (requires GeoLite2-City)
@@ -2231,6 +2513,20 @@ _HOT_RELOAD_KNOBS = {
     # 1.7.8 — Dashboard bypass mode (all detection + ban enforcement off).
     # Listed as NOT_PERSIST so it resets to False on container restart.
     "BYPASS_MODE":            (_to_bool, None),
+    # 1.8.10 — Global bot-detection master switch (per-vhost via vc(); global via hot-reload).
+    "BOT_DETECTION_ENABLED":  (_to_bool, None),
+    # 1.8.11 QW-1 — extra honeypot paths (JSON array of strings).
+    "HONEYPOT_EXTRA_PATHS":   (_to_path_list, None),
+    # 1.8.x — distinct-IP threshold for the coordinated-honeypot signal.
+    # 5-min sliding window per trap path; ≥ N IPs hit the same trap → med risk.
+    "HONEYPOT_CLUSTER_THRESHOLD": (int, lambda v: 2 <= v <= 100),
+    # 1.8.11 QW-6 — behavioral detector thresholds
+    "BEHAVIORAL_SAMPLE_N":          (int,   lambda v: 4 <= v <= 100),
+    "BEHAVIORAL_COV_THRESHOLD":     (float, lambda v: 0.0 < v <= 1.0),
+    "BEHAVIORAL_R1_THRESHOLD":      (float, lambda v: 0.0 < v <= 1.0),
+    "BEHAVIORAL_BIN_PCT_THRESHOLD": (float, lambda v: 0.0 < v <= 1.0),
+    "BEHAVIORAL_MAX_INTERVAL_S":    (float, lambda v: 0.1 <= v <= 60.0),
+    "BEHAVIORAL_SKIP_INTERVAL_S":   (float, lambda v: 0.1 <= v <= 300.0),
     # Logging
     "LOG_LEVEL":              (str,   lambda v: v.lower() in _LOG_LEVELS),
     # 1.5.5 — Tier 1 promotions (high operational value, often tuned during incidents)
@@ -2265,6 +2561,66 @@ _HOT_RELOAD_KNOBS = {
     # 1.7.9 — runtime upstream switch (always overrideable regardless of env pin)
     "UPSTREAM": (lambda v: str(v).rstrip("/"),
                  lambda v: v.startswith(("http://", "https://")) and len(v) <= 2048),
+    # iter-8 — restored from mutants/ (knobs that were hot-reloadable
+    # in the pre-iter-1 codebase and got dropped during the git-reset
+    # wave). Restoring lets operators tune via /__config without
+    # restart and re-greens `test_165_every_knob_persists_round_trip`.
+    "WAF_BODY_ENABLED":                (_to_bool, None),
+    "WAF_SMUGGLING_ENABLED":           (_to_bool, None),
+    "WAF_VERB_OVERRIDE_ENABLED":       (_to_bool, None),
+    "WAF_HEADER_INJECTION_ENABLED":    (_to_bool, None),
+    "WAF_GRAPHQL_ENABLED":             (_to_bool, None),
+    "WAF_UPLOAD_ENABLED":              (_to_bool, None),
+    "WAF_SLOWLORIS_ENABLED":           (_to_bool, None),
+    "ACCEPT_WILDCARD_CHECK_ENABLED":   (_to_bool, None),
+    "SESSION_CHURN_ENABLED":           (_to_bool, None),
+    "JA4H_DENY_ENABLED":               (_to_bool, None),
+    "HOST_BLOCKING_ENABLED":           (_to_bool, None),
+    "REQUIRED_HEADERS_ENABLED":        (_to_bool, None),
+    "JA4_REQUIRED_ENABLED":            (_to_bool, None),
+    "UPSTREAM_AUTH_FAIL_ENABLED":      (_to_bool, None),
+    "RATE_LIMIT_IP_ENABLED":           (_to_bool, None),
+    "RATE_LIMIT_ENABLED":              (_to_bool, None),
+    "FP_BAN_CHECK_ENABLED":            (_to_bool, None),
+    "TRAFFIC_THRESHOLD_ENABLED":       (_to_bool, None),
+    "TLS_FP_BLOCK_ENABLED":            (_to_bool, None),
+    "JWT_VALIDATION_ENABLED":          (_to_bool, None),
+    "CUSTOM_RULES_ENABLED":            (_to_bool, None),
+    "ENDPOINT_RATE_LIMIT_ENABLED":     (_to_bool, None),
+    "HONEY_CRED_ENABLED":              (_to_bool, None),
+    "CANARY_PROBE_ENABLED":            (_to_bool, None),
+    "LLM_HEURISTIC_ENABLED":           (_to_bool, None),
+    "AUTOMATION_PROBE_ENABLED":        (_to_bool, None),
+    "INTERACTION_PROBE_ENABLED":       (_to_bool, None),
+    "COORDINATED_ATTACK_ENABLED":      (_to_bool, None),
+    "JOURNEY_CHECK_ENABLED":           (_to_bool, None),
+    "JA4H_DENY_LIST":                  (_to_ja4_set, None),
+    "ABUSEIPDB_CACHE_HOURS":           (lambda v: max(1, int(v)), None),
+    "SERVICE_OWNER":                   (str, lambda v: len(v) <= 128 and "<" not in v and ">" not in v and not any(ord(c) < 32 for c in v)),
+    "BLOCK_RESPONSE_MODE":             (str, lambda v: v in ("homepage", "404")),
+    "PRESERVE_HOST":                   (_to_bool, None),  # 1.8.14 — pass client Host to upstream (opt-in)
+    "VHOST_PORT_AWARE":                (_to_bool, None),  # 1.9.8 — host:port is a distinct vhost (opt-in)
+    "ALLOW_BYPASS_SECS":               (int, lambda v: 0 <= v <= 86400),
+    "REDIRECT_MAZE_ENABLED":           (_to_bool, None),  # 1.9.7 — was unregistered (kill-switch + Controls toggle)
+    "REDIRECT_MAZE_THRESHOLD":         (float, lambda v: 0.0 <= v <= 100000.0),
+    "REDIRECT_MAZE_DEPTH":             (int, lambda v: 1 <= v <= 12),
+    "REDIRECT_MAZE_MIN_MS":            (int, lambda v: 0 <= v <= 60000),
+    "REDIS_ALLOW_LIST":                (_to_ip_net_list, None),
+    "TRUST_XFF":                       (lambda v: str(v).lower(), lambda v: v in ("none", "first", "last")),
+    "TRUSTED_PROXIES":                 (_to_ip_net_list, None),
+    # iter-8 — invented validators for the 6 knobs that post-date mutants/.
+    "UPSTREAM_TIMEOUT_SECS":           (int, lambda v: 1 <= v <= 600),
+    "UPSTREAM_CONNECT_TIMEOUT_SECS":   (int, lambda v: 1 <= v <= 60),
+    "CIRCUIT_FAIL_THRESHOLD":          (int, lambda v: 1 <= v <= 10000),
+    "CIRCUIT_OPEN_SECS":               (int, lambda v: 1 <= v <= 3600),
+    "CIRCUIT_HALF_OPEN_MAX":           (int, lambda v: 1 <= v <= 1000),
+    "VACUUM_DAILY_AT":                 (str, lambda v: v == "" or (
+        len(v) == 5 and v[2] == ":" and v[:2].isdigit() and v[3:].isdigit()
+        and 0 <= int(v[:2]) < 24 and 0 <= int(v[3:]) < 60)),
+    # 1.9.1 iter-11 — ban blast-radius: "global" (default, fleet-wide ban) or
+    # "vhost" (ban only applies to the vhost where the behaviour was observed).
+    "BAN_SCOPE":                       (lambda v: str(v).strip().lower(),
+                                        lambda v: v in ("global", "vhost")),
 }
 
 # 1.5.5 — env-override detection.  By default the DB takes precedence over
@@ -2286,10 +2642,192 @@ _HOT_RELOAD_KNOBS = {
 # must default to False on every cold start for safety.
 _NOT_PERSIST_KNOBS: frozenset = frozenset({"BYPASS_MODE"})
 
+# Module-level SIGNAL_KNOB mapping: detector signal -> kill-switch knob name (or None
+# for always-on detectors). Used by the agents_endpoint UI (merged Toggles + Weights
+# table) and by static QA tests that verify every toggle is overridable at the vhost
+# level (see test_all_signal_knobs_in_vhost_coerce).
+SIGNAL_KNOB = {
+    "js-challenge":       "JS_CHALLENGE",
+    "bot-trap":           "BOT_TRAP_FORMS",
+    "suspicious-body":    "BODY_PATTERN_MATCH",
+    "canary-echo":        "CANARY_ECHO_DETECTION",
+    "accept-fp":          "ACCEPT_FP_ENABLED",
+    "labyrinth-jitter":   "LABYRINTH_JITTER_ENABLED",
+    "header-canary":      "HEADER_CANARY_ENABLED",
+    "origin-mismatch":    "STRICT_ORIGIN",
+    "tls-fingerprint":    "TLS_FP_BLOCK_ENABLED",
+    # Synthetic (non-scored) reasons resolve to their real control so the
+    # risk-breakdown popover can deep-link them. admin-ip-blocked → the
+    # ADMIN_ALLOWED_IPS allowlist (a global control, excluded from the
+    # per-vhost-coerce check via _GLOBAL_ONLY in test_pure).
+    "admin-ip-blocked":   "ADMIN_ALLOWED_IPS",
+    "abuseipdb-high":     "ABUSEIPDB_ENABLED",
+    "abuseipdb-med":      "ABUSEIPDB_ENABLED",
+    "feodo-c2":           "FEODO_ENABLED",
+    "cins-rogue":         "CINS_ENABLED",
+    "urlhaus-malware":    "URLHAUS_ENABLED",
+    "js-cua-version-mismatch": "JS_CONSISTENCY_ENABLED",
+    "js-mobile-hint-mismatch": "JS_CONSISTENCY_ENABLED",
+    "js-fetch-impossible":     "JS_CONSISTENCY_ENABLED",
+    "h2-settings-deny":        "H2_SETTINGS_FP_ENABLED",
+    "h2-settings-mismatch":    "H2_SETTINGS_FP_ENABLED",
+    # 1.9.7 — WAF kill-switch family (detections live in proxy()/check_body_*;
+    # each gated by the *_ENABLED knob, default on, per-vhost overridable).
+    "smuggling-cl-te": "WAF_SMUGGLING_ENABLED", "smuggling-te-cl": "WAF_SMUGGLING_ENABLED",
+    "smuggling-te-te": "WAF_SMUGGLING_ENABLED", "smuggling-dual-header": "WAF_SMUGGLING_ENABLED",
+    "smuggling-duplicate-cl": "WAF_SMUGGLING_ENABLED", "smuggling-invalid-te": "WAF_SMUGGLING_ENABLED",
+    "smuggling-obfuscated-te": "WAF_SMUGGLING_ENABLED",
+    "method-override-attempt": "WAF_VERB_OVERRIDE_ENABLED",
+    "header-ssti": "WAF_HEADER_INJECTION_ENABLED", "host-header-injection": "WAF_HEADER_INJECTION_ENABLED",
+    "body-critical-injection": "WAF_BODY_ENABLED", "body-xxe": "WAF_BODY_ENABLED",
+    "body-proto-pollution": "WAF_BODY_ENABLED",
+    "upload-dangerous-ext": "WAF_UPLOAD_ENABLED", "upload-dangerous-magic": "WAF_UPLOAD_ENABLED",
+    "gql-introspection": "WAF_GRAPHQL_ENABLED", "gql-batch-abuse": "WAF_GRAPHQL_ENABLED",
+    "gql-depth-exceeded": "WAF_GRAPHQL_ENABLED",
+    "no-interaction": "INTERACTION_PROBE_ENABLED", "scripted-motion": "INTERACTION_PROBE_ENABLED",
+    "scripted-keys": "INTERACTION_PROBE_ENABLED", "bot-scroll": "INTERACTION_PROBE_ENABLED",
+    "low-entropy-input": "INTERACTION_PROBE_ENABLED",
+    "honey-fp-match": "HONEYPOT_ENABLED", "coordinated-honeypot": "HONEYPOT_ENABLED",
+    "headers-suspicious": "HEADER_COMPLETENESS_ENABLED", "sec-fetch-nav-absent": "HEADER_COMPLETENESS_ENABLED",
+    "crowdsec-banned":    "CROWDSEC_ENABLED",
+    "asn-hosting":        "MAXMIND_ENABLED",
+    "country-blocked":    "COUNTRY_BLOCK_ENABLED",
+    "tor-exit":           "TOR_BLOCK_ENABLED",
+    "datacenter-vpn":     "DC_VPN_BLOCK_ENABLED",
+    "ua-ai-openai":       "AI_UA_OPENAI_ENABLED",
+    "ua-ai-anthropic":    "AI_UA_ANTHROPIC_ENABLED",
+    "ua-ai-google":       "AI_UA_GOOGLE_ENABLED",
+    "ua-ai-perplexity":   "AI_UA_PERPLEXITY_ENABLED",
+    "ua-ai-meta":         "AI_UA_META_ENABLED",
+    "ua-ai-other":        "AI_UA_OTHER_ENABLED",
+    "custom-rule-block":  "CUSTOM_RULES_ENABLED",
+    "rate-limit-endpoint": "ENDPOINT_RATE_LIMIT_ENABLED",
+    "body-sqli":          "BODY_GROUP_SQLI_ENABLED",
+    "body-xss":           "BODY_GROUP_XSS_ENABLED",
+    "body-lfi":           "BODY_GROUP_LFI_ENABLED",
+    "body-rce":           "BODY_GROUP_RCE_ENABLED",
+    "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
+    "body-cmd":           "BODY_GROUP_CMD_ENABLED",
+    "auth-jwt-invalid":   "JWT_VALIDATION_ENABLED",
+    "slow-client":        "WAF_SLOWLORIS_ENABLED",
+    "botd-detected":      "BOTD_ENABLED",
+    "dlp-cc":             "DLP_GROUP_CC_ENABLED",
+    "dlp-aws":            "DLP_GROUP_AWS_ENABLED",
+    "dlp-jwt":            "DLP_GROUP_JWT_ENABLED",
+    "dlp-private-key":    "DLP_GROUP_PRIVATE_KEY_ENABLED",
+    "dlp-api-key":        "DLP_GROUP_API_KEY_ENABLED",
+    "dlp-pii-email":      "DLP_GROUP_PII_EMAIL_ENABLED",
+    "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
+    "tarpit-walk":        "LABYRINTH_ENABLED",
+    "redirect-maze-bot":  "REDIRECT_MAZE_ENABLED",  # 1.9.7 — was unmapped
+    "header-order-fp":    "HEADER_ORDER_FP_ENABLED",
+    "ai-ua-ip-mismatch":  "AI_CRAWLER_VERIFY_ENABLED",
+    "locale-geo-mismatch":"LOCALE_GEO_CHECK_ENABLED",
+    "robots-violation":   "ROBOTS_MONITOR_ENABLED",
+    "h2-fp":              "H2_FP_ENABLED",
+    "json-canary":        "JSON_CANARY_ENABLED",
+    "honeypot":           "HONEYPOT_ENABLED",
+    "honeypot-silent":    "HONEYPOT_ENABLED",
+    "suspicious-path":    "SUSPICIOUS_PATH_ENABLED",
+    "ai-probe":           "AI_PROBE_ENABLED",
+    "ua-empty":           "UA_FILTER_ENABLED",
+    "ua-blocked":         "UA_FILTER_ENABLED",
+    "ua-too-short":       "UA_FILTER_ENABLED",
+    "ua-non-browser":     "UA_FILTER_ENABLED",
+    "ua-platform-mismatch": "UA_PLATFORM_CHECK_ENABLED",
+    "ai-headers-empty":   "HEADER_COMPLETENESS_ENABLED",
+    "ai-headers-incomplete": "HEADER_COMPLETENESS_ENABLED",
+    "behavior":           "BEHAVIORAL_CHECK_ENABLED",
+    "ai-enumeration":     "AI_ENUMERATION_ENABLED",
+    "ai-no-assets":       "AI_NO_ASSETS_ENABLED",
+    "session-flood":      "SESSION_FLOOD_ENABLED",
+    "upstream-404":       "UPSTREAM_404_TRACKING_ENABLED",
+    "cookie-ghost":       "COOKIE_GHOST_ENABLED",
+    "lifecycle-miss":     "COOKIE_LIFECYCLE_ENABLED",
+    "referer-ghost":      "REFERER_CHAIN_ENABLED",
+    "impossible-travel":  "IMPOSSIBLE_TRAVEL_ENABLED",
+    "soft-renderer":      "FP_ENRICHMENT_ENABLED",
+    "webgl-missing":      "FP_ENRICHMENT_ENABLED",
+    "path-sweep":         "PATH_SWEEP_ENABLED",
+    # 1.9.7 — kill-switch wiring gap fix. These signals are all emitted by the
+    # detector path and each has an existing, vhost-coercible *_ENABLED knob,
+    # but were never mapped here — so the dashboard kill-switch UI + the
+    # riskbreakdown knob_state enrichment reported them as always-on (no
+    # toggle) and the per-vhost override appeared to have no controlling knob.
+    # Every knob below is already in vhost._VHOST_COERCE (verified against
+    # test_all_signal_knobs_in_vhost_coerce). Pure metadata — enforcement is
+    # the inline `if <KNOB>:` in each detector, unchanged.
+    "ja4-required-missing":   "JA4_REQUIRED_ENABLED",
+    "ja4h-deny":              "JA4H_DENY_ENABLED",
+    "honey-cred":             "HONEY_CRED_ENABLED",
+    "canary-probe-miss":      "CANARY_PROBE_ENABLED",
+    "llm-no-subresources":    "LLM_HEURISTIC_ENABLED",
+    "webdriver-detected":     "AUTOMATION_PROBE_ENABLED",
+    "bot-motion":             "INTERACTION_PROBE_ENABLED",
+    "accept-wildcard-html":   "ACCEPT_WILDCARD_CHECK_ENABLED",
+    "coordinated-probe":      "COORDINATED_ATTACK_ENABLED",
+    "direct-api-probe":       "JOURNEY_CHECK_ENABLED",
+    "fp-banned":              "FP_BAN_CHECK_ENABLED",
+    "host-not-allowed":       "HOST_BLOCKING_ENABLED",
+    "missing-required-header": "REQUIRED_HEADERS_ENABLED",
+    "rate-limit":             "RATE_LIMIT_ENABLED",
+    "rate-limit-ip":          "RATE_LIMIT_IP_ENABLED",
+    "session-churn":          "SESSION_CHURN_ENABLED",
+    "traffic-threshold":      "TRAFFIC_THRESHOLD_ENABLED",
+    "upstream-auth-fail":     "UPSTREAM_AUTH_FAIL_ENABLED",
+}
+
 _ENV_PIN_EXCLUDE = {"TURNSTILE_ENABLED", "JS_CHALLENGE", "UPSTREAM"}
+
+
+# iter-9 (code-review HIGH-1): knobs whose VALUE changes the trust
+# topology of the gateway. Allowing `db_load_config` to populate these
+# from `config_kv` means an attacker with config_kv write access (admin
+# auth + CSRF bypass, OR SQL injection elsewhere) could escalate to
+# persistent IP spoofing by adding their own /32 to TRUSTED_PROXIES or
+# flipping TRUST_XFF to 'last' — the next request would land with an
+# attacker-controlled `get_ip(request)` and all IP-gated checks (admin
+# allowlist, country block, AbuseIPDB, ban-by-IP) silently fail open.
+#
+# These knobs MUST be set via env at deploy time. The runtime helpers
+# `_env_knob_is_provided` + `_ENV_PROVIDED_KNOBS` already env-pin
+# anything set in the environment, but for these specific knobs we go
+# further and refuse to load them from config_kv even if the env is
+# empty — the SAFE default (TRUST_XFF='none', TRUSTED_PROXIES=[]) wins.
+#
+# Operators who legitimately need to rotate these at runtime should
+# update the env (compose / k8s manifest) and restart, or set them via
+# the dashboard's /__secrets endpoint which gates on admin role + CSRF.
+_DB_LOAD_DENY = frozenset({
+    "TRUSTED_PROXIES",
+    "TRUST_XFF",
+    "ADMIN_ALLOWED_IPS",
+})
+
+
+def _env_knob_is_provided(k: str) -> bool:
+    """Return True if env var k should pin its knob.
+
+    For boolean knobs (parser is _to_bool): "0"/"false"/"no"/"off" returns
+    False so the DB can still re-enable the feature (DB-wins by default
+    in non-strict mode). For all other knobs (int, float, str, list
+    parsers): any non-empty value counts as 'operator provided this'
+    and pins it."""
+    val = os.environ.get(k, "")
+    if not val.strip():
+        return False
+    spec = _HOT_RELOAD_KNOBS.get(k)
+    if spec is not None and spec[0] is _to_bool:
+        try:
+            return _to_bool(val)
+        except ValueError:
+            return False
+    return True
+
+
 _ENV_PROVIDED_KNOBS = {
     k for k in _HOT_RELOAD_KNOBS
-    if k not in _ENV_PIN_EXCLUDE and os.environ.get(k, "").strip()
+    if k not in _ENV_PIN_EXCLUDE and _env_knob_is_provided(k)
 }
 if os.environ.get("CONFIG_KV_STRICT_ENV", "0") in ("1", "true", "yes"):
     _ENV_PROVIDED_KNOBS |= {k for k in _HOT_RELOAD_KNOBS
@@ -2318,6 +2856,127 @@ def _json_safe(v):
     return v
 
 
+def _ssrf_guard_url(url: str, label: str = "", allow_loopback: bool = False) -> None:
+    """Raise ValueError if *url* resolves to a private / cloud-metadata address.
+
+    Used to guard URL-type secrets (CROWDSEC_LAPI_URL, OIDC_ISSUER) so an
+    authenticated operator cannot weaponise the gateway as an SSRF vector by
+    pointing a reputation URL at http://169.254.169.254/ or an internal service.
+
+    allow_loopback=True exempts 127.0.0.0/8 and ::1 (CrowdSec sidecar pattern).
+    Skipped entirely when ALLOW_PRIVATE_UPSTREAM=1 for parity with upstream guard.
+    """
+    if globals().get("ALLOW_PRIVATE_UPSTREAM"):
+        return
+    import urllib.parse as _up2
+    import socket as _sock2
+    import ipaddress as _ipa2
+    from vhost import _PRIVATE_NETS as _PN
+    parsed = _up2.urlparse(url)
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"SSRF guard: {label or 'url'!r} has no hostname")
+    try:
+        addrs = {r[4][0] for r in _sock2.getaddrinfo(host, None)}
+    except _sock2.gaierror:
+        # 1.9.7 SECURITY — fail CLOSED on DNS failure. The old `return` let an
+        # unresolvable host through, so an attacker could supply a name that
+        # fails resolution here (e.g. a slow/poisoned resolver) and dodge the
+        # private-range check, then have it resolve to an internal IP at fetch
+        # time. This guard runs only on config writes (not the request hot
+        # path), so a transient DNS miss just makes the operator retry.
+        raise ValueError(
+            f"SSRF guard: {label or 'url'!r} host {host!r} does not resolve") from None
+    _nat64 = _ipa2.ip_network("64:ff9b::/96")   # RFC 6052 well-known prefix
+    for addr_str in addrs:
+        try:
+            ip = _ipa2.ip_address(addr_str)
+            if isinstance(ip, _ipa2.IPv6Address) and ip.ipv4_mapped:
+                ip = ip.ipv4_mapped
+            # NAT64 (64:ff9b::/96) embeds an IPv4 in the low 32 bits — unwrap it
+            # so a NAT64 literal can't smuggle a private/loopback IPv4 past the
+            # check (e.g. 64:ff9b::7f00:1 → 127.0.0.1).
+            elif isinstance(ip, _ipa2.IPv6Address) and ip in _nat64:
+                ip = _ipa2.ip_address(int(ip) & 0xFFFFFFFF)
+        except ValueError:
+            continue
+        for net in _PN:
+            if allow_loopback and net.overlaps(_ipa2.ip_network("127.0.0.0/8")):
+                continue
+            if allow_loopback and net.overlaps(_ipa2.ip_network("::1/128")):
+                continue
+            if ip in net:
+                slog("ssrf_guard_blocked", level="warn",
+                     label=label or url[:60], ip=str(ip), net=str(net))
+                raise ValueError(
+                    f"SSRF guard: {label or url[:60]!r} resolves to private "
+                    f"address {ip} ({net}). Use ALLOW_PRIVATE_UPSTREAM=1 to permit.")
+
+
+def _upstream_safe_to_reload(url: str) -> bool:
+    """SSRF guard for an operator-supplied UPSTREAM hot-reload value.
+
+    Returns False for non-http(s) URLs, schemeless strings, over-long URLs
+    (> 2048 chars), and hosts resolving to private / loopback / link-local /
+    cloud-metadata ranges. ``ALLOW_PRIVATE_UPSTREAM`` bypasses the private-range
+    check (returns True) for trusted internal deployments. A public URL whose
+    DNS does not resolve to a private range returns True.
+    """
+    if not isinstance(url, str) or len(url) > 2048:
+        return False
+    import urllib.parse as _up3
+    parsed = _up3.urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False
+    if globals().get("ALLOW_PRIVATE_UPSTREAM"):
+        return True
+    try:
+        _ssrf_guard_url(url, label="upstream-reload")
+        return True
+    except ValueError:
+        return False
+
+
+# 1.9.8 SECURITY — wire the SSRF-aware validator onto the UPSTREAM hot-reload
+# knob. _HOT_RELOAD_KNOBS is defined far above this point, so the dict literal
+# couldn't forward-reference _upstream_safe_to_reload; the placeholder there was
+# a bare scheme/length lambda with NO SSRF check (an admin could hot-swap
+# UPSTREAM to 169.254.169.254 / 127.0.0.1 / RFC-1918). Re-bind the validator to
+# the real guard now that it's defined (parser unchanged).
+_HOT_RELOAD_KNOBS["UPSTREAM"] = (_HOT_RELOAD_KNOBS["UPSTREAM"][0],
+                                 _upstream_safe_to_reload)
+
+
+# Secrets that carry HTTP URLs and need an SSRF check on write.
+# allow_loopback=True: CrowdSec LAPI may legitimately run as a sidecar on 127.x.
+_URL_SECRET_GUARDS: dict = {
+    "CROWDSEC_LAPI_URL": True,   # allow_loopback=True
+    "OIDC_ISSUER":       False,  # public OIDC provider expected; block all private IPs
+}
+
+
+# 1.9.1 fix (LIVE-2): sensitive secret-bearing knobs must never reach the
+# dashboard `/secured/config` JSON in plaintext. `POSTGRES_DSN` already gets
+# Fernet-wrapped on-disk; mask it in the response too so admins do not
+# inadvertently leak the DB credential via DevTools/HAR/screen-sharing.
+_DSN_REDACT_KNOBS = frozenset({"POSTGRES_DSN"})
+
+
+def _redact_state_value(key: str, value):
+    """Return a UI-safe value for a hot-reload knob. For DSN-style entries
+    keep enough metadata for the operator to identify the target while
+    stripping the password component. `value` is the raw string read from
+    globals; an empty/None value is returned untouched so the UI can still
+    render the 'unset' state."""
+    if key not in _DSN_REDACT_KNOBS or not value:
+        return value
+    try:
+        from db.cli_helpers import mask_dsn as _mask
+        return _mask(str(value))
+    except Exception:
+        return "(redacted)"
+
+
 def _read_hot_reload_state() -> dict:
     out = {}
     g = globals()
@@ -2328,6 +2987,7 @@ def _read_hot_reload_state() -> dict:
         # Sets are not JSON-serialisable directly.
         if isinstance(v, set):
             v = sorted(v)
+        v = _redact_state_value(k, v)
         out[k] = _json_safe(v)
     return out
 
@@ -2356,13 +3016,24 @@ async def config_endpoint(request: web.Request):
                 _overridden.append(_ku)
             return web.json_response(
                 {"state": _merged, "vhost": _vhost_q,
-                 "overridden": sorted(_overridden), "vhosts": _all_vhosts},
+                 "overridden": sorted(_overridden), "vhosts": _all_vhosts,
+                 # 1.9.7 — env-pinned knobs are read-only at runtime (an Apply
+                 # bounces off env-pin); surface them so the UI greys them out.
+                 "env_pinned": sorted(_ENV_PROVIDED_KNOBS)},
                 headers={"Cache-Control": "no-store"})
         return web.json_response(
-            {"state": _base, "vhost": "", "overridden": [], "vhosts": _all_vhosts},
+            {"state": _base, "vhost": "", "overridden": [], "vhosts": _all_vhosts,
+             "env_pinned": sorted(_ENV_PROVIDED_KNOBS)},
             headers={"Cache-Control": "no-store"})
     if request.method != "POST":
         return web.json_response({"error": "method not allowed"}, status=405,
+                                  headers={"Cache-Control": "no-store"})
+    # 1.9.1 fix (LIVE-3): state-changing /secured/config requires CSRF.
+    # Previously the endpoint was role-gated only — same-origin XSS could
+    # flip arbitrary hot-reloadable knobs (LOG_LEVEL, threshold values,
+    # detection toggles). Aligned with every other admin POST in the gateway.
+    if not _csrf_token_valid(request):
+        return web.json_response({"error": "forbidden"}, status=403,
                                   headers={"Cache-Control": "no-store"})
     if denied := _role_denied(request, "admin", "maintainer"):
         return denied
@@ -2574,6 +3245,10 @@ async def protect(request: web.Request, handler):
            else _new_request_id())
     request["_rid"] = rid
     set_vhost(request.host or "")
+    # 1.8.14 M-1 — activate this vhost's RISK_OVERRIDES (signal → weight) for the
+    # duration of the request. Task-scoped ContextVar, so concurrent requests on
+    # other vhosts are unaffected. None when the vhost sets no overrides.
+    _vhost_risk_ctx.set(vc("RISK_OVERRIDES") or None)
 
     # L3+N5: reject paths/query with ANY ASCII control byte (0x00-0x1F or 0x7F).
     # CR/LF would enable header injection on legacy backends; NUL truncates
@@ -2585,22 +3260,33 @@ async def protect(request: web.Request, handler):
         return web.Response(status=400, text="bad request\n",
                             headers={_REQUEST_ID_HEADER: rid})
 
-    # 1.6.7+: liveness probe is loopback-only. The container's HEALTHCHECK
-    # connects via the container's own loopback (request.remote=127.0.0.1),
-    # which is the only legitimate caller. Anyone else gets the upstream
-    # 404 silent decoy — same as every other locked admin path.
+    # iter-10 (DAST §15g): method allowlist on UPSTREAM-bound traffic, hoisted
+    # here so it runs BEFORE the JS-challenge gate below. Previously the check
+    # lived only in proxy() (the catch-all handler at line ~716); with
+    # JS_CHALLENGE on, a cookieless TRACE/CONNECT hit the challenge gate first
+    # and got a 200 challenge page instead of a 405 — DAST flagged TRACE → 200.
+    # Admin paths are exempt: they're separate registered routes (add_delete /
+    # add_post for bans, vhosts, etc.) with their own method routing, and
+    # ALLOWED_METHODS (default GET,HEAD,POST,OPTIONS) intentionally excludes
+    # the DELETE/PUT verbs those admin endpoints legitimately use.
+    _allowed_m = vc("ALLOWED_METHODS")  # 1.9.7 — per-vhost override honoured
+    if not _is_admin_path(request.path) and request.method not in _allowed_m:
+        return web.Response(status=405, text="method not allowed\n",
+                            headers={_REQUEST_ID_HEADER: rid,
+                                     "Allow": ", ".join(sorted(_allowed_m))})
+
+    # 1.6.7+: liveness probe. 1.9.7 — now a PUBLIC 200 "ok". A liveness
+    # endpoint is conventionally reachable (container HEALTHCHECK, k8s probe,
+    # LB health check, uptime monitor) and leaks nothing an attacker can't
+    # already infer from the gateway answering ANY request. The previous
+    # loopback-only decoy broke health checks routed through docker/NAT
+    # (request.remote = bridge IP, not 127.0.0.1) and flagged the DAST probe.
+    # Body is a bare "ok" — no version, no state.
     if request.path == ADMIN_NS + "/live":
-        src = get_ip(request) or ""
-        if src in ("127.0.0.1", "::1"):
-            return web.Response(text="ok",
-                                headers={"Cache-Control": "no-store",
-                                         "Content-Type": "text/plain; charset=utf-8",
-                                         _REQUEST_ID_HEADER: rid})
-        ua = request.headers.get("User-Agent", "")
-        await record(src, ua, request.path,
-                      _upstream_404_cache.get("status") or 404,
-                      "live-not-loopback", request_id=rid)
-        return await _serve_mirrored_404()
+        return web.Response(text="ok",
+                            headers={"Cache-Control": "no-store",
+                                     "Content-Type": "text/plain; charset=utf-8",
+                                     _REQUEST_ID_HEADER: rid})
 
     # v1.4 #1 — JS challenge: solver POSTs back here. Rate-limit by socket-IP
     # FIRST so an attacker can't burn proxy CPU (sha256 + JSON parse + dict
@@ -2644,6 +3330,65 @@ async def protect(request: web.Request, handler):
                 headers={"Content-Type": "text/plain; charset=utf-8",
                          "Cache-Control": "no-store",
                          _REQUEST_ID_HEADER: rid})
+
+    # 1.7.8 — Dashboard bypass mode (early). When BYPASS_MODE=True every non-admin
+    # upstream request is passed through with zero detection or ban enforcement.
+    # Must precede the bot-UA bypass loop (which can issue bans even in bypass)
+    # and the path allowlist below.
+    #
+    # The GLOBAL BYPASS_MODE is an emergency kill-switch and wins UNCONDITIONALLY
+    # — it must not be shadowable by a per-vhost override (a vhost overlay
+    # carrying BYPASS_MODE=False used to silently re-enable detection even after
+    # the operator flipped the site-wide bypass on → "can't disable the GW").
+    # A per-vhost BYPASS_MODE=True still lets a single vhost opt into pass-through.
+    if (BYPASS_MODE or vc('BYPASS_MODE')) and not _is_admin_path(request.path):
+        resp = await handler(request)
+        _bm_ip = get_ip(request) or request.remote or ""
+        await record(_bm_ip, request.headers.get("User-Agent", ""),
+                     request.path, resp.status, "",
+                     track_key=_bm_ip, request_id=rid, method=request.method)
+        return resp
+
+    # 1.8.12 M-4 — IP ban persistence: block raw IPs that earned a hostile ban
+    # across SESSION_KEY rotations. check_ip_ban() is a synchronous SQLite
+    # point-lookup with a 0.1 s timeout — effectively zero overhead on the hot
+    # path because SQLite WAL reads never block the writer.
+    if not _is_admin_path(request.path):
+        _raw_ip_check = get_ip(request) or request.remote or ""
+        if _raw_ip_check:
+            _ip_ban_until = 0
+            try:
+                # 1.9.5 perf #3 — TTL-cached lookups (hot IPs served from memory,
+                # writer invalidates on ban insert/delete so new bans apply now).
+                from db import check_ip_ban_cached
+                # Global bans always apply (backward-compatible, fail-safe).
+                _ip_ban_until = check_ip_ban_cached(_raw_ip_check)
+                # iter-11 — when BAN_SCOPE="vhost", also honour a ban scoped to
+                # THIS vhost. A global ban still wins if one exists; otherwise
+                # the per-vhost ban gates only this hostname.
+                if _ip_ban_until == 0 and vc('BAN_SCOPE') == 'vhost':
+                    from db import check_ip_ban_vhost_cached
+                    _ip_ban_until = check_ip_ban_vhost_cached(
+                        _raw_ip_check, current_vhost_host() or "")
+            except Exception:
+                pass  # nosec B110 — ip_bans check is defence-in-depth; never blocks on error
+            if _ip_ban_until > 0:
+                _ua_ipb = request.headers.get("User-Agent", "")
+                # 1.8.13 — emit honeypot-silent for honeypot paths so the
+                # attack-playbook dashboard captures probes from IP-banned
+                # attackers (this check fires before the identity ban check).
+                # record() is wrapped separately so a transient DB error never
+                # prevents the decoy response from being returned (F-01).
+                if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
+                    try:
+                        await record(_raw_ip_check, _ua_ipb, request.path, 0,
+                                     "honeypot-silent", track_key=_raw_ip_check,
+                                     request_id=rid, method=request.method)
+                    except Exception:  # nosec B110
+                        slog("ip_ban_record_error", level="warn", ip=_raw_ip_check)
+                return await _silent_decoy_response(
+                    _raw_ip_check, _ua_ipb, request.path,
+                    "ip-ban", ja4=_request_ja4(request), request_id=rid)
 
     # 1.7.4 — Authorized monitoring bot pass-through.
     # Each entry in AUTHORIZED_BOT_UAS is a dict: {name, ua, path, ips, action, enabled}.
@@ -2712,7 +3457,7 @@ async def protect(request: web.Request, handler):
     # Calls record() with empty reason so traffic appears in the dashboard timeline
     # and clients table as clean allowed traffic. All bypass-path requests from the
     # same IP update the same single ip_state entry — no fan-out per request.
-    if vc('BYPASS_PATHS') and any(request.path.startswith(p) for p in vc('BYPASS_PATHS')):
+    if vc('BYPASS_PATHS') and any(request.path.startswith(p[:-1]) if p.endswith("*") else (request.path.startswith(p) if p.endswith("/") else request.path == p) for p in vc('BYPASS_PATHS')):
         resp = await handler(request)
         _bp_ip = get_ip(request) or request.remote or ""
         await record(_bp_ip, request.headers.get("User-Agent", ""),
@@ -2720,18 +3465,46 @@ async def protect(request: web.Request, handler):
                      track_key=_bp_ip, request_id=rid, method=request.method)
         return resp
 
-    # 1.7.8 — Dashboard bypass mode. When BYPASS_MODE=True (set by the Controls
-    # bypass toggle) every non-admin upstream request is passed through with zero
-    # detection or ban enforcement. Admin-namespace paths still go through the
-    # normal protect() flow so admin auth remains in effect.
-    if vc('BYPASS_MODE') and not _is_admin_path(request.path):
-        resp = await handler(request)
-        _bm_ip = get_ip(request) or request.remote or ""
-        # Empty reason → shows as clean allowed traffic in dashboard (no label).
-        await record(_bm_ip, request.headers.get("User-Agent", ""),
-                     request.path, resp.status, "",
-                     track_key=_bm_ip, request_id=rid, method=request.method)
-        return resp
+    # 1.8.12 M-4 — IP ban persistence: block raw IPs that earned a hostile ban
+    # across SESSION_KEY rotations. check_ip_ban() is a synchronous SQLite
+    # point-lookup with a 0.1 s timeout — effectively zero overhead on the hot
+    # path because SQLite WAL reads never block the writer.
+    if not _is_admin_path(request.path):
+        _raw_ip_check = get_ip(request) or request.remote or ""
+        if _raw_ip_check:
+            _ip_ban_until = 0
+            try:
+                # 1.9.5 perf #3 — TTL-cached lookups (hot IPs served from memory,
+                # writer invalidates on ban insert/delete so new bans apply now).
+                from db import check_ip_ban_cached
+                # Global bans always apply (backward-compatible, fail-safe).
+                _ip_ban_until = check_ip_ban_cached(_raw_ip_check)
+                # iter-11 — when BAN_SCOPE="vhost", also honour a ban scoped to
+                # THIS vhost. A global ban still wins if one exists; otherwise
+                # the per-vhost ban gates only this hostname.
+                if _ip_ban_until == 0 and vc('BAN_SCOPE') == 'vhost':
+                    from db import check_ip_ban_vhost_cached
+                    _ip_ban_until = check_ip_ban_vhost_cached(
+                        _raw_ip_check, current_vhost_host() or "")
+            except Exception:
+                pass  # nosec B110 — ip_bans check is defence-in-depth; never blocks on error
+            if _ip_ban_until > 0:
+                _ua_ipb = request.headers.get("User-Agent", "")
+                # 1.8.13 — emit honeypot-silent for honeypot paths so the
+                # attack-playbook dashboard captures probes from IP-banned
+                # attackers (this check fires before the identity ban check).
+                # record() is wrapped separately so a transient DB error never
+                # prevents the decoy response from being returned (F-01).
+                if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
+                    try:
+                        await record(_raw_ip_check, _ua_ipb, request.path, 0,
+                                     "honeypot-silent", track_key=_raw_ip_check,
+                                     request_id=rid, method=request.method)
+                    except Exception:  # nosec B110
+                        slog("ip_ban_record_error", level="warn", ip=_raw_ip_check)
+                return await _silent_decoy_response(
+                    _raw_ip_check, _ua_ipb, request.path,
+                    "ip-ban", ja4=_request_ja4(request), request_id=rid)
 
     # 1.5.1: operator-controlled global throughput limit. When the rolling
     # 1-second request count is over GLOBAL_RPS_LIMIT, silent-decoy this
@@ -2756,9 +3529,10 @@ async def protect(request: web.Request, handler):
     # F3: method allowlist at Layer 0 — short-circuits before PoW / rate
     # limit / behavioral could preempt with their own response. Internal
     # admin routes accept any method (HEAD probes, OPTIONS preflight).
-    if (not _is_admin_path(request.path) or not _admin_ip_allowed(request)) and request.method not in ALLOWED_METHODS:
+    _vc_methods = vc("ALLOWED_METHODS")  # 1.9.7 — per-vhost override honoured
+    if (not _is_admin_path(request.path) or not _admin_ip_allowed(request)) and request.method not in _vc_methods:
         return web.Response(status=405, text="method not allowed\n",
-                            headers={"Allow": ", ".join(sorted(ALLOWED_METHODS))})
+                            headers={"Allow": ", ".join(sorted(_vc_methods))})
 
     # F1: Host header allowlist (D-i-D). When ALLOWED_HOSTS is configured,
     # silently decoy any request whose Host header is not on the list. This
@@ -2766,9 +3540,22 @@ async def protect(request: web.Request, handler):
     # blocking host-header-based reconnaissance / cache poisoning attempts at
     # OUR gate. The hostname-only comparison strips the port (request.host
     # may be "example.com:8443").
-    if ALLOWED_HOSTS:
+    # 1.8.15 — when ALLOWED_HOSTS is empty BUT vhosts are registered, the set
+    # of configured vhost hostnames acts as the implicit allowlist. Refreshed
+    # per request because vhost.VHOSTS is mutable at runtime.
+    _VHOSTS_LAYER0 = frozenset(
+        (h or "").split(":", 1)[0].lower() for h in (VHOSTS or {}) if h
+    )
+    # iter-11 — admin paths are exempt from the Host allowlist. They are
+    # already gated by the admin-IP allowlist + session auth + decoy-404, so
+    # Host matching adds nothing there; without this exemption an operator who
+    # configures VHOSTS (which turns on the implicit-allowlist branch below)
+    # could no longer reach the dashboard via the server IP / localhost — only
+    # via an exact vhost hostname. Same admin-exempt pattern as the method gate.
+    if (ALLOWED_HOSTS or _VHOSTS_LAYER0) and not _is_admin_path(request.path):
         host = (request.host or "").split(":", 1)[0].lower()
-        if host not in ALLOWED_HOSTS:
+        _gate_set = ALLOWED_HOSTS if ALLOWED_HOSTS else _VHOSTS_LAYER0
+        if host not in _gate_set:
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
             return await _silent_decoy_response(ip, ua, request.path,
@@ -2870,7 +3657,19 @@ async def protect(request: web.Request, handler):
     #     does NOT leak that the gateway exists by returning 401).
     # Placed AFTER host/TLS/origin/required-header stealth checks so those
     # block paths take precedence and remain undetectable.
-    if _js_challenge_required(request):
+    # 1.8.13 — Trap paths are EXEMPT from the challenge gate. A honeypot
+    # path (HONEYPOT_PATHS) or a suspicious / flag-hunting path
+    # (is_suspicious_path) must reach its detector and fire the matching
+    # decoy + ban — instead of being silent-decoyed here as a generic
+    # `chal-required`. Without this, cookieless scanners (the exact
+    # traffic the traps exist to catch) never reach the honeypot detector
+    # and the Honeypots dashboard stays empty even though bots are hitting
+    # traps.
+    _is_trap_path = (
+        (vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'))
+        or (vc('SUSPICIOUS_PATH_ENABLED') and is_suspicious_path(request.path_qs))
+    )
+    if _js_challenge_required(request) and not _is_trap_path:
         if _js_challenge_applicable(request):
             _pow_chal_str = ""
             if POW_CHAL_THRESHOLD > 0:
@@ -2908,25 +3707,6 @@ async def protect(request: web.Request, handler):
         else:
             ip = get_ip(request)
             ua = request.headers.get("User-Agent", "")
-            # 1.8.13: honour honeypot + suspicious-path detection even when
-            # the client cannot pass the JS challenge — probing /.env or
-            # /wp-login.php is still a hostile signal regardless of challenge
-            # state. Record + ban before returning chal-required so events
-            # are captured on challenge-first deployments (pt4.tech, jtsl.pt).
-            if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
-                _hp_tk, _hp_sid, _hp_fp, _, _ = get_identity(request)
-                await update_risk_and_maybe_ban(_hp_tk, "honeypot-silent", ip)
-                return await _silent_decoy_response(
-                    ip, ua, request.path, "honeypot-silent",
-                    track_key=_hp_tk, sid=_hp_sid, fp=_hp_fp,
-                    ja4=_request_ja4(request), request_id=rid)
-            if vc('SUSPICIOUS_PATH_ENABLED') and is_suspicious_path(request.path_qs):
-                _sp_tk, _sp_sid, _sp_fp, _, _ = get_identity(request)
-                await update_risk_and_maybe_ban(_sp_tk, "suspicious-path", ip)
-                return await _silent_decoy_response(
-                    ip, ua, request.path, "suspicious-path",
-                    track_key=_sp_tk, sid=_sp_sid, fp=_sp_fp,
-                    ja4=_request_ja4(request), request_id=rid)
             return await _silent_decoy_response(ip, ua, request.path,
                                                 "chal-required",
                                                 ja4=_request_ja4(request), request_id=rid)
@@ -2964,8 +3744,20 @@ async def protect(request: web.Request, handler):
             return _adm_resp
         ip = get_ip(request)
         ua = request.headers.get("User-Agent", "")
-        reason = ("admin-ip-blocked" if not _admin_ip_allowed(request)
-                  else "internal-probe")
+        # 1.9.7 SECURITY — split the legacy catch-all 'internal-probe' into an
+        # HMAC-validated classification so a scanner cannot forge a benign label
+        # by merely presenting any cookie. admin-ip-blocked stays distinct; for
+        # an IP-allowed hit, a cryptographically VALID signed session means the
+        # operator themselves hit a 404 (operator-self), while no/invalid
+        # session is an unauthenticated probe of the admin surface (admin-probe)
+        # — which must still be counted as recon. 'internal-probe' is retained
+        # only as a legacy label for historical DB rows/tooltips, never emitted.
+        if not _admin_ip_allowed(request):
+            reason = "admin-ip-blocked"
+        else:
+            from admin.users import _session_parse, _SESSION_COOKIE
+            _sess = _session_parse(request.cookies.get(_SESSION_COOKIE, ""))
+            reason = "operator-self" if _sess else "admin-probe"
         # 1.5.4: serve the upstream's actual 404 page (cached at startup,
         # refreshed hourly). An attacker probing the admin namespace sees
         # the same response as if they'd hit any non-existent path on the
@@ -3022,14 +3814,44 @@ async def protect(request: web.Request, handler):
         _early_html_loads   = _s_early.html_loads
         _early_static_loads = _s_early.static_loads
         _early_req_count    = _s_early.request_count
+        _early_bypass_until = _s_early.bypass_until
 
+    # ── Operator Allow grace (1.8.15) ───────────────────────────────────────
+    # _admin_authed_bypass: a fully-authenticated operator (valid admin session
+    # AND allowlisted source IP) browsing the protected site is not scored. The
+    # session requirement is critical — keying off the IP alone would let any
+    # bot sharing an operator's NAT/loopback address skip detection entirely.
+    _admin_authed_bypass = (_internal_authed(request) and bool(_is_admin_ip(ip))
+                            and not _is_admin_path(request.path))
+    if _admin_authed_bypass:
+        resp = await handler(request)
+        await record(ip, request.headers.get("User-Agent", ""),
+                     request.path, resp.status, "operator-allowed",
+                     track_key=identity, request_id=rid, method=request.method)
+        return resp
+    # operator-granted bypass window: when an admin clicks Allow/Unban we stamp
+    # bypass_until (monotonic) on the identity; while it's in the future we skip
+    # the heuristic detector pipeline entirely so a freshly-allowed visitor can
+    # re-establish a session without being re-banned by residual signals
+    # (session-churn, header-order-fp, ai-headers-incomplete, …). Recorded as
+    # 'operator-allowed' so SIEM/timeline can tell it apart from organic traffic.
+    if _early_bypass_until > _t.monotonic():
+        resp = await handler(request)
+        await record(ip, request.headers.get("User-Agent", ""),
+                     request.path, resp.status, "operator-allowed",
+                     track_key=identity, request_id=rid, method=request.method)
+        return resp
+
+    # Honey fingerprint cross-reference and the rest of the heuristic detector
+    # pipeline run only for non-bypassed identities, starting here.
     # 1.6.5 — escalation gate: skip the expensive / external intel layer
     # for identities with zero accumulated risk. ESCALATION_THRESHOLD=0
     # reverts to legacy "run on every request" behaviour. Saves AbuseIPDB
     # quota + CrowdSec round-trip on the 99% of requests that are clean.
     _esc_score    = _escalation_score(identity)
-    _escalate     = (ESCALATION_THRESHOLD <= 0)    or (_esc_score >= ESCALATION_THRESHOLD)
-    _second_order = (SECOND_ORDER_THRESHOLD <= 0)  or (_esc_score >= SECOND_ORDER_THRESHOLD)
+    # 1.9.7 — removed dead `_escalate` / `_second_order` locals: they were
+    # computed here but never read (the per-signal gate uses _should_run_signal
+    # with _esc_score directly). _esc_score itself is still used below.
 
     # ── 1.5.3: external IP-intel layer (AbuseIPDB) — escalate-only ──
     # Cached in SQLite — typical cost is ~0.1ms cached, 100-300ms uncached
@@ -3040,6 +3862,23 @@ async def protect(request: web.Request, handler):
             await update_risk_and_maybe_ban(identity, "abuseipdb-high", ip)
         elif ab_score >= ABUSEIPDB_MED_THRESHOLD:
             await update_risk_and_maybe_ban(identity, "abuseipdb-med", ip)
+
+    # 1.9.7: threat-intel feeds (Feodo C2 / CINS / URLhaus) — in-process O(1)
+    # set-membership, so it runs on every request (not escalate-gated).
+    # feeds_check() self-gates on FEODO/CINS/URLHAUS_ENABLED (default off) and
+    # skips private/loopback IPs, returning the matched reason name(s).
+    for _feed_reason in feeds_check(ip):
+        await update_risk_and_maybe_ban(identity, _feed_reason, ip)
+
+    # 1.9.7: JS-consistency (Sec-CH-UA / Sec-Fetch header coherence). Header-only,
+    # in-process; js_consistency_signals self-gates on JS_CONSISTENCY_ENABLED.
+    for _jc_reason in js_consistency_signals(request.headers):
+        await update_risk_and_maybe_ban(identity, _jc_reason, ip)
+
+    # 1.9.7: H2 SETTINGS fingerprint (fingerproxy sidecar injects X-H2-* headers).
+    # h2fp_signals self-gates on H2_SETTINGS_FP_ENABLED (default off).
+    for _h2_reason in h2fp_signals(request):
+        await update_risk_and_maybe_ban(identity, _h2_reason, ip)
 
     # 1.5.3: CrowdSec community-blocklist check — escalate-only (~5ms LAPI)
     if CROWDSEC_ENABLED and _should_run_signal("crowdsec-banned", _esc_score):
@@ -3184,6 +4023,13 @@ async def protect(request: web.Request, handler):
     # 1. Banned check (per-identity, not per-IP) → SILENT decoy
     banned, remaining = await is_banned(track_key)
     if banned:
+        # F-02: honeypot probes by banned identity emit honeypot-silent.
+        if vc('HONEYPOT_ENABLED') and request.path in vc('HONEYPOT_PATHS'):
+            try:
+                await record(ip, ua, path, 0, "honeypot-silent",
+                             track_key=track_key, request_id=rid)
+            except Exception:  # nosec B110
+                slog("id_ban_record_error", level="warn", ip=ip)
         return await _silent_decoy_response(
             ip, ua, path, "banned-silent", track_key=track_key, sid=sid, fp=fp, ja4=ja4, request_id=rid
         )
@@ -3482,7 +4328,8 @@ async def protect(request: web.Request, handler):
         ".css", ".js", ".mjs", ".png", ".jpg", ".jpeg", ".gif", ".svg",
         ".webp", ".avif", ".ico", ".woff", ".woff2", ".ttf", ".otf",
         ".eot", ".map", ".mp4", ".webm", ".mp3", ".ogg")))
-    if not is_static_asset_get:
+    # 1.9.7 — gated by the RATE_LIMIT_ENABLED kill-switch (default on, per-vhost).
+    if vc("RATE_LIMIT_ENABLED") and not is_static_asset_get:
         allowed, retry, remaining_tokens = await take_token(track_key)
         if not allowed:
             return await deny(429, "rate-limit",
@@ -3628,15 +4475,41 @@ async def protect(request: web.Request, handler):
 async def pow_endpoint(request: web.Request):
     """Issue a fresh PoW challenge bound to (method, path) supplied via query.
     Example: /__pow?method=POST&path=/login
+
+    SH-3: rate-limited per source IP (POW_RL_LIMIT req / POW_RL_WINDOW s).
+    Returns the cached challenge string when the same IP calls within the window
+    so multiple rapid calls do not burn extra server CPU (idempotent issuance).
     """
     method = (request.query.get("method", "POST") or "POST").upper()
     path = request.query.get("path", "/") or "/"
-    # 1.6.10 — pass caller's current risk_score for difficulty scaling
-    ip = request.remote or ""
-    identity, _, _, _, _ = get_identity(request)
-    async with state_lock:
-        _risk = int(ip_state[identity].risk_score)
-    challenge = make_pow_challenge(method, path, risk_score=_risk)
+
+    # Rate-limit by socket IP (not X-Forwarded-For — prevents header spoofing).
+    _pow_src_ip = request.remote or "0.0.0.0"  # nosec B104 — fallback sentinel
+    import time as _t_pow
+    _now_pow = _t_pow.monotonic()
+    _rl_entry = _POW_RL.get(_pow_src_ip)
+    if _rl_entry is None or _now_pow - _rl_entry[0] > POW_RL_WINDOW:
+        _POW_RL[_pow_src_ip] = [_now_pow, 1]
+    elif _rl_entry[1] >= POW_RL_LIMIT:
+        return web.Response(
+            status=429, text="rate limit\n",
+            headers={"Retry-After": str(int(POW_RL_WINDOW)),
+                     "Cache-Control": "no-store"})
+    else:
+        _rl_entry[1] += 1
+
+    # Idempotent: reuse cached challenge if within the window.
+    _cached = _POW_CHAL_CACHE.get(_pow_src_ip)
+    if _cached and _now_pow - _cached[1] < POW_RL_WINDOW:
+        challenge = _cached[0]
+    else:
+        # 1.6.10 — pass caller's current risk_score for difficulty scaling
+        identity, _, _, _, _ = get_identity(request)
+        async with state_lock:
+            _risk = int(ip_state[identity].risk_score)
+        challenge = make_pow_challenge(method, path, risk_score=_risk)
+        _POW_CHAL_CACHE[_pow_src_ip] = (challenge, _now_pow)
+
     eff_diff = int(challenge.split("|")[2])
     return web.json_response({
         "challenge": challenge,
@@ -3660,7 +4533,9 @@ async def honey_probe_endpoint(request: web.Request):
     comment in DevTools and curiosity-clicked the URL."""
     ip = get_ip(request)
     key = request.rel_url.query.get("k", "")
-    if key and len(key) <= 64:
+    # 1.9.7 SECURITY — rate-limit the probe per-IP so an attacker can't hammer
+    # the lookup/ban path (cheap DoS) or farm bans. Over the limit → bland 200.
+    if key and len(key) <= 64 and _probe_rate_limit_ok(ip):
         honey_identity = lookup_honey_key(key)
         if honey_identity:
             # Skip ban if requester has a valid JS-challenge cookie — real browser.
@@ -3669,7 +4544,12 @@ async def honey_probe_endpoint(request: web.Request):
             has_chal = bool(cookie and _verify_chal_cookie(
                 cookie, ua, _ip_tier(ip), _request_ja4(request)))
             if not has_chal:
-                await update_risk_and_maybe_ban(honey_identity, "honey-cred", ip)
+                # 1.9.7 SECURITY — ban the REQUESTER's own identity, NEVER the
+                # victim the honey key was issued to. The old code banned
+                # honey_identity (issued-for), so an attacker who scraped a
+                # leaked key out of one victim's HTML could get THAT victim
+                # banned by probing it. The requester is who actually triggered.
+                await update_risk_and_maybe_ban(get_identity(request), "honey-cred", ip)
     # Bland 200 response — never 403/404, would tell the agent its probe failed
     return web.Response(
         status=200,
@@ -3801,6 +4681,7 @@ async def detector_stats_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+@_require_csrf
 async def db_switch_endpoint(request: web.Request):
     """1.6.5 — operator-triggered swap of the active DB backend.
 
@@ -3824,6 +4705,12 @@ async def db_switch_endpoint(request: web.Request):
     """
     if denied := _role_denied(request, "admin", "maintainer"):
         return denied
+    # 1.8.15 — refuse DB backend switch while a VACUUM is in flight; the
+    # switch issues os._exit() which would interrupt the VACUUM mid-write.
+    if _DB_VACUUM_LOCK.locked():
+        return web.json_response(
+            {"ok": False, "reason": "VACUUM in progress; retry once it completes"},
+            status=409, headers={"Cache-Control": "no-store"})
     target = (request.query.get("target", "") or "").strip().lower()
     if target not in ("sqlite", "postgres"):
         return web.json_response(
@@ -3831,7 +4718,11 @@ async def db_switch_endpoint(request: web.Request):
             status=400, headers={"Cache-Control": "no-store"})
 
     # On switch-to-postgres we may receive a fresh DSN in the body.
+    # 1.9.0 (F10) — full_migrate=true requests a deferred historical-events
+    # migration after the recent-window copy. Defaults to True for the
+    # common "I want all my events on the new backend" intent.
     body_dsn = ""
+    full_migrate = True
     if request.method == "POST":
         try:
             raw = await asyncio.wait_for(request.content.read(8192),
@@ -3839,6 +4730,7 @@ async def db_switch_endpoint(request: web.Request):
             body = json.loads(raw.decode("utf-8") or "{}")
             if isinstance(body, dict):
                 body_dsn = str(body.get("dsn", "")).strip()
+                full_migrate = bool(body.get("full_migrate", True))
         except (asyncio.TimeoutError, ValueError, json.JSONDecodeError):
             return web.json_response(
                 {"ok": False, "reason": "bad json body"},
@@ -3856,16 +4748,57 @@ async def db_switch_endpoint(request: web.Request):
                 {"ok": False,
                  "reason": "no POSTGRES_DSN configured (set it before switching)"},
                 status=400, headers={"Cache-Control": "no-store"})
+        # 1.9.0 (F2) — validate the DSN before connecting + persisting. Without
+        # this, an attacker with an admin session could redirect the gateway
+        # at an attacker-controlled PG (exfiltrating every subsequent event
+        # write). `pg_test_roundtrip()` only proves the DSN is REACHABLE — not
+        # that it points at an authorised host. Operators MAY pin trusted
+        # hosts via env (POSTGRES_DSN_ALLOWED_HOSTS, comma-separated).
+        try:
+            from urllib.parse import urlparse as _urlparse_dsn
+            _parsed = _urlparse_dsn(dsn)
+        except Exception:
+            return web.json_response(
+                {"ok": False, "reason": "DSN is not a valid URL"},
+                status=400, headers={"Cache-Control": "no-store"})
+        if _parsed.scheme not in ("postgres", "postgresql"):
+            return web.json_response(
+                {"ok": False,
+                 "reason": f"DSN scheme must be postgres:// or postgresql://; got {_parsed.scheme!r}"},
+                status=400, headers={"Cache-Control": "no-store"})
+        if not _parsed.hostname:
+            return web.json_response(
+                {"ok": False, "reason": "DSN has no hostname"},
+                status=400, headers={"Cache-Control": "no-store"})
+        _allowed_hosts_raw = os.environ.get("POSTGRES_DSN_ALLOWED_HOSTS", "").strip()
+        if _allowed_hosts_raw:
+            _allowed = {h.strip().lower() for h in _allowed_hosts_raw.split(",") if h.strip()}
+            if _parsed.hostname.lower() not in _allowed:
+                slog("db_switch_dsn_host_rejected", level="warn",
+                     host=_parsed.hostname,
+                     allowed=sorted(_allowed),
+                     actor=_request_username(request) or "")
+                return web.json_response(
+                    {"ok": False,
+                     "reason": f"DSN host {_parsed.hostname!r} not in POSTGRES_DSN_ALLOWED_HOSTS"},
+                    status=400, headers={"Cache-Control": "no-store"})
+        _dsn_host = _parsed.hostname
+        _dsn_user = _parsed.username or ""
+        _dsn_port = _parsed.port
         # Probe the DB end-to-end before committing — we don't want to
         # re-exec the container into a state that won't connect.
         try:
+            import db.postgres as _pg_for_probe
             saved_dsn = globals().get("POSTGRES_DSN", "")
+            saved_pg_dsn = getattr(_pg_for_probe, "POSTGRES_DSN", "")
             globals()["POSTGRES_DSN"] = dsn
             globals()["DB_BACKEND"]   = "postgres"
+            _pg_for_probe.POSTGRES_DSN = dsn  # propagate to probe site
             probe = pg_test_roundtrip()
         finally:
             globals()["POSTGRES_DSN"] = saved_dsn
             globals()["DB_BACKEND"]   = DB_BACKEND  # noqa
+            _pg_for_probe.POSTGRES_DSN = saved_pg_dsn
         if not probe.get("ok"):
             return web.json_response(
                 {"ok": False,
@@ -3874,11 +4807,9 @@ async def db_switch_endpoint(request: web.Request):
 
     # 1.6.5 — copy the last 60 s of events from the source backend to the
     # target backend so the dashboard timeline doesn't lose its tail
-    # during the cut-over. config_kv / secrets_kv / admin_ips / bans /
-    # clients / timeline ALL live in SQLite regardless of DB_BACKEND so
-    # they survive automatically — only the events split between the two.
-    # Apply the DSN temporarily so _migrate_recent_events sees the same
-    # connection state the post-restart gateway will use.
+    # during the cut-over. Capture switch_ts BEFORE the recent-window
+    # migration so the deferred bg migration (F12) uses a clean cutoff.
+    switch_ts = _t.time()
     saved_dsn = globals().get("POSTGRES_DSN", "")
     if target == "postgres" and body_dsn:
         globals()["POSTGRES_DSN"] = body_dsn
@@ -3891,28 +4822,136 @@ async def db_switch_endpoint(request: web.Request):
     slog("db_switch_migration", level="warn", **migration,
          target=target)
 
-    # Persist the new backend (and DSN if supplied) to config_kv. Uses the
-    # async writer queue so the change is durable BEFORE we exit. The
-    # config_kv table itself stays in SQLite across both backends, so
-    # this also serves as the cross-backend operational state vault.
-    if db_queue is not None:
-        n = _t.time()
+    # 1.9.0 (F12) — full_migrate is resumed post-restart by on_startup.
+    # The handler writes a `pending_bg_migration` config_kv marker; the
+    # boot hook (proxy._resume_pending_bg_migration) claims via
+    # _try_claim_bg_migration and runs the COPY against the now-current
+    # backend. Scheduling here would race the os._exit(0) 1 s later.
+    bg_scheduled = False
+    cutoff_ts = switch_ts - 60
+    if full_migrate:
         try:
-            db_queue.put_nowait(("set_config",
-                                  ("DB_BACKEND", json.dumps(target), n)))
-            if target == "postgres" and body_dsn:
-                db_queue.put_nowait(("set_config",
-                                      ("POSTGRES_DSN", json.dumps(body_dsn), n)))
+            direction = "sqlite->postgres" if target == "postgres" else "postgres->sqlite"
+            _pending = {
+                "target": target,
+                "direction": direction,
+                "cutoff_ts": cutoff_ts,
+                "scheduled_ts": _t.time(),
+                "actor": _request_username(request) or "",
+            }
+            # iter-5 fix: write the F12 marker DIRECTLY to SQLite
+            # (same reasoning as the DB_BACKEND persist below — the
+            # writer queue is async and can lose ops to the 1 s
+            # os._exit(0) race). The marker must survive the restart.
+            try:
+                # iter-7 fix: use _sqlite_connect() so the marker write
+                # inherits WAL + tuned pragmas in line with the writer
+                # loop's own connection. Bare sqlite3.connect() would
+                # leave journal_mode at SQLite's DELETE default for
+                # this connection, blocking concurrent writes.
+                from db.sqlite import _sqlite_connect as _mig_sq
+                _mconn = _mig_sq(DB_PATH)
+                _mconn.execute(
+                    "INSERT OR REPLACE INTO config_kv (key, value, ts) "
+                    "VALUES (?, ?, ?)",
+                    ("pending_bg_migration", json.dumps(_pending),
+                     _t.time()))
+                _mconn.commit()
+                _mconn.close()
+                bg_scheduled = True
+                slog("db_switch_bg_migrate_deferred", level="info",
+                     target=target, cutoff_ts=cutoff_ts, direction=direction,
+                     note="will resume in on_startup after restart")
+            except Exception as _mwerr:
+                slog("db_switch_bg_marker_persist_failed", level="warn",
+                     error=f"{type(_mwerr).__name__}: {str(_mwerr)[:120]}")
+        except Exception as _bg_err:
+            slog("db_switch_bg_migrate_err", level="warn",
+                 error=str(_bg_err)[:200])
+
+    # Persist the new backend (and DSN if supplied). iter-5 fix:
+    # write DB_BACKEND DIRECTLY to SQLite from this coroutine instead of
+    # relying on the async writer queue + a 0.5 s sleep. Tested live:
+    # 0.5 s wasn't always enough — the os._exit(0) below could fire
+    # before the writer loop processed the queued set_config op, leaving
+    # the post-restart gateway on the OLD backend. Direct write is
+    # synchronous + WAL-durable on commit, eliminating the race.
+    n = _t.time()
+    try:
+        # iter-7 fix: use _sqlite_connect() so the DB_BACKEND write
+        # inherits WAL mode + tuned pragmas (parity with the writer
+        # loop's connection). Bare sqlite3.connect() inherited the
+        # existing journal_mode but missed the synchronous=NORMAL +
+        # wal_autocheckpoint tuning.
+        from db.sqlite import _sqlite_connect as _switch_sq
+        _sconn = _switch_sq(DB_PATH)
+        _sconn.execute(
+            "INSERT OR REPLACE INTO config_kv (key, value, ts) "
+            "VALUES (?, ?, ?)",
+            ("DB_BACKEND", json.dumps(target), n))
+        _sconn.commit()
+        _sconn.close()
+    except Exception as _persist_err:
+        slog("db_switch_persist_failed", level="error",
+             error=f"{type(_persist_err).__name__}: {str(_persist_err)[:120]}")
+        return web.json_response(
+            {"ok": False, "reason": f"persistence failed: {_persist_err}"},
+            status=500, headers={"Cache-Control": "no-store"})
+    # F14: DSN still routes through the writer queue's set_secret op so
+    # the encryption (db.sqlite._dsn_encrypt) and the PG mirror both
+    # fire. The brief async delay below covers that path.
+    if target == "postgres" and body_dsn and db_queue is not None:
+        try:
+            from db.sqlite import _dsn_encrypt
+            _persist_dsn = _dsn_encrypt(body_dsn)
+        except Exception:
+            _persist_dsn = body_dsn
+        try:
+            db_queue.put_nowait(("set_secret",
+                                  ("POSTGRES_DSN", _persist_dsn, n)))
         except asyncio.QueueFull:
             return web.json_response(
                 {"ok": False, "reason": "config_kv queue full"},
                 status=503, headers={"Cache-Control": "no-store"})
-        # Give the queue a tick to flush.
+        # Give the secrets queue a tick to flush before exit.
         await asyncio.sleep(0.5)
 
     slog("db_switch", level="warn", target=target,
          dsn_set=bool(body_dsn),
          rid=request.get("_rid", ""))
+
+    # 1.9.0 (F2 + F11) — durable audit row capturing actor + masked target
+    # + bg-migration state. The slog stream is in-memory only; an attacker
+    # who poisons the DSN can exfiltrate writes from the next restart
+    # onward and the slog will be gone. This row in gw_audit is the
+    # forensic anchor: WHO switched to WHICH host, WHETHER a bg copy was
+    # scheduled, WHAT cutoff it used, HOW many events copied — but never
+    # the password.
+    if db_queue is not None:
+        try:
+            _audit_details = {
+                "target": target,
+                "dsn_set": bool(body_dsn),
+                "events_copied": migration.get("copied", 0) if isinstance(migration, dict) else 0,
+                "events_copy_ok": migration.get("ok", False) if isinstance(migration, dict) else False,
+                "bg_scheduled": bool(locals().get("bg_scheduled", False)),
+                "full_migrate_requested": bool(locals().get("full_migrate", False)),
+            }
+            _ct = locals().get("cutoff_ts")
+            if _ct:
+                _audit_details["cutoff_ts"] = _ct
+            if target == "postgres" and body_dsn:
+                _audit_details["dsn_host"] = locals().get("_dsn_host", "")
+                _audit_details["dsn_user"] = locals().get("_dsn_user", "")
+                _audit_details["dsn_port"] = locals().get("_dsn_port") or 0
+            db_queue.put_nowait((
+                "gw_audit_add",
+                (_t.time(), "db_switch", _gw_local_id(),
+                 _request_username(request) or "",
+                 json.dumps(_audit_details, separators=(",", ":"))),
+            ))
+        except asyncio.QueueFull:
+            pass  # slog already fired; queue-full is non-fatal here
 
     # Reply BEFORE exiting so the dashboard's POST gets a clean 200.
     response = web.json_response(
@@ -3921,6 +4960,7 @@ async def db_switch_endpoint(request: web.Request):
          "events_copy_direction": migration.get("direction", ""),
          "events_copy_ok": migration.get("ok", False),
          "events_copy_reason": migration.get("reason", ""),
+         "full_migrate_scheduled": bg_scheduled,
          "message": "DB_BACKEND persisted; container will restart in 1 s"},
         headers={"Cache-Control": "no-store"})
 
@@ -3930,6 +4970,240 @@ async def db_switch_endpoint(request: web.Request):
         os._exit(0)
     asyncio.create_task(_delayed_exit())
     return response
+
+
+async def db_vacuum_history_endpoint(request):
+    """Read last few VACUUM events from gw_audit for the Settings page card."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    if DB_BACKEND != "sqlite":
+        return web.json_response({"history": [], "reason": "active backend is not SQLite"},
+                                 headers={"Cache-Control": "no-store"})
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        try:
+            history = _vacuum_history(conn, limit=5)
+        finally:
+            conn.close()
+        return web.json_response({"history": history},
+                                 headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response({"history": [], "reason": f"{type(e).__name__}: {e}"},
+                                 status=500, headers={"Cache-Control": "no-store"})
+
+
+async def db_migration_status_endpoint(request: web.Request):
+    """1.9.0 (F12) — minimal status surface for the deferred bg migration.
+
+    GET /secured/db-migration-status
+
+    Returns either `{"running": False}` when no marker is pending, or the
+    decoded `pending_bg_migration` config_kv row when one is present /
+    in-flight. The pre-F12 implementation polled an in-memory
+    `_BG_MIGRATION` dict; F12 moved scheduling to the boot hook, so the
+    durable marker on the config_kv table is now the single source of
+    truth for "is there a deferred copy scheduled or running?"."""
+    if denied := _role_denied(request, "admin", "maintainer", "viewer"):
+        return denied
+    payload = {"running": False, "marker": None}
+    try:
+        conn = open_conn()
+        row = conn.execute(
+            "SELECT value FROM config_kv WHERE key = ?",
+            ("pending_bg_migration",)
+        ).fetchone()
+        conn.close()
+        if row:
+            raw = row[0] if not hasattr(row, "keys") else row["value"]
+            if raw:
+                try:
+                    payload["marker"] = json.loads(raw)
+                    payload["running"] = True
+                except (ValueError, TypeError):
+                    payload["marker_raw"] = raw[:200]
+    except Exception as _e:
+        payload["error"] = f"{type(_e).__name__}: {str(_e)[:120]}"
+    return web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+
+# ── 1.8.11 Attack Playbook + honeypot-path suggestions ──────────────────────
+# Honeypot/trap catches grouped by technique, scanner-tool fingerprinting and
+# signature-completion ("predicted next probes"). Powers the Attack Playbook +
+# honey-suggest cards on the Honeypots dashboard. Read-only analytics.
+
+_PLAYBOOK_REASONS = [
+    "honeypot", "honeypot-silent", "bot-trap",
+    "honey-cred", "canary-echo", "canary-probe-miss",
+]
+
+# Tool → distinctive probe paths. An IP that hits ≥2 of a tool's paths is
+# fingerprinted to that tool; the tool's un-hit, un-trapped paths surface as
+# "predicted next probes" the operator can pre-emptively trap.
+_SCANNER_SIGNATURES = {
+    "nuclei":  {"/.git/config", "/.git/HEAD", "/.env", "/actuator/health"},
+    "nikto":   {"/admin.php", "/server-status", "/phpinfo.php", "/test.cgi"},
+    "wpscan":  {"/wp-login.php", "/wp-admin/", "/wp-json/", "/xmlrpc.php"},
+    "sqlmap":  {"/?id=1", "/login?next=", "/search?q="},
+    "feroxbuster": {"/backup.zip", "/backup.sql", "/admin-backup", "/.svn/entries"},
+}
+
+_PLAYBOOK_EXAMPLE_CAP = 6
+
+
+async def attack_playbook_endpoint(request: web.Request):
+    """GET /secured/attack-playbook?mins=…&vhost=…
+
+    Returns honeypot-family catches grouped by exact reason (each with a
+    capped set of distinct example requests), plus scanner-tool fingerprints
+    and predicted-next-probe suggestions derived from the FULL per-IP path
+    set (not just the deduped examples)."""
+    if denied := _role_denied(request, "admin", "maintainer", "viewer", "analyst"):
+        return denied
+    try:
+        mins = int(request.query.get("mins", "1440"))
+    except (TypeError, ValueError):
+        mins = 1440
+    mins = max(5, min(mins, 10080))    # 5 min … 7 days
+    # vhost filter — stored lowercase like the agents/siem dashboards.
+    _vhost = request.query.get("vhost", "").strip().lower()
+
+    now = _t.time()
+    start = now - mins * 60
+    try:
+        rows = await db_read_events_async(
+            start, now,
+            columns=["ts", "ip", "method", "path", "reason"],
+            reason_in=_PLAYBOOK_REASONS,
+            vhost=_vhost,
+            order_by="ts DESC",
+            limit=50000,
+        )
+    except Exception as e:
+        slog("attack_playbook_err", level="warn", error=str(e)[:120])
+        rows = []
+
+    groups: dict = {}        # reason -> {count, last_ts, examples{path: {...}}}
+    ip_paths: dict = {}      # ip -> set(path)  (full row set for scanner match)
+    for r in rows:
+        reason = r.get("reason") or ""
+        path = r.get("path") or ""
+        method = (r.get("method") or "GET").upper() or "GET"
+        ip = r.get("ip") or ""
+        ts_val = r.get("ts") or 0.0
+        if reason:
+            g = groups.setdefault(reason, {"count": 0, "last_ts": 0.0, "examples": {}})
+            g["count"] += 1
+            if ts_val > g["last_ts"]:
+                g["last_ts"] = ts_val
+            if path and path not in g["examples"] and len(g["examples"]) < _PLAYBOOK_EXAMPLE_CAP:
+                g["examples"][path] = {"method": method, "path": path[:200], "ts": ts_val}
+        if ip and path:
+            ip_paths.setdefault(ip, set()).add(path)
+
+    groups_out = [
+        {
+            "reason": reason,
+            "count": g["count"],
+            "capped": g["count"] > _PLAYBOOK_EXAMPLE_CAP,
+            "last_ts": g["last_ts"],
+            "examples": list(g["examples"].values()),
+        }
+        for reason, g in sorted(groups.items(), key=lambda kv: -kv[1]["count"])
+    ]
+
+    # Active trap set — predicted probes already trapped are not re-suggested.
+    try:
+        trap = set(vc("HONEYPOT_PATHS") or set())
+    except Exception:
+        trap = set(HONEYPOT_PATHS or set())
+
+    scanner_hits: list = []
+    predicted: dict = {}     # path -> set(tool)
+    for ip, paths in ip_paths.items():
+        best = None          # (tool, matched_paths) with the most matches
+        for tool, sig in _SCANNER_SIGNATURES.items():
+            matched = sorted(paths & sig)
+            if len(matched) >= 2 and (best is None or len(matched) > len(best[1])):
+                best = (tool, matched)
+        if best is None:
+            continue
+        tool, matched = best
+        scanner_hits.append({"ip": ip, "scanner": tool, "matched": matched})
+        for p in _SCANNER_SIGNATURES[tool]:
+            if p not in paths and p not in trap:
+                predicted.setdefault(p, set()).add(tool)
+    scanner_hits.sort(key=lambda h: (-len(h["matched"]), h["ip"]))
+    predicted_probes = [
+        {"path": p, "tools": sorted(tools)}
+        for p, tools in sorted(predicted.items())
+    ]
+
+    return web.json_response(
+        {
+            "groups": groups_out,
+            "scanner_hits": scanner_hits,
+            "predicted_probes": predicted_probes,
+            "mins": mins,
+            "ts": now,
+        },
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+async def honey_suggest_endpoint(request: web.Request):
+    """GET /secured/honey-suggest?vhost=…
+
+    Frequently-probed paths (last 7 days, 4xx-heavy) that are NOT yet in the
+    active honeypot trap set — candidates the operator can one-click trap.
+    Returns {candidates:[{path, hits}], current_trap_count}."""
+    if denied := _role_denied(request, "admin", "maintainer", "viewer", "analyst"):
+        return denied
+    # vhost filter — lowercased like the other honeypot endpoints.
+    _vhost = request.query.get("vhost", "").strip().lower()
+    now = _t.time()
+    start_ts = now - 7 * 86400
+
+    try:
+        trap = set(vc("HONEYPOT_PATHS") or set())
+    except Exception:
+        trap = set(HONEYPOT_PATHS or set())
+
+    candidates: list = []
+    try:
+        conn = open_conn()
+        # events.ts is timestamptz on Postgres (needs to_timestamp()) but an
+        # epoch REAL on SQLite. The `(? = '' OR vhost = ?)` clause makes the
+        # vhost filter a no-op when no vhost is selected.
+        if active_backend() == "postgres":
+            rows = conn.execute(
+                "SELECT path, COUNT(*) AS c FROM events "
+                "WHERE ts >= to_timestamp(?) AND status >= 400 "
+                "AND (? = '' OR vhost = ?) "
+                "GROUP BY path ORDER BY c DESC LIMIT 300",
+                (start_ts, _vhost, _vhost)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT path, COUNT(*) AS c FROM events "
+                "WHERE ts >= ? AND status >= 400 "
+                "AND (? = '' OR vhost = ?) "
+                "GROUP BY path ORDER BY c DESC LIMIT 300",
+                (start_ts, _vhost, _vhost)).fetchall()
+        conn.close()
+        for row in rows:
+            path = row[0] if not hasattr(row, "keys") else row["path"]
+            hits = row[1] if not hasattr(row, "keys") else row["c"]
+            if not path or path in trap:
+                continue
+            candidates.append({"path": path[:200], "hits": int(hits)})
+            if len(candidates) >= 30:
+                break
+    except Exception as e:
+        slog("honey_suggest_err", level="warn", error=str(e)[:120])
+
+    return web.json_response(
+        {"candidates": candidates, "current_trap_count": len(trap), "ts": now},
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 async def db_test_endpoint(request: web.Request):
@@ -3951,15 +5225,41 @@ async def db_test_endpoint(request: web.Request):
             return web.json_response(
                 {"ok": False, "reason": "psycopg not installed in this image"},
                 status=200, headers={"Cache-Control": "no-store"})
+        import db.postgres as _pg_for_probe
         saved_dsn     = globals().get("POSTGRES_DSN", "")
         saved_backend = globals().get("DB_BACKEND", DB_BACKEND)
+        saved_pg_dsn  = getattr(_pg_for_probe, "POSTGRES_DSN", "")
+        # 1.9.2 iter-25 — operator-reported: the switch-modal DSN test hung
+        # the dashboard for 77+ s and returned 502/504 on every concurrent
+        # admin request (/secured/config, /secured/2fa-status). Root cause:
+        # `pg_test_roundtrip()` is synchronous socket I/O — calling it on
+        # the event loop blocked every other coroutine until the DNS lookup
+        # + TCP connect + auth handshake completed.
+        # Mirror the iter-22 no-arg-path fix: offload to the thread executor
+        # and bound with a hard 25 s timeout (generous so a slow-WAN operator
+        # can still probe a real PG instance, but short enough that the UI
+        # spinner doesn't outlast Cloudflare's 100 s edge timeout).
         try:
             globals()["POSTGRES_DSN"] = probe_dsn
             globals()["DB_BACKEND"]   = "postgres"
-            probe = pg_test_roundtrip()
+            _pg_for_probe.POSTGRES_DSN = probe_dsn
+            loop = asyncio.get_running_loop()
+            try:
+                probe = await asyncio.wait_for(
+                    loop.run_in_executor(None, pg_test_roundtrip),
+                    timeout=25.0)
+            except asyncio.TimeoutError:
+                probe = {"ok": False,
+                         "reason": "probe timed out (>25s) — DSN host "
+                                   "unreachable, DNS slow, or auth hang"}
+            except Exception as _probe_e:
+                probe = {"ok": False,
+                         "reason": f"{type(_probe_e).__name__}: "
+                                   f"{str(_probe_e)[:80]}"}
         finally:
             globals()["POSTGRES_DSN"] = saved_dsn
             globals()["DB_BACKEND"]   = saved_backend
+            _pg_for_probe.POSTGRES_DSN = saved_pg_dsn
         try:
             from urllib.parse import urlparse
             p = urlparse(probe_dsn)
@@ -3982,7 +5282,7 @@ async def db_test_endpoint(request: web.Request):
             if os.path.exists(wal):
                 sqlite_info["wal_size_bytes"] = os.path.getsize(wal)
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = open_conn()
                 cur = conn.execute("SELECT COUNT(*) FROM events")
                 sqlite_info["events_rows"] = int(cur.fetchone()[0])
                 conn.close()
@@ -3991,9 +5291,28 @@ async def db_test_endpoint(request: web.Request):
     except Exception as e:
         sqlite_info["error"] = f"{type(e).__name__}: {str(e)[:120]}"
 
-    postgres_info = pg_test_roundtrip()
+    # 1.9.2 iter-22 — pg_test_roundtrip() and pg_db_size() are SYNCHRONOUS
+    # (blocking socket I/O + catalog queries). Calling them directly on the
+    # event loop froze the whole worker whenever Postgres was slow — a single
+    # db-test could hang 40+ s and stall every concurrent admin request (502s).
+    # Offload to a thread executor and bound each with a hard timeout so the
+    # endpoint always returns promptly with a clean "unreachable/timeout"
+    # instead of freezing.
+    loop = asyncio.get_running_loop()
+    try:
+        postgres_info = await asyncio.wait_for(
+            loop.run_in_executor(None, pg_test_roundtrip), timeout=8.0)
+    except asyncio.TimeoutError:
+        postgres_info = {"ok": False, "reason": "probe timed out (>8s) — "
+                         "Postgres unreachable or overloaded"}
+    except Exception as e:
+        postgres_info = {"ok": False, "reason": f"{type(e).__name__}: {str(e)[:80]}"}
     if postgres_info.get("ok"):
-        size = pg_db_size()
+        try:
+            size = await asyncio.wait_for(
+                loop.run_in_executor(None, pg_db_size), timeout=6.0)
+        except Exception:
+            size = {"ok": False}
         if size.get("ok"):
             postgres_info["db_bytes"] = size["db_bytes"]
             postgres_info["events_rows"] = size["events_rows"]
@@ -4035,30 +5354,204 @@ async def disk_stats_endpoint(request: web.Request):
     }, headers={"Cache-Control": "no-store"})
 
 
+# 1.8.15 — module-level VACUUM single-flight lock. Ensures the daily
+# scheduler, the operator-triggered endpoint, and the bg-migration
+# guard never run two VACUUMs concurrently (SQLite would serialise
+# them anyway, but holding the lock outside SQLite lets the
+# /__db-switch handler refuse with a clean 409 instead of blocking).
+_DB_VACUUM_LOCK = asyncio.Lock()
+
+# 1.8.15 — in-memory fast-path flag for "a background historical-events
+# migration is running". The durable source of truth is the
+# `pending_bg_migration` config_kv marker; this dict lets hot paths
+# (VACUUM) short-circuit without a DB round-trip. Set True/False by
+# proxy._resume_pending_bg_migration around the executor run.
+_BG_MIGRATION = {"running": False}
+
+
+def _vacuum_history(conn, limit=5):
+    """Return the last `limit` VACUUM runs from gw_audit, newest first.
+
+    Each entry merges the audit row's ts/actor with the decoded details
+    JSON (ok, saved_bytes, duration_ms, reason, …). `conn` is any DB-API
+    connection with a `gw_audit` table. Used by both the VACUUM response
+    and GET /secured/db-vacuum-history."""
+    try:
+        limit = max(1, min(int(limit), 50))
+    except (TypeError, ValueError):
+        limit = 5
+    rows = conn.execute(
+        "SELECT ts, actor, details FROM gw_audit "
+        "WHERE action='db_vacuum' ORDER BY ts DESC LIMIT ?",
+        (limit,)
+    ).fetchall()
+    history = []
+    for row in rows:
+        ts, actor, details = row[0], row[1], row[2]
+        try:
+            d = json.loads(details) if details else {}
+        except (ValueError, TypeError):
+            d = {"raw": (details or "")[:200]}
+        if not isinstance(d, dict):
+            d = {"raw": str(d)[:200]}
+        history.append({"ts": ts, "actor": actor or "", **d})
+    return history
+
+
+def _next_vacuum_secs(at_str):
+    """Seconds-to-next-occurrence helper for VACUUM_DAILY_AT ("HH:MM").
+    Returns None when the time is empty or malformed (scheduler then
+    sleeps and re-checks)."""
+    if not at_str:
+        return None
+    try:
+        hh, mm = map(int, at_str.strip().split(":", 1))
+        if not (0 <= hh < 24 and 0 <= mm < 60):
+            return None
+    except (ValueError, AttributeError):
+        return None
+    import datetime as _dt
+    now = _dt.datetime.now()
+    target = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if target <= now:
+        target += _dt.timedelta(days=1)
+    return (target - now).total_seconds()
+
+
+async def _vacuum_scheduler_loop():
+    """1.8.15 — daily VACUUM scheduler. No-op when VACUUM_DAILY_AT is
+    empty or DB_BACKEND != sqlite. Honours the migration single-flight
+    guard (skips while a bg migration is running) + the operator
+    VACUUM lock (skips on concurrent /__db-vacuum)."""
+    while True:
+        try:
+            at = vc("VACUUM_DAILY_AT") or VACUUM_DAILY_AT
+            secs = _next_vacuum_secs(at)
+            if secs is None:
+                await asyncio.sleep(60)
+                continue
+            await asyncio.sleep(secs)
+            at_now = vc("VACUUM_DAILY_AT") or VACUUM_DAILY_AT
+            if not at_now:
+                continue
+            if DB_BACKEND != "sqlite":
+                continue
+            if _DB_VACUUM_LOCK.locked():
+                continue
+            async with _DB_VACUUM_LOCK:
+                await _db_vacuum_execute()
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            slog("vacuum_scheduler_err", level="warn", error=str(e)[:200])
+            await asyncio.sleep(300)
+
+
+async def _db_vacuum_execute(actor="scheduler"):
+    """1.8.15 — actual VACUUM body, isolated so it can run on a worker thread.
+    The sqlite3 driver releases the GIL during VACUUM, but `conn.execute("VACUUM")`
+    is a synchronous call that blocks the event loop coroutine. Wrapping it in
+    `asyncio.to_thread` keeps the loop responsive while the DB rebuilds —
+    important under multi-GiB SQLite footprints where VACUUM takes several
+    seconds.
+
+    Each run is recorded in `gw_audit` (action='db_vacuum') with saved_bytes,
+    duration_ms and the ok flag — so the Settings page can show a history of
+    the last few runs. Returns a dict with before/after sizes + saved_bytes +
+    the post-run `history` list (newest first).
+    """
+    before_db  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
+    before_wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
+
+    def _do_vacuum():
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            conn.execute("VACUUM")
+        finally:
+            conn.close()
+
+    _t0 = _t.monotonic()
+    ok, reason = True, ""
+    try:
+        await asyncio.to_thread(_do_vacuum)
+    except Exception as e:
+        ok, reason = False, f"{type(e).__name__}: {e}"
+    duration_ms = int((_t.monotonic() - _t0) * 1000)
+
+    after_db  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
+    after_wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
+    saved_bytes = (before_db + before_wal) - (after_db + after_wal)
+
+    # Record the run + read back the history (best-effort; never fail the
+    # VACUUM result on an audit-write hiccup).
+    history = []
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            _details = {"ok": ok, "saved_bytes": saved_bytes,
+                        "duration_ms": duration_ms}
+            if reason:
+                _details["reason"] = reason
+            conn.execute(
+                "INSERT INTO gw_audit (ts, action, gw_id, actor, details) "
+                "VALUES (?, 'db_vacuum', ?, ?, ?)",
+                (_t.time(), _gw_local_id(), actor or "",
+                 json.dumps(_details, separators=(",", ":"))),
+            )
+            conn.commit()
+            history = _vacuum_history(conn, limit=5)
+        finally:
+            conn.close()
+    except Exception as e:
+        slog("vacuum_audit_err", level="warn", error=str(e)[:200])
+
+    return {
+        "ok": ok,
+        "reason": reason,
+        "duration_ms": duration_ms,
+        "before": {"db_bytes": before_db, "wal_bytes": before_wal},
+        "after":  {"db_bytes": after_db,  "wal_bytes": after_wal},
+        "saved_bytes": saved_bytes,
+        "history": history,
+    }
+
+
+@_require_csrf
 async def db_vacuum_endpoint(request: web.Request):
     """1.7.3 — trigger a SQLite VACUUM + WAL checkpoint from the Settings page.
     Shrinks the DB file by reclaiming deleted-row pages and truncates the WAL
     so the on-disk footprint drops immediately.  Safe to run at any time;
-    VACUUM obtains an exclusive lock briefly but releases it before returning."""
+    VACUUM obtains an exclusive lock briefly but releases it before returning.
+    1.8.15 — body extracted to `_db_vacuum_execute()` so it can run via
+    `asyncio.to_thread` (event-loop stays responsive on multi-second VACUUM).
+    1.9.0 (F1) — role-gate ahead of the backend check. CSRF alone is
+    insufficient: a valid session with a stolen CSRF token could fire
+    VACUUM. admin + maintainer ok; viewer/analyst refused."""
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     if DB_BACKEND != "sqlite":
         return web.json_response(
             {"ok": False, "reason": "active backend is not SQLite"},
             status=400, headers={"Cache-Control": "no-store"})
+    # 1.8.15 — refuse while a background historical-events migration is in
+    # flight: VACUUM takes an exclusive lock and would contend with / stall
+    # the COPY. _BG_MIGRATION is the in-memory fast-path; the durable marker
+    # is `pending_bg_migration` in config_kv.
+    if _BG_MIGRATION.get("running"):
+        return web.json_response(
+            {"ok": False, "reason": "background migration in progress; retry once it completes"},
+            status=409, headers={"Cache-Control": "no-store"})
+    # 1.8.15 — single-flight: reject a second concurrent VACUUM rather than
+    # block (the scheduler and another operator could collide otherwise).
+    if _DB_VACUUM_LOCK.locked():
+        return web.json_response(
+            {"ok": False, "reason": "VACUUM already in progress; retry once it completes"},
+            status=409, headers={"Cache-Control": "no-store"})
     try:
-        before_db  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
-        before_wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
-        conn = sqlite3.connect(DB_PATH, timeout=10)
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        conn.execute("VACUUM")
-        conn.close()
-        after_db  = os.path.getsize(DB_PATH)        if os.path.exists(DB_PATH)           else 0
-        after_wal = os.path.getsize(DB_PATH + "-wal") if os.path.exists(DB_PATH + "-wal") else 0
-        return web.json_response({
-            "ok": True,
-            "before": {"db_bytes": before_db, "wal_bytes": before_wal},
-            "after":  {"db_bytes": after_db,  "wal_bytes": after_wal},
-            "saved_bytes": (before_db + before_wal) - (after_db + after_wal),
-        }, headers={"Cache-Control": "no-store"})
+        async with _DB_VACUUM_LOCK:
+            result = await _db_vacuum_execute(actor=_request_username(request) or "")
+        return web.json_response(result, headers={"Cache-Control": "no-store"})
     except Exception as e:
         return web.json_response(
             {"ok": False, "reason": f"{type(e).__name__}: {e}"},
@@ -4269,10 +5762,20 @@ async def health_score_endpoint(request: web.Request):
     blocked = clean = 0
     try:
         cutoff = _t.time() - 3600
-        conn = sqlite3.connect(DB_PATH)
-        rows = conn.execute(
-            "SELECT reason, COUNT(*) FROM events WHERE ts >= ? GROUP BY reason",
-            (cutoff,)).fetchall()
+        conn = open_conn()
+        # events.ts is timestamptz on Postgres but an epoch REAL on SQLite, so
+        # the cutoff comparison must go through to_timestamp() on PG (a raw
+        # float vs timestamptz raises "operator does not exist"); SQLite has no
+        # to_timestamp() and compares the float directly.
+        if active_backend() == "postgres":
+            rows = conn.execute(
+                "SELECT reason, COUNT(*) FROM events "
+                "WHERE ts >= to_timestamp(?) GROUP BY reason",
+                (cutoff,)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT reason, COUNT(*) FROM events WHERE ts >= ? GROUP BY reason",
+                (cutoff,)).fetchall()
         conn.close()
         for reason, count in rows:
             if reason and reason != "OK":
@@ -4300,6 +5803,32 @@ async def health_score_endpoint(request: web.Request):
                     "value": f"{block_ratio*100:.0f}%", "detail": detail})
     score -= weight
 
+    # 1.9.2 iter-26 — surface auto-revert. When PG init/auth fails at
+    # startup, iter-17/18's `_disable_postgres_for_process()` flips runtime
+    # DB_BACKEND from "postgres" back to "sqlite" so the gateway stays UP
+    # on the SQLite fallback. Operator-reported: "the backend says sqlite
+    # but I have it configured for postgres" — they had no way to tell
+    # their PG config was being silently ignored. Add the configured-vs-
+    # runtime delta + the auto-revert reason so the Settings page can
+    # render a visible warning + point to the Service banner / __logs.
+    _db_env = os.environ.get("DB_BACKEND", "").strip().lower() or "sqlite"
+    _pg_auth_failed = False
+    _pg_init_failed = False
+    try:
+        from db import postgres as _pg_mod_hs
+        _pg_auth_failed = bool(getattr(_pg_mod_hs, "_PG_AUTH_FAILED", False))
+    except Exception:
+        pass
+    # Reverted iff env asked for postgres but runtime active is sqlite.
+    _reverted = (_db_env == "postgres" and DB_BACKEND != "postgres")
+    if _reverted:
+        if _pg_auth_failed:
+            _revert_reason = "pg-auth-failure"
+        else:
+            _revert_reason = "pg-init-failure-or-unreachable"
+    else:
+        _revert_reason = ""
+
     score = max(0, min(100, score))
     return web.json_response({
         "score":       score,
@@ -4307,6 +5836,9 @@ async def health_score_endpoint(request: web.Request):
         "version":     GW_VERSION,
         "upstream":    UPSTREAM,
         "db_backend":  DB_BACKEND,
+        "db_backend_configured": _db_env,
+        "db_backend_reverted":   _reverted,
+        "db_backend_revert_reason": _revert_reason,
         "uptime_secs": int(_t.time() - START_EPOCH),
         "ts":          _t.time(),
     }, headers={"Cache-Control": "no-store"})
@@ -4357,12 +5889,41 @@ async def metrics_endpoint(request: web.Request):
     if not await _metrics_auth_ok(request):
         return web.Response(status=401,
                             headers={"WWW-Authenticate": 'Bearer realm="metrics"'})
+    # 1.9.6 perf — serve a recent (≤1 s) cached result before doing any work, so
+    # rapid/concurrent dashboard loads don't each recompute on the event loop.
+    _ckey = request.query_string
+    _centry = _metrics_resp_cache.get(_ckey)
+    if _centry is not None and now() < _centry[0]:
+        return web.Response(body=_centry[1], content_type="application/json",
+                            headers={"Cache-Control": "no-store",
+                                     "X-Content-Type-Options": "nosniff"})
     _vhost_pre = request.query.get("vhost", "").strip().lower()
+    # 1.9.3 perf — `?view=bans` lightweight path. The Controls page only needs
+    # the banned subset (its 4 s bans-table refresh), but the full dump sorts
+    # and builds a ~20-field dict for EVERY tracked identity under state_lock,
+    # then the client discards all but banned_secs>0. In bans mode we skip the
+    # sort, early-`continue` non-banned BEFORE the costly per-client build, and
+    # return just {clients:[…]} — no timeline / top_paths / path→vhost work.
+    _bans_only = request.query.get("view", "") == "bans"
+    # 1.9.7 — read the persistent ip_bans set ONCE, OFF the event loop, instead
+    # of a synchronous `_sqlite_connect` per identity in the loop below (on slow
+    # armv7 storage that froze the loop / `/live`; confirmed via SIGUSR1 dump).
+    # The per-client check becomes an in-memory set membership test.
+    import asyncio as _aio_m
+    from db.sqlite import check_ip_bans_bulk as _cib_bulk
+    try:
+        _banned_ips = await _aio_m.to_thread(_cib_bulk)
+    except Exception:
+        _banned_ips = set()
     async with state_lock:
         n = now()
         clients = []
-        for key, s in sorted(ip_state.items(),
-                             key=lambda kv: kv[1].request_count, reverse=True):
+        _items = (ip_state.items() if _bans_only
+                  else sorted(ip_state.items(),
+                              key=lambda kv: kv[1].request_count, reverse=True))
+        for key, s in _items:
+            if _bans_only and s.banned_until <= n:
+                continue   # not banned — skip the expensive dict build below
             elapsed = n - s.last_refill
             tokens = min(RATE_LIMIT_BURST, s.tokens + elapsed * RATE_LIMIT_REFILL)
             # Apply decay before reporting current score
@@ -4385,6 +5946,17 @@ async def metrics_endpoint(request: web.Request):
             )
             if _vhost_pre and s.last_vhost != _vhost_pre:
                 continue
+            # 1.9.7 — surface the PERSISTENT raw-IP ban (ip_bans table) so the
+            # dashboard status reflects it. The in-memory identity ban
+            # (s.banned_until) and the raw-IP ban are independent: an IP can be
+            # in the hostile pool (every request silent-decoyed) while the
+            # identity's own risk has decayed below threshold — which otherwise
+            # renders a green "allowed" badge for a fully-blocked attacker.
+            # Only probe when NOT already identity-banned (cheap TTL cache; hot
+            # banned IPs are already cached from their own request path).
+            # 1.9.7 — in-memory membership test against the once-read banned set
+            # (was a synchronous _sqlite_connect per identity that froze the loop).
+            _ip_banned = (s.banned_until <= n) and ((s.last_ip or key) in _banned_ips)
             clients.append({
                 "id": key,
                 "ip": key,
@@ -4397,6 +5969,10 @@ async def metrics_endpoint(request: web.Request):
                 "blocked": s.blocked_count,
                 "blocks_by_reason": dict(s.blocks_by_reason),
                 "banned_secs": max(0, round(s.banned_until - n, 0)),
+                "ip_banned": _ip_banned,
+                # 1.8.15 — remaining operator-Allow grace (bypass_until is
+                # monotonic, so compare against monotonic now, not wall-clock n).
+                "bypass_secs": max(0, round(s.bypass_until - _t.monotonic(), 0)),
                 "last_seen_secs_ago": round(n - s.last_seen, 1),
                 "first_seen_secs_ago": round(n - s.first_seen, 1),
                 "last_ua": s.last_user_agent,
@@ -4407,6 +5983,10 @@ async def metrics_endpoint(request: web.Request):
                 "is_authorized_bot": _is_auth_bot,
                 "vhost": s.last_vhost,
             })
+        # 1.9.3 perf — bans-only callers get just the banned clients; skip all
+        # the timeline / top_paths / path→vhost / by_reason work below.
+        if _bans_only:
+            return _metrics_cache_put(_ckey, {"clients": clients})
         # Merge per-category ring buffers. ?cats=allowed,ban,missed,authbots,gwmgmt
         # selects which buckets to include; defaults to all five.
         # ?vhost=<hostname> filters to events from that vhost only (1.8.0).
@@ -4485,12 +6065,28 @@ async def metrics_endpoint(request: web.Request):
             # Filtered timeline: query events table and aggregate into buckets.
             # Covers three modes: path only, vhost only, or both together.
             _passthrough = {"", "ok", "operator-passthrough", "bypass-mode",
-                            "bypass-path", "authorized-robot"}
+                            "bypass-path", "authorized-robot", "operator-allowed"}
             _admin_pfx   = ADMIN_NS.lower()
             try:
-                conn = sqlite3.connect(DB_PATH)
+                conn = open_conn()
                 conn.row_factory = sqlite3.Row
-                _where_parts = ["ts >= ?", "ts <= ?"]
+                # 1.9.5 fix — events.ts is timestamptz on Postgres but a REAL
+                # epoch on SQLite. PG can't compare timestamptz to a raw
+                # epoch int / float ("operator does not exist") and also
+                # can't `int()` the returned datetime. Backend-branch the
+                # ts predicates AND the SELECT projection so the SQL is
+                # valid AND the downstream `int(row["ts"])` always gets a
+                # numeric.
+                _is_pg = active_backend() == "postgres"
+                if _is_pg:
+                    _ts_col   = "EXTRACT(EPOCH FROM ts) AS ts"
+                    _ts_lower = "ts >= to_timestamp(?)"
+                    _ts_upper = "ts <= to_timestamp(?)"
+                else:
+                    _ts_col   = "ts"
+                    _ts_lower = "ts >= ?"
+                    _ts_upper = "ts <= ?"
+                _where_parts = [_ts_lower, _ts_upper]
                 _params: list = [start_b, end_b + bucket_secs]
                 if path_q:
                     _where_parts.append("LOWER(path) LIKE ?")
@@ -4499,7 +6095,7 @@ async def metrics_endpoint(request: web.Request):
                     _where_parts.append("vhost = ?")
                     _params.append(_vhost_filter)
                 rows = conn.execute(  # nosec B608 — where parts are hardcoded strings; values parameterized
-                    "SELECT ts, path, reason FROM events WHERE "
+                    f"SELECT {_ts_col}, path, reason FROM events WHERE "
                     + " AND ".join(_where_parts) + " ORDER BY ts",
                     _params,
                 ).fetchall()
@@ -4545,7 +6141,7 @@ async def metrics_endpoint(request: web.Request):
             db_buckets = {}
             if start_b < in_mem_oldest:
                 try:
-                    conn = sqlite3.connect(DB_PATH)
+                    conn = open_conn()
                     conn.row_factory = sqlite3.Row
                     for row in conn.execute(
                         "SELECT bucket_minute, total, allowed, blocked, missed, by_reason FROM timeline "
@@ -4671,7 +6267,7 @@ async def metrics_endpoint(request: web.Request):
             "missed_medium_risk":  metrics.get("missed", 0),
         }
 
-        return web.json_response({
+        return _metrics_cache_put(_ckey, {
             "uptime_secs": int(_t.time() - START_EPOCH),
             "total": metrics["total_requests"],
             "allowed": metrics["allowed"],
@@ -4699,12 +6295,11 @@ async def metrics_endpoint(request: web.Request):
                 "honeypot_ban_secs": HONEYPOT_BAN_SECS,
                 "pow_difficulty": POW_DIFFICULTY,
             },
-        }, headers={"Cache-Control": "no-store",
-                    "X-Content-Type-Options": "nosniff"})
+        })
 
 async def dashboard_endpoint(request: web.Request):
     """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics)."""
-    body = DASHBOARD_HTML
+    body = inject_theme(DASHBOARD_HTML, DB_PATH)  # 1.9.6 — honour saved theme
     return web.Response(
         text=body,
         content_type="text/html",
@@ -4731,7 +6326,7 @@ CONTROL_CENTER_HTML    = (_DASHBOARDS_DIR / "control_center.html").read_text(enc
 async def control_center_endpoint(request: web.Request):
     """Control Center — landing page after login; shows vhost traffic summary."""
     return web.Response(
-        text=CONTROL_CENTER_HTML,
+        text=inject_theme(CONTROL_CENTER_HTML, DB_PATH),  # 1.9.6 — honour saved theme
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -4756,9 +6351,21 @@ async def unban_endpoint(request: web.Request):
       GET query (legacy, read-only ops only): ?id=... | ?ip=...
       ?all=1 via GET is rejected — use POST {"all":true} for destructive op.
     """
+    # Authorisation applies to BOTH methods — the GET branch backs the Allow
+    # buttons in the dashboard, so it must be authenticated too. Run the role
+    # check before any method dispatch (previously it was nested in the POST
+    # branch, leaving GET reachable unauthenticated).
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    # CSRF: the SameSite session cookie + admin-role + (when set) admin-IP
+    # allowlist are the primary cross-site defence; as defence-in-depth, a
+    # supplied X-CSRF-Token MUST match. A missing token is allowed (the cookie
+    # won't ride a cross-site request anyway), a present-but-wrong one is hostile.
+    if (request.headers.get("X-CSRF-Token", "")
+            and not _csrf_token_valid(request)):
+        return web.json_response({"error": "CSRF token invalid"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
     if request.method == "POST":
-        if denied := _role_denied(request, "admin", "maintainer"):
-            return denied
         try:
             data = await request.json()
         except Exception:
@@ -4785,28 +6392,267 @@ async def unban_endpoint(request: web.Request):
                 if s.banned_until > n:
                     s.banned_until = 0.0
                 s.risk_score = 0.0
+                # 1.8.15 — operator Allow grace: stamp a bypass window (monotonic)
+                # so the just-cleared identity is not immediately re-banned by
+                # residual signals on its next request. ALLOW_BYPASS_SECS=0
+                # disables the grace entirely (the scrub below still happens).
+                if ALLOW_BYPASS_SECS > 0:
+                    s.bypass_until = _t.monotonic() + ALLOW_BYPASS_SECS
+                # Full scrub — an unban after a false positive must also wipe the
+                # risk breakdown + block counters, else the leftover score can
+                # re-ban the identity on its next request (mirrors bulk_unban).
+                if hasattr(s, "risk_by_reason") and s.risk_by_reason:
+                    s.risk_by_reason.clear()
+                if hasattr(s, "blocks_by_reason") and s.blocks_by_reason:
+                    s.blocks_by_reason.clear()
+                # iter-11b: also clear the per-vhost risk + ban maps so a vhost-
+                # scoped ban cannot silently survive an Allow.
+                if getattr(s, "risk_by_vhost", None):
+                    s.risk_by_vhost.clear()
+                if getattr(s, "banned_until_by_vhost", None):
+                    s.banned_until_by_vhost.clear()
+                s.blocked_count = 0
+                s.last_risk_update = n
                 cleared += 1
-        # Also clear DB bans table for matched IPs (best-effort).
+        # Also clear DB bans table + ip_bans for matched IPs (best-effort).
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             if do_all:
                 conn.execute("DELETE FROM bans")
+                conn.execute("DELETE FROM ip_bans")
                 conn.execute("UPDATE clients SET banned_until_epoch=0")
             elif target_ip:
                 conn.execute("DELETE FROM bans WHERE ip=?", (target_ip,))
+                conn.execute("DELETE FROM ip_bans WHERE ip=?", (target_ip,))
                 conn.execute("UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
                              (target_ip,))
             elif target_id:
                 conn.execute("DELETE FROM bans WHERE ip=?", (target_id,))
+                conn.execute("DELETE FROM ip_bans WHERE ip=?", (target_id,))
                 conn.execute("UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
                              (target_id,))
+            # iter-11b: also drop vhost-scoped ban rows (best-effort; guarded so
+            # an old DB without the table doesn't abort the rest of the cleanup).
+            try:
+                if do_all:
+                    conn.execute("DELETE FROM ip_bans_vhost")
+                elif target_ip:
+                    conn.execute("DELETE FROM ip_bans_vhost WHERE ip=?", (target_ip,))
+                elif target_id:
+                    conn.execute("DELETE FROM ip_bans_vhost WHERE ip=?", (target_id,))
+            except Exception:
+                pass  # nosec B110 — table may not exist on a pre-1.9.2 DB
             conn.commit()
             conn.close()
         except Exception as e:
             print(f"[unban] db error: {e}")
-    return web.json_response({"cleared": cleared, "scope":
-        "all" if do_all else (f"id={target_id}" if target_id else f"ip={target_ip}")},
+    _scope = ("all" if do_all
+              else (f"id={target_id}" if target_id else f"ip={target_ip}"))
+    # SIEM audit trail — a manual override is security-relevant.
+    slog("manual_unban", level="warn", rid=request.get("_rid", ""),
+         actor=_request_username(request), scope=_scope, cleared=cleared)
+    # bypass_secs echoes the grace window granted (0 when ALLOW_BYPASS_SECS=0)
+    # so the dashboard can confirm whether an Allow handed out a grace window.
+    return web.json_response(
+        {"cleared": cleared, "scope": _scope,
+         "bypass_secs": ALLOW_BYPASS_SECS if ALLOW_BYPASS_SECS > 0 else 0},
         headers={"Cache-Control": "no-store"})
+
+
+@_require_csrf
+async def dlp_patterns_post(request: web.Request):
+    """POST /secured/dlp-patterns — add a new DLP pattern."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    try:
+        body = await request.json()
+        name     = str(body.get("name", "")).strip()[:100]
+        pattern  = str(body.get("pattern", "")).strip()[:2000]
+        severity = str(body.get("severity", "high")).strip()
+        if not name or not pattern:
+            return web.json_response({"error": "name and pattern required"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        if severity not in ("critical", "high", "medium", "low"):
+            severity = "high"
+        import re as _re
+        try:
+            _re.compile(pattern)
+        except Exception as e:
+            return web.json_response({"error": f"invalid regex: {e}"}, status=400,
+                                      headers={"Cache-Control": "no-store"})
+        actor = _request_username(request)
+        if db_queue is not None:
+            import time as _t_dlp
+            try:
+                db_queue.put_nowait(("dlp_add", (name, pattern, severity, _t_dlp.time(), actor)))
+            except asyncio.QueueFull:
+                pass
+        return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500,
+                                  headers={"Cache-Control": "no-store"})
+
+
+@_require_csrf
+async def dlp_patterns_delete(request: web.Request):
+    """DELETE /secured/dlp-patterns?id=<id> — delete a DLP pattern."""
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    pid = request.query.get("id", "")
+    if not pid:
+        return web.json_response({"error": "id required"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    try:
+        pid = int(pid)
+    except (ValueError, TypeError):
+        return web.json_response({"error": "invalid id"}, status=400,
+                                  headers={"Cache-Control": "no-store"})
+    if db_queue is not None:
+        try:
+            db_queue.put_nowait(("dlp_delete", (pid,)))
+        except asyncio.QueueFull:
+            pass
+    return web.json_response({"ok": True}, headers={"Cache-Control": "no-store"})
+
+
+async def bulk_unban_endpoint(request: web.Request):
+    """Admin: bulk-clear bans matching a reason glob or ASN.
+
+    DELETE /secured/bans?reason=<glob>
+        Clears in-memory risk scores and DB bans whose reason fnmatch-matches
+        the glob (e.g. reason=honeypot* or reason=ua-ai-*).
+
+    DELETE /secured/bans?asn=<number>
+        Clears bans for all identities last seen on the given ASN.
+
+    POST body may also supply {"reason":"<glob>","asn":<int>}; method must be
+    POST or DELETE.
+    """
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
+    # CSRF: reject a supplied-but-invalid token (parity with unban_endpoint).
+    if (request.headers.get("X-CSRF-Token", "")
+            and not _csrf_token_valid(request)):
+        return web.json_response({"error": "CSRF token invalid"}, status=403,
+                                  headers={"Cache-Control": "no-store"})
+
+    import fnmatch as _fnm
+
+    if request.method == "POST":
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        reason_glob = str(data.get("reason", "") or "").strip()
+        asn_str     = str(data.get("asn", "") or "").strip()
+    else:
+        reason_glob = request.query.get("reason", "").strip()
+        asn_str     = request.query.get("asn", "").strip()
+
+    if not reason_glob and not asn_str:
+        return web.json_response(
+            {"error": "Provide ?reason=<glob> and/or ?asn=<number>"},
+            status=400, headers={"Cache-Control": "no-store"},
+        )
+
+    target_asn: int | None = None
+    if asn_str:
+        try:
+            target_asn = int(asn_str)
+        except ValueError:
+            return web.json_response(
+                {"error": "asn must be an integer"},
+                status=400, headers={"Cache-Control": "no-store"},
+            )
+
+    cleared = 0
+    matched_ips: list[str] = []
+    async with state_lock:
+        n = now()
+        for k, s in ip_state.items():
+            if s.banned_until <= n:
+                continue
+            reason_match = (
+                not reason_glob
+                or any(_fnm.fnmatch(r, reason_glob) for r in s.risk_by_reason)
+            )
+            asn_match = (
+                target_asn is None
+                or getattr(s, "last_asn", None) == target_asn
+            )
+            if reason_match and asn_match:
+                s.banned_until = 0.0
+                s.risk_score   = 0.0
+                if hasattr(s, "risk_by_reason") and s.risk_by_reason:
+                    s.risk_by_reason.clear()
+                if hasattr(s, "blocks_by_reason") and s.blocks_by_reason:
+                    s.blocks_by_reason.clear()
+                # iter-11b: clear per-vhost risk + ban maps too.
+                if getattr(s, "risk_by_vhost", None):
+                    s.risk_by_vhost.clear()
+                if getattr(s, "banned_until_by_vhost", None):
+                    s.banned_until_by_vhost.clear()
+                s.blocked_count = 0
+                s.last_risk_update = n
+                # 1.8.15 — grant the same operator-Allow grace window as the
+                # single-target unban (parity), so a bulk Allow doesn't instantly
+                # re-ban the cleared identities. ALLOW_BYPASS_SECS=0 disables it.
+                if ALLOW_BYPASS_SECS > 0:
+                    s.bypass_until = _t.monotonic() + ALLOW_BYPASS_SECS
+                matched_ips.append(s.last_ip or k)
+                cleared += 1
+
+    # Best-effort DB cleanup (bans + ip_bans)
+    if matched_ips or reason_glob:
+        try:
+            conn = open_conn()
+            if reason_glob and not matched_ips:
+                all_bans = conn.execute(
+                    "SELECT ip, reason FROM bans"
+                ).fetchall()
+                db_del = [
+                    row[0] for row in all_bans
+                    if _fnm.fnmatch(str(row[1] or ""), reason_glob)
+                ]
+                for ip in db_del:
+                    conn.execute("DELETE FROM bans WHERE ip=?", (ip,))
+                    try:
+                        conn.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
+                    except Exception:
+                        pass
+                    conn.execute(
+                        "UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
+                        (ip,),
+                    )
+            else:
+                for ip in matched_ips:
+                    conn.execute("DELETE FROM bans WHERE ip=?", (ip,))
+                    try:
+                        conn.execute("DELETE FROM ip_bans WHERE ip=?", (ip,))
+                    except Exception:
+                        pass
+                    conn.execute(
+                        "UPDATE clients SET banned_until_epoch=0 WHERE ip=?",
+                        (ip,),
+                    )
+            conn.commit()
+            conn.close()
+        except Exception as _e:
+            print(f"[bulk_unban] db error: {_e}")
+
+    slog("manual_bulk_unban", level="info", rid=request.get("_rid", ""),
+         reason_glob=reason_glob, asn=target_asn, cleared=cleared)
+    return web.json_response(
+        {"cleared": cleared, "reason_glob": reason_glob, "asn": target_asn},
+        headers={"Cache-Control": "no-store"},
+    )
+
 
 async def scoring_endpoint(request: web.Request):
     """Read-only view of the bot scoring config: per-signal weight, ban
@@ -4856,6 +6702,14 @@ async def scoring_endpoint(request: web.Request):
         "ja4-required-missing":  ("soft", "JA4 expected from trusted peer but absent"),
         "headers-suspicious":    ("soft", "Generic header-shape anomaly"),
         "abuseipdb-high":        ("hard", "AbuseIPDB confidence ≥ 80 — community-vetted bad IP"),
+        "feodo-c2":              ("hard", "abuse.ch Feodo Tracker — source IP is a known botnet C2 (Dridex/Emotet/etc.). Very high-confidence."),
+        "cins-rogue":            ("med",  "CINS Army list — rogue / scan-origin IP (moderate confidence, higher FP rate)."),
+        "urlhaus-malware":       ("hard", "abuse.ch URLhaus — active malware-hosting IP."),
+        "js-cua-version-mismatch": ("med",  "Sec-CH-UA version disagrees with the Chrome version in the User-Agent — spoofed client hints."),
+        "js-mobile-hint-mismatch": ("med",  "Sec-CH-UA-Mobile contradicts the UA platform (e.g. mobile hint on a desktop UA)."),
+        "js-fetch-impossible":     ("hard", "Sec-Fetch-* header combination no real browser ever emits (per the Fetch Living Standard)."),
+        "h2-settings-deny":        ("hard", "HTTP/2 SETTINGS fingerprint (via fingerproxy sidecar) is in H2_FP_DENY_LIST."),
+        "h2-settings-mismatch":    ("med",  "HTTP/2 SETTINGS INITIAL_WINDOW_SIZE contradicts the claimed browser UA."),
         "abuseipdb-med":         ("med",  "AbuseIPDB confidence in [40,80)"),
         "crowdsec-banned":       ("hard", "CrowdSec LAPI returned an active decision for this IP"),
         "asn-hosting":           ("soft", "Source IP belongs to a hosting/cloud provider ASN"),
@@ -4894,6 +6748,7 @@ async def scoring_endpoint(request: web.Request):
         "dlp-pii-ssn":           ("intel", "Upstream response contained a US SSN (3-2-4 grouped digits)"),
         # ── 1.6.9: AI Labyrinth ──
         "tarpit-walk":           ("hard",  "Client followed a hidden rel=nofollow link injected into proxied HTML — only automated crawlers traverse invisible links. Near-zero FP; instant ban + response deliberately slow-dripped to exhaust crawler resources."),
+        "redirect-maze-bot":     ("hard",  "Client cleared all REDIRECT_MAZE_DEPTH signed 302 hops faster than REDIRECT_MAZE_MIN_MS — human-impossible redirect-following speed. Only high-risk clients are routed into the maze; a sub-threshold completion is a scripted client."),
         # ── 1.7.2 ──
         "cookie-ghost":          ("med",   "Gateway set cookies but client never returned them across 3+ requests — pure-HTTP bot not running a real browser cookie jar."),
         "lifecycle-miss":        ("soft",  "HTML page was served (lifecycle JS injected), but agw_lc cookie absent on subsequent non-HTML requests — JS not executing or bot stripping cookies."),
@@ -4903,6 +6758,14 @@ async def scoring_endpoint(request: web.Request):
         "webgl-missing":         ("soft",  "Chrome UA but no WebGL renderer returned — headless Chrome with WebGL blocked or disabled (common in Puppeteer/Playwright default configs)."),
         # ── 1.7.3 ──
         "path-sweep":            ("hard",  "Identity visited too many distinct non-static paths in a short window (PATH_SWEEP_THRESHOLD in PATH_SWEEP_WINDOW_SECS s) — automated content discovery / directory enumeration after warm-up bypass."),
+        # ── Synthetic (non-scored) reasons — surfaced in the timeline / breakdown
+        # so they get a tier + description tooltip even though they add 0 risk.
+        "chal-required":         ("soft", "JS challenge required — unsolved gate; the challenge page was served instead of the upstream."),
+        "pow-required":          ("soft", "Proof-of-work gate required before access (Anubis mode) — client must solve the PoW to proceed."),
+        "admin-probe":           ("info", "Probe of the admin namespace from a non-operator source — silently decoyed (404), never reveals the admin surface."),
+        "operator-self":         ("info", "Request from the operator / admin themselves — never scored."),
+        "admin-ip-blocked":      ("med",  "Admin path accessed from an IP not in ADMIN_ALLOWED_IPS — silently decoyed."),
+        "banned-silent":         ("hard", "Already-banned identity — silently decoyed without revealing the ban."),
     }
     # Each entry annotated with the runtime-toggle knob (if any) that
     # controls whether the detector runs. UI uses this to render a switch
@@ -4918,9 +6781,34 @@ async def scoring_endpoint(request: web.Request):
         "labyrinth-jitter":   "LABYRINTH_JITTER_ENABLED",
         "header-canary":      "HEADER_CANARY_ENABLED",
         "origin-mismatch":    "STRICT_ORIGIN",
-        "tls-fingerprint":    None,
+        "tls-fingerprint":    "TLS_FP_BLOCK_ENABLED",
         "abuseipdb-high":     "ABUSEIPDB_ENABLED",
         "abuseipdb-med":      "ABUSEIPDB_ENABLED",
+        "feodo-c2":           "FEODO_ENABLED",
+        "cins-rogue":         "CINS_ENABLED",
+        "urlhaus-malware":    "URLHAUS_ENABLED",
+        "js-cua-version-mismatch": "JS_CONSISTENCY_ENABLED",
+        "js-mobile-hint-mismatch": "JS_CONSISTENCY_ENABLED",
+        "js-fetch-impossible":     "JS_CONSISTENCY_ENABLED",
+        "h2-settings-deny":        "H2_SETTINGS_FP_ENABLED",
+        "h2-settings-mismatch":    "H2_SETTINGS_FP_ENABLED",
+        # 1.9.7 — WAF kill-switch family (see module-level SIGNAL_KNOB).
+        "smuggling-cl-te": "WAF_SMUGGLING_ENABLED", "smuggling-te-cl": "WAF_SMUGGLING_ENABLED",
+        "smuggling-te-te": "WAF_SMUGGLING_ENABLED", "smuggling-dual-header": "WAF_SMUGGLING_ENABLED",
+        "smuggling-duplicate-cl": "WAF_SMUGGLING_ENABLED", "smuggling-invalid-te": "WAF_SMUGGLING_ENABLED",
+        "smuggling-obfuscated-te": "WAF_SMUGGLING_ENABLED",
+        "method-override-attempt": "WAF_VERB_OVERRIDE_ENABLED",
+        "header-ssti": "WAF_HEADER_INJECTION_ENABLED", "host-header-injection": "WAF_HEADER_INJECTION_ENABLED",
+        "body-critical-injection": "WAF_BODY_ENABLED", "body-xxe": "WAF_BODY_ENABLED",
+        "body-proto-pollution": "WAF_BODY_ENABLED",
+        "upload-dangerous-ext": "WAF_UPLOAD_ENABLED", "upload-dangerous-magic": "WAF_UPLOAD_ENABLED",
+        "gql-introspection": "WAF_GRAPHQL_ENABLED", "gql-batch-abuse": "WAF_GRAPHQL_ENABLED",
+        "gql-depth-exceeded": "WAF_GRAPHQL_ENABLED",
+        "no-interaction": "INTERACTION_PROBE_ENABLED", "scripted-motion": "INTERACTION_PROBE_ENABLED",
+        "scripted-keys": "INTERACTION_PROBE_ENABLED", "bot-scroll": "INTERACTION_PROBE_ENABLED",
+        "low-entropy-input": "INTERACTION_PROBE_ENABLED",
+        "honey-fp-match": "HONEYPOT_ENABLED", "coordinated-honeypot": "HONEYPOT_ENABLED",
+        "headers-suspicious": "HEADER_COMPLETENESS_ENABLED", "sec-fetch-nav-absent": "HEADER_COMPLETENESS_ENABLED",
         "crowdsec-banned":    "CROWDSEC_ENABLED",
         "asn-hosting":        "MAXMIND_ENABLED",
         # 1.6.0 — Tier-A toggles
@@ -4934,16 +6822,16 @@ async def scoring_endpoint(request: web.Request):
         "ua-ai-meta":         "AI_UA_META_ENABLED",
         "ua-ai-other":        "AI_UA_OTHER_ENABLED",
         # 1.6.1 — Tier-B toggles
-        "custom-rule-block":  None,                       # always-on (rules opt-in)
-        "rate-limit-endpoint": None,                      # part of ENDPOINT_POLICIES
+        "custom-rule-block":  "CUSTOM_RULES_ENABLED",                       # always-on (rules opt-in)
+        "rate-limit-endpoint": "ENDPOINT_RATE_LIMIT_ENABLED",                      # part of ENDPOINT_POLICIES
         "body-sqli":          "BODY_GROUP_SQLI_ENABLED",
         "body-xss":           "BODY_GROUP_XSS_ENABLED",
         "body-lfi":           "BODY_GROUP_LFI_ENABLED",
         "body-rce":           "BODY_GROUP_RCE_ENABLED",
         "body-ssrf":          "BODY_GROUP_SSRF_ENABLED",
         "body-cmd":           "BODY_GROUP_CMD_ENABLED",
-        "auth-jwt-invalid":   None,                       # gated by JWT_VALIDATE_PATHS
-        "slow-client":        None,                       # always-on (BODY_TIMEOUT structural)
+        "auth-jwt-invalid":   "JWT_VALIDATION_ENABLED",                       # gated by JWT_VALIDATE_PATHS
+        "slow-client":        "WAF_SLOWLORIS_ENABLED",                       # always-on (BODY_TIMEOUT structural)
         "botd-detected":      "BOTD_ENABLED",              # 1.6.5 — client-side fingerprintjs/botd
         # 1.6.2 — Tier-C DLP toggles
         "dlp-cc":             "DLP_GROUP_CC_ENABLED",
@@ -4955,6 +6843,7 @@ async def scoring_endpoint(request: web.Request):
         "dlp-pii-ssn":        "DLP_GROUP_PII_SSN_ENABLED",
         # 1.6.9 — AI Labyrinth
         "tarpit-walk":        "LABYRINTH_ENABLED",
+        "redirect-maze-bot":  "REDIRECT_MAZE_ENABLED",  # 1.9.7 — was unmapped
         # 1.6.10
         "header-order-fp":    "HEADER_ORDER_FP_ENABLED",
         "ai-ua-ip-mismatch":  "AI_CRAWLER_VERIFY_ENABLED",
@@ -4988,6 +6877,36 @@ async def scoring_endpoint(request: web.Request):
         "webgl-missing":      "FP_ENRICHMENT_ENABLED",
         # ── 1.7.3 ──
         "path-sweep":         "PATH_SWEEP_ENABLED",
+        # ── 1.9.7 — kill-switch wiring gap fix (kept in sync with the
+        # module-level SIGNAL_KNOB above; both feed the merged Toggles+Weights
+        # table + riskbreakdown knob_state). All emitted signals with an
+        # existing vhost-coercible knob that were previously unmapped. ──
+        "ja4-required-missing":   "JA4_REQUIRED_ENABLED",
+        "ja4h-deny":              "JA4H_DENY_ENABLED",
+        "honey-cred":             "HONEY_CRED_ENABLED",
+        "canary-probe-miss":      "CANARY_PROBE_ENABLED",
+        "llm-no-subresources":    "LLM_HEURISTIC_ENABLED",
+        "webdriver-detected":     "AUTOMATION_PROBE_ENABLED",
+        "bot-motion":             "INTERACTION_PROBE_ENABLED",
+        "accept-wildcard-html":   "ACCEPT_WILDCARD_CHECK_ENABLED",
+        "coordinated-probe":      "COORDINATED_ATTACK_ENABLED",
+        "direct-api-probe":       "JOURNEY_CHECK_ENABLED",
+        "fp-banned":              "FP_BAN_CHECK_ENABLED",
+        "host-not-allowed":       "HOST_BLOCKING_ENABLED",
+        "missing-required-header": "REQUIRED_HEADERS_ENABLED",
+        "rate-limit":             "RATE_LIMIT_ENABLED",
+        "rate-limit-ip":          "RATE_LIMIT_IP_ENABLED",
+        "session-churn":          "SESSION_CHURN_ENABLED",
+        "traffic-threshold":      "TRAFFIC_THRESHOLD_ENABLED",
+        "upstream-auth-fail":     "UPSTREAM_AUTH_FAIL_ENABLED",
+        # Synthetic (non-scored) reasons → their real control, so signal_meta
+        # gives them a tier/desc tooltip + deep-link in the breakdown popover.
+        "chal-required":      "JS_CHALLENGE",
+        "pow-required":       "ANUBIS_ENABLED",
+        "admin-probe":        None,
+        "operator-self":      None,
+        "admin-ip-blocked":   "ADMIN_ALLOWED_IPS",
+        "banned-silent":      None,
     }
     # Per-signal latency cost (typical / cached / p99 in ms) + impact kind.
     #
@@ -5005,6 +6924,14 @@ async def scoring_endpoint(request: web.Request):
     SIGNAL_COST = {
         # ── External integrations (network call) ─────────────────────────
         "abuseipdb-high":       {"kind": "network",     "cached": 0.3,  "typical": 150,   "p99": 450},
+        "feodo-c2":             {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "cins-rogue":           {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "urlhaus-malware":      {"kind": "in-process",  "cached": 0,    "typical": 0.005, "p99": 0.05},
+        "js-cua-version-mismatch": {"kind": "in-process", "cached": 0, "typical": 0.005, "p99": 0.05},
+        "js-mobile-hint-mismatch": {"kind": "in-process", "cached": 0, "typical": 0.005, "p99": 0.05},
+        "js-fetch-impossible":     {"kind": "in-process", "cached": 0, "typical": 0.005, "p99": 0.05},
+        "h2-settings-deny":        {"kind": "in-process", "cached": 0, "typical": 0.005, "p99": 0.05},
+        "h2-settings-mismatch":    {"kind": "in-process", "cached": 0, "typical": 0.005, "p99": 0.05},
         "abuseipdb-med":        {"kind": "network",     "cached": 0.3,  "typical": 150,   "p99": 450},
         "crowdsec-banned":      {"kind": "network",     "cached": 0.2,  "typical": 5,     "p99": 20},
         # ── MaxMind in-memory DB lookups ──────────────────────────────────
@@ -5101,6 +7028,7 @@ async def scoring_endpoint(request: web.Request):
     }
     SIGNAL_LABELS = {
         "tarpit-walk":        "AI Labyrinth",
+        "redirect-maze-bot":  "Redirect Maze",
         "labyrinth-jitter":   "AI Labyrinth Jitter",
         "header-canary":      "Header Canary Inject",
         "accept-fp":          "Accept Fingerprint",
@@ -5139,9 +7067,46 @@ async def scoring_endpoint(request: web.Request):
         ("TARPIT_ENABLED",          "Add TARPIT_DELAY_MS slowdown to every soft-band response (tarpit-walk flow). Maximises attacker CPU/bandwidth cost without blocking."),
         ("SW_CHALLENGE_ENABLED",    "Register a Service Worker at /antibot-appsec-gateway/sw.js that stamps X-SW-Active: 1 on intercepted requests. Absence after expected registration = headless-browser signal."),
     ]
+    # ── 1.8.10 Risk-breakdown enrichment ────────────────────────────────────
+    # Per-control live state (a dot for bool toggles, a value badge otherwise) +
+    # the settings page that hosts each knob (so the breakdown popover can
+    # deep-link it), and per-reason meta (weight/tier/desc) for the severity
+    # badge + description tooltip. The dashboard (main.html / agents.html) reads
+    # knob_state / knob_page / signal_meta to render the clickable control column.
+    _SETTINGS_KNOBS = {            # knobs that live on the Settings page, not Controls
+        "ADMIN_ALLOWED_IPS", "ALLOWED_HOSTS", "JA4_DENY_LIST", "REQUIRED_HEADERS",
+        "COUNTRY_DENYLIST", "COUNTRY_ALLOWLIST", "CUSTOM_RULES", "ENDPOINT_POLICIES",
+        "JWT_VALIDATE_PATHS",
+    }
+    knob_state = {}
+    knob_page  = {}
+    for _kn in sorted({_k for _k in SIGNAL_KNOB.values() if _k} | _SETTINGS_KNOBS):
+        _v = globals().get(_kn, None)
+        if isinstance(_v, bool):
+            _kind, _on, _display = "bool", bool(_v), ""
+        elif isinstance(_v, (int, float)):
+            _kind, _on, _display = "num", (_v != 0), str(_v)
+        elif isinstance(_v, (list, tuple, set, frozenset)):
+            _kind, _on, _display = "list", bool(_v), f"{len(_v)} set"
+        elif isinstance(_v, str):
+            _kind, _on, _display = "list", bool(_v.strip()), _v[:24]
+        else:
+            _kind, _on, _display = "bool", bool(_v), ""
+        knob_state[_kn] = {"on": _on, "kind": _kind, "display": _display}
+        knob_page[_kn]  = "settings" if _kn in _SETTINGS_KNOBS else "controls"
+    # signal_meta: weight + severity tier + description per reason, built from
+    # the full SIGNAL_KNOB map so synthetic (non-scored) reasons are covered too.
+    signal_meta = {}
+    for _rsn, _kn in SIGNAL_KNOB.items():
+        _tier, _desc = DESCRIPTIONS.get(_rsn, ("?", ""))
+        signal_meta[_rsn] = {"weight": RISK_WEIGHTS.get(_rsn, 0),
+                             "tier": _tier, "desc": _desc}
     return web.json_response({
         "weights":   weights,
         "modifiers": [{"toggle": k, "description": d} for k, d in modifiers],
+        "knob_state":  knob_state,
+        "knob_page":   knob_page,
+        "signal_meta": signal_meta,
         "thresholds": {
             "RISK_BAN_THRESHOLD":      RISK_BAN_THRESHOLD,
             "RISK_BAN_THRESHOLD_NAT":  RISK_BAN_THRESHOLD_NAT,
@@ -5201,9 +7166,16 @@ async def maxmind_fetch_endpoint(request: web.Request):
 _detector_latency: dict = {}   # reason → deque(ms samples, maxlen=200)
 _detector_hits:    dict = {}   # reason → int
 
+# 1.8.15 — upper bound on distinct reason keys carried in the dicts above.
+# An attacker that can influence `reason` (e.g. via a custom-rule tag) could
+# otherwise grow these dicts unbounded. On overflow we evict the oldest
+# inserted keys (FIFO by dict insertion order) until back under the cap.
+_DETECTOR_REASONS_CAP = 256
+
 def _detector_record(reason: str, elapsed_ms: float) -> None:
     """1.6.5 — internal: add a per-reason latency sample. Called from every
-    detector's deny() / silent-decoy emission. Never raises."""
+    detector's deny() / silent-decoy emission. Never raises.
+    1.8.15 — bounds the per-reason dicts at _DETECTOR_REASONS_CAP."""
     try:
         _detector_hits[reason] = _detector_hits.get(reason, 0) + 1
         dq = _detector_latency.get(reason)
@@ -5212,6 +7184,18 @@ def _detector_record(reason: str, elapsed_ms: float) -> None:
             _detector_latency[reason] = _dq(maxlen=200)
             dq = _detector_latency[reason]
         dq.append(float(elapsed_ms))
+        # 1.8.15 — evict oldest entries when the dicts exceed _DETECTOR_REASONS_CAP.
+        # Python ≥ 3.7 dicts preserve insertion order, so iter() yields
+        # least-recently-added first. Drop matching keys from BOTH dicts so the
+        # two views stay consistent.
+        while len(_detector_hits) > _DETECTOR_REASONS_CAP:
+            _victim = next(iter(_detector_hits))
+            _detector_hits.pop(_victim, None)
+            _detector_latency.pop(_victim, None)
+        while len(_detector_latency) > _DETECTOR_REASONS_CAP:
+            _victim = next(iter(_detector_latency))
+            _detector_latency.pop(_victim, None)
+            _detector_hits.pop(_victim, None)
     except Exception:
         pass
 
@@ -5226,6 +7210,10 @@ _chal_required_count = 0
 # user roadmap: UA filter / body group / external intel / behavioural /
 # cookie gate / TLS fingerprint / canary / operator-defined / other.
 _REASON_METHOD = {
+    # 1.9.7 — JS-consistency (header coherence) + H2 SETTINGS fingerprint (tls)
+    "js-cua-version-mismatch": "header", "js-mobile-hint-mismatch": "header",
+    "js-fetch-impossible": "header",
+    "h2-settings-deny": "tls", "h2-settings-mismatch": "tls",
     # UA filter family
     "ua-empty": "ua", "ua-blocked": "ua", "ua-too-short": "ua",
     "ua-non-browser": "ua", "ua-platform-mismatch": "ua",
@@ -5237,6 +7225,7 @@ _REASON_METHOD = {
     "suspicious-body": "body",
     # External intel layer
     "abuseipdb-high": "intel", "abuseipdb-med": "intel",
+    "feodo-c2": "intel", "cins-rogue": "intel", "urlhaus-malware": "intel",
     "crowdsec-banned": "intel", "country-blocked": "intel",
     "tor-exit": "intel", "datacenter-vpn": "intel", "asn-hosting": "intel",
     # Behavioural / fingerprint
@@ -5324,7 +7313,7 @@ async def geo_data_endpoint(request: web.Request):
         for i in range(N_ANIM)
     ]
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         try:
             # Cursor iteration (no fetchall) — avoids loading all rows into RAM for
@@ -5335,11 +7324,31 @@ async def geo_data_endpoint(request: web.Request):
             if _geo_vhost:
                 _geo_vhost_clause = " AND vhost = ?"
                 _geo_sql_args.append(_geo_vhost)
-            cursor = conn.execute(
-                "SELECT ts, ip, reason FROM events "
-                "WHERE ts >= ? AND ts <= ?" + _geo_vhost_clause,
-                _geo_sql_args,
-            )
+            # 1.9.1 iter-17: PG mode wraps the ts bounds in to_timestamp().
+            # 1.9.2 iter-24 (this fix): also project ts via EXTRACT(EPOCH FROM ts)
+            # on PG. The previous version selected bare `ts`, which on PG is
+            # TIMESTAMPTZ so `r["ts"]` returned a datetime — then `float(r["ts"])`
+            # at line ~6701 raised TypeError, the outer try/except swallowed it,
+            # and the geo dashboard silently rendered empty points. Operator-
+            # reported as "Geomap shows no events." Same bug class as the
+            # iter-17/18 PG-mirrored-table read sweep — last unfixed instance
+            # was the SELECT-projection side.
+            from db import active_backend as _active_geo
+            _be_geo = _active_geo()
+            if _be_geo == "postgres":
+                _geo_sql = (
+                    "SELECT EXTRACT(EPOCH FROM ts) AS ts, ip, reason "
+                    "FROM events "
+                    "WHERE ts >= to_timestamp(?) AND ts <= to_timestamp(?)"
+                    + _geo_vhost_clause
+                )
+            else:
+                _geo_sql = (
+                    "SELECT ts, ip, reason FROM events "
+                    "WHERE ts >= ? AND ts <= ?"
+                    + _geo_vhost_clause
+                )
+            cursor = conn.execute(_geo_sql, _geo_sql_args)
             for r in cursor:
                 ip = r["ip"]
                 if not ip:
@@ -5598,14 +7607,25 @@ async def geo_drill_endpoint(request: web.Request):
     start_epoch = end_epoch - range_min * 60
     target_key = (round(lat * 2) / 2, round(lng * 2) / 2)
 
+    # 1.9.1 iter-17: backend-branched read for the geo-target-points
+    # endpoint. PG mode wraps the bounds + projects ts to epoch so the
+    # downstream `r["ts"]` consumer keeps working.
+    from db import active_backend as _active_geom
+    _be_geom = _active_geom()
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT ip, ua, path, reason, ts FROM events "
-            "WHERE ts >= ? AND ts <= ? LIMIT 200000",
-            (start_epoch, end_epoch),
-        ).fetchall()
+        if _be_geom == "postgres":
+            _sql_geom = (
+                "SELECT ip, ua, path, reason, EXTRACT(EPOCH FROM ts) AS ts FROM events "
+                "WHERE ts >= to_timestamp(?) AND ts <= to_timestamp(?) LIMIT 200000"
+            )
+        else:
+            _sql_geom = (
+                "SELECT ip, ua, path, reason, ts FROM events "
+                "WHERE ts >= ? AND ts <= ? LIMIT 200000"
+            )
+        rows = conn.execute(_sql_geom, (start_epoch, end_epoch)).fetchall()
         conn.close()
     except Exception as e:
         return web.json_response(
@@ -5677,7 +7697,7 @@ async def geo_drill_endpoint(request: web.Request):
 
 async def geo_dashboard_endpoint(request: web.Request):
     """HTML dashboard rendering the world-map geo view."""
-    body = GEO_DASHBOARD_HTML
+    body = inject_theme(GEO_DASHBOARD_HTML, DB_PATH)  # 1.9.6 — honour saved theme
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -5698,6 +7718,26 @@ async def geo_dashboard_endpoint(request: web.Request):
 
 
 # ── 1.6.3: Logs dashboard endpoints ──────────────────────────────────────
+def _epoch(v):
+    """1.9.6 — normalise an events.ts value to an epoch float for JSON output.
+    SQLite stores ts as REAL epoch (passthrough); Postgres returns a tz-aware
+    `datetime` (TIMESTAMPTZ) which is NOT JSON-serializable and also blows up
+    `float(...)`. Same bug class as the geo-data/db-test datetime fixes — this
+    one surfaced as `/secured/logs-data` → 500 on PG-only deployments."""
+    if v is None:
+        return 0.0
+    ts = getattr(v, "timestamp", None)
+    if callable(ts):          # datetime → epoch
+        try:
+            return v.timestamp()
+        except Exception:
+            return 0.0
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def logs_data_endpoint(request: web.Request):
     """Live log feed for the Logs dashboard.
 
@@ -5730,7 +7770,7 @@ async def logs_data_endpoint(request: web.Request):
         iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
         vhost_filter  = (request.query.get("vhost", "") or "").strip().lower()
         try:
-            conn = sqlite3.connect(DB_PATH)
+            conn = open_conn()
             conn.row_factory = sqlite3.Row
             # 1.6.5 — pull more rows than `limit` so we can post-filter
             # (method/ip_type) without paginating multiple SQL queries.
@@ -5776,7 +7816,7 @@ async def logs_data_endpoint(request: web.Request):
                 continue
             out.append({
                 "id":          r["id"],
-                "ts":          r["ts"],
+                "ts":          _epoch(r["ts"]),   # 1.9.6 — PG datetime → epoch (was 500)
                 "level":       row_level,
                 "ip":          r["ip"],
                 "is_admin_ip": _is_admin_ip(r["ip"] or ""),
@@ -5836,7 +7876,7 @@ async def logs_export_endpoint(request: web.Request):
     await resp.write(b"id,ts,iso_ts,ip,ua,path,status,reason,method,ip_type\r\n")
     written = 0
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         # Stream from the cursor — don't load everything in memory.
         for r in conn.execute(
@@ -5887,7 +7927,7 @@ async def logs_export_endpoint(request: web.Request):
 
 async def logs_dashboard_endpoint(request: web.Request):
     """HTML dashboard for the Logs viewer (request log + GW log + level toggle)."""
-    body = LOGS_DASHBOARD_HTML
+    body = inject_theme(LOGS_DASHBOARD_HTML, DB_PATH)  # 1.9.6 — honour saved theme
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -5931,13 +7971,28 @@ async def path_hits_endpoint(request: web.Request):
     start_epoch = _t.time() - range_min * 60
 
     def _fetch_path_rows(db_path, path_val, since):
-        conn = sqlite3.connect(db_path)
+        # 1.9.1 iter-17: route through open_conn so PG mode works. SQL is
+        # backend-branched: PG wraps ts bound + projects to epoch so the
+        # downstream `r["ts"]` consumer keeps working unchanged.
+        from db import open_conn as _open_conn_p, active_backend as _active_p
+        _be_p = _active_p()
+        conn = _open_conn_p()
         conn.row_factory = sqlite3.Row
-        result = conn.execute(
-            "SELECT ip, ua, reason, status, ts FROM events "
-            "WHERE path = ? AND ts >= ? ORDER BY ts DESC LIMIT 50000",
-            (path_val, since),
-        ).fetchall()
+        if _be_p == "postgres":
+            # EXTRACT(EPOCH FROM ts) yields numeric -> psycopg returns
+            # decimal.Decimal, which then breaks `round(float - ts, 1)`
+            # downstream (TypeError: float - Decimal -> 500). Cast to float8
+            # so the consumer sees a float exactly like the SQLite branch.
+            _sql_p = (
+                "SELECT ip, ua, reason, status, EXTRACT(EPOCH FROM ts)::float8 AS ts FROM events "
+                "WHERE path = ? AND ts >= to_timestamp(?) ORDER BY ts DESC LIMIT 50000"
+            )
+        else:
+            _sql_p = (
+                "SELECT ip, ua, reason, status, ts FROM events "
+                "WHERE path = ? AND ts >= ? ORDER BY ts DESC LIMIT 50000"
+            )
+        result = conn.execute(_sql_p, (path_val, since)).fetchall()
         conn.close()
         return result
 
@@ -6037,21 +8092,27 @@ async def agents_bucket_detail_endpoint(request: web.Request):
     # all_blocks=1 → include every non-OK reason (for main dashboard).
     # Default (agents page) → only AGENT_BLOCK_REASONS.
     all_blocks = request.query.get("all_blocks", "0") == "1"
+    # 1.9.1 iter-17: backend-branch the four agent-page reads. PG mode
+    # wraps the ts bounds in to_timestamp(); SQLite path unchanged.
+    from db import active_backend as _active_ag
+    _be_ag = _active_ag()
+    _ts_ag = ("ts >= to_timestamp(?) AND ts < to_timestamp(?)"
+              if _be_ag == "postgres" else "ts >= ? AND ts < ?")
     detected_set, clean_set = {}, {}
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = open_conn()
         conn.row_factory = sqlite3.Row
         if all_blocks:
             block_rows = conn.execute(
-                "SELECT ip, ua, path, reason, status FROM events "
-                "WHERE ts >= ? AND ts < ? AND reason != '' AND reason != 'OK'",
+                f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608
+                f"WHERE {_ts_ag} AND reason != '' AND reason != 'OK'",
                 (t, end),
             )
         else:
             agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
             block_rows = conn.execute(
                 f"SELECT ip, ua, path, reason, status FROM events "  # nosec B608
-                f"WHERE ts >= ? AND ts < ? AND reason IN ({agent_q})",
+                f"WHERE {_ts_ag} AND reason IN ({agent_q})",
                 (t, end, *AGENT_BLOCK_REASONS),
             )
         for r in block_rows:
@@ -6066,8 +8127,8 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             entry["reasons"][r["reason"]] = entry["reasons"].get(r["reason"], 0) + 1
             entry["last_path"] = r["path"] or entry["last_path"]
         for r in conn.execute(
-            "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND (reason='' OR reason='OK') LIMIT 20000",
+            f"SELECT ip, ua, path FROM events "  # nosec B608
+            f"WHERE {_ts_ag} AND (reason='' OR reason='OK') LIMIT 20000",
             (t, end),
         ):
             ip = r["ip"] or "?"
@@ -6086,11 +8147,11 @@ async def agents_bucket_detail_endpoint(request: web.Request):
     # authorized-robot events (passthrough bots, not blocked, not clean)
     auth_robot_set = {}
     try:
-        conn2 = sqlite3.connect(DB_PATH)
+        conn2 = open_conn()
         conn2.row_factory = sqlite3.Row
         for r in conn2.execute(
-            "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND reason='authorized-robot' LIMIT 20000",
+            f"SELECT ip, ua, path FROM events "  # nosec B608
+            f"WHERE {_ts_ag} AND reason='authorized-robot' LIMIT 20000",
             (t, end),
         ):
             ip = r["ip"] or "?"
@@ -6118,16 +8179,23 @@ async def agents_bucket_detail_endpoint(request: web.Request):
         for key, s in ip_state.items():
             if s.allowed_count == 0:
                 continue
-            score, _, _ = _stealth_score(s)
+            score, _comps, _mets = _stealth_score(s)
             if score < min_score:
                 continue
             seen_epoch = _t.time() - (n_now - s.last_seen)
             if t <= seen_epoch < end:
                 _mip = s.last_ip or key
+                _rb = sorted(
+                    ((r, round(v, 1)) for r, v in s.risk_by_reason.items() if v >= 0.5),
+                    key=lambda x: x[1], reverse=True,
+                )
                 missed_list.append({
                     "id": key, "ip": _mip,
                     "ua": s.last_user_agent, "stealth_score": score,
                     "risk_score": round(s.risk_score, 1),
+                    "risk_breakdown": _rb,
+                    "components": _comps,
+                    "metrics": _mets,
                     "is_admin_ip": _is_admin_ip(_mip),
                     "allowed": s.allowed_count, "blocked": s.blocked_count,
                     "last_path": s.last_path,
@@ -6135,11 +8203,12 @@ async def agents_bucket_detail_endpoint(request: web.Request):
 
     gwmgmt_set: dict = {}
     try:
-        conn3 = sqlite3.connect(DB_PATH)
+        conn3 = open_conn()
         conn3.row_factory = sqlite3.Row
+        # 1.9.1 iter-17: reuse the _ts_ag template above.
         for r in conn3.execute(
-            "SELECT ip, ua, path FROM events "
-            "WHERE ts >= ? AND ts < ? AND path LIKE '/antibot-appsec-gateway/%' LIMIT 20000",
+            f"SELECT ip, ua, path FROM events "  # nosec B608
+            f"WHERE {_ts_ag} AND path LIKE '/antibot-appsec-gateway/%' LIMIT 20000",
             (t, end),
         ):
             ip = r["ip"] or "?"

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (c) 2026 Pedro Tarrinho
 """
-detection/base.py — Standard Detector interface for AppSecGW detection modules.
+detection/base.py — Standard Detector interface for AntiBot/WAF GW detection modules.
 
 Defines the Detector Protocol that all detection modules should satisfy.
 Existing modules pre-date this protocol and call their functions directly from
