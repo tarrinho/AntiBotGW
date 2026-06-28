@@ -7337,7 +7337,12 @@ async def geo_data_endpoint(request: web.Request):
         {"ts": start_epoch + (i + 1) * _anim_step, "points": {}}
         for i in range(N_ANIM)
     ]
-    try:
+    def _scan():
+        # 1.9.9 — run the events scan + per-IP GeoIP/ASN resolution in a worker
+        # thread so a wide-window geomap load (many rows + mmdb lookups) never
+        # blocks the event loop / freezes the gateway. The 60s _GEO_CACHE still
+        # serves repeat ticks; only a cache-miss pays the scan, now off-loop.
+        nonlocal skipped_no_geo, _sample_seen
         conn = open_conn()
         conn.row_factory = sqlite3.Row
         try:
@@ -7455,6 +7460,8 @@ async def geo_data_endpoint(request: web.Request):
                         events_sample[j] = [float(r["ts"]), lat, lng, kind]
         finally:
             conn.close()
+    try:
+        await asyncio.to_thread(_scan)
     except Exception as e:
         return web.json_response(
             {"error": f"db: {e}", "points": []}, status=500,
