@@ -1879,9 +1879,11 @@ window._gwIdentityPopover = (function(){
       id:               raw.id || '',
       ip:               raw.ip || raw.last_ip || '',
       ua:               raw.ua || raw.last_ua || '',
-      session:          raw.session    || raw.last_session    || '—',
-      fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '—',
-      ja4:              raw.ja4 || '—',
+      // 1.9.8 UX — keep raw '' so the renderer can substitute a
+      // contextual "n/a (reason)" hint via _naHint(field).
+      session:          raw.session    || raw.last_session    || '',
+      fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '',
+      ja4:              raw.ja4 || '',
       stealth_score:    raw.stealth_score != null ? raw.stealth_score : null,
       risk_score:       raw.metrics ? raw.metrics.risk_score : (raw.risk_score || 0),
       banned_secs:      raw.banned_secs || 0,
