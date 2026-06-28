@@ -116,12 +116,15 @@ class TestPreserveHostGate:
 
     def test_p02_x_forwarded_host_always_set(self):
         src = _read("core/proxy_handler.py")
-        # X-Forwarded-Host should always carry the original client host
-        # regardless of PRESERVE_HOST — it's an informational header for upstream.
-        # Confirm the X-Forwarded-Host assignment is NOT inside the preserve check.
-        idx_xfh = src.find('fwd_headers["X-Forwarded-Host"] = request.host')
+        # X-Forwarded-Host is still always forwarded regardless of PRESERVE_HOST,
+        # but 1.9.8 M5 (CWE-644) routes it through _safe_client_host(): a valid Host
+        # is reflected, a malformed / allowlist-miss falls back to the upstream
+        # netloc. Confirm the (validated) assignment precedes the PRESERVE_HOST gate.
+        idx_xfh = src.find('fwd_headers["X-Forwarded-Host"] = _xfh')
         idx_gate = src.find("and not vc('PRESERVE_HOST')")
         assert idx_xfh != -1, "X-Forwarded-Host must be set in the HTTP forward path"
+        assert "_safe_client_host(request.host" in src, \
+            "X-Forwarded-Host must be validated via _safe_client_host (M5)"
         assert idx_xfh < idx_gate, (
             "X-Forwarded-Host assignment must come BEFORE the PRESERVE_HOST gate "
             "so it is always forwarded regardless of PRESERVE_HOST setting"

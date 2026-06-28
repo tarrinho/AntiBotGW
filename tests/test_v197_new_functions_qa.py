@@ -354,7 +354,13 @@ class TestTotpPartialTokenScheme:
         src = open(self.users.__file__, encoding="utf-8").read()
         idx_verify = src.find("def totp_verify_endpoint")
         assert idx_verify != -1
-        window = src[idx_verify: idx_verify + 3000]
+        # Scope to the function body (up to the next top-level def) instead of a
+        # fixed-size slice — a fixed window breaks when the body legitimately
+        # grows (the 1.9.8 S-W5 partial-token length guard pushed compare_digest
+        # past the old 3000-char window).
+        _ends = [p for p in (src.find("\nasync def ", idx_verify + 10),
+                             src.find("\ndef ", idx_verify + 10)) if p != -1]
+        window = src[idx_verify: min(_ends)] if _ends else src[idx_verify:]
         assert "compare_digest" in window, (
             "totp_verify_endpoint must use hmac.compare_digest for partial_token"
         )
