@@ -654,6 +654,8 @@ async def gw_registry_auto_apply_endpoint(request: web.Request):
     this peer skip the pending queue and apply straight to the live
     integration. Only meaningful for non-local rows; rejected on the
     local row to keep the audit story clean."""
+    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M1 — was missing (CWE-862)
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -761,6 +763,8 @@ async def gw_registry_delete_endpoint(request: web.Request):
 
 async def gw_registry_distribution_matrix_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/distribution/matrix"""
+    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M2 — topology read gate
+        return denied
     rows = _gw_load_all()
     pairs = _gw_load_distribution()
     by_pair = {(s, t): True for s, t in pairs}
@@ -780,6 +784,8 @@ async def gw_registry_distribution_rules_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/distribution/rules
     Body: {"rules": [{"source": "gw-a", "target": "gw-b"}, ...]}
     Replaces the entire rule set in one transaction (idempotent)."""
+    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M2 — was missing (CWE-862)
+        return denied
     try:
         body = await asyncio.wait_for(request.content.read(64 * 1024),
                                        timeout=BODY_TIMEOUT)
@@ -878,6 +884,8 @@ async def gw_registry_sync_status_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/{gw_id}/sync-status — synthetic
     health view: how recently the gateway was seen + active distribution
     pairs sourced from / targeted at it."""
+    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M2 — topology read gate
+        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -1057,6 +1065,11 @@ def _mesh_load_pending(status: str = "pending") -> list[dict]:
 # ── Mesh-sync endpoints ─────────────────────────────────────────────
 async def mesh_sync_state_endpoint(request: web.Request):
     """GET <NS>/secured/admin/mesh-sync — current state."""
+    # 1.9.8 (S-W2) — viewers must not see which sync keys are enabled or the
+    # pending offer previews; restrict to admin/maintainer like the mutating
+    # mesh-sync endpoints below.
+    if denied := _role_denied(request, "admin", "maintainer"):
+        return denied
     enabled = sorted(_mesh_sync_enabled_set())
     pending = _mesh_load_pending("pending")
     return web.json_response({

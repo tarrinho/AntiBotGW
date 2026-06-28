@@ -6,6 +6,34 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.9.9] — security hardening
+
+### Security (Tier-1 hardening)
+- **mesh-sync state requires admin/maintainer** — `mesh_sync_state_endpoint` now
+  applies `_role_denied`; viewers can no longer read which sync keys are enabled
+  or the pending offer previews.
+- **`_internal_authed` gate on `ip-intel` and `whoami`** — explicit in-handler
+  auth (defence-in-depth beneath the `protect()` middleware).
+- **2FA setup is POST + CSRF** — `totp_setup_endpoint` is now `@_require_csrf` and
+  registered as `add_post` (it was an unrouted GET; this also wires the route so
+  the dashboard's existing POST reaches it). Generating a pending TOTP secret can
+  no longer be driven cross-site or by a bare navigation.
+- **scrypt parameter upper bounds** — `_password_verify` rejects `n>2^18`/`r>16`/
+  `p>4` before calling `hashlib.scrypt`, so a crafted stored value cannot force a
+  memory/CPU DoS on every verify.
+- **2FA token length bound** — `totp_verify_endpoint` rejects oversized
+  `partial_token`/`code` (>64) with a 400 before the timing-safe compare.
+- **`agw_csrf` cookie scoped to `ADMIN_NS`** — the JS-readable CSRF cookie is set
+  and deleted with `path=/antibot-appsec-gateway` (was `path=/`), so it never
+  travels to the proxied upstream surface (mitigates register risk R1).
+- **Async password hashing** — login / user-create / password-change run scrypt
+  (`N=2^17`, ~500 ms) off the event loop via `_password_hash_async` /
+  `_password_verify_async` (`asyncio.to_thread`), so a burst of logins no longer
+  stalls every other coroutine.
+
+
+---
+
 ## [1.9.8] — port-aware virtual hosts
 
 ### Added
@@ -55,6 +83,22 @@ Author: Pedro Tarrinho
   key-forming site (`set_vhost`, env/file config load, `vhost_set`,
   `vhost_delete`), making `site.com`, `site.com:80` and `site.com:443` one vhost
   while non-default ports (e.g. `:8008`) stay distinct. (`vhost._strip_default_port`)
+
+### Security
+- **Whitebox security review (see `analysis.result.md`) — quick-win fixes landed.**
+  M1/M2 (CWE-862): added role authorization (`_role_denied admin/maintainer`) to four
+  mesh registry endpoints (auto-apply, distribution-rules, distribution-matrix,
+  sync-status) that a `viewer` could previously reach. M6 (CWE-312): every `secrets_kv`
+  value is now Fernet-encrypted at rest (was POSTGRES_DSN only) — idempotent, with
+  no-op decrypt on legacy plaintext for in-place upgrade. M8 (CWE-1357): `Dockerfile.armv7`
+  base image digest-pinned on both stages. Guarded by `tests/test_v198_secfix_quickwins.py`.
+  Second batch — M3 (CWE-184): WAF body scan now normalizes JSON-unicode escapes +
+  iterative percent-decoding before matching; M4 (CWE-693): body scan covers textual
+  bodies under any content type (incl. octet-stream), skipping only binary media;
+  M5 (CWE-644): `_safe_client_host()` allowlists/validates the Host before reflecting
+  it as `X-Forwarded-Host`/`Location` (HTTP + WS); M7 (CWE-400): `concurrency_guard`
+  middleware caps concurrent in-flight requests (`MAX_CONCURRENT_REQUESTS`, fast 503).
+  Guarded by `tests/test_v198_secfix_medium2.py`. All 8 Medium findings now resolved.
 
 ### Documentation
 - **Refreshed stale markdown docs to 1.9.8.** `README.md` (6 stale `1.8.15`

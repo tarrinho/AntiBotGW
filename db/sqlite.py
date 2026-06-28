@@ -787,6 +787,11 @@ async def db_writer_loop():
                         _pg_mirror_bg("del_config", args)  # REVIEW-H2
                     elif op == "set_secret":
                         # 1.5.5 — runtime integration-secret persistence.
+                        # 1.9.8 M6 (CWE-312) — encrypt EVERY secret at rest, not just
+                        # POSTGRES_DSN. _dsn_encrypt is idempotent (prefix-guarded) so a
+                        # pre-encrypted DSN is never double-wrapped; SQLite and the PG
+                        # mirror store the identical ciphertext.
+                        args = (args[0], _dsn_encrypt(args[1]), args[2])
                         conn.execute("INSERT OR REPLACE INTO secrets_kv (key,value,ts) VALUES (?,?,?)", args)
                         _pg_mirror_bg("set_secret", args)  # REVIEW-H2
                     elif op == "del_secret":
@@ -1450,19 +1455,17 @@ def db_load_secrets(proxy_globals: dict) -> None:
         if os.environ.get(env_name, "").strip():
             env_pinned += 1
             continue
-        # 1.9.0 (F14) — POSTGRES_DSN is the one secret stored encrypted-
-        # at-rest. _dsn_decrypt is a no-op on legacy plaintext rows so
-        # an in-place upgrade keeps booting until the operator triggers
-        # the next /db-switch (which writes the encrypted form).
-        _value = r["value"]
-        if public_name == "POSTGRES_DSN":
-            _value = _dsn_decrypt(_value)
-            if not _value:
-                # Decrypt failed (lost SESSION_KEY). Skip rather than
-                # bind an empty DSN that would silently disable PG.
-                slog("db_secrets_dsn_skipped", level="error",
-                     note="POSTGRES_DSN ciphertext unreadable; skipped")
-                continue
+        # 1.9.8 M6 (CWE-312) — EVERY secret is stored Fernet-encrypted at rest
+        # now (was POSTGRES_DSN only). _dsn_decrypt is a no-op on legacy plaintext
+        # rows, so an in-place upgrade keeps booting; each row re-encrypts on its
+        # next write. A "" result means prefixed-but-unreadable (lost SESSION_KEY).
+        _value = _dsn_decrypt(r["value"])
+        if public_name == "POSTGRES_DSN" and not _value:
+            # Decrypt failed (lost SESSION_KEY). Skip rather than bind an
+            # empty DSN that would silently disable PG.
+            slog("db_secrets_dsn_skipped", level="error",
+                 note="POSTGRES_DSN ciphertext unreadable; skipped")
+            continue
         g[global_name] = _value
         loaded.append((global_name, _value))
         applied += 1

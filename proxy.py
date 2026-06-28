@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.9.8 — entry point only.
+Anti-bot reverse proxy v1.9.9 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -1059,12 +1059,40 @@ async def on_cleanup(app):
         db_writer_task.cancel()
 
 
+# ── 1.9.8 M7 (CWE-400) — concurrent in-flight request cap ─────────────────────
+# Without a cap, a flood of large request bodies (≤UPSTREAM_MAX_BODY) + buffered
+# upstream responses (≤UPSTREAM_MAX_RESP) can exhaust container memory. This
+# middleware bounds simultaneous in-flight requests and returns a fast 503
+# (no unbounded queueing) once the ceiling is hit. Tune via
+# MAX_CONCURRENT_REQUESTS (0 disables). Note: pure slow-header (slowloris) trickle
+# in the pre-handler phase is not boundable via aiohttp's high-level API — keep a
+# hardened front proxy (Cloudflare/nginx) in front, as documented.
+MAX_CONCURRENT_REQUESTS = int(os.environ.get("MAX_CONCURRENT_REQUESTS", "512"))
+_inflight_requests = 0
+
+
+@web.middleware
+async def concurrency_guard(request, handler):
+    global _inflight_requests
+    if MAX_CONCURRENT_REQUESTS and _inflight_requests >= MAX_CONCURRENT_REQUESTS:
+        return web.Response(status=503, text="server busy",
+                            headers={"Retry-After": "2", "Cache-Control": "no-store"})
+    _inflight_requests += 1
+    try:
+        return await handler(request)
+    finally:
+        _inflight_requests -= 1
+
+
 # ── Application factory ───────────────────────────────────────────────────────
 
 def make_app() -> web.Application:
     # 1.9.7 — security_headers is OUTERMOST so it stamps baseline headers on
     # every final response (including the proxied upstream root).
-    app = web.Application(middlewares=[security_headers, cost_meter, session_cookie_finalizer, protect])
+    # security_headers stays OUTERMOST (stamps every response, incl. a 503 from
+    # concurrency_guard); concurrency_guard sits immediately inside it so the cap
+    # still rejects early (security_headers does no pre-work before calling next).
+    app = web.Application(middlewares=[security_headers, concurrency_guard, cost_meter, session_cookie_finalizer, protect])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
@@ -1231,6 +1259,7 @@ def make_app() -> web.Application:
     app.router.add_get  (PUBLIC + "/auth/oidc/callback", oidc_callback_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
     app.router.add_get  (SEC    + "/ip-intel/{ip}", ip_intel_endpoint)
+    app.router.add_post (SEC    + "/2fa-setup", totp_setup_endpoint)  # 1.9.8 (M4) — POST + @_require_csrf (was an unrouted GET)
     USERS = SEC + "/admin/users"
     app.router.add_get   (USERS,                  users_list_endpoint)
     app.router.add_post  (USERS,                  users_create_endpoint)

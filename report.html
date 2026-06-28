@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>AntiBot/WAF GW 1.9.8 — Implementation Report</title>
+<title>AntiBot/WAF GW 1.9.9 — Implementation Report</title>
 <style>
   @page {
     size: A4;
@@ -139,14 +139,14 @@
 <!-- ───────────────────────── COVER ───────────────────────── -->
 <div class="cover">
   <div class="cover-title">
-    <h1>AntiBot/WAF&nbsp;GW&nbsp;1.9.8</h1>
+    <h1>AntiBot/WAF&nbsp;GW&nbsp;1.9.9</h1>
     <div class="subtitle">Reverse Proxy with Layered Anti-Automation Defenses + Web Application Firewall</div>
     <div class="subtitle">Implementation Report</div>
   </div>
   <div class="cover-meta">
     <p><strong>Author:</strong> Pedro Tarrinho</p>
     <p><strong>Date:</strong> 2026-06-27</p>
-    <p><strong>Build:</strong> <code>AntiBotWaf_GW_1.9.8</code> (multi-arch: amd64 · arm64 · arm/v7)</p>
+    <p><strong>Build:</strong> <code>AntiBotWaf_GW_1.9.9</code> (multi-arch: amd64 · arm64 · arm/v7)</p>
     <p><strong>Stack:</strong> Python 3.13 / aiohttp / Podman (Chainguard distroless) / Cloudflare Tunnel front</p>
     <p><strong>Datastore:</strong> SQLite (default) · optional PostgreSQL / TimescaleDB (dual-write)</p>
     <p><strong>Purpose:</strong> Defensive control evaluation — implementation + bypass-surface review</p>
@@ -158,7 +158,7 @@
 <h2>1. Executive Summary</h2>
 <p>AntiBot/WAF&nbsp;GW is a reverse HTTP/HTTPS proxy that sits in front of a
 protected upstream application and filters automated and malicious traffic before
-it reaches the origin. Version&nbsp;1.9.8 extends the original six-layer
+it reaches the origin. Version&nbsp;1.9.9 extends the original six-layer
 anti-automation design into a full layered defense stack combining
 <strong>bot/agent detection</strong>, a <strong>request-time Web Application
 Firewall (WAF)</strong>, <strong>IP / reputation intelligence</strong>, and a
@@ -172,7 +172,7 @@ a score crosses the (NAT-aware) ban threshold the identity enters a hostile pool
 and is served a <em>silent decoy</em> — the upstream homepage or a 404 — so the
 client cannot tell it was caught.</p>
 
-<h4>Implemented controls (1.9.8)</h4>
+<h4>Implemented controls (1.9.9)</h4>
 <ul>
   <li><strong>36 weighted detection signals</strong> across UA, path, header,
       behavioural, fingerprint, and reputation families, plus
@@ -358,7 +358,7 @@ pool; and an Ed25519-signed gateway mesh for sharing reputation between peers.</
   <tr><td><code>SOFT_CHALLENGE_SCORE</code> / <code>RISK_BAN_THRESHOLD</code></td><td>4 / configurable</td><td>Risk bands (hot-reloadable)</td></tr>
   <tr><td><code>POSTGRES_DSN</code></td><td>(unset = SQLite)</td><td>Enables PostgreSQL/TimescaleDB dual-write</td></tr>
   <tr><td><code>WAF_*_ENABLED</code></td><td>1</td><td>Per-detector WAF kill-switches (default-on)</td></tr>
-  <tr><td><code>VHOST_PORT_AWARE</code></td><td>0</td><td>1.9.8 — treat the Host's port as part of the vhost identity, so <code>host:8008</code> and <code>host:8009</code> are distinct vhosts (separate upstream/policy/stats/bans). Default off (host-only). Front must forward the original <code>host:port</code>.</td></tr>
+  <tr><td><code>VHOST_PORT_AWARE</code></td><td>0</td><td>1.9.9 — treat the Host's port as part of the vhost identity, so <code>host:8008</code> and <code>host:8009</code> are distinct vhosts (separate upstream/policy/stats/bans). Default off (host-only). Front must forward the original <code>host:port</code>.</td></tr>
 </table>
 <p>All 196 hot-reload knobs are readable / settable at runtime; trust-topology
 knobs (<code>TRUST_XFF</code>, <code>TRUSTED_PROXIES</code>) are env-pinned and
@@ -437,7 +437,7 @@ reference instance fronting a generic upstream
 <!-- ───────────────────────── 5. TEST RESULTS ───────────────────────── -->
 <h2>5. Test Results</h2>
 <p>Validation is driven by a 20-stage release pipeline (<code>rules.md</code>).
-The 1.9.8 release record is held in <code>validation/1.9.8.md</code>.</p>
+The 1.9.9 release record is held in <code>validation/1.9.8.md</code>.</p>
 <table>
   <tr><th>Stage</th><th>Result</th></tr>
   <tr><td>Unit / functional / integration / component / regression</td><td><span class="badge badge-200">1184 passed</span> (SQLite gate)</td></tr>
@@ -508,7 +508,7 @@ podman run -d --name antibot-gw \
   -e UPSTREAM=https://app.example.com \
   -e TRUST_XFF=last \
   -p 8443:8443 \
-  &lt;your-registry&gt;/antibotappsecgw:1.9.8
+  &lt;your-registry&gt;/antibotappsecgw:1.9.9
 
 # Front the listener with a TLS tunnel that injects JA4 (e.g. cloudflared)
 cloudflared tunnel --url http://127.0.0.1:8443</pre>
@@ -527,13 +527,13 @@ cloudflared tunnel --url http://127.0.0.1:8443</pre>
 </table>
 
 <h3>8.3 Verdict</h3>
-<p>AntiBot/WAF&nbsp;GW&nbsp;1.9.8 implements a defense-in-depth stack — bot/agent
+<p>AntiBot/WAF&nbsp;GW&nbsp;1.9.9 implements a defense-in-depth stack — bot/agent
 detection, a request-time WAF, reputation intelligence, and a decay-aware risk
 model — with a clean CVE posture and a complete, version-controlled validation
 record. The dominant residual risk is the trust boundary at the front of the
 proxy; the documented deployment guidance closes it.</p>
 
-<p class="footer-note">Author: Pedro Tarrinho · AntiBot/WAF GW 1.9.8 ·
+<p class="footer-note">Author: Pedro Tarrinho · AntiBot/WAF GW 1.9.9 ·
 Document version 2.0 · 2026-06-27. Targets and hostnames in this document are
 illustrative.</p>
 

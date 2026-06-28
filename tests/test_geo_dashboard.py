@@ -669,7 +669,7 @@ class TestGeoPillRegression:
     def test_geo_html_version_string_correct(self):
         """Version banner must match docker-compose image tag."""
         html = _GEO_HTML.read_text()
-        assert "AntiBotWaf_GW_1.9.8" in html
+        assert "AntiBotWaf_GW_1.9.9" in html
 
     def test_geo_html_tick_function_present(self):
         """tick() is the polling function — the pill flip hangs off it."""
