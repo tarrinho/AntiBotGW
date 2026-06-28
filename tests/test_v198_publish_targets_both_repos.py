@@ -5,7 +5,7 @@ Root cause found 2026-06-27: `copy-to-github.sh` hard-assigned `DEST=…corporat
 *unconditionally*, so it ignored the `DEST=` override that `publish.sh` passes
 per repo. Every copy — including publish.sh's "personal" pass — silently landed
 in the corporate repo, so the personal repo (`AntiBotGW`) drifted ~13 versions
-behind (stuck at AppSecGW_1.8.5 while corporate was AntiBotWaf_GW_1.9.8).
+behind (stuck at AppSecGW_1.8.5 while corporate was AntiBotWaf_GW_1.9.9).
 
 These are static source-inspection guards (the scripts are Mac-pathed and not
 executed in CI) so the regressions cannot silently return.

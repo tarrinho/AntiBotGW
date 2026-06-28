@@ -748,8 +748,10 @@ async def proxy_websocket(request: web.Request):
     fwd_headers["X-Forwarded-For"] = gw_ip
     fwd_headers["X-Real-IP"] = gw_ip
     fwd_headers["X-Forwarded-Proto"] = "https" if request.secure else "http"
-    if request.host:
-        fwd_headers["X-Forwarded-Host"] = request.host
+    # 1.9.8 M5 — validate/allowlist the Host before reflecting (CWE-644).
+    _ws_xfh = _safe_client_host(request.host, upstream_host)
+    if _ws_xfh:
+        fwd_headers["X-Forwarded-Host"] = _ws_xfh
 
     # Sub-protocol negotiation (e.g. STOMP, GraphQL-WS).
     proto_hdr = request.headers.get("Sec-WebSocket-Protocol", "")
@@ -806,6 +808,28 @@ async def proxy_websocket(request: web.Request):
         if not ws_server.closed:
             await ws_server.close()
     return ws_server
+
+
+# 1.9.8 M5 (CWE-644) — a syntactically valid Host is host[:port] with no scheme,
+# path, userinfo, whitespace or CR/LF. Anything else is a header-injection /
+# embedded-URL attempt and must never be reflected to the upstream or into a
+# rewritten Location.
+_VALID_HOSTHDR_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$")
+
+
+def _safe_client_host(req_host: str, up_netloc: str) -> str:
+    """Return a Host safe to reflect (X-Forwarded-Host / Location rewrite).
+
+    Precedence: an explicit ALLOWED_HOSTS allowlist wins; otherwise reflect the
+    client Host only when it is a well-formed hostname[:port]; on any mismatch or
+    malformed/injection value, fall back to the configured upstream netloc.
+    Closes the default-config host-header injection (M5) without breaking the
+    common single-host deployment.
+    """
+    h = (req_host or "").strip()
+    if ALLOWED_HOSTS:
+        return h if h in ALLOWED_HOSTS else up_netloc
+    return h if _VALID_HOSTHDR_RE.match(h) else up_netloc
 
 
 async def proxy(request: web.Request):
@@ -895,8 +919,11 @@ async def proxy(request: web.Request):
     fwd_headers["X-Forwarded-For"] = gw_ip
     fwd_headers["X-Real-IP"] = gw_ip
     fwd_headers["X-Forwarded-Proto"] = request.scheme or "http"
-    if request.host:
-        fwd_headers["X-Forwarded-Host"] = request.host
+    # 1.9.8 M5 — never reflect an unvalidated / injection Host to the upstream.
+    from urllib.parse import urlparse as _xfh_urlparse
+    _xfh = _safe_client_host(request.host, _xfh_urlparse(_vc_upstream).netloc)
+    if _xfh:
+        fwd_headers["X-Forwarded-Host"] = _xfh
 
     # Rewrite Origin / Referer / Host so upstream's CSRF / origin-validation
     # sees its own canonical origin instead of the gateway's public hostname.
@@ -1195,14 +1222,12 @@ async def proxy(request: web.Request):
                 up_parsed = _urlparse(_vc_upstream)
                 client_scheme = (request.headers.get("X-Forwarded-Proto")
                                  or ("https" if request.secure else "http"))
-                _req_host = request.host or ""
-                client_host = _req_host or up_parsed.netloc
-                # Host-header hardening — when ALLOWED_HOSTS is configured, never
-                # reflect an unlisted (attacker-controlled) Host into the rewritten
-                # Location header (open-redirect / cache-poisoning vector). Fall
-                # back to the upstream netloc instead.
-                if ALLOWED_HOSTS and _req_host not in ALLOWED_HOSTS:
-                    client_host = up_parsed.netloc
+                # Host-header hardening (1.9.8 M5, CWE-644) — reflect the client
+                # Host into the rewritten Location only when it is allowlisted
+                # (if ALLOWED_HOSTS is set) or a well-formed hostname[:port];
+                # otherwise fall back to the upstream netloc. Blocks open-redirect
+                # / cache-poisoning / header-injection via a spoofed Host.
+                client_host = _safe_client_host(request.host, up_parsed.netloc)
 
                 for k, v in resp.headers.items():
                     kl = k.lower()

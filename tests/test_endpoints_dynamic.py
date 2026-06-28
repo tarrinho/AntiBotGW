@@ -200,7 +200,7 @@ class TestAuthGuard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/live-feed")
                     body = await r.text()
-                    assert "AntiBotWaf_GW_1.9.8 · Live Feed" not in body
+                    assert "AntiBotWaf_GW_1.9.9 · Live Feed" not in body
         _run(go())
 
     def test_config_unauthenticated_decoy(self, proxy_module):
@@ -2106,7 +2106,7 @@ class TestControlCenterCharts:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/control-center", headers=_browser_headers())
                     body = await r.text()
-                    assert "AntiBotWaf_GW_1.9.8 · Control Center" not in body, \
+                    assert "AntiBotWaf_GW_1.9.9 · Control Center" not in body, \
                         "control-center: unauthenticated request must not return dashboard HTML"
         _run(go())
 

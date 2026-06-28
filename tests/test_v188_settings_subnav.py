@@ -83,6 +83,55 @@ from aiohttp.test_utils import TestServer, TestClient
 _DASHBOARDS = Path(__file__).resolve().parent.parent / "dashboards"
 _NS = "/antibot-appsec-gateway/secured"
 
+@pytest.fixture(autouse=True)
+def _reset_pg_dsn_globals(proxy_module):
+    """Combined-run isolation. Other files (e.g. test_v188_backend_aware_reads,
+    test_v1814_review_fixes) leave shared module state dirty:
+      1. a non-empty POSTGRES_DSN on shared globals — the settings-page tests
+         build a gateway via make_app(), whose on_startup boot-guard (proxy.py:
+         "POSTGRES_DSN set but PG unreachable" -> SystemExit(3)) then aborts
+         construction, so the test errors with `SystemExit: 3` instead of running;
+      2. a popped/reimported db.postgres (test_v1814_review_fixes does
+         sys.modules.pop("db.postgres") + reimport) that desyncs the db-test
+         probe from pg_test_roundtrip — the probe does `import db.postgres` (the
+         current, swapped module) and patches its POSTGRES_DSN, while
+         core.proxy_handler.pg_test_roundtrip stays bound to the original module
+         and reads an empty DSN → "POSTGRES_DSN not configured".
+    Reset both before each test (fresh SQLite-mode gateway). No-op for the static
+    S/C/J tests that never build a gateway.
+    """
+    import os
+    import sys
+    # (2) rebind the gateway's bound db.postgres functions to whatever module is
+    # CURRENTLY registered, so the probe (`import db.postgres`) and
+    # pg_test_roundtrip operate on the same object and observe the same DSN.
+    _rebind_saved = []
+    _cur_pg = sys.modules.get("db.postgres")
+    _cph = sys.modules.get("core.proxy_handler")
+    if _cur_pg is not None and _cph is not None:
+        for _name in ("pg_test_roundtrip", "_postgres_load_module"):
+            if hasattr(_cph, _name) and hasattr(_cur_pg, _name):
+                _rebind_saved.append((_cph, _name, getattr(_cph, _name)))
+                setattr(_cph, _name, getattr(_cur_pg, _name))
+    # (1) force POSTGRES_DSN empty across every loaded module + env.
+    saved = []
+    for _modname in ("proxy", "config", "db.postgres", "core.proxy_handler", "state"):
+        _m = sys.modules.get(_modname)
+        if _m is not None and hasattr(_m, "POSTGRES_DSN"):
+            saved.append((_m, _m.POSTGRES_DSN))
+            _m.POSTGRES_DSN = ""
+    _env_saved = os.environ.pop("POSTGRES_DSN", None)
+    try:
+        yield
+    finally:
+        for _m, _old in saved:
+            _m.POSTGRES_DSN = _old
+        for _obj, _name, _old in _rebind_saved:
+            setattr(_obj, _name, _old)
+        if _env_saved is not None:
+            os.environ["POSTGRES_DSN"] = _env_saved
+
+
 _EXPECTED_SECTIONS = {"routing", "identity", "mesh", "infra", "config"}
 
 _CARD_SEC_EXPECTED = {

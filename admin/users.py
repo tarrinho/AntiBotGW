@@ -85,6 +85,12 @@ def _password_verify(pw: str, stored: str) -> bool:
         if algo != "scrypt":
             return False
         n, r, p = int(n), int(r), int(p)
+        # 1.9.8 (S-I2) — reject scrypt params above safe maximums. A crafted
+        # stored value with huge n/r/p would make hashlib.scrypt allocate
+        # enormous memory / burn CPU on every verify (DoS). Our own hashes use
+        # _SCRYPT_N/_R/_P, well under these bounds.
+        if n > 2**18 or r > 16 or p > 4:
+            return False
         salt = _b64.urlsafe_b64decode(salt_b + "=" * (-len(salt_b) % 4))
         want = _b64.urlsafe_b64decode(hash_b + "=" * (-len(hash_b) % 4))
         got  = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=n, r=r, p=p,
@@ -92,6 +98,20 @@ def _password_verify(pw: str, stored: str) -> bool:
         return hmac.compare_digest(want, got)
     except (ValueError, TypeError):
         return False
+
+
+async def _password_hash_async(pw: str) -> str:
+    """1.9.8 (H1) — off-loop wrapper for _password_hash. scrypt at N=2**17 is
+    ~500 ms of CPU; running it on the event loop stalls every other coroutine,
+    so a burst of logins / password writes serialises the whole gateway.
+    asyncio.to_thread keeps the loop responsive."""
+    return await asyncio.to_thread(_password_hash, pw)
+
+
+async def _password_verify_async(pw: str, stored: str) -> bool:
+    """1.9.8 (H1) — off-loop wrapper for _password_verify (see
+    _password_hash_async)."""
+    return await asyncio.to_thread(_password_verify, pw, stored)
 
 
 def _new_sid() -> str:
@@ -513,7 +533,7 @@ async def login_submit_endpoint(request: web.Request):
              reason="no-such-user-or-disabled")
         return web.json_response({"error": "invalid credentials"}, status=401,
                                   headers={"Cache-Control": "no-store"})
-    if not _password_verify(password, user.get("password_hash") or ""):
+    if not await _password_verify_async(password, user.get("password_hash") or ""):
         slog("login_failed", level="warn", username=username, ip=ip,
              reason="bad-password")
         return web.json_response({"error": "invalid credentials"}, status=401,
@@ -569,7 +589,7 @@ async def login_submit_endpoint(request: web.Request):
                      secure=SESSION_SECURE)
     resp.set_cookie("agw_csrf", csrf_token,
                      max_age=_SESSION_TTL, httponly=False,
-                     samesite="Strict", path="/",
+                     samesite="Strict", path=ADMIN_NS,
                      secure=SESSION_SECURE)
     return resp
 
@@ -611,6 +631,15 @@ async def totp_verify_endpoint(request: web.Request):
         code = (_params.get("code", [""])[0] or "").strip()
     if not partial_token or not code:
         return web.json_response({"error": "partial_token and code required"},
+                                  status=400,
+                                  headers={"Cache-Control": "no-store"})
+    # 1.9.8 (S-W5) — bound input lengths before any further processing. A real
+    # partial_token is ~43 chars (token_urlsafe(32)); a TOTP code is 6 digits
+    # and a backup code 10 hex chars. Reject oversized input early so a huge
+    # body can't waste cycles or probe the timing-safe compare below.
+    if len(partial_token) > 64 or len(code) > 64:
+        slog("totp_verify_failed", level="warn", ip=ip, reason="bad-length")
+        return web.json_response({"error": "invalid token format"},
                                   status=400,
                                   headers={"Cache-Control": "no-store"})
     from state import _TOTP_PENDING, _TOTP_PENDING_LOCK
@@ -695,7 +724,7 @@ async def totp_verify_endpoint(request: web.Request):
                      secure=SESSION_SECURE)
     resp.set_cookie("agw_csrf", csrf_token,
                      max_age=_SESSION_TTL, httponly=False,
-                     samesite="Strict", path="/",
+                     samesite="Strict", path=ADMIN_NS,
                      secure=SESSION_SECURE)
     return resp
 
@@ -720,9 +749,10 @@ async def logout_endpoint(request: web.Request):
             _session_revoke(sid, by_username=user)
     resp = web.HTTPFound("/antibot-appsec-gateway/login")
     resp.del_cookie(_SESSION_COOKIE, path="/")
-    # 1.9.7 — also clear agw_csrf (set with path="/" at login, line ~520) so a
+    # 1.9.7 — also clear agw_csrf (scoped to ADMIN_NS at login) so a
     # stale CSRF token can't survive logout into a fresh re-login.
-    resp.del_cookie("agw_csrf", path="/")
+    # 1.9.8 (M1) — delete with the same path the cookie was set with.
+    resp.del_cookie("agw_csrf", path=ADMIN_NS)
     return resp
 
 
@@ -742,6 +772,14 @@ async def ip_intel_endpoint(request: web.Request):
       • abuseipdb: SQLite cache (or live API if cache stale + key set)
       • crowdsec:  in-process cache (or LAPI poll if stale + URL set)
     """
+    # 1.9.8 (LIVE-1) — defence-in-depth: this endpoint is reached via the
+    # protect() middleware which already enforces _internal_authed, but gate
+    # explicitly so it can never leak reputation/geo intel if a future route
+    # change exposes it. Runs before IP parsing so an unauthenticated caller
+    # gets 401, not input-validation feedback.
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
     import ipaddress as _ipaddress
     ip = (request.match_info.get("ip") or "").strip()
     try:
@@ -887,6 +925,10 @@ async def ip_intel_endpoint(request: web.Request):
 async def whoami_endpoint(request: web.Request):
     """GET /antibot-appsec-gateway/secured/whoami — return the calling
     operator's identity. Used by the dashboard's top-right strip."""
+    # 1.9.8 (LIVE-2) — defence-in-depth auth gate (see ip_intel_endpoint).
+    if not _internal_authed(request):
+        return web.json_response({"error": "auth"}, status=401,
+                                  headers={"Cache-Control": "no-store"})
     username = _request_username(request)
     via = "session" if request.get("_session_user") else "admin-key"
     # 1.9.2 iter-27 — operator-reported: Settings shows "Unknown (via key)"
@@ -979,7 +1021,7 @@ async def users_create_endpoint(request: web.Request):
         return web.json_response({"error": "username already exists"}, status=409,
                                   headers={"Cache-Control": "no-store"})
     n = _t.time()
-    pw_hash = _password_hash(password)
+    pw_hash = await _password_hash_async(password)
     if db_queue is not None:
         try:
             db_queue.put_nowait((
@@ -1062,10 +1104,10 @@ async def users_update_endpoint(request: web.Request):
             if not cur_pw:
                 return web.json_response({"error": "current_password required"},
                                           status=400, headers={"Cache-Control": "no-store"})
-            if not _password_verify(cur_pw, cur.get("password_hash", "")):
+            if not await _password_verify_async(cur_pw, cur.get("password_hash", "")):
                 return web.json_response({"error": "current password is incorrect"},
                                           status=403, headers={"Cache-Control": "no-store"})
-        fields["password_hash"] = _password_hash(pw)
+        fields["password_hash"] = await _password_hash_async(pw)
         audit_fields["password_changed"] = True
     if "role" in data:
         # S-C1 fix — role changes are ADMIN-ONLY. Previously this gate only
@@ -1219,10 +1261,15 @@ def _generate_backup_codes() -> list:  # F-08: 10 bytes = 80 bits per code
     return [_sec.token_hex(10).upper() for _ in range(8)]
 
 
+@_require_csrf
 async def totp_setup_endpoint(request: web.Request):
-    """GET /antibot-appsec-gateway/secured/2fa-setup — generate a new TOTP secret.
+    """POST /antibot-appsec-gateway/secured/2fa-setup — generate a new TOTP secret.
     Stores it temporarily in _TOTP_PENDING[username] and returns the provisioning URI
-    plus a base64-encoded SVG QR code data URL."""
+    plus a base64-encoded SVG QR code data URL.
+
+    1.9.8 (M4) — POST + @_require_csrf (was an unguarded GET): generating a
+    pending TOTP secret mutates server state, so it must not be drivable
+    cross-site or by a simple navigation."""
     if not _internal_authed(request):
         return web.json_response({"error": "auth"}, status=401,
                                   headers={"Cache-Control": "no-store"})

@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AntiBotWaf_GW_1.9.8"
+GW_VERSION = "AntiBotWaf_GW_1.9.9"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -1568,6 +1568,80 @@ def _extract_multipart_fields(body: bytes, ctype: str) -> bytes:
     return b"\n".join(values) if values else body
 
 
+# ── 1.9.8 M3/M4 — shared WAF body sample extraction ──────────────────────────
+# Known textual content types (always scanned) and clearly-binary media (never
+# scanned, to avoid false positives on images/archives).
+_WAF_TEXT_CT = ("application/json", "application/x-www-form-urlencoded",
+                "text/", "application/xml", "+json", "+xml",
+                "application/javascript", "application/graphql",
+                "multipart/form-data")
+_WAF_BINARY_CT = ("image/", "video/", "audio/", "font/", "application/pdf",
+                  "application/zip", "application/gzip", "application/x-gzip",
+                  "application/x-7z", "application/wasm")
+
+
+def _looks_textual(b: bytes) -> bool:
+    """True if the sample is UTF-8-decodable or overwhelmingly printable —
+    used to decide whether a non-allowlisted/`octet-stream` body is worth
+    scanning (catches JSON/SQLi smuggled under a binary content type)."""
+    chunk = b[:2048]
+    if not chunk:
+        return False
+    try:
+        chunk.decode("utf-8")
+        return True
+    except UnicodeDecodeError:
+        nonprint = sum(1 for c in chunk if c < 9 or (13 < c < 32))
+        return (nonprint / len(chunk)) < 0.10
+
+
+def _waf_samples(body: bytes, ctype: str) -> list:
+    """Return the byte sample(s) WAF signatures are matched against (1.9.8 M3/M4).
+
+    M4: scan textual bodies under ANY content type (not just an allowlist),
+        skipping only clearly-binary media; this closes the octet-stream/no-CT
+        bypass while avoiding false positives on real images/archives.
+    M3: add a JSON-decoded view and a backslash-unicode-unescaped view so
+        `{"q":"\\u003cscript\\u003e"}` / `\\u0027 OR 1=1` can no longer evade
+        the literal-byte signatures; form bodies are percent-decoded iteratively
+        (also closes the double-encoding gap, L7).
+    """
+    if not body:
+        return []
+    raw = body[:WAF_BODY_SCAN_BYTES]
+    cl = (ctype or "").lower()
+    if not any(t in cl for t in _WAF_TEXT_CT):
+        if any(b in cl for b in _WAF_BINARY_CT) or not _looks_textual(raw):
+            return []
+    out = [raw]
+    if "multipart/form-data" in cl:
+        try:
+            out.append(_extract_multipart_fields(raw, ctype))
+        except Exception:
+            pass
+    if "x-www-form-urlencoded" in cl or b"%" in raw:
+        from urllib.parse import unquote_to_bytes
+        dec, prev = raw, None
+        for _ in range(3):           # bounded iterative decode (anti double-encode)
+            if dec == prev:
+                break
+            prev, dec = dec, unquote_to_bytes(dec)
+        if dec != raw:
+            out.append(dec)
+    if "json" in cl or raw.lstrip()[:1] in (b"{", b"["):
+        try:
+            import json as _json
+            out.append(_json.dumps(_json.loads(raw.decode("utf-8", "replace"))).encode("utf-8"))
+        except Exception:
+            pass
+    if b"\\u" in raw or b"\\x" in raw:
+        try:
+            out.append(raw.decode("unicode_escape", "ignore").encode("utf-8", "ignore"))
+        except Exception:
+            pass
+    return out
+
+
 def is_suspicious_body(body: bytes, ctype: str) -> bool:
     """Returns True if request body matches a known SQLi/XSS/SSTI/cmd-injection
     pattern. Only scans text-ish content types and bounds at 64 KiB.
@@ -1576,19 +1650,8 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
     F-14: multipart/form-data fields are extracted and scanned."""
     if not BODY_PATTERN_MATCH or not body:
         return False
-    cl = ctype.lower()
-    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
-                                  "text/plain", "text/xml", "application/xml",
-                                  "multipart/form-data")):
-        return False
-    if "multipart/form-data" in cl:
-        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
-    elif "x-www-form-urlencoded" in cl:
-        from urllib.parse import unquote_to_bytes
-        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
-    else:
-        sample = body[:WAF_BODY_SCAN_BYTES]
-    return any(p.search(sample) for p in SUSPICIOUS_BODY_PATTERNS)
+    return any(p.search(s) for s in _waf_samples(body, ctype)
+               for p in SUSPICIOUS_BODY_PATTERNS)
 
 def match_body_group(body: bytes, ctype: str):
     """1.6.1 — return the first matched group name or None.
@@ -1597,18 +1660,9 @@ def match_body_group(body: bytes, ctype: str):
     F-14: multipart/form-data fields are extracted and scanned."""
     if not BODY_PATTERN_MATCH or not body:
         return None
-    cl = ctype.lower()
-    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
-                                  "text/plain", "text/xml", "application/xml",
-                                  "multipart/form-data")):
+    samples = _waf_samples(body, ctype)
+    if not samples:
         return None
-    if "multipart/form-data" in cl:
-        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
-    elif "x-www-form-urlencoded" in cl:
-        from urllib.parse import unquote_to_bytes
-        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
-    else:
-        sample = body[:WAF_BODY_SCAN_BYTES]
     enabled = {
         "rce":  BODY_GROUP_RCE_ENABLED,
         "cmd":  BODY_GROUP_CMD_ENABLED,
@@ -1621,7 +1675,7 @@ def match_body_group(body: bytes, ctype: str):
         if not enabled[grp]:
             continue
         for pat in BODY_PATTERN_GROUPS[grp]:
-            if pat.search(sample):
+            if any(pat.search(s) for s in samples):
                 return grp
     return None
 
@@ -1684,19 +1738,8 @@ def check_always_body(body: bytes, ctype: str) -> bool:
     F-14: multipart/form-data fields are extracted and scanned."""
     if not body:
         return False
-    cl = ctype.lower()
-    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
-                                  "text/plain", "text/xml", "application/xml",
-                                  "multipart/form-data")):
-        return False
-    if "multipart/form-data" in cl:
-        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
-    elif "x-www-form-urlencoded" in cl:
-        from urllib.parse import unquote_to_bytes
-        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
-    else:
-        sample = body[:WAF_BODY_SCAN_BYTES]
-    return any(p.search(sample) for p in _BODY_ALWAYS_RE)
+    return any(p.search(s) for s in _waf_samples(body, ctype)
+               for p in _BODY_ALWAYS_RE)
 
 
 _VERB_OVERRIDE_HEADERS = frozenset([
