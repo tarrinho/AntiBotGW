@@ -2463,9 +2463,11 @@ window._gwIdentityPopover = (function(){
       id:               raw.id || '',
       ip:               raw.ip || raw.last_ip || '',
       ua:               raw.ua || raw.last_ua || '',
-      session:          raw.session    || raw.last_session    || '—',
-      fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '—',
-      ja4:              raw.ja4 || '—',
+      // 1.9.8 UX — empty string lets the renderer substitute a
+      // contextual "n/a · <reason>" hint instead of a bare em-dash.
+      session:          raw.session    || raw.last_session    || '',
+      fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '',
+      ja4:              raw.ja4 || '',
       stealth_score:    raw.stealth_score != null ? raw.stealth_score : null,
       risk_score:       raw.metrics ? raw.metrics.risk_score : (raw.risk_score || 0),
       banned_secs:      raw.banned_secs || 0,
@@ -2486,6 +2488,23 @@ window._gwIdentityPopover = (function(){
       metrics:          raw.metrics    || {},
       score_source:     raw.score_source || 'stealth',
     };
+  }
+  // 1.9.8 UX — empty session/fingerprint/JA4 cells explain WHY so the
+  // operator doesn't have to guess. Cookieless monitors never have a
+  // session; non-JS clients never have a fingerprint; JA4 needs the
+  // fingerproxy sidecar to inject X-Ja4 on inbound requests.
+  function _naHint(field, value, ua){
+    if (value) return escapeHtml(value);
+    const _ua = (ua || '').toLowerCase();
+    const _isBotUa = /uptimerobot|pingdom|statuscake|site24x7|hetrix|better\s*uptime|updown|curl\/|wget\/|python-requests|go-http-client/i.test(_ua);
+    const reasons = {
+      session:     _isBotUa ? 'cookieless monitor — does not accept Set-Cookie'
+                            : 'no agw_session — client did not pass JS challenge',
+      fingerprint: _isBotUa ? 'no JS executed (monitor / scripted client)'
+                            : 'JS challenge not yet completed for this identity',
+      ja4:         'fingerproxy sidecar not deployed — no X-Ja4 header on inbound',
+    };
+    return `<span class="dim" title="${escapeHtml(reasons[field]||'')}">n/a · ${escapeHtml(reasons[field]||field)}</span>`;
   }
   function buildIdHtml(d){
     const bsec = d.banned_secs;
@@ -2514,9 +2533,9 @@ window._gwIdentityPopover = (function(){
         <span class="k">status</span>      <span class="v">${banLine}</span>
         <span class="k">ip</span>          <span class="v">${_adminLock(d.ip, d.is_admin_ip)}${escapeHtml(d.ip)}</span>
         <span class="k">user-agent</span>  <span class="v">${escapeHtml(d.ua)}</span>
-        <span class="k">session</span>     <span class="v">${escapeHtml(d.session)}</span>
-        <span class="k">fingerprint</span> <span class="v">${escapeHtml(d.fingerprint)}</span>
-        <span class="k">JA4 (TLS)</span>   <span class="v">${escapeHtml(d.ja4)}</span>
+        <span class="k">session</span>     <span class="v">${_naHint('session', d.session, d.ua)}</span>
+        <span class="k">fingerprint</span> <span class="v">${_naHint('fingerprint', d.fingerprint, d.ua)}</span>
+        <span class="k">JA4 (TLS)</span>   <span class="v">${_naHint('ja4', d.ja4, d.ua)}</span>
         <span class="k">first seen</span>  <span class="v">${_fmt(d.first_seen_secs_ago)}</span>
         <span class="k">last seen</span>   <span class="v">${_fmt(d.last_seen_secs_ago)}</span>
         <span class="k">requests</span>    <span class="v">${d.requests} (${d.allowed} ok / ${d.blocked} blocked)</span>
@@ -2812,8 +2831,16 @@ window._gwIdentityPopover = (function(){
       if (!r.ok) throw new Error('HTTP ' + r.status);
       j = await r.json();
     } catch (e) {
+      // 1.9.8 UX — explain WHY in one line so the operator doesn't have to
+      // diagnose a bare "HTTP 401". Most common: idle-timed-out session.
+      const msg = (e.message || String(e));
+      let hint = '';
+      if (msg.indexOf('401') !== -1)        hint = ' — session expired or idle-timed-out · re-login to refresh';
+      else if (msg.indexOf('403') !== -1)   hint = ' — your role lacks admin/maintainer rights';
+      else if (msg.indexOf('404') !== -1)   hint = ' — endpoint not deployed in this build';
+      else if (msg.indexOf('5') === 0)      hint = ' — gateway error (check /__health)';
       return `<h3 style="margin:0 0 6px 0">IP intelligence</h3>
-              <div class="dim" style="font-size:11px">unavailable: ${escapeHtml(e.message||String(e))}</div>`;
+              <div class="dim" style="font-size:11px">unavailable: ${escapeHtml(msg)}${escapeHtml(hint)}</div>`;
     }
     const verdictColor = {
       'high-risk':   'var(--red)',
@@ -2832,6 +2859,42 @@ window._gwIdentityPopover = (function(){
     const ab  = j.abuseipdb || {};
     const cs  = j.crowdsec  || {};
     const it  = j.internal  || {};
+    // 1.9.8 UX — sub-system source label + per-layer "how to enable" hint.
+    const _srcLabel = {
+      'ok':       { color: 'var(--green)',  text: 'live' },
+      'stale':    { color: 'var(--yellow)', text: 'cached (refresh pending)' },
+      'cached':   { color: 'var(--yellow)', text: 'cached' },
+      'disabled': { color: 'var(--dim)',    text: 'not configured' },
+      'private':  { color: 'var(--dim)',    text: 'skipped · RFC1918 / loopback' },
+      'invalid':  { color: 'var(--dim)',    text: 'skipped · invalid IP' },
+      'error':    { color: 'var(--red)',    text: 'upstream error' },
+    };
+    const _src = (s) => {
+      const m = _srcLabel[(s||'').toLowerCase()] || { color: 'var(--dim)', text: s || 'unknown' };
+      return `<span style="color:${m.color};font-size:10px">(${escapeHtml(m.text)})</span>`;
+    };
+    const _explain = {
+      abuseipdb: {
+        disabled: 'set ABUSEIPDB_KEY env to enable',
+        error:    'AbuseIPDB API unreachable / quota exceeded',
+      },
+      crowdsec: {
+        disabled: 'set CROWDSEC_LAPI_URL + CROWDSEC_API_KEY env to enable',
+        error:    'CrowdSec LAPI unreachable',
+      },
+      asn: {
+        disabled: 'GeoLite2-ASN.mmdb missing — drop it in /data/',
+        error:    'GeoLite2-ASN read error',
+      },
+      geo: {
+        disabled: 'GeoLite2-City.mmdb missing — drop it in /data/',
+        error:    'GeoLite2-City read error',
+      },
+    };
+    const _hint = (layer, src) => {
+      const e = (_explain[layer] || {})[(src||'').toLowerCase()];
+      return e ? `<div class="dim" style="font-size:10px;margin-left:4px">${escapeHtml(e)}</div>` : '';
+    };
     const fmtScore = (s) => {
       if (s == null || s === undefined) return '—';
       if (s >= 75) return `<span style="color:var(--red);font-weight:600">${s}</span>`;
@@ -2865,12 +2928,12 @@ window._gwIdentityPopover = (function(){
       </h3>
       <div style="margin-bottom:8px">${flagBadges}</div>
       <table>
-        <tr><td class="dim" style="text-align:right">country</td>     <td>${escapeHtml(geo.country||'—')}${geo.city?(' · '+escapeHtml(geo.city)):''}</td></tr>
-        <tr><td class="dim" style="text-align:right">ASN</td>         <td>${asn.asn?(`AS${asn.asn} · ${escapeHtml(asn.org||'')}`):'—'}</td></tr>
+        <tr><td class="dim" style="text-align:right">country</td>     <td>${geo.country?escapeHtml(geo.country)+(geo.city?(' · '+escapeHtml(geo.city)):''):`<span class="dim">n/a</span> ${_src(asn.source)}`}${(!geo.country)?_hint('geo', asn.source):''}</td></tr>
+        <tr><td class="dim" style="text-align:right">ASN</td>         <td>${asn.asn?(`AS${asn.asn} · ${escapeHtml(asn.org||'')} ${_src(asn.source)}`):`<span class="dim">n/a</span> ${_src(asn.source)}`}${(!asn.asn)?_hint('asn', asn.source):''}</td></tr>
         <tr><td class="dim" style="text-align:right">datacenter</td>  <td>${fmtFlag(asn.is_hosting)}</td></tr>
         <tr><td class="dim" style="text-align:right">tor exit</td>    <td>${fmtFlag(j.tor_exit)}</td></tr>
-        <tr><td class="dim" style="text-align:right">AbuseIPDB</td>   <td>${fmtScore(ab.score)}/100 ${ab.country?('· '+escapeHtml(ab.country)):''} <span class="dim" style="font-size:10px">(${escapeHtml(ab.source||'?')})</span></td></tr>
-        <tr><td class="dim" style="text-align:right">CrowdSec</td>    <td>${cs.decision?`<span style="color:var(--red);font-weight:600">${escapeHtml(cs.decision)}</span>`:'<span class="dim">clean</span>'} <span class="dim" style="font-size:10px">(${escapeHtml(cs.source||'?')})</span></td></tr>
+        <tr><td class="dim" style="text-align:right">AbuseIPDB</td>   <td>${(ab.source==='ok'||ab.source==='stale'||ab.source==='cached')?`${fmtScore(ab.score)}/100 ${ab.country?('· '+escapeHtml(ab.country)):''} ${_src(ab.source)}`:`<span class="dim">n/a</span> ${_src(ab.source)}`}${_hint('abuseipdb', ab.source)}</td></tr>
+        <tr><td class="dim" style="text-align:right">CrowdSec</td>    <td>${(cs.source==='ok'||cs.source==='stale'||cs.source==='cached')?(cs.decision?`<span style="color:var(--red);font-weight:600">${escapeHtml(cs.decision)}</span> ${_src(cs.source)}`:`<span class="dim">clean</span> ${_src(cs.source)}`):`<span class="dim">n/a</span> ${_src(cs.source)}`}${_hint('crowdsec', cs.source)}</td></tr>
         <tr><td class="dim" style="text-align:right">internal ban</td><td>${it.banned?`<span style="color:var(--red);font-weight:600">YES · ${it.banned_remaining_secs}s left</span> <span class="dim" style="font-size:10px">${escapeHtml(it.ban_reason||'')}</span>`:'<span class="dim">no</span>'}</td></tr>
         <tr><td class="dim" style="text-align:right">risk</td>        <td>${
           (it.risk_score > 0 && (it.risk_breakdown||[]).length)
