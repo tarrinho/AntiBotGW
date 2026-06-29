@@ -2463,8 +2463,8 @@ window._gwIdentityPopover = (function(){
       id:               raw.id || '',
       ip:               raw.ip || raw.last_ip || '',
       ua:               raw.ua || raw.last_ua || '',
-      // 1.9.8 UX — empty string lets the renderer substitute a
-      // contextual "n/a · <reason>" hint instead of a bare em-dash.
+      // 1.9.8 UX — keep raw '' so the renderer can substitute a
+      // contextual "n/a (reason)" hint via _naHint(field).
       session:          raw.session    || raw.last_session    || '',
       fingerprint:      raw.fingerprint|| raw.last_fingerprint|| '',
       ja4:              raw.ja4 || '',
@@ -2489,10 +2489,11 @@ window._gwIdentityPopover = (function(){
       score_source:     raw.score_source || 'stealth',
     };
   }
-  // 1.9.8 UX — empty session/fingerprint/JA4 cells explain WHY so the
-  // operator doesn't have to guess. Cookieless monitors never have a
-  // session; non-JS clients never have a fingerprint; JA4 needs the
-  // fingerproxy sidecar to inject X-Ja4 on inbound requests.
+  // 1.9.8 UX — empty session/fingerprint/JA4 cells now explain WHY,
+  // so the operator doesn't have to guess. Cookieless monitors
+  // (UptimeRobot, curl-based pingers, …) never have a session;
+  // non-JS clients never have a fingerprint; JA4 needs the upstream
+  // fingerproxy sidecar to inject X-Ja4.
   function _naHint(field, value, ua){
     if (value) return escapeHtml(value);
     const _ua = (ua || '').toLowerCase();
@@ -2506,6 +2507,7 @@ window._gwIdentityPopover = (function(){
     };
     return `<span class="dim" title="${escapeHtml(reasons[field]||'')}">n/a · ${escapeHtml(reasons[field]||field)}</span>`;
   }
+
   function buildIdHtml(d){
     const bsec = d.banned_secs;
     const bpass = d.bypass_secs || 0;

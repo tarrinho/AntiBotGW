@@ -17,7 +17,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/antibot-appsec-gateway/secured/{dashboard, agents, service, controls, geo, logs, settings}` (DB-backed, click-to-drill) |
 
-## Architecture (1.9.8)
+## Architecture (1.9.9)
 
 ```
                                 ┌─────────────────────┐
@@ -223,7 +223,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.9.8 \
+docker run -d --name appsec-antibot-gw1.9.9 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -939,7 +939,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.9.8
+  appsec-antibot-gw:1.9.9
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1143,8 +1143,8 @@ docker pull  harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.9.8 .
-trivy image appsec-antibot-gw:1.9.8        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.9.9 .
+trivy image appsec-antibot-gw:1.9.9        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1268,7 +1268,7 @@ All owned by UID 65532 (`nonroot`).
 │
 ├── validation/                      per-release audit trail (one .md per version)
 │   ├── TEMPLATE.md                  17-step validation template
-│   └── 1.9.8.md                     latest validation record
+│   └── 1.9.9.md                     latest validation record
 │
 ├── Dockerfile                       multi-stage Wolfi distroless arm64 build
 ├── Dockerfile.armv7                 armv7 variant (libpq + psycopg-c)

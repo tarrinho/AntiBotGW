@@ -6,7 +6,27 @@ Author: Pedro Tarrinho
 
 ---
 
-## [1.9.9] — security hardening
+## [1.9.9] — security hardening + GeoMap event-loop offload
+
+### Performance
+- **GeoMap no longer stalls the gateway** — `geo_data_endpoint`'s events scan and
+  per-IP GeoLite2-City / ASN mmdb lookups now run on a worker thread
+  (`await asyncio.to_thread(_scan)`) instead of inline on the asyncio event loop.
+  A wide map window (selectable up to 30 days) with many unique IPs previously
+  blocked all proxying until the scan finished; the loop now stays responsive and
+  the 60 s `_GEO_CACHE` still serves repeat ticks. Partial mitigation of L11–L13
+  (event-loop starvation, CWE-400). Counts remain exact within the window — no
+  SQL `LIMIT`; events with no public GeoIP coordinate (private/LAN/unresolvable)
+  are reported separately in the "No geo" card (`skipped_no_geo`).
+
+### Tests
+- `tests/test_v199_geo_scan_offload.py` (4) — asserts the scan is wrapped in
+  `_scan()`, run via `asyncio.to_thread`, declares `nonlocal skipped_no_geo,
+  _sample_seen`, keeps the blocking mmdb/cursor work inside the offloaded helper,
+  and that `skipped_no_geo` is surfaced in the payload + `geo.html` "No geo" card.
+
+### Validation
+- `validation/1.9.9.md` — full §11b residual-risk review + §21 pipeline report.
 
 ### Security (Tier-1 hardening)
 - **mesh-sync state requires admin/maintainer** — `mesh_sync_state_endpoint` now
