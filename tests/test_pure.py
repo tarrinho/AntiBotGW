@@ -5602,14 +5602,28 @@ def test_gw_identity_popover_risk_score_uses_to_fixed():
 # ── escapeHtml applied to all user-controlled fields ─────────────────────
 
 def test_gw_identity_popover_escape_html_applied_to_user_fields():
-    """buildIdHtml must call escapeHtml() on ip, ua, session, fingerprint, ja4,
-    last_path and reason fields to prevent XSS via crafted identity values."""
+    """buildIdHtml must escape every user-controlled identity field to prevent XSS.
+
+    1.9.8 UX moved session/fingerprint/ja4 behind `_naHint(field, value, ua)`,
+    which escapes its value (`if (value) return escapeHtml(value)`) and otherwise
+    emits a static, escaped reason hint. So a field is safe if it is rendered
+    EITHER directly via `escapeHtml(d.X)` OR via `_naHint('…', d.X, …)`.
+    """
+    import re
+    _HINT_KEY = {"d.session": "session", "d.fingerprint": "fingerprint", "d.ja4": "ja4"}
     for dashboard in ("agents.html", "main.html"):
         sec = _gw_popover_section(dashboard)
+        # the indirection itself must escape — else _naHint would be an XSS sink
+        assert "if (value) return escapeHtml(value)" in sec, (
+            f"{dashboard} _naHint must escape its value (escapeHtml) before render")
         for field in ("d.ip", "d.ua", "d.session", "d.fingerprint", "d.ja4", "d.last_path"):
-            assert f"escapeHtml({field})" in sec, (
-                f"{dashboard} buildIdHtml must call escapeHtml({field}) — "
-                f"unescaped {field} would allow XSS via crafted identity data"
+            direct = f"escapeHtml({field})" in sec
+            key = _HINT_KEY.get(field)
+            hinted = bool(key and re.search(rf"_naHint\('{key}',\s*{re.escape(field)}", sec))
+            assert direct or hinted, (
+                f"{dashboard} buildIdHtml must escape {field} — directly via "
+                f"escapeHtml({field}) or via _naHint (which escapes); unescaped "
+                f"{field} would allow XSS via crafted identity data"
             )
 
 

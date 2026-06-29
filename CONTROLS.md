@@ -1,6 +1,6 @@
 # AntiBot/WAF GW — Controls Reference
 
-**Version**: 1.9.8 · **Author**: Pedro Tarrinho
+**Version**: 1.9.9 · **Author**: Pedro Tarrinho
 
 > Auto-generated from the live control set. Every toggle/threshold the gateway exposes is listed below, grouped by request-pipeline stage. For the full code-grounded deep-dive (mechanics, CWE, when-to-disable) see `controls_details.pdf`; for live state use the Controls dashboard.
 
