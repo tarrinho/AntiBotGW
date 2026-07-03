@@ -1,0 +1,102 @@
+name: security
+
+# Bandit (SAST) + pip-audit (deps) + Trivy (deps/secret/misconfig).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install bandit
+      - name: Run Bandit
+        run: |
+          set +e
+          out=$(bandit -r . -x ./tests,./mutants \
+            --severity-level high --confidence-level medium 2>&1)
+          code=$?
+          set -e
+          {
+            echo "### Bandit"
+            if [ "$code" -eq 0 ]; then
+              echo "No HIGH severity findings."
+            else
+              echo "HIGH severity findings:"
+            fi
+            echo '```'
+            echo "$out"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install pip-audit
+      - name: Audit requirements
+        run: |
+          set +e
+          out=$(pip-audit -r requirements.txt 2>&1)
+          code=$?
+          set -e
+          {
+            echo "### pip-audit"
+            if [ "$code" -eq 0 ]; then
+              echo "No known vulnerabilities."
+            else
+              echo "Vulnerabilities found:"
+              echo '```'
+              echo "$out"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+  trivy:
+    name: Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        run: |
+          set +e
+          out=$(docker run --rm -v "${{ github.workspace }}:/src" \
+            aquasec/trivy:latest fs /src \
+            --scanners vuln,secret,misconfig \
+            --ignorefile /src/.trivyignore \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 2>&1)
+          code=$?
+          set -e
+          {
+            echo "### Trivy"
+            if [ "$code" -eq 0 ]; then
+              echo "No HIGH/CRITICAL findings."
+            else
+              echo "HIGH/CRITICAL findings:"
+              echo '```'
+              echo "$out"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
