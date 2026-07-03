@@ -1,6 +1,6 @@
 """
 1.9.2 iter-22 — guard the db-test endpoint against the two failure modes that
-froze it for 40+ s on the live pt4.tech (Timescale) deployment:
+froze it for 40+ s on a live Timescale deployment:
 
   1. `pg_db_size()` ran an UNBOUNDED `COUNT(*) FROM events`. On a large
      Timescale hypertable that full-scans every chunk (seconds → minutes).

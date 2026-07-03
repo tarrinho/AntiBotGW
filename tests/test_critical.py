@@ -1700,7 +1700,7 @@ def test_167_gw_id_from_domain():
     assert out.startswith("a" * 60)
     # Result must round-trip through the validator.
     for d in ["gw-prod.example.com", "demo-tunnel-abc123.trycloudflare.com",
-              "node1.test-env.example.com"]:
+              "svc.staging.example.com"]:
         derived = f(d)
         ok, _ = proxy._gw_validate_id(derived)
         assert ok, f"derived {derived!r} from {d!r} fails validator"

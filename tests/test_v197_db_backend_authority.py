@@ -7,7 +7,7 @@ ignored an explicit `DB_BACKEND=sqlite`. Worse, the READ path
 (`active_backend()`/`open_conn()`) keyed on POSTGRES_DSN while the WRITER keyed
 on DB_BACKEND — so a configured-but-unwanted DSN split reads→PG / writes→SQLite,
 ran synchronous psycopg calls on the event loop, and stalled `/live` under load
-(armv7 pt4.tech → 502).
+(armv7 production → 502).
 
 Fix (config.py): DB_BACKEND wins when explicit. `DB_BACKEND=sqlite` deactivates
 the DSN so every DSN-keyed path (reads, writer, mirror) stays on SQLite. The DSN
@@ -54,7 +54,7 @@ def _resolve(db_backend, dsn):
 
 
 def test_sqlite_pin_deactivates_dsn():
-    """The pt4.tech case: explicit sqlite + DSN → SQLite everywhere, DSN off."""
+    """The explicit-sqlite-plus-DSN case: explicit sqlite + DSN → SQLite everywhere, DSN off."""
     backend, dsn_active, active = _resolve("sqlite", _DSN)
     assert backend == "sqlite", backend
     assert dsn_active == "0", "DSN must be deactivated so no path routes to PG"

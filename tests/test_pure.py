@@ -192,7 +192,7 @@ def test_pow_malformed_rejected(proxy_module):
     ("/foo/../../../etc/passwd",         True),
     ("/path?q=union+select+*",           True),
     # Legitimate paths previously false-flagged by `passw[do]` — must NOT match
-    ("/content/productcatalogue/ufe/v5/micro-frontends/password-recovery/passwordRecovery.js",
+    ("/content/app-portal/ui/v5/micro-frontends/password-recovery/passwordRecovery.js",
                                           False),
     ("/api/v1/credentials-manager/list", False),
     ("/static/private-key-icon.svg",     False),
@@ -780,10 +780,15 @@ def test_report_html_is_publish_clean():
     if not (root / "report.html").exists():
         pytest.skip("report.html not present in this tree (e.g. mutation sandbox)")
     html = (root / "report.html").read_text(errors="replace")
+    # NOTE: the authoritative internal-infra/engagement token denylist lives in
+    # the PRIVATE publish gate (copy-to-github.sh SECRET_PATTERNS); it is not
+    # mirrored here so this public test does not itself enumerate those markers.
+    # This keeps a generic secret-shape guard on the shipped report.
     forbidden = [
-        r"cfsectraining", r"sporting\.", r"\bngrok\b", r"/media/share",
-        r"kali-claude-code", r"harbor\.tools", r"trycloudflare", r"celfocus",
-        r"\.admin_key", r"node1\.",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+        r"\bAKIA[0-9A-Z]{16}\b",
+        r"/Users/[a-z0-9]+/", r"/home/[a-z0-9]+/",
+        r"\.admin_key",
     ]
     hits = [p for p in forbidden if re.search(p, html, re.IGNORECASE)]
     assert not hits, (
