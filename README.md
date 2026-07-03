@@ -1132,8 +1132,8 @@ UPSTREAM=https://your-app ALLOWED_HOSTS=www.example.com ./myip.sh --apply
 ### Pull from Harbor
 
 ```bash
-docker login harbor.tools.pt4.tech
-docker pull  harbor.tools.pt4.tech/antibotappsecgw/antibotappsecgw:1.3
+docker login registry.example.com
+docker pull  registry.example.com/antibotappsecgw/antibotappsecgw:1.3
 ```
 
 ---

@@ -147,7 +147,7 @@ def test_q3_reported_scenario_policy_only_with_inherited_upstream(proxy_module):
         async with _spin_upstream() as up:
             async with _spin_proxy(proxy_module, up) as c:
                 # _globalVals.UPSTREAM carries the PUBLIC global default
-                # (e.g. the demo's https://www.celfocus.com) — use a public value,
+                # (e.g. the demo's https://www.example.com) — use a public value,
                 # not the loopback test upstream (which is correctly rejected as
                 # private when ALLOW_PRIVATE_UPSTREAM=0).
                 r = await _post_vhost(proxy_module, c, {

@@ -415,7 +415,7 @@ Author: Pedro Tarrinho
   heuristic into taking the in-memory path (stale gap + most-recent live
   samples) instead of the backend-aware DB path — so long windows rendered only
   the most-recent ~1 day even though Postgres held the full history (observed on
-  pt4.tech: 9 days in PG, 1 day shown). Fixed by rehydrating through
+  a production deployment: 9 days in PG, 1 day shown). Fixed by rehydrating through
   `open_conn()` (backend-aware, the same pattern `_rehydrate_timeline` already
   uses), so PG-only deployments load a **contiguous recent buffer from
   Postgres**. SQLite-only deployments are unaffected (`open_conn()` returns the
@@ -526,7 +526,7 @@ Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and
 
 ### Fixed
 
-- **`POSTGRES_DSN` set but gateway silently ran on SQLite.** For `DB_BACKEND`, a persisted `config_kv` value overrode the env (by design, so the dashboard backend-switch survives restart) — but a *stale* persisted `DB_BACKEND="sqlite"` (from an earlier SQLite run or a pre-PG-only-migration switch) then kept the gateway on SQLite **even with a healthy Postgres and a DSN set**. Result on pt4.tech: 8.3M events in PG, then a ~1.5h gap as new events went to the local SQLite file. `db/sqlite.py::db_load_config` now **coerces a persisted `DB_BACKEND` to `postgres` whenever `POSTGRES_DSN` is set** (logs `db_backend_forced_pg_by_dsn`). A DSN now unambiguously means Postgres.
+- **`POSTGRES_DSN` set but gateway silently ran on SQLite.** For `DB_BACKEND`, a persisted `config_kv` value overrode the env (by design, so the dashboard backend-switch survives restart) — but a *stale* persisted `DB_BACKEND="sqlite"` (from an earlier SQLite run or a pre-PG-only-migration switch) then kept the gateway on SQLite **even with a healthy Postgres and a DSN set**. Result in production: 8.3M events in PG, then a ~1.5h gap as new events went to the local SQLite file. `db/sqlite.py::db_load_config` now **coerces a persisted `DB_BACKEND` to `postgres` whenever `POSTGRES_DSN` is set** (logs `db_backend_forced_pg_by_dsn`). A DSN now unambiguously means Postgres.
 
 ### Added
 
@@ -542,7 +542,7 @@ Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and
 
 ### Fixed
 
-- **`/secured/db-test` hung 40+ s and stalled the whole worker on the live pt4.tech (Timescale) deployment.** Two compounding bugs:
+- **`/secured/db-test` hung 40+ s and stalled the whole worker on a live Timescale deployment.** Two compounding bugs:
   - **`db/postgres.py::pg_db_size()` ran an unbounded `COUNT(*)` over the events table.** On a Timescale hypertable that full-scans every chunk (seconds → minutes as the table grows). Replaced with a planner **estimate** — `SUM(reltuples)` over the table + its inheritance children (Timescale chunks are inheritance children of the hypertable root) — a catalog-only read that's instant and accurate enough for a dashboard figure (kept fresh by ANALYZE/autovacuum).
   - **`core/proxy_handler.py::db_test_endpoint` called the blocking probes (`pg_test_roundtrip`, `pg_db_size`) directly on the event loop.** A slow Postgres therefore froze the entire async worker — every concurrent admin request (`/secured/vhosts`, `/secured/config`, …) timed out with a 502. Both probes are now offloaded to a thread executor and bounded with `asyncio.wait_for` (8s for the roundtrip, 6s for the size query); on timeout the endpoint returns a clean `ok:false, reason:"probe timed out"` instead of hanging.
 
@@ -556,7 +556,7 @@ Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and
 
 ### Added
 
-- **Postgres backend now self-heals after a failure — no operator restart required.** Previously, any Postgres failure (`db_init_postgres` auth rejection, container restart, network blip, or a password drift later corrected) called `_disable_postgres_for_process`, which latched the backend OFF for the life of the process: the gateway silently degraded to SQLite and stayed there — **empty dashboards, dead geo-data / event reads** — until someone restarted the container. This was the root cause of the pt4.tech "no events" + `geo-data 500` / `vhosts 502` incident after a Timescale restart.
+- **Postgres backend now self-heals after a failure — no operator restart required.** Previously, any Postgres failure (`db_init_postgres` auth rejection, container restart, network blip, or a password drift later corrected) called `_disable_postgres_for_process`, which latched the backend OFF for the life of the process: the gateway silently degraded to SQLite and stayed there — **empty dashboards, dead geo-data / event reads** — until someone restarted the container. This was the root cause of the production "no events" + `geo-data 500` / `vhosts 502` incident after a Timescale restart.
   - `db/postgres.py` — the disable is now *recoverable*: it records **why** it went down (`_PG_DISABLED_BY_FAILURE`, `_PG_DISABLED_TS`) rather than latching permanently.
   - `pg_recovery_probe()` — a direct connect + `SELECT 1`, bypassing the pool and the auth latch, to test whether Postgres is reachable **and** authable again. Never raises.
   - `pg_maybe_recover()` — cheap no-op while PG is healthy; when disabled-by-failure it probes once and, on success, calls `_reenable_postgres_for_process()` which clears the auth latch, flips `_postgres_available` back on across every module, restores `DB_BACKEND=postgres` on `core.proxy_handler`, and bumps `_PG_RECOVERED_COUNT`.
@@ -791,9 +791,9 @@ test-driven; full suite now **1185 passed / 0 failed / 0 errors**.
   touched it (carry-over). Risk now accumulates per-vhost
   (`IpState.risk_by_vhost`, decays in lockstep) and the threshold is evaluated
   against the per-vhost score, so behaviour on one vhost can no longer ban the
-  identity on another it has not abused. Verified live (attack jtsl → jtsl
-  banned, pt4 untouched stays `200`) and by controlled unit test (global score
-  424, pt4 per-vhost score 24 < 50 → pt4 free; pt4 still bans on its own 56≥50).
+  identity on another it has not abused. Verified live (attack vhost-a → vhost-a
+  banned, vhost-b untouched stays `200`) and by controlled unit test (global score
+  424, vhost-b per-vhost score 24 < 50 → vhost-b free; vhost-b still bans on its own 56≥50).
 - **`unban_endpoint` full scrub restored + extended.** The single-target unban
   cleared only `risk_score`/`banned_until`, not the risk breakdown — a leftover
   score could re-ban the identity on its next request (the bulk endpoint already
@@ -1124,7 +1124,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
 
 ### Performance
 
-- **SQLite tuning** — single `_sqlite_connect()` helper consolidates all 12 connect sites with WAL + `synchronous=NORMAL` + `wal_autocheckpoint=10000` + `temp_store=MEMORY` + `mmap_size=256MB`. Cuts INSERT+COMMIT on slow-fsync disks (pt4.tech root cause).
+- **SQLite tuning** — single `_sqlite_connect()` helper consolidates all 12 connect sites with WAL + `synchronous=NORMAL` + `wal_autocheckpoint=10000` + `temp_store=MEMORY` + `mmap_size=256MB`. Cuts INSERT+COMMIT on slow-fsync disks (production root cause).
 - **Quick-wins #2–#8/#11/#12** — `json.dumps` outside `state_lock`, JA4H short-circuit + lock-free write, decay skip when score is 0, LLM heuristic skips static assets, per-request `_vhost` cache, conditional LRU promotion (`_should_promote()`), per-request `_ua_of()` cache (38 callsites), `_is_static_asset_path()` single source.
 
 ### Resilience
@@ -1223,7 +1223,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
 
 ### Fixed
 
-- **pt4.tech slowness** — SQLite 802 MB DB on slow-fsync disk (57 ms/4 KB) caused 76 ms `INSERT+COMMIT`. New `db/sqlite.py::_sqlite_connect()` helper consolidates all 12 `sqlite3.connect()` call sites with `WAL + synchronous=NORMAL + wal_autocheckpoint=10000 + temp_store=MEMORY + mmap_size=256MB + cache_size=-20000`.
+- **Production slowness** — SQLite 802 MB DB on slow-fsync disk (57 ms/4 KB) caused 76 ms `INSERT+COMMIT`. New `db/sqlite.py::_sqlite_connect()` helper consolidates all 12 `sqlite3.connect()` call sites with `WAL + synchronous=NORMAL + wal_autocheckpoint=10000 + temp_store=MEMORY + mmap_size=256MB + cache_size=-20000`.
 - **Self-ban banner text**: distinguishes admin IP with session vs without.
 - **colspan=13 → 14** in `agents.html` (Suspicious table: 12 data + expand + bulk-chk).
 - **`_migPollTimer` leak**: pushed to `_timers` array + cleared in `beforeunload`.
@@ -2771,7 +2771,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
   reaches a live integration without operator confirmation. `ADMIN_KEY` / `SESSION_KEY` /
   `INTERNAL_KEY` excluded from allowlist.
 - **UX polish** — green ● LIVE pill normalised across every dashboard; portal footer
-  (Antibot AppSec Gateway · © 2026 pt4.tech, S.A. · Confidential); Sign-out link inline
+  (Antibot AppSec Gateway · © 2026 <service owner> · Confidential); Sign-out link inline
   next to Settings in every topnav with confirm prompt; Online column in Users table (60 s
   in-memory TTL).
 - Additive column upgrades for `admin_ips` and other tables driven by a central registry

@@ -26,7 +26,7 @@ Pre-requisite — admin-IP gate
   takes effect if (a) the gateway's socket peer is in TRUSTED_PROXIES and
   (b) the --admin-xff value is in ADMIN_ALLOWED_NETS.
 
-  If you see "Refused to execute script" CSP errors with celfocus/upstream
+  If you see "Refused to execute script" CSP errors with upstream
   URLs in them, the admin-IP gate is rejecting and the decoy is mirroring
   the upstream HTML. Fix by adding the runner's IP to ADMIN_ALLOWED_NETS
   (Settings → Admin Access) or by choosing an --admin-xff value already in
