@@ -27,8 +27,9 @@ jobs:
       - name: Run Bandit
         run: |
           set +e
-          out=$(bandit -r . -x ./tests,./mutants \
-            --severity-level high --confidence-level medium 2>&1)
+          bandit -r . -x ./tests,./mutants \
+            --severity-level high --confidence-level medium \
+            -f json -o bandit-report.json
           code=$?
           set -e
           {
@@ -36,12 +37,14 @@ jobs:
             if [ "$code" -eq 0 ]; then
               echo "No HIGH severity findings."
             else
-              echo "HIGH severity findings:"
+              echo "$(jq '[.results[] | select(.issue_severity=="HIGH")] | length' bandit-report.json) HIGH severity finding(s):"
+              echo ""
+              echo "| File | Line | Test | Confidence |"
+              echo "|------|------|------|------------|"
+              jq -r '.results[] | select(.issue_severity=="HIGH") | "| \(.filename) | \(.line_number) | \(.test_id) \(.test_name) | \(.issue_confidence) |"' bandit-report.json
             fi
-            echo '```'
-            echo "$out"
-            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          rm -f bandit-report.json
           exit $code
 
   pip-audit:
@@ -80,12 +83,13 @@ jobs:
       - name: Trivy filesystem scan
         run: |
           set +e
-          out=$(docker run --rm -v "${{ github.workspace }}:/src" \
+          docker run --rm -v "${{ github.workspace }}:/src" \
             aquasec/trivy:latest fs /src \
             --scanners vuln,secret,misconfig \
             --ignorefile /src/.trivyignore \
             --severity HIGH,CRITICAL \
-            --exit-code 1 2>&1)
+            --format json --output /src/trivy-report.json \
+            --exit-code 1
           code=$?
           set -e
           {
@@ -94,9 +98,16 @@ jobs:
               echo "No HIGH/CRITICAL findings."
             else
               echo "HIGH/CRITICAL findings:"
-              echo '```'
-              echo "$out" | sed -r 's/\x1b\[[0-9;]*m//g'
-              echo '```'
+              echo ""
+              echo "| Type | Location | ID | Severity |"
+              echo "|------|----------|----|----------|"
+              jq -r '
+                .Results[]? as $r
+                | (($r.Vulnerabilities // [])[] | "| vuln | \($r.Target) | \(.VulnerabilityID) (\(.PkgName)) | \(.Severity) |"),
+                  (($r.Secrets // [])[] | "| secret | \($r.Target):\(.StartLine) | \(.RuleID) | \(.Severity) |"),
+                  (($r.Misconfigurations // [])[] | "| misconfig | \($r.Target) | \(.ID) | \(.Severity) |")
+              ' trivy-report.json
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          rm -f trivy-report.json
           exit $code
