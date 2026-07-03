@@ -2,7 +2,7 @@
 tests/test_v195_svc_rehydrate_backend_aware.py — guard the 1.9.5 fix that
 makes the service-metrics buffer rehydration backend-aware.
 
-THE BUG (reported on pt4.tech): selecting a 7-day window on the Service
+THE BUG (reported in production): selecting a 7-day window on the Service
 page showed only ~1 day of data, even though Postgres held 9 days.
 
 ROOT CAUSE: `db_load_state()` in db/sqlite.py rehydrated

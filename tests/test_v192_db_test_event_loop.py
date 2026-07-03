@@ -1,6 +1,6 @@
 """1.9.2 iter-25 — db_test_endpoint event-loop blocking guard.
 
-Operator-reported bug (from the Switch DB Backend modal on pt4.tech):
+Operator-reported bug (from the Switch DB Backend modal in production):
 clicking "Test" with a candidate DSN hung the entire gateway for 77 s and
 returned 502/504 on every concurrent admin request (`/secured/config`,
 `/secured/2fa-status`). Root cause: `pg_test_roundtrip()` does synchronous

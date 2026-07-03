@@ -1,8 +1,8 @@
 """
 QA tests — SQLite write-path tuning, upstream timeouts, circuit-breaker knobs
-(1.8.15, post pt4.tech slow-fsync incident).
+(1.8.15, post production slow-fsync incident).
 
-Production incident: pt4.tech container had 4KB fsync = 57 ms on the
+Production incident: the container had 4KB fsync = 57 ms on the
 underlying volume and SQLite events table at 2.4 M rows. Every blocked
 request triggered an INSERT + UPDATE chain that committed → fsync, so the
 db_writer_loop spent 76 ms per commit. At 50 req/s the gateway could not
@@ -271,7 +271,7 @@ class TestCircuitBreakerKnobs:
 # ── 5. TestPerformanceDocumented ────────────────────────────────────────────
 
 class TestPerformanceDocumented:
-    """Source-comment guard: the pt4.tech incident context must be in
+    """Source-comment guard: the slow-fsync incident context must be in
     db/sqlite.py so future maintainers don't remove the PRAGMAs accidentally."""
 
     def test_pt4_incident_referenced(self):

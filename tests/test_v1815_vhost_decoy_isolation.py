@@ -3,9 +3,9 @@
 
 Bugs fixed:
   * Global _decoy_cache / _upstream_404_cache leaked vhost-A's homepage as
-    vhost-B's silent-decoy body. When jtsl.pt was decoyed, the gateway
+    vhost-B's silent-decoy body. When example.org was decoyed, the gateway
     served pt4.tech's cached HTML — and the browser then re-fetched assets
-    against jtsl.pt, which got re-decoyed (HTML body, wrong content-type),
+    against example.org, which got re-decoyed (HTML body, wrong content-type),
     breaking page styling.
   * Wildcard vhost entries (``*.example.com``) were accepted by
     _validate_vhost_hostname + stored as literal dict keys, but

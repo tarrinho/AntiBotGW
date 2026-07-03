@@ -1576,7 +1576,7 @@ def db_load_config(proxy_globals: dict) -> None:
         # (a stale operator choice, or a pre-PG-only-migration /db-switch) must
         # NOT override it — otherwise the gateway silently runs SQLite while a
         # healthy Postgres sits idle and events split across two stores (the
-        # exact pt4.tech failure: 8.3M rows in PG, then a 1.5h gap in SQLite).
+        # exact production failure: 8.3M rows in PG, then a 1.5h gap in SQLite).
         # Coerce the row to postgres in-memory so the normal apply+propagate
         # path below forces DB_BACKEND=postgres everywhere.
         if key == "DB_BACKEND" and POSTGRES_DSN:

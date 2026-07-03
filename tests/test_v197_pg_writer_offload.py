@@ -7,7 +7,7 @@ In PG-primary mode the writer drained each queued batch by calling
 execute) DIRECTLY on the event loop. A slow Postgres query (cold pool,
 checkpoint, lock, write-burst) therefore froze the WHOLE loop — `/live`
 (healthcheck) and real requests timed out → front-proxy 502, even with CPU
-idle (armv7 pt4.tech).
+idle (armv7 production).
 
 Fix: the batch's PG work runs in a worker thread via `asyncio.to_thread`
 (`_drain_batch_pg`), so a slow query can't block the loop. The psycopg pool is

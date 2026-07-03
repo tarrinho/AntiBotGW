@@ -1,5 +1,5 @@
 """
-QA tests — 1.8.15 perf quick-wins (post pt4.tech slowness investigation).
+QA tests — 1.8.15 perf quick-wins (post production slowness investigation).
 
 Five hot-path optimisations:
 
