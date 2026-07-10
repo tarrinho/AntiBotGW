@@ -495,6 +495,15 @@ async def test_d05_vhost_stats_fields_required_by_charts(proxy_module):
             conn.commit()
             conn.close()
 
+            # bust the 15 s /vhost-stats TTL cache — otherwise the response
+            # can be a stale snapshot from an earlier test in the same second.
+            try:
+                from admin.settings import _VHOST_STATS_CACHE as _vsc
+                _vsc["ts"] = 0.0
+                _vsc["value"] = []
+            except Exception:
+                pass
+
             r = await cli.get(f"{NS}/vhost-stats",
                               cookies=cookies)
             assert r.status == 200

@@ -1,0 +1,709 @@
+{
+  "abuseipdb_set": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5",
+          50,
+          "US",
+          1700000000
+        ],
+        "sql": "INSERT INTO abuseipdb_cache (ip, score, country, ts) VALUES (%s,%s,%s,%s) ON CONFLICT(ip) DO UPDATE SET score=excluded.score, country=excluded.country, ts=excluded.ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "audit_log": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          "login_success",
+          "alice",
+          "/dashboard",
+          "203.0.113.5",
+          "{}",
+          "sid-x",
+          "info"
+        ],
+        "sql": "INSERT INTO audit_events (ts, event_type, actor, target, ip, detail, session_id, severity) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)"
+      }
+    ],
+    "dispatched": true
+  },
+  "ban": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5",
+          1700000600,
+          "abusive_ja3",
+          1700000000
+        ],
+        "sql": "INSERT INTO bans (ip, banned_until, reason, ts) VALUES (%s,%s,%s,%s) ON CONFLICT (ip) DO UPDATE SET banned_until=EXCLUDED.banned_until, reason=EXCLUDED.reason, ts=EXCLUDED.ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "del_admin_ip": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "10.0.0.0/24"
+        ],
+        "sql": "DELETE FROM admin_ips WHERE cidr = %s"
+      }
+    ],
+    "dispatched": true
+  },
+  "del_config": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "knob_x"
+        ],
+        "sql": "DELETE FROM config_kv WHERE key = %s"
+      }
+    ],
+    "dispatched": true
+  },
+  "del_secret": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "ABUSEIPDB_KEY"
+        ],
+        "sql": "DELETE FROM secrets_kv WHERE key = %s"
+      }
+    ],
+    "dispatched": true
+  },
+  "dlp_add": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "ccn_re",
+          "\\b\\d{16}\\b",
+          "high",
+          1700000000,
+          "alice"
+        ],
+        "sql": "INSERT INTO dlp_patterns (name, pattern, severity, added_ts, added_by) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (name) DO NOTHING"
+      }
+    ],
+    "dispatched": true
+  },
+  "dlp_delete": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          42
+        ],
+        "sql": "DELETE FROM dlp_patterns WHERE id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "dlp_toggle": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          0,
+          42
+        ],
+        "sql": "UPDATE dlp_patterns SET enabled=%s WHERE id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "gw_audit_add": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          "db_switch",
+          "gw-01",
+          "alice",
+          "{\"target\":\"postgres\"}"
+        ],
+        "sql": "INSERT INTO gw_audit (ts, action, gw_id, actor, details) VALUES (%s, %s, %s, %s, %s)"
+      }
+    ],
+    "dispatched": true
+  },
+  "gw_distribution_replace": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": null,
+        "sql": "DELETE FROM gw_distribution"
+      },
+      {
+        "kind": "executemany",
+        "params": [
+          [
+            "gw-01",
+            "gw-02",
+            1700000000
+          ],
+          [
+            "gw-01",
+            "gw-03",
+            1700000000
+          ]
+        ],
+        "sql": "INSERT INTO gw_distribution (source_gw_id, target_gw_id, ts) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING"
+      }
+    ],
+    "dispatched": true
+  },
+  "gw_registry_add": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "gw-02",
+          "node2.example.com",
+          "eu-west",
+          "prod",
+          "active",
+          1,
+          "pubkey-x",
+          "privkey-x",
+          1700000000,
+          1700000000,
+          1700000000,
+          1700000000,
+          1700000000,
+          0
+        ],
+        "sql": "INSERT INTO gw_registry (gw_id, domain, region, environment, status, can_distribute, public_key, private_key, key_created_ts, key_rotated_ts, last_seen_ts, created_ts, updated_ts, is_local) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (gw_id) DO UPDATE SET domain=EXCLUDED.domain, region=EXCLUDED.region, environment=EXCLUDED.environment, status=EXCLUDED.status, can_distribute=EXCLUDED.can_distribute, public_key=EXCLUDED.public_key, private_key=COALESCE(NULLIF(EXCLUDED.private_key,''), gw_registry.private_key), key_rotated_ts=EXCLUDED.key_rotated_ts, last_seen_ts=EXCLUDED.last_seen_ts, updated_ts=EXCLUDED.updated_ts, is_local=EXCLUDED.is_local"
+      }
+    ],
+    "dispatched": true
+  },
+  "gw_registry_delete": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "gw-02"
+        ],
+        "sql": "DELETE FROM gw_registry WHERE gw_id=%s"
+      },
+      {
+        "kind": "execute",
+        "params": [
+          "gw-02",
+          "gw-02"
+        ],
+        "sql": "DELETE FROM gw_distribution WHERE source_gw_id=%s OR target_gw_id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "gw_registry_discover": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "gw-04",
+          1700000000,
+          1700000000,
+          1700000000,
+          1700000000
+        ],
+        "sql": "INSERT INTO gw_registry (gw_id, domain, region, environment, status, can_distribute, public_key, private_key, key_created_ts, last_seen_ts, created_ts, updated_ts, is_local, auto_apply) VALUES (%s, NULL, NULL, NULL, 'untrusted', 0, '', NULL, %s, %s, %s, %s, 0, 0) ON CONFLICT(gw_id) DO NOTHING"
+      },
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          "gw-04"
+        ],
+        "sql": "UPDATE gw_registry SET last_seen_ts=%s WHERE gw_id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "gw_registry_update": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "node2.example.com",
+          "eu-west",
+          "prod",
+          "active",
+          1,
+          "pubkey-x",
+          "privkey-x",
+          1700000000,
+          1700000000,
+          1700000000,
+          1700000000,
+          0,
+          1,
+          "gw-02"
+        ],
+        "sql": "UPDATE gw_registry SET domain=%s, region=%s, environment=%s, status=%s, can_distribute=%s, public_key=%s, private_key=%s, key_created_ts=%s, key_rotated_ts=%s, last_seen_ts=%s, updated_ts=%s, is_local=%s, auto_apply=%s WHERE gw_id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "honey_fp_add": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          "trackkey",
+          "203.0.113.5",
+          "curl/8",
+          "ja4-x",
+          "AS64500",
+          "/honeypot",
+          "fp-x"
+        ],
+        "sql": "INSERT INTO honey_fingerprints (ts, track_key, ip, ua, ja4, asn, path, reason) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+      }
+    ],
+    "dispatched": true
+  },
+  "ip_ban": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5",
+          1700000600,
+          "manual_ban",
+          1700000000
+        ],
+        "sql": "INSERT INTO ip_bans (ip, banned_until, reason, ts) VALUES (%s,%s,%s,%s) ON CONFLICT (ip) DO UPDATE SET banned_until=GREATEST(ip_bans.banned_until, EXCLUDED.banned_until), reason=EXCLUDED.reason, ts=EXCLUDED.ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "ip_ban_del": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5"
+        ],
+        "sql": "DELETE FROM ip_bans WHERE ip=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "ip_ban_vhost": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5",
+          "shop.example.com",
+          1700000600,
+          "manual_ban",
+          1700000000
+        ],
+        "sql": "INSERT INTO ip_bans_vhost (ip, vhost, banned_until, reason, ts) VALUES (%s,%s,%s,%s,%s) ON CONFLICT (ip, vhost) DO UPDATE SET banned_until=GREATEST(ip_bans_vhost.banned_until, EXCLUDED.banned_until), reason=EXCLUDED.reason, ts=EXCLUDED.ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "ip_ban_vhost_del": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5",
+          "shop.example.com"
+        ],
+        "sql": "DELETE FROM ip_bans_vhost WHERE ip=%s AND vhost=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "mesh_sync_pending_upsert": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          "gw-01",
+          "FEODO_ENABLED",
+          "true"
+        ],
+        "sql": "INSERT INTO gw_sync_pending (received_ts, source_gw_id, key_name, value, status) VALUES (%s,%s,%s,%s,'pending') ON CONFLICT(source_gw_id, key_name) DO UPDATE SET received_ts = excluded.received_ts, value = excluded.value, status = 'pending', confirmed_ts = NULL WHERE excluded.value <> gw_sync_pending.value"
+      }
+    ],
+    "dispatched": true
+  },
+  "mesh_sync_status": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "confirmed",
+          1700000000,
+          15
+        ],
+        "sql": "UPDATE gw_sync_pending SET status=%s, confirmed_ts=%s WHERE id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "set_admin_ip": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "10.0.0.0/24",
+          1700000000,
+          "office",
+          "manual",
+          "HQ office range"
+        ],
+        "sql": "INSERT INTO admin_ips (cidr, added_ts, note, source, description) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (cidr) DO UPDATE SET added_ts = EXCLUDED.added_ts, note = EXCLUDED.note, source = EXCLUDED.source, description = EXCLUDED.description"
+      }
+    ],
+    "dispatched": true
+  },
+  "set_config": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "knob_x",
+          "\"on\"",
+          1700000000
+        ],
+        "sql": "INSERT INTO config_kv (key, value, ts) VALUES (%s, %s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, ts = EXCLUDED.ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "set_kv": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "total_requests",
+          "12345"
+        ],
+        "sql": "INSERT INTO metrics_kv (key, val) VALUES (%s,%s) ON CONFLICT(key) DO UPDATE SET val=excluded.val"
+      }
+    ],
+    "dispatched": true
+  },
+  "set_secret": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "ABUSEIPDB_KEY",
+          "k123",
+          1700000000
+        ],
+        "sql": "INSERT INTO secrets_kv (key, value, ts) VALUES (%s, %s, %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, ts = EXCLUDED.ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "siem_alert_fired": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          7,
+          1700000000,
+          1500.0
+        ],
+        "sql": "INSERT INTO siem_alert_fired (rule_id, ts, value) VALUES (%s,%s,%s)"
+      },
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          7
+        ],
+        "sql": "UPDATE siem_alert_rules SET last_fired_ts=%s WHERE id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "siem_alert_rule_add": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "requests_per_min",
+          ">",
+          1000.0,
+          "burst",
+          1700000000,
+          "alice",
+          300
+        ],
+        "sql": "INSERT INTO siem_alert_rules (metric, op, threshold, label, created_ts, created_by, cooldown_s) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+      }
+    ],
+    "dispatched": true
+  },
+  "siem_alert_rule_del": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          7
+        ],
+        "sql": "DELETE FROM siem_alert_rules WHERE id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "siem_alert_toggle": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1,
+          7
+        ],
+        "sql": "UPDATE siem_alert_rules SET enabled=%s WHERE id=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "svc_metric": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34
+        ],
+        "sql": "INSERT INTO svc_metrics ( ts, cpu_pct, load1, load5, load15, mem_used, mem_total, mem_avail, mem_pct, swap_used, swap_total, cg_used, cg_limit, cg_pct, disk_used, disk_total, disk_avail, disk_pct, procs, open_fds, net_rx_bps, net_tx_bps, db_db, db_wal, db_shm, db_total, pg_db_bytes, pg_events_rows, identities_count, total_requests, pg_index_bytes, pg_active_conns, pg_idle_conns, pg_cache_hit_pct, pg_tx_total) VALUES (%s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s,%s,%s, %s,%s, %s,%s, %s,%s,%s,%s,%s) ON CONFLICT(ts) DO NOTHING"
+      }
+    ],
+    "dispatched": true
+  },
+  "svc_metric_prune": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1699900000
+        ],
+        "sql": "DELETE FROM svc_metrics WHERE ts < %s"
+      }
+    ],
+    "dispatched": true
+  },
+  "update_admin_ip_description": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "new desc",
+          "10.0.0.0/24"
+        ],
+        "sql": "UPDATE admin_ips SET description = %s WHERE cidr = %s"
+      }
+    ],
+    "dispatched": true
+  },
+  "upsert_client": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "203.0.113.5",
+          1700000000,
+          1700000300,
+          50,
+          30,
+          20,
+          1700000600,
+          "ua-x",
+          "/path",
+          "vhost-x",
+          "{\"r\":1}"
+        ],
+        "sql": "INSERT INTO clients (ip, first_seen, last_seen, request_count, allowed_count, blocked_count, banned_until_epoch, last_user_agent, last_path, last_vhost, blocks_by_reason) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(ip) DO UPDATE SET last_seen=excluded.last_seen, request_count=excluded.request_count, allowed_count=excluded.allowed_count, blocked_count=excluded.blocked_count, banned_until_epoch=excluded.banned_until_epoch, last_user_agent=excluded.last_user_agent, last_path=excluded.last_path, last_vhost=excluded.last_vhost, blocks_by_reason=excluded.blocks_by_reason"
+      }
+    ],
+    "dispatched": true
+  },
+  "upsert_timeline": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          28333333,
+          100,
+          80,
+          20,
+          5,
+          "{\"abusive\":3}"
+        ],
+        "sql": "INSERT INTO timeline (bucket_minute, total, allowed, blocked, missed, by_reason) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT(bucket_minute) DO UPDATE SET total=excluded.total, allowed=excluded.allowed, blocked=excluded.blocked, missed=excluded.missed, by_reason=excluded.by_reason"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_create": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "alice",
+          "bcrypt$x",
+          "admin",
+          "active",
+          1700000000,
+          1700000000
+        ],
+        "sql": "INSERT INTO users (username, password_hash, role, status, created_ts, updated_ts) VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT (username) DO UPDATE SET password_hash=EXCLUDED.password_hash, role=EXCLUDED.role, status=EXCLUDED.status, updated_ts=EXCLUDED.updated_ts"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_delete": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "alice"
+        ],
+        "sql": "DELETE FROM users WHERE username=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_login_recorded": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000000,
+          "203.0.113.5",
+          "alice"
+        ],
+        "sql": "UPDATE users SET last_login_ts=%s, last_login_ip=%s WHERE username=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_session_create": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "sid-x",
+          "alice",
+          "203.0.113.5",
+          "ua-x",
+          1700000000,
+          1700000000,
+          1700000300
+        ],
+        "sql": "INSERT INTO user_sessions (sid, username, ip, user_agent, created_ts, last_seen_ts, expires_ts, status) VALUES (%s,%s,%s,%s,%s,%s,%s,'active') ON CONFLICT (sid) DO NOTHING"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_session_revoke": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "admin",
+          1700000400,
+          "sid-x"
+        ],
+        "sql": "UPDATE user_sessions SET status='revoked', revoked_by=%s, revoked_ts=%s WHERE sid=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_session_touch": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          1700000300,
+          "sid-x"
+        ],
+        "sql": "UPDATE user_sessions SET last_seen_ts=%s WHERE sid=%s"
+      }
+    ],
+    "dispatched": true
+  },
+  "user_update": {
+    "calls": [
+      {
+        "kind": "execute",
+        "params": [
+          "bcrypt$y",
+          "maintainer",
+          "disabled",
+          "secret-x",
+          1,
+          "[\"a\",\"b\"]",
+          "sub-x",
+          "okta",
+          1700000000,
+          "alice"
+        ],
+        "sql": "UPDATE users SET password_hash=%s, role=%s, status=%s, totp_secret=%s, totp_enabled=%s, totp_backup_codes=%s, oidc_sub=%s, sso_source=%s, updated_ts=%s WHERE username=%s"
+      }
+    ],
+    "dispatched": true
+  }
+}

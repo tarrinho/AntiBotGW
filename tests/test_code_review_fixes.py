@@ -103,6 +103,15 @@ def _wipe_events(proxy_module):
     import state as _st
     _st.ip_state.clear()
     _st.events.clear()
+    # /vhost-stats has a 15 s TTL cache in admin.settings — without this reset,
+    # back-to-back test cases within 15 s read stale data from the previous
+    # seed and the vhost never appears in the response.
+    try:
+        from admin.settings import _VHOST_STATS_CACHE as _vsc
+        _vsc["ts"] = 0.0
+        _vsc["value"] = []
+    except Exception:
+        pass
 
 
 def _seed_events(proxy_module, rows):
