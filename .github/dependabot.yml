@@ -1,0 +1,50 @@
+# Dependabot configuration — weekly PRs for GitHub Actions, base images, and
+# Python deps. Combines with the SHA-pinning discipline in the workflows: pinned
+# actions still get bump PRs (Dependabot rewrites the SHA + trailing tag comment).
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  # GitHub Actions used in .github/workflows/*.yml
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "deps"
+      - "ci"
+
+  # Dockerfile base images (Chainguard python:latest / python:latest-dev + armv7)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "deps"
+      - "docker"
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "deps"
+      - "docker"
+    # armv7 variant lives in a separate Dockerfile.
+    target-branch: "main"
+
+  # Python runtime dependencies (aiohttp, maxminddb, redis, psycopg, pyjwt, etc).
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "deps"
+      - "python"

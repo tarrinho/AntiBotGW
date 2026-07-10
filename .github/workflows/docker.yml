@@ -1,0 +1,310 @@
+name: build · test · scan · push
+
+# Aggregates the release-gate controls so the Actions page shows ONE run per
+# push, and so a single `badges` job at the end can publish per-control status
+# JSONs to an orphan `badges` branch (README reads those via shields endpoint).
+# The `secret-scan` and `security` badges are aggregated from the parallel
+# `.github/workflows/{secret-scan,security}.yml` runs on the same SHA (via
+# gh api) — those workflows remain the source of truth for those controls.
+
+on:
+  push:
+    branches: [main]
+    tags:     ['v*.*.*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  IMAGE: appsec-antibot-gw
+  # Harbor destination is configured via repo secrets/vars so the workflow is
+  # safe to publish to any mirror (personal or otherwise); when the secrets are
+  # absent, every Harbor step short-circuits via the HAS_HARBOR gate and only
+  # the ghcr.io push runs. Populate on the corporate mirror:
+  #   HARBOR_HOST     — e.g. harbor.example.com
+  #   HARBOR_PROJECT  — e.g. antibotappsecgw
+  #   HARBOR_IMAGE    — e.g. antibotappsecgw
+  #   HARBOR_USERNAME / HARBOR_PASSWORD — Harbor robot account credentials
+  HARBOR_HOST:    ${{ vars.HARBOR_HOST }}
+  HARBOR_PROJECT: ${{ vars.HARBOR_PROJECT }}
+  HARBOR_IMAGE:   ${{ vars.HARBOR_IMAGE }}
+  GHCR_HOST: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write   # for CodeQL / Trivy SARIF upload
+  actions: read            # badges job reads sibling workflow conclusions
+
+jobs:
+  # ─── 1. Run the unit + integration tests ─────────────────────────────────
+  tests:
+    name: pytest (3 layers · 68 tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          UPSTREAM:           https://example.com   # required by proxy.py at import
+          ADMIN_KEY:          TEST-KEY-DO-NOT-USE
+          ADMIN_ALLOWED_IPS:  ''
+          ALLOWED_HOSTS:      ''
+          DEBUG:              '1'
+        run: pytest tests/ -v --tb=short
+
+  # ─── 2. Build the Docker image (multi-arch) → Harbor + ghcr.io ───────────
+  build-scan:
+    name: docker build (linux/amd64,linux/arm64)
+    needs: tests
+    runs-on: ubuntu-latest
+    outputs:
+      digest:      ${{ steps.build.outputs.digest }}
+      version:     ${{ steps.meta.outputs.version }}
+      tags:        ${{ steps.meta.outputs.tags }}
+      ghcr_image:  ${{ steps.ghcr.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Lowercase ghcr image path
+        id: ghcr
+        run: |
+          # ghcr requires lowercase — GITHUB_REPOSITORY may contain uppercase
+          # letters (e.g. Celfocus-AppSec/AntiBot-AppSecGW when the corporate
+          # mirror runs this workflow); the personal mirror is already lowercase.
+          echo "image=${GHCR_HOST}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Compute image tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Publish under BOTH registries with the same tag set. When Harbor
+          # credentials aren't configured (e.g. personal mirror without a
+          # Harbor account), the Harbor push silently fails but ghcr still
+          # succeeds — treat ghcr as the always-on public registry.
+          images: |
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.HARBOR_IMAGE }}
+            ${{ steps.ghcr.outputs.image }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern=latest
+            type=sha,format=short
+
+      - name: Login to Harbor
+        if: github.event_name != 'pull_request' && env.HAS_HARBOR == '1'
+        env:
+          HAS_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && '1' || '0' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_HOST }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+        continue-on-error: true   # ghcr is the always-on target
+
+      - name: Login to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_HOST }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (and push when not a PR)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          load: ${{ github.event_name == 'pull_request' }}
+          pull: true
+          provenance: true
+          sbom: true
+          tags:   ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to:   type=gha,mode=max
+
+  # ─── 3. Trivy scan (filesystem + image) ──────────────────────────────────
+  trivy-fs:
+    name: trivy CVE scan
+    needs: build-scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy vulnerability scan (filesystem)
+        # Pinned to release tag (was @master — mutable branch, supply-chain risk).
+        # Update deliberately per release; SHA-pin at next hardening pass.
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          ignore-unfixed: false
+          exit-code: '1'
+          format: sarif
+          output: trivy-fs.sarif
+
+      - name: Upload SARIF (filesystem)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+      - name: Trivy image scan (ghcr — always-available registry)
+        # Pinned to release tag (was @master — mutable branch, supply-chain risk).
+        # Scans the ghcr image because ghcr is unauthenticated for public
+        # pulls; Harbor may not be reachable from public runners.
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.build-scan.outputs.ghcr_image }}@${{ needs.build-scan.outputs.digest }}
+          severity: CRITICAL,HIGH,MEDIUM
+          ignore-unfixed: false
+          exit-code: '1'
+          format: sarif
+          output: trivy-image.sarif
+
+      - name: Upload SARIF (image)
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+
+  # ─── 4. Cosign image signing (keyless OIDC) — signs BOTH registries ─────
+  sign:
+    name: cosign keyless signing
+    needs: [build-scan, trivy-fs]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      packages: write
+    steps:
+      - name: Login to Harbor
+        if: env.HAS_HARBOR == '1'
+        env:
+          HAS_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && '1' || '0' }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.HARBOR_HOST }}
+          username: ${{ secrets.HARBOR_USERNAME }}
+          password: ${{ secrets.HARBOR_PASSWORD }}
+        continue-on-error: true
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_HOST }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Sign ghcr image (keyless)
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          cosign sign --yes \
+            ${{ needs.build-scan.outputs.ghcr_image }}@${{ needs.build-scan.outputs.digest }}
+
+      - name: Sign Harbor image (keyless, best-effort)
+        if: env.HAS_HARBOR == '1'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+          HAS_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && '1' || '0' }}
+        run: |
+          cosign sign --yes \
+            ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.HARBOR_IMAGE }}@${{ needs.build-scan.outputs.digest }}
+        continue-on-error: true
+
+  # ─── 5. Publish per-control status badges to `badges` branch ─────────────
+  # Mirrors the ai_monitoring pattern (single force-push, no history churn) so
+  # the README endpoint badges (secret-scan, lint, tests, trivy-fs, build-scan)
+  # render a live per-control state. `secret-scan` and `lint` conclusions come
+  # from the parallel workflows (secret-scan.yml + security.yml) on the same
+  # HEAD SHA via gh api; the other three come from this workflow's own jobs.
+  badges:
+    name: publish status badges
+    needs: [tests, build-scan, trivy-fs]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions:  read
+    steps:
+      - name: Aggregate + write badge JSONs, force-push to `badges` branch
+        env:
+          R_TESTS:  ${{ needs.tests.result }}
+          R_BUILD:  ${{ needs.build-scan.result }}
+          R_TRIVY:  ${{ needs.trivy-fs.result }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Cross-workflow: pull secret-scan.yml + security.yml conclusions for
+          # this SHA. If a sibling hasn't finished yet the query returns null →
+          # we mark it "pending" (yellow) rather than blowing up.
+          sha="${GITHUB_SHA}"
+          fetch(){ # $1 = workflow name
+            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}" \
+              --jq "([.workflow_runs[] | select(.name==\"$1\")] | .[0].conclusion) // \"pending\""
+          }
+          R_SECRET="$(fetch secret-scan)"
+          R_LINT="$(fetch security)"          # security.yml runs bandit (SAST) + pip-audit + trivy — closest signal for "lint"
+          mkdir out && cd out
+          mk() {   # <file> <label> <result>
+            case "$3" in
+              success)   msg=passing;   col=brightgreen;;
+              failure)   msg=failing;   col=red;;
+              cancelled) msg=cancelled; col=inactive;;
+              skipped)   msg=skipped;   col=lightgrey;;
+              pending)   msg=pending;   col=yellow;;
+              *)         msg="$3";      col=yellow;;
+            esac
+            printf '{"schemaVersion":1,"label":"%s","message":"%s","color":"%s"}\n' \
+              "$2" "$msg" "$col" > "$1.json"
+          }
+          mk secret-scan secret-scan "$R_SECRET"
+          mk lint        lint        "$R_LINT"
+          mk tests       tests       "$R_TESTS"
+          mk trivy-fs    trivy-fs    "$R_TRIVY"
+          mk build-scan  build-scan  "$R_BUILD"
+          git init -q
+          git checkout -q -b badges
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "badges: ${GITHUB_SHA::7}"
+          git push -q --force \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" badges
+
+  # ─── 6. Summary comment on PRs ──────────────────────────────────────────
+  pr-summary:
+    name: PR summary
+    needs: [build-scan, trivy-fs]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Print build outputs
+        run: |
+          echo "::notice title=Image digest::${{ needs.build-scan.outputs.digest }}"
+          echo "::notice title=Tags::${{ needs.build-scan.outputs.tags }}"
