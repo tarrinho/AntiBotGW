@@ -81,12 +81,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Trivy filesystem scan
+        # .gitleaks.toml is the gitleaks allowlist — it necessarily contains
+        # secret-SHAPED strings (the fake fixtures gitleaks must recognise), so
+        # Trivy's secret scanner flags them as real. Skip that one file; it holds
+        # no actual credentials.
         run: |
           set +e
           docker run --rm -v "${{ github.workspace }}:/src" \
             aquasec/trivy:latest fs /src \
             --scanners vuln,secret,misconfig \
             --ignorefile /src/.trivyignore \
+            --skip-files '/src/.gitleaks.toml' \
             --severity HIGH,CRITICAL \
             --format json --output /src/trivy-report.json \
             --exit-code 1

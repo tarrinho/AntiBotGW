@@ -1,5 +1,19 @@
 # AntiBot/WAF GW — Anti-Automation Reverse Proxy
 
+[![release](https://img.shields.io/github/v/release/tarrinho/AntiBotGW?sort=semver&label=release&color=3fb950)](https://github.com/tarrinho/AntiBotGW/releases/latest)
+[![ghcr.io](https://img.shields.io/badge/ghcr.io-antibotgw-2496ED?logo=github&logoColor=white)](https://github.com/tarrinho/AntiBotGW/pkgs/container/antibotgw)
+[![license](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](.github/dependabot.yml)
+[![cosign](https://img.shields.io/badge/cosign-keyless%20signed-2496ED?logo=sigstore&logoColor=white)](https://github.com/tarrinho/AntiBotGW/pkgs/container/antibotgw)
+
+<!-- Per-control status from the aggregated CI workflow, published to the `badges` branch. -->
+[![CI](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml/badge.svg)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+[![secret-scan](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/secret-scan.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+[![lint](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/lint.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+[![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/tests.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+[![trivy-fs](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/trivy-fs.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+[![build-scan](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/build-scan.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+
 A hardened reverse HTTP/WS gateway that sits in front of any web application
 and applies **13 layered detection & mitigation controls** against automated
 agents (CLI tools, scrapers, headless browsers, AI agents). Domain-agnostic:
