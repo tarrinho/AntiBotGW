@@ -110,7 +110,7 @@ jobs:
         if: github.event_name != 'pull_request' && env.HAS_HARBOR == '1'
         env:
           HAS_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && '1' || '0' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.HARBOR_HOST }}
           username: ${{ secrets.HARBOR_USERNAME }}
@@ -119,7 +119,7 @@ jobs:
 
       - name: Login to GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.GHCR_HOST }}
           username: ${{ github.actor }}
@@ -204,7 +204,7 @@ jobs:
         if: env.HAS_HARBOR == '1'
         env:
           HAS_HARBOR: ${{ secrets.HARBOR_USERNAME != '' && '1' || '0' }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.HARBOR_HOST }}
           username: ${{ secrets.HARBOR_USERNAME }}
@@ -212,7 +212,7 @@ jobs:
         continue-on-error: true
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.GHCR_HOST }}
           username: ${{ github.actor }}
