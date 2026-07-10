@@ -11,7 +11,7 @@ redis>=5,<6
 pytest>=9.0.3,<10  # CVE-2025-71176 fix (8.x affected)
 pytest-asyncio>=0.23,<1
 pytest-aiohttp>=1.0,<2
-fakeredis>=2,<3
+fakeredis>=2.36.2,<3
 
 # 1.6.7 — runtime deps the Dockerfile installs separately. Listed here
 # so CI's `pip install -r requirements.txt` exercises the same import
