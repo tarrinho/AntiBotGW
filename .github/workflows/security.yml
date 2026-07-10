@@ -15,6 +15,39 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  lint:
+    name: Lint & type (ruff / semgrep / mypy / vulture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install ruff semgrep mypy vulture
+      # ruff — HARD gate, but only the zero-tolerance codes. The full rules.md
+      # §11 review deliberately accepts a large ruff baseline (E701, C901, S608,
+      # F811, …) as non-blocking, so a plain `ruff check` would fail on code the
+      # project treats as clean. Enforce just the must-be-0 set here; the broad
+      # review stays a manual rules.md step.
+      - name: ruff (zero-tolerance — F841 / S314 / B904)
+        run: |
+          ruff check proxy.py core/ db/ scoring.py identity.py helpers.py admin/ \
+            --select F841,S314,B904
+      # semgrep — HARD gate. OSS registry ruleset only; NEVER --config=auto and
+      # NEVER set SEMGREP_APP_TOKEN (rules.md §9).
+      - name: semgrep (OSS p/python — no token, no auto)
+        run: semgrep scan --config p/python proxy.py core/ dashboards/*.py --error --quiet
+      # mypy — INFORMATIONAL. The source carries an accepted no-redef baseline
+      # (conditional re-defs behind import guards), so this surfaces regressions
+      # without failing the build.
+      - name: mypy (informational)
+        continue-on-error: true
+        run: mypy proxy.py core/ scoring.py identity.py helpers.py --ignore-missing-imports --no-error-summary
+      # vulture — INFORMATIONAL dead-code sweep (≥90% confidence).
+      - name: vulture (informational)
+        continue-on-error: true
+        run: vulture proxy.py core/ db/ scoring.py identity.py helpers.py admin/ --min-confidence 90
+
   bandit:
     name: Bandit
     runs-on: ubuntu-latest
