@@ -9,7 +9,7 @@ redis>=5,<6
 
 # Test-only dependencies. Used by GitHub Actions and `pytest tests/`.
 pytest>=9.0.3,<10  # CVE-2025-71176 fix (8.x affected)
-pytest-asyncio>=0.23,<1
+pytest-asyncio>=1.4.0,<2
 pytest-aiohttp>=1.0,<2
 fakeredis>=2,<3
 
