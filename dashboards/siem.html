@@ -3,7 +3,7 @@
 <!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
 <script>(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AntiBotWaf_GW_1.9.10 · SIEM</title>
+<title>AntiBotWaf_GW_1.9.11 · SIEM</title>
 <style>
 :root{
   --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
@@ -262,7 +262,7 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-      <div id="sidebar-brand-ver">1.9.10</div>
+      <div id="sidebar-brand-ver">1.9.11</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -512,7 +512,7 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
 </div>
 
 <div class="portal-footer">
-  AntiBotWaf_GW_1.9.10 <span class="sep">|</span>
+  AntiBotWaf_GW_1.9.11 <span class="sep">|</span>
   SIEM Security Event Center <span class="sep">|</span>
   <span id="footer-ts" class="dim"></span>
 </div>
@@ -1106,7 +1106,7 @@ function _updateKPIs(stats, threatIndex) {
   var winLabel = selectedMins < 60 ? 'Last '+selectedMins+'m'
     : (selectedMins===60 ? 'Last 1h' : (selectedMins===360 ? 'Last 6h' : 'Last 24h'));
   document.getElementById('kpi-window').textContent = winLabel;
-  document.title = 'AntiBotWaf_GW_1.9.10 · SIEM · ' + winLabel;
+  document.title = 'AntiBotWaf_GW_1.9.11 · SIEM · ' + winLabel;
   var fill = document.getElementById('threat-bar-fill');
   fill.style.width = threatIndex + '%';
   fill.style.background = threatIndex>=75 ? '#ff4444' : threatIndex>=50 ? '#ff7b3a'

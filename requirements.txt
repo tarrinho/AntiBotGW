@@ -5,20 +5,20 @@ aiohttp==3.14.1
 # Optional — used only when REDIS_URL is set at runtime (1.5.0 shared-state
 # mode for multi-instance deployments). Image pre-installs it so an operator
 # can flip the env without rebuilding.
-redis>=5,<6
+redis>=8.0.1,<9   # 1.9.11: bump from 5.x — audited: only async client + basic get/set/expire, no cluster API surface used
 
 # Test-only dependencies. Used by GitHub Actions and `pytest tests/`.
 pytest>=9.0.3,<10  # CVE-2025-71176 fix (8.x affected)
-pytest-asyncio>=0.23,<1
-pytest-aiohttp>=1.0,<2
-fakeredis>=2,<3
+pytest-asyncio>=1.4.0,<2   # 1.9.11: bump from 0.23 — check tests/conftest.py sets asyncio_mode="auto"
+pytest-aiohttp>=1.1.1,<2
+fakeredis>=2.36.2,<3
 
 # 1.6.7 — runtime deps the Dockerfile installs separately. Listed here
 # so CI's `pip install -r requirements.txt` exercises the same import
 # paths that production runs (test_functional.py touches GeoLite2 +
 # Postgres conditionally; without these wheels available, lazy imports
 # fail and several tests skip silently).
-maxminddb>=2.6,<3
+maxminddb>=3.1.1,<4   # 1.9.11: bump from 2.x — reader.metadata() API compatible; iteration semantics validated
 # `psycopg[binary]` ships C-extension wheels only for amd64 / arm64 /
 # ppc64le / s390x. armv7l / armv6l Raspberry Pi OS hosts have to either
 # (a) leave Postgres support out (DB_BACKEND=sqlite, lazy-import becomes

@@ -1,6 +1,6 @@
 # AntiBot/WAF GW — Operational Runbook
 
-**Version**: 1.9.10  
+**Version**: 1.9.11  
 **Author**: Pedro Tarrinho
 
 ---
@@ -67,7 +67,7 @@ docker run -d \
   -e UPSTREAM=http://your-app:3000 \
   -e APPSECGW_KEY_DIR=/data \
   -v /srv/appsecgw-data:/data \
-  appsec-antibot-gw:1.9.10
+  appsec-antibot-gw:1.9.11
 ```
 
 `UPSTREAM` is the only required variable. Keys are auto-generated under `/data` on first boot.
@@ -94,7 +94,7 @@ The directory must be writable by the container user (UID 65532). If using a hos
 
 ```bash
 docker logs appsecgw | head -40
-# Expect: [keys] loaded … [db] sqlite WAL … [start] AntiBotWaf_GW_1.9.10 listening on :8080
+# Expect: [keys] loaded … [db] sqlite WAL … [start] AntiBotWaf_GW_1.9.11 listening on :8080
 curl -s http://localhost:8080/antibot-appsec-gateway/live
 # Returns: ok  (plain text — loopback-only; no JSON)
 ```
@@ -629,7 +629,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.9.10
+  appsec-antibot-gw:1.9.11
 ```
 
 ### Manage at runtime (Settings UI)

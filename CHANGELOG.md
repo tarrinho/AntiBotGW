@@ -6,6 +6,82 @@ Author: Pedro Tarrinho
 
 ---
 
+## [1.9.11] — 2026-07-10 — Dependabot round-up + README badges + full SHA-pin sweep
+
+Absorbs the 11 Dependabot PRs the new `dependabot.yml` (1.9.10) opened, adds
+the AI-Monitoring-style README badge row, and turns `docker.yml` into an
+aggregated CI + badges publisher that also pushes/signs a ghcr.io image.
+
+### Changed (dependencies)
+
+- **`redis`** `>=5,<6` → `>=8.0.1,<9`. Three-major jump. Audited call sites in
+  `integrations/redis.py` — only async client + basic `get`/`set`/`expire`, no
+  cluster API surface used. 1069 unit tests pass on redis-py 8.
+- **`maxminddb`** `>=2.6,<3` → `>=3.1.1,<4`. Reader/`metadata()` API compatible;
+  iteration semantics verified against the ASN/City readers in
+  `reputation/maxmind.py`.
+- **`pytest-asyncio`** `>=0.23,<1` → `>=1.4.0,<2`. `conftest.py` already sets
+  `asyncio_mode="auto"`, so the 1.0 default-scope change is a no-op here.
+- **`pytest-aiohttp`** `>=1.0,<2` → `>=1.1.1,<2` — min-floor tighten within same major.
+- **`fakeredis`** `>=2,<3` → `>=2.36.2,<3` — min-floor tighten within same major.
+
+### Changed (base images + build)
+
+- **Chainguard `python:latest-dev`** digest → `sha256:727c118e…` (weekly roll,
+  fresh CVE fixes).
+- **Chainguard `python:latest` runtime** digest → `sha256:48b99516…`.
+- **armv7 base** → `python:3.13-alpine3.20` (was `python:3.13-alpine`). Alpine 3.24
+  ships a QEMU/musl TLS regression that fails every HTTPS repo fetch during
+  `apk add`. Alpine 3.20 is the last known-good release; Dependabot PR #8's
+  Python 3.14 request is deferred until Alpine 3.25 or the Chainguard armv7
+  base ships. Runtime stage now runs `apk upgrade --no-cache` to close the
+  libcrypto3 / libssl3 / musl / sqlite-libs / zlib CVEs left over from the
+  stale 3.20 base packages. **Trivy 0 CRITICAL / 0 HIGH on all three arches.**
+- **armv7 code deps** in `Dockerfile.armv7` bumped in lockstep with
+  `requirements.txt`: `maxminddb==3.1.1`, `redis==8.0.1`.
+
+### Changed (CI / supply chain)
+
+- **Every third-party GHA action SHA-pinned** — was previously major-tag `@vN`
+  on 7 references (`actions/checkout`, `actions/setup-python`, `docker/setup-qemu-action`,
+  `docker/setup-buildx-action`, `docker/metadata-action`,
+  `github/codeql-action/upload-sarif`, `sigstore/cosign-installer`), plus the
+  three from the Dependabot round-up (`docker/login-action` v3→v4,
+  `docker/build-push-action` v6→v7, `aquasecurity/trivy-action` 0.28.0→0.36.0).
+  Extends the 1.9.10 Fix 5a policy from trivy-action to the whole workflow.
+- **`docker.yml` restructured** — job renames (`test`→`tests`, `build`→`build-scan`,
+  `scan`→`trivy-fs`) so each maps 1:1 to a README status-badge label. Added a
+  parallel `ghcr.io/${owner}/${repo}` push (multi-registry via
+  `docker/metadata-action` `images:` list). Added cosign keyless sign of the
+  ghcr digest (Harbor sign kept as best-effort). Added a `badges` job that
+  aggregates per-control results (own `needs.<job>.result` + `gh api` for the
+  parallel `secret-scan.yml` + `security.yml` conclusions on the same HEAD SHA)
+  and force-pushes shields-endpoint JSONs to an orphan `badges` branch.
+- **`HARBOR_HOST` / `HARBOR_PROJECT` / `HARBOR_IMAGE`** moved from hardcoded
+  literals in `env:` to `${{ vars.* }}` so the workflow is safe to publish to
+  any mirror. When the Harbor vars/secrets aren't set the Harbor push
+  short-circuits via a `HAS_HARBOR` gate and only ghcr.io runs.
+
+### Added
+
+- **`.github/dependabot.yml`** — weekly PRs for `github-actions`, `docker`, `pip`
+  (5 open per ecosystem). This release itself is the round-up of the first
+  batch Dependabot opened on the AntiBotGW mirror.
+- **11-badge README row** — release · ghcr.io · license · dependabot · cosign
+  above the fold, then CI · secret-scan · lint · tests · trivy-fs · build-scan.
+  Endpoint badges resolve against the orphan `badges` branch.
+- **`copy-to-github.sh` MANIFEST** now ships `.github/dependabot.yml` and the
+  three public workflows (`docker.yml`, `secret-scan.yml`, `security.yml`).
+  Blocklist tightened from a blanket `.github/workflows/*` block to just
+  `build_push.yml` (which still references internal Harbor + a private
+  reusable workflow).
+
+### Validation
+
+Full stage-by-stage record in `validation/1.9.11.md`. All three image digests
+listed there. Trivy CRIT/HIGH = 0 on all arches. Smoke test confirms the
+`AntiBotWaf_GW_1.9.11 → https://example.com` banner.
+
 ## [1.9.10] — 2026-07-08 — security hardening + accumulated 1.9.7-1.9.9 promotion
 
 Bumps `GW_VERSION` from 1.9.6 to 1.9.10; folds already-built 1.9.7-1.9.9

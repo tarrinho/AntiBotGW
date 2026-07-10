@@ -27,7 +27,7 @@ def _read(rel):
         return f.read()
 
 import config as _cfg
-GW_VERSION = _cfg.GW_VERSION                       # e.g. "AntiBotWaf_GW_1.9.10"
+GW_VERSION = _cfg.GW_VERSION                       # e.g. "AntiBotWaf_GW_1.9.11"
 _m = re.search(r"(\d+\.\d+\.\d+)", GW_VERSION)
 VER = _m.group(1) if _m else ""                    # "1.8.10"
 

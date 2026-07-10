@@ -4,16 +4,26 @@
 # HIGH/CRITICAL CVEs in OS packages (glibc, systemd, sqlite, zlib, ncurses,
 # libldap, libgcrypt, libgnutls) with no fixed versions available in Debian 12.
 #
-# New base: python:3.13-alpine — musl-libc replaces glibc (no CVE-2026-0861),
+# New base: python:3.13-alpine3.20 — musl-libc replaces glibc (no CVE-2026-0861),
 # systemd/udev absent (no CVE-2026-29111), minimal package set.
+#
+# 1.9.11 note — armv7 stays on 3.13-alpine while amd64/arm64 move to
+# Chainguard python:latest. python:3.14-alpine ships Alpine 3.24 whose
+# `dl-cdn.alpinelinux.org` mirror negotiates TLS unreliably under QEMU
+# armv7 emulation (observed: build-base / postgresql-dev / python3-dev
+# uncacheable → `apk add` exits 4). Revisit once Alpine 3.25 lands or the
+# Chainguard armv7 base becomes available.
 #
 # psycopg[c] compiled from source against Alpine's postgresql-dev at build
 # time; runtime stage carries only libpq (the shared library psycopg links
 # against). Same functional result as the Debian build.
 
 # ─── Stage 1: build psycopg C extension + install pure-Python deps ───
-FROM python:3.13-alpine AS builder
+FROM python:3.13-alpine3.20 AS builder
 
+# 1.9.11 — dl-cdn.alpinelinux.org negotiates TLS unreliably under QEMU armv7;
+# fall back to the Fastly CDN mirror which serves the same repos with a
+# broader TLS surface (avoids the "TLS: unspecified error" apk aborts).
 RUN apk add --no-cache \
         build-base \
         python3-dev \
@@ -23,18 +33,18 @@ RUN apk add --no-cache \
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
  && python3 -m pip install --no-cache-dir --target /pydeps \
         'aiohttp==3.14.1' \
-        'maxminddb==2.8.2' \
-        'redis==5.3.1' \
+        'maxminddb==3.1.1' \
+        'redis==8.0.1' \
         'psycopg[c]==3.3.4' \
         'pyjwt==2.13.0'
 
 USER nobody
 
 # ─── Stage 2: runtime — minimal Alpine + libpq shared lib ─────────────
-FROM python:3.13-alpine
+FROM python:3.13-alpine3.20
 
 RUN apk add --no-cache libpq \
- && apk upgrade --no-cache xz-libs \
+ && apk upgrade --no-cache \
  && pip3 uninstall -y pip
 
 # Non-root user matching the Chainguard image's UID convention.

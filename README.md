@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="img/banner.svg" alt="AntiBot/WAF GW — hardened anti-automation reverse proxy" width="100%">
+</p>
+
 # AntiBot/WAF GW — Anti-Automation Reverse Proxy
 
 [![release](https://img.shields.io/github/v/release/tarrinho/AntiBotGW?sort=semver&label=release&color=3fb950)](https://github.com/tarrinho/AntiBotGW/releases/latest)
@@ -21,7 +25,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.9.10` (amd64 202 MB · arm64 209 MB · armv7 184 MB) |
+| Image | `appsec-antibot-gw:1.9.11` (amd64 202 MB · arm64 209 MB · armv7 184 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`, pinned by digest); armv7 variant on `python:3.13-alpine` |
 | Trivy CVE findings | **0 Critical / 0 High** on all three arches (release-gate posture per rules.md §10) |
 | Stack | Python 3.13 · aiohttp 3.14.1 · SQLite WAL (optional TimescaleDB/Postgres mirror) |
@@ -31,7 +35,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/antibot-appsec-gateway/secured/{dashboard, agents, service, controls, geo, logs, settings}` (DB-backed, click-to-drill) |
 
-## Architecture (1.9.10)
+## Architecture (1.9.11)
 
 ```
                                 ┌─────────────────────┐
@@ -237,7 +241,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.9.10 \
+docker run -d --name appsec-antibot-gw1.9.11 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -254,7 +258,7 @@ docker run -d --name appsec-antibot-gw1.9.10 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.9.10 \
+  appsec-antibot-gw:1.9.11 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -272,7 +276,7 @@ recommended way to run AntiBot/WAF GW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.9.10` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.9.11` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/secured/controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -353,7 +357,7 @@ Monitor startup:
 
 ```bash
 docker compose logs -f appsec-antibot-gw
-# Expect: "[js-challenge] active" and "AntiBotWaf_GW_1.9.10 listening …" within 5 s
+# Expect: "[js-challenge] active" and "AntiBotWaf_GW_1.9.11 listening …" within 5 s
 ```
 
 Check that all services are healthy:
@@ -958,7 +962,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.9.10
+  appsec-antibot-gw:1.9.11
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1162,8 +1166,8 @@ docker pull  harbor.example.com/antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.9.10 .
-trivy image appsec-antibot-gw:1.9.10        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.9.11 .
+trivy image appsec-antibot-gw:1.9.11        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1287,7 +1291,7 @@ All owned by UID 65532 (`nonroot`).
 │
 ├── validation/                      per-release audit trail (one .md per version)
 │   ├── TEMPLATE.md                  17-step validation template
-│   └── 1.9.10.md                    latest validation record
+│   └── 1.9.11.md                    latest validation record
 │
 ├── Dockerfile                       multi-stage Wolfi distroless build (amd64 + arm64)
 ├── Dockerfile.armv7                 armv7 variant on python:3.13-alpine (libpq + psycopg-c)
