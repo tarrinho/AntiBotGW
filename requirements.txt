@@ -26,3 +26,9 @@ maxminddb>=3.1.1,<4   # 1.9.11: bump from 2.x — reader.metadata() API compatib
 # `psycopg` (without [binary]) which builds the C extension on demand.
 # The marker below skips this line on armv7 / armv6 wheels-only installs.
 psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
+
+# OIDC / SSO id-token verification (admin/oidc.py). proxy.py imports admin.oidc
+# unconditionally and admin/oidc.py imports `jwt` at module load, so PyJWT is
+# effectively required for the package to import at all — declare it. [crypto]
+# pulls in `cryptography`, needed for RS256/ES256 id-tokens (the common case).
+PyJWT[crypto]>=2,<3
