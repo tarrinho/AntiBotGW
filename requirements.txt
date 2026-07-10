@@ -18,7 +18,7 @@ fakeredis>=2,<3
 # paths that production runs (test_functional.py touches GeoLite2 +
 # Postgres conditionally; without these wheels available, lazy imports
 # fail and several tests skip silently).
-maxminddb>=2.6,<3
+maxminddb>=3.1.1,<4
 # `psycopg[binary]` ships C-extension wheels only for amd64 / arm64 /
 # ppc64le / s390x. armv7l / armv6l Raspberry Pi OS hosts have to either
 # (a) leave Postgres support out (DB_BACKEND=sqlite, lazy-import becomes
