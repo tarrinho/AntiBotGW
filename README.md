@@ -7,17 +7,17 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.9.10` (~ 190 MB) |
-| Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
-| Trivy CVE findings | **0** (Critical / High / Medium) |
-| Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
+| Image | `appsec-antibot-gw:1.9.10` (amd64 202 MB · arm64 209 MB · armv7 184 MB) |
+| Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`, pinned by digest); armv7 variant on `python:3.13-alpine` |
+| Trivy CVE findings | **0 Critical / 0 High** on all three arches (release-gate posture per rules.md §10) |
+| Stack | Python 3.13 · aiohttp 3.14.1 · SQLite WAL (optional TimescaleDB/Postgres mirror) |
 | User | non-root, UID 65532 |
-| Architecture | linux/amd64, linux/arm64 |
+| Architecture | linux/amd64, linux/arm64, linux/arm/v7 |
 | External intel | Cloudflare Turnstile · AbuseIPDB · CrowdSec · MaxMind GeoLite2 (ASN + City) |
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/antibot-appsec-gateway/secured/{dashboard, agents, service, controls, geo, logs, settings}` (DB-backed, click-to-drill) |
 
-## Architecture (1.8.15)
+## Architecture (1.9.10)
 
 ```
                                 ┌─────────────────────┐
@@ -223,7 +223,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.8.15 \
+docker run -d --name appsec-antibot-gw1.9.10 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -470,26 +470,32 @@ For the strongest defense, **enable Cloudflare Turnstile** — `TURNSTILE_SITEKE
 
 ## What it does
 
-Each incoming request passes through 13 ordered layers. Any non-PoW block
-returns **the upstream homepage as `200 OK`** (silent decoy) so an attacker
-cannot enumerate which layer fired.
+Every incoming request passes through 14 primary detection buckets (numbered
+0-13 below). Any non-PoW block returns **the upstream homepage as `200 OK`**
+(silent decoy) so an attacker cannot enumerate which layer fired.
 
-| # | Layer | What it catches |
-|---|---|---|
-| 0 | Path / method / host gating | Control bytes, disallowed methods, mismatched Host, admin-IP allowlist |
-| 1 | Identity ban | Previously-banned identity → silent decoy |
-| 2 | Honeypot paths | `/wp-admin`, `/.env`, `/.git/config`, IMDS, `/actuator/*`, … |
-| 3 | Suspicious-path patterns | CTF flag-hunting, traversal, SQLi/XSS markers, OS file paths |
-| 4 | UA filter | Empty / too-short / blocklisted (60+ entries: HTTP libs, scanners, AI agents, headless browsers) |
-| 5 | AI-probe paths | OpenAPI / Swagger / `llms.txt` / model discovery |
-| 6 | Header completeness | Browser UA without `Sec-Ch-Ua` / `Sec-Fetch-*` |
-| 7 | Path-discipline | Enumeration (>300 unique paths), HTML loads with no asset fetches |
-| 8 | Socket-IP rate limit | Token bucket on kernel-observed peer IP (un-spoofable) |
-| 9 | Per-identity rate limit | Token bucket on identity hash; static-asset GETs exempt |
-| 10 | Behavioural timing | σ/μ < 0.05, lag-1 autocorr > 0.85, 50ms-bin majority > 70 % |
-| 11 | Proof-of-Work | Bound to `METHOD:path`, replay-protected; opt-in per path |
-| 12 | Risk-score model | Weighted scoring, NAT-aware threshold |
-| 13 | Honey-link injection | Hidden links injected before `</body>` to trap HTML parsers |
+The Architecture ASCII above shows the full expanded chain (~30 sub-checks at
+1.9.10, e.g. `L2.5` suspicious-path, `L2.7` GraphQL, `L3.4` LLM-no-subresource,
+`L4.5` canary-echo, `L5.7` interaction-entropy). Each sub-check rolls up into
+one of these 14 buckets — the ASCII is the mechanism view, this table is the
+capability view.
+
+| # | Layer bucket | Sub-checks (subset) | What it catches |
+|---|---|---|---|
+| 0 | Path / method / host gating | L0, L0.4, L1.5 | Control bytes, disallowed methods, mismatched Host, admin-IP allowlist, custom-rules-engine allow/block/challenge/tag |
+| 1 | Identity ban | (L1) | Previously-banned identity → silent decoy |
+| 2 | Honeypot paths | L2 | `/wp-admin`, `/.env`, `/.git/config`, IMDS, `/actuator/*`, … |
+| 3 | Suspicious-path patterns | L2.5, L2.6, L2.7 | CTF flag-hunting, traversal, SQLi/XSS markers, content-discovery post-challenge, GraphQL introspection/depth |
+| 4 | UA filter | L3.5 | Empty / too-short / blocklisted (60+ entries: HTTP libs, scanners, AI agents, headless browsers) |
+| 5 | AI-probe paths | L3, L3.2, L3.4 | OpenAPI / Swagger / `llms.txt` / model discovery; webdriver/CDP; LLM no-subresource heuristic |
+| 6 | Header completeness | L3.6, L3.7 | Browser UA without `Sec-Ch-Ua` / `Sec-Fetch-*`; sec-fetch-nav absent; Origin eTLD+1 mismatch |
+| 7 | Path-discipline | L5 | Enumeration (>300 unique paths), HTML loads with no asset fetches |
+| 8 | Socket-IP rate limit | L1 (socket bucket) | Token bucket on kernel-observed peer IP (un-spoofable) |
+| 9 | Per-identity rate limit | L1 (identity bucket) | Token bucket on identity hash; static-asset GETs exempt |
+| 10 | Behavioural timing | L5, L5.2, L5.4, L5.6, L5.7, L5.8 | σ/μ < 0.05, cookie-lifecycle HMAC, referer-chain ghost/loop, impossible-travel, interaction-entropy, canvas/WebGL fp |
+| 11 | Proof-of-Work | L7 | Bound to `METHOD:path`, replay-protected; opt-in per path; Anubis-mode boost |
+| 12 | Risk-score model | L8 | Weighted scoring, NAT-aware threshold, external intel (AbuseIPDB · CrowdSec · MaxMind ASN) |
+| 13 | Honey-link injection | L4, L4.2, L4.5, L4.7 | Hidden links before `</body>`, bot-trap forms, honey-cred injection, canary-echo, redirect-maze trap |
 
 Plus protocol-level support:
 
@@ -840,7 +846,7 @@ OIDC_DEFAULT_ROLE=viewer          # optional — role for new users (default: vi
 | Ulimits | `nofile=4096 nproc=200 core=0` |
 | Logs | `--log-opt max-size=10m --log-opt max-file=3` |
 | User | non-root UID 65532 |
-| CVEs (Trivy) | **0** |
+| CVEs (Trivy) | **0 Critical / 0 High** (all three arches) |
 
 ---
 
@@ -938,7 +944,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.8.15
+  appsec-antibot-gw:1.9.10
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1093,7 +1099,7 @@ the relevant log entries fleet-wide.
   "risk_score": 80,
   "track_key": "8ef229cffad339b2",
   "ip":        "203.0.113.42",
-  "ja4":       "t13d_8a44_python_urllib",
+  "ja4":       "t13d1516h2_8daaf6152771_e5627efa2ab1",
   "ua":        "Mozilla/5.0 (X11; Linux x86_64) Chrome/120 Safari/537.36",
   "duration_s": 86400,
   "hostile":   true
@@ -1142,8 +1148,8 @@ docker pull  harbor.example.com/antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.8.15 .
-trivy image appsec-antibot-gw:1.8.15        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.9.10 .
+trivy image appsec-antibot-gw:1.9.10        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1253,7 +1259,7 @@ All owned by UID 65532 (`nonroot`).
 │       ├── purify.min.js            DOMPurify innerHTML sanitiser
 │       └── escalate.svg             escalate-icon SVG
 │
-├── tests/                           pytest suite (2143 passing, 1 skipped)
+├── tests/                           pytest suite (~8,449 tests · see Test suite section below)
 │   ├── test_critical.py             core unit tests
 │   ├── test_pure.py                 pure-function unit tests
 │   ├── test_async.py                async unit tests
@@ -1263,14 +1269,14 @@ All owned by UID 65532 (`nonroot`).
 │   ├── test_control_center.py       Control Center QA (1.8.1)
 │   ├── test_v182_charts.py          6 new analytics charts QA (66 tests, 1.8.2)
 │   ├── test_v182_svc_metrics_db.py  30-day service metrics DB path (32 tests, 1.8.2)
-│   └── … (26 more test files)
+│   └── … (~220 more test files — see GW-Tests-Full.md for the per-file breakdown)
 │
 ├── validation/                      per-release audit trail (one .md per version)
 │   ├── TEMPLATE.md                  17-step validation template
-│   └── 1.8.14.md                    latest validation record
+│   └── 1.9.10.md                    latest validation record
 │
-├── Dockerfile                       multi-stage Wolfi distroless arm64 build
-├── Dockerfile.armv7                 armv7 variant (libpq + psycopg-c)
+├── Dockerfile                       multi-stage Wolfi distroless build (amd64 + arm64)
+├── Dockerfile.armv7                 armv7 variant on python:3.13-alpine (libpq + psycopg-c)
 ├── docker-compose.yml               bundles gateway + Redis + CrowdSec + TimescaleDB
 ├── requirements.txt                 pinned Python deps (== exact versions)
 ├── bump-version.sh                  atomic version-string updater
@@ -1278,8 +1284,7 @@ All owned by UID 65532 (`nonroot`).
 ├── _seed/
 │   ├── GeoLite2-ASN.mmdb            mmdbs baked into image (offline-bootable)
 │   └── GeoLite2-City.mmdb
-├── sbom/
-│   └── sbom-1.5.5.cdx.json          CycloneDX SBOM (Trivy-generated)
+├── sbom/                            CycloneDX SBOMs (Trivy-generated, per-release)
 ├── img/
 │   ├── dashboard.png
 │   └── agents.png
@@ -1337,7 +1342,21 @@ The full per-release history lives in **[CHANGELOG.md](CHANGELOG.md)** — every
 
 ## Pentest results per version
 
-Each row is a recorded post-release pentest of the deployed image. The "honest verdict" column is what the pentester (and we) *empirically observed* — not what the marketing claimed.
+> **Historical excerpt (1.0 → 1.4.5).** The table below documents the early
+> hardening iterations. Rows for 1.5+ are recorded in the per-release
+> `validation/<version>.md` files (§11 secure code review, §11b security-risk
+> register, §12 black-box pentest, §15 DAST) rather than duplicated here — the
+> per-release doc is the authoritative record. See `CHANGELOG.md` for a summary
+> of each release's security delta.
+>
+> **Current posture (1.9.10).** External-facing gate: layered heuristics + risk
+> score + optional Turnstile boundary + optional Anubis PoW. Admin plane:
+> multi-user accounts, TOTP setup path, OIDC/Keycloak SSO, per-user session
+> ledger, session revocation on password/role/status/delete (1.9.10). CVE
+> posture: 0 Critical / 0 High Trivy findings on all three arches after
+> Chainguard base bump. Full breakdown in `validation/1.9.10.md`.
+
+Each row below is a recorded post-release pentest of the deployed image. The "honest verdict" column is what the pentester (and we) *empirically observed* — not what the marketing claimed.
 
 | Version | Configuration | Probe / scenario | Result | Honest verdict |
 |---|---|---|---|---|
@@ -1369,6 +1388,13 @@ Each row is a recorded post-release pentest of the deployed image. The "honest v
 | 1.4.5 (SPA-friendly) | `JS_CHAL_OPEN_PATHS=/bin/mvc.do/,/release-management/,/entity-management/,/content/` | Single-Page-App XHRs against operator-listed prefixes | Forwarded to upstream regardless of cookie state | Operator decides which prefixes are SPA data-layer (auth-by-app) vs gated nav (auth-by-cookie); other layers (UA, body-pattern, canary echo, rate limits, hostile pool) still apply on open paths |
 
 ### Cross-version effectiveness matrix
+
+> **Historical (1.1 → 1.4.2).** The matrix below was recorded during the
+> heuristic-vs-Turnstile posture transition. It is preserved because it
+> documents which controls empirically closed which attack, which is more
+> useful than replacing it with the current single-column pass state. For the
+> current release (1.9.10), all columns of this table plus every attack in
+> `dast-smoke.sh §15a-15u` pass — see `validation/1.9.10.md` §15.
 
 Same attack battery executed against every locally-available image (`1.1`, `1.2`, `1.3`, `1.4` with `JS_CHALLENGE=1`, `1.4.2` without Turnstile keys, `1.4.2` with Cloudflare always-fail test keys), each container started fresh on port 8444 with a controlled local upstream that returns distinguishable markers. Verdicts:
 
