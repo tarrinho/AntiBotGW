@@ -21,13 +21,20 @@
 import importlib
 import pathlib
 
+import pytest
+
 
 _ROOT     = pathlib.Path(__file__).resolve().parent.parent
 _PH_SRC   = (_ROOT / "core" / "proxy_handler.py").read_text(encoding="utf-8")
 _PROXY    = (_ROOT / "proxy.py").read_text(encoding="utf-8")
 _DBSQL    = (_ROOT / "db" / "sqlite.py").read_text(encoding="utf-8")
 _AUTH     = (_ROOT / "admin" / "auth.py").read_text(encoding="utf-8")
-_VALMD    = (_ROOT / "validation" / "1.9.0.md").read_text(encoding="utf-8")
+try:
+    _VALMD = (_ROOT / "validation" / "1.9.0.md").read_text(encoding="utf-8")
+except FileNotFoundError:
+    _VALMD = ""   # validation records are private (excluded from the public repo);
+                  # the doc-inspection tests below skip when the file is absent.
+_needs_valmd = pytest.mark.skipif(not _VALMD, reason="validation/1.9.0.md is private (not in this tree)")
 
 
 # F11
@@ -178,15 +185,18 @@ def test_f14_legacy_plaintext_passes_through_decrypt():
 
 # F15
 
+@_needs_valmd
 def test_f15_validation_doc_has_operator_hardening_callout():
     assert "POSTGRES_DSN_ALLOWED_HOSTS" in _VALMD
     assert "Operator hardening" in _VALMD
 
 
+@_needs_valmd
 def test_f15_validation_doc_documents_default_behaviour():
     assert "When unset" in _VALMD
 
 
+@_needs_valmd
 def test_f15_validation_doc_links_finding_to_mitigation():
     assert "F2" in _VALMD
 

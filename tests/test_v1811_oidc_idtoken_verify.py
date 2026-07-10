@@ -35,6 +35,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 # ── RSA / EC key generation via cryptography ──────────────────────────────────
+# cryptography + PyJWT are OPTIONAL runtime deps (OIDC id-token verification);
+# they are not in requirements.txt, so CI's `pip install -r requirements.txt`
+# won't have them. Skip this whole module when either is absent instead of
+# failing collection.
+pytest.importorskip("cryptography")
+pytest.importorskip("jwt")
 from cryptography.hazmat.primitives.asymmetric import rsa, ec
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
