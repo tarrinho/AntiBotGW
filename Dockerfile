@@ -1,7 +1,7 @@
 # ─── Stage 1: build deps using Chainguard's Wolfi-based python:latest-dev.
 # Same Python interpreter as the runtime stage so wheels match exactly.
 # Chainguard ships fixes for OS-level CVEs typically within hours of disclosure.
-FROM cgr.dev/chainguard/python:latest-dev@sha256:1ee5a8796e78035f548c584e469ed318f7e40cced89d26c6e43d48e935a3e801 AS builder
+FROM cgr.dev/chainguard/python:latest-dev@sha256:6dd180984927051df465a1914772a4675119e6a998ab9dcfbb7a9269badad387 AS builder
 
 USER root
 WORKDIR /tmp
@@ -52,7 +52,7 @@ USER nonroot
 # ─── Stage 2: Chainguard's distroless python runtime (Wolfi). No shell, no
 # apt, no systemd, no ncurses, no util-linux, no expat-side-tools. Built
 # from upstream sources with continuous security patching. ───
-FROM cgr.dev/chainguard/python:latest@sha256:79dc146af52dbbaece4c9aed21bec2579742f3f90a222e9e5bc6f976cf508189
+FROM cgr.dev/chainguard/python:latest@sha256:522a5ff629869272271784d864da372e03612822902878ecb20b4afc9e797779
 
 COPY --from=builder --chown=65532:65532 /rootfs /
 

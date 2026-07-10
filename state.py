@@ -111,7 +111,7 @@ class _BoundedIpStateDict:
     # 1.8.15 perf — LRU promotion threshold. Below this fraction of maxsize,
     # `move_to_end()` on every access is pure waste (capacity-based eviction
     # never fires because evict_expired() background task keeps the dict
-    # well below cap on most deployments). In one production deployment ~13k/100k = 13%
+    # well below cap on most deployments). At example.com with ~13k/100k = 13%
     # full, this saves one OrderedDict-internal linked-list update per read
     # AND eliminates write-per-read contention with dashboard iterators.
     _LRU_PROMOTE_THRESHOLD = 0.5  # promote only when >50% of maxsize

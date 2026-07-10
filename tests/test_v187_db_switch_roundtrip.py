@@ -508,47 +508,30 @@ class TestDbSwitchEndpointSource:
         assert "_role_denied" in src
         assert '"admin"' in src
 
-    def test_migrate_called_before_exit(self, src):
-        """SWITCH-23: migration runs before the deferred os._exit() restart so the
-        recent-window copy completes against the source backend before cut-over.
-
-        (The v1.8.7 in-process "hot-swap" with _propagate_global was reverted;
-        the shipped design persists DB_BACKEND + DSN, copies the recent window,
-        then re-execs the container via a deferred os._exit(0). This test now
-        pins that restart-based ordering: migrate, then schedule exit.)"""
+    def test_migrate_called_before_propagation(self, src):
+        """SWITCH-23 (updated): migration runs after propagation so the new pool/DSN is live."""
         migrate_pos = src.find("_migrate_recent_events")
-        exit_pos    = src.find("_delayed_exit")
+        prop_pos    = src.find("_propagate_global")
         assert migrate_pos != -1, "_migrate_recent_events not found in endpoint"
-        assert exit_pos    != -1, "_delayed_exit not found in endpoint"
-        assert migrate_pos < exit_pos, \
-            "_migrate_recent_events must run before the deferred os._exit() restart"
+        assert prop_pos    != -1, "_propagate_global not found in endpoint"
+        assert prop_pos < migrate_pos, \
+            "_propagate_global must run before _migrate_recent_events"
 
-    def test_uses_os_exit_for_restart(self, src):
-        """SWITCH-24: switch re-execs the container — os._exit(0) is scheduled.
+    def test_no_os_exit_hot_swap(self, src):
+        """SWITCH-24 (updated): hot-swap is in-process — os._exit must NOT be called."""
+        assert "os._exit" not in src, \
+            "db_switch_endpoint must not call os._exit — backend is hot-swapped in-process"
 
-        The in-process hot-swap design was rolled back; the restart-based
-        switch relies on docker's --restart policy to rebind the new backend."""
-        assert "os._exit" in src, \
-            "db_switch_endpoint must call os._exit to restart into the new backend"
-
-    def test_response_returned_before_exit(self, src):
-        """SWITCH-25: the 200 response is built and returned to the caller, and the
-        exit is deferred via a background task so the dashboard POST gets a clean
-        reply before the process re-execs."""
-        assert "return web.json_response" in src or "return response" in src, \
-            "db_switch_endpoint must return a response to the caller"
-        assert "_delayed_exit" in src, \
-            "exit must be deferred (via _delayed_exit task) so the response flushes first"
+    def test_response_returned_directly(self, src):
+        """SWITCH-25 (updated): response is returned directly (no deferred exit needed)."""
+        assert "return web.json_response" in src, \
+            "db_switch_endpoint must return response directly"
+        assert "_delayed_exit" not in src, \
+            "No deferred exit task needed — switch is synchronous"
 
     def test_config_kv_persisted(self, src):
-        """SWITCH-21/27: DB_BACKEND is persisted to config_kv.
-
-        iter-5/iter-7 fix: DB_BACKEND is written DIRECTLY to SQLite config_kv
-        (via _sqlite_connect) rather than the async set_config queue, because the
-        1 s os._exit() race could drop a queued op before the writer loop flushed
-        it. The durable direct write is the shipped contract."""
-        assert "config_kv" in src, \
-            "db_switch_endpoint must persist into the config_kv table"
+        """SWITCH-21/27: DB_BACKEND is persisted to config_kv queue."""
+        assert '"set_config"' in src or "'set_config'" in src
         assert "DB_BACKEND" in src
 
     def test_dsn_persisted_when_body_dsn(self, src):
@@ -571,17 +554,10 @@ class TestDbSwitchEndpointSource:
         assert postgres_if_idx < pg_check_idx, \
             "psycopg check must be inside 'if target == postgres' guard"
 
-    def test_dsn_persisted_via_set_secret(self, src):
-        """SWITCH-26b: when a body DSN is supplied, POSTGRES_DSN is persisted through
-        the set_secret queue op (so it is encrypted via _dsn_encrypt and mirrored to
-        PG), not via plaintext set_config.
-
-        (Replaces the reverted hot-swap _propagate_global assertion — the shipped
-        design re-execs the container, so cross-module in-process propagation is
-        not used; durable secret persistence is the real contract.)"""
-        assert "set_secret" in src, \
-            "POSTGRES_DSN must be persisted through the set_secret queue op (encrypted)"
-        assert "POSTGRES_DSN" in src
+    def test_propagate_global_called(self, src):
+        """SWITCH-26b (updated): _propagate_global used to push DB_BACKEND to all modules."""
+        assert "_propagate_global" in src, \
+            "_propagate_global must be called to propagate DB_BACKEND across sys.modules"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -605,33 +581,16 @@ class TestDbSwitchConfigPersistence:
 
     @pytest.mark.asyncio
     async def test_db_backend_sqlite_entry_enqueued(self):
-        """SWITCH-21/27: switching to sqlite persists DB_BACKEND='sqlite' to config_kv.
-
-        iter-5/iter-7 fix: DB_BACKEND is written DIRECTLY to the SQLite config_kv
-        table (not the async set_config queue) so it survives the 1 s os._exit()
-        restart race. This test sets up a real schema and asserts the durable row.
-        """
+        """SWITCH-21: switching to sqlite enqueues DB_BACKEND='sqlite'."""
         import asyncio
-        import sqlite3
-        import tempfile as _tf
-        import admin.auth
-        from db import sqlite as _sqlite_mod
         from core import proxy_handler
-
-        _dbp = os.path.join(_tf.mkdtemp(prefix="switch-cfg-"), "switch.db")
-        _sqlite_mod.db_init(_dbp)
 
         queue_items = []
         fake_queue = MagicMock()
         fake_queue.put_nowait = lambda item: queue_items.append(item)
 
         req = self._make_request("sqlite")
-        # The endpoint is wrapped with @_require_csrf; the MagicMock request
-        # carries no session cookie, so isolate the test from the CSRF decorator
-        # (which has its own dedicated coverage) and exercise the handler body.
-        with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
-             patch.object(proxy_handler, "DB_PATH", _dbp), \
-             patch.object(proxy_handler, "_internal_authed", return_value=True), \
+        with patch.object(proxy_handler, "_internal_authed", return_value=True), \
              patch.object(proxy_handler, "_role_denied", return_value=None), \
              patch.object(proxy_handler, "db_queue", fake_queue), \
              patch.object(proxy_handler, "_migrate_recent_events",
@@ -640,13 +599,15 @@ class TestDbSwitchConfigPersistence:
              patch("asyncio.create_task"):
             resp = await proxy_handler.db_switch_endpoint(req)
 
-        assert resp.status == 200
-        conn = sqlite3.connect(_dbp)
-        row = conn.execute(
-            "SELECT value FROM config_kv WHERE key='DB_BACKEND'").fetchone()
-        conn.close()
-        assert row is not None, "DB_BACKEND must be persisted to config_kv"
-        assert json.loads(row[0]) == "sqlite"             # SWITCH-27
+        db_backend_entries = [
+            item for item in queue_items
+            if item[0] == "set_config" and item[1][0] == "DB_BACKEND"
+        ]
+        assert len(db_backend_entries) >= 1, \
+            "DB_BACKEND must be written to config_kv queue"
+        _, (key, val, _ts) = db_backend_entries[0]
+        assert key == "DB_BACKEND"
+        assert json.loads(val) == "sqlite"                # SWITCH-27
 
     @pytest.mark.asyncio
     @pytest.mark.timeout(120)  # pycares async DNS resolver retries the placeholder 'host' hostname for ~60s before giving up
@@ -659,18 +620,8 @@ class TestDbSwitchConfigPersistence:
         fake_queue = MagicMock()
         fake_queue.put_nowait = lambda item: queue_items.append(item)
 
-        import sqlite3
-        import tempfile as _tf
-        import admin.auth
-        from db import sqlite as _sqlite_mod
-        _dbp = os.path.join(_tf.mkdtemp(prefix="switch-dsn-"), "switch.db")
-        _sqlite_mod.db_init(_dbp)
-
         req = self._make_request("postgres", body_json={"dsn": "postgresql://user:pw@host/db"})
-        # @_require_csrf wraps the endpoint — isolate from CSRF (see sibling test).
-        with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
-             patch.object(proxy_handler, "DB_PATH", _dbp), \
-             patch.object(proxy_handler, "_internal_authed", return_value=True), \
+        with patch.object(proxy_handler, "_internal_authed", return_value=True), \
              patch.object(proxy_handler, "_role_denied", return_value=None), \
              patch.object(proxy_handler, "db_queue", fake_queue), \
              patch.object(proxy_handler, "_postgres_load_module",
@@ -683,14 +634,14 @@ class TestDbSwitchConfigPersistence:
              patch("asyncio.create_task"):
             resp = await proxy_handler.db_switch_endpoint(req)
 
-        # SWITCH-22: the DSN is persisted through the set_secret queue op (so it is
-        # encrypted via _dsn_encrypt + mirrored to PG), NOT plaintext set_config.
         dsn_entries = [
             item for item in queue_items
-            if item[0] == "set_secret" and item[1][0] == "POSTGRES_DSN"
+            if item[0] == "set_config" and item[1][0] == "POSTGRES_DSN"
         ]
         assert len(dsn_entries) >= 1, \
-            "POSTGRES_DSN must be persisted via the set_secret queue op when body provides it"
+            "POSTGRES_DSN must be written to config_kv when body provides it"
+        _, (key, val, _ts) = dsn_entries[0]
+        assert json.loads(val) == "postgresql://user:pw@host/db"  # SWITCH-22
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -792,25 +743,18 @@ class TestDbSwitchEndpointValidation:
     @pytest.mark.asyncio
     async def test_invalid_target_returns_400(self):
         """SWITCH-16: target='mysql' → 400."""
-        import admin.auth
         from core import proxy_handler
         req = self._make_req("mysql")
-        # @_require_csrf wraps the endpoint; the MagicMock request has no session
-        # cookie. Isolate from the CSRF decorator (covered separately) so the
-        # target-validation path under test is reached.
-        with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
-             patch.object(proxy_handler, "_role_denied", return_value=None):
+        with patch.object(proxy_handler, "_role_denied", return_value=None):
             resp = await proxy_handler.db_switch_endpoint(req)
         assert resp.status == 400
 
     @pytest.mark.asyncio
     async def test_postgres_without_psycopg_returns_400(self):
         """SWITCH-17: psycopg absent → 400 for postgres target."""
-        import admin.auth
         from core import proxy_handler
         req = self._make_req("postgres")
-        with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
-             patch.object(proxy_handler, "_role_denied", return_value=None), \
+        with patch.object(proxy_handler, "_role_denied", return_value=None), \
              patch.object(proxy_handler, "_postgres_load_module", return_value=None):
             resp = await proxy_handler.db_switch_endpoint(req)
         assert resp.status == 400
@@ -820,11 +764,9 @@ class TestDbSwitchEndpointValidation:
     @pytest.mark.asyncio
     async def test_postgres_without_dsn_returns_400(self):
         """SWITCH-18: no POSTGRES_DSN → 400."""
-        import admin.auth
         from core import proxy_handler
         req = self._make_req("postgres")
-        with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
-             patch.object(proxy_handler, "_role_denied", return_value=None), \
+        with patch.object(proxy_handler, "_role_denied", return_value=None), \
              patch.object(proxy_handler, "_postgres_load_module",
                           return_value=FakePsycopg()), \
              patch.object(proxy_handler, "POSTGRES_DSN", ""):
@@ -834,11 +776,9 @@ class TestDbSwitchEndpointValidation:
     @pytest.mark.asyncio
     async def test_postgres_failed_roundtrip_returns_400(self):
         """SWITCH-19: failed roundtrip probe → 400."""
-        import admin.auth
         from core import proxy_handler
         req = self._make_req("postgres")
-        with patch.object(admin.auth, "_csrf_token_valid", return_value=True), \
-             patch.object(proxy_handler, "_role_denied", return_value=None), \
+        with patch.object(proxy_handler, "_role_denied", return_value=None), \
              patch.object(proxy_handler, "_postgres_load_module",
                           return_value=FakePsycopg()), \
              patch.object(proxy_handler, "POSTGRES_DSN", "postgresql://host/db"), \

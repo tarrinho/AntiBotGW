@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
-<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
+<script>(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AntiBotWaf_GW_1.9.9 · Controls</title>
+<title>AntiBotWaf_GW_1.9.10 · Controls</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
@@ -155,7 +155,7 @@ main{padding:0;max-width:none;margin:0}
 #ctrl-scope-strip{flex-shrink:0;padding:8px 14px 0;border-bottom:1px solid var(--line);background:var(--bg-deep)}
 #ctrl-scope-strip #vhost-scope-bar{margin-bottom:8px}
 .ctrl-nav-item{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;font-size:12.5px;color:var(--dim);border-left:3px solid transparent;transition:background .1s,color .1s;user-select:none}
-.ctrl-nav-item:hover{background:rgba(121,192,255,.06);color:var(--fg)}
+.ctrl-nav-item:hover{background:rgba(88,166,255,.06);color:var(--fg)}
 .ctrl-nav-item.active{color:var(--bright);background:var(--bg-hover);border-left-color:var(--blue)}
 .cni-icon{font-size:14px;width:20px;text-align:center;flex-shrink:0}
 .cni-label{flex:1}
@@ -180,7 +180,7 @@ main{padding:0;max-width:none;margin:0}
       padding:8px 0;border-bottom:1px solid var(--bg-hover)}
 .ctrl:last-child{border-bottom:none}
 /* deep-link highlight: flash a knob row when arrived via #knob=NAME */
-@keyframes knobFlash{0%{background:rgba(121,192,255,.28)}100%{background:transparent}}
+@keyframes knobFlash{0%{background:rgba(88,166,255,.28)}100%{background:transparent}}
 .ctrl.knob-deeplink-flash{animation:knobFlash 2.4s ease-out;border-radius:6px;
   box-shadow:0 0 0 2px var(--blue) inset}
 .ctrl-hint{display:block;padding:6px 0;border-bottom:1px solid var(--bg-hover);opacity:.7}
@@ -228,7 +228,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 #vhost-scope-bar{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 12px;background:var(--card);border:1px solid var(--line);border-radius:6px;font-size:12.5px}
 #vhost-sel{background:var(--bg);border:1px solid var(--line);color:var(--fg);padding:4px 8px;border-radius:4px;font-size:12px;cursor:pointer;max-width:240px}
 .ctrl.vhost-ov{border-left:2px solid var(--blue);padding-left:6px}
-.ctrl.vhost-ov>.label>.name::after{content:'vhost';font-size:9px;color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-weight:700;margin-left:6px;background:rgba(121,192,255,.12);border:1px solid rgba(121,192,255,.3);padding:1px 5px;border-radius:3px;vertical-align:middle}
+.ctrl.vhost-ov>.label>.name::after{content:'vhost';font-size:9px;color:var(--blue);font-family:ui-monospace,Menlo,monospace;font-weight:700;margin-left:6px;background:rgba(88,166,255,.12);border:1px solid rgba(88,166,255,.3);padding:1px 5px;border-radius:3px;vertical-align:middle}
 tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .thr-row{display:grid;grid-template-columns:200px 110px 1fr 90px 90px;gap:14px;align-items:center;
          padding:10px 0;border-bottom:1px solid var(--bg-hover);font-size:12px}
@@ -252,7 +252,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 @media(max-width:780px){.thr-row{grid-template-columns:1fr;gap:6px}.thr-desc{padding-left:0}}
 /* 1.6.10 — order-threshold slider (Defenses & Scoring) */
 #ord-slider .ord-track{position:absolute;left:0;right:0;top:22px;height:14px;border-radius:7px;
-  background:linear-gradient(to right,#79c0ff 0%,#79c0ff var(--s2-pct,15%),#d29922 var(--s2-pct,15%),#d29922 var(--s3-pct,30%),#f85149 var(--s3-pct,30%),#f85149 100%);
+  background:linear-gradient(to right,#58a6ff 0%,#58a6ff var(--s2-pct,15%),#d29922 var(--s2-pct,15%),#d29922 var(--s3-pct,30%),#f85149 var(--s3-pct,30%),#f85149 100%);
   border:1px solid var(--line)}
 #ord-slider .ord-scale{position:absolute;left:0;right:0;top:42px;display:flex;justify-content:space-between;font:10px ui-monospace,monospace;color:var(--dim);pointer-events:none}
 #ord-slider .ord-knob{position:absolute;top:14px;width:30px;height:30px;border-radius:50%;
@@ -300,10 +300,10 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .kind-in-process{background:rgba(63,185,80,.12);color:#3fb950;border:1px solid rgba(63,185,80,.3)}
 .kind-state     {background:rgba(63,185,80,.08);color:#57ab6e;border:1px solid rgba(63,185,80,.2)}
 .kind-regex     {background:rgba(210,153,34,.12);color:#d29922;border:1px solid rgba(210,153,34,.3)}
-.kind-mmdb      {background:rgba(121,192,255,.12);color:#79c0ff;border:1px solid rgba(121,192,255,.3)}
+.kind-mmdb      {background:rgba(88,166,255,.12);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
 .kind-network   {background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.3)}
 .kind-response  {background:rgba(188,140,255,.12);color:#bc8cff;border:1px solid rgba(188,140,255,.3)}
-.kind-adversary {background:rgba(121,192,255,.08);color:var(--blue);border:1px solid rgba(121,192,255,.2)}
+.kind-adversary {background:rgba(88,166,255,.08);color:var(--blue);border:1px solid rgba(88,166,255,.2)}
 .kind-modifier  {background:rgba(139,148,158,.08);color:#8b949e;border:1px solid rgba(139,148,158,.2)}
 
 /* Kind-legend strip above the scoring table */
@@ -388,7 +388,7 @@ tr.scoring-row-ov td:first-child{box-shadow:inset 2px 0 0 var(--blue)}
 .sig-name{cursor:pointer;border-bottom:1px dotted var(--blue);color:var(--blue);
   font-family:ui-monospace,Menlo,monospace;transition:color .1s}
 .sig-name:hover{color:var(--blue)}
-#_sig-tip{position:fixed;background:#1c2333;border:1px solid rgba(121,192,255,.4);border-radius:8px;
+#_sig-tip{position:fixed;background:#1c2333;border:1px solid rgba(88,166,255,.4);border-radius:8px;
   padding:0;font-size:12px;color:var(--fg);max-width:500px;min-width:300px;line-height:1.5;
   z-index:600;box-shadow:0 8px 32px rgba(0,0,0,.65);display:none;overflow:hidden;
   font-family:-apple-system,'SF Pro',ui-sans-serif,sans-serif;pointer-events:auto}
@@ -400,7 +400,7 @@ html[data-theme="light"] .stip-hdr{background:#e1ebfa}
   font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stip-badges{display:flex;gap:5px;flex-shrink:0;align-items:center}
 .stip-ver{font-size:9.5px;padding:1px 6px;border-radius:10px;font-weight:700;
-  background:rgba(121,192,255,.15);color:#79c0ff;border:1px solid rgba(121,192,255,.3)}
+  background:rgba(88,166,255,.15);color:#58a6ff;border:1px solid rgba(88,166,255,.3)}
 .stip-tier{font-size:9.5px;padding:1px 6px;border-radius:10px;font-weight:700}
 .stip-body{padding:11px 14px 12px}
 .stip-desc{color:#c9d1d9;font-size:11.5px;line-height:1.6;margin-bottom:11px}
@@ -408,7 +408,7 @@ html[data-theme="light"] .stip-hdr{background:#e1ebfa}
 .stip-meta .mk{color:var(--dim);font-weight:600;white-space:nowrap;padding-top:1px}
 .stip-meta .mv{color:var(--fg);display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 .stip-meta .mv code{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;
-  background:rgba(121,192,255,.1);color:var(--blue);padding:0 4px;border-radius:3px}
+  background:rgba(88,166,255,.1);color:var(--blue);padding:0 4px;border-radius:3px}
 .stip-cfg{margin-top:11px;padding:8px 11px;background:rgba(63,185,80,.06);
   border:1px solid rgba(63,185,80,.2);border-radius:5px;font-size:10.5px;color:var(--dim);line-height:1.55}
 .stip-cfg strong{color:#3fb950}
@@ -422,11 +422,11 @@ html[data-theme="light"] .stip-hdr{background:#e1ebfa}
 .stip-list-editor{margin-bottom:9px}
 .stip-list-label{font-size:10px;color:var(--dim);margin-bottom:3px;display:flex;align-items:center;gap:5px}
 .stip-list-label code{font-family:ui-monospace,Menlo,monospace;font-size:9.5px;
-  background:rgba(121,192,255,.1);color:var(--blue);padding:0 3px;border-radius:2px}
+  background:rgba(88,166,255,.1);color:var(--blue);padding:0 3px;border-radius:2px}
 .stip-list-field{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line);
   color:var(--fg);font-family:ui-monospace,Menlo,monospace;font-size:11px;border-radius:4px;
   padding:5px 7px;resize:vertical;min-height:54px;outline:none;transition:border-color .15s}
-.stip-list-field:focus{border-color:rgba(121,192,255,.5)}
+.stip-list-field:focus{border-color:rgba(88,166,255,.5)}
 input.stip-list-field{min-height:unset;height:28px;resize:none}
 .stip-list-row{display:flex;align-items:center;gap:6px;margin-top:4px}
 .stip-list-save{background:rgba(63,185,80,.15);border:1px solid rgba(63,185,80,.35);color:#3fb950;
@@ -436,7 +436,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .stip-list-save:not(:disabled):hover{background:rgba(63,185,80,.25)}
 .stip-list-msg{font-size:10px;flex:1}
 .stip-example{margin:0 0 9px;padding:6px 9px;background:var(--bg);border-radius:4px;
-  border-left:2px solid rgba(121,192,255,.3);font-family:ui-monospace,Menlo,monospace;
+  border-left:2px solid rgba(88,166,255,.3);font-family:ui-monospace,Menlo,monospace;
   font-size:10px;color:#8b949e;line-height:1.6;white-space:pre-wrap;word-break:break-all}
 .stip-example-lbl{font-size:9px;text-transform:uppercase;letter-spacing:.4px;
   color:var(--dim);font-weight:700;margin-bottom:3px;display:block}
@@ -444,13 +444,13 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .cs-input{width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--line);
   color:var(--fg);font-size:11px;border-radius:4px;padding:4px 7px;outline:none;
   transition:border-color .15s}
-.cs-input:focus{border-color:rgba(121,192,255,.5)}
-.cs-results{background:#1c2333;border:1px solid rgba(121,192,255,.3);border-radius:4px;
+.cs-input:focus{border-color:rgba(88,166,255,.5)}
+.cs-results{background:#1c2333;border:1px solid rgba(88,166,255,.3);border-radius:4px;
   max-height:120px;overflow-y:auto;margin-top:3px;display:none}
 .cs-item{padding:4px 8px;cursor:pointer;font-size:11px;display:flex;gap:7px;align-items:center}
-.cs-item:hover,.cs-item.focused{background:rgba(121,192,255,.1)}
+.cs-item:hover,.cs-item.focused{background:rgba(88,166,255,.1)}
 .cs-item code{font-family:ui-monospace,Menlo,monospace;font-size:10px;flex-shrink:0;
-  background:rgba(121,192,255,.1);color:var(--blue);padding:0 4px;border-radius:2px}
+  background:rgba(88,166,255,.1);color:var(--blue);padding:0 4px;border-radius:2px}
 .cs-item .cs-name{color:var(--fg);font-size:10.5px}
 .cs-item .cs-added{font-size:9px;color:#3fb950;margin-left:auto}
 .stip-val-err{font-size:10px;color:#f85149;margin-top:3px;padding:3px 6px;
@@ -464,7 +464,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   background:rgba(139,148,158,.1);border:1px solid rgba(139,148,158,.25);
   color:var(--dim);transition:all .12s;font-weight:600;line-height:1.6}
 .sf-chip:hover{background:rgba(139,148,158,.2);color:var(--fg)}
-.sf-chip.active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:#79c0ff}
+.sf-chip.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:#58a6ff}
 .sf-chip[data-filter="tier:hard"].active{background:rgba(248,81,73,.15);border-color:rgba(248,81,73,.4);color:#f85149}
 .sf-chip[data-filter="tier:med"].active{background:rgba(210,153,34,.15);border-color:rgba(210,153,34,.4);color:#d29922}
 .sf-chip[data-filter="tier:soft"].active{background:rgba(63,185,80,.15);border-color:rgba(63,185,80,.4);color:#3fb950}
@@ -486,7 +486,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
 .sig-order.o3{background:rgba(248,81,73,.12);color:#f85149;border:1px solid rgba(248,81,73,.35)}
 .sig-order:hover{filter:brightness(1.3);transform:scale(1.15)}
 /* Order change popover */
-.order-pop{position:fixed;z-index:700;background:#1c2333;border:1px solid rgba(121,192,255,.3);
+.order-pop{position:fixed;z-index:700;background:#1c2333;border:1px solid rgba(88,166,255,.3);
   border-radius:7px;padding:8px 10px;box-shadow:0 6px 20px rgba(0,0,0,.55);min-width:185px}
 .order-pop-title{font-size:10px;color:var(--dim);text-transform:uppercase;letter-spacing:.4px;font-weight:700;margin-bottom:6px}
 .order-pop-btns{display:flex;gap:5px}
@@ -536,7 +536,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-      <div id="sidebar-brand-ver">1.9.9</div>
+      <div id="sidebar-brand-ver">1.9.10</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -593,7 +593,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
   <select id="vhost-sel">
     <option value="">Global (all vhosts)</option>
   </select>
-  <span id="vhost-ov-badge" style="display:none;background:rgba(121,192,255,.1);border:1px solid rgba(121,192,255,.3);color:var(--blue);padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600"></span>
+  <span id="vhost-ov-badge" style="display:none;background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.3);color:var(--blue);padding:2px 10px;border-radius:10px;font-size:11px;font-weight:600"></span>
   <a id="vhost-policy-lnk" href="#" style="display:none;font-size:11px;color:var(--blue)">Edit overrides →</a>
   <span id="vhost-scope-hint" style="color:var(--dim);font-size:11px;margin-left:auto">Global: controls affect all vhosts without per-vhost override</span>
 </div>
@@ -706,7 +706,7 @@ input.stip-list-field{min-height:unset;height:28px;resize:none}
       </div>
       <div id="ord-slider" style="position:relative;height:58px;margin:0 4px"></div>
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:6px;font-size:11px">
-        <div><span style="color:#79c0ff;font-size:14px;line-height:1">●</span> <b>1st order</b> — always active
+        <div><span style="color:#58a6ff;font-size:14px;line-height:1">●</span> <b>1st order</b> — always active
           <div style="color:var(--dim);margin-top:2px">score 0 → &lt;<span id="ord-s2-label" style="font-family:ui-monospace;font-weight:600">—</span></div>
         </div>
         <div><span style="color:#d29922;font-size:14px;line-height:1">●</span> <b>2nd order</b> — activated at ≥ <span id="ord-s2-val" style="font-family:ui-monospace;font-weight:700;color:#d29922">—</span>
@@ -2803,17 +2803,12 @@ document.addEventListener('DOMContentLoaded', () => {
           knobS2Val.textContent = s2Off ? 'off' : S2;
           knobS3Val.textContent = s3Off ? 'off' : S3;
 
-          // 1.9.6 fix — NEVER disable a knob. 0 is a valid "always-run / no
-          // gate" value (and ESCALATION_THRESHOLD defaults to 0), so setting
-          // pointer-events:none trapped the knob at 0 with no way to drag it
-          // back up. Dim slightly to signal the off state, keep it draggable,
-          // and keep its value label visible (showing "off").
-          knobS2.style.opacity       = s2Off ? '0.55' : '1';
-          knobS2.style.pointerEvents = '';
-          knobS2Val.style.opacity    = '1';
-          knobS3.style.opacity       = s3Off ? '0.55' : '1';
-          knobS3.style.pointerEvents = '';
-          knobS3Val.style.opacity    = '1';
+          knobS2.style.opacity       = s2Off ? '0.3' : '1';
+          knobS2.style.pointerEvents = s2Off ? 'none' : '';
+          knobS2Val.style.opacity    = s2Off ? '0'   : '1';
+          knobS3.style.opacity       = s3Off ? '0.3' : '1';
+          knobS3.style.pointerEvents = s3Off ? 'none' : '';
+          knobS3Val.style.opacity    = s3Off ? '0'   : '1';
 
           const s2Lbl = document.getElementById('ord-s2-label');
           const s2V   = document.getElementById('ord-s2-val');
@@ -2836,15 +2831,8 @@ document.addEventListener('DOMContentLoaded', () => {
           const v    = Math.round(pct * MAX);
           const rban = (typeof serverState.RISK_BAN_THRESHOLD === 'number')
             ? Math.round(serverState.RISK_BAN_THRESHOLD) : MAX;
-          // 1.9.6 fix — clamp each knob INDEPENDENTLY to [0, rban-1]. The old
-          // code coupled them (S2 = min(v, S3-1) / S3 = max(v, S2+1)); with the
-          // shipped defaults (S2=15, S3=0) that coupling forced S2 negative the
-          // moment you dragged it, perma-disabling 2nd-order. They are two
-          // independent backend knobs (each min 0 / max 1000), so order them
-          // by intent, not by a hard inter-knob constraint. 0 = always-run.
-          const cap = Math.max(0, rban - 1);
-          if (dragging === 's2') S2 = Math.min(Math.max(0, v), cap);
-          else                   S3 = Math.min(Math.max(0, v), cap);
+          if (dragging === 's2') S2 = Math.min(v, S3 - 1);
+          else                   S3 = Math.min(Math.max(v, S2 + 1), rban - 1);
           render();
         }
         async function dragEnd(){
@@ -3933,7 +3921,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
 #gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #79c0ff}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -4969,7 +4957,7 @@ if (typeof _origLoad === 'function') {
 })();
 </script>
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

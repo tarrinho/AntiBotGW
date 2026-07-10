@@ -35,24 +35,6 @@ def temp_db(monkeypatch):
         pass
 
 
-@pytest.fixture
-def force_sqlite_backend(monkeypatch):
-    """Pin db_load_config to the SQLite backend for this test.
-
-    db_load_config is backend-aware (1.9.2): under APPSECGW_TEST_PG=1 it reads
-    config_kv from Postgres via active_backend(), ignoring the temp SQLite DB
-    these tests seed. Clearing POSTGRES_DSN in both the config module (read by
-    active_backend() at call time) and the db.sqlite module-level binding (read
-    by the PG-authority coercion in db_load_config) routes the read back to the
-    per-test DB_PATH so the env-pin exemption is actually exercised.
-    """
-    import config as _cfg
-    import db.sqlite as _s
-    monkeypatch.setattr(_cfg, "POSTGRES_DSN", "", raising=False)
-    monkeypatch.setattr(_s, "POSTGRES_DSN", "", raising=False)
-    yield
-
-
 def _seed(db_path: str, key: str, value):
     conn = sqlite3.connect(db_path)
     try:
@@ -71,7 +53,7 @@ def _seed(db_path: str, key: str, value):
 
 # ── Exemption robustness ────────────────────────────────────────────────
 
-def test_exemption_invalid_value_falls_back_to_env(temp_db, force_sqlite_backend):
+def test_exemption_invalid_value_falls_back_to_env(temp_db):
     """A config_kv DB_BACKEND row holding a bogus value (e.g. someone
     manually edited the SQLite file) must fail the validator and leave the
     env-driven cold-start value in place — must NOT crash the load."""
@@ -96,7 +78,7 @@ def test_exemption_invalid_value_falls_back_to_env(temp_db, force_sqlite_backend
     )
 
 
-def test_exemption_handles_missing_validator(temp_db, force_sqlite_backend):
+def test_exemption_handles_missing_validator(temp_db):
     """A registry that registers DB_BACKEND with validator=None must still
     apply the persisted value (validator-None is the registry convention
     for 'no extra check' — the parser already type-coerced)."""
@@ -117,7 +99,7 @@ def test_exemption_handles_missing_validator(temp_db, force_sqlite_backend):
     )
 
 
-def test_exemption_sqlite_to_postgres_and_back(temp_db, force_sqlite_backend):
+def test_exemption_sqlite_to_postgres_and_back(temp_db):
     """Round-trip: env=sqlite, config_kv flips to postgres, then back to
     sqlite. Each load applies the persisted value over env."""
     from db.sqlite import db_load_config

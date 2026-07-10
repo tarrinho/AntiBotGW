@@ -1,11 +1,5 @@
 # Threat Model — AntiBot/WAF GW 1.6.7
 
-> **Historical snapshot — point-in-time threat model as of v1.6.7 (2026-05-01).**
-> The trust boundaries and STRIDE analysis here remain broadly valid, but
-> version-specific layer references are not updated per release. Current controls
-> live in `MANUAL.md` / `CONTROLS.md`; current residual-risk register is in the
-> latest `validation/<version>.md` §11b.
-
 Author: Pedro Tarrinho
 Date: 2026-05-01
 Scope: AntiBot/WAF GW 1.6.7 (post-1.6.7-revalidation cut)

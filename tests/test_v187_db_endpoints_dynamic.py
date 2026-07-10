@@ -103,29 +103,21 @@ def _csrf_hdr(proxy_module, cookie):
 
 
 def _make_viewer_cookie(proxy_module):
-    """Prime a viewer-role session. Insert the user via the gateway's own
-    backend-aware connection.
-
-    _request_role() -> _user_load() reads users via db.open_conn() (PG in
-    PG-only mode, SQLite otherwise). Seeding a raw sqlite3.connect(DB_PATH)
-    here wrote to an unused local file in PG mode, so _user_load() returned
-    None and _request_role() fell back to the key-only 'admin' default — the
-    viewer was silently treated as admin and the role-gate test saw a 200
-    instead of the expected 403. Route the seed through open_conn so the user
-    lands in the SAME backend the role check reads. (1.9.1 iter-18 backend-
-    aware reads.)
-    """
-    import hashlib
-    from db import open_conn as _open_conn
+    """Prime a viewer-role session. Insert the user directly into the DB."""
+    import sqlite3, hashlib
+    db_path = proxy_module.DB_PATH
+    # Insert viewer user if not already present
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS users "
+        "(username TEXT PRIMARY KEY, password_hash TEXT, role TEXT, "
+        "status TEXT, created_ts REAL, updated_ts REAL)"
+    )
     pw_hash = hashlib.sha256(b"Viewer-QA-pass1!").hexdigest()
     n = proxy_module._t.time()
-    # users table already exists (db_init ran on proxy boot). DELETE+INSERT is
-    # dialect-neutral; the open_conn wrapper rewrites ? -> %s on PG.
-    conn = _open_conn()
-    conn.execute("DELETE FROM users WHERE username=?", ("viewer_qa",))
     conn.execute(
-        "INSERT INTO users (username, password_hash, role, status, "
-        "created_ts, updated_ts) VALUES (?, ?, 'viewer', 'active', ?, ?)",
+        "INSERT OR REPLACE INTO users (username, password_hash, role, status, created_ts, updated_ts) "
+        "VALUES (?, ?, 'viewer', 'active', ?, ?)",
         ("viewer_qa", pw_hash, n, n),
     )
     conn.commit()
@@ -262,19 +254,13 @@ class TestDbMigrationStatusEndpoint:
                 async with _spin_proxy(proxy_module, up) as c:
                     # Write the F12 marker AFTER startup so the config_kv table
                     # (created during proxy boot/migration) exists.
-                    # db_migration_status_endpoint reads config_kv via
-                    # db.open_conn() (PG in PG-only mode), so seed through the
-                    # SAME backend — a raw sqlite3.connect(DB_PATH) wrote an
-                    # unused local row in PG mode and the endpoint reported
-                    # running=False/marker=None.
-                    from db import open_conn as _open_conn
-                    conn = _open_conn()
+                    conn = sqlite3.connect(proxy_module.DB_PATH)
                     conn.execute(
-                        "DELETE FROM config_kv WHERE key=?",
-                        ("pending_bg_migration",),
+                        "CREATE TABLE IF NOT EXISTS config_kv "
+                        "(key TEXT PRIMARY KEY, value TEXT, ts REAL)"
                     )
                     conn.execute(
-                        "INSERT INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
+                        "INSERT OR REPLACE INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
                         ("pending_bg_migration", _json.dumps(marker), time.time()),
                     )
                     conn.commit()
@@ -291,13 +277,12 @@ class TestDbMigrationStatusEndpoint:
                         f"DBQA-11: marker direction not surfaced: {d}"
         _run(go())
 
-        # Restore clean state: remove the marker row via the active backend.
-        from db import open_conn as _open_conn
-        conn = _open_conn()
+        # Restore clean state: remove the marker row (table guaranteed by go()).
+        conn = sqlite3.connect(proxy_module.DB_PATH)
         try:
             conn.execute("DELETE FROM config_kv WHERE key = ?", ("pending_bg_migration",))
             conn.commit()
-        except Exception:
+        except sqlite3.OperationalError:
             pass
         conn.close()
 

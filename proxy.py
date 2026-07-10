@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Anti-bot reverse proxy v1.9.9 — entry point only.
+Anti-bot reverse proxy v1.9.10 — entry point only.
 
 Domain-agnostic: the upstream target is supplied exclusively via the
 UPSTREAM environment variable (no domain is baked in).
@@ -349,21 +349,10 @@ async def _resume_pending_bg_migration():
           f"(cutoff_ts={cutoff_ts:.0f}, marker age={age_s:.0f}s)",
           flush=True)
 
-    # 1.8.15 — flag the in-memory guard so an operator VACUUM (or DB switch)
-    # fired mid-migration short-circuits with 409 instead of contending for
-    # the exclusive lock. Cleared in the finally below.
-    try:
-        from core.proxy_handler import _BG_MIGRATION as _BGM
-        _BGM["running"] = True
-    except Exception:
-        _BGM = None
-
     def _runner():
         try:
             _full_migrate_background(target, cutoff_ts)
         finally:
-            if _BGM is not None:
-                _BGM["running"] = False
             # iter-5 fix: clear the marker from SQLite directly (writer
             # queue route via `del_config` would clear PG, not SQLite).
             try:
@@ -538,20 +527,8 @@ async def on_startup(app):
     # proxy(), etc.) see any value set by tests or hot-reload, not the import-time snapshot.
     import core.proxy_handler as _cph
     _cph.UPSTREAM = UPSTREAM
-    # 1.9.7 — resolve OFFLINE_BG_TASKS early; it now also gates whether the
-    # heavy state rehydrate runs synchronously (tests) or is deferred to a
-    # background task (production, Option B — see the rehydrate block below).
-    import os as _os_offl
-    _offline_bg = _os_offl.environ.get(
-        "OFFLINE_BG_TASKS", "").lower() in ("1", "true", "yes")
     db_init()
-    # 1.9.7 (Option B) — in production db_load_state is DEFERRED (background
-    # task scheduled after the bans rehydrate) so its full-table scans don't
-    # block aiohttp from accepting connections. Tests load it synchronously
-    # here, before _rehydrate_bans, so ip_state.clear() (clear_first=True)
-    # can't wipe rehydrated bans and each test sees a clean slate.
-    if _offline_bg:
-        db_load_state()
+    db_load_state()
     # 1.6.5 — initialise MaxMind FIRST so that knob validators which gate on
     # `_city_reader is not None` (notably COUNTRY_BLOCK_ENABLED) see the
     # readers as loaded when db_load_config applies persisted values.
@@ -787,58 +764,19 @@ async def on_startup(app):
                 pass
     db_writer_task = asyncio.create_task(db_writer_loop())
     # 1.8.5 — rehydrate bans from DB so container restarts don't amnesty banned IPs.
-    # SECURITY-CRITICAL: stays SYNCHRONOUS (runs before the server accepts) so a
-    # banned IP can never slip through during the post-restart warm-up window.
     from db.sqlite import _rehydrate_bans
     _rehydrate_bans()
-    # 1.9.7 (Option B) — the remaining rehydrate work is dashboard-cosmetic and
-    # was the dominant cost of a slow boot (~17s db_load_state full-table scans
-    # + ~35s unbounded events scan on a large Postgres deployment), all of it
-    # blocking aiohttp from accepting → a Cloudflare 502 window on every
-    # upgrade. Defer it to a background task so the server accepts in ~3s; the
-    # dashboards fill in within a few seconds of serving. Bans (above) and the
-    # security path are unaffected. Tests run it synchronously (OFFLINE_BG_TASKS)
-    # for deterministic assertions; db_load_state already ran in that path.
-    #   - db_load_state(clear_first=False): never wipe the bans just rehydrated.
-    #   - rehydrate_timeline / rehydrate_events: trend chart + recent-event ring.
-    async def _deferred_state_rehydrate():
-        # Each step is a SYNCHRONOUS blocking DB read (full-table scans / an
-        # unbounded events query that can take tens of seconds on a large
-        # Postgres deployment). Run them in the default thread-pool executor
-        # via run_in_executor so the event loop keeps serving requests the
-        # whole time — running them inline here would block the loop and just
-        # convert the 502 into a multi-second stall. Steps run sequentially
-        # (one worker thread at a time). Note: these populate shared state
-        # dicts (ip_state/metrics/timeline) that dashboard *aggregation*
-        # endpoints iterate; during this one-time boot window a dashboard read
-        # could hit a mid-write dict and 500 (per-request isolated, self-heals
-        # on retry). The proxy decision path only does single-key ip_state
-        # lookups (GIL-atomic) and bans already rehydrated synchronously, so
-        # request filtering is unaffected. See validation §11b (residual risk).
-        import asyncio as _aio
-        import functools as _ft
-        from helpers import slog as _slog
-        from db.sqlite import (db_load_state as _dls,
-                               _rehydrate_timeline as _rht,
-                               _rehydrate_events as _rhe)
-        loop = _aio.get_event_loop()
-        for _name, _call in (("db_load_state", _ft.partial(_dls, clear_first=False)),
-                             ("rehydrate_timeline", _rht),
-                             ("rehydrate_events", _rhe)):
-            try:
-                await loop.run_in_executor(None, _call)
-            except Exception as _e:  # never let a rehydrate error kill serving
-                _slog("deferred_rehydrate_step_failed", level="warn",
-                      step=_name, error=str(_e)[:200])
-        _slog("deferred_rehydrate_done", level="info")
-    if _offline_bg:
-        # Tests: synchronous, original order. db_load_state already ran above
-        # (before bans); now seed the trend chart + recent-event ring.
-        from db.sqlite import _rehydrate_timeline, _rehydrate_events
-        _rehydrate_timeline()
-        _rehydrate_events()
-    else:
-        asyncio.create_task(_deferred_state_rehydrate())
+    # 1.9.4 — rehydrate the in-memory timeline minute-buckets from the DB so the
+    # Live Feed chart shows existing history immediately after a restart instead
+    # of blank-until-new-traffic (the in-memory dict starts empty and the recent
+    # window never falls back to the DB). Backend-aware read inside.
+    from db.sqlite import _rehydrate_timeline
+    _rehydrate_timeline()
+    # 1.9.6 — also rehydrate the recent-event ring buffers so the "recent events"
+    # list + by-reason/by-path breakdowns aren't blank after a restart until new
+    # traffic arrives (companion to the timeline rehydrate above).
+    from db.sqlite import _rehydrate_events
+    _rehydrate_events()
     # 1.8.5 — start ip_state LRU eviction loop.
     from state import _ip_state_evict_loop as _evict_loop
     import state as _state_mod
@@ -908,7 +846,9 @@ async def on_startup(app):
     # OFFLINE_BG_TASKS=1 (set by tests/conftest.py) skips every periodic
     # loop that issues outbound HTTPS so the test suite doesn't leak
     # aiohttp ClientSessions to Cloudflare anycast IPs.
-    # (_offline_bg is resolved once at the top of on_startup — see 1.9.7 note.)
+    import os as _os_bg
+    _offline_bg = _os_bg.environ.get(
+        "OFFLINE_BG_TASKS", "").lower() in ("1", "true", "yes")
     if not _offline_bg:
         asyncio.create_task(_periodic_404_refresh_loop())
         # 1.8.15 — daily scheduled VACUUM (no-op when VACUUM_DAILY_AT="" or
@@ -1059,40 +999,10 @@ async def on_cleanup(app):
         db_writer_task.cancel()
 
 
-# ── 1.9.8 M7 (CWE-400) — concurrent in-flight request cap ─────────────────────
-# Without a cap, a flood of large request bodies (≤UPSTREAM_MAX_BODY) + buffered
-# upstream responses (≤UPSTREAM_MAX_RESP) can exhaust container memory. This
-# middleware bounds simultaneous in-flight requests and returns a fast 503
-# (no unbounded queueing) once the ceiling is hit. Tune via
-# MAX_CONCURRENT_REQUESTS (0 disables). Note: pure slow-header (slowloris) trickle
-# in the pre-handler phase is not boundable via aiohttp's high-level API — keep a
-# hardened front proxy (Cloudflare/nginx) in front, as documented.
-MAX_CONCURRENT_REQUESTS = int(os.environ.get("MAX_CONCURRENT_REQUESTS", "512"))
-_inflight_requests = 0
-
-
-@web.middleware
-async def concurrency_guard(request, handler):
-    global _inflight_requests
-    if MAX_CONCURRENT_REQUESTS and _inflight_requests >= MAX_CONCURRENT_REQUESTS:
-        return web.Response(status=503, text="server busy",
-                            headers={"Retry-After": "2", "Cache-Control": "no-store"})
-    _inflight_requests += 1
-    try:
-        return await handler(request)
-    finally:
-        _inflight_requests -= 1
-
-
 # ── Application factory ───────────────────────────────────────────────────────
 
 def make_app() -> web.Application:
-    # 1.9.7 — security_headers is OUTERMOST so it stamps baseline headers on
-    # every final response (including the proxied upstream root).
-    # security_headers stays OUTERMOST (stamps every response, incl. a 503 from
-    # concurrency_guard); concurrency_guard sits immediately inside it so the cap
-    # still rejects early (security_headers does no pre-work before calling next).
-    app = web.Application(middlewares=[security_headers, concurrency_guard, cost_meter, session_cookie_finalizer, protect])
+    app = web.Application(middlewares=[cost_meter, session_cookie_finalizer, protect])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
@@ -1174,8 +1084,6 @@ def make_app() -> web.Application:
         ("secrets",           "DELETE", secrets_endpoint,                      True),
         ("config",            "GET",    config_endpoint,                       True),
         ("config",            "POST",   config_endpoint,                       True),
-        ("ui-theme",          "GET",    ui_theme_endpoint,                     True),
-        ("ui-theme",          "POST",   ui_theme_endpoint,                     True),
         ("agents",            "GET",    agents_dashboard_endpoint,             True),
         ("agents-data",       "GET",    agents_data_endpoint,                  True),
         ("agents-timeline",   "GET",    agents_timeline_endpoint,              True),
@@ -1183,8 +1091,6 @@ def make_app() -> web.Application:
         ("service-data",      "GET",    service_metrics_data_endpoint,         True),
         ("honeypots",         "GET",    honeypots_dashboard_endpoint,          True),
         ("honeypots-data",    "GET",    honeypots_data_endpoint,               True),
-        ("attack-playbook",   "GET",    attack_playbook_endpoint,              True),
-        ("honey-suggest",     "GET",    honey_suggest_endpoint,                True),
         ("controls",          "GET",    controls_dashboard_endpoint,           True),
         ("settings",          "GET",    settings_dashboard_endpoint,           True),
         ("settings-export",   "GET",    settings_export_endpoint,              True),
@@ -1252,14 +1158,12 @@ def make_app() -> web.Application:
     # 1.6.7 — Login flow + Users CRUD ────────────────────────────────
     app.router.add_get  (PUBLIC + "/login",  login_page_endpoint)
     app.router.add_post (PUBLIC + "/login",  login_submit_endpoint)
-    app.router.add_post (PUBLIC + "/login/totp", totp_verify_endpoint)  # 1.9.8 — 2FA step-2 (login.html posts here)
     app.router.add_post (PUBLIC + "/logout", logout_endpoint)
     # 1.8.5 — OIDC/Keycloak SSO (both public — no session cookie before login)
     app.router.add_get  (PUBLIC + "/auth/oidc/login",    oidc_login_endpoint)
     app.router.add_get  (PUBLIC + "/auth/oidc/callback", oidc_callback_endpoint)
     app.router.add_get  (SEC    + "/whoami", whoami_endpoint)
     app.router.add_get  (SEC    + "/ip-intel/{ip}", ip_intel_endpoint)
-    app.router.add_post (SEC    + "/2fa-setup", totp_setup_endpoint)  # 1.9.8 (M4) — POST + @_require_csrf (was an unrouted GET)
     USERS = SEC + "/admin/users"
     app.router.add_get   (USERS,                  users_list_endpoint)
     app.router.add_post  (USERS,                  users_create_endpoint)
@@ -1728,18 +1632,6 @@ if _cph_gip.__dict__.get("get_ip") is _h_gip_patch.__dict__.get("get_ip"):
 
 
 if __name__ == "__main__":
-    # 1.9.7 — SIGUSR1 dumps ALL thread stacks to stderr (→ docker logs) WITHOUT
-    # stopping the process. Lets an operator capture exactly what the single
-    # event loop is stuck on during a stall (e.g. a synchronous psycopg call):
-    #     docker kill -s USR1 <container>     # then read `docker logs`
-    # `chain=False` so we don't disturb any default handler; safe in prod.
-    try:
-        import faulthandler as _fh, signal as _sig
-        _fh.register(_sig.SIGUSR1, all_threads=True, chain=False)
-        print("[diag] SIGUSR1 → thread-stack dump enabled "
-              "(docker kill -s USR1 <container> to capture a stall)", flush=True)
-    except Exception:
-        pass
     if ADMIN_KEY_FROM_ENV:
         key_line = "supplied via ADMIN_KEY env"
     else:

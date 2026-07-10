@@ -84,17 +84,12 @@ def _isolate_events(proxy_module):
     prior tests in the same combined session run.
     """
     def _wipe():
-        # Backend-aware wipe: under APPSECGW_TEST_PG the dashboard endpoints
-        # read events from Postgres, so wiping only the local SQLite file left
-        # stale PG rows visible (and seeded rows below would never appear). Go
-        # through db.open_conn() so we clear whichever backend is live.
         try:
-            from db import open_conn
-            conn = open_conn()
+            conn = sqlite3.connect(proxy_module.DB_PATH)
             conn.execute("DELETE FROM events")
             conn.commit()
             conn.close()
-        except Exception:
+        except sqlite3.OperationalError:
             pass  # table not yet created — nothing to wipe
         # Also clear in-memory ring buffers used by metrics timeline aggregation
         try:
@@ -153,60 +148,29 @@ def _make_admin_cookie(proxy_module):
     return proxy_module._session_sign("admin", sid=sid)
 
 
-def _is_pg():
-    """True when the active backend is Postgres (APPSECGW_TEST_PG mode)."""
-    try:
-        from db.conn import active_backend
-        return active_backend() == "postgres"
-    except Exception:
-        return False
-
-
-def _insert_event_row(conn, ts, ip, ua, path, status, reason, vhost, pg):
-    """Insert one events row through a backend-aware connection. On Postgres
-    the `ts` column is TIMESTAMPTZ, so wrap the epoch float in to_timestamp();
-    on SQLite ts is a raw float. open_conn() rewrites ? -> %s for PG."""
-    if pg:
-        conn.execute(
-            "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-            "VALUES (to_timestamp(?),?,?,?,?,?,?)",
-            (ts, ip, ua, path, status, reason, vhost),
-        )
-    else:
-        conn.execute(
-            "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (ts, ip, ua, path, status, reason, vhost),
-        )
-
-
 def _seed_event(proxy_module, vhost="", reason="ok", ip="1.2.3.4",
                 path="/", ts=None, status=200):
-    """Insert a single event row into the events table on the active backend.
-
-    Backend-aware (was sqlite3.connect(DB_PATH)): the dashboard endpoints read
-    events from Postgres under APPSECGW_TEST_PG, so seeding only the local
-    SQLite file left the rows invisible to the endpoints under test.
-    """
-    from db import open_conn
-    pg = _is_pg()
-    conn = open_conn()
-    _insert_event_row(conn, ts or time.time(), ip, "test-ua", path, status,
-                      reason, vhost, pg)
+    """Insert a single event row into the events table directly via sqlite3."""
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(
+        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+        "VALUES (?,?,?,?,?,?,?)",
+        (ts or time.time(), ip, "test-ua", path, status, reason, vhost),
+    )
     conn.commit()
     conn.close()
 
 
 def _seed_many(proxy_module, rows):
-    """Insert multiple (vhost, reason, ip) tuples as recent events on the
-    active backend (see _seed_event for the backend-aware rationale)."""
-    from db import open_conn
-    pg = _is_pg()
-    conn = open_conn()
+    """Insert multiple (vhost, reason, ip) tuples as recent events."""
+    conn = sqlite3.connect(proxy_module.DB_PATH)
     now = time.time()
     for i, (vhost, reason, ip) in enumerate(rows):
-        _insert_event_row(conn, now - i, ip, "test-ua", "/", 200,
-                          reason, vhost, pg)
+        conn.execute(
+            "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (now - i, ip, "test-ua", "/", 200, reason, vhost),
+        )
     conn.commit()
     conn.close()
 

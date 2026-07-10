@@ -12,44 +12,6 @@ from aiohttp import web
 SETTINGS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "settings.html").read_text(encoding="utf-8")
 
 
-async def ui_theme_endpoint(request: web.Request):
-    """GET/POST /secured/ui-theme — the single master light/dark toggle.
-
-    GET  → {"theme": "dark"|"light"} (current persisted master).
-    POST {"theme":"dark"|"light"} → persist to config_kv['ui_theme'] and echo it.
-          Invalid theme → 400.
-
-    Every dashboard bakes `config_kv['ui_theme']` into `<html data-theme>` on
-    first paint, so persisting here makes the toggle on ANY page the master that
-    ALL pages reflect on their next load — across browsers/devices, not just the
-    local browser's localStorage. Auth is enforced by the SEC-prefix middleware
-    (unauthenticated → 401); the write is additionally role-gated."""
-    from db.sqlite import get_ui_theme as _get_theme, set_ui_theme as _set_theme
-    if request.method == "POST":
-        if denied := _role_denied(request, "admin", "maintainer"):
-            return denied
-        try:
-            body = await request.json()
-        except Exception:
-            body = {}
-        theme = str((body or {}).get("theme", "")).strip().lower()
-        if theme not in ("dark", "light"):
-            return web.json_response(
-                {"error": "theme must be 'dark' or 'light'"},
-                status=400, headers={"Cache-Control": "no-store"})
-        if not _set_theme(DB_PATH, theme):
-            return web.json_response(
-                {"error": "failed to persist theme"},
-                status=500, headers={"Cache-Control": "no-store"})
-        slog("ui_theme_set", level="info", theme=theme,
-             actor=_request_username(request) or "")
-        return web.json_response({"theme": theme},
-                                 headers={"Cache-Control": "no-store"})
-    # GET — any authenticated dashboard user may read the current master.
-    return web.json_response({"theme": _get_theme(DB_PATH)},
-                             headers={"Cache-Control": "no-store"})
-
-
 async def settings_dashboard_endpoint(request: web.Request):
     """GET /__settings — render the Settings dashboard (admin-only)."""
     if denied := _role_denied(request, "admin"):
@@ -1127,11 +1089,7 @@ async def vhost_breakdown_endpoint(request: web.Request):
         if _be_vs == "postgres":
             _sql_vs = (
                 "SELECT vhost, "
-                # PG CAST(numeric AS INTEGER) ROUNDS half-up, so an event in the
-                # final partial bucket rounds UP to slot==n_slots and is dropped
-                # by the 0<=slot<n_slots filter. FLOOR truncates like SQLite's
-                # CAST + the Python int() n_slots math. (vhost_breakdown D04)
-                "  CAST(FLOOR((EXTRACT(EPOCH FROM ts) - ?) / ?) AS INTEGER) AS slot, "
+                "  CAST((EXTRACT(EPOCH FROM ts) - ?) / ? AS INTEGER) AS slot, "
                 "  COUNT(*) AS cnt "
                 "FROM events "
                 "WHERE ts >= to_timestamp(?) AND ts <= to_timestamp(?) AND vhost != '' "
@@ -1566,9 +1524,7 @@ async def block_reasons_timeline_endpoint(request: web.Request):
         if _be_e == "postgres":
             sql = (
                 f"SELECT reason, "
-                # FLOOR so PG truncates like SQLite CAST + Python int() (see
-                # vhost_breakdown above) — avoids dropping final-bucket events.
-                f"  CAST(FLOOR((EXTRACT(EPOCH FROM ts) - ?) / ?) AS INTEGER) AS slot, "
+                f"  CAST((EXTRACT(EPOCH FROM ts) - ?) / ? AS INTEGER) AS slot, "
                 f"  COUNT(*) AS cnt "
                 f"FROM events "
                 f"WHERE ts >= to_timestamp(?) AND ts <= to_timestamp(?) "

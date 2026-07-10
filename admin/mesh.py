@@ -58,97 +58,24 @@ def _gw_id_from_domain(domain: str) -> str:
     return s if (s and _GW_ID_RE.match(s)) else ""
 
 
-def _b64u_enc(raw: bytes) -> str:
-    """base64url, no padding (32-byte key → 43 chars, 64-byte sig → 86)."""
-    return _b64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
-
-
-def _b64u_dec(s: str) -> bytes:
-    """Inverse of _b64u_enc — restores padding before decoding."""
-    return _b64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
-
-
 def _gw_generate_keypair() -> tuple[str, str]:
-    """1.8.8 — mint a real Ed25519 (private_key, public_key) pair. Both are the
-    raw 32-byte keys, base64url-encoded (no padding → 43 chars). Asymmetric:
-    peers hold only the PUBLIC key and verify offer signatures without ever
-    seeing the private key (replaces the old symmetric-HMAC model). Falls back
-    to ('', '') when the `cryptography` package is absent (e.g. armv7) — that
-    node simply can't participate in signed mesh, which is fail-closed."""
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from cryptography.hazmat.primitives import serialization as _ser
-    except Exception:
-        return "", ""
-    sk = Ed25519PrivateKey.generate()
-    priv_raw = sk.private_bytes(_ser.Encoding.Raw, _ser.PrivateFormat.Raw,
-                                _ser.NoEncryption())
-    pub_raw = sk.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
-    return _b64u_enc(priv_raw), _b64u_enc(pub_raw)
+    """Mint a new (private_key, public_key) pair. Private is 32-byte
+    URL-safe random; public is a SHA256-derived verification handle so
+    peers can authenticate signatures without holding the private key.
+    Both are base64url-encoded so they round-trip in JSON / XML cleanly."""
+    private_key = secrets.token_urlsafe(32)
+    public_key  = _gw_derive_pubkey(private_key)
+    return private_key, public_key
 
 
 def _gw_derive_pubkey(private_key: str) -> str:
-    """Derive the Ed25519 public key (base64url) from a base64url private key.
-    Returns '' for empty/invalid input (not 32 raw bytes) or when crypto is
-    unavailable — never raises."""
-    if not private_key:
-        return ""
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        from cryptography.hazmat.primitives import serialization as _ser
-        raw = _b64u_dec(private_key)
-        if len(raw) != 32:
-            return ""
-        sk = Ed25519PrivateKey.from_private_bytes(raw)
-        pub_raw = sk.public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
-        return _b64u_enc(pub_raw)
-    except Exception:
-        return ""
-
-
-def _canonical_offer_bytes(offers: dict) -> bytes:
-    """Deterministic byte serialisation of a mesh offer for signing/verifying.
-    Excludes the `_sig` field (the signature can't sign itself), sorts keys, and
-    uses compact separators so both ends produce identical bytes regardless of
-    dict insertion order. Empty / _sig-only → b'{}'."""
-    import json as _json
-    clean = {k: v for k, v in (offers or {}).items() if k != "_sig"}
-    return _json.dumps(clean, sort_keys=True, separators=(",", ":")).encode("utf-8")
-
-
-def _gw_sign_offers(private_key: str, offers: dict) -> str:
-    """Ed25519-sign the canonical offer bytes; return the base64url signature
-    (86 chars). '' for empty/invalid private key or when crypto is absent."""
-    if not private_key:
-        return ""
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        raw = _b64u_dec(private_key)
-        if len(raw) != 32:
-            return ""
-        sk = Ed25519PrivateKey.from_private_bytes(raw)
-        return _b64u_enc(sk.sign(_canonical_offer_bytes(offers)))
-    except Exception:
-        return ""
-
-
-def _gw_verify_offers(public_key: str, signature: str, offers: dict) -> bool:
-    """Verify an Ed25519 offer signature. Returns True only when `signature`
-    (base64url) is a valid signature over `_canonical_offer_bytes(offers)` by
-    `public_key` (base64url). Any tamper / wrong key / bad input / missing
-    crypto → False (fail-closed); never raises."""
-    if not public_key or not signature:
-        return False
-    try:
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
-        pub_raw = _b64u_dec(public_key)
-        if len(pub_raw) != 32:
-            return False
-        Ed25519PublicKey.from_public_bytes(pub_raw).verify(
-            _b64u_dec(signature), _canonical_offer_bytes(offers))
-        return True
-    except Exception:
-        return False
+    """SHA256 fingerprint of the private secret — used as the public
+    verification handle. Peers receive this, and verify HMAC-SHA256
+    signatures on inbound block records by recomputing locally with the
+    SAME secret (mesh participants share the secret out-of-band), which
+    is the symmetric-HMAC mesh model we ship until proper Ed25519 lands."""
+    h = hashlib.sha256(private_key.encode("utf-8")).digest()
+    return _b64.urlsafe_b64encode(h).rstrip(b"=").decode("ascii")
 
 
 def _gw_fingerprint(public_key: str, length: int = 12) -> str:
@@ -654,8 +581,6 @@ async def gw_registry_auto_apply_endpoint(request: web.Request):
     this peer skip the pending queue and apply straight to the live
     integration. Only meaningful for non-local rows; rejected on the
     local row to keep the audit story clean."""
-    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M1 — was missing (CWE-862)
-        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -763,8 +688,6 @@ async def gw_registry_delete_endpoint(request: web.Request):
 
 async def gw_registry_distribution_matrix_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/distribution/matrix"""
-    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M2 — topology read gate
-        return denied
     rows = _gw_load_all()
     pairs = _gw_load_distribution()
     by_pair = {(s, t): True for s, t in pairs}
@@ -784,8 +707,6 @@ async def gw_registry_distribution_rules_endpoint(request: web.Request):
     """POST <NS>/secured/admin/gw-registry/distribution/rules
     Body: {"rules": [{"source": "gw-a", "target": "gw-b"}, ...]}
     Replaces the entire rule set in one transaction (idempotent)."""
-    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M2 — was missing (CWE-862)
-        return denied
     try:
         body = await asyncio.wait_for(request.content.read(64 * 1024),
                                        timeout=BODY_TIMEOUT)
@@ -884,8 +805,6 @@ async def gw_registry_sync_status_endpoint(request: web.Request):
     """GET <NS>/secured/admin/gw-registry/{gw_id}/sync-status — synthetic
     health view: how recently the gateway was seen + active distribution
     pairs sourced from / targeted at it."""
-    if denied := _role_denied(request, "admin", "maintainer"):  # 1.9.8 M2 — topology read gate
-        return denied
     gw_id = request.match_info.get("gw_id", "").strip().lower()
     cur = _gw_load_one(gw_id)
     if cur is None:
@@ -1065,11 +984,6 @@ def _mesh_load_pending(status: str = "pending") -> list[dict]:
 # ── Mesh-sync endpoints ─────────────────────────────────────────────
 async def mesh_sync_state_endpoint(request: web.Request):
     """GET <NS>/secured/admin/mesh-sync — current state."""
-    # 1.9.8 (S-W2) — viewers must not see which sync keys are enabled or the
-    # pending offer previews; restrict to admin/maintainer like the mutating
-    # mesh-sync endpoints below.
-    if denied := _role_denied(request, "admin", "maintainer"):
-        return denied
     enabled = sorted(_mesh_sync_enabled_set())
     pending = _mesh_load_pending("pending")
     return web.json_response({
@@ -1216,31 +1130,12 @@ async def _mesh_sync_loop():
         try:
             if _redis is not None:
                 src = _gw_local_id() or "gw-local"
-                # 1. publish own offers (1.8.8 — Ed25519-signed so peers verify
-                # provenance without holding our private key).
+                # 1. publish own offers
                 offers = {k: _mesh_sync_get_value(k)
                           for k in _mesh_sync_enabled_set()
                           if _mesh_sync_get_value(k)}
-                # L01 — fetch + unwrap this gw's private key from the local
-                # gw_registry row before publishing.
-                local_private_key = ""
-                try:
-                    _cpk = open_conn()
-                    _rpk = _cpk.execute(
-                        "SELECT private_key FROM gw_registry WHERE is_local = 1"
-                    ).fetchone()
-                    _cpk.close()
-                    if _rpk and _rpk[0]:
-                        local_private_key = _gw_unwrap_private_key(_rpk[0])
-                except Exception:
-                    pass
                 key = f"{REDIS_NS}:{_MESH_REDIS_NS}:{src}"
                 if offers:
-                    # L02/L03 — sign the canonical offers and attach _sig so
-                    # peers can verify before applying.
-                    _offer_sig = _gw_sign_offers(local_private_key, offers)
-                    if _offer_sig:
-                        offers["_sig"] = _offer_sig
                     try:
                         await asyncio.wait_for(_redis.delete(key),
                                                 timeout=REDIS_TIMEOUT)
@@ -1255,16 +1150,13 @@ async def _mesh_sync_loop():
                              err=str(e)[:120])
                 # 2. snapshot peer trust state once per cycle. Avoids a
                 # SQLite round-trip per peer-key inside the inner loop.
-                # L04/L05 — peer_gw -> (auto_ok, peer_pub_key). public_key is
-                # needed to verify inbound offer signatures (1.8.8).
-                trust_map: dict = {}
+                trust_map: dict = {}   # peer_gw -> auto-apply allowed?
                 try:
                     conn = open_conn()
                     for r in conn.execute(
-                            "SELECT gw_id, status, auto_apply, public_key "
+                            "SELECT gw_id, status, auto_apply "
                             "FROM gw_registry WHERE is_local = 0"):
-                        auto_ok, peer_pub_key = (r[1] == "active" and r[2] == 1), (r[3] or "")
-                        trust_map[r[0]] = (auto_ok, peer_pub_key)
+                        trust_map[r[0]] = (r[1] == "active" and r[2] == 1)
                     conn.close()
                 except Exception:
                     pass
@@ -1288,12 +1180,6 @@ async def _mesh_sync_loop():
                                                           timeout=REDIS_TIMEOUT)
                     except Exception:
                         continue
-                    # L06 — pop the signature off before processing so it isn't
-                    # treated as an offered key and isn't part of the signed
-                    # canonical payload.
-                    offered_data = dict(offered or {})
-                    sig_b64 = offered_data.pop("_sig", "")
-                    auto_ok, peer_pub_key = trust_map.get(peer_gw, (False, ""))
                     # Auto-discover: insert placeholder if missing + bump
                     # last_seen_ts. Idempotent — handler does INSERT OR
                     # IGNORE then UPDATE.
@@ -1304,24 +1190,8 @@ async def _mesh_sync_loop():
                             ))
                         except asyncio.QueueFull:
                             pass
-                    # 1.8.8 — Ed25519 signature gate. Only KNOWN (registered)
-                    # peers' offers are processed, and only after the signature
-                    # verifies against their registered public key. An unknown
-                    # peer is just discovered above (placeholder) — its offers
-                    # are NOT applied until an operator registers it + its key.
-                    if peer_gw not in trust_map:
-                        continue
-                    if not sig_b64:
-                        slog("mesh_sync_no_sig", level="warn", source_gw=peer_gw)
-                        continue
-                    if not peer_pub_key:
-                        slog("mesh_sync_no_pubkey", level="warn", source_gw=peer_gw)
-                        continue
-                    # L10 — verify (peer_pub_key, sig_b64, offered_data).
-                    if not _gw_verify_offers(peer_pub_key, sig_b64, offered_data):
-                        slog("mesh_sync_sig_invalid", level="warn", source_gw=peer_gw)
-                        continue
-                    for kname, kval in offered_data.items():
+                    auto_ok = trust_map.get(peer_gw, False)
+                    for kname, kval in (offered or {}).items():
                         if kname not in _MESH_SYNC_ELIGIBLE_KEYS:
                             continue
                         if not kval:

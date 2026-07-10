@@ -88,11 +88,6 @@ _JWKS_URI = (OIDC_ISSUER + "/protocol/openid-connect/certs") if OIDC_ISSUER else
 _CALLBACK_PATH      = ADMIN_NS + "/auth/oidc/callback"
 _POST_LOGIN_PATH    = ADMIN_NS + "/secured/control-center"
 _STATE_TTL_S        = 300   # 5-minute window for the browser round-trip
-# 1.9.7 — hard cap on the in-memory state dict. Each unauthenticated GET
-# /auth/oidc/login inserts a state entry; without a ceiling an attacker can
-# spray logins to exhaust memory (DoS). At the cap we purge expired entries
-# first, then 503 if still full. 500 ≈ 500 concurrent in-flight logins.
-_OIDC_STATE_MAX     = 500
 
 # ── State store — CSRF protection ─────────────────────────────────────────────
 # state_token → {"next_url": str, "expires_ts": float}
@@ -193,13 +188,6 @@ async def _verify_id_token(http, token: str, expected_nonce: str | None) -> dict
         leeway=_JWKS_LEEWAY_S,
         options={"require": ["exp", "iat", "sub"]})
 
-    # 3b) 1.9.7 — strict exp: PyJWT's `leeway` applies skew tolerance to exp too,
-    # so a token expired up to _JWKS_LEEWAY_S ago would still pass. Re-check exp
-    # with NO leeway so an already-expired id_token is rejected (skew tolerance
-    # is retained for nbf/iat via the decode above). Reuse PyJWT's typed error.
-    if float(claims.get("exp", 0)) < _t.time():
-        raise _pyjwt.ExpiredSignatureError("id_token expired (strict exp check)")
-
     # 4) Nonce binding — PyJWT does not check it. Constant-time compare; a missing
     #    or mismatched token nonce is fatal when we expected one.
     tok_nonce = claims.get("nonce", "")
@@ -223,14 +211,6 @@ async def oidc_login_endpoint(request: web.Request) -> web.Response:
 
     state = secrets.token_urlsafe(24)
     _purge_expired_states()
-    # 1.9.7 — DoS cap: after purging expired entries, refuse new logins if the
-    # state dict is full (>= cap). Prevents unauthenticated state-spray memory
-    # exhaustion. Uses >= so we reject AT the cap, never exceed it.
-    if len(_OIDC_STATE) >= _OIDC_STATE_MAX:
-        slog("oidc_state_cap_reached", level="warn", size=len(_OIDC_STATE))
-        return web.json_response(
-            {"error": "login temporarily unavailable; retry shortly"},
-            status=503, headers={"Cache-Control": "no-store", "Retry-After": "30"})
     _OIDC_STATE[state] = {"next_url": next_url, "expires_ts": _t.time() + _STATE_TTL_S}
 
     params = {

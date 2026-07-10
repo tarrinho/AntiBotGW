@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AntiBotWaf_GW_1.9.9"
+GW_VERSION = "AntiBotWaf_GW_1.9.10"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
@@ -60,21 +60,6 @@ ALLOW_PRIVATE_UPSTREAM = os.environ.get("ALLOW_PRIVATE_UPSTREAM", "0").strip() =
 # Set STRICT_VHOST=0 to allow unknown hosts to fall through to global UPSTREAM even
 # when other vhosts are configured.
 STRICT_VHOST = os.environ.get("STRICT_VHOST", "1").strip() == "1"
-# 1.9.8 — VHOST_PORT_AWARE: treat the inbound Host's PORT as part of the vhost
-# identity, so `challenges.site.com:8008` and `challenges.site.com:8009` are
-# DISTINCT vhosts (separate config / upstream / stats / bans). Default OFF — the
-# port is stripped and the vhost key is host-only (the historical behaviour).
-# When ON: the vhost key is `host:port`; lookup precedence is exact `host:port`
-# → portless `host` (an all-ports fallback) → `*.parent` wildcards. The gateway
-# binds a single LISTEN_PORT, so the distinction comes from the Host header —
-# the front (CDN / reverse proxy) must forward the original `host:port` (or
-# X-Forwarded-Host) for this to work.
-#   Why this exists: CTFd serves DYNAMIC challenges as separate instances on the
-#   SAME hostname but DIFFERENT ports (e.g. challenges.site.com:8008,
-#   challenges.site.com:8009, …). Host-only keying collapses them into one
-#   vhost, so each challenge can't have its own upstream / policy / ban scope —
-#   port-aware keying is required to front per-instance dynamic challenges.
-VHOST_PORT_AWARE = os.environ.get("VHOST_PORT_AWARE", "0").strip() in ("1", "true", "yes", "on")
 # PRESERVE_HOST: forward the client's original Host header to upstream unchanged.
 # Default OFF — the proxy rewrites Host to the upstream's netloc so TLS SNI and
 # upstream CSRF / origin-validation work correctly.  Enable only when upstream
@@ -737,34 +722,21 @@ PRUNE_INTERVAL_SECS = 600  # run every 10 min
 import time as _t
 
 # ── DB backend ─────────────────────────────────────────────────────────────
-# Backend selection (1.9.7 — DB_BACKEND is authoritative when explicit):
-#   DB_BACKEND=sqlite              → SQLite, even if POSTGRES_DSN is set
-#                                    (the DSN is left configured but inactive)
-#   DB_BACKEND=postgres + DSN      → Postgres
-#   DB_BACKEND unset + DSN set     → Postgres (DSN implies PG; back-compat)
-#   DB_BACKEND=postgres + no DSN   → invalid → SQLite + warning
-#   DB_BACKEND unset/sqlite, no DSN→ SQLite
-# Selecting on DB_BACKEND (not raw DSN presence) keeps READS (active_backend/
-# open_conn) aligned with WRITES (the writer loop branches on DB_BACKEND), so
-# a configured-but-unwanted DSN can't split reads→PG while writes→SQLite.
+# PG-only migration (Phase 4/8): the active backend is auto-selected from
+# POSTGRES_DSN. POSTGRES_DSN set → postgres-only; unset → sqlite-only. The
+# legacy DB_BACKEND env var is honored ONLY when no POSTGRES_DSN is set
+# (legacy SQLite deployments that read it for display purposes). A
+# `DB_BACKEND=postgres` env without POSTGRES_DSN is invalid and falls
+# back to sqlite with a warning.
 POSTGRES_DSN = os.environ.get("POSTGRES_DSN", "").strip()
 _legacy_db_backend = os.environ.get("DB_BACKEND", "").strip().lower()
-if _legacy_db_backend == "sqlite" and POSTGRES_DSN:
-    # Operator explicitly pins SQLite while a DSN is configured: DB_BACKEND
-    # wins. DEACTIVATE the DSN so EVERY DSN-keyed path stays on SQLite — the
-    # active_backend()/open_conn() read path, the writer loop, and the PG
-    # mirror. (Previously reads keyed on POSTGRES_DSN went to PG while writes
-    # went to SQLite — a split that also ran synchronous psycopg calls on the
-    # event loop and stalled /live under load.) The DSN stays in the env, so a
-    # later flip to PG is just `DB_BACKEND=postgres` (or unset DB_BACKEND).
-    print("[db] DB_BACKEND=sqlite explicitly set with POSTGRES_DSN present; "
-          "running SQLite and leaving the DSN inactive (set DB_BACKEND=postgres "
-          "to activate PG).", flush=True)
-    POSTGRES_DSN = ""
-    DB_BACKEND = "sqlite"
-elif POSTGRES_DSN:
-    # DSN set and DB_BACKEND is postgres or unset → Postgres.
+if POSTGRES_DSN:
     DB_BACKEND = "postgres"
+    if _legacy_db_backend and _legacy_db_backend != "postgres":
+        print(f"[db] POSTGRES_DSN is set; ignoring legacy "
+              f"DB_BACKEND={_legacy_db_backend!r} env var (DB_BACKEND is "
+              f"auto-derived from POSTGRES_DSN in single-DB mode)",
+              flush=True)
 elif _legacy_db_backend == "postgres":
     print("[db] DB_BACKEND=postgres requested but POSTGRES_DSN is unset; "
           "falling back to sqlite (PG mode requires POSTGRES_DSN)",
@@ -1151,11 +1123,6 @@ GW_AUDIT_RETENTION_DAYS = int(os.environ.get("GW_AUDIT_RETENTION_DAYS", "365"))
 # "homepage" (default): upstream's / content (stealth — looks like a normal page load).
 # "404": upstream's real 404 page (explicit rejection signal, status 404).
 BLOCK_RESPONSE_MODE = os.environ.get("BLOCK_RESPONSE_MODE", "homepage")
-
-# 1.8.14 — PRESERVE_HOST: when True, skip Host/Origin/Referer rewriting on
-# forward and pass the client's original Host to upstream. Default False (safe
-# default rewrites Host to upstream's netloc). Per-vhost; hot-reloadable.
-PRESERVE_HOST = os.environ.get("PRESERVE_HOST", "").strip().lower() in ("1", "true", "yes", "on")
 
 # 1.8.15 — grace window (seconds) granted to an identity when an operator
 # clicks Allow / Unban. During this window heuristic detection is skipped so
@@ -1568,80 +1535,6 @@ def _extract_multipart_fields(body: bytes, ctype: str) -> bytes:
     return b"\n".join(values) if values else body
 
 
-# ── 1.9.8 M3/M4 — shared WAF body sample extraction ──────────────────────────
-# Known textual content types (always scanned) and clearly-binary media (never
-# scanned, to avoid false positives on images/archives).
-_WAF_TEXT_CT = ("application/json", "application/x-www-form-urlencoded",
-                "text/", "application/xml", "+json", "+xml",
-                "application/javascript", "application/graphql",
-                "multipart/form-data")
-_WAF_BINARY_CT = ("image/", "video/", "audio/", "font/", "application/pdf",
-                  "application/zip", "application/gzip", "application/x-gzip",
-                  "application/x-7z", "application/wasm")
-
-
-def _looks_textual(b: bytes) -> bool:
-    """True if the sample is UTF-8-decodable or overwhelmingly printable —
-    used to decide whether a non-allowlisted/`octet-stream` body is worth
-    scanning (catches JSON/SQLi smuggled under a binary content type)."""
-    chunk = b[:2048]
-    if not chunk:
-        return False
-    try:
-        chunk.decode("utf-8")
-        return True
-    except UnicodeDecodeError:
-        nonprint = sum(1 for c in chunk if c < 9 or (13 < c < 32))
-        return (nonprint / len(chunk)) < 0.10
-
-
-def _waf_samples(body: bytes, ctype: str) -> list:
-    """Return the byte sample(s) WAF signatures are matched against (1.9.8 M3/M4).
-
-    M4: scan textual bodies under ANY content type (not just an allowlist),
-        skipping only clearly-binary media; this closes the octet-stream/no-CT
-        bypass while avoiding false positives on real images/archives.
-    M3: add a JSON-decoded view and a backslash-unicode-unescaped view so
-        `{"q":"\\u003cscript\\u003e"}` / `\\u0027 OR 1=1` can no longer evade
-        the literal-byte signatures; form bodies are percent-decoded iteratively
-        (also closes the double-encoding gap, L7).
-    """
-    if not body:
-        return []
-    raw = body[:WAF_BODY_SCAN_BYTES]
-    cl = (ctype or "").lower()
-    if not any(t in cl for t in _WAF_TEXT_CT):
-        if any(b in cl for b in _WAF_BINARY_CT) or not _looks_textual(raw):
-            return []
-    out = [raw]
-    if "multipart/form-data" in cl:
-        try:
-            out.append(_extract_multipart_fields(raw, ctype))
-        except Exception:
-            pass
-    if "x-www-form-urlencoded" in cl or b"%" in raw:
-        from urllib.parse import unquote_to_bytes
-        dec, prev = raw, None
-        for _ in range(3):           # bounded iterative decode (anti double-encode)
-            if dec == prev:
-                break
-            prev, dec = dec, unquote_to_bytes(dec)
-        if dec != raw:
-            out.append(dec)
-    if "json" in cl or raw.lstrip()[:1] in (b"{", b"["):
-        try:
-            import json as _json
-            out.append(_json.dumps(_json.loads(raw.decode("utf-8", "replace"))).encode("utf-8"))
-        except Exception:
-            pass
-    if b"\\u" in raw or b"\\x" in raw:
-        try:
-            out.append(raw.decode("unicode_escape", "ignore").encode("utf-8", "ignore"))
-        except Exception:
-            pass
-    return out
-
-
 def is_suspicious_body(body: bytes, ctype: str) -> bool:
     """Returns True if request body matches a known SQLi/XSS/SSTI/cmd-injection
     pattern. Only scans text-ish content types and bounds at 64 KiB.
@@ -1650,8 +1543,19 @@ def is_suspicious_body(body: bytes, ctype: str) -> bool:
     F-14: multipart/form-data fields are extracted and scanned."""
     if not BODY_PATTERN_MATCH or not body:
         return False
-    return any(p.search(s) for s in _waf_samples(body, ctype)
-               for p in SUSPICIOUS_BODY_PATTERNS)
+    cl = ctype.lower()
+    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
+                                  "text/plain", "text/xml", "application/xml",
+                                  "multipart/form-data")):
+        return False
+    if "multipart/form-data" in cl:
+        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
+    elif "x-www-form-urlencoded" in cl:
+        from urllib.parse import unquote_to_bytes
+        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
+    else:
+        sample = body[:WAF_BODY_SCAN_BYTES]
+    return any(p.search(sample) for p in SUSPICIOUS_BODY_PATTERNS)
 
 def match_body_group(body: bytes, ctype: str):
     """1.6.1 — return the first matched group name or None.
@@ -1660,9 +1564,18 @@ def match_body_group(body: bytes, ctype: str):
     F-14: multipart/form-data fields are extracted and scanned."""
     if not BODY_PATTERN_MATCH or not body:
         return None
-    samples = _waf_samples(body, ctype)
-    if not samples:
+    cl = ctype.lower()
+    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
+                                  "text/plain", "text/xml", "application/xml",
+                                  "multipart/form-data")):
         return None
+    if "multipart/form-data" in cl:
+        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
+    elif "x-www-form-urlencoded" in cl:
+        from urllib.parse import unquote_to_bytes
+        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
+    else:
+        sample = body[:WAF_BODY_SCAN_BYTES]
     enabled = {
         "rce":  BODY_GROUP_RCE_ENABLED,
         "cmd":  BODY_GROUP_CMD_ENABLED,
@@ -1675,7 +1588,7 @@ def match_body_group(body: bytes, ctype: str):
         if not enabled[grp]:
             continue
         for pat in BODY_PATTERN_GROUPS[grp]:
-            if any(pat.search(s) for s in samples):
+            if pat.search(sample):
                 return grp
     return None
 
@@ -1738,8 +1651,19 @@ def check_always_body(body: bytes, ctype: str) -> bool:
     F-14: multipart/form-data fields are extracted and scanned."""
     if not body:
         return False
-    return any(p.search(s) for s in _waf_samples(body, ctype)
-               for p in _BODY_ALWAYS_RE)
+    cl = ctype.lower()
+    if not any(t in cl for t in ("application/json", "application/x-www-form-urlencoded",
+                                  "text/plain", "text/xml", "application/xml",
+                                  "multipart/form-data")):
+        return False
+    if "multipart/form-data" in cl:
+        sample = _extract_multipart_fields(body[:WAF_BODY_SCAN_BYTES], ctype)
+    elif "x-www-form-urlencoded" in cl:
+        from urllib.parse import unquote_to_bytes
+        sample = unquote_to_bytes(body[:WAF_BODY_SCAN_BYTES])
+    else:
+        sample = body[:WAF_BODY_SCAN_BYTES]
+    return any(p.search(sample) for p in _BODY_ALWAYS_RE)
 
 
 _VERB_OVERRIDE_HEADERS = frozenset([

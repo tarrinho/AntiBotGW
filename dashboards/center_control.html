@@ -1,10 +1,9 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
-<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <title>AntiBot/WAF GW · Center Control</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);display:flex;min-height:100vh}
@@ -66,7 +65,7 @@ main{max-width:1200px;margin:0 auto}
 .section-header .ts{font-size:10.5px;color:var(--dim);font-family:ui-monospace,Menlo,monospace}
 .empty{padding:20px 8px;color:var(--dim);font-size:11.5px;text-align:center}
 .upstream-pill{font-family:ui-monospace,Menlo,monospace;font-size:10.5px;color:var(--blue);
-               background:rgba(121,192,255,.08);border:1px solid rgba(121,192,255,.2);
+               background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.2);
                padding:2px 8px;border-radius:4px;display:inline-block;max-width:260px;
                overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle}
 .toast{position:fixed;bottom:20px;right:20px;background:var(--card);
@@ -89,7 +88,7 @@ button.btn-sm.danger:hover{border-color:var(--red);color:var(--red)}
 <div id="sidebar">
   <div id="sidebar-brand">
     <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-    <div id="sidebar-brand-ver">1.9.9</div>
+    <div id="sidebar-brand-ver">1.9.10</div>
   </div>
   <nav id="sidebar-nav" aria-label="Main navigation">
     <a href="/antibot-appsec-gateway/secured/control-center" class="active">Center Control</a>

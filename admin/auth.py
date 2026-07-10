@@ -37,15 +37,7 @@ def _csrf_token_valid(request, require_for_safe: bool = False) -> bool:
     if not parsed:
         return False
     _, sid, _ = parsed
-    # 1.9.7 — compare against the per-session random CSRF nonce stored in the
-    # session cache (not a recomputed HMAC). Fall back to the legacy
-    # HMAC(SESSION_KEY, sid) when the cache has no nonce for this sid — i.e.
-    # sessions minted before this change (db csrf_nonce='') or a cold cache in
-    # the boot window — so existing cookies keep working.
-    from admin.users import _SESSION_CACHE
-    _entry = _SESSION_CACHE.get(sid)
-    _nonce = (_entry.get("csrf_nonce") if _entry else "") or ""
-    expected = _nonce or hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
+    expected = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
     provided = request.headers.get("X-CSRF-Token", "")
     if not provided:
         return False
@@ -184,13 +176,21 @@ def _request_username(request) -> str:
 
 
 def _request_role(request) -> str:
-    """Return the role of the session user, or 'admin' for key-only auth."""
+    """Return the role of the session user, or 'admin' for key-only auth.
+
+    A session referencing a username that no longer exists (deleted, purged
+    by mirror-repair, race between DELETE and outstanding request) returns
+    ``"none"`` — an empty string would be truthy-checked as invalid input
+    downstream; ``"none"`` never matches any allowed_roles tuple so every
+    role-gated endpoint denies. Do NOT return "admin" here (fail-open)."""
     from admin.users import _user_load  # lazy: avoid circular import at module load
     u = request.get("_session_user") if hasattr(request, "get") else None
     if not u:
-        return "admin"
+        return "admin"  # key-only auth path; session guard already verified admin_key
     user = _user_load(u)
-    return (user or {}).get("role") or "admin"
+    if user is None:
+        return "none"  # session valid, user row gone → deny (fail-closed)
+    return user.get("role") or "none"
 
 
 def _role_denied(request, *allowed_roles: str):

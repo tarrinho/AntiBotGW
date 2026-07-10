@@ -1272,7 +1272,7 @@ class TestVhostPolicyDashboard:
         status, ct, html = _run(go())
         assert status == 200, f"GET /vhost-policy with auth returned {status}"
         assert "html" in ct, f"Content-Type not HTML: {ct}"
-        assert "AntiBotWaf_GW_1.9.9" in html, "vhost-policy page missing version string"
+        assert "AntiBotWaf_GW_1.9.10" in html, "vhost-policy page missing version string"
 
     def test_vhost_policy_page_no_store_header(self, proxy_module):
         async def go():
@@ -1429,14 +1429,7 @@ class TestDbConfigExportImport:
         assert "DB_BACKEND" in state, "DB_BACKEND missing from /secured/config state"
 
     def test_config_state_db_backend_default_sqlite(self, proxy_module):
-        """Default DB_BACKEND must be 'sqlite'.
-
-        The active backend is auto-derived from POSTGRES_DSN (config.py): unset
-        → sqlite (the zero-deps default), set → postgres. Assert that contract
-        so the PG-mode test harness (POSTGRES_DSN exported) is not a false
-        failure — the value must reflect the configured backend, not a constant.
-        """
-        import os as _os
+        """Default DB_BACKEND must be 'sqlite'."""
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
@@ -1444,9 +1437,7 @@ class TestDbConfigExportImport:
                     d = await (await c.get(NS + "/config",
                                            cookies={proxy_module._SESSION_COOKIE: cookie})).json()
                     return d["state"].get("DB_BACKEND")
-        expected = "postgres" if _os.environ.get("POSTGRES_DSN", "").strip() else "sqlite"
-        assert _run(go()) == expected, (
-            f"DB_BACKEND must be {expected!r} for this backend configuration")
+        assert _run(go()) == "sqlite", "default DB_BACKEND must be 'sqlite'"
 
     def test_config_state_has_postgres_dsn(self, proxy_module):
         """GET /secured/config state must include POSTGRES_DSN (may be empty)."""
@@ -1582,37 +1573,19 @@ class TestDbConfigExportImport:
                     state = (await (await c.get(NS + "/config", cookies=ck)).json())["state"]
                     return summary, state.get("POSTGRES_DSN")
         summary, live_dsn = _run(go())
-        # POSTGRES_DSN is a hot-reload knob, but when it is provided via the
-        # process env (the PG-mode test harness exports POSTGRES_DSN to point at
-        # the live database) it is env-pinned: settings_import_endpoint MUST
-        # refuse to override an env-pinned DB connection string from an uploaded
-        # config file (security — a file upload must not repoint the database).
-        # So the contract is backend-dependent:
-        #   • env DSN absent (SQLite harness): import applies it, live state
-        #     echoes the masked form.
-        #   • env DSN present (PG harness): import rejects it as "env-pinned".
-        import os as _os
+        assert "POSTGRES_DSN" in summary.get("applied", []), (
+            f"POSTGRES_DSN must be in applied list; got summary={summary}"
+        )
+        # F14 (1.9.0 iter-4): GET /__config redacts secret-class knobs — the
+        # POSTGRES_DSN password is masked in the returned `state` so the
+        # dashboard never echoes credentials, even to an authenticated admin.
+        # So the import-applied check above is the proof the value took; the
+        # live state must show the MASKED form (user:****@), NOT the raw DSN.
         from db.cli_helpers import mask_dsn
-        if _os.environ.get("POSTGRES_DSN", "").strip():
-            assert "POSTGRES_DSN" not in summary.get("applied", []), (
-                "env-pinned POSTGRES_DSN must NOT be applied from an uploaded "
-                f"config; got summary={summary}"
-            )
-            assert summary.get("rejected", {}).get("POSTGRES_DSN") == "env-pinned", (
-                "env-pinned POSTGRES_DSN must be rejected with reason "
-                f"'env-pinned'; got summary={summary}"
-            )
-        else:
-            assert "POSTGRES_DSN" in summary.get("applied", []), (
-                f"POSTGRES_DSN must be in applied list; got summary={summary}"
-            )
-            # F14 (1.9.0 iter-4): GET /__config redacts secret-class knobs — the
-            # POSTGRES_DSN password is masked in the returned `state` so the
-            # dashboard never echoes credentials, even to an authenticated admin.
-            assert live_dsn == mask_dsn(dsn), (
-                f"live POSTGRES_DSN {live_dsn!r} must equal the masked form "
-                f"{mask_dsn(dsn)!r} (F14 redaction); raw DSN must never be echoed"
-            )
+        assert live_dsn == mask_dsn(dsn), (
+            f"live POSTGRES_DSN {live_dsn!r} must equal the masked form "
+            f"{mask_dsn(dsn)!r} (F14 redaction); raw DSN must never be echoed"
+        )
 
     def test_export_after_db_change_reflects_new_value(self, proxy_module):
         """After importing DB_BACKEND='postgres', the next export must include 'postgres'."""

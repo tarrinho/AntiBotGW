@@ -3,7 +3,6 @@
 import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
 from db import open_conn
-from db.sqlite import inject_theme  # noqa: F401 — 1.9.6 per-dashboard theme bake
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
@@ -112,11 +111,7 @@ async def agents_timeline_endpoint(request: web.Request):
     _atl_vhost = request.query.get("vhost", "").strip().lower()
     async with state_lock:
         stealth_ips = set()
-        # Snapshot before iterating: state_lock only serialises coroutines, not
-        # the worker threads (rehydrate / db offload) that also mutate ip_state,
-        # so iterating the live dict can raise "OrderedDict mutated during
-        # iteration" — seen during the post-restart warm-up window.
-        for k, s in list(ip_state.items()):
+        for k, s in ip_state.items():
             if _atl_vhost and s.last_vhost != _atl_vhost:
                 continue
             if s.allowed_count and _stealth_score(s)[0] >= min_score:
@@ -254,7 +249,7 @@ async def agents_data_endpoint(request: web.Request):
         suspects = []
         clean = 0
         total_allowed_identities = 0
-        for key, s in list(ip_state.items()):   # snapshot: see agents_timeline note
+        for key, s in ip_state.items():
             if _ad_vhost and s.last_vhost != _ad_vhost:
                 continue
             # 1.5.5 — broaden criteria.  Old logic skipped any identity
@@ -377,7 +372,7 @@ AGENTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "agents.html").read_text(encoding="ut
 
 
 async def agents_dashboard_endpoint(request: web.Request):
-    body = inject_theme(AGENTS_DASHBOARD_HTML, DB_PATH)  # 1.9.6 — honour saved theme
+    body = AGENTS_DASHBOARD_HTML
     return web.Response(
         text=body, content_type="text/html",
         headers={

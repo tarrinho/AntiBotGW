@@ -1,8 +1,8 @@
 """
 1.8.15 — Vhost-implicit ALLOWED_HOSTS.
 
-UX bug: operator adds example.org in Settings → Routing (vhost UPSTREAM mapping)
-but doesn't realise ALLOWED_HOSTS also needs the hostname → every example.org
+UX bug: operator adds jtsl.pt in Settings → Routing (vhost UPSTREAM mapping)
+but doesn't realise ALLOWED_HOSTS also needs the hostname → every jtsl.pt
 request fires the `host-not-allowed` silent decoy → broken page. Since
 ALLOWED_HOSTS is env-pinned, the operator can't even fix it from the
 dashboard.
@@ -86,30 +86,12 @@ class TestHostAllowedSourceGuards:
         )
 
     def test_origin_check_handles_empty_allowed_hosts_with_vhosts(self):
-        """Host validation must defer to VHOSTS when ALLOWED_HOSTS is empty.
-
-        CONTRACT CHANGE (aligned 2026-06): this requirement (E-2) did NOT ship
-        inside `_origin_check_failed` (which is the Origin/CSRF check, a
-        separate control). It shipped as the inline Layer-0 Host gate in
-        protect(): `_VHOSTS_LAYER0` is built from VHOSTS and the gate fires on
-        `ALLOWED_HOSTS or _VHOSTS_LAYER0`, selecting _VHOSTS_LAYER0 as the
-        allowlist when ALLOWED_HOSTS is empty. The security guarantee
-        (vhost-registered hosts implicitly allowed, everything else decoyed) is
-        unchanged and additionally locked by test_v1815_release_fixes.py.
-        """
-        idx = _PH_SRC.find("_VHOSTS_LAYER0 = frozenset(")
-        assert idx != -1, "protect() must build _VHOSTS_LAYER0 from VHOSTS"
-        block = _PH_SRC[idx: idx + 1400]
-        assert "VHOSTS" in block, (
-            "_VHOSTS_LAYER0 must derive from VHOSTS (implicit allowlist)"
-        )
-        # The gate must enter on ALLOWED_HOSTS OR the implicit vhost allowlist.
-        assert "ALLOWED_HOSTS or _VHOSTS_LAYER0" in block, (
-            "gate must fire on ALLOWED_HOSTS OR the implicit vhost allowlist"
-        )
-        # When ALLOWED_HOSTS is empty, the gate must fall back to VHOSTS.
-        assert "ALLOWED_HOSTS if ALLOWED_HOSTS else _VHOSTS_LAYER0" in block, (
-            "Host gate must use VHOSTS as the allowlist when ALLOWED_HOSTS is empty"
+        """_origin_check_failed must defer to VHOSTS when ALLOWED_HOSTS is empty."""
+        idx = _PH_SRC.find("def _origin_check_failed(")
+        nxt = _PH_SRC.find("\ndef ", idx + 1)
+        block = _PH_SRC[idx: nxt]
+        assert "from vhost import VHOSTS" in block, (
+            "_origin_check_failed must consult VHOSTS when ALLOWED_HOSTS is empty"
         )
 
 
@@ -166,8 +148,8 @@ class TestHostAllowedUnit:
 
     def test_vhost_entry_implies_allowed(self):
         _v, _cph = self._fresh_modules()
-        _v.VHOSTS["example.org"] = {"UPSTREAM": "http://internal:8093"}
-        assert self._host_decision(_v, _cph, "example.org") is True, (
+        _v.VHOSTS["jtsl.pt"] = {"UPSTREAM": "http://internal:8093"}
+        assert self._host_decision(_v, _cph, "jtsl.pt") is True, (
             "vhost entry must implicitly allow its hostname"
         )
 
@@ -183,7 +165,7 @@ class TestHostAllowedUnit:
 
     def test_no_match_when_unconfigured(self):
         _v, _cph = self._fresh_modules()
-        _v.VHOSTS["example.org"] = {"UPSTREAM": "http://internal:8093"}
+        _v.VHOSTS["jtsl.pt"] = {"UPSTREAM": "http://internal:8093"}
         assert self._host_decision(_v, _cph, "evil.example.org") is False, (
             "host not in ALLOWED_HOSTS nor VHOSTS must be rejected"
         )
@@ -245,29 +227,29 @@ class TestProtectAllowsConfiguredVhost:
 
     def test_vhost_registered_host_bypasses_allowed_hosts(self, proxy_module):
         async def go():
-            async with _spin_upstream(label="upstream-example") as up_example:
+            async with _spin_upstream(label="upstream-jtsl") as up_jtsl:
                 async with _spin_upstream(label="upstream-pt4") as up_pt4:
                     async with _spin_proxy(proxy_module, up_pt4) as client:
                         import vhost as _v
                         # Restrict ALLOWED_HOSTS to pt4.tech only
                         proxy_module.ALLOWED_HOSTS = {"pt4.tech"}
                         proxy_module.HOST_BLOCKING_ENABLED = True
-                        # Register example.org as a vhost — must implicitly allowlist
-                        _v.VHOSTS["example.org"] = {"UPSTREAM": up_example}
+                        # Register jtsl.pt as a vhost — must implicitly allowlist
+                        _v.VHOSTS["jtsl.pt"] = {"UPSTREAM": up_jtsl}
 
                         try:
-                            r = await client.get("/", headers={"Host": "example.org"})
+                            r = await client.get("/", headers={"Host": "jtsl.pt"})
                             body = await r.text()
                         finally:
-                            del _v.VHOSTS["example.org"]
+                            del _v.VHOSTS["jtsl.pt"]
                             proxy_module.ALLOWED_HOSTS = set()
 
-                        assert "I am upstream-example" in body, (
-                            f"example.org must reach its own upstream (vhost-implicit "
+                        assert "I am upstream-jtsl" in body, (
+                            f"jtsl.pt must reach its own upstream (vhost-implicit "
                             f"allowlist); got: {body!r}"
                         )
                         assert "I am upstream-pt4" not in body, (
-                            "example.org request must NOT be silently decoyed with "
+                            "jtsl.pt request must NOT be silently decoyed with "
                             "global UPSTREAM's homepage"
                         )
         _run(go())

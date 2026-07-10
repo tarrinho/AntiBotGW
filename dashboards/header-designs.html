@@ -4,7 +4,7 @@
 <style>
 :root{
   --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-  --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;
+  --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;
   --orange:#ff7b3a;
 }
 *{box-sizing:border-box;margin:0;padding:0}
@@ -43,7 +43,7 @@ button,select{cursor:pointer}
 .d1-filter-label{font-size:11px;color:var(--dim)}
 .d1-cpill{padding:3px 11px;border-radius:12px;border:1px solid var(--line);
   color:var(--dim);background:transparent;font-size:11.5px;font-weight:600;line-height:1.6}
-.d1-cpill.active{border-color:#79c0ff33;color:var(--fg);background:#1a2332}
+.d1-cpill.active{border-color:#58a6ff33;color:var(--fg);background:#1a2332}
 .d1-path{display:inline-flex;align-items:center;gap:4px;padding:3px 10px;
   border-radius:12px;border:1px solid var(--line);background:transparent;margin-left:6px}
 .d1-path input{font-family:ui-monospace,monospace;font-size:11px;background:transparent;
@@ -97,7 +97,7 @@ button,select{cursor:pointer}
 .d3-cpill.active.ban{background:rgba(248,81,73,.15);color:var(--red);border-color:rgba(248,81,73,.3)}
 .d3-cpill.active.missed{background:rgba(255,123,58,.15);color:var(--orange);border-color:rgba(255,123,58,.3)}
 .d3-cpill.active.auth{background:rgba(188,140,255,.15);color:var(--purple);border-color:rgba(188,140,255,.3)}
-.d3-cpill.active.gwm{background:rgba(121,192,255,.1);color:var(--blue);border-color:rgba(121,192,255,.2)}
+.d3-cpill.active.gwm{background:rgba(88,166,255,.1);color:var(--blue);border-color:rgba(88,166,255,.2)}
 .d3-path{background:#1f2730;border:1px solid var(--line);border-radius:5px;
   color:var(--fg);font-size:11px;padding:3px 8px;font-family:ui-monospace,monospace;width:130px;outline:none;margin-left:8px}
 
@@ -110,13 +110,13 @@ button,select{cursor:pointer}
 .d4-title{font-size:16px;font-weight:700;color:#fff;display:flex;align-items:center;gap:10px}
 .d4-nav{display:flex;gap:2px}
 .d4-nav a{color:var(--dim);text-decoration:none;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:500}
-.d4-nav a.active{color:#fff;background:rgba(121,192,255,.15);border:1px solid rgba(121,192,255,.3)}
+.d4-nav a.active{color:#fff;background:rgba(88,166,255,.15);border:1px solid rgba(88,166,255,.3)}
 .d4-row2{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   padding-top:10px;border-top:1px solid rgba(255,255,255,.06)}
 .d4-vhost-label{font-size:11px;color:var(--dim)}
-.d4-vpill{padding:3px 12px;border-radius:20px;border:1px solid rgba(121,192,255,.4);
+.d4-vpill{padding:3px 12px;border-radius:20px;border:1px solid rgba(88,166,255,.4);
   color:var(--blue);background:transparent;font-size:11.5px;font-weight:600}
-.d4-vpill.active{background:rgba(121,192,255,.2);border-color:var(--blue)}
+.d4-vpill.active{background:rgba(88,166,255,.2);border-color:var(--blue)}
 .d4-divider{width:1px;height:18px;background:rgba(255,255,255,.08);margin:0 4px}
 .d4-show-label{font-size:11px;color:var(--dim)}
 .d4-cpill{padding:3px 10px;border-radius:20px;border:1px solid rgba(255,255,255,.08);
@@ -187,9 +187,9 @@ button,select{cursor:pointer}
 .d7-filter-strip{background:#0d1117;padding:7px 16px;display:flex;align-items:center;
   gap:8px;flex-wrap:wrap;border-top:1px solid rgba(48,54,61,.6)}
 .d7-vhost-label{font-size:10.5px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
-.d7-vpill{padding:2px 11px;border-radius:12px;border:1px solid rgba(121,192,255,.35);
+.d7-vpill{padding:2px 11px;border-radius:12px;border:1px solid rgba(88,166,255,.35);
   color:var(--blue);background:transparent;font-size:11px;font-weight:600}
-.d7-vpill.active{background:rgba(121,192,255,.15)}
+.d7-vpill.active{background:rgba(88,166,255,.15)}
 .d7-divider{width:1px;height:16px;background:rgba(48,54,61,.8)}
 .d7-show-label{font-size:10.5px;color:var(--dim);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
 .d7-cpill{padding:2px 9px;border-radius:10px;border:1px solid transparent;
@@ -211,9 +211,9 @@ button,select{cursor:pointer}
 .d8-nav a.active{color:#fff;background:#1f2730}
 .d8-filter{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
 .d8-vhost-label{font-size:10.5px;color:var(--dim)}
-.d8-vpill{padding:2px 10px;border-radius:10px;border:1px solid rgba(121,192,255,.4);
+.d8-vpill{padding:2px 10px;border-radius:10px;border:1px solid rgba(88,166,255,.4);
   color:var(--blue);background:transparent;font-size:11px;font-weight:600}
-.d8-vpill.active{background:rgba(121,192,255,.2)}
+.d8-vpill.active{background:rgba(88,166,255,.2)}
 .d8-div{width:1px;height:14px;background:var(--line)}
 .d8-show-label{font-size:10.5px;color:var(--dim)}
 .d8-cpill{padding:2px 8px;border-radius:9px;border:1px solid var(--line);
@@ -293,7 +293,7 @@ button,select{cursor:pointer}
 <div class="design-block">
   <div class="design-label">Option 1 <span>Current design (reference)</span></div>
   <div class="design-frame">
-    <h1 class="d1-h1">AntiBotWaf_GW_1.9.9 · Dashboard <span class="pill-live">● LIVE</span></h1>
+    <h1 class="d1-h1">AntiBotWaf_GW_1.9.10 · Dashboard <span class="pill-live">● LIVE</span></h1>
     <nav class="d1-nav">
       <a href="#" class="active">Dashboard</a>
       <a href="#">Agents</a><a href="#">Service</a><a href="#">Controls</a>
@@ -509,7 +509,7 @@ button,select{cursor:pointer}
     <div class="d7-header">
       <div class="d7-top-strip">
         <div class="d7-brand">
-          AntiBotWaf_GW_1.9.9
+          AntiBotWaf_GW_1.9.10
           <span class="d7-brand-sub">Anti-bot Gateway</span>
         </div>
         <span class="pill-live">● LIVE</span>
@@ -587,7 +587,7 @@ button,select{cursor:pointer}
     <div class="d9-wrap">
       <div class="d9-title-row">
         <div class="d9-accent"></div>
-        <div class="d9-title">Dashboard <sub>AntiBotWaf_GW_1.9.9 · <span class="pill-live" style="font-size:9px">● LIVE</span></sub></div>
+        <div class="d9-title">Dashboard <sub>AntiBotWaf_GW_1.9.10 · <span class="pill-live" style="font-size:9px">● LIVE</span></sub></div>
       </div>
       <div class="d9-nav-row">
         <nav class="d9-nav">

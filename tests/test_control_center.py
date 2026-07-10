@@ -454,22 +454,14 @@ async def test_d04_vhost_breakdown_seeded_event_appears_in_dataset(proxy_module)
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            # Backend-aware: /vhost-breakdown reads events from the active
-            # backend, so under the PG-mode harness the seed must land in PG.
-            # PG events.ts is timestamptz; pg_insert_event applies to_timestamp.
-            from db.conn import active_backend
-            if active_backend() == "postgres":
-                from db.postgres import pg_insert_event
-                pg_insert_event(now - 30, "1.2.3.4", "bot", "/", 200,
-                                "ua-block", vhost="qa.example.com")
-            else:
-                from db.conn import conn as _backend_conn
-                with _backend_conn(timeout=10) as conn:
-                    conn.execute(
-                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                        "VALUES (?, '1.2.3.4', 'bot', '/', 200, 'ua-block', 'qa.example.com')",
-                        (now - 30,),
-                    )
+            conn = sqlite3.connect(proxy_module.DB_PATH)
+            conn.execute(
+                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                "VALUES (?, '1.2.3.4', 'bot', '/', 200, 'ua-block', 'qa.example.com')",
+                (now - 30,),
+            )
+            conn.commit()
+            conn.close()
 
             r = await cli.get(
                 f"{NS}/vhost-breakdown?range=120&bucket=300",
@@ -494,20 +486,14 @@ async def test_d05_vhost_stats_fields_required_by_charts(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            # Backend-aware: /vhost-stats reads events from the active backend.
-            from db.conn import active_backend
-            if active_backend() == "postgres":
-                from db.postgres import pg_insert_event
-                pg_insert_event(now - 60, "10.0.0.1", "b", "/x", 200,
-                                "ua-block", vhost="chart-test.local")
-            else:
-                from db.conn import conn as _backend_conn
-                with _backend_conn(timeout=10) as conn:
-                    conn.execute(
-                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                        "VALUES (?, '10.0.0.1', 'b', '/x', 200, 'ua-block', 'chart-test.local')",
-                        (now - 60,),
-                    )
+            conn = sqlite3.connect(proxy_module.DB_PATH)
+            conn.execute(
+                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                "VALUES (?, '10.0.0.1', 'b', '/x', 200, 'ua-block', 'chart-test.local')",
+                (now - 60,),
+            )
+            conn.commit()
+            conn.close()
 
             r = await cli.get(f"{NS}/vhost-stats",
                               cookies=cookies)
@@ -531,20 +517,14 @@ async def test_d06_vhost_stats_bans_is_integer(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            # Backend-aware: /vhost-stats reads events from the active backend.
-            from db.conn import active_backend
-            if active_backend() == "postgres":
-                from db.postgres import pg_insert_event
-                pg_insert_event(now - 10, "99.0.0.1", "b", "/", 200,
-                                "ua-block", vhost="bans-test.local")
-            else:
-                from db.conn import conn as _backend_conn
-                with _backend_conn(timeout=10) as conn:
-                    conn.execute(
-                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                        "VALUES (?, '99.0.0.1', 'b', '/', 200, 'ua-block', 'bans-test.local')",
-                        (now - 10,),
-                    )
+            conn = sqlite3.connect(proxy_module.DB_PATH)
+            conn.execute(
+                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                "VALUES (?, '99.0.0.1', 'b', '/', 200, 'ua-block', 'bans-test.local')",
+                (now - 10,),
+            )
+            conn.commit()
+            conn.close()
 
             r = await cli.get(f"{NS}/vhost-stats",
                               cookies=cookies)
@@ -574,12 +554,7 @@ async def test_d07_vhost_breakdown_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                # 404 is the deliberate silent-decoy status: blocked admin
-                # endpoints mirror the upstream's real 404 so the gateway is
-                # indistinguishable from "this path does not exist"
-                # (_serve_mirrored_404 / _silent_decoy_response). It is a valid
-                # deflection — no labels/datasets are returned.
-                assert r.status in (401, 403, 404, 302, 301), (
+                assert r.status in (401, 403, 302, 301), (
                     f"/vhost-breakdown: unexpected status {r.status} for unauthenticated request."
                 )
 

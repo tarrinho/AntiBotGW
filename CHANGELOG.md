@@ -6,363 +6,42 @@ Author: Pedro Tarrinho
 
 ---
 
-## [1.9.9] — security hardening + GeoMap event-loop offload
+## [1.9.10] — 2026-07-08 — security hardening + accumulated 1.9.7-1.9.9 promotion
 
-### Performance
-- **GeoMap no longer stalls the gateway** — `geo_data_endpoint`'s events scan and
-  per-IP GeoLite2-City / ASN mmdb lookups now run on a worker thread
-  (`await asyncio.to_thread(_scan)`) instead of inline on the asyncio event loop.
-  A wide map window (selectable up to 30 days) with many unique IPs previously
-  blocked all proxying until the scan finished; the loop now stays responsive and
-  the 60 s `_GEO_CACHE` still serves repeat ticks. Partial mitigation of L11–L13
-  (event-loop starvation, CWE-400). Counts remain exact within the window — no
-  SQL `LIMIT`; events with no public GeoIP coordinate (private/LAN/unresolvable)
-  are reported separately in the "No geo" card (`skipped_no_geo`).
+Bumps `GW_VERSION` from 1.9.6 to 1.9.10; folds already-built 1.9.7-1.9.9
+feature work (Server-header hardening, `_upstream_safe_to_reload`, SSRF-guard
+raise, `*_ENABLED` detection knobs, port-aware vhosts, geo endpoint event-loop
+offload) which had shipped in code but never in the version string. This
+release adds three low-risk security fixes on top.
 
-### Tests
-- `tests/test_v199_geo_scan_offload.py` (4) — asserts the scan is wrapped in
-  `_scan()`, run via `asyncio.to_thread`, declares `nonlocal skipped_no_geo,
-  _sample_seen`, keeps the blocking mmdb/cursor work inside the offloaded helper,
-  and that `skipped_no_geo` is surfaced in the payload + `geo.html` "No geo" card.
+### Security
+
+- **Fix 1a — role fail-closed for deleted-user sessions.** `admin/auth.py::_request_role`
+  no longer returns `"admin"` when the session cookie points at a user row
+  that no longer exists (deleted, mirror-repaired, race between DELETE and
+  outstanding request). Returns `"none"` instead so every role-gated endpoint
+  denies. The key-only path (no session, admin_key verified upstream) is
+  unchanged. Closes a fail-open EoP.
+- **Fix 1b — outstanding sessions revoked on credential/authz mutation.**
+  New helper `admin/users.py::_revoke_user_sessions(user, actor, except_sid=)`.
+  Wired into `users_update_endpoint` (fires on password change, role change,
+  status→!active; preserves the caller's own sid on self-service password
+  rotate so the current response isn't invalidated before it returns) and
+  into `users_delete_endpoint` (kills every session for the deleted account).
+  Ends the "sid outlives revoke" post-mutation window. Adds `sessions_revoked`
+  count to the `_gw_audit` line for both `user_updated` and `user_deleted`.
+
+### Supply chain
+
+- **Fix 5a — trivy-action off `@master`.** `.github/workflows/docker.yml` —
+  both scan steps pinned to `aquasecurity/trivy-action@0.28.0` (was `@master`,
+  a mutable branch — supply-chain risk on every CI run). TODO left in-file
+  to complete full SHA-pin at the next hardening pass.
 
 ### Validation
-- `validation/1.9.9.md` — full §11b residual-risk review + §21 pipeline report.
 
-### Security (Tier-1 hardening)
-- **mesh-sync state requires admin/maintainer** — `mesh_sync_state_endpoint` now
-  applies `_role_denied`; viewers can no longer read which sync keys are enabled
-  or the pending offer previews.
-- **`_internal_authed` gate on `ip-intel` and `whoami`** — explicit in-handler
-  auth (defence-in-depth beneath the `protect()` middleware).
-- **2FA setup is POST + CSRF** — `totp_setup_endpoint` is now `@_require_csrf` and
-  registered as `add_post` (it was an unrouted GET; this also wires the route so
-  the dashboard's existing POST reaches it). Generating a pending TOTP secret can
-  no longer be driven cross-site or by a bare navigation.
-- **scrypt parameter upper bounds** — `_password_verify` rejects `n>2^18`/`r>16`/
-  `p>4` before calling `hashlib.scrypt`, so a crafted stored value cannot force a
-  memory/CPU DoS on every verify.
-- **2FA token length bound** — `totp_verify_endpoint` rejects oversized
-  `partial_token`/`code` (>64) with a 400 before the timing-safe compare.
-- **`agw_csrf` cookie scoped to `ADMIN_NS`** — the JS-readable CSRF cookie is set
-  and deleted with `path=/antibot-appsec-gateway` (was `path=/`), so it never
-  travels to the proxied upstream surface (mitigates register risk R1).
-- **Async password hashing** — login / user-create / password-change run scrypt
-  (`N=2^17`, ~500 ms) off the event loop via `_password_hash_async` /
-  `_password_verify_async` (`asyncio.to_thread`), so a burst of logins no longer
-  stalls every other coroutine.
-
-
----
-
-## [1.9.8] — port-aware virtual hosts
-
-### Added
-- **Port-aware virtual hosts (`VHOST_PORT_AWARE`).** The vhost identity can now
-  include the inbound `Host` **port**, so `challenges.site.com:8008` and
-  `challenges.site.com:8009` are **distinct vhosts** — each with its own
-  upstream, per-vhost policy, statistics, and ban scope. Default **off** (the
-  port is stripped, host-only keying — the historical behaviour); opt-in and
-  hot-reloadable via Controls / `POST /secured/config`.
-  - **Why:** CTFd serves *dynamic challenges* as separate instances on the
-    **same hostname but different ports**. Host-only keying collapsed every
-    challenge into one vhost, making per-instance upstream/policy/ban-scope
-    impossible — port-aware keying is required to front per-instance CTFd
-    dynamic challenges from one gateway.
-  - **Lookup precedence:** exact `host:port` → portless `host` (an all-ports
-    fallback) → `*.parent[:port]` wildcards. A portless entry
-    (`challenges.site.com`) catches any port without an exact `host:port` entry.
-  - **Scope of change is small** — the vhost key is derived in one place
-    (`vhost.set_vhost`) and consumed as an opaque string everywhere downstream
-    (`events.vhost`, dashboards, per-vhost bans `ip_bans_vhost`, RPS windows),
-    so they become port-distinct automatically with no schema change.
-  - `_validate_vhost_hostname` accepts an optional `:PORT` (1-65535) suffix when
-    the knob is on (the `VHOSTS` env, the Settings add form, and `/secured/vhosts`
-    all accept `host:port`); rejects it otherwise.
-  - **Deployment note:** the gateway binds a single `LISTEN_PORT` and tells the
-    ports apart purely from the `Host` header — the front (CDN / reverse proxy)
-    must forward the original `host:port` (or `X-Forwarded-Host`).
-  - (`config.py` `VHOST_PORT_AWARE`, `vhost.py` `set_vhost`/`_resolve_vhost_entry`/
-    `_validate_vhost_hostname`, `core/proxy_handler.py` `_HOT_RELOAD_KNOBS`.)
-
-### Fixed
-- **Publish pipeline now reliably updates BOTH GitHub repos.** `copy-to-github.sh`
-  hard-assigned `DEST` to the corporate path unconditionally, ignoring the
-  `DEST=` override `publish.sh` passes per repo — so every copy (including the
-  "personal" pass) landed in corporate and the personal repo silently drifted
-  ~13 versions behind (stuck at `AppSecGW_1.8.5`). Now `DEST="${DEST:-…}"` honors
-  the override. Also: `publish.sh apply_one` pushes whenever local is ahead of
-  origin (self-heals a prior failed push, not just new staged changes); a
-  per-repo **version gate** (aborts if the copied `config.py` version ≠ source)
-  and a **cross-repo parity** check (both staged trees compared by path+hash)
-  were added; and the `copy-to-github.sh` "Next steps" commit hint is derived
-  from `config.py` instead of a frozen `v1.8.7`.
-- **Default ports (`:80`/`:443`) are normalised to portless in port-aware mode.**
-  Browsers and reverse proxies (incl. Cloudflare) send `Host: site.com` — no
-  port — for default-port traffic, so a port-aware vhost keyed `site.com:443`
-  previously never matched. `:80`/`:443` now collapse to portless at every
-  key-forming site (`set_vhost`, env/file config load, `vhost_set`,
-  `vhost_delete`), making `site.com`, `site.com:80` and `site.com:443` one vhost
-  while non-default ports (e.g. `:8008`) stay distinct. (`vhost._strip_default_port`)
-
-### Security
-- **Whitebox security review (see `analysis.result.md`) — quick-win fixes landed.**
-  M1/M2 (CWE-862): added role authorization (`_role_denied admin/maintainer`) to four
-  mesh registry endpoints (auto-apply, distribution-rules, distribution-matrix,
-  sync-status) that a `viewer` could previously reach. M6 (CWE-312): every `secrets_kv`
-  value is now Fernet-encrypted at rest (was POSTGRES_DSN only) — idempotent, with
-  no-op decrypt on legacy plaintext for in-place upgrade. M8 (CWE-1357): `Dockerfile.armv7`
-  base image digest-pinned on both stages. Guarded by `tests/test_v198_secfix_quickwins.py`.
-  Second batch — M3 (CWE-184): WAF body scan now normalizes JSON-unicode escapes +
-  iterative percent-decoding before matching; M4 (CWE-693): body scan covers textual
-  bodies under any content type (incl. octet-stream), skipping only binary media;
-  M5 (CWE-644): `_safe_client_host()` allowlists/validates the Host before reflecting
-  it as `X-Forwarded-Host`/`Location` (HTTP + WS); M7 (CWE-400): `concurrency_guard`
-  middleware caps concurrent in-flight requests (`MAX_CONCURRENT_REQUESTS`, fast 503).
-  Guarded by `tests/test_v198_secfix_medium2.py`. All 8 Medium findings now resolved.
-
-### Documentation
-- **Refreshed stale markdown docs to 1.9.8.** `README.md` (6 stale `1.8.15`
-  banners/examples), `CONTROLS.md` (was 1.7.3 — now **regenerated** from the live
-  155-control set), and `analysis.result.md` (was a 1.7.8 review — refreshed).
-  `IMPROVEMENTS.md` (1.8.9) and `threatmodel.md` (1.6.7) gained explicit
-  "historical snapshot / point-in-time" markers. Screenshots standard: all
-  captures are now **light mode** (codified in rules.md §15/§13).
-
-### Tests
-- `tests/test_v198_vhost_port_aware.py` — 16 tests: default-off host-only
-  behaviour, distinct `host:port` vhosts, portless all-ports fallback, exact
-  `host:port` wins over portless, wildcard matching ±port, hostname validation
-  (accept `:PORT` only when aware), `vhost_set` CRUD, and (iteration) the four
-  default-port normalisation cases (`:80`/`:443` → portless on match/store/delete;
-  `:8008` stays distinct). Added `VHOST_PORT_AWARE` to the `test_165` every-knob
-  round-trip.
-
----
-
-## [1.9.7] — 2026-06-23 — fast startup (deferred state rehydrate)
-
-### Performance
-- **Gateway accepts connections in ~3 s instead of ~60 s after a restart.** On a
-  large Postgres deployment, `on_startup` blocked aiohttp from serving while it
-  rehydrated dashboard state synchronously — measured on a 1.18M-request /
-  19,469-client / 8M-event store: ~17 s of full-table aggregate scans in
-  `db_load_state` plus a ~35 s **unbounded** `ORDER BY ts DESC LIMIT 250` across
-  every chunk of the Timescale `events` hypertable. Because the server doesn't
-  accept until `on_startup` returns, a Cloudflare-fronted origin returned a
-  `502` for the whole window on every upgrade. The cosmetic rehydrate
-  (`db_load_state` + `_rehydrate_timeline` + `_rehydrate_events`) now runs in a
-  **background task after the server is accepting**, offloaded to a thread
-  executor (`run_in_executor`) so the slow blocking DB reads never stall the
-  event loop. Dashboards fill in within a few seconds of serving.
-  (`proxy.py`, `db/sqlite.py`; `tests/test_v197_deferred_rehydrate.py`.)
-- **Security path unaffected.** `_rehydrate_bans()` stays **synchronous** (runs
-  before the server accepts) so a banned IP can never slip through the warm-up
-  window. `db_load_state` gained a `clear_first` param: the deferred (merge)
-  path calls it with `clear_first=False` so it never wipes `ip_state` or
-  downgrades an already-active in-memory ban from the (possibly staler) clients
-  table. Tests keep the synchronous path (`OFFLINE_BG_TASKS`) with
-  `clear_first=True` for cross-test isolation.
-
-### Detection (built-but-unwired features activated)
-- **Ed25519 mesh signing (replaces the symmetric-HMAC model).** Gateway mesh
-  offers are now signed with a real Ed25519 private key and verified by peers
-  using only the public key — a peer can no longer forge another gateway's
-  offers (the old model shared an HMAC secret out-of-band). New
-  `_gw_sign_offers`/`_gw_verify_offers`/`_canonical_offer_bytes`; `_gw_generate_keypair`
-  /`_gw_derive_pubkey` now produce real Ed25519 keys. `_mesh_sync_loop` signs on
-  publish (attaches `_sig`) and, on ingress, **only applies offers from a
-  registered peer whose signature verifies against its registered public key**
-  (logs `mesh_sync_no_sig`/`mesh_sync_no_pubkey`/`mesh_sync_sig_invalid` and
-  skips otherwise). **BREAKING for existing mesh deployments:** old HMAC-derived
-  keypairs won't verify — all mesh nodes must upgrade together and regenerate
-  keypairs. Single-node deployments are unaffected. Degrades gracefully (no
-  signing) when `cryptography` is absent (armv7). (`admin/mesh.py`.)
-- **WAF kill-switches wired (operator control over the whole WAF layer).** The
-  request-smuggling, verb-override, header-injection (SSTI / host-header),
-  body-WAF (XXE / proto-pollution / critical-injection), file-upload, GraphQL,
-  slowloris, interaction-probe, and per-identity rate-limit detections were all
-  built and acting but **not gated by their `*_ENABLED` kill-switches** (so an
-  operator couldn't disable a layer) and the signals weren't mapped in
-  `SIGNAL_KNOB` (dashboard showed them as always-on). Added the gates
-  (`WAF_SMUGGLING/VERB_OVERRIDE/HEADER_INJECTION/BODY/UPLOAD/GRAPHQL/SLOWLORIS_ENABLED`,
-  `RATE_LIMIT_ENABLED`, all default-on, per-vhost overridable) and mapped every
-  WAF/interaction signal in `SIGNAL_KNOB`. (`core/proxy_handler.py`.)
-- **Threat-intel feeds now enforced.** `reputation.feeds.feeds_check()` was
-  defined and its refresh loops ran, but it was **never called** in the request
-  path — `feodo-c2`/`cins-rogue`/`urlhaus-malware` were dead. Wired into the
-  detector pipeline (in-process set lookup; self-gates on
-  `FEODO/CINS/URLHAUS_ENABLED`, all default-off; skips private IPs) + mapped in
-  `SIGNAL_KNOB`/`_REASON_METHOD`/latency/descriptions. (`core/proxy_handler.py`.)
-- **JS-consistency signals now enforced.** `js_consistency_signals()` (Sec-CH-UA /
-  Sec-Fetch coherence → `js-cua-version-mismatch`/`js-mobile-hint-mismatch`/
-  `js-fetch-impossible`) was defined but never called; wired + mapped. Gated on
-  `JS_CONSISTENCY_ENABLED`. (`core/proxy_handler.py`.)
-- **H2 SETTINGS fingerprint now enforced.** `h2fp_signals()`
-  (`h2-settings-deny`/`h2-settings-mismatch`) was defined but never called; wired
-  + mapped. Gated on `H2_SETTINGS_FP_ENABLED` (default off; needs the fingerproxy
-  sidecar). (`core/proxy_handler.py`.)
-
-### Security
-- **2FA-at-login bypass closed (HIGH).** `login_submit` minted a full session
-  immediately after password verification, ignoring the user's `totp_enabled`
-  flag — a user who had enrolled TOTP could authenticate with the password
-  alone. Login now issues an unpredictable, server-stored `partial_token`
-  (`secrets.token_urlsafe`, not an enumerable HMAC) for 2FA users and requires a
-  second POST to `/login/totp` carrying that token + the TOTP (or a one-time
-  backup) code before any session is minted. New `totp_verify_endpoint`
-  (timing-safe token + code compare, backup-code consumption, IP rate-limited).
-  (`admin/users.py`, `proxy.py`.)
-- **UPSTREAM hot-reload SSRF guard restored (HIGH).** The `UPSTREAM`
-  hot-reload knob validated only scheme + length via a bare lambda — an admin
-  (or same-origin XSS hitting `/__config`) could repoint the upstream at
-  `169.254.169.254` / `127.0.0.1` / an RFC-1918 host. Re-wired the validator to
-  `_upstream_safe_to_reload`, which resolves the host and rejects
-  private/loopback/link-local/cloud-metadata ranges (subject to
-  `ALLOW_PRIVATE_UPSTREAM`). (`core/proxy_handler.py`.)
-- **Session absolute timeout enforced.** `_session_verify` now rejects a session
-  more than `SESSION_ABSOLUTE_TIMEOUT` (default 8 h) past its `created_ts`, even
-  if the sliding `expires_ts` keeps getting refreshed; `created_ts` is persisted
-  and rehydrated so the clock survives a restart (legacy rows with `created_ts=0`
-  are not rejected). (`admin/users.py`.)
-- **OIDC hardening.** Expired `id_token` now rejected via a strict `exp` re-check
-  (PyJWT's `leeway` had allowed tokens up to 30 s past expiry; nbf/iat skew
-  tolerance retained). Added `_OIDC_STATE_MAX` (500) cap: `/auth/oidc/login`
-  purges expired states then returns 503 at the cap, blocking unauthenticated
-  state-spray memory exhaustion. (`admin/oidc.py`.)
-- **Honey-cred probe.** Now IP rate-limited (`_probe_rate_limit_ok`) and bans the
-  **requester's** own identity — previously it banned the identity the honey key
-  was *issued to*, so an attacker who scraped a leaked key from a victim's HTML
-  could get that victim banned by probing it. (`core/proxy_handler.py`.)
-- **RFC-7239 `Forwarded` + `X-Forwarded-Prefix` stripped** from inbound requests
-  (same spoof surface as the `X-Forwarded-*` family). (`core/proxy_handler.py`.)
-- **SSRF guard fails closed on DNS failure.** `_ssrf_guard_url` raised nothing
-  (let the URL through) on `gaierror`; now raises so an unresolvable host can't
-  dodge the private-range check at config-write time. (`core/proxy_handler.py`.)
-- **Per-vhost `ALLOWED_METHODS` now enforced.** The Layer-0 / post-WebSocket
-  method checks read the global set; switched to `vc("ALLOWED_METHODS")` so a
-  per-vhost override actually applies. (`core/proxy_handler.py`.)
-- **Admin-probe label no longer forgeable.** The admin-namespace 404 classifier
-  emitted a catch-all `internal-probe`; split into an HMAC-validated
-  `operator-self` (valid signed session) vs `admin-probe` (unauthenticated
-  recon) so a scanner can't dodge the recon count by presenting any cookie.
-  (`core/proxy_handler.py`.)
-- **Per-session random CSRF nonce.** The `agw_csrf` token was
-  `HMAC(SESSION_KEY, sid)` — derivable for every session from one secret.
-  `_session_create` now mints an independent `secrets.token_urlsafe(24)` nonce,
-  stored in the session cache + persisted (rehydrated on restart);
-  `_csrf_token_valid` and the middleware self-heal/`__AGW_CSRF__` injection
-  compare against it. Backward-compatible: sessions minted before the change
-  (or a cold cache in the boot window) fall back to the legacy HMAC, so existing
-  cookies keep working. (`admin/users.py`, `admin/auth.py`, `core/middleware.py`.)
-
-### Fixed
-- **Kill-switch wiring gaps (`SIGNAL_KNOB`).** 19 emitted detection signals
-  (probe/session/rate-limit/host/header/ja4/journey/coordinated/fp families +
-  `redirect-maze-bot`) had real, vhost-coercible, hot-reloadable `*_ENABLED`
-  knobs but were unmapped in `SIGNAL_KNOB`, so the dashboard kill-switch UI +
-  riskbreakdown `knob_state` reported them as always-on and the per-vhost
-  override showed no controlling knob. Mapped in both `SIGNAL_KNOB` copies;
-  `redirect-maze-bot` also gained its `_HOT_RELOAD_KNOBS` entry
-  (`REDIRECT_MAZE_ENABLED`), `SIGNAL_LABELS`, and description tuple (mirrors
-  `tarpit-walk`). Metadata only — enforcement stays the inline `if <KNOB>:` in
-  each detector. (`core/proxy_handler.py`.)
-- **Postgres correctness fixes** (all 500/data-loss on PG-only deployments;
-  SQLite was unaffected):
-  - `/secured/path-hits` 500'd on any match — `EXTRACT(EPOCH FROM ts)` returns
-    `Decimal` on PG, breaking `round(now - ts, 1)`. Cast to `::float8`.
-  - vhost-breakdown + signal-timeline charts silently dropped final-bucket
-    events — PG `CAST(numeric AS INTEGER)` rounds half-up vs SQLite/Python
-    truncation. Wrapped the slot math in `FLOOR(...)`. (`admin/settings.py`.)
-  - Service-metrics history 500'd on PG — 2-arg `ROUND(AVG(col), 2)` has no
-    `round(double precision, integer)` overload. Cast `AVG` to `numeric`.
-    (`dashboards/service_metrics.py`.)
-- **Shared upstream session now uses `DummyCookieJar`.** The 1.9.5 app-wide
-  pooled `ClientSession` kept a default cookie jar, so an upstream `Set-Cookie`
-  from one proxied request could persist into another (cross-request cookie
-  leak). Cookies are forwarded via headers, so the shared session must not keep
-  a jar. (`core/proxy_handler.py`.)
-- **Logout clears the `agw_csrf` cookie** (was only clearing the session
-  cookie), so a stale CSRF token can't survive into a re-login.
-  (`admin/users.py`.)
-- **`GET /__config` exposes an `env_pinned` list** so the dashboard can render
-  env-locked knobs read-only instead of bouncing off env-pin on Apply.
-  Removed dead `_escalate`/`_second_order` locals in `protect()`.
-  (`core/proxy_handler.py`.)
-- **`test_164` cross-test flake fixed.** `test_v187_db_switch_hotswap.py` set `POSTGRES_DSN` at module-import time, leaking it process-globally and flipping `test_164_db_backend_default_sqlite` into PG mode; removed the import-time env set. Default suite now 1185/0. (`tests/`.)
-- **PG-mode stale-test debt.** Updated ~75 tests across 39 files that asserted
-  renamed internals or pre-refactor contracts to the current behaviour (verified
-  against source; no security control weakened, no test skipped/trivialised).
-- **`geo.html` load-status pill test pinned the old static label.** Updated
-  `test_geo_html_load_status_ready_text` to the 1.9.5 progress-pill behaviour
-  (`Loading N%` → `Ready`, re-armed on every fetch); the literal `Loading Ready`
-  no longer exists. (`tests/test_pure.py`.)
-
-### Fixed
-- **Light/dark theme is now a true single server-side master.** Every dashboard
-  already baked `config_kv['ui_theme']` into `<html data-theme>` on first paint,
-  but the toggle's persist call (`POST /antibot-appsec-gateway/secured/ui-theme`)
-  had **no registered endpoint** — the request 405'd and was swallowed by the
-  toggle's `.catch()`, so the choice only ever lived in the local browser's
-  `localStorage` (per-browser, never synced; a fresh browser fell back to a
-  dark/OS-preference split between baked and un-baked pages). Built the
-  `ui_theme_endpoint` (GET → current master; POST `{"theme":"dark"|"light"}` →
-  persists synchronously to `config_kv['ui_theme']`, 400 on invalid, role-gated)
-  and registered `GET`/`POST /secured/ui-theme`. Now toggling on ANY page sets
-  the master that ALL 11 dashboards reflect on their next load — across browsers
-  and devices. Also gave the `main.html` chart-loading overlay a light-mode
-  override (it was hardcoded `rgba(13,17,23,0.55)` and stayed dark in day theme).
-  (`admin/settings.py`, `db/sqlite.py` `set_ui_theme`, `proxy.py`,
-  `dashboards/main.html`; `tests/test_v1811_theme.py` — api01–10, incl. an
-  all-dashboards master-reflection test.)
-- **Persistent IP ban now shows as "Banned" in the dashboard (was "allowed").**
-  The raw-IP ban (`ip_bans` table, checked via `check_ip_ban_cached` — survives
-  session-cookie / fingerprint rotation) is independent of the in-memory identity
-  ban (`s.banned_until`). An IP in the hostile pool whose identity risk had since
-  decayed below threshold rendered a green **allowed** badge in the reason-details
-  popup and the ALLOWED/BLOCKED/MISSED tabs — even though every request was being
-  silent-decoyed (the ban *was* enforced; only the label was wrong). The clients
-  dump (`metrics_endpoint`) now exposes an `ip_banned` flag (probed only for
-  not-already-identity-banned clients, via the TTL ban cache); the dashboard
-  treats it as banned in `_clientCats`, the reason-details status, and the
-  client-detail status line. Added the missing `ip-ban` entry to `REASON_INFO`
-  (was "tier INFO, weight 0, No description available"). (`core/proxy_handler.py`,
-  `dashboards/main.html`; `tests/test_v197_ip_ban_status.py`.)
-
-### Operator features (P2 — built-but-unwired backlog completed)
-- **Attack Playbook backend.** The Honeypots dashboard's Attack-Playbook +
-  honey-suggest cards fetched `/secured/attack-playbook` and
-  `/secured/honey-suggest`, but neither endpoint existed (the cards rendered
-  "HTTP 404"). Built `attack_playbook_endpoint` (honeypot-family catches grouped
-  by exact reason with capped distinct examples + `last_ts`/`capped`; scanner-tool
-  fingerprinting from the **full per-IP path set** — nuclei/nikto/wpscan/sqlmap/
-  feroxbuster signatures, ≥2 hits → fingerprint; signature-completion
-  `predicted_probes` minus already-trapped paths) and `honey_suggest_endpoint`
-  (frequently-probed 4xx paths not yet trapped, last 7 days). Both read the
-  `vhost` query param (lowercased) and push it into the DB read so the dashboard
-  vhost selector actually filters; routes registered in `proxy.py`.
-  (`core/proxy_handler.py`, `proxy.py`; `tests/test_v1810_attack_playbook.py`,
-  `tests/test_v1813_honeypot_vhost_filter.py`.)
-- **`PRESERVE_HOST` knob.** Opt-in (default False, per-vhost, hot-reloadable):
-  when set, the forward path skips Host/Origin/Referer rewriting and passes the
-  client's original Host to upstream (X-Forwarded-Host always carries the client
-  host regardless). Gated in both the HTTP and WebSocket forward paths.
-  (`config.py`, `core/proxy_handler.py`, `vhost.py`;
-  `tests/test_v1814_preserve_host_qa.py`.)
-- **VACUUM history + concurrency guards.** Each SQLite VACUUM now records a
-  `gw_audit` row (`action='db_vacuum'`, saved_bytes/duration_ms/ok) and the
-  response + `GET /secured/db-vacuum-history` return the last 5 runs (newest
-  first, via the new `_vacuum_history` helper). `db_vacuum_endpoint` now refuses
-  with **409** while a background migration is in flight (`_BG_MIGRATION`, set by
-  `proxy._resume_pending_bg_migration`) or a concurrent VACUUM holds
-  `_DB_VACUUM_LOCK`; the run is single-flighted under the lock.
-  (`core/proxy_handler.py`, `proxy.py`; `tests/test_v1815_vacuum_history.py`.)
-- **`BLOCK_RESPONSE_MODE="404"` now serves the upstream 404 body** instead of
-  falling through to the homepage decoy. The silent-decoy responder branches
-  api/admin → JSON 404, `"404"` → cached upstream-404 body (primed via
-  `_fetch_upstream_404`), else homepage. (`core/proxy_handler.py`;
-  `tests/test_v1815_block_response_mode_qa.py`.)
-
----
+See `validation/1.9.10.md` for the stage-by-stage record and the STRIDE-lite
+security risk register update.
 
 ## [1.9.6] — 2026-06-20 — dashboard responsiveness (/__metrics response cache)
 
@@ -379,59 +58,6 @@ Author: Pedro Tarrinho
   (`core/proxy_handler.py`; `tests/test_v196_metrics_cache.py`.)
 - Read-only/display path only — no change to detection, scoring, banning, or
   proxying. At most ~1 s data staleness on a dashboard that already polls at 2 s.
-
-### Fixed
-- **`/secured/logs-data` returned 500 on Postgres-only deployments.** `r["ts"]`
-  is a `TIMESTAMPTZ` `datetime` on PG (not JSON-serializable), so the Logs
-  dashboard's data endpoint 500'd. Added a `_epoch()` coercion helper
-  (datetime→epoch float, SQLite REAL passthrough, null-safe) on the ts output.
-  Found while running the full PG-mode suite. (`core/proxy_handler.py`;
-  `tests/test_v196_pg_datetime_and_writer.py`.)
-- **`db_writer_loop` crashed with `task_done() called too many times` on
-  shutdown/cancellation.** `batch` was assigned inside the `try`, so a
-  `CancelledError` during `await db_queue.get()` left a stale prior-iteration
-  batch that the `finally` re-`task_done()`'d. Reset `batch = []` before the
-  `try` in both writer-loop variants. Cleaner production shutdown; also un-stuck
-  5 PG-mode test files that this defect was hard-crashing. (`db/sqlite.py`.)
-- **Dashboard background flipped dark↔light when navigating between pages.** Only
-  5 of 11 dashboards baked the persisted UI theme into the served `<html>` tag;
-  the other 6 (main, agents, siem, geo, logs, control_center) shipped without
-  `data-theme`, so their `<head>` init script fell back to the OS
-  `prefers-color-scheme` — flipping the theme between the two groups when the
-  saved choice differed from the OS setting. Added one shared helper
-  `db.sqlite.inject_theme(html, db_path)` and routed every dashboard through it
-  (the previously-broken 6 now inject; honeypots refactored to the helper too).
-  A source-scan guard test fails if any dashboard HTML is ever served raw.
-  (`db/sqlite.py`, `core/proxy_handler.py`, `dashboards/{agents,siem,honeypots}.py`;
-  `tests/test_v196_dashboard_theme_injection.py`.)
-- **Service page "7 days" window showed only ~1 day (PG-only deployments).**
-  `db/sqlite.py::db_load_state()` rehydrated the in-memory `SERVICE_METRICS_HISTORY`
-  buffer at boot from the **local SQLite file** (its hard-coded
-  `conn = _sqlite_connect(DB_PATH)`). In PG-only mode the db-writer mirrors
-  `svc_metric` rows to Postgres and never touches local SQLite, so that file is
-  frozen at the pre-cutover state — rehydrating from it loaded **stale samples
-  with old timestamps**. Those made the deque's oldest entry look weeks old,
-  which fooled `service_metrics_data_endpoint`'s `start_b < _buf_oldest`
-  heuristic into taking the in-memory path (stale gap + most-recent live
-  samples) instead of the backend-aware DB path — so long windows rendered only
-  the most-recent ~1 day even though Postgres held the full history (observed on
-  a production deployment: 9 days in PG, 1 day shown). Fixed by rehydrating through
-  `open_conn()` (backend-aware, the same pattern `_rehydrate_timeline` already
-  uses), so PG-only deployments load a **contiguous recent buffer from
-  Postgres**. SQLite-only deployments are unaffected (`open_conn()` returns the
-  same file). Buffer is cleared before rehydration (repeat-`on_startup` safety)
-  and still bounded by `SERVICE_METRICS_RETENTION`. The last read path in
-  `db_load_state` that wasn't made backend-aware in 1.9.1 iter-18.
-
-### Tests
-- `tests/test_v196_metrics_cache.py` — `/__metrics` short-TTL response cache.
-- `tests/test_v195_svc_rehydrate_backend_aware.py` (**7 tests**) — the
-  svc_metrics rehydration reads through `open_conn()` (not the local-SQLite
-  `conn`), closes its connection in `finally`, clears the deque first, keeps the
-  `LIMIT SERVICE_METRICS_RETENTION` bound, swallows boot errors with the
-  `db_svc_metrics_not_loaded` slog, and (belt-and-braces) no `conn.execute(…
-  svc_metrics …)` remains on the local-SQLite connection anywhere in
-  `db_load_state`.
 
 ## [1.9.5] — 2026-06-19 — hot-path performance (shared upstream pool + ban-lookup cache)
 
@@ -526,7 +152,7 @@ Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and
 
 ### Fixed
 
-- **`POSTGRES_DSN` set but gateway silently ran on SQLite.** For `DB_BACKEND`, a persisted `config_kv` value overrode the env (by design, so the dashboard backend-switch survives restart) — but a *stale* persisted `DB_BACKEND="sqlite"` (from an earlier SQLite run or a pre-PG-only-migration switch) then kept the gateway on SQLite **even with a healthy Postgres and a DSN set**. Result in production: 8.3M events in PG, then a ~1.5h gap as new events went to the local SQLite file. `db/sqlite.py::db_load_config` now **coerces a persisted `DB_BACKEND` to `postgres` whenever `POSTGRES_DSN` is set** (logs `db_backend_forced_pg_by_dsn`). A DSN now unambiguously means Postgres.
+- **`POSTGRES_DSN` set but gateway silently ran on SQLite.** For `DB_BACKEND`, a persisted `config_kv` value overrode the env (by design, so the dashboard backend-switch survives restart) — but a *stale* persisted `DB_BACKEND="sqlite"` (from an earlier SQLite run or a pre-PG-only-migration switch) then kept the gateway on SQLite **even with a healthy Postgres and a DSN set**. Result on example.com: 8.3M events in PG, then a ~1.5h gap as new events went to the local SQLite file. `db/sqlite.py::db_load_config` now **coerces a persisted `DB_BACKEND` to `postgres` whenever `POSTGRES_DSN` is set** (logs `db_backend_forced_pg_by_dsn`). A DSN now unambiguously means Postgres.
 
 ### Added
 
@@ -542,7 +168,7 @@ Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and
 
 ### Fixed
 
-- **`/secured/db-test` hung 40+ s and stalled the whole worker on a live Timescale deployment.** Two compounding bugs:
+- **`/secured/db-test` hung 40+ s and stalled the whole worker on the live example.com (Timescale) deployment.** Two compounding bugs:
   - **`db/postgres.py::pg_db_size()` ran an unbounded `COUNT(*)` over the events table.** On a Timescale hypertable that full-scans every chunk (seconds → minutes as the table grows). Replaced with a planner **estimate** — `SUM(reltuples)` over the table + its inheritance children (Timescale chunks are inheritance children of the hypertable root) — a catalog-only read that's instant and accurate enough for a dashboard figure (kept fresh by ANALYZE/autovacuum).
   - **`core/proxy_handler.py::db_test_endpoint` called the blocking probes (`pg_test_roundtrip`, `pg_db_size`) directly on the event loop.** A slow Postgres therefore froze the entire async worker — every concurrent admin request (`/secured/vhosts`, `/secured/config`, …) timed out with a 502. Both probes are now offloaded to a thread executor and bounded with `asyncio.wait_for` (8s for the roundtrip, 6s for the size query); on timeout the endpoint returns a clean `ok:false, reason:"probe timed out"` instead of hanging.
 
@@ -556,7 +182,7 @@ Promotes the 1.9.2 iter-21→23 Postgres-resilience work to a tagged release and
 
 ### Added
 
-- **Postgres backend now self-heals after a failure — no operator restart required.** Previously, any Postgres failure (`db_init_postgres` auth rejection, container restart, network blip, or a password drift later corrected) called `_disable_postgres_for_process`, which latched the backend OFF for the life of the process: the gateway silently degraded to SQLite and stayed there — **empty dashboards, dead geo-data / event reads** — until someone restarted the container. This was the root cause of the production "no events" + `geo-data 500` / `vhosts 502` incident after a Timescale restart.
+- **Postgres backend now self-heals after a failure — no operator restart required.** Previously, any Postgres failure (`db_init_postgres` auth rejection, container restart, network blip, or a password drift later corrected) called `_disable_postgres_for_process`, which latched the backend OFF for the life of the process: the gateway silently degraded to SQLite and stayed there — **empty dashboards, dead geo-data / event reads** — until someone restarted the container. This was the root cause of the example.com "no events" + `geo-data 500` / `vhosts 502` incident after a Timescale restart.
   - `db/postgres.py` — the disable is now *recoverable*: it records **why** it went down (`_PG_DISABLED_BY_FAILURE`, `_PG_DISABLED_TS`) rather than latching permanently.
   - `pg_recovery_probe()` — a direct connect + `SELECT 1`, bypassing the pool and the auth latch, to test whether Postgres is reachable **and** authable again. Never raises.
   - `pg_maybe_recover()` — cheap no-op while PG is healthy; when disabled-by-failure it probes once and, on success, calls `_reenable_postgres_for_process()` which clears the auth latch, flips `_postgres_available` back on across every module, restores `DB_BACKEND=postgres` on `core.proxy_handler`, and bumps `_PG_RECOVERED_COUNT`.
@@ -791,9 +417,9 @@ test-driven; full suite now **1185 passed / 0 failed / 0 errors**.
   touched it (carry-over). Risk now accumulates per-vhost
   (`IpState.risk_by_vhost`, decays in lockstep) and the threshold is evaluated
   against the per-vhost score, so behaviour on one vhost can no longer ban the
-  identity on another it has not abused. Verified live (attack vhost-a → vhost-a
-  banned, vhost-b untouched stays `200`) and by controlled unit test (global score
-  424, vhost-b per-vhost score 24 < 50 → vhost-b free; vhost-b still bans on its own 56≥50).
+  identity on another it has not abused. Verified live (attack foo → foo
+  banned, pt4 untouched stays `200`) and by controlled unit test (global score
+  424, pt4 per-vhost score 24 < 50 → pt4 free; pt4 still bans on its own 56≥50).
 - **`unban_endpoint` full scrub restored + extended.** The single-target unban
   cleared only `risk_score`/`banned_until`, not the risk breakdown — a leftover
   score could re-ban the identity on its next request (the bulk endpoint already
@@ -1124,7 +750,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
 
 ### Performance
 
-- **SQLite tuning** — single `_sqlite_connect()` helper consolidates all 12 connect sites with WAL + `synchronous=NORMAL` + `wal_autocheckpoint=10000` + `temp_store=MEMORY` + `mmap_size=256MB`. Cuts INSERT+COMMIT on slow-fsync disks (production root cause).
+- **SQLite tuning** — single `_sqlite_connect()` helper consolidates all 12 connect sites with WAL + `synchronous=NORMAL` + `wal_autocheckpoint=10000` + `temp_store=MEMORY` + `mmap_size=256MB`. Cuts INSERT+COMMIT on slow-fsync disks (example.com root cause).
 - **Quick-wins #2–#8/#11/#12** — `json.dumps` outside `state_lock`, JA4H short-circuit + lock-free write, decay skip when score is 0, LLM heuristic skips static assets, per-request `_vhost` cache, conditional LRU promotion (`_should_promote()`), per-request `_ua_of()` cache (38 callsites), `_is_static_asset_path()` single source.
 
 ### Resilience
@@ -1223,7 +849,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
 
 ### Fixed
 
-- **Production slowness** — SQLite 802 MB DB on slow-fsync disk (57 ms/4 KB) caused 76 ms `INSERT+COMMIT`. New `db/sqlite.py::_sqlite_connect()` helper consolidates all 12 `sqlite3.connect()` call sites with `WAL + synchronous=NORMAL + wal_autocheckpoint=10000 + temp_store=MEMORY + mmap_size=256MB + cache_size=-20000`.
+- **example.com slowness** — SQLite 802 MB DB on slow-fsync disk (57 ms/4 KB) caused 76 ms `INSERT+COMMIT`. New `db/sqlite.py::_sqlite_connect()` helper consolidates all 12 `sqlite3.connect()` call sites with `WAL + synchronous=NORMAL + wal_autocheckpoint=10000 + temp_store=MEMORY + mmap_size=256MB + cache_size=-20000`.
 - **Self-ban banner text**: distinguishes admin IP with session vs without.
 - **colspan=13 → 14** in `agents.html` (Suspicious table: 12 data + expand + bulk-chk).
 - **`_migPollTimer` leak**: pushed to `_timers` array + cleared in `beforeunload`.
@@ -1240,7 +866,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
 ### Validation
 
 - Stage 9 ruff blocking categories: 0 (F841/F401/S314/B904 all 0 after `import re` removal). Bandit `-ll`: 0 H/C. Semgrep `p/python`: 0 findings. Trivy ×3 arches: 0 CRITICAL/HIGH each. DAST: 24/25 (1 known by-design — `/live` 404 loopback-only).
-- Multi-arch manifest pushed to the release registry (`<registry>/antibotappsecgw:1.8.14`) → `sha256:1d205dd2d2a67093dfaa9d15d395e7b16650e3c8381a3ef8cd8905d461fbb7e2` (amd64+arm64+armv7).
+- Harbor manifest pushed: `harbor.example.com/antibotappsecgw/antibotappsecgw:1.8.14` → `sha256:1d205dd2d2a67093dfaa9d15d395e7b16650e3c8381a3ef8cd8905d461fbb7e2` (multi-arch amd64+arm64+armv7).
 - See `validation/1.8.14.md § Iter-16` for full per-stage table and R4 STRIDE register entry (synchronous=NORMAL tradeoff accepted).
 
 ---
@@ -2771,7 +2397,7 @@ Cumulative release of the iter-15 through iter-22 work performed on the 1.8.14 l
   reaches a live integration without operator confirmation. `ADMIN_KEY` / `SESSION_KEY` /
   `INTERNAL_KEY` excluded from allowlist.
 - **UX polish** — green ● LIVE pill normalised across every dashboard; portal footer
-  (Antibot AppSec Gateway · © 2026 <service owner> · Confidential); Sign-out link inline
+  (Antibot AppSec Gateway · © 2026 example.com, S.A. · Confidential); Sign-out link inline
   next to Settings in every topnav with confirm prompt; Online column in Users table (60 s
   in-memory TTL).
 - Additive column upgrades for `admin_ips` and other tables driven by a central registry

@@ -327,19 +327,9 @@ class TestTotpVerifyEndpointSource:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestLogoutCsrfExemption:
-    """logout_endpoint is CSRF-PROTECTED (@_require_csrf).
+    """logout_endpoint must NOT carry @_require_csrf — plain form POST must work."""
 
-    SECURITY NOTE: an earlier revision of this test asserted logout must be
-    EXEMPT from CSRF (no @_require_csrf) so a plain <form> POST would work. That
-    is the weaker posture — a CSRF logout is a real (if low-severity) nuisance
-    attack, and the shipped code correctly keeps @_require_csrf on logout. The
-    dashboard sidebar supplies the token (the agw_csrf cookie is readable by JS
-    / injected window.__AGW_CSRF__, and the auto-attach test fixture mirrors a
-    real browser). This test now pins the SAFE current behavior: CSRF stays on
-    logout. Do NOT flip this back to assert exemption — that weakens the control.
-    """
-
-    def test_logout_endpoint_has_require_csrf_decorator(self):
+    def test_logout_endpoint_has_no_require_csrf_decorator(self):
         from admin import users
         src = inspect.getsource(users)
         # Find the logout_endpoint definition
@@ -347,9 +337,9 @@ class TestLogoutCsrfExemption:
             r'((?:@[^\n]+\n)+)?async def logout_endpoint', src)
         assert match, "logout_endpoint not found in users.py source"
         decorators_block = match.group(1) or ""
-        assert "_require_csrf" in decorators_block, (
-            "logout_endpoint must keep @_require_csrf — a CSRF-triggered logout "
-            "must be blocked; the dashboard supplies the CSRF token. "
+        assert "_require_csrf" not in decorators_block, (
+            "logout_endpoint must NOT have @_require_csrf — "
+            "plain form POST from the sidebar cannot set X-CSRF-Token header. "
             f"Found decorators: {decorators_block!r}"
         )
 

@@ -629,68 +629,48 @@ async def db_writer_loop():
             _sqlite_connect(DB_PATH).close()
         except Exception as _smoke_err:
             slog("sqlite_smoke_failed", level="warn", error=str(_smoke_err)[:120])
-
-        def _drain_batch_pg(batch):
-            """1.9.7 — process one queued batch against PG in a WORKER THREAD.
-
-            pg_insert_event / _pg_mirror_kv are synchronous psycopg calls
-            (pool.connection() + execute) — running them inline on the event
-            loop meant a slow Postgres query (cold pool, checkpoint, lock,
-            write-burst) froze the WHOLE loop: /live (healthcheck) and real
-            requests timed out → front-proxy 502, even with CPU idle. Running
-            the batch via asyncio.to_thread keeps the loop responsive; the
-            psycopg pool is thread-safe and only one writer batch runs at a
-            time (the caller awaits this), so _dropped_ops_seen.add is safe.
-            Each op keeps its own try/except (one bad op can't abort the
-            batch); task_done() stays on the loop in the caller's finally.
-            """
-            for op, args in batch:
-                try:
-                    if op == "event":
-                        # SQLite event args: (ts, ip, ua, path, method,
-                        # status, reason, vhost). PG signature differs.
-                        try:
-                            if len(args) >= 8:
-                                _ts, _ip, _ua, _path, _method, \
-                                    _status, _reason, _vhost = args[:8]
-                            else:
-                                _ts, _ip, _ua, _path, _method, \
-                                    _status, _reason = args[:7]
-                                _vhost = ""
-                            pg_insert_event(
-                                _ts, _ip, _ua, _path,
-                                _status, _reason,
-                                method=_method, vhost=_vhost)
-                        except Exception as _e:
-                            slog("db_write_failed", level="error",
-                                 error=str(_e), op=op)
-                        continue
-                    pg_op = _OP_RENAME.get(op, op)
-                    ok = _pg_mirror_kv(pg_op, args)
-                    if not ok and op not in _dropped_ops_seen:
-                        _dropped_ops_seen.add(op)
-                        slog("db_pg_op_unhandled",
-                             level="warn", op=op, pg_op=pg_op,
-                             hint="no _pg_mirror_kv arm; add one in "
-                                  "db/postgres.py")
-                except Exception as e:
-                    slog("db_write_failed", level="error",
-                         error=str(e), op=op)
-
         while True:
-            batch = []  # 1.9.6 — reset BEFORE the try. On CancelledError during
-            try:        # `await get()` (shutdown/test teardown) a stale prior-
-                        # iteration batch must not be re-task_done()'d in finally
-                        # ("task_done() called too many times" → crashed the run).
+            try:
                 batch = [await _state.db_queue.get()]
                 while len(batch) < 100:
                     try:
                         batch.append(_state.db_queue.get_nowait())
                     except asyncio.QueueEmpty:
                         break
-                # Run the batch's synchronous psycopg writes OFF the event loop
-                # so a slow Postgres query can't freeze it (see _drain_batch_pg).
-                await asyncio.to_thread(_drain_batch_pg, batch)
+                for op, args in batch:
+                    try:
+                        if op == "event":
+                            # SQLite event args: (ts, ip, ua, path, method,
+                            # status, reason, vhost). PG signature differs
+                            # (status before reason, more optional fields).
+                            try:
+                                if len(args) >= 8:
+                                    _ts, _ip, _ua, _path, _method, \
+                                        _status, _reason, _vhost = args[:8]
+                                else:
+                                    _ts, _ip, _ua, _path, _method, \
+                                        _status, _reason = args[:7]
+                                    _vhost = ""
+                                pg_insert_event(
+                                    _ts, _ip, _ua, _path,
+                                    _status, _reason,
+                                    method=_method, vhost=_vhost)
+                            except Exception as _e:
+                                slog("db_write_failed",
+                                     level="error",
+                                     error=str(_e), op=op)
+                            continue
+                        pg_op = _OP_RENAME.get(op, op)
+                        ok = _pg_mirror_kv(pg_op, args)
+                        if not ok and op not in _dropped_ops_seen:
+                            _dropped_ops_seen.add(op)
+                            slog("db_pg_op_unhandled",
+                                 level="warn", op=op, pg_op=pg_op,
+                                 hint="no _pg_mirror_kv arm; add one in "
+                                      "db/postgres.py")
+                    except Exception as e:
+                        slog("db_write_failed", level="error",
+                             error=str(e), op=op)
             finally:
                 for _ in batch:
                     _state.db_queue.task_done()
@@ -732,8 +712,7 @@ async def db_writer_loop():
     last_checkpoint = _t.time()
     last_vacuum = _t.time()
     while True:
-        batch = []  # 1.9.6 — reset before try (see PG-primary loop): avoid
-        try:        # stale-batch double task_done() on CancelledError in get()
+        try:
             batch = [await _state.db_queue.get()]
             # Drain up to 100 more items if available (without waiting)
             while len(batch) < 100:
@@ -787,11 +766,6 @@ async def db_writer_loop():
                         _pg_mirror_bg("del_config", args)  # REVIEW-H2
                     elif op == "set_secret":
                         # 1.5.5 — runtime integration-secret persistence.
-                        # 1.9.8 M6 (CWE-312) — encrypt EVERY secret at rest, not just
-                        # POSTGRES_DSN. _dsn_encrypt is idempotent (prefix-guarded) so a
-                        # pre-encrypted DSN is never double-wrapped; SQLite and the PG
-                        # mirror store the identical ciphertext.
-                        args = (args[0], _dsn_encrypt(args[1]), args[2])
                         conn.execute("INSERT OR REPLACE INTO secrets_kv (key,value,ts) VALUES (?,?,?)", args)
                         _pg_mirror_bg("set_secret", args)  # REVIEW-H2
                     elif op == "del_secret":
@@ -1455,17 +1429,19 @@ def db_load_secrets(proxy_globals: dict) -> None:
         if os.environ.get(env_name, "").strip():
             env_pinned += 1
             continue
-        # 1.9.8 M6 (CWE-312) — EVERY secret is stored Fernet-encrypted at rest
-        # now (was POSTGRES_DSN only). _dsn_decrypt is a no-op on legacy plaintext
-        # rows, so an in-place upgrade keeps booting; each row re-encrypts on its
-        # next write. A "" result means prefixed-but-unreadable (lost SESSION_KEY).
-        _value = _dsn_decrypt(r["value"])
-        if public_name == "POSTGRES_DSN" and not _value:
-            # Decrypt failed (lost SESSION_KEY). Skip rather than bind an
-            # empty DSN that would silently disable PG.
-            slog("db_secrets_dsn_skipped", level="error",
-                 note="POSTGRES_DSN ciphertext unreadable; skipped")
-            continue
+        # 1.9.0 (F14) — POSTGRES_DSN is the one secret stored encrypted-
+        # at-rest. _dsn_decrypt is a no-op on legacy plaintext rows so
+        # an in-place upgrade keeps booting until the operator triggers
+        # the next /db-switch (which writes the encrypted form).
+        _value = r["value"]
+        if public_name == "POSTGRES_DSN":
+            _value = _dsn_decrypt(_value)
+            if not _value:
+                # Decrypt failed (lost SESSION_KEY). Skip rather than
+                # bind an empty DSN that would silently disable PG.
+                slog("db_secrets_dsn_skipped", level="error",
+                     note="POSTGRES_DSN ciphertext unreadable; skipped")
+                continue
         g[global_name] = _value
         loaded.append((global_name, _value))
         applied += 1
@@ -1576,7 +1552,7 @@ def db_load_config(proxy_globals: dict) -> None:
         # (a stale operator choice, or a pre-PG-only-migration /db-switch) must
         # NOT override it — otherwise the gateway silently runs SQLite while a
         # healthy Postgres sits idle and events split across two stores (the
-        # exact production failure: 8.3M rows in PG, then a 1.5h gap in SQLite).
+        # exact example.com failure: 8.3M rows in PG, then a 1.5h gap in SQLite).
         # Coerce the row to postgres in-memory so the normal apply+propagate
         # path below forces DB_BACKEND=postgres everywhere.
         if key == "DB_BACKEND" and POSTGRES_DSN:
@@ -1720,67 +1696,16 @@ def get_ui_theme(db_path: str) -> str:
     return "dark"
 
 
-def set_ui_theme(db_path: str, theme: str) -> bool:
-    """Persist the master UI theme to config_kv synchronously. Returns True on
-    success, False on invalid theme or DB error. Written to SQLite config_kv
-    (which `get_ui_theme`/`inject_theme` read directly via DB_PATH — config_kv
-    is the SQLite-resident config store across both backends), so the change is
-    visible to the next served page immediately, no async-flush wait."""
-    if theme not in ("dark", "light"):
-        return False
-    try:
-        conn = _sqlite_connect(db_path, timeout=2)
-        conn.execute(
-            "INSERT OR REPLACE INTO config_kv (key, value, ts) VALUES ('ui_theme', ?, ?)",
-            (json.dumps(theme), time.time()),
-        )
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
-
-
-def inject_theme(html: str, db_path: str) -> str:
-    """1.9.6 — bake the persisted UI theme into the served dashboard's <html>
-    tag so EVERY page honours the saved choice on first paint.
-
-    Previously only 5 of 11 dashboards did this; the other 6 (main, agents,
-    siem, geo, logs, control_center) shipped without `data-theme`, so their
-    in-<head> init script fell back to the OS `prefers-color-scheme` — making
-    the background flip dark↔light when navigating between the two groups if
-    the saved theme differed from the OS setting. Routing every dashboard
-    through this single helper keeps them consistent (and the guard test
-    asserts no dashboard endpoint forgets it). Best-effort: on any error the
-    HTML is returned unchanged (the <head> fallback still applies)."""
-    try:
-        theme = get_ui_theme(db_path)
-    except Exception:
-        return html
-    return html.replace('<html lang="en">',
-                        f'<html lang="en" data-theme="{theme}">', 1)
-
-
-def db_load_state(clear_first: bool = True) -> None:
+def db_load_state() -> None:
     """Load saved state at startup. Populates state-module objects
     (ip_state, metrics, events, timeline, SERVICE_METRICS_HISTORY)
-    directly — these are mutable containers imported by reference.
-
-    1.9.7 — `clear_first` controls whether `ip_state` is wiped before load.
-    Tests call with the default True (each make_app()/on_startup() must see a
-    clean slate for cross-test isolation). The production *deferred* rehydrate
-    path (proxy.on_startup, Option B) calls with False because by then
-    `_rehydrate_bans()` has already run synchronously and may have populated
-    live bans — a clear() here would wipe them. In merge mode we also never
-    *downgrade* an already-active in-memory ban from the (possibly staler)
-    clients table (see the banned_until guard below)."""
+    directly — these are mutable containers imported by reference."""
     # Reset in-memory identity state so stale entries from a previous startup
     # (or a prior test invocation) don't persist when the DB table is empty.
     # In production on_startup is called once on a fresh container so ip_state
     # is always empty here; in tests each make_app() / on_startup() call must
     # see a clean slate to avoid cross-test risk-score contamination.
-    if clear_first:
-        ip_state.clear()
+    ip_state.clear()
 
     conn = _sqlite_connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -1808,13 +1733,9 @@ def db_load_state(clear_first: bool = True) -> None:
         s.request_count = r["request_count"] or 0
         s.allowed_count = r["allowed_count"] or 0
         s.blocked_count = r["blocked_count"] or 0
-        # banned_until is monotonic; if epoch > now, restore offset.
-        # 1.9.7 — in merge mode (clear_first=False, the deferred rehydrate
-        # path) don't overwrite a ban already applied by _rehydrate_bans():
-        # the bans table is authoritative and may be fresher than this row.
+        # banned_until is monotonic; if epoch > now, restore offset
         if r["banned_until_epoch"] and r["banned_until_epoch"] > n:
-            if clear_first or not (s.banned_until and s.banned_until > now()):
-                s.banned_until = now() + (r["banned_until_epoch"] - n)
+            s.banned_until = now() + (r["banned_until_epoch"] - n)
         s.last_user_agent = r["last_user_agent"] or ""
         s.last_path = r["last_path"] or ""
         # 1.8.14 iter-21 — restore last_vhost so the main.html Clients Domain
@@ -1883,34 +1804,15 @@ def db_load_state(clear_first: bool = True) -> None:
     # Re-hydrate the service-metrics history (last RETENTION samples in time
     # order). Skips silently if the table doesn't exist yet (first boot
     # against an old DB).
-    #
-    # 1.9.5 fix — read through open_conn() (backend-aware) instead of the local
-    # SQLite `conn`. In PG-only mode the writer mirrors svc_metric rows to
-    # Postgres and NEVER touches the local SQLite file, so the old
-    # `conn.execute(...)` here loaded STALE, frozen samples (timestamps from
-    # before the PG cut-over). Those old timestamps made the in-memory deque's
-    # oldest entry look weeks old, which fooled service_metrics_data_endpoint's
-    # `start_b < _buf_oldest` heuristic into taking the in-memory path (which
-    # only spans the stale gap + the most-recent live samples) instead of the
-    # DB path — so a 7-day window rendered only ~1 day of data. Reading from the
-    # active backend gives a CONTIGUOUS recent buffer and the heuristic works.
-    # Clear first so repeated on_startup() calls in tests don't accumulate.
-    SERVICE_METRICS_HISTORY.clear()
     svc_loaded = 0
     try:
-        from db import open_conn as _open_conn_svc
-        _svc_conn = _open_conn_svc()
-        try:
-            _svc_conn.row_factory = sqlite3.Row
-            cur = _svc_conn.execute(
-                "SELECT * FROM svc_metrics ORDER BY ts DESC LIMIT ?",
-                (SERVICE_METRICS_RETENTION,))
-            rows_svc = cur.fetchall()
-            for row in reversed(rows_svc):   # oldest-first into the deque
-                SERVICE_METRICS_HISTORY.append({k: row[k] for k in row.keys()})
-            svc_loaded = len(rows_svc)
-        finally:
-            _svc_conn.close()
+        cur = conn.execute(
+            "SELECT * FROM svc_metrics ORDER BY ts DESC LIMIT ?",
+            (SERVICE_METRICS_RETENTION,))
+        rows_svc = cur.fetchall()
+        for row in reversed(rows_svc):       # oldest-first into the deque
+            SERVICE_METRICS_HISTORY.append({k: row[k] for k in row.keys()})
+        svc_loaded = len(rows_svc)
     except Exception as e:
         slog("db_svc_metrics_not_loaded", level="warn", error=str(e))
     conn.close()
@@ -2090,27 +1992,6 @@ def check_ip_ban(ip: str) -> float:
         return float(row[0]) if row else 0.0
     except Exception:
         return 0.0
-
-
-def check_ip_bans_bulk() -> set:
-    """Return the set of IPs currently in ip_bans (banned_until > now) in ONE
-    short-lived connection.
-
-    1.9.7 — for callers that would otherwise open a SQLite connection PER row
-    (metrics_endpoint checked every tracked identity individually, doing N
-    synchronous `_sqlite_connect`s on the event loop — on slow armv7 storage
-    that froze the loop / `/live`, confirmed via a SIGUSR1 stack dump). Callers
-    on the event loop MUST invoke this via `asyncio.to_thread` so the open/query
-    never blocks the loop. Returns an empty set on any error (display hint)."""
-    n = time.time()
-    try:
-        conn = _sqlite_connect(DB_PATH, timeout=0.5)
-        rows = conn.execute(
-            "SELECT ip FROM ip_bans WHERE banned_until > ?", (n,)).fetchall()
-        conn.close()
-        return {r[0] for r in rows}
-    except Exception:
-        return set()
 
 
 def check_ip_ban_vhost(ip: str, vhost: str) -> float:

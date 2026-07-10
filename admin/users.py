@@ -85,12 +85,6 @@ def _password_verify(pw: str, stored: str) -> bool:
         if algo != "scrypt":
             return False
         n, r, p = int(n), int(r), int(p)
-        # 1.9.8 (S-I2) — reject scrypt params above safe maximums. A crafted
-        # stored value with huge n/r/p would make hashlib.scrypt allocate
-        # enormous memory / burn CPU on every verify (DoS). Our own hashes use
-        # _SCRYPT_N/_R/_P, well under these bounds.
-        if n > 2**18 or r > 16 or p > 4:
-            return False
         salt = _b64.urlsafe_b64decode(salt_b + "=" * (-len(salt_b) % 4))
         want = _b64.urlsafe_b64decode(hash_b + "=" * (-len(hash_b) % 4))
         got  = hashlib.scrypt(pw.encode("utf-8"), salt=salt, n=n, r=r, p=p,
@@ -98,20 +92,6 @@ def _password_verify(pw: str, stored: str) -> bool:
         return hmac.compare_digest(want, got)
     except (ValueError, TypeError):
         return False
-
-
-async def _password_hash_async(pw: str) -> str:
-    """1.9.8 (H1) — off-loop wrapper for _password_hash. scrypt at N=2**17 is
-    ~500 ms of CPU; running it on the event loop stalls every other coroutine,
-    so a burst of logins / password writes serialises the whole gateway.
-    asyncio.to_thread keeps the loop responsive."""
-    return await asyncio.to_thread(_password_hash, pw)
-
-
-async def _password_verify_async(pw: str, stored: str) -> bool:
-    """1.9.8 (H1) — off-loop wrapper for _password_verify (see
-    _password_hash_async)."""
-    return await asyncio.to_thread(_password_verify, pw, stored)
 
 
 def _new_sid() -> str:
@@ -185,17 +165,6 @@ def _session_verify(token: str) -> str | None:
         return None
     if cached.get("expires_ts", 0) < _t.time():
         return None
-    # 1.9.8 SECURITY — absolute session lifetime. Even if the sliding
-    # expires_ts keeps getting refreshed, a session must die
-    # SESSION_ABSOLUTE_TIMEOUT seconds after it was first created. Read via the
-    # config module so a runtime/Settings change (and tests) take effect.
-    # created_ts==0 (legacy rows minted before this field was persisted) is
-    # treated as "unknown" and not rejected.
-    import config as _cfg_abs
-    _created = cached.get("created_ts", 0) or 0
-    _abs = getattr(_cfg_abs, "SESSION_ABSOLUTE_TIMEOUT", 8 * 3600)
-    if _created and (_t.time() - _created) > _abs:
-        return None
     return username
 
 
@@ -211,11 +180,7 @@ def _session_cache_load() -> None:
         conn = open_conn()
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
-            # 1.9.8 — also load created_ts + csrf_nonce so the absolute-timeout
-            # clock survives a restart (otherwise it silently reset to "now" on
-            # every boot) and the csrf_nonce isn't dropped on rehydrate.
-            "SELECT sid, username, expires_ts, status, created_ts, csrf_nonce "
-            "FROM user_sessions "
+            "SELECT sid, username, expires_ts, status FROM user_sessions "
             "WHERE status = 'active' AND expires_ts > ?",
             (_t.time(),)).fetchall()
         conn.close()
@@ -225,13 +190,10 @@ def _session_cache_load() -> None:
         return
     fresh = {}
     for r in rows:
-        _keys = r.keys()
         fresh[r["sid"]] = {
             "username":   r["username"],
             "expires_ts": float(r["expires_ts"] or 0),
             "revoked":    False,
-            "created_ts": float((r["created_ts"] if "created_ts" in _keys else 0) or 0),
-            "csrf_nonce": (r["csrf_nonce"] if "csrf_nonce" in _keys else "") or "",
         }
     _SESSION_CACHE.clear()
     _SESSION_CACHE.update(fresh)
@@ -246,29 +208,21 @@ def _session_create(username: str, ip: str, user_agent: str) -> str:
     sid = _new_sid()
     n = _t.time()
     expires_ts = n + _SESSION_TTL
-    # 1.9.7 SECURITY — per-session random CSRF nonce (independent of
-    # SESSION_KEY/sid), stored in the cache + persisted so it survives a
-    # restart. The agw_csrf cookie is set to this value; _csrf_token_valid
-    # compares against it. Replaces the derivable HMAC(SESSION_KEY, sid) token
-    # (defence in depth — a leaked SESSION_KEY no longer yields valid CSRF
-    # tokens for every sid).
-    import secrets as _secrets_sc
-    csrf_nonce = _secrets_sc.token_urlsafe(24)
     if db_queue is not None:
         try:
             db_queue.put_nowait((
                 "user_session_create",
-                # 8-tuple — trailing slot is the csrf_nonce (PG drops it,
-                # SQLite stores it; rehydrated by _session_cache_load).
+                # M11 (caught live by arity guard): 8-tuple — trailing
+                # csrf_nonce slot. PG drops it; SQLite stores it. Empty
+                # string here is fine since CSRF is also derived from
+                # session_sign() and stored in the agw_csrf cookie.
                 (sid, username, ip or "", (user_agent or "")[:512],
-                 n, n, expires_ts, csrf_nonce),
+                 n, n, expires_ts, ""),
             ))
         except asyncio.QueueFull:
             pass
     _SESSION_CACHE[sid] = {
         "username": username, "expires_ts": expires_ts, "revoked": False,
-        # created_ts powers the absolute-timeout check in _session_verify.
-        "created_ts": n, "csrf_nonce": csrf_nonce,
     }
     return _session_sign(username, sid=sid)
 
@@ -288,6 +242,30 @@ def _session_revoke(sid: str, by_username: str) -> bool:
         except asyncio.QueueFull:
             pass
     return True
+
+
+def _revoke_user_sessions(username: str, by_username: str,
+                           except_sid: str | None = None) -> int:
+    """Revoke every non-revoked, non-expired session for `username`.
+
+    Called on credential/authz mutations (password change, role change,
+    status→!active, user delete) so a compromised or repudiated session
+    cannot outlive the authoritative record. `except_sid` preserves the
+    caller's own sid on a self-service password rotate (otherwise the
+    admin logs themselves out mid-request).
+
+    Returns the number of sessions revoked."""
+    n = _t.time()
+    to_revoke = [
+        sid for sid, info in list(_SESSION_CACHE.items())
+        if info.get("username") == username
+        and not info.get("revoked")
+        and info.get("expires_ts", 0) > n
+        and sid != except_sid
+    ]
+    for sid in to_revoke:
+        _session_revoke(sid, by_username=by_username or "system")
+    return len(to_revoke)
 
 
 def _enforce_session_limit(username: str) -> None:
@@ -533,31 +511,11 @@ async def login_submit_endpoint(request: web.Request):
              reason="no-such-user-or-disabled")
         return web.json_response({"error": "invalid credentials"}, status=401,
                                   headers={"Cache-Control": "no-store"})
-    if not await _password_verify_async(password, user.get("password_hash") or ""):
+    if not _password_verify(password, user.get("password_hash") or ""):
         slog("login_failed", level="warn", username=username, ip=ip,
              reason="bad-password")
         return web.json_response({"error": "invalid credentials"}, status=401,
                                   headers={"Cache-Control": "no-store"})
-    # 1.9.8 SECURITY — 2FA step-up. If the user enrolled TOTP, password alone
-    # must NOT mint a session (closes the login-time 2FA bypass). Issue an
-    # unpredictable, server-stored partial_token (secrets.token_urlsafe, NOT an
-    # enumerable HMAC of username|window) and require a second POST to
-    # /totp-verify carrying that token + the TOTP (or a one-time backup) code.
-    if user.get("totp_enabled"):
-        import secrets as _secrets
-        partial_token = _secrets.token_urlsafe(32)
-        _ua_pending = (request.headers.get("User-Agent") or "")[:512]
-        from state import _TOTP_PENDING, _TOTP_PENDING_LOCK
-        async with _TOTP_PENDING_LOCK:
-            _TOTP_PENDING[partial_token] = {
-                "token": partial_token, "username": username,
-                "ip": ip, "ua": _ua_pending, "next": next_url,
-                "ts": _t.time(),
-            }
-        slog("login_totp_required", level="warn", username=username, ip=ip)
-        return web.json_response(
-            {"step": "totp_required", "partial_token": partial_token},
-            headers={"Cache-Control": "no-store"})
     # 1.6.7 — mint a fresh per-session cookie (sid embedded). Captures
     # the source IP and User-Agent for the session ledger so the
     # operator can spot unfamiliar sessions and revoke them.
@@ -576,11 +534,7 @@ async def login_submit_endpoint(request: web.Request):
     _enforce_session_limit(username)
     token = _session_create(username, ip, ua)
     sid = token.split("|")[1]
-    # 1.9.7 — agw_csrf carries the per-session random nonce (set by
-    # _session_create); fall back to the legacy HMAC only if the cache entry is
-    # somehow absent (keeps the cookie non-empty).
-    csrf_token = (_SESSION_CACHE.get(sid, {}).get("csrf_nonce")
-                  or hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32])
+    csrf_token = hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32]
     resp = web.json_response({"ok": True, "redirect": next_url, "username": username},
                               headers={"Cache-Control": "no-store"})
     resp.set_cookie(_SESSION_COOKIE, token,
@@ -589,142 +543,7 @@ async def login_submit_endpoint(request: web.Request):
                      secure=SESSION_SECURE)
     resp.set_cookie("agw_csrf", csrf_token,
                      max_age=_SESSION_TTL, httponly=False,
-                     samesite="Strict", path=ADMIN_NS,
-                     secure=SESSION_SECURE)
-    return resp
-
-
-async def totp_verify_endpoint(request: web.Request):
-    """POST /antibot-appsec-gateway/totp-verify — step 2 of two-step login.
-
-    Body (form): partial_token, code. Validates the server-stored partial_token
-    (timing-safe) issued by login_submit, then the TOTP code (or a one-time
-    backup code), and only then mints the session. No @_require_csrf: like
-    /login this is a pre-session bootstrap with no cookie to protect yet; it is
-    IP-rate-limited via _login_rate_limit instead."""
-    import json
-    ip = get_ip(request)
-    if not await _login_rate_limit(ip):
-        return web.json_response({"error": "too many attempts; wait 60s"},
-                                  status=429,
-                                  headers={"Cache-Control": "no-store",
-                                           "Retry-After": "60"})
-    try:
-        raw = await asyncio.wait_for(request.content.read(8 * 1024),
-                                      timeout=BODY_TIMEOUT)
-    except asyncio.TimeoutError:
-        return web.json_response({"error": "timeout"}, status=400,
-                                  headers={"Cache-Control": "no-store"})
-    # login.html posts JSON ({partial_token, code}); also accept form-encoded.
-    _txt = raw.decode("utf-8", errors="replace")
-    partial_token = ""
-    code = ""
-    try:
-        _body = json.loads(_txt or "{}")
-        if isinstance(_body, dict):
-            partial_token = str(_body.get("partial_token", "") or "").strip()
-            code = str(_body.get("code", "") or "").strip()
-    except (ValueError, json.JSONDecodeError):
-        from urllib.parse import parse_qs
-        _params = parse_qs(_txt, keep_blank_values=True)
-        partial_token = (_params.get("partial_token", [""])[0] or "").strip()
-        code = (_params.get("code", [""])[0] or "").strip()
-    if not partial_token or not code:
-        return web.json_response({"error": "partial_token and code required"},
-                                  status=400,
-                                  headers={"Cache-Control": "no-store"})
-    # 1.9.8 (S-W5) — bound input lengths before any further processing. A real
-    # partial_token is ~43 chars (token_urlsafe(32)); a TOTP code is 6 digits
-    # and a backup code 10 hex chars. Reject oversized input early so a huge
-    # body can't waste cycles or probe the timing-safe compare below.
-    if len(partial_token) > 64 or len(code) > 64:
-        slog("totp_verify_failed", level="warn", ip=ip, reason="bad-length")
-        return web.json_response({"error": "invalid token format"},
-                                  status=400,
-                                  headers={"Cache-Control": "no-store"})
-    from state import _TOTP_PENDING, _TOTP_PENDING_LOCK
-    async with _TOTP_PENDING_LOCK:
-        entry = _TOTP_PENDING.get(partial_token)
-        # Prune a stale pending entry (>5 min) so an old token can't be replayed.
-        if entry and (_t.time() - entry.get("ts", 0) > 300):
-            _TOTP_PENDING.pop(partial_token, None)
-            entry = None
-    # Timing-safe match of the stored random token. A login-pending entry stores
-    # {"token", "username", ...}; a setup-pending entry stores {"secret"} keyed
-    # by username, so .get("token","") is "" there and never matches.
-    if not entry or not hmac.compare_digest(str(entry.get("token", "")), partial_token):
-        slog("totp_verify_failed", level="warn", ip=ip, reason="bad-token")
-        return web.json_response({"error": "invalid or expired token"},
-                                  status=401,
-                                  headers={"Cache-Control": "no-store"})
-    username = entry.get("username", "")
-    user = _user_load(username)
-    if user is None or user.get("status") != "active":
-        async with _TOTP_PENDING_LOCK:
-            _TOTP_PENDING.pop(partial_token, None)
-        slog("totp_verify_failed", level="warn", username=username, ip=ip,
-             reason="no-user")
-        return web.json_response({"error": "invalid or expired token"},
-                                  status=401,
-                                  headers={"Cache-Control": "no-store"})
-    # Verify the TOTP code; fall back to a one-time backup code (constant-time).
-    secret = user.get("totp_secret") or ""
-    verified = _totp_verify(secret, code)
-    used_backup = False
-    if not verified:
-        import json as _json
-        try:
-            backup_codes = _json.loads(user.get("totp_backup_codes") or "[]")
-        except Exception:
-            backup_codes = []
-        code_norm = code.upper().replace(" ", "").replace("-", "")
-        if any(hmac.compare_digest(str(_bc), code_norm) for _bc in backup_codes):
-            verified = True
-            used_backup = True
-            # Consume the backup code (one-time) and persist the remainder.
-            backup_codes = [_bc for _bc in backup_codes
-                            if not hmac.compare_digest(str(_bc), code_norm)]
-            if db_queue is not None:
-                try:
-                    db_queue.put_nowait((
-                        "user_update",
-                        (username, {"totp_backup_codes": _json.dumps(backup_codes)}),
-                    ))
-                except asyncio.QueueFull:
-                    pass
-    if not verified:
-        slog("totp_verify_failed", level="warn", username=username, ip=ip,
-             reason="bad-code")
-        return web.json_response({"error": "invalid code"}, status=401,
-                                  headers={"Cache-Control": "no-store"})
-    # Success — consume the pending token and mint the session (mirrors the
-    # login_submit success path exactly).
-    async with _TOTP_PENDING_LOCK:
-        _TOTP_PENDING.pop(partial_token, None)
-    next_url = entry.get("next") or "/antibot-appsec-gateway/secured/control-center"
-    if not next_url.startswith("/") or next_url.startswith("//"):
-        next_url = "/antibot-appsec-gateway/secured/control-center"
-    ua = (request.headers.get("User-Agent") or "")[:512]
-    _ACTIVE_SESSIONS[username] = _t.time()
-    _enforce_session_limit(username)
-    token = _session_create(username, ip, ua)
-    sid = token.split("|")[1]
-    # 1.9.7 — agw_csrf carries the per-session random nonce (set by
-    # _session_create); fall back to the legacy HMAC only if the cache entry is
-    # somehow absent (keeps the cookie non-empty).
-    csrf_token = (_SESSION_CACHE.get(sid, {}).get("csrf_nonce")
-                  or hmac.new(SESSION_KEY, sid.encode(), hashlib.sha256).hexdigest()[:32])
-    slog("totp_verify_success", level="warn", username=username, ip=ip,
-         backup=used_backup)
-    resp = web.json_response({"ok": True, "redirect": next_url, "username": username},
-                              headers={"Cache-Control": "no-store"})
-    resp.set_cookie(_SESSION_COOKIE, token,
-                     max_age=_SESSION_TTL, httponly=True,
                      samesite="Strict", path="/",
-                     secure=SESSION_SECURE)
-    resp.set_cookie("agw_csrf", csrf_token,
-                     max_age=_SESSION_TTL, httponly=False,
-                     samesite="Strict", path=ADMIN_NS,
                      secure=SESSION_SECURE)
     return resp
 
@@ -749,10 +568,6 @@ async def logout_endpoint(request: web.Request):
             _session_revoke(sid, by_username=user)
     resp = web.HTTPFound("/antibot-appsec-gateway/login")
     resp.del_cookie(_SESSION_COOKIE, path="/")
-    # 1.9.7 — also clear agw_csrf (scoped to ADMIN_NS at login) so a
-    # stale CSRF token can't survive logout into a fresh re-login.
-    # 1.9.8 (M1) — delete with the same path the cookie was set with.
-    resp.del_cookie("agw_csrf", path=ADMIN_NS)
     return resp
 
 
@@ -772,14 +587,6 @@ async def ip_intel_endpoint(request: web.Request):
       • abuseipdb: SQLite cache (or live API if cache stale + key set)
       • crowdsec:  in-process cache (or LAPI poll if stale + URL set)
     """
-    # 1.9.8 (LIVE-1) — defence-in-depth: this endpoint is reached via the
-    # protect() middleware which already enforces _internal_authed, but gate
-    # explicitly so it can never leak reputation/geo intel if a future route
-    # change exposes it. Runs before IP parsing so an unauthenticated caller
-    # gets 401, not input-validation feedback.
-    if not _internal_authed(request):
-        return web.json_response({"error": "auth"}, status=401,
-                                  headers={"Cache-Control": "no-store"})
     import ipaddress as _ipaddress
     ip = (request.match_info.get("ip") or "").strip()
     try:
@@ -925,10 +732,6 @@ async def ip_intel_endpoint(request: web.Request):
 async def whoami_endpoint(request: web.Request):
     """GET /antibot-appsec-gateway/secured/whoami — return the calling
     operator's identity. Used by the dashboard's top-right strip."""
-    # 1.9.8 (LIVE-2) — defence-in-depth auth gate (see ip_intel_endpoint).
-    if not _internal_authed(request):
-        return web.json_response({"error": "auth"}, status=401,
-                                  headers={"Cache-Control": "no-store"})
     username = _request_username(request)
     via = "session" if request.get("_session_user") else "admin-key"
     # 1.9.2 iter-27 — operator-reported: Settings shows "Unknown (via key)"
@@ -1021,7 +824,7 @@ async def users_create_endpoint(request: web.Request):
         return web.json_response({"error": "username already exists"}, status=409,
                                   headers={"Cache-Control": "no-store"})
     n = _t.time()
-    pw_hash = await _password_hash_async(password)
+    pw_hash = _password_hash(password)
     if db_queue is not None:
         try:
             db_queue.put_nowait((
@@ -1104,10 +907,10 @@ async def users_update_endpoint(request: web.Request):
             if not cur_pw:
                 return web.json_response({"error": "current_password required"},
                                           status=400, headers={"Cache-Control": "no-store"})
-            if not await _password_verify_async(cur_pw, cur.get("password_hash", "")):
+            if not _password_verify(cur_pw, cur.get("password_hash", "")):
                 return web.json_response({"error": "current password is incorrect"},
                                           status=403, headers={"Cache-Control": "no-store"})
-        fields["password_hash"] = await _password_hash_async(pw)
+        fields["password_hash"] = _password_hash(pw)
         audit_fields["password_changed"] = True
     if "role" in data:
         # S-C1 fix — role changes are ADMIN-ONLY. Previously this gate only
@@ -1147,6 +950,17 @@ async def users_update_endpoint(request: web.Request):
         except asyncio.QueueFull:
             return web.json_response({"error": "db queue full"}, status=503,
                                       headers={"Cache-Control": "no-store"})
+    # Revoke outstanding sessions on any authN/authZ-relevant mutation.
+    # Preserve caller's own sid on a self-service password rotate so the
+    # in-flight response isn't invalidated before it returns; every other
+    # session for this account is killed and the operator must re-login.
+    if any(k in audit_fields for k in ("password_changed", "role", "status")):
+        except_sid = None
+        if is_self and "password_changed" in audit_fields:
+            except_sid = request.get("_session_sid")
+        revoked = _revoke_user_sessions(username, by_username=caller,
+                                         except_sid=except_sid)
+        audit_fields["sessions_revoked"] = revoked
     from admin.mesh import _gw_audit  # noqa: F401
     _gw_audit("user_updated", username, _request_username(request), **audit_fields)
     return web.json_response({"username": username, "updates": list(audit_fields)},
@@ -1261,15 +1075,10 @@ def _generate_backup_codes() -> list:  # F-08: 10 bytes = 80 bits per code
     return [_sec.token_hex(10).upper() for _ in range(8)]
 
 
-@_require_csrf
 async def totp_setup_endpoint(request: web.Request):
-    """POST /antibot-appsec-gateway/secured/2fa-setup — generate a new TOTP secret.
+    """GET /antibot-appsec-gateway/secured/2fa-setup — generate a new TOTP secret.
     Stores it temporarily in _TOTP_PENDING[username] and returns the provisioning URI
-    plus a base64-encoded SVG QR code data URL.
-
-    1.9.8 (M4) — POST + @_require_csrf (was an unguarded GET): generating a
-    pending TOTP secret mutates server state, so it must not be drivable
-    cross-site or by a simple navigation."""
+    plus a base64-encoded SVG QR code data URL."""
     if not _internal_authed(request):
         return web.json_response({"error": "auth"}, status=401,
                                   headers={"Cache-Control": "no-store"})
@@ -1335,7 +1144,13 @@ async def users_delete_endpoint(request: web.Request):
         except asyncio.QueueFull:
             return web.json_response({"error": "db queue full"}, status=503,
                                       headers={"Cache-Control": "no-store"})
+    # Kill every outstanding session for the deleted account — no
+    # except_sid: self-delete is already refused above (L1102).
+    revoked = _revoke_user_sessions(username,
+                                     by_username=_request_username(request))
     from admin.mesh import _gw_audit  # noqa: F401
-    _gw_audit("user_deleted", username, _request_username(request))
-    return web.json_response({"username": username, "deleted": True},
+    _gw_audit("user_deleted", username, _request_username(request),
+              sessions_revoked=revoked)
+    return web.json_response({"username": username, "deleted": True,
+                               "sessions_revoked": revoked},
                               headers={"Cache-Control": "no-store"})

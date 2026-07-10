@@ -1,0 +1,82 @@
+title = "AntiBot/WAF GW — gitleaks config"
+
+# Start from gitleaks' full built-in ruleset, then allowlist ONLY the known
+# false positives below.
+#
+# Two rules govern every entry here:
+#
+#   1. Never blanket-exclude a source directory. The DLP-detector tests live in
+#      tests/ and must contain credential-shaped strings, but a REAL secret
+#      pasted into tests/ has to keep failing the gate.
+#   2. Never allowlist by `regexTarget = "line"`. A line-scoped allowlist
+#      suppresses every finding on that line — so a real key sharing a line with
+#      an allowlisted constant becomes invisible. Match on the default target
+#      (the extracted secret) with an anchored regex instead: a different secret
+#      on the same line is a distinct finding and still fires.
+#
+# Within one [[allowlists]] block the conditions are ANDed: a finding must sit
+# in one of `paths` AND have a secret matching one of `regexes`.
+[extend]
+useDefault = true
+
+# ── 1. Dashboard JS constants ────────────────────────────────────────────────
+# `generic-api-key` fires on `<IDENT>_KEY = '<string>'`. These are localStorage
+# namespace keys for user preferences, not credentials.
+[[allowlists]]
+description = "dashboard localStorage preference-key constants"
+paths = ['''^dashboards/.*\.html$''']
+regexes = ['''^appsecgw\.[a-z]+\.prefs\.v\d+$''']
+
+# `auth-jwt-invalid":"Invalid/forged …` — a human-readable reason label rendered
+# in the agents dashboard, matched only because the value follows a quoted key.
+[[allowlists]]
+description = "dashboard reason-code display label"
+paths = ['''^dashboards/agents\.html$''']
+regexes = ['''^Invalid/forged$''']
+
+# ── 2. DLP / secret-detector test fixtures ──────────────────────────────────
+# The gateway ships detectors that flag credentials leaking in upstream
+# responses, so their tests must carry credential-SHAPED strings. Each literal
+# below is a sequential/alphabetic dummy no real issuer would ever mint. The
+# regexes are anchored to the exact value — not the file, not the rule.
+[[allowlists]]
+description = "deliberately-fake credential fixtures used by the DLP detector tests"
+paths = ['''^tests/.*\.py$''']
+regexes = [
+  # AWS access-key id: fixed 'AKIA' + strictly sequential body
+  '''^AKIA1234567890ABCDEF$''',
+  # Slack bot token: sequential digits + an a,b,c… run
+  '''^xoxb-1234567890-abcdefghij-AbCdEfGhIjKlMnOp$''',
+  # A→J / 1→0 run, used as a generic "looks like a key" sample
+  '''^ABCDEFGHIJ1234567890$''',
+  # JWT with an empty ({}) claim set and the literal signature "sig"
+  '''^eyJhbGciOiJSUzI1NiJ9\.e30\.sig$''',
+  # `db.sqlite` DSN encrypt/decrypt round-trip fixture (test_v198_secfix_quickwins)
+  '''^abuseipdb_KEY_123$''',
+]
+
+# ── 2b. Dynamic (shell) test harness fixtures ───────────────────────────────
+# The tests/dynamic/*.sh probes send protocol-canonical sample values. These are
+# published spec constants, not secrets.
+[[allowlists]]
+description = "protocol sample values in the dynamic shell test harness"
+paths = ['''^tests/dynamic/.*\.sh$''']
+regexes = [
+  # RFC 6455 §1.3 canonical Sec-WebSocket-Key = base64("the sample nonce")
+  '''^dGhlIHNhbXBsZSBub25jZQ==$''',
+]
+
+# ── 3. Binary / generated artifacts ─────────────────────────────────────────
+# Not published (MANIFEST-excluded), but `gitleaks dir` on a working tree walks
+# them anyway and reports each finding a second time.
+[[allowlists]]
+description = "compiled + vendored artifacts"
+paths = [
+  # the destination repos carry a .git/ dir; its packed objects are binary and
+  # re-report every finding already seen in the working tree.
+  '''(^|/)\.git/''',
+  '''(^|/)__pycache__/''',
+  '''\.pyc$''',
+  '''(^|/)mutants/''',
+  '''\.mmdb$''',
+]

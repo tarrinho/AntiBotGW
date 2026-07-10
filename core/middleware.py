@@ -35,17 +35,6 @@ async def session_cookie_finalizer(request: web.Request, handler):
         except Exception:
             pass  # FileResponse / streaming responses may not allow cookies post-hoc
     _csrf_self_heal(request, response)
-    # Version-disclosure / decoy-fidelity hardening: aiohttp stamps a
-    # `Server: Python/X aiohttp/Y` banner on every response, which fingerprints
-    # the gateway (framework + version) and breaks honeypot decoy fidelity —
-    # a normal site behind a CDN does not announce its app framework. Normalise
-    # to a generic token so nothing framework/version-specific leaks.
-    # (DAST §15 "Server header does not disclose aiohttp"; dynamic HP-2 decoy
-    # fidelity; test_live_gw.py::test_j03_no_server_version_disclosure.)
-    try:
-        response.headers["Server"] = "nginx"
-    except Exception:
-        pass  # some streaming / file responses expose immutable headers
     return response
 
 
@@ -185,35 +174,6 @@ def _inject_csrf_global(request: web.Request, response, token: str) -> None:
 
 
 # ── Middleware ─────────────────────────────────────────────────────────────
-# 1.9.7 — baseline security response headers applied to EVERY response
-# (including the proxied upstream root `/`). Previously these lived only on
-# specific admin endpoints, so a direct hit on `/` (no CDN in front) shipped
-# without X-Frame-Options / X-Content-Type-Options — flagged by the DAST
-# smoke test. Defence-in-depth: do not rely on Cloudflare to inject them.
-# Only set when ABSENT, so upstream- or endpoint-supplied values win.
-_SECURITY_HEADERS = {
-    "X-Frame-Options": "DENY",
-    "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
-}
-
-
-@web.middleware
-async def security_headers(request: web.Request, handler):
-    """Outermost middleware — stamps baseline security headers on the final
-    response. Skips already-prepared StreamResponses (websockets / streamed
-    bodies) whose headers are immutable post-prepare."""
-    resp = await handler(request)
-    try:
-        if not getattr(resp, "prepared", False):
-            for _k, _v in _SECURITY_HEADERS.items():
-                if _k not in resp.headers:
-                    resp.headers[_k] = _v
-    except Exception:
-        pass  # nosec B110 — header stamping is best-effort, never break a response
-    return resp
-
-
 @web.middleware
 async def cost_meter(request: web.Request, handler):
     """1.5.4 — outer timing middleware. Records the wall-time the proxy

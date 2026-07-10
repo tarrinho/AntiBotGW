@@ -800,7 +800,7 @@ async def test_d05_score_distribution_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (401, 403, 302, 301, 404), (
+                assert r.status in (401, 403, 302, 301), (
                     f"/score-distribution: unexpected status {r.status} for unauthenticated request."
                 )
 
@@ -904,7 +904,7 @@ async def test_d10_traffic_pipeline_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (401, 403, 302, 301, 404), (
+                assert r.status in (401, 403, 302, 301), (
                     f"/traffic-pipeline: unexpected status {r.status} for unauthenticated request."
                 )
 
@@ -950,33 +950,14 @@ async def test_d13_vhost_heatmap_seeded_event_appears(proxy_module):
         async with _gateway(proxy_module, up) as cli:
             cookies = _admin_cookie(proxy_module)
             now = time.time()
-            # Seed into the ACTIVE backend — /vhost-heatmap reads from whichever
-            # backend is active, so in PG-mode seeding SQLite would be invisible.
-            import os as _os
-            _pg = (_os.environ.get("APPSECGW_TEST_PG", "").lower()
-                   in ("1", "true", "yes")
-                   and bool(_os.environ.get("POSTGRES_DSN", "").strip()))
-            if _pg:
-                import psycopg
-                with psycopg.connect(_os.environ["POSTGRES_DSN"],
-                                     connect_timeout=5) as _c:
-                    # PG events.ts is timestamptz → to_timestamp(epoch).
-                    _c.execute(
-                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                        "VALUES (to_timestamp(%s), '5.5.5.5', 'bot', '/heat', 200, "
-                        "'ua-block', 'heatmap-test.local')",
-                        (now - 30,),
-                    )
-                    _c.commit()
-            else:
-                conn = sqlite3.connect(proxy_module.DB_PATH)
-                conn.execute(
-                    "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
-                    "VALUES (?, '5.5.5.5', 'bot', '/heat', 200, 'ua-block', 'heatmap-test.local')",
-                    (now - 30,),
-                )
-                conn.commit()
-                conn.close()
+            conn = sqlite3.connect(proxy_module.DB_PATH)
+            conn.execute(
+                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) "
+                "VALUES (?, '5.5.5.5', 'bot', '/heat', 200, 'ua-block', 'heatmap-test.local')",
+                (now - 30,),
+            )
+            conn.commit()
+            conn.close()
 
             r = await cli.get(
                 f"{NS}/vhost-heatmap?range=60&bucket=300",
@@ -1026,7 +1007,7 @@ async def test_d15_vhost_heatmap_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (401, 403, 302, 301, 404), (
+                assert r.status in (401, 403, 302, 301), (
                     f"/vhost-heatmap: unexpected status {r.status} for unauthenticated request."
                 )
 
@@ -1121,6 +1102,6 @@ async def test_d20_signal_performance_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                assert r.status in (401, 403, 302, 301, 404), (
+                assert r.status in (401, 403, 302, 301), (
                     f"/signal-performance: unexpected status {r.status} for unauthenticated request."
                 )

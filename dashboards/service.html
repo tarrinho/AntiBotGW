@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
-<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
+<script>(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AntiBotWaf_GW_1.9.9 · Service Metrics</title>
+<title>AntiBotWaf_GW_1.9.10 · Service Metrics</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
@@ -117,8 +117,8 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
       font-family:inherit;line-height:1.4}
 .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
 .ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:var(--blue)}
-.ctrl-now:hover:not(:disabled){background:rgba(121,192,255,.25)}
+.ctrl-now{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue)}
+.ctrl-now:hover:not(:disabled){background:rgba(88,166,255,.25)}
 @media (max-width:1100px){.row,.row5{grid-template-columns:repeat(2,1fr)}}
 
 /* 1.6.7 — global portal footer (consistent across every dashboard) */
@@ -131,7 +131,7 @@ table td{padding:5px 8px;border-bottom:1px solid var(--line);font-family:ui-mono
 html[data-theme="light"] .chart-overlay{background:rgba(255,255,255,.7)}
 .chart-overlay.hidden{display:none}
 .vhost-pill{font-family:inherit;font-weight:600;font-size:10px;color:var(--blue);
-            background:rgba(121,192,255,.1);border:1px solid rgba(121,192,255,.25);
+            background:rgba(88,166,255,.1);border:1px solid rgba(88,166,255,.25);
             padding:1px 6px;border-radius:3px;display:inline-block;
             max-width:160px;overflow:hidden;text-overflow:ellipsis;
             white-space:nowrap;vertical-align:middle;line-height:1.4}
@@ -161,7 +161,7 @@ html[data-theme="light"] .chart-overlay{background:rgba(255,255,255,.7)}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-      <div id="sidebar-brand-ver">1.9.9</div>
+      <div id="sidebar-brand-ver">1.9.10</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -549,8 +549,8 @@ function ensureCharts(){
   };
   cpuMemChart = new Chart(document.getElementById('chart-cpu-mem').getContext('2d'),{
     type:'line', data:{labels:[],datasets:[
-      {label:'CPU %',    data:[], borderColor:'#79c0ff',
-        backgroundColor:'rgba(121,192,255,0.35)',
+      {label:'CPU %',    data:[], borderColor:'#58a6ff',
+        backgroundColor:'rgba(88,166,255,0.35)',
         tension:0.25, fill:'origin', borderWidth:2, pointRadius:0, yAxisID:'y'},
       {label:'Memory %', data:[], borderColor:'#bc8cff',
         backgroundColor:'rgba(188,140,255,0.35)',
@@ -921,7 +921,7 @@ _timers.push(setInterval(()=>{ if (endEpoch === null && !_typing()) tick(); }, 5
 // 1.6.5 — per-detector latency + cost-by-bucket
 (function(){
   const COL = {
-    ua:'#f85149', body:'#ff7b3a', intel:'#79c0ff', behavior:'#bc8cff',
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
     cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
     operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
   };
@@ -1039,7 +1039,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
 #gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #79c0ff}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -1383,8 +1383,8 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
         datasets: [{
           label,
           data,
-          borderColor: '#79c0ff',
-          backgroundColor: 'rgba(121,192,255,0.35)',
+          borderColor: '#58a6ff',
+          backgroundColor: 'rgba(88,166,255,0.35)',
           borderWidth: 1.5,
           fill: 'origin',
           tension: 0.2,
@@ -1517,7 +1517,7 @@ window.addEventListener('beforeunload',()=>_timers.forEach(clearInterval));
 </div><!-- /page-content -->
 </div><!-- /main-area -->
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

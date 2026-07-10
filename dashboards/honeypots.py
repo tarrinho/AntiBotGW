@@ -192,8 +192,11 @@ HONEYPOTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "honeypots.html").read_text(encodi
 
 
 async def honeypots_dashboard_endpoint(request: web.Request):
-    from db.sqlite import inject_theme  # 1.9.6 — honour saved theme
-    body = inject_theme(HONEYPOTS_DASHBOARD_HTML, DB_PATH)
+    from db.sqlite import get_ui_theme as _get_theme
+    _theme = _get_theme(DB_PATH)
+    body = HONEYPOTS_DASHBOARD_HTML.replace(
+        '<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1
+    )
     return web.Response(
         text=body,
         content_type="text/html",

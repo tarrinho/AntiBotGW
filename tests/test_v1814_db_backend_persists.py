@@ -36,25 +36,6 @@ def temp_db(monkeypatch):
         pass
 
 
-@pytest.fixture
-def force_sqlite_backend(monkeypatch):
-    """Pin db_load_config to the SQLite backend for this test.
-
-    db_load_config is backend-aware (1.9.2): when POSTGRES_DSN is set it reads
-    config_kv from Postgres via active_backend(), ignoring the temp SQLite DB
-    these tests seed. Under APPSECGW_TEST_PG=1 that means the seeded override is
-    never read. Clearing POSTGRES_DSN in both the config module (consulted by
-    active_backend() at call time) and the db.sqlite module-level binding
-    (consulted by the PG-authority coercion in db_load_config) routes the read
-    back to the per-test DB_PATH so the env-pin exemption is actually exercised.
-    """
-    import config as _cfg
-    import db.sqlite as _s
-    monkeypatch.setattr(_cfg, "POSTGRES_DSN", "", raising=False)
-    monkeypatch.setattr(_s, "POSTGRES_DSN", "", raising=False)
-    yield
-
-
 def _seed_config_kv(db_path: str, key: str, value):
     """Schema-aware insert (config_kv ts column is NOT NULL on newer
     migrations)."""
@@ -73,7 +54,7 @@ def _seed_config_kv(db_path: str, key: str, value):
         conn.close()
 
 
-def test_db_load_config_db_backend_exempt_from_env_pin(temp_db, force_sqlite_backend):
+def test_db_load_config_db_backend_exempt_from_env_pin(temp_db):
     """The core fix: with DB_BACKEND in _ENV_PROVIDED_KNOBS and a config_kv
     row holding the opposite value, db_load_config must apply the config_kv
     value (not skip it as env-pinned)."""

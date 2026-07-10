@@ -7,7 +7,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 | Property | Value |
 |---|---|
-| Image | `appsec-antibot-gw:1.9.9` (~ 190 MB) |
+| Image | `appsec-antibot-gw:1.9.10` (~ 190 MB) |
 | Base | Chainguard Wolfi distroless (`cgr.dev/chainguard/python:latest`) |
 | Trivy CVE findings | **0** (Critical / High / Medium) |
 | Stack | Python 3.14 / aiohttp 3.13 / SQLite WAL |
@@ -17,7 +17,7 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 | In-process detectors | 36 weighted signals · 13 hot-toggleable kill-switches · risk-score model with NAT-aware threshold + Anubis-mode strict PoW |
 | Operator dashboards | `/antibot-appsec-gateway/secured/{dashboard, agents, service, controls, geo, logs, settings}` (DB-backed, click-to-drill) |
 
-## Architecture (1.9.9)
+## Architecture (1.8.15)
 
 ```
                                 ┌─────────────────────┐
@@ -223,7 +223,7 @@ docker volume  create antibot-data 2>/dev/null
 KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
 MYIP="$(curl -s https://api.ipify.org)"
 
-docker run -d --name appsec-antibot-gw1.9.9 \
+docker run -d --name appsec-antibot-gw1.8.15 \
   --restart unless-stopped --init \
   --read-only --tmpfs /tmp:size=8m,mode=1777,nosuid,nodev,noexec \
   --cap-drop ALL \
@@ -240,7 +240,7 @@ docker run -d --name appsec-antibot-gw1.9.9 \
   -e ADMIN_KEY="$KEY" \
   -e TRUST_XFF=last \
   -v antibot-data:/data \
-  appsec-antibot-gw:1.9.9 \
+  appsec-antibot-gw:1.9.10 \
 && echo "ADMIN_KEY: $KEY"
 ```
 
@@ -258,7 +258,7 @@ recommended way to run AntiBot/WAF GW in production.
 
 | Service | Image | Role | Host port |
 |---|---|---|---|
-| `appsec-antibot-gw` | `appsec-antibot-gw:1.9.9` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
+| `appsec-antibot-gw` | `appsec-antibot-gw:1.9.10` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/secured/controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
 | `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
@@ -339,7 +339,7 @@ Monitor startup:
 
 ```bash
 docker compose logs -f appsec-antibot-gw
-# Expect: "[js-challenge] active" and "AntiBotWaf_GW_1.9.9 listening …" within 5 s
+# Expect: "[js-challenge] active" and "AntiBotWaf_GW_1.9.10 listening …" within 5 s
 ```
 
 Check that all services are healthy:
@@ -748,7 +748,6 @@ Each sample includes: CPU %, load average (1/5/15), memory total/used/available,
 | `JA4_TRUSTED_PEERS` | _(empty)_ | Comma-separated IPs/CIDRs allowed to inject the JA4 header (the TLS terminator). Empty = trust all (assumes firewall blocks direct port access). |
 | `STRICT_ORIGIN` | `0` | When `1`, POST/PUT/PATCH/DELETE requires `Origin` header host to match `ALLOWED_HOSTS` |
 | `PRESERVE_HOST` | `0` | When `1`, forward the client's original `Host`, `Origin`, and `Referer` headers to upstream unchanged (skips the proxy's netloc rewrite). Enable only when upstream routes by the public hostname. Default `0` rewrites headers to the upstream's netloc for correct TLS SNI and CORS. Per-vhost configurable. |
-| `VHOST_PORT_AWARE` | `0` | When `1`, the inbound `Host` **port** is part of the vhost identity, so `challenges.site.com:8008` and `:8009` are **distinct vhosts** (separate upstream/policy/stats/bans). Lookup: exact `host:port` → portless `host` (all-ports fallback) → `*.parent[:port]` wildcards. Needed to front CTFd dynamic challenges (same host, different ports). Default `0` strips the port (host-only keying). The front must forward the original `host:port` in `Host`. Hot-reloadable. |
 | `OPEN_ORIGIN_PATHS` | _(empty)_ | Path prefixes that bypass the Origin check (e.g. `/api/webhook`) |
 | `REQUIRED_HEADERS` | _(empty)_ | Comma-separated header names that must be present on every non-admin, non-static request |
 
@@ -939,7 +938,7 @@ docker run -d --name "appsec-gw-${NAME}" \
   -e TURNSTILE_SITEKEY="${TURNSTILE_SITEKEY}" \
   -e TURNSTILE_SECRET="${TURNSTILE_SECRET}" \
   -v "appsec-gw-${NAME}-data:/data" \
-  appsec-antibot-gw:1.9.9
+  appsec-antibot-gw:1.8.15
 echo "  → ${NAME}: http://localhost:${PORT}    admin key: ${ADMIN_KEY}"
 ```
 
@@ -1132,8 +1131,8 @@ UPSTREAM=https://your-app ALLOWED_HOSTS=www.example.com ./myip.sh --apply
 ### Pull from Harbor
 
 ```bash
-docker login registry.example.com
-docker pull  registry.example.com/antibotappsecgw/antibotappsecgw:1.3
+docker login harbor.example.com
+docker pull  harbor.example.com/antibotappsecgw/antibotappsecgw:1.3
 ```
 
 ---
@@ -1143,8 +1142,8 @@ docker pull  registry.example.com/antibotappsecgw/antibotappsecgw:1.3
 ```bash
 git clone https://github.com/<your-org>/appsec-antibot-gw.git
 cd appsec-antibot-gw
-docker build --pull -t appsec-antibot-gw:1.9.9 .
-trivy image appsec-antibot-gw:1.9.9        # expect 0 findings
+docker build --pull -t appsec-antibot-gw:1.8.15 .
+trivy image appsec-antibot-gw:1.8.15        # expect 0 findings
 ```
 
 Multi-stage build:
@@ -1268,7 +1267,7 @@ All owned by UID 65532 (`nonroot`).
 │
 ├── validation/                      per-release audit trail (one .md per version)
 │   ├── TEMPLATE.md                  17-step validation template
-│   └── 1.9.9.md                     latest validation record
+│   └── 1.8.14.md                    latest validation record
 │
 ├── Dockerfile                       multi-stage Wolfi distroless arm64 build
 ├── Dockerfile.armv7                 armv7 variant (libpq + psycopg-c)
@@ -1287,6 +1286,34 @@ All owned by UID 65532 (`nonroot`).
 ├── README.md · CHANGELOG.md · MANUAL.md · CONTROLS.md · rules.md · threatmodel.md
 └── .dockerignore · .trivyignore · .gitignore
 ```
+
+---
+
+## Test suite
+
+The gateway ships with **8,449 tests** across ~230 `tests/test_*.py` files. Grouped
+by function (buckets are approximate — some files span two categories):
+
+| Category | Tests | What it covers |
+|---|---|---|
+| Core detection / pure logic | ~1,050 | `test_pure`, custom-rules fuzzing, path sweep, redirect maze, interaction/pentest probes |
+| Live gateway / integration / functional | ~600 | `test_live_gw`, functional, integration, component, async, endpoints-dynamic, control-center |
+| Dashboard / UI / theme | ~1,300 | theme, QA modules / ui-ux / detection, settings nav/subnav, charts, siem, geo, incidents, control-regressions |
+| DB backend (Postgres/SQLite) | ~650 | pg-only-dynamic, backend-aware-reads, pg-pool, pg-mode, backend-switch/hotswap, db-settings-merge, pg auto-recovery, mirrored-table guards |
+| Auth / session / CSRF / 2FA / OIDC | ~350 | oidc, login-2fa, csrf-session-regression, csrf-shim/nonce/cookie, oidc-idtoken-verify, change-password, admin-key-strength |
+| Security hardening / pentest / no-leak | ~450 | redis-security, ed25519-mesh, security-hardening, bypass-hardening, admin-bypass, upstream-no-leak, admin-ips-no-leak, tier1-security, secfix |
+| vhost policy / filtering / decoy | ~350 | vhost-comparison, vhost-filtering, policy-picker/summary/apply, decoy-isolation, implicit-allowlist, risk-overrides, honeypot-vhost-filter |
+| Knobs / kill-switches / posture / hotreload | ~350 | knob-kill-switches, low-coverage-knobs, signal-knob-hotreload, posture-presets, disable-gw-controls, infra-restart-knobs |
+| Ban / risk / incident scope | ~200 | ban-scope, ban-outcome-breakdown, ban-duration, riskbreakdown-enrichment, riskmodal-actions, ip-ban-status, unban-full-scrub |
+| Perf / soak / metrics offload | ~120 | performance, perf-pass, perf-quick-wins, geo-scan-offload, pg-writer-offload, metrics-ban-offload, metrics-cache, timescaledb-soak |
+| Threat feeds / IP intel / crowdsec | ~180 | threat-feeds, qa-feeds, ip-intel-qa, crowdsec-lapi-health, attack-playbook, honey-suggest |
+| Release tooling / version / docs freshness | ~90 | publish-targets, publish-marker, doc-version-freshness, version-consistency, release-tooling, loop-responsiveness |
+| Audit trail / admin IP / live feed | ~130 | audit-trail, admin-ip-list, livefeed-detector-stats, live-events-grid |
+
+Largest single files: `test_pure.py` (938), `test_live_gw.py` (244), `test_v1811_theme.py` (231).
+
+Run the full suite with `pytest tests/ -q`. See **[GW-Tests-Full.md](GW-Tests-Full.md)**
+for the per-file breakdown.
 
 ---
 

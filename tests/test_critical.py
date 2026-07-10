@@ -274,16 +274,8 @@ def test_env_precedence_marker():
             assert k in os.environ
             assert k in proxy._HOT_RELOAD_KNOBS
     else:
-        # default (non-strict): DB takes precedence, so the set is only the
-        # knobs actually provided in the process env (it is NOT the full
-        # hot-reload set). With no knobs in env it is empty; under the PG-mode
-        # test harness POSTGRES_DSN is exported and is legitimately pinned.
-        # Every entry must therefore correspond to a real env-provided knob.
-        import core.proxy_handler as _cph
-        for k in proxy._ENV_PROVIDED_KNOBS:
-            assert _cph._env_knob_is_provided(k) or k in os.environ, (
-                f"{k} in _ENV_PROVIDED_KNOBS but not actually set in env"
-            )
+        # default: empty set (DB takes precedence)
+        assert proxy._ENV_PROVIDED_KNOBS == set()
 
 
 def test_env_provided_knobs_falsy_values_not_pinned():
@@ -1001,17 +993,8 @@ def test_163_geo_drill_payload_shape():
 # ── 1.6.4 — DB_BACKEND knob + GW health-score ──────────────────────────
 def test_164_db_backend_default_sqlite():
     """Default backend is sqlite — preserves the zero-deps single-container
-    posture for low-volume operators.
-
-    The active backend is auto-derived from POSTGRES_DSN (config.py): DSN set
-    → postgres-only, DSN unset → sqlite-only. So the *default* (no DSN) is
-    sqlite, while a configured DSN correctly selects postgres. Assert that
-    contract rather than a hardcoded value so the PG-mode test harness
-    (POSTGRES_DSN exported) is not a false failure."""
-    if os.environ.get("POSTGRES_DSN", "").strip():
-        assert proxy.DB_BACKEND == "postgres"
-    else:
-        assert proxy.DB_BACKEND == "sqlite"
+    posture for low-volume operators."""
+    assert proxy.DB_BACKEND == "sqlite"
 
 
 def test_164_db_backend_falls_back_when_psycopg_missing():
@@ -1169,7 +1152,6 @@ def test_165_every_knob_persists_round_trip():
         # Booleans — flip to opposite of env default
         "JS_CHALLENGE": False, "BOT_TRAP_FORMS": False, "BODY_PATTERN_MATCH": False,
         "CANARY_ECHO_DETECTION": False, "STRICT_ORIGIN": True, "PRESERVE_HOST": False,
-        "VHOST_PORT_AWARE": True,   # 1.9.8 — host:port as a distinct vhost
         "INJECT_SECURITY_HEADERS": False, "JS_CHAL_BIND_JA4": False,
         "JS_CHAL_REQUIRE_JA4": False, "JS_CHAL_STRICT_STATIC": False,
         "ABUSEIPDB_ENABLED": False, "CROWDSEC_ENABLED": False,
@@ -1341,24 +1323,20 @@ def test_165_every_knob_persists_round_trip():
                 if hasattr(proxy, k)}
 
     # Wipe + re-seed config_kv with our test values.
-    # Backend-aware: db_load_config() reads config_kv from the ACTIVE backend
-    # (Postgres when POSTGRES_DSN is set, else SQLite). Writing straight to the
-    # SQLite file would leave the PG-mode read empty, so use db.conn.conn()
-    # which targets the same backend db_load_config() reads (commits on exit,
-    # `?` placeholders rewritten to `%s` on PG).
-    from db.conn import conn as _backend_conn
-    with _backend_conn(timeout=10) as _seed:
-        _seed.execute("DELETE FROM config_kv")
-        for k, v in test_values.items():
-            # Mimic what /antibot-appsec-gateway/secured/config does on POST:
-            # serialise sets as sorted lists, then json-encode.
-            if isinstance(v, set):
-                ser = sorted(v)
-            else:
-                ser = v
-            _seed.execute(
-                "INSERT INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
-                (k, json.dumps(ser), 0.0))
+    conn = sqlite3.connect(proxy.DB_PATH)
+    conn.execute("DELETE FROM config_kv")
+    for k, v in test_values.items():
+        # Mimic what /antibot-appsec-gateway/secured/config does on POST: serialise sets as sorted lists,
+        # then json-encode.
+        if isinstance(v, set):
+            ser = sorted(v)
+        else:
+            ser = v
+        conn.execute(
+            "INSERT INTO config_kv (key, value, ts) VALUES (?, ?, ?)",
+            (k, json.dumps(ser), 0.0))
+    conn.commit()
+    conn.close()
 
     # Reset _ENV_PROVIDED_KNOBS so DB wins (test is checking persistence,
     # not env precedence).
@@ -1376,18 +1354,10 @@ def test_165_every_knob_persists_round_trip():
         # Exclude them from this round-trip assertion (the security
         # contract overrides hot-reload).
         _deny = getattr(proxy, "_DB_LOAD_DENY", frozenset())
-        # When Postgres is the active backend (POSTGRES_DSN set), the single-DB
-        # contract makes DB_BACKEND auto-derived from the DSN (self-healed to
-        # 'postgres') and POSTGRES_DSN a secret that config_kv must not stomp.
-        # The SQLite-oriented seed values ('sqlite' / '') therefore cannot — and
-        # MUST not — round-trip; that refusal is the correct security behaviour,
-        # so exclude these two knobs from the round-trip check in PG mode.
-        _pg_active = bool(os.environ.get("POSTGRES_DSN", "").strip())
-        _pg_skip = {"DB_BACKEND", "POSTGRES_DSN"} if _pg_active else set()
         # Verify each knob loaded correctly.
         rejected = []
         for k, expected in test_values.items():
-            if k in _deny or k in _pg_skip:
+            if k in _deny:
                 continue
             actual = getattr(proxy, k, "<missing>")
             # Normalise sets / lists / objects for comparison.
@@ -1426,10 +1396,11 @@ def test_165_every_knob_persists_round_trip():
                         setattr(_m, k, v)
                     except (AttributeError, TypeError):
                         pass
-        # Wipe config_kv so other tests start clean (backend-aware).
-        from db.conn import conn as _backend_conn_cleanup
-        with _backend_conn_cleanup(timeout=10) as _wipe:
-            _wipe.execute("DELETE FROM config_kv")
+        # Wipe config_kv so other tests start clean.
+        conn = sqlite3.connect(proxy.DB_PATH)
+        conn.execute("DELETE FROM config_kv")
+        conn.commit()
+        conn.close()
 
 
 def test_165_admin_ip_bypasses_country_block():
@@ -1700,7 +1671,7 @@ def test_167_gw_id_from_domain():
     assert out.startswith("a" * 60)
     # Result must round-trip through the validator.
     for d in ["gw-prod.example.com", "demo-tunnel-abc123.trycloudflare.com",
-              "svc.staging.example.com"]:
+              "host.example.com"]:
         derived = f(d)
         ok, _ = proxy._gw_validate_id(derived)
         assert ok, f"derived {derived!r} from {d!r} fails validator"

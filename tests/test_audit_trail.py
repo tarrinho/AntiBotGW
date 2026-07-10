@@ -123,44 +123,40 @@ def _csrf_hdr(proxy_module, cookie):
     return {"X-CSRF-Token": token}
 
 
-# gw_audit is mirrored to the active backend. Under the PG-mode test harness
-# (POSTGRES_DSN set) the config endpoint and gw_audit_add writer op persist to
-# Postgres and never touch SQLite, so raw sqlite3.connect(DB_PATH) reads/writes
-# would miss the rows. db.conn.conn() targets whatever backend is active (it
-# rewrites `?` → `%s` and commits on clean exit) keeping these helpers correct
-# in both modes.
 def _audit_rows(proxy_module, action=None):
     """Query gw_audit table directly; optionally filter by action."""
-    from db.conn import conn as _backend_conn
-    with _backend_conn(timeout=10) as conn:
-        conn.row_factory = sqlite3.Row
-        if action:
-            rows = conn.execute(
-                "SELECT * FROM gw_audit WHERE action=? ORDER BY ts", (action,)
-            ).fetchall()
-        else:
-            rows = conn.execute("SELECT * FROM gw_audit ORDER BY ts").fetchall()
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.row_factory = sqlite3.Row
+    if action:
+        rows = conn.execute(
+            "SELECT * FROM gw_audit WHERE action=? ORDER BY ts", (action,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM gw_audit ORDER BY ts").fetchall()
+    conn.close()
     return [dict(r) for r in rows]
 
 
 def _seed_audit(proxy_module, action="test_action", actor="admin",
                 details=None, ts=None):
     """Insert a row directly into gw_audit for query-side tests."""
-    from db.conn import conn as _backend_conn
-    with _backend_conn(timeout=10) as conn:
-        conn.execute(
-            "INSERT INTO gw_audit (ts, action, gw_id, actor, details) VALUES (?,?,?,?,?)",
-            (ts or time.time(), action, "gw-test", actor,
-             json.dumps(details or {"key": "val"})),
-        )
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(
+        "INSERT INTO gw_audit (ts, action, gw_id, actor, details) VALUES (?,?,?,?,?)",
+        (ts or time.time(), action, "gw-test", actor,
+         json.dumps(details or {"key": "val"})),
+    )
+    conn.commit()
+    conn.close()
 
 
 def _wipe_audit(proxy_module):
-    from db.conn import conn as _backend_conn
     try:
-        with _backend_conn(timeout=10) as conn:
-            conn.execute("DELETE FROM gw_audit")
-    except Exception:
+        conn = sqlite3.connect(proxy_module.DB_PATH)
+        conn.execute("DELETE FROM gw_audit")
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError:
         pass
 
 

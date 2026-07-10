@@ -3,9 +3,9 @@
 
 Bugs fixed:
   * Global _decoy_cache / _upstream_404_cache leaked vhost-A's homepage as
-    vhost-B's silent-decoy body. When example.org was decoyed, the gateway
+    vhost-B's silent-decoy body. When jtsl.pt was decoyed, the gateway
     served pt4.tech's cached HTML — and the browser then re-fetched assets
-    against example.org, which got re-decoyed (HTML body, wrong content-type),
+    against jtsl.pt, which got re-decoyed (HTML body, wrong content-type),
     breaking page styling.
   * Wildcard vhost entries (``*.example.com``) were accepted by
     _validate_vhost_hostname + stored as literal dict keys, but
@@ -106,24 +106,12 @@ class TestPerUpstreamDecoyCacheSource:
         )
 
     def test_upstream_unavailable_resolves_vhost_upstream(self):
-        """The mirrored-404 response must look up the current vhost's slot.
-
-        1.8.15 shipped this as `_serve_mirrored_404()` (the earlier
-        `_upstream_unavailable_response` name never landed). It resolves the
-        active vhost upstream via vc('UPSTREAM') and keys _upstream_404_cache
-        by that upstream — the per-vhost isolation invariant this test guards.
-        """
-        idx = _PH_SRC.find("async def _serve_mirrored_404(")
-        assert idx != -1, (
-            "_serve_mirrored_404 (mirrored-404 response) must exist"
-        )
-        nxt = _PH_SRC.find("\nasync def ", idx + 1)
+        """_upstream_unavailable_response must look up the current vhost's slot."""
+        idx = _PH_SRC.find("def _upstream_unavailable_response(")
+        nxt = _PH_SRC.find("def ", idx + 1)
         block = _PH_SRC[idx: nxt]
-        assert "vc(\"UPSTREAM\")" in block or "vc('UPSTREAM')" in block, (
-            "mirrored-404 must resolve the active vhost via vc('UPSTREAM')"
-        )
-        assert "_upstream_404_cache.get(up)" in block, (
-            "_serve_mirrored_404 must key cache by current vhost upstream"
+        assert "_upstream_404_cache.get(_up)" in block, (
+            "_upstream_unavailable_response must key cache by current vhost upstream"
         )
 
 

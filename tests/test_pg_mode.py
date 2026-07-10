@@ -48,18 +48,14 @@ class TestPgModeBoot:
             c.close()
 
     def test_pg_writer_loop_branch_taken(self, pg_session):
-        # In PG mode, db.sqlite.db_writer_loop's source must contain the
-        # PG-primary branch. iter-6 fix: the loop now forks on the
-        # OPERATOR-CONTROLLED `DB_BACKEND == "postgres" and POSTGRES_DSN`
-        # guard (not the bare `if POSTGRES_DSN:` of earlier releases), so
-        # that an operator who switches PG → SQLite via /__db-switch keeps
-        # the SQLite-primary path even though the encrypted DSN is still
-        # bound. We don't run the writer here (it's an infinite loop) — we
-        # assert the branch exists in the resolved function source.
+        # In PG mode, db.sqlite.db_writer_loop's source must hit the
+        # `if POSTGRES_DSN:` PG-primary branch. We don't run the writer
+        # here (it's an infinite loop) — we assert the branch exists in
+        # the resolved function source.
         import inspect
         import db.sqlite
         src = inspect.getsource(db.sqlite.db_writer_loop)
-        assert 'DB_BACKEND == "postgres" and POSTGRES_DSN:' in src
+        assert "if POSTGRES_DSN:" in src
         assert "_pg_mirror_kv(pg_op, args)" in src
 
 
@@ -325,21 +321,9 @@ class TestPgModeEventsRoundtrip:
         import sqlite3
         c = sqlite3.connect(out)
         try:
-            # Scope to THIS test's events only. The events table is shared
-            # across the PG test DB, and parallel agent runs (and the
-            # per-test truncate races warned about in the suite) can write
-            # additional rows between this test's inserts and the export —
-            # a bare `SELECT ... FROM events` then returns >5 rows. The five
-            # rows inserted above use distinctive vhosts v0.example..v4.example
-            # and IPs 10.0.0.0..10.0.0.4, so filter on them. This keeps the
-            # test's intent (those 5 events round-trip with correct
-            # timestamps/fields) while being immune to concurrent writers.
             rows = c.execute(
                 "SELECT ts, ip, ua, path, method, status, reason, vhost "
-                "FROM events WHERE vhost IN "
-                "('v0.example','v1.example','v2.example',"
-                "'v3.example','v4.example') "
-                "AND ip LIKE '10.0.0.%' ORDER BY ts"
+                "FROM events ORDER BY ts"
             ).fetchall()
         finally:
             c.close()
@@ -463,17 +447,9 @@ class TestPgModeLargeDatasetSmoke:
         assert dur < 30, f"large import too slow: {dur:.1f}s"
 
         with pg_session.cursor() as cur:
-            # Count the imported rows specifically. The product's
-            # _user_bootstrap() (1.6.7) auto-creates an `admin` user from
-            # INTERNAL_KEY whenever the users table is empty (which it is
-            # immediately after the TRUNCATE above), so the live table may
-            # legitimately hold 1001 rows = 1000 imported + 1 bootstrap
-            # admin. Asserting the exact 1000 user-#### rows preserves the
-            # test's intent ("all 1000 imported users landed in PG")
-            # without forbidding the bootstrap admin.
-            cur.execute("SELECT COUNT(*) FROM users WHERE username LIKE 'user-%'")
+            cur.execute("SELECT COUNT(*) FROM users")
             assert cur.fetchone()[0] == 1000
-            cur.execute("SELECT COUNT(*) FROM config_kv WHERE key LIKE 'k-%'")
+            cur.execute("SELECT COUNT(*) FROM config_kv")
             assert cur.fetchone()[0] == 1000
 
 
@@ -711,19 +687,7 @@ class TestPgModePermissionFailure:
         import db.postgres as _pgmod
         import config
         orig_dsn = config.POSTGRES_DSN
-        # Swap the userinfo (user:password) of the configured DSN for the
-        # unprivileged role, regardless of what the privileged creds are.
-        # The harness DSN moved from test:test → agw:testpass, so the old
-        # literal .replace("test:test", ...) became a no-op and the init
-        # ran as the privileged role (returning True and failing this
-        # test). Parse the URL and rewrite the netloc instead.
-        from urllib.parse import urlsplit, urlunsplit
-        _u = urlsplit(orig_dsn)
-        _hostport = _u.netloc.split("@", 1)[-1]
-        unpriv_dsn = urlunsplit((
-            _u.scheme,
-            f"appsec_readonly:ro@{_hostport}",
-            _u.path, _u.query, _u.fragment))
+        unpriv_dsn = orig_dsn.replace("test:test", "appsec_readonly:ro")
         try:
             # Drop the pool so it rebuilds with the new DSN.
             _pgmod._state._postgres_pool = None
@@ -820,29 +784,14 @@ class TestPgModePerformanceSmoke:
                 "TRUNCATE TABLE events RESTART IDENTITY CASCADE")
         pg_session.commit()
 
-        # Bulk insert. The thing under test is the EXPORT speed, not the seed,
-        # so seed with a single pooled connection + executemany (matching what
-        # pg_insert_event writes, incl. to_timestamp(epoch) for the timestamptz
-        # ts column) rather than 10k separate pool checkouts. The per-row
-        # pg_insert_event path opened/closed a pooled connection 10k times,
-        # which under the shared-DB harness blew the 60s pytest-timeout during
-        # SEED (before the export was ever measured). This change does not alter
-        # the assertion — same N rows, same export path.
+        # Bulk insert via the dedicated event writer.
         t0 = _t.time()
         N = 10000  # 10k — keeps the test under a minute end-to-end
-        _pool = _pgmod._get_pool()
-        assert _pool is not None, "PG pool unavailable for perf seed"
-        _seed_params = [
-            (float(i), f"10.0.{i // 256 % 256}.{i % 256}",
-             "ua", "/p", "GET", 200, "ok", "x.example")
-            for i in range(N)
-        ]
-        with _pool.connection(timeout=10.0) as _seed_conn:
-            _seed_conn.cursor().executemany(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (to_timestamp(%s), %s, %s, %s, %s, %s, %s, %s)",
-                _seed_params,
-            )
+        for i in range(N):
+            pg_insert_event(
+                float(i), f"10.0.{i // 256 % 256}.{i % 256}",
+                "ua", "/p", 200, "ok",
+                method="GET", vhost="x.example")
         dur_insert = _t.time() - t0
 
         out = str(tmp_path / "perf.db")

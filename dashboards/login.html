@@ -3,13 +3,13 @@
 <!-- 1.9.2 iter-22 UX — set data-theme BEFORE first paint so OS preference
      (prefers-color-scheme) is honored on first visit, instead of always
      flashing dark before any later JS theme toggle runs. -->
-<script nonce="__CSP_NONCE__">(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
+<script nonce="__CSP_NONCE__">(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AntiBot/WAF GW · Sign in</title>
 <meta name="robots" content="noindex,nofollow">
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;}
 *{box-sizing:border-box;margin:0;padding:0}
 body{font:13.5px/1.45 -apple-system,'SF Pro',ui-sans-serif,sans-serif;
      background:var(--bg);color:var(--fg);min-height:100vh;
@@ -70,7 +70,7 @@ body{flex-direction:column}
       display:flex;align-items:center;justify-content:center;
       font-size:11px;font-weight:700;color:var(--dim);flex-shrink:0;
       transition:border-color .2s,color .2s,background .2s}
-.step.active{border-color:var(--blue);color:var(--blue);background:rgba(121,192,255,.10)}
+.step.active{border-color:var(--blue);color:var(--blue);background:rgba(88,166,255,.10)}
 .step.done{border-color:var(--green);color:var(--green);background:rgba(63,185,80,.08)}
 .step-line{flex:1;height:2px;background:var(--line);transition:background .2s}
 .step-line.done{background:var(--green)}

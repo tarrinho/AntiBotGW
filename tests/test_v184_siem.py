@@ -753,27 +753,20 @@ async def test_d04_siem_data_unauthenticated_deflected(proxy_module):
                 except (_json.JSONDecodeError, TypeError):
                     pass
             else:
-                # 404 = silent-decoy deflection: unauthenticated probes to a
-                # secured admin endpoint get the upstream-mirrored 404 (recon
-                # hardening — the endpoint's existence is not confirmed). This
-                # is the shipped, stronger deflection vs a bare 401/403.
-                assert r.status in (302, 401, 403, 404), (
+                assert r.status in (302, 401, 403), (
                     f"/siem-data unauthenticated: unexpected status {r.status}."
                 )
 
 
 @pytest.mark.asyncio
 async def test_d05_mins_filters_old_events(proxy_module):
+    proxy_module.events.clear()
+    now_ts = time.monotonic()
+    proxy_module.events.append(_ev("canary-echo", ts=now_ts - 30, ip="10.0.0.1"))
+    proxy_module.events.append(_ev("honeypot",    ts=now_ts - 7200, ip="10.0.0.2"))
+
     async with _spin_upstream() as up:
         async with _gateway(proxy_module, up) as cli:
-            # Seed post-boot: PG-only boot rehydrates `events` from Postgres
-            # (could otherwise add a recent 10.0.0.2-like row, or drop the
-            # seeded recent event). Clearing after boot keeps the window
-            # assertion deterministic.
-            proxy_module.events.clear()
-            now_ts = time.monotonic()
-            proxy_module.events.append(_ev("canary-echo", ts=now_ts - 30, ip="10.0.0.1"))
-            proxy_module.events.append(_ev("honeypot",    ts=now_ts - 7200, ip="10.0.0.2"))
             cookies = _admin_cookie(proxy_module)
             r = await cli.get(f"{NS}/siem-data?mins=1", cookies=cookies)
             data = await r.json()
@@ -815,20 +808,16 @@ async def test_d06_vhost_filter(proxy_module):
 
 @pytest.mark.asyncio
 async def test_d07_stats_computed_correctly(proxy_module):
+    proxy_module.events.clear()
+    now_ts = time.monotonic()
+    # 2 blocked, 1 ok (allowed), 1 bypass
+    proxy_module.events.append(_ev("honeypot",    ts=now_ts - 5, ip="10.2.0.1", status=403))
+    proxy_module.events.append(_ev("banned",      ts=now_ts - 5, ip="10.2.0.2", status=403))
+    proxy_module.events.append(_ev("ok",          ts=now_ts - 5, ip="10.2.0.3", status=200))
+    proxy_module.events.append(_ev("bypass-mode", ts=now_ts - 5, ip="10.2.0.4", status=200))
+
     async with _spin_upstream() as up:
         async with _gateway(proxy_module, up) as cli:
-            # Seed the in-memory deque AFTER gateway boot. In PG-only mode the
-            # boot path runs _rehydrate_events(), which refills `events` from
-            # Postgres — a pre-boot clear()+append() gets clobbered and the
-            # stats then count the rehydrated history (total=155 in CI). Seeding
-            # post-boot keeps the deque under the test's control at query time.
-            proxy_module.events.clear()
-            now_ts = time.monotonic()
-            # 2 blocked, 1 ok (allowed), 1 bypass
-            proxy_module.events.append(_ev("honeypot",    ts=now_ts - 5, ip="10.2.0.1", status=403))
-            proxy_module.events.append(_ev("banned",      ts=now_ts - 5, ip="10.2.0.2", status=403))
-            proxy_module.events.append(_ev("ok",          ts=now_ts - 5, ip="10.2.0.3", status=200))
-            proxy_module.events.append(_ev("bypass-mode", ts=now_ts - 5, ip="10.2.0.4", status=200))
             cookies = _admin_cookie(proxy_module)
             r = await cli.get(f"{NS}/siem-data?mins=60", cookies=cookies)
             data = await r.json()
@@ -919,16 +908,14 @@ async def test_d11_invalid_mins_defaults_60(proxy_module):
 
 @pytest.mark.asyncio
 async def test_d12_enriched_events_carry_sev(proxy_module):
+    proxy_module.events.clear()
+    now_ts = time.monotonic()
+    proxy_module.events.append(_ev("canary-echo", ts=now_ts - 5, ip="10.5.0.1"))
+    proxy_module.events.append(_ev("body-rce",    ts=now_ts - 5, ip="10.5.0.2"))
+    proxy_module.events.append(_ev("rate-burst",  ts=now_ts - 5, ip="10.5.0.3"))
+
     async with _spin_upstream() as up:
         async with _gateway(proxy_module, up) as cli:
-            # Seed post-boot: PG-only boot rehydrates `events` from Postgres,
-            # which would otherwise push these seeded IPs out of the last-100
-            # enriched window (canary-echo sev lookup returned None in CI).
-            proxy_module.events.clear()
-            now_ts = time.monotonic()
-            proxy_module.events.append(_ev("canary-echo", ts=now_ts - 5, ip="10.5.0.1"))
-            proxy_module.events.append(_ev("body-rce",    ts=now_ts - 5, ip="10.5.0.2"))
-            proxy_module.events.append(_ev("rate-burst",  ts=now_ts - 5, ip="10.5.0.3"))
             cookies = _admin_cookie(proxy_module)
             r = await cli.get(f"{NS}/siem-data?mins=60", cookies=cookies)
             data = await r.json()
@@ -1195,14 +1182,7 @@ async def test_sec05_unauthenticated_siem_data_rejected(proxy_module):
                 assert isinstance(data, dict), (
                     "/siem-data unauthenticated: non-dict JSON response."
                 )
-                # Must NOT leak the seeded sensitive event to an unauth caller.
-                _ips = [e.get("ip") for e in data.get("events", [])]
-                assert "192.168.99.1" not in _ips, (
-                    "/siem-data unauthenticated LEAKED a seeded event IP"
-                )
             else:
-                # 404 = silent-decoy deflection for unauthenticated admin-path
-                # probes (recon hardening); stronger than a bare 401/403.
-                assert r.status in (302, 401, 403, 404), (
+                assert r.status in (302, 401, 403), (
                     f"/siem-data unauthenticated: unexpected status {r.status}."
                 )

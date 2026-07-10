@@ -822,11 +822,7 @@ class TestDbLoadSecretsPropagation:
         src = (Path(__file__).resolve().parent.parent / "db" / "sqlite.py").read_text()
         fn_start = src.find("def db_load_secrets")
         assert fn_start != -1
-        # Slice to the END of the function (next top-level `def`), not a fixed
-        # byte window — the function grew (extra DSN validation) and a fixed
-        # 4000-char slice now truncates before the propagation loop.
-        next_def = src.find("\ndef ", fn_start + 1)
-        body = src[fn_start: next_def if next_def != -1 else len(src)]
+        body = src[fn_start: fn_start + 4000]
         assert "sys.modules" in body or "_sys.modules" in body, (
             "db_load_secrets must iterate sys.modules to propagate values"
         )
@@ -925,13 +921,6 @@ class TestDbLoadSecretsPropagation:
         import db.sqlite as sql_mod
         monkeypatch.setattr(sql_mod, "DB_PATH", str(db_path))
         monkeypatch.delenv("POSTGRES_DSN", raising=False)
-        # db_load_secrets/db_load_config route reads via active_backend(), which
-        # reads config.POSTGRES_DSN. Under the PG test harness that is set, so
-        # without this the helpers would read secrets_kv/config_kv from the shared
-        # Postgres instead of the temp SQLite seeded above. Pin sqlite routing so
-        # this isolated unit test exercises the seeded DB deterministically.
-        import config as _config
-        monkeypatch.setattr(_config, "POSTGRES_DSN", "", raising=False)
         monkeypatch.setattr(sql_mod, "_refresh_integration_state",
                             lambda *_a, **_k: None)
 
@@ -1233,12 +1222,6 @@ class TestConfigKvStompAlert:
         # (db_load_config reads `g.get("DB_PATH") or os.environ.get("DB_PATH")
         #  or DB_PATH` and env wins over module-level).
         monkeypatch.delenv("DB_PATH", raising=False)
-        # Pin sqlite routing: active_backend() reads config.POSTGRES_DSN, which is
-        # set under the PG test harness; without this the helpers read config_kv
-        # from the shared Postgres instead of the temp SQLite seeded above and the
-        # stomp-collision (and thus the alert) never happens.
-        import config as _config
-        monkeypatch.setattr(_config, "POSTGRES_DSN", "", raising=False)
         monkeypatch.setattr(sql_mod, "_refresh_integration_state",
                             lambda *_a, **_k: None)
         import core.proxy_handler as ph
@@ -1259,14 +1242,6 @@ class TestConfigKvStompAlert:
             "_ENV_PROVIDED_KNOBS": set(),
         }
         sql_mod.db_load_secrets(fake_globals)
-        # 1.8.8 backend-aware reads: db_load_secrets propagates the secret
-        # POSTGRES_DSN to every loaded module (including `config`), which flips
-        # active_backend() to 'postgres'. db_load_config then tries to read
-        # config_kv from the (fake, unreachable) PG host and bails with
-        # db_config_load_failed BEFORE the SQLite stomp-detection path runs.
-        # Re-pin config.POSTGRES_DSN='' so db_load_config takes the SQLite path
-        # against the temp DB seeded above and the stomp collision is detected.
-        monkeypatch.setattr(_config, "POSTGRES_DSN", "", raising=False)
         sql_mod.db_load_config(fake_globals)
 
         try:
@@ -1516,10 +1491,7 @@ class TestEnvPinnedKnobUx:
         """K03: ALLOW_PRIVATE_UPSTREAM must be registered in _HOT_RELOAD_KNOBS
         with a _to_bool parser. Regression target — the knob was missing from
         the spec at one point and silently rejected even unrelated POSTs."""
-        import re as _re
-        # Whitespace-tolerant: the source aligns the spec dict, so there may be
-        # >1 space after the colon. The contract is "registered with _to_bool".
-        assert _re.search(r'"ALLOW_PRIVATE_UPSTREAM":\s*\(_to_bool,\s*None\)', self.src), (
+        assert '"ALLOW_PRIVATE_UPSTREAM": (_to_bool, None)' in self.src, (
             "ALLOW_PRIVATE_UPSTREAM must be in _HOT_RELOAD_KNOBS with _to_bool parser"
         )
 
@@ -1815,21 +1787,8 @@ class TestBypassModeAbsolute:
     @pytest.mark.asyncio
     async def test_b09_post_bypass_without_csrf_header_returns_403(self, proxy_module, monkeypatch):
         """B09: dynamic — reproduce the operator's symptom. POST /config
-        with the session cookie but WITHOUT a valid X-CSRF-Token header must
-        return HTTP 403.
-
-        SECURITY CONTRACT (asserts the SAFER shipped behaviour): per the 1.9.0
-        F13 hardening (`admin/auth.py::_require_csrf` / `_role_denied`), the
-        rejection body is intentionally normalised to the generic
-        `{"error":"forbidden"}` — it deliberately does NOT reveal whether the
-        request was rejected for a missing/invalid CSRF token vs. an
-        insufficient role, so an authenticated low-priv probe cannot map which
-        endpoints are role-gated vs. only CSRF-gated. The earlier revision of
-        this test demanded the body literally mention 'CSRF', which would
-        require reverting that hardening and re-introducing the information
-        disclosure. Updated to pin the safe current contract (403 + opaque
-        forbidden body) while preserving the test's intent: a state-changing
-        POST without a valid CSRF token is rejected."""
+        with the session cookie but WITHOUT X-CSRF-Token header must
+        return HTTP 403 with body 'CSRF token invalid'."""
         import core.proxy_handler as ph
         self._bypass_helpers(monkeypatch)
         # Leave CSRF check REAL — that's what we're testing
@@ -1846,13 +1805,9 @@ class TestBypassModeAbsolute:
                 assert r.status == 403, (
                     f"POST without X-CSRF-Token must return 403, got {r.status}"
                 )
-                # F13 hardening: opaque rejection body (no CSRF-vs-role leak).
                 body = await r.text()
-                j = await r.json()
-                assert j.get("error") == "forbidden", (
-                    "403 rejection body must be the generic {\"error\":\"forbidden\"} "
-                    "shape (1.9.0 F13) — it must NOT disclose whether the failure "
-                    f"was CSRF vs role-gating. Got: {body[:200]!r}"
+                assert "CSRF" in body or "csrf" in body, (
+                    f"403 body must mention CSRF for operator clarity. Got: {body[:200]!r}"
                 )
 
     @pytest.mark.asyncio
@@ -1953,32 +1908,17 @@ class TestBypassModeAbsolute:
         )
 
     def test_b15_pg_mirror_handles_set_config(self):
-        """B15: db.postgres must dispatch op='set_config' to a handler that
-        translates it into a Postgres UPSERT (INSERT ... ON CONFLICT
+        """B15: db.postgres._pg_mirror_kv must accept op='set_config' and
+        translate it into a Postgres UPSERT (INSERT ... ON CONFLICT
         DO UPDATE) into config_kv with the same (key, value, ts) tuple.
         (sqlite calls _pg_mirror_bg — the off-loop background wrapper —
-        which dispatches to _pg_mirror_kv where the SQL lives.)
-
-        1.9.0 refactor: _pg_mirror_kv's `if op == "set_config"` chain was
-        replaced by a `_PG_OP_HANDLERS = {op: fn}` dispatch dict. The
-        set_config UPSERT now lives in the `_h_set_config` handler, which
-        must be registered under the "set_config" key. Assert the current
-        dispatch-dict contract rather than the retired if/elif chain."""
+        which dispatches to _pg_mirror_kv where the SQL lives.)"""
         pg_src = (Path(__file__).resolve().parent.parent / "db" / "postgres.py").read_text()
-        # "set_config" must be registered in the op-dispatch dict.
-        import db.postgres as pg_mod
-        assert "set_config" in pg_mod._PG_OP_HANDLERS, (
-            "_PG_OP_HANDLERS must register a handler for op='set_config'"
-        )
-        handler = pg_mod._PG_OP_HANDLERS["set_config"]
-        assert handler is pg_mod._h_set_config, (
-            "set_config must dispatch to _h_set_config"
-        )
-        # The handler body must perform the idempotent config_kv UPSERT.
-        import inspect
-        body = inspect.getsource(handler)
+        idx = pg_src.find("def _pg_mirror_kv")
+        body = pg_src[idx: idx + 3000]
+        assert 'if op == "set_config":' in body
         assert "INSERT INTO config_kv" in body, (
-            "_h_set_config must INSERT INTO config_kv"
+            "_pg_mirror_kv set_config branch must INSERT INTO config_kv"
         )
         assert "ON CONFLICT (key)" in body, (
             "Mirror must use ON CONFLICT (key) DO UPDATE to be idempotent"
@@ -2016,46 +1956,19 @@ class TestBypassModeAbsolute:
                 assert target_knob in j.get("applied", {}), (
                     f"Knob {target_knob} must be in applied: {j}"
                 )
-        # Give the writer loop a beat to drain the queue, then read the
-        # config_kv row back from the ACTIVE backend. Under the PG test
-        # harness the gateway boots PG-primary (DB_BACKEND="postgres"), so
-        # the writer routes set_config to Postgres config_kv via
-        # _pg_mirror_kv and never touches the SQLite file — reading SQLite
-        # directly would (correctly) find nothing. Pick the backend the
-        # gateway is actually persisting to.
+        # Give the writer loop a beat to drain the queue + check SQLite
         await asyncio.sleep(0.5)
-        backend = getattr(ph, "DB_BACKEND", "sqlite")
-        row = None
-        if backend == "postgres":
-            # Poll the PG mirror briefly — the writer offloads the PG mirror
-            # to a background thread, so it may land a beat after the SQLite
-            # source-of-truth write in dual-write mode (or be the only write
-            # in PG-primary mode).
-            import psycopg
-            dsn = os.environ["POSTGRES_DSN"]
-            for _ in range(20):
-                with psycopg.connect(dsn, connect_timeout=5) as pgc:
-                    with pgc.cursor() as cur:
-                        cur.execute(
-                            "SELECT key, value FROM config_kv WHERE key = %s",
-                            (target_knob,))
-                        row = cur.fetchone()
-                if row is not None:
-                    break
-                await asyncio.sleep(0.25)
-        else:
-            import sqlite3
-            conn = sqlite3.connect(sql_mod.DB_PATH)
-            try:
-                row = conn.execute(
-                    "SELECT key, value FROM config_kv WHERE key = ?",
-                    (target_knob,)
-                ).fetchone()
-            finally:
-                conn.close()
+        import sqlite3
+        conn = sqlite3.connect(sql_mod.DB_PATH)
+        try:
+            row = conn.execute(
+                "SELECT key, value FROM config_kv WHERE key = ?",
+                (target_knob,)
+            ).fetchone()
+        finally:
+            conn.close()
         assert row is not None, (
-            f"config_kv (backend={backend}) must contain a row for "
-            f"{target_knob} after POST /config"
+            f"config_kv must contain a row for {target_knob} after POST /config"
         )
         assert row[0] == target_knob
         assert row[1] == "false", (

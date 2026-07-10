@@ -66,14 +66,8 @@ def test_hotpath_counters_use_cap():
 def test_rehydrate_timeline_loads_db_buckets(proxy_module):
     import state
     from db.sqlite import _rehydrate_timeline
-    # Seed two persisted buckets into the timeline table on the ACTIVE backend.
-    # _rehydrate_timeline() is backend-aware (open_conn()), so under
-    # APPSECGW_TEST_PG it reads Postgres, not the local SQLite file. Seeding
-    # via sqlite3.connect(DB_PATH) directly therefore loaded the wrong store
-    # in PG mode (rehydrate returned PG's rows, not the seeded ones). Seed
-    # through db.open_conn() so the test exercises whichever backend is live.
-    from db import open_conn
-    conn = open_conn()
+    # Seed two persisted buckets directly into the timeline table.
+    conn = sqlite3.connect(proxy_module.DB_PATH)
     conn.execute("CREATE TABLE IF NOT EXISTS timeline (bucket_minute INTEGER PRIMARY KEY, "
                  "total INTEGER DEFAULT 0, allowed INTEGER DEFAULT 0, blocked INTEGER DEFAULT 0, "
                  "missed INTEGER DEFAULT 0, by_reason TEXT)")

@@ -28,34 +28,23 @@ import config as _cfg
 _LABEL_RE = re.compile(r'^[a-z0-9]([a-z0-9\-]{0,61}[a-z0-9])?$')
 
 
-def _validate_vhost_hostname(hostname: str, allow_port: bool = False) -> "tuple[bool, str]":
+def _validate_vhost_hostname(hostname: str) -> "tuple[bool, str]":
     """Validate an inbound vhost hostname.
 
     Accepts:
       - plain FQDNs:   example.com, sub.example.com
       - single labels: localhost, myapp  (for local/dev setups)
       - wildcards:     *.example.com
-      - with `allow_port=True` (1.9.8, VHOST_PORT_AWARE): an optional
-        `:PORT` suffix (1-65535), e.g. `challenges.site.com:8008`.
 
     Rejects:
-      - bare IPs, consecutive dots, labels > 63 chars, total > 253 chars,
-        invalid characters; port numbers unless `allow_port=True`.
+      - bare IPs, hostnames with port numbers, consecutive dots,
+        labels > 63 chars, total > 253 chars, invalid characters.
     """
     h = hostname.strip().lower()
     if not h:
         return False, "hostname is empty"
     if ":" in h:
-        if not allow_port:
-            return False, f"hostname must not include a port number: {h!r}"
-        # 1.9.8 — split the optional :PORT suffix and validate it; the host part
-        # falls through to the normal hostname checks below.
-        _hostpart, _, _portpart = h.rpartition(":")
-        if not _hostpart:
-            return False, f"hostname has no host part before the port: {h!r}"
-        if not _portpart.isdigit() or not (1 <= int(_portpart) <= 65535):
-            return False, f"port must be an integer 1-65535, got: {_portpart!r}"
-        h = _hostpart
+        return False, f"hostname must not include a port number: {h!r}"
     if len(h) > 253:
         return False, f"hostname too long ({len(h)} chars, max 253)"
     # Strip single trailing dot (FQDN notation)
@@ -86,25 +75,6 @@ def _validate_vhost_hostname(hostname: str, allow_port: bool = False) -> "tuple[
                 f"(only a-z, 0-9, hyphens allowed; cannot start or end with a hyphen)"
             )
     return True, ""
-
-
-_DEFAULT_PORTS = ("80", "443")
-
-
-def _strip_default_port(key: str) -> str:
-    """Collapse a default-port suffix (``:80``/``:443``) to portless (1.9.8).
-
-    Browsers and reverse proxies (incl. Cloudflare) send ``Host: site.com`` —
-    with no port — for traffic on the default ports. Without this, a port-aware
-    vhost keyed ``site.com:443`` would never match real traffic. Treating the two
-    default ports as portless makes ``site.com``, ``site.com:80`` and
-    ``site.com:443`` one and the same vhost, while non-default ports
-    (e.g. ``:8008``) stay distinct. No-op when the key has no default-port suffix.
-    """
-    host, sep, port = key.rpartition(":")
-    if sep and host and port in _DEFAULT_PORTS:
-        return host
-    return key
 
 
 # RFC-1918, loopback, link-local, CGNAT, multicast, and reserved ranges
@@ -331,7 +301,6 @@ _VHOST_COERCE: Dict[str, Any] = {
     "TARPIT_ENABLED":                bool,
     "TARPIT_DELAY_MS":               int,
     "BLOCK_RESPONSE_MODE":           str,
-    "PRESERVE_HOST":                 bool,
     "ALLOW_BYPASS_SECS":             int,
     "UPSTREAM_TIMEOUT_SECS":         int,
     "UPSTREAM_CONNECT_TIMEOUT_SECS": int,
@@ -461,10 +430,7 @@ if _VHOSTS_RAW:
         for _host, _overrides in _parsed.items():
             if not isinstance(_overrides, dict):
                 raise ValueError(f"VHOSTS[{_host!r}] must be a JSON object")
-            # 1.9.8 — read VHOST_PORT_AWARE from config directly (this runs at
-            # import, before _port_aware() is defined) so `host:port` keys load.
-            _hvalid, _herr = _validate_vhost_hostname(
-                _host, allow_port=bool(getattr(_cfg, "VHOST_PORT_AWARE", False)))
+            _hvalid, _herr = _validate_vhost_hostname(_host)
             if not _hvalid:
                 raise ValueError(f"VHOSTS[{_host!r}] invalid hostname: {_herr}")
             _norm: Dict[str, Any] = {}
@@ -482,13 +448,10 @@ if _VHOSTS_RAW:
                         f"VHOSTS[{_host!r}][{_ku!r}] coerce error: {_ce}") from _ce
             if "UPSTREAM" in _norm:
                 _assert_upstream_public(_norm["UPSTREAM"], key=f"VHOSTS[{_host!r}].UPSTREAM")
-            _key = _host.lower()
-            if bool(getattr(_cfg, "VHOST_PORT_AWARE", False)):
-                _key = _strip_default_port(_key)   # 1.9.8 — :80/:443 → portless
-            VHOSTS[_key] = _norm
+            VHOSTS[_host.lower()] = _norm
     except (json.JSONDecodeError, ValueError) as _e:
         print(f"FATAL: VHOSTS parse error — {_e}", flush=True)
-        raise SystemExit(2) from _e
+        raise SystemExit(2)
 
 if VHOSTS:
     _upstream_info = {h: v.get("UPSTREAM", "(global)") for h, v in VHOSTS.items()}
@@ -577,9 +540,7 @@ def _save_vhosts_file() -> None:
 def vhost_set(hostname: str, overrides: dict) -> "tuple[bool, str]":
     """Add or replace a vhost entry. Returns (True, '') on success or (False, error)."""
     h = hostname.strip().lower()
-    if _port_aware():
-        h = _strip_default_port(h)   # 1.9.8 — store :80/:443 as portless
-    valid, err = _validate_vhost_hostname(h, allow_port=_port_aware())
+    valid, err = _validate_vhost_hostname(h)
     if not valid:
         return False, f"invalid hostname: {err}"
     _norm: Dict[str, Any] = {}
@@ -607,8 +568,6 @@ def vhost_set(hostname: str, overrides: dict) -> "tuple[bool, str]":
 def vhost_delete(hostname: str) -> bool:
     """Remove a vhost entry. Returns True if it existed, False otherwise."""
     h = hostname.strip().lower()
-    if _port_aware():
-        h = _strip_default_port(h)   # 1.9.8 — match the normalised stored key
     existed = h in VHOSTS
     VHOSTS.pop(h, None)
     _vhost_rps_windows.pop(h, None)
@@ -641,64 +600,24 @@ _vhost_host_ctx: contextvars.ContextVar[str] = \
     contextvars.ContextVar("_vhost_host_ctx", default="")
 
 
-def _port_aware() -> bool:
-    """Live read of the global ``VHOST_PORT_AWARE`` knob (hot-reloadable). Reads
-    from ``core.proxy_handler`` first (the merged namespace tests / hot-reload
-    patch), then ``config``. NOT per-vhost — port-awareness is a gateway-wide
-    keying mode, so it must be resolved before any per-vhost context exists."""
-    import sys as _s
-    _cph = _s.modules.get("core.proxy_handler")
-    if _cph is not None and hasattr(_cph, "VHOST_PORT_AWARE"):
-        return bool(getattr(_cph, "VHOST_PORT_AWARE"))
-    return bool(getattr(_cfg, "VHOST_PORT_AWARE", False))
-
-
-def _resolve_vhost_entry(key: str) -> Optional[Dict[str, Any]]:
-    """Resolve the override dict for a vhost ``key`` (``host`` or ``host:port``).
-
-    Precedence (most → least specific):
-      1. exact literal (``host:port`` or ``host``)
-      2. portless ``host`` — an all-ports fallback for a ported request (1.9.8)
-      3. ``*.<parent>:<port>`` then ``*.<parent>`` wildcards, for each parent label
-    Returns None when nothing matches → ``vc()`` falls back to globals.
-    """
-    if not key:
-        return None
-    entry = VHOSTS.get(key)                     # 1. exact host[:port]
-    if entry is not None:
-        return entry
-    host, sep, port = key.partition(":")
-    if sep:                                     # 2. portless host (all-ports fallback)
-        entry = VHOSTS.get(host)
-        if entry is not None:
-            return entry
-    labels = host.split(".")                    # 3. wildcard parents
-    for i in range(1, len(labels)):
-        parent = ".".join(labels[i:])
-        if sep:
-            entry = VHOSTS.get(f"*.{parent}:{port}")
-            if entry is not None:
-                return entry
-        entry = VHOSTS.get(f"*.{parent}")
-        if entry is not None:
-            return entry
-    return None
-
-
 def set_vhost(host: str) -> None:
     """Set per-request vhost override context from the Host header value.
     1.8.15 — match wildcard entries (``*.example.com``) against subdomains.
-    1.9.8 — ``VHOST_PORT_AWARE``: when on, the vhost key keeps the ``:PORT`` so
-    ``host:port`` pairs are distinct vhosts (exact host:port wins, portless host
-    is the all-ports fallback). When off, the port is stripped (historical).
-    1.9.8 — the default ports ``:80``/``:443`` are normalised to portless even
-    when port-aware, so a ``site.com:443`` config entry still matches the
-    ``Host: site.com`` that browsers / Cloudflare send for default-port traffic.
+    Lookup order: exact literal → ``*.<rest>`` for each parent label.
     """
-    raw = (host or "").strip().lower()
-    key = _strip_default_port(raw) if _port_aware() else raw.split(":", 1)[0]
-    _vhost_host_ctx.set(key)
-    _vhost_ctx.set(_resolve_vhost_entry(key))  # None when no match → vc() globals
+    h = (host or "").split(":", 1)[0].lower()
+    _vhost_host_ctx.set(h)
+    # Exact match wins
+    entry = VHOSTS.get(h)
+    if entry is None and h:
+        # Walk parent domains: securebin.example.com → *.example.com, *.tech
+        labels = h.split(".")
+        for i in range(1, len(labels)):
+            wildcard = "*." + ".".join(labels[i:])
+            entry = VHOSTS.get(wildcard)
+            if entry is not None:
+                break
+    _vhost_ctx.set(entry)  # None when no match → vc() falls back to globals
 
 
 def current_vhost_host() -> str:

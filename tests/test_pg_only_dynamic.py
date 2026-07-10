@@ -246,13 +246,9 @@ class TestWriterLoopBranchSelection:
         import db.postgres as _db_pg
         import state as _state
 
-        # 1) Force the PG-primary branch: needs BOTH DB_BACKEND == "postgres"
-        #    AND POSTGRES_DSN (db/sqlite.py ~586). Setting only POSTGRES_DSN
-        #    left the writer on the SQLite branch — it passed before only via
-        #    cross-file pollution (some earlier test had set DB_BACKEND); in
-        #    isolation it took SQLite and the spy never fired.
+        # 1) Force POSTGRES_DSN at module level so the writer's
+        #    `if POSTGRES_DSN:` branch fires.
         monkeypatch.setattr(_db_sqlite, "POSTGRES_DSN", "postgresql://x/y")
-        monkeypatch.setattr(_db_sqlite, "DB_BACKEND", "postgres")
 
         # 2) Spy on _pg_mirror_kv. The writer imports it locally, so
         #    patch db.postgres.
@@ -305,9 +301,7 @@ class TestWriterLoopBranchSelection:
         import db.postgres as _db_pg
         import state as _state
 
-        # PG-primary branch needs DB_BACKEND == "postgres" too (see sibling).
         monkeypatch.setattr(_db_sqlite, "POSTGRES_DSN", "postgresql://x/y")
-        monkeypatch.setattr(_db_sqlite, "DB_BACKEND", "postgres")
         calls = []
         monkeypatch.setattr(_db_pg, "_pg_mirror_kv",
                             lambda op, args: (calls.append((op, args))
@@ -348,14 +342,7 @@ class TestWriterLoopBranchSelection:
         import db.postgres as _db_pg
         import state as _state
 
-        # db_writer_loop takes the PG-primary branch only when BOTH
-        # DB_BACKEND == "postgres" AND POSTGRES_DSN are set (db/sqlite.py
-        # line ~586). The event arm routes to pg_insert_event ONLY on that
-        # branch — without DB_BACKEND the writer fell to the SQLite path,
-        # hit the (absent) events table, and pg_insert_event was never
-        # called (pos == None). Set both.
         monkeypatch.setattr(_db_sqlite, "POSTGRES_DSN", "postgresql://x/y")
-        monkeypatch.setattr(_db_sqlite, "DB_BACKEND", "postgres")
         recorded = {}
         def _spy_event(ts, ip, ua, path, status, reason, **kw):
             recorded["positional"] = (ts, ip, ua, path, status, reason)
@@ -424,7 +411,7 @@ class TestBootGuardExitCodes:
         assert ei.value.code == 2
 
     def test_exit_3_when_pg_unreachable(self, monkeypatch):
-        import proxy, config, db.postgres as _pgmod, db.sqlite as _sqlmod
+        import proxy, config, db.postgres as _pgmod
         monkeypatch.setattr(config, "POSTGRES_DSN", "postgresql://x/y")
         monkeypatch.setattr(proxy, "POSTGRES_DSN", "postgresql://x/y")
         monkeypatch.setenv("POSTGRES_BOOT_MAX_ATTEMPTS", "2")
@@ -437,24 +424,6 @@ class TestBootGuardExitCodes:
 
         monkeypatch.setattr(_pgmod, "_postgres_load_module",
                             lambda: _DeadPg)
-        # on_startup calls db_init() (which runs db_init_postgres() with its
-        # DEFAULT 12-attempt / 1s-linear-backoff retry = ~66s) BEFORE it
-        # reaches the fail-fast boot-guard probe loop that actually emits the
-        # documented exit codes. The POSTGRES_BOOT_* env vars only bound the
-        # boot-guard loop, NOT db_init_postgres' own retry, so with PG "down"
-        # the db_init precursor blocks past the 60s test timeout and the test
-        # never reaches the SystemExit(3) it is asserting. Cap that precursor
-        # to a single fast (still-failing) attempt so we exercise the guard
-        # under test rather than the unrelated db_init retry loop. The
-        # contract being verified — on_startup -> SystemExit(3) when PG is
-        # unreachable — is unchanged.
-        _real_init = _pgmod.db_init_postgres
-        monkeypatch.setattr(
-            _pgmod, "db_init_postgres",
-            lambda max_attempts=1, backoff_s=0: _real_init(
-                max_attempts=1, backoff_s=0))
-        monkeypatch.setattr(_sqlmod, "db_init_postgres",
-                            _pgmod.db_init_postgres, raising=False)
         with pytest.raises(SystemExit) as ei:
             asyncio.run(self._run_on_startup())
         assert ei.value.code == 3

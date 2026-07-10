@@ -131,33 +131,19 @@ def _run(coro):
 
 
 def _seed_events(proxy_module, rows):
-    """Insert (ts, ip, ua, path, status, reason) tuples into the DB.
-
-    Backend-aware: the dashboard endpoints read events from the active backend,
-    so under the PG-mode harness (POSTGRES_DSN set) the rows must land in
-    Postgres. db.conn.conn() targets the active backend; the CREATE only runs on
-    SQLite (the PG events table is created at startup and the SQLite DDL is
-    incompatible).
-    """
-    from db.conn import active_backend
-    if active_backend() == "postgres":
-        # PG events.ts is timestamptz; reuse pg_insert_event (to_timestamp).
-        # Row tuple: (ts, ip, ua, path, status, reason)
-        from db.postgres import pg_insert_event
-        for ts, ip, ua, path, status, reason in rows:
-            pg_insert_event(ts, ip, ua, path, int(status), reason)
-    else:
-        from db.conn import conn as _backend_conn
-        with _backend_conn(timeout=10) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS events "
-                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-                "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
-            )
-            conn.executemany(
-                "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
-                rows,
-            )
+    """Insert (ts, ip, ua, path, status, reason) tuples into the DB."""
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS events "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+        "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
+    )
+    conn.executemany(
+        "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -200,7 +186,7 @@ class TestAuthGuard:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/live-feed")
                     body = await r.text()
-                    assert "AntiBotWaf_GW_1.9.9 · Live Feed" not in body
+                    assert "AntiBotWaf_GW_1.9.10 · Live Feed" not in body
         _run(go())
 
     def test_config_unauthenticated_decoy(self, proxy_module):
@@ -2106,7 +2092,7 @@ class TestControlCenterCharts:
                 async with _spin_proxy(proxy_module, up) as c:
                     r = await c.get(NS + "/control-center", headers=_browser_headers())
                     body = await r.text()
-                    assert "AntiBotWaf_GW_1.9.9 · Control Center" not in body, \
+                    assert "AntiBotWaf_GW_1.9.10 · Control Center" not in body, \
                         "control-center: unauthenticated request must not return dashboard HTML"
         _run(go())
 
@@ -2185,13 +2171,6 @@ class TestControlCenterCharts:
         async def go():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
-                    # Backend-aware empty-DB precondition: in PG-only mode the
-                    # events table lives in Postgres (not the per-test SQLite
-                    # file the conftest wipes), so clear it here to establish the
-                    # "empty DB" precondition this test asserts.
-                    from db.conn import conn as _backend_conn
-                    with _backend_conn(timeout=10) as _wc:
-                        _wc.execute("DELETE FROM events")
                     cookie = self._cookie(proxy_module)
                     r = await c.get(NS + "/vhost-stats",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
@@ -2207,29 +2186,21 @@ class TestControlCenterCharts:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     now = _time.time()
-                    # Backend-aware seed (vhost-stats reads the active backend).
-                    _seed_rows = [
-                        (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "shop.example.com"),
-                        (now - 60, "1.2.3.4", "ua", "/", 200, "banned-silent",        "shop.example.com"),
-                    ]
-                    from db.conn import active_backend
-                    if active_backend() == "postgres":
-                        # PG events.ts is timestamptz; use pg_insert_event (to_timestamp).
-                        from db.postgres import pg_insert_event
-                        for ts, ip, ua, path, status, reason, vhost in _seed_rows:
-                            pg_insert_event(ts, ip, ua, path, int(status), reason, vhost=vhost)
-                    else:
-                        from db.conn import conn as _backend_conn
-                        with _backend_conn(timeout=10) as conn:
-                            conn.execute(
-                                "CREATE TABLE IF NOT EXISTS events "
-                                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-                                "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
-                            )
-                            conn.executemany(
-                                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
-                                _seed_rows,
-                            )
+                    conn = sqlite3.connect(proxy_module.DB_PATH)
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS events "
+                        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+                        "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
+                    )
+                    conn.executemany(
+                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
+                        [
+                            (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "shop.example.com"),
+                            (now - 60, "1.2.3.4", "ua", "/", 200, "banned-silent",        "shop.example.com"),
+                        ],
+                    )
+                    conn.commit()
+                    conn.close()
                     cookie = self._cookie(proxy_module)
                     r = await c.get(NS + "/vhost-stats",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})
@@ -2283,24 +2254,18 @@ class TestControlCenterCharts:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as c:
                     now = _time.time()
-                    # Backend-aware seed (vhost-breakdown reads the active backend).
-                    from db.conn import active_backend
-                    if active_backend() == "postgres":
-                        from db.postgres import pg_insert_event
-                        pg_insert_event(now - 60, "1.2.3.4", "ua", "/", 200,
-                                        "operator-passthrough", vhost="api.example.com")
-                    else:
-                        from db.conn import conn as _backend_conn
-                        with _backend_conn(timeout=10) as conn:
-                            conn.execute(
-                                "CREATE TABLE IF NOT EXISTS events "
-                                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-                                "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
-                            )
-                            conn.execute(
-                                "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
-                                (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "api.example.com"),
-                            )
+                    conn = sqlite3.connect(proxy_module.DB_PATH)
+                    conn.execute(
+                        "CREATE TABLE IF NOT EXISTS events "
+                        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+                        "path TEXT, status INTEGER DEFAULT 200, reason TEXT DEFAULT '', vhost TEXT DEFAULT '')"
+                    )
+                    conn.execute(
+                        "INSERT INTO events (ts, ip, ua, path, status, reason, vhost) VALUES (?,?,?,?,?,?,?)",
+                        (now - 60, "1.2.3.4", "ua", "/", 200, "operator-passthrough", "api.example.com"),
+                    )
+                    conn.commit()
+                    conn.close()
                     cookie = self._cookie(proxy_module)
                     r = await c.get(NS + "/vhost-breakdown?range=120&bucket=60",
                                     cookies={proxy_module._SESSION_COOKIE: cookie})

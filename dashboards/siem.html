@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
-<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
+<script>(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AntiBotWaf_GW_1.9.9 · SIEM</title>
+<title>AntiBotWaf_GW_1.9.10 · SIEM</title>
 <style>
 :root{
   --bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-  --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;
+  --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;
   --purple:#bc8cff;--orange:#ff7b3a;
   --sev-crit:#ff4444;--sev-high:#ff7b3a;--sev-med:#d29922;
-  --sev-low:#79c0ff;--sev-info:#8b949e;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+  --sev-low:#58a6ff;--sev-info:#8b949e;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
@@ -82,8 +82,8 @@ table tbody tr:hover{background:rgba(255,255,255,.03);cursor:pointer}
 .btn{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);border-radius:5px;
   padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;
   transition:background .1s,border-color .1s}
-.btn:hover{background:#2d333b;border-color:#79c0ff;color:var(--bright)}
-.btn.active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:var(--blue);font-weight:600}
+.btn:hover{background:#2d333b;border-color:#58a6ff;color:var(--bright)}
+.btn.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue);font-weight:600}
 .btn-sm{font-size:10px;padding:2px 8px}
 select.ctrl{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);
   border-radius:4px;padding:4px 6px;font-size:11px;cursor:pointer;font-family:inherit}
@@ -105,7 +105,7 @@ select.ctrl:focus{outline:none;border-color:var(--blue)}
 .tab-btn{background:none;border:none;color:var(--dim);cursor:pointer;font:inherit;
   font-size:12px;padding:4px 12px;border-radius:4px}
 .tab-btn:hover{color:var(--fg);background:var(--bg-hover)}
-.tab-btn.active{color:var(--bright);background:rgba(121,192,255,.15);font-weight:600}
+.tab-btn.active{color:var(--bright);background:rgba(88,166,255,.15);font-weight:600}
 .tab-pane{display:none}
 .tab-pane.active{display:block}
 .rules-table-wrap{overflow-x:auto;margin-bottom:10px}
@@ -143,9 +143,9 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
   background:var(--green);color:#000;cursor:help;transition:background .2s}
 #badge-live.alert{background:var(--sev-crit);color:var(--bright)}
 /* ── Vhost badge ── */
-#vhost-badge{display:none;background:rgba(121,192,255,.15);border:1px solid rgba(121,192,255,.5);color:var(--blue);
+#vhost-badge{display:none;background:rgba(88,166,255,.15);border:1px solid rgba(88,166,255,.5);color:var(--blue);
   border-radius:12px;padding:2px 10px;font-size:11px;cursor:pointer}
-#vhost-badge:hover{background:rgba(121,192,255,.25)}
+#vhost-badge:hover{background:rgba(88,166,255,.25)}
 /* ── Event feed filters ── */
 #feed-filters{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap;align-items:center}
 .sev-pill{padding:2px 10px;border-radius:12px;border:1.5px solid transparent;
@@ -262,7 +262,7 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-      <div id="sidebar-brand-ver">1.9.9</div>
+      <div id="sidebar-brand-ver">1.9.10</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -512,7 +512,7 @@ html[data-theme="light"] .fire-alert{background:#ffebe9;color:#cf222e}
 </div>
 
 <div class="portal-footer">
-  AntiBotWaf_GW_1.9.9 <span class="sep">|</span>
+  AntiBotWaf_GW_1.9.10 <span class="sep">|</span>
   SIEM Security Event Center <span class="sep">|</span>
   <span id="footer-ts" class="dim"></span>
 </div>
@@ -826,7 +826,7 @@ function _exportCsv() {
 
 // ── Charts ────────────────────────────────────────────────────────────────────
 var _chartTimeline=null, _chartDonut=null, _chartSignals=null, _chartSev=null;
-var _DONUT_COLORS=['#f85149','#ff7b3a','#d29922','#79c0ff','#bc8cff','#3fb950','#4dc4c4','#c77dff','#ff4d4d','#8b949e','#e6af4b'];
+var _DONUT_COLORS=['#f85149','#ff7b3a','#d29922','#58a6ff','#bc8cff','#3fb950','#4dc4c4','#c77dff','#ff4d4d','#8b949e','#e6af4b'];
 function _initCharts() {
   _chartTimeline = new Chart(document.getElementById('chart-timeline').getContext('2d'), {
     type:'bar',
@@ -848,7 +848,7 @@ function _initCharts() {
   });
   _chartSignals = new Chart(document.getElementById('chart-signals').getContext('2d'), {
     type:'bar',
-    data:{labels:[],datasets:[{data:[],backgroundColor:'rgba(121,192,255,.65)',borderRadius:3}]},
+    data:{labels:[],datasets:[{data:[],backgroundColor:'rgba(88,166,255,.65)',borderRadius:3}]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false}},
       scales:{x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}},
@@ -857,7 +857,7 @@ function _initCharts() {
   _chartSev = new Chart(document.getElementById('chart-sev').getContext('2d'), {
     type:'bar',
     data:{labels:['Critical','High','Medium','Low','Info'],
-      datasets:[{data:[0,0,0,0,0],backgroundColor:['#ff4444','#ff7b3a','#d29922','#79c0ff','#8b949e'],borderRadius:3}]},
+      datasets:[{data:[0,0,0,0,0],backgroundColor:['#ff4444','#ff7b3a','#d29922','#58a6ff','#8b949e'],borderRadius:3}]},
     options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,
       plugins:{legend:{display:false}},
       scales:{x:{ticks:{color:'#8b949e',font:{size:10}},grid:{color:'rgba(48,54,61,.5)'}},
@@ -1106,7 +1106,7 @@ function _updateKPIs(stats, threatIndex) {
   var winLabel = selectedMins < 60 ? 'Last '+selectedMins+'m'
     : (selectedMins===60 ? 'Last 1h' : (selectedMins===360 ? 'Last 6h' : 'Last 24h'));
   document.getElementById('kpi-window').textContent = winLabel;
-  document.title = 'AntiBotWaf_GW_1.9.9 · SIEM · ' + winLabel;
+  document.title = 'AntiBotWaf_GW_1.9.10 · SIEM · ' + winLabel;
   var fill = document.getElementById('threat-bar-fill');
   fill.style.width = threatIndex + '%';
   fill.style.background = threatIndex>=75 ? '#ff4444' : threatIndex>=50 ? '#ff7b3a'
@@ -1203,7 +1203,7 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

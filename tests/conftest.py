@@ -154,20 +154,6 @@ def _wipe_config_kv_between_tests():
                         pass
     except Exception:
         pass
-    # 1.9.7 — clear the 1.9.6 in-memory TTL ban cache between tests. The request
-    # path reads bans via check_ip_ban_cached()/check_ip_ban_vhost_cached(),
-    # which memoise (banned_until, cached_at) in db.sqlite._ban_cache /
-    # _ban_cache_vhost. Wiping the ip_bans TABLE above does NOT evict these
-    # entries, so a ban cached in one test (e.g. 127.0.0.1) survived its TTL
-    # into later tests and made them see a stale 'ip-ban' (the 7
-    # test_control_regressions cross-file failures). Clear both dicts so each
-    # test starts with a cold ban cache.
-    try:
-        import db.sqlite as _dbs
-        _dbs._ban_cache.clear()
-        _dbs._ban_cache_vhost.clear()
-    except Exception:
-        pass
     # Clear VHOSTS after every test. VHOSTS is a module-level dict in vhost.py
     # (shared singleton across all proxy imports in the session). A test that
     # registers a vhost would otherwise make VHOSTS non-empty for subsequent
@@ -176,19 +162,6 @@ def _wipe_config_kv_between_tests():
     try:
         import vhost as _vh
         _vh.VHOSTS.clear()
-    except Exception:
-        pass
-    # 1.9.6 — reset the 15 s per-vhost stats cache in admin.settings. The
-    # autouse fixture above wipes the events table, but _vhost_stats_cached()
-    # holds the previous test's aggregated rows for up to _VHOST_STATS_TTL
-    # (15 s). Back-to-back vhost-stats tests therefore read STALE rows that
-    # lack the freshly-seeded vhost, so allowed_1h/total_1h read 0 and the
-    # assertion fails even though each test passes in isolation. Forcing the
-    # cache stale here makes the next call re-query the (now wiped+seeded) DB.
-    try:
-        import admin.settings as _as
-        _as._VHOST_STATS_CACHE["ts"] = 0.0
-        _as._VHOST_STATS_CACHE["value"] = []
     except Exception:
         pass
     # 1.8.9 kill-switch knobs — tests that disable detection signals (e.g.
@@ -352,37 +325,3 @@ def _auto_attach_csrf_header():
         yield
     finally:
         TestClient._request = _orig_request
-
-
-# ── UNBUILT-feature xfail registry ────────────────────────────────────────────
-# A large body of tests assert GW features/symbols that were spec'd but never
-# implemented. They were hidden for months by the conftest_pg_mode autouse-skip
-# bug (now fixed). Rather than silently delete or let them red the suite, we
-# mark them xfail(strict=False) from a central registry so the gaps stay VISIBLE
-# (reported as xfail) and the suite is green. strict=False => if a feature later
-# lands, the test xpasses without failing the run; remove its registry entry
-# then. See tests/_unbuilt_xfail.py and UNBUILT_BACKLOG.md.
-try:
-    from _unbuilt_xfail import UNBUILT_XFAIL as _UNBUILT_XFAIL
-except Exception:  # pragma: no cover — registry optional
-    _UNBUILT_XFAIL = {}
-
-
-def pytest_collection_modifyitems(config, items):
-    """Apply xfail markers to known UNBUILT-feature tests (see registry)."""
-    if not _UNBUILT_XFAIL:
-        return
-    # Match by exact nodeid or by the 'test_file.py::...' suffix so it works
-    # regardless of how pytest roots the path.
-    suffix_map = {k.split("/", 1)[-1]: v for k, v in _UNBUILT_XFAIL.items()}
-    for item in items:
-        nid = item.nodeid
-        reason = _UNBUILT_XFAIL.get(nid)
-        if reason is None:
-            for suf, r in suffix_map.items():
-                if nid.endswith(suf):
-                    reason = r
-                    break
-        if reason is not None:
-            item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-

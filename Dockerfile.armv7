@@ -12,9 +12,7 @@
 # against). Same functional result as the Debian build.
 
 # ─── Stage 1: build psycopg C extension + install pure-Python deps ───
-# 1.9.8 M8 — digest-pinned (was a floating tag) for reproducible, integrity-checked
-# builds, matching the digest-pinned primary Dockerfile. Bump deliberately on base refresh.
-FROM python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0 AS builder
+FROM python:3.13-alpine AS builder
 
 RUN apk add --no-cache \
         build-base \
@@ -33,8 +31,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
 USER nobody
 
 # ─── Stage 2: runtime — minimal Alpine + libpq shared lib ─────────────
-# 1.9.8 M8 — digest-pinned (see builder stage).
-FROM python:3.13-alpine@sha256:399babc8b49529dabfd9c922f2b5eea81d611e4512e3ed250d75bd2e7683f4b0
+FROM python:3.13-alpine
 
 RUN apk add --no-cache libpq \
  && apk upgrade --no-cache xz-libs \

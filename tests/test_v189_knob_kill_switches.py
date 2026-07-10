@@ -240,13 +240,8 @@ class TestGateLogic:
         import pathlib
         src = pathlib.Path("core/proxy_handler.py").read_text()
         lines = src.splitlines()
-        # Only the detection/ban-site occurrence must be gated; skip the
-        # SIGNAL_KNOB / _REASON_METHOD / description / latency data-dict entries
-        # (where the literal is a dict KEY `"sig":`), which 1.9.7 added so the
-        # signal has a kill-switch knob (required by r03/r04).
         crit_lines = [i for i, ln in enumerate(lines)
-                      if '"body-critical-injection"' in ln
-                      and '"body-critical-injection":' not in ln]
+                      if '"body-critical-injection"' in ln]
         assert crit_lines, "body-critical-injection literal not found"
         # For each occurrence, the previous 15 lines must contain
         # `if WAF_BODY_ENABLED` (the gate that wraps the block).
@@ -269,10 +264,8 @@ class TestGateLogic:
         import pathlib
         src = pathlib.Path("core/proxy_handler.py").read_text()
         lines = src.splitlines()
-        # Skip data-dict entries (literal as a dict key `"body-xxe":`); only the
-        # detection/ban-site occurrence must be WAF_BODY_ENABLED-gated.
         xxe_lines = [i for i, ln in enumerate(lines)
-                     if '"body-xxe"' in ln and '"body-xxe":' not in ln]
+                     if '"body-xxe"' in ln]
         assert xxe_lines, "body-xxe literal not found"
         for i in xxe_lines:
             preceding = "\n".join(lines[max(0, i - 15):i])
@@ -357,22 +350,16 @@ class TestHotReloadRoundTrip:
     """H01–H06: knobs persist through db_load_config() round-trip."""
 
     def _write_knob_and_reload(self, knob_name, value):
-        """Helper: write a knob to config_kv and call db_load_config().
-
-        Backend-aware: db_load_config() reads config_kv from the *active*
-        backend (Postgres when POSTGRES_DSN is set, else SQLite at DB_PATH —
-        see db/sqlite.py:db_load_config). A hardcoded ``sqlite3.connect`` write
-        is invisible in PG mode, so we route the write through the same
-        backend-aware ``db.conn.conn()`` context manager the loader reads from.
-        ``?`` placeholders are rewritten to ``%s`` on PG transparently."""
+        """Helper: write a knob to config_kv and call db_load_config()."""
         import json
-        from db.conn import conn as _backend_conn
         proxy.db_init()
+        conn = sqlite3.connect(proxy.DB_PATH)
+        conn.execute("DELETE FROM config_kv WHERE key = ?", (knob_name,))
         v = value if not isinstance(value, bool) else ("true" if value else "false")
-        with _backend_conn(timeout=5) as _bc:
-            _bc.execute("DELETE FROM config_kv WHERE key = ?", (knob_name,))
-            _bc.execute("INSERT INTO config_kv (key, value) VALUES (?, ?)",
-                        (knob_name, json.dumps(v)))
+        conn.execute("INSERT INTO config_kv (key, value) VALUES (?, ?)",
+                     (knob_name, json.dumps(v)))
+        conn.commit()
+        conn.close()
         proxy.db_load_config(vars(proxy))
         return getattr(proxy, knob_name)
 

@@ -491,14 +491,7 @@ def test_agents_ip_intel_risk_breakdown_embedded_in_return():
     src = _read("agents.html")
     fn_start = src.find("async function fetchIpIntel(")
     assert fn_start != -1
-    # slice to the END of the function (next top-level `function `/`async function`
-    # declaration) rather than a fixed byte count — the function grew when the
-    # riskBreakdownHtml IIFE was added, so a fixed 5500-char window dropped the
-    # `${riskBreakdownHtml}` usage that lives near the function's end.
-    nxt = src.find("\nasync function ", fn_start + 1)
-    nxt2 = src.find("\nfunction ", fn_start + 1)
-    ends = [e for e in (nxt, nxt2) if e != -1]
-    block = src[fn_start: min(ends)] if ends else src[fn_start:]
+    block = src[fn_start: fn_start + 5500]
     assert "${riskBreakdownHtml}" in block, (
         "agents.html: ${riskBreakdownHtml} not embedded in fetchIpIntel() return template"
     )

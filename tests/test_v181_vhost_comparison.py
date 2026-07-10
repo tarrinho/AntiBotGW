@@ -135,30 +135,11 @@ def _invalidate_vhost_stats_cache():
         pass
 
 
-def _pg_active() -> bool:
-    """True when the suite is running against a real Postgres backend.
-
-    vhost_stats / vhost_breakdown read from whichever backend is active, so
-    the seed/wipe helpers must target the SAME backend the endpoint reads —
-    otherwise (PG-mode) we'd seed SQLite while the endpoint queries Postgres
-    and every aggregation assertion sees zero rows (or stale rows that PG's
-    own truncate fixture, not _wipe_events, governs)."""
-    import os
-    return (os.environ.get("APPSECGW_TEST_PG", "").lower() in ("1", "true", "yes")
-            and bool(os.environ.get("POSTGRES_DSN", "").strip()))
-
-
 def _wipe_events(proxy_module):
-    if _pg_active():
-        import psycopg, os
-        with psycopg.connect(os.environ["POSTGRES_DSN"], connect_timeout=5) as _c:
-            _c.execute("DELETE FROM events")
-            _c.commit()
-    else:
-        conn = sqlite3.connect(proxy_module.DB_PATH)
-        conn.execute("DELETE FROM events")
-        conn.commit()
-        conn.close()
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute("DELETE FROM events")
+    conn.commit()
+    conn.close()
     # clear in-memory ip_state so ban counts from prior tests don't leak
     import state as _st
     _st.ip_state.clear()
@@ -166,28 +147,15 @@ def _wipe_events(proxy_module):
 
 
 def _seed_events(proxy_module, rows):
-    """Insert (ts, ip, ua, path, method, status, reason, vhost) rows into the
-    ACTIVE backend (SQLite by default, Postgres when APPSECGW_TEST_PG=1)."""
-    if _pg_active():
-        import psycopg, os
-        with psycopg.connect(os.environ["POSTGRES_DSN"], connect_timeout=5) as _c:
-            # PG events.ts is `timestamp with time zone`; convert the float
-            # epoch exactly as pg_insert_event does (to_timestamp).
-            _c.cursor().executemany(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (to_timestamp(%s),%s,%s,%s,%s,%s,%s,%s)",
-                list(rows),
-            )
-            _c.commit()
-    else:
-        conn = sqlite3.connect(proxy_module.DB_PATH)
-        conn.executemany(
-            "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-            "VALUES (?,?,?,?,?,?,?,?)",
-            rows,
-        )
-        conn.commit()
-        conn.close()
+    """Insert (ts, ip, ua, path, method, status, reason, vhost) rows."""
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.executemany(
+        "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
     _invalidate_vhost_stats_cache()
 
 

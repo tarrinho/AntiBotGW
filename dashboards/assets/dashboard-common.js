@@ -73,8 +73,8 @@
   var style = document.createElement("style");
   style.textContent =
     "#gw-progress-bar{position:fixed;top:0;left:0;height:2px;" +
-    "background:linear-gradient(90deg,var(--blue,#79c0ff) 0%," +
-    "var(--blue,#79c0ff) 60%,rgba(121,192,255,.4) 100%);" +
+    "background:linear-gradient(90deg,var(--blue,#58a6ff) 0%," +
+    "var(--blue,#58a6ff) 60%,rgba(88,166,255,.4) 100%);" +
     "width:0%;z-index:99999;pointer-events:none;" +
     "transition:width .25s ease-out,opacity .2s ease-out;opacity:0}" +
     "#gw-progress-bar.gw-on{opacity:1}" +
@@ -201,20 +201,20 @@
   style.textContent =
     "#gw-slow-toast{position:fixed;top:14px;right:14px;z-index:99998;" +
       "background:var(--card,#161b22);color:var(--fg,#c9d1d9);" +
-      "border:1px solid var(--blue,#79c0ff);border-radius:6px;" +
+      "border:1px solid var(--blue,#58a6ff);border-radius:6px;" +
       "padding:8px 12px;font:12px/1.4 -apple-system,'SF Pro',ui-sans-serif,sans-serif;" +
       "box-shadow:0 4px 14px rgba(0,0,0,.35);max-width:380px;" +
       "display:none;align-items:center;gap:10px;pointer-events:none}" +
     "#gw-slow-toast.gw-show{display:flex}" +
-    "#gw-slow-toast .gw-spin{width:12px;height:12px;border:2px solid var(--blue,#79c0ff);" +
+    "#gw-slow-toast .gw-spin{width:12px;height:12px;border:2px solid var(--blue,#58a6ff);" +
       "border-top-color:transparent;border-radius:50%;animation:gw-spin .8s linear infinite;flex-shrink:0}" +
     "#gw-slow-toast .gw-msg{font-weight:600}" +
     "#gw-slow-toast .gw-url{color:var(--dim,#8b949e);font-family:ui-monospace,Menlo,monospace;font-size:11px;" +
       "max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
-    "#gw-slow-toast .gw-elapsed{color:var(--blue,#79c0ff);font-weight:700;font-variant-numeric:tabular-nums}" +
+    "#gw-slow-toast .gw-elapsed{color:var(--blue,#58a6ff);font-weight:700;font-variant-numeric:tabular-nums}" +
     "@keyframes gw-spin{to{transform:rotate(360deg)}}" +
     "@media (prefers-reduced-motion:reduce){" +
-      "#gw-slow-toast .gw-spin{animation:none;border-top-color:var(--blue,#79c0ff);opacity:.6}}";
+      "#gw-slow-toast .gw-spin{animation:none;border-top-color:var(--blue,#58a6ff);opacity:.6}}";
   document.head.appendChild(style);
 
   var toast = null;

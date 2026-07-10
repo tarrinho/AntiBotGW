@@ -95,30 +95,20 @@ def _run(coro):
 
 
 def _seed_user(proxy_module, username, password, role="admin"):
-    """Insert a test user with a known password hash into the ACTIVE backend.
-
-    Uses db.open_conn() (backend-aware) so this works in PG-only mode too — the
-    gateway reads users from the active backend, so seeding into SQLite while the
-    gateway runs on Postgres left the user invisible (404). DELETE+INSERT is
-    portable across SQLite/PG (avoids SQLite `OR REPLACE` vs PG `ON CONFLICT`).
-    """
+    """Insert a test user with a known password hash into the proxy DB."""
     from admin.users import _password_hash
-    from db import open_conn
     pw_hash = _password_hash(password)
     import time as _t
     n = _t.time()
-    conn = open_conn()
-    try:
-        conn.execute("DELETE FROM users WHERE username=?", (username,))
-        conn.execute(
-            "INSERT INTO users "
-            "(username, password_hash, role, status, created_ts, updated_ts) "
-            "VALUES (?, ?, ?, 'active', ?, ?)",
-            (username, pw_hash, role, n, n),
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(
+        "INSERT OR REPLACE INTO users "
+        "(username, password_hash, role, status, created_ts, updated_ts) "
+        "VALUES (?, ?, ?, 'active', ?, ?)",
+        (username, pw_hash, role, n, n),
+    )
+    conn.commit()
+    conn.close()
 
 
 # ── 1. TestChangePasswordUI — settings.html source-code checks ───────────────

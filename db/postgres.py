@@ -2417,7 +2417,7 @@ def pg_db_size() -> dict:
                 # events_rows — planner ESTIMATE, not an exact COUNT(*).
                 # 1.9.2 iter-22: on a large Timescale hypertable an unbounded
                 # exact count over the events table full-scans every chunk — 40+ s
-                # on a live production DB and, because db_test_endpoint runs
+                # on the live example.com DB and, because db_test_endpoint runs
                 # this on the event loop, froze the whole worker (concurrent
                 # admin requests 502'd). reltuples summed over the table + its
                 # inheritance children (Timescale chunks ARE inheritance

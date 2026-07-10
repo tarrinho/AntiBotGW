@@ -310,12 +310,8 @@ def _svc_db_history(start_b: int, end_b: int, bucket_secs: int,
     """
     import sqlite3 as _sq3
     b = bucket_secs
-    # CAST AVG -> numeric before 2-arg ROUND: Postgres has no
-    # round(double precision, integer) (only round(numeric, int)), so the bare
-    # 2-arg form 500s on PG. CAST(... AS numeric) is accepted by both backends
-    # (SQLite treats it as numeric affinity). 1-arg ROUND below is fine on PG.
     avg_sel = ", ".join(
-        f"ROUND(CAST(AVG(COALESCE({k},0)) AS numeric),2) AS {k}" for k in avg_keys)
+        f"ROUND(AVG(COALESCE({k},0)),2) AS {k}" for k in avg_keys)
     max_sel = ", ".join(
         f"MAX(COALESCE({k},0)) AS {k}"           for k in max_keys)
     sum_sel = ", ".join(
@@ -476,7 +472,7 @@ async def service_metrics_data_endpoint(request: web.Request):
         identities = len(ip_state)
         ip_buckets_n = len(ip_buckets)
         if _vhost:
-            identities = sum(1 for s in list(ip_state.values())
+            identities = sum(1 for s in ip_state.values()
                              if (getattr(s, "last_vhost", "") or "").lower() == _vhost)
 
     # Per-vhost traffic counters from events table (when vhost filter is active).

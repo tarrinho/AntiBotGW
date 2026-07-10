@@ -49,7 +49,7 @@ async def score_distribution_endpoint(request: web.Request):
             "100+":   0,
         }
         async with state_lock:
-            scores = [s.risk_score for s in list(ip_state.values())]
+            scores = [s.risk_score for s in ip_state.values()]
 
         for score in scores:
             if score == 0:
@@ -119,7 +119,7 @@ async def traffic_pipeline_endpoint(request: web.Request):
         # We need the set of IPs currently in the "bypassed" band (allowed but score >= SOFT_CHALLENGE_SCORE)
         async with state_lock:
             bypassed_ips: set = set()
-            for s in list(ip_state.values()):
+            for s in ip_state.values():
                 if (SOFT_CHALLENGE_SCORE > 0
                         and SOFT_CHALLENGE_SCORE <= s.risk_score < RISK_BAN_THRESHOLD
                         and s.last_ip):
@@ -417,7 +417,7 @@ async def security_incidents_endpoint(request: web.Request):
         # Snapshot ip → max risk_score from in-memory state
         async with state_lock:
             ip_risk: dict = {}
-            for s in list(ip_state.values()):
+            for s in ip_state.values():
                 ip = s.last_ip
                 if ip:
                     ip_risk[ip] = max(ip_risk.get(ip, 0.0), s.risk_score)
@@ -512,7 +512,7 @@ async def risk_percentiles_endpoint(request: web.Request):
 
         async with state_lock:
             scores = [
-                s.risk_score for s in list(ip_state.values())
+                s.risk_score for s in ip_state.values()
                 if s.risk_score >= min_score
             ]
 
@@ -702,12 +702,12 @@ async def ban_events_endpoint(request: web.Request):
 
         chal_issued = metrics.get("by_reason", {}).get("chal-required", 0)
         async with state_lock:
-            n_chal_ips     = sum(1 for s in list(ip_state.values())
+            n_chal_ips     = sum(1 for s in ip_state.values()
                                  if s.blocks_by_reason.get("chal-required", 0) > 0)
-            n_chal_allowed = sum(1 for s in list(ip_state.values())
+            n_chal_allowed = sum(1 for s in ip_state.values()
                                  if s.blocks_by_reason.get("chal-required", 0) > 0
                                  and s.allowed_count > 0)
-            n_still_banned = sum(1 for s in list(ip_state.values())
+            n_still_banned = sum(1 for s in ip_state.values()
                                  if s.blocks_by_reason.get("chal-required", 0) > 0
                                  and s.banned_until > _t.monotonic())
 
@@ -762,7 +762,7 @@ async def top_attackers_endpoint(request: web.Request):
 
         async with state_lock:
             ip_agg: dict = {}
-            for _tk, s in list(ip_state.items()):
+            for _tk, s in ip_state.items():
                 ip = s.last_ip
                 if not ip:
                     continue

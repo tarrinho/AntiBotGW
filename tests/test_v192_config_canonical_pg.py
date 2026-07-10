@@ -172,15 +172,6 @@ def test_sqlite_mode_load_applies_config_kv_row(tmp_path):
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
     os.environ.pop("POSTGRES_DSN", None)  # force SQLite branch
-    # active_backend() reads config.POSTGRES_DSN (not os.environ) at call
-    # time, and under APPSECGW_TEST_PG config.POSTGRES_DSN is already set at
-    # import time — so popping the env var alone left db_load_config on the
-    # Postgres branch (reading PG config_kv, which has no LOG_LEVEL=debug
-    # row). Clear config.POSTGRES_DSN for the duration to actually exercise
-    # the SQLite branch this test targets.
-    import config as _cfg
-    _orig_cfg_pg = getattr(_cfg, "POSTGRES_DSN", "")
-    _cfg.POSTGRES_DSN = ""
     try:
         g = _build_proxy_globals(db)
         from db.sqlite import db_load_config
@@ -188,7 +179,6 @@ def test_sqlite_mode_load_applies_config_kv_row(tmp_path):
         assert g.get("LOG_LEVEL") == "debug", \
             f"SQLite-mode load did not apply LOG_LEVEL: got {g.get('LOG_LEVEL')!r}"
     finally:
-        _cfg.POSTGRES_DSN = _orig_cfg_pg
         for k, v in (("DB_PATH", _orig_db_path),
                      ("UPSTREAM", _orig_upstream),
                      ("POSTGRES_DSN", _orig_pg)):
@@ -212,17 +202,7 @@ def test_sqlite_mode_load_missing_table_logs_and_returns(tmp_path):
     _orig_pg = os.environ.get("POSTGRES_DSN")
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
-    os.environ.pop("POSTGRES_DSN", None)  # force SQLite branch
-    # active_backend() reads config.POSTGRES_DSN (not os.environ) at call
-    # time, and under APPSECGW_TEST_PG config.POSTGRES_DSN is already set at
-    # import time — so popping the env var alone leaves db_load_config on the
-    # Postgres branch (reading the live PG config_kv, which has a LOG_LEVEL
-    # row), and the empty-SQLite missing-table scenario this test targets is
-    # never exercised. Clear config.POSTGRES_DSN for the duration to actually
-    # take the SQLite branch. Mirrors test_sqlite_mode_load_applies_config_kv_row.
-    import config as _cfg
-    _orig_cfg_pg = getattr(_cfg, "POSTGRES_DSN", "")
-    _cfg.POSTGRES_DSN = ""
+    os.environ.pop("POSTGRES_DSN", None)
     try:
         g = _build_proxy_globals(db)
         _before = g.get("LOG_LEVEL")
@@ -232,7 +212,6 @@ def test_sqlite_mode_load_missing_table_logs_and_returns(tmp_path):
         # LOG_LEVEL must be unchanged (no rows to apply)
         assert g.get("LOG_LEVEL") == _before
     finally:
-        _cfg.POSTGRES_DSN = _orig_cfg_pg
         for k, v in (("DB_PATH", _orig_db_path),
                      ("UPSTREAM", _orig_upstream),
                      ("POSTGRES_DSN", _orig_pg)):

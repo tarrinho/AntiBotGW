@@ -2,7 +2,6 @@
 from collections import defaultdict
 from config import *   # noqa: F401,F403
 from db import open_conn
-from db.sqlite import inject_theme  # noqa: F401 — 1.9.6 per-dashboard theme bake
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
@@ -332,8 +331,8 @@ async def siem_data_endpoint(request: web.Request) -> web.Response:
     # ── Filter events from deque ─────────────────────────────────────────────
     async with state_lock:
         raw_events = list(events)  # snapshot under lock
-        ip_snap    = dict(ip_state)   # single-op shallow copy: smallest race
-        tl_snap    = dict(timeline)   # window vs the rehydrate worker thread
+        ip_snap    = {k: v for k, v in ip_state.items()}  # shallow copy
+        tl_snap    = {k: v for k, v in timeline.items()}
 
     filtered: list[dict] = []
     for ev in raw_events:
@@ -547,7 +546,7 @@ SIEM_DASHBOARD_HTML = (_DASHBOARDS_DIR / "siem.html").read_text(encoding="utf-8"
 async def siem_dashboard_endpoint(request: web.Request) -> web.Response:
     """Serve the SIEM Security Event Center dashboard."""
     return web.Response(
-        text=inject_theme(SIEM_DASHBOARD_HTML, DB_PATH),  # 1.9.6 — honour saved theme
+        text=SIEM_DASHBOARD_HTML,
         content_type="text/html",
         headers={
             "Cache-Control":        "no-store",

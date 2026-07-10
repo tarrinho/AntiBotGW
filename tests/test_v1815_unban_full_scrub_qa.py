@@ -338,20 +338,6 @@ class TestScrubVariants:
     def test_bypass_zero_still_scrubs_breakdown(self, proxy_module):
         """ALLOW_BYPASS_SECS=0 disables grace but MUST still scrub reasons."""
         async def go():
-            # unban_endpoint reads core.proxy_handler.ALLOW_BYPASS_SECS, which is
-            # a DIFFERENT module binding from proxy.ALLOW_BYPASS_SECS that
-            # _spin_proxy's setattr(proxy_module, ...) mutates. Set the value on
-            # the module the endpoint actually reads (and restore after) so the
-            # ALLOW_BYPASS_SECS=0 override is honoured.
-            import core.proxy_handler as _ph
-            _old_bypass = _ph.ALLOW_BYPASS_SECS
-            _ph.ALLOW_BYPASS_SECS = 0
-            try:
-                await _go_inner()
-            finally:
-                _ph.ALLOW_BYPASS_SECS = _old_bypass
-
-        async def _go_inner():
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up,
                                        ALLOW_BYPASS_SECS=0) as client:
@@ -431,34 +417,22 @@ class TestDBRowDeletion:
             async with _spin_upstream() as up:
                 async with _spin_proxy(proxy_module, up) as client:
                     ip = "192.0.2.123"
+                    db_path = proxy_module.DB_PATH
 
-                    # Seed DB rows through the gateway's own backend-aware
-                    # connection. The unban endpoint scrubs via db.open_conn()
-                    # (PG in PG-only mode, SQLite otherwise), so the test must
-                    # seed + verify against the SAME backend — a raw
-                    # sqlite3.connect(DB_PATH) seeds an unused local file in
-                    # PG-only mode and the assertions never reflect the real
-                    # scrub. (1.9.1 iter-18 backend-aware reads.)
-                    from db import open_conn as _open_conn
-                    # Clear any pre-existing rows first (INSERT OR REPLACE is
-                    # SQLite-only; explicit DELETE+INSERT is dialect-neutral and
-                    # the open_conn wrapper rewrites ? → %s on PG).
-                    conn = _open_conn()
-                    for _tbl in ("bans", "ip_bans"):
-                        conn.execute(f"DELETE FROM {_tbl} WHERE ip=?", (ip,))
-                    conn.execute("DELETE FROM clients WHERE ip=?", (ip,))
+                    # Seed DB rows directly
+                    conn = sqlite3.connect(db_path)
                     conn.execute(
-                        "INSERT INTO bans(ip, banned_until, reason, ts) "
+                        "INSERT OR REPLACE INTO bans(ip, banned_until, reason, ts) "
                         "VALUES (?, ?, ?, ?)",
                         (ip, time.time() + 3600, "manual-ban", time.time()),
                     )
                     conn.execute(
-                        "INSERT INTO ip_bans(ip, banned_until, reason, ts) "
+                        "INSERT OR REPLACE INTO ip_bans(ip, banned_until, reason, ts) "
                         "VALUES (?, ?, ?, ?)",
                         (ip, time.time() + 3600, "hard-ban", time.time()),
                     )
                     conn.execute(
-                        "INSERT INTO clients(ip, first_seen, last_seen, "
+                        "INSERT OR REPLACE INTO clients(ip, first_seen, last_seen, "
                         "banned_until_epoch) VALUES (?, ?, ?, ?)",
                         (ip, time.time(), time.time(), time.time() + 3600),
                     )
@@ -481,8 +455,8 @@ class TestDBRowDeletion:
                         )
                     assert r.status == 200, await r.text()
 
-                    # Verify DB rows wiped — read back via the SAME backend.
-                    conn = _open_conn()
+                    # Verify DB rows wiped
+                    conn = sqlite3.connect(db_path)
                     bans_rows = conn.execute(
                         "SELECT 1 FROM bans WHERE ip=?", (ip,)
                     ).fetchall()

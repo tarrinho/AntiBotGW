@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="pt-PT">
 <head>
 <meta charset="UTF-8">
-<title>AntiBot/WAF GW 1.9.9 — Implementation Report</title>
+<title>AntiBot-GW/1.0 — Implementation Report</title>
 <style>
   @page {
     size: A4;
@@ -123,15 +123,6 @@
     border-radius: 3px;
   }
   .alert strong { color: #c44a00; }
-  .shot {
-    width: 100%;
-    border: 1px solid #d4dce3;
-    border-radius: 4px;
-    margin: 6px 0 2px 0;
-    page-break-inside: avoid;
-  }
-  .shot-cap { font-size: 8.5pt; color: #555; margin: 0 0 14px 2px; font-style: italic; }
-  figure { margin: 0 0 16px 0; page-break-inside: avoid; }
 </style>
 </head>
 <body>
@@ -139,403 +130,551 @@
 <!-- ───────────────────────── COVER ───────────────────────── -->
 <div class="cover">
   <div class="cover-title">
-    <h1>AntiBot/WAF&nbsp;GW&nbsp;1.9.9</h1>
-    <div class="subtitle">Reverse Proxy with Layered Anti-Automation Defenses + Web Application Firewall</div>
+    <h1>AntiBot-GW/1.0</h1>
+    <div class="subtitle">Reverse Proxy with Layered Anti-Automation Defenses</div>
     <div class="subtitle">Implementation Report</div>
   </div>
   <div class="cover-meta">
     <p><strong>Author:</strong> Pedro Tarrinho</p>
-    <p><strong>Date:</strong> 2026-06-27</p>
-    <p><strong>Build:</strong> <code>AntiBotWaf_GW_1.9.9</code> (multi-arch: amd64 · arm64 · arm/v7)</p>
-    <p><strong>Stack:</strong> Python 3.13 / aiohttp / Podman (Chainguard distroless) / Cloudflare Tunnel front</p>
-    <p><strong>Datastore:</strong> SQLite (default) · optional PostgreSQL / TimescaleDB (dual-write)</p>
-    <p><strong>Purpose:</strong> Defensive control evaluation — implementation + bypass-surface review</p>
-    <p><strong>Document version:</strong> 2.0 (supersedes the 1.0 implementation report)</p>
+    <p><strong>Date:</strong> 2026-04-26</p>
+    <p><strong>Target:</strong> target.example.com</p>
+    <p><strong>Stack:</strong> Python 3.13 / aiohttp / ngrok</p>
+    <p><strong>Purpose:</strong> Defensive control evaluation — bypass-testing harness</p>
+    <p><strong>Document version:</strong> 1.0</p>
   </div>
 </div>
 
 <!-- ───────────────────────── 1. EXECUTIVE SUMMARY ───────────────────────── -->
 <h2>1. Executive Summary</h2>
-<p>AntiBot/WAF&nbsp;GW is a reverse HTTP/HTTPS proxy that sits in front of a
-protected upstream application and filters automated and malicious traffic before
-it reaches the origin. Version&nbsp;1.9.9 extends the original six-layer
-anti-automation design into a full layered defense stack combining
-<strong>bot/agent detection</strong>, a <strong>request-time Web Application
-Firewall (WAF)</strong>, <strong>IP / reputation intelligence</strong>, and a
-<strong>risk-scoring engine</strong> with an operator console of eleven
-dashboards.</p>
 
-<p>Every request passes through an aiohttp middleware chain. Each layer addresses
-a distinct attack surface used by CLI tools, scrapers, headless browsers, AI
-agents, and exploitation frameworks. Detections feed a weighted risk score; once
-a score crosses the (NAT-aware) ban threshold the identity enters a hostile pool
-and is served a <em>silent decoy</em> — the upstream homepage or a 404 — so the
-client cannot tell it was caught.</p>
+<p>
+This report describes <strong>AntiBot-GW/1.0</strong>, a reverse HTTP proxy
+implemented to sit in front of the CTF challenge
+<code>target.example.com</code> for the purpose of evaluating
+anti-automation defenses. The proxy implements <strong>six independent
+protection layers</strong>, each addressing a distinct attack surface used by
+automated agents (CLI tools, scrapers, headless browsers, AI agents).
+</p>
 
-<h4>Implemented controls (1.9.9)</h4>
-<ul>
-  <li><strong>36 weighted detection signals</strong> across UA, path, header,
-      behavioural, fingerprint, and reputation families, plus
-      <strong>13 hot-toggleable kill-switches</strong> and a decay-aware risk
-      model with NAT-aware thresholds and an optional strict-PoW "Anubis" mode.</li>
-  <li><strong>Request-time WAF</strong>: HTTP request-smuggling, verb-override,
-      header injection (SSTI / host-header), body inspection (XXE,
-      prototype-pollution, critical injection), file-upload, GraphQL abuse, and
-      slow-loris — each behind its own <code>WAF_*_ENABLED</code> kill-switch.</li>
-  <li><strong>Reputation &amp; threat intel</strong>: AbuseIPDB, CrowdSec,
-      MaxMind geo/ASN, Tor exit list, and the Feodo / CINS / URLhaus C2 +
-      malware feeds.</li>
-  <li><strong>Challenge stack</strong>: heuristic JS cookie gate, optional
-      Cloudflare Turnstile, proof-of-work, and an AI-labyrinth / tarpit for
-      crawlers that follow hidden links.</li>
-  <li><strong>JA4 TLS-fingerprint binding</strong> of the challenge cookie when a
-      JA4-injecting front (cloudflared) is present.</li>
-  <li><strong>Ed25519 gateway mesh</strong>: peer gateways exchange
-      signed reputation offers; only offers verifying against a registered peer
-      public key are applied.</li>
-  <li><strong>196 hot-reload knobs</strong>, all tunable at runtime via
-      <code>/secured/config</code> and the operator dashboards without a restart.</li>
-  <li><strong>Dual datastore</strong> (SQLite default, optional
-      PostgreSQL/TimescaleDB with dual-write) for bans, config, audit, and
-      observational metrics that survive restarts and session-key rotation.</li>
-</ul>
+<p>
+The objective is twofold: <em>(i)</em> demonstrate working defenses against
+common automated traffic patterns, and <em>(ii)</em> expose the deliberate weaknesses
+of each layer so they can be tested and bypassed in a controlled environment.
+This dual nature makes the proxy a learning artifact for offensive testing of
+defensive controls — every layer is wired to be inspected at runtime via
+internal endpoints (<code>/__status</code>, <code>/__xff</code>).
+</p>
 
-<p>The build ships as a multi-arch container image (amd64 / arm64 / arm/v7) with
-a clean CVE posture (0 CRITICAL / 0 HIGH on all three arches) and is validated by
-a 20-stage release pipeline covering unit/functional/integration tests, mutation
-testing, SAST, dependency/image CVE scans, dynamic security testing, and a
-written per-release audit record.</p>
+<h3>Implemented controls</h3>
+<table>
+  <tr>
+    <th style="width:5%">#</th><th style="width:18%">Control</th>
+    <th style="width:14%">Trigger response</th>
+    <th>Description</th>
+  </tr>
+  <tr><td>1</td><td>Ban list</td>
+    <td><span class="badge badge-403">403</span></td>
+    <td>In-memory blocklist of IPs that previously hit a honeypot path.</td></tr>
+  <tr><td>2</td><td>Honeypot paths</td>
+    <td><span class="badge badge-403">403</span> + ban</td>
+    <td>Trap URLs (e.g. <code>/wp-admin</code>) that auto-ban any visitor for 1h.</td></tr>
+  <tr><td>3</td><td>UA blocklist</td>
+    <td><span class="badge badge-403">403</span></td>
+    <td>Substring match against a list of automation-tool User-Agents.</td></tr>
+  <tr><td>4</td><td>Rate limit</td>
+    <td><span class="badge badge-429">429</span></td>
+    <td>Per-IP token bucket; configurable burst and refill rate.</td></tr>
+  <tr><td>5</td><td>Behavioral check</td>
+    <td><span class="badge badge-403">403</span></td>
+    <td>Statistical analysis of inter-request timing (σ, µ).</td></tr>
+  <tr><td>6</td><td>Proof-of-Work</td>
+    <td><span class="badge badge-402">402</span></td>
+    <td>Hashcash-style puzzle gating sensitive endpoints.</td></tr>
+</table>
+
+<p>
+All six layers were tested individually and end-to-end through an ngrok tunnel.
+Each layer functions as designed and each has a known bypass vector
+documented in §6.
+</p>
 
 <!-- ───────────────────────── 2. ARCHITECTURE ───────────────────────── -->
 <h2>2. Architecture</h2>
 
 <h3>2.1 Deployment topology</h3>
-<p>The gateway runs as a single container behind a TLS-terminating front
-(Cloudflare Tunnel in the reference deployment, which also injects the client
-<code>CF-JA4</code> TLS fingerprint). The front forwards to the gateway's
-listener; the gateway applies all detection + WAF layers and proxies clean
-traffic to the upstream origin.</p>
-<div class="ascii">  Client
-    │  HTTPS
-    ▼
-  ┌─────────────────────────────────┐
-  │  TLS front (Cloudflare Tunnel)  │  ← terminates TLS, injects CF-JA4
-  │  https://app.example.com        │
-  └───────────────┬─────────────────┘
-                  │  HTTP + X-Forwarded-*, CF-JA4
-                  ▼
-  ┌─────────────────────────────────┐
-  │  AntiBot/WAF GW (this build)     │
-  │   protect() middleware           │
-  │   ├─ trust topology / IP-ban     │
-  │   ├─ detection layers (L1..L9)   │
-  │   ├─ WAF layers (L10)            │
-  │   ├─ risk score → ban / decoy    │
-  │   └─ proxy clean → upstream      │
-  └───────────────┬─────────────────┘
-                  │  HTTP
-                  ▼
-  ┌─────────────────────────────────┐
-  │  Upstream origin (app.example)   │
-  └─────────────────────────────────┘</div>
+<div class="ascii">                ┌─────────────────────────────────┐
+                │      Internet (attacker)        │
+                └────────────────┬────────────────┘
+                                 │ HTTPS
+                                 ▼
+                ┌─────────────────────────────────┐
+                │  ngrok edge (public URL)        │
+                │  https://&lt;sub&gt;.ngrok-free.app   │
+                │  → injects X-Forwarded-For      │
+                └────────────────┬────────────────┘
+                                 │ HTTP localhost:8443
+                                 ▼
+       ╔═══════════════════════════════════════════╗
+       ║   AntiBot-GW/1.0  (aiohttp middleware)    ║
+       ║   ┌─────────────────────────────────┐     ║
+       ║   │  protect()   ← 6 layers in seq. │     ║
+       ║   └────────────────┬────────────────┘     ║
+       ║   ┌────────────────▼────────────────┐     ║
+       ║   │  proxy()   ← upstream forward   │     ║
+       ║   └────────────────┬────────────────┘     ║
+       ╚════════════════════│══════════════════════╝
+                            │ HTTPS
+                            ▼
+                ┌─────────────────────────────────┐
+                │  target.example.com     │
+                │  (Apache 2.4 + own rate limit)  │
+                └─────────────────────────────────┘
+</div>
 
 <h3>2.2 Request lifecycle</h3>
-<p>Every request flows through the <code>protect()</code> middleware. Short-circuit
-checks (IP-ban, admin-path gating, bypass paths, authorized-bot pass-through) run
-first; then the detection + WAF layers accumulate risk; finally the risk verdict
-selects forward / challenge / silent-decoy / ban.</p>
-<div class="ascii">  Request → protect() middleware
-    1. Source-IP resolution (XFF trust topology) + persistent IP-ban check
-    2. Admin-path gating (admin-IP allowlist + session) / authorized-bot rules
-    3. Detection layers L1..L9 (accumulate weighted risk)
-    4. WAF layers L10 (smuggling / verb / header / body / upload / graphql / slowloris)
-    5. Challenge gate (JS cookie / PoW / Turnstile) when required
-    6. Risk verdict:
-         score < SOFT_CHALLENGE_SCORE  → forward to upstream
-         soft band                     → monitor / challenge
-         score ≥ RISK_BAN_THRESHOLD    → hostile pool + silent decoy
-    7. Rate-limit (per-IP + per-identity token buckets, global RPS cap)
-    8. Forward clean traffic → upstream; record event → datastore</div>
 
-<h3>2.3 State model</h3>
-<p>Hot-path state (per-identity risk, token buckets, session/fingerprint maps,
-recent events, timeline buckets) lives in memory for zero-latency reads. Durable
-state (bans, <code>config_kv</code>, secrets, admin-IP ACL, audit, observational
-metrics) is persisted to the datastore and rehydrated on boot. Security-critical
-ban state is rehydrated <em>synchronously</em> before the server accepts traffic;
-cosmetic dashboard state is rehydrated in a background task so the gateway accepts
-connections within seconds of a restart. The persistent <code>ip_bans</code>
-table keys on the raw IP and therefore survives session-cookie and fingerprint
-rotation.</p>
+<div class="ascii">  Request  →  protect() middleware  →  6 layers
+                                       ▼ (all pass)
+                                    proxy() handler
+                                       ▼
+                                   upstream call
+                                       ▼
+                                    response back
+</div>
+
+<h3>2.3 In-memory state model</h3>
+
+<pre>@dataclass
+class IpState:
+    tokens: float           # current token-bucket capacity (max BURST)
+    last_refill: float      # monotonic timestamp of last refill
+    banned_until: float     # 0 if not banned, else absolute monotonic time
+    request_times: deque    # last 50 request timestamps (for behavioral check)
+    request_count: int      # cumulative count
+    first_seen: float       # first appearance of this IP</pre>
+
+<p>
+State is keyed by client IP (resolved via the <code>get_ip()</code> helper),
+held in a <code>defaultdict</code> guarded by an <code>asyncio.Lock</code>,
+and is process-local — restarting the proxy clears all bans and counters.
+</p>
 
 <!-- ───────────────────────── 3. PROTECTION LAYERS ───────────────────────── -->
 <h2>3. Protection Layers</h2>
-<p>The layers below are grouped by attack surface. Each weighted signal is
-independently hot-toggleable and contributes to the identity's risk score; WAF
-layers are terminal (immediate silent-decoy on a confirmed match).</p>
 
+<!-- LAYER 1 -->
 <div class="layer-box">
-  <h3><span class="layer-num">1</span>User-Agent &amp; client identity</h3>
-  <p>Blocklist of 60+ UA fragments (HTTP libraries, scanners, headless browsers,
-  and AI crawler bots such as <code>gptbot</code>, <code>claudebot</code>,
-  <code>anthropic</code>), plus empty / too-short / non-browser / platform-mismatch
-  signals against the declared <code>Sec-CH-UA-Platform</code>.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">2</span>Path &amp; honeypot traps</h3>
-  <p>Suspicious-path regex (VCS metadata, backup files, traversal, SQLi/XSS/LFI
-  markers), advertised honeypot paths with no upstream (<code>/.git/HEAD</code>,
-  <code>/.env</code>, <code>/actuator/env</code>, …), hidden bot-trap form fields,
-  and an AI-labyrinth that bans clients which follow injected
-  <code>rel=nofollow</code> links.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">3</span>Header completeness &amp; consistency</h3>
-  <p>Required-header allowlist, <code>Accept-*</code> / <code>Sec-Fetch-*</code>
-  presence, Sec-Fetch navigation coherence, Client-Hints vs UA consistency, and an
-  HTTP/2 SETTINGS fingerprint check.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">4</span>Behavioural analysis</h3>
-  <p>Inter-arrival timing regularity, path-enumeration thresholds, HTML-without-
-  assets ratio, and request-cadence autocorrelation — robotic-pattern signatures.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">5</span>Challenge &amp; proof-of-work</h3>
-  <p>Heuristic JS cookie gate (auto-mint on first qualifying HTML GET), optional
-  Cloudflare Turnstile, and a proof-of-work gate (strict "Anubis" mode for
-  configured paths). Unsolved challenges are silently decoyed.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">6</span>Rate limiting</h3>
-  <p>Per-IP and per-identity token buckets plus a global RPS cap; throttled
-  traffic receives HTTP 429 with no risk penalty (pure back-pressure).</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">7</span>Canary &amp; referer integrity</h3>
-  <p>Canary tokens planted in responses (echo detection for LLM agents that
-  replay page content) and referer-chain validation (ghost / loop signals).</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">8</span>TLS / JA4 fingerprint</h3>
-  <p>JA3/JA4 handshake fingerprints matched against a deny-list; the challenge
-  cookie is bound to the observed JA4 so it cannot be replayed under a different
-  TLS stack.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">9</span>Reputation &amp; threat intelligence</h3>
-  <p>AbuseIPDB confidence tiers, CrowdSec decisions, MaxMind geo/ASN (country
-  allow/deny + hosting-ASN signal), Tor exit detection, and the Feodo / CINS /
-  URLhaus C2 + malware feeds.</p>
-</div>
-<div class="layer-box">
-  <h3><span class="layer-num">10</span>Web Application Firewall</h3>
-  <p>Request-time WAF inspecting method, headers, and (bounded) body: HTTP
-  request-smuggling, verb-override, header injection (SSTI / host-header), XXE,
-  prototype-pollution, critical command/SQL injection, malicious file-upload,
-  GraphQL introspection/batching abuse, and slow-loris. Each detector is gated by
-  its own <code>WAF_*_ENABLED</code> kill-switch (default-on, per-vhost
-  overridable) and yields a silent decoy on a confirmed match.</p>
+<h3><span class="layer-num">1</span>Ban List</h3>
+<p>
+Simple membership check against <code>ip_state[ip].banned_until</code>.
+If the value is greater than the current monotonic time, the request is
+rejected immediately, before any other check.
+</p>
+<pre>banned, remaining = await is_banned(ip)
+if banned:
+    return Response(status=403,
+                    text=f"banned for {int(remaining)}s",
+                    headers={"X-Reason": "banned"})</pre>
+<p class="footer-note">
+Default ban duration: 1h (3600s). Bans are populated by Layer 2 (honeypot).
+</p>
 </div>
 
-<p><strong>Cross-cutting:</strong> a decay-aware weighted risk model
-(<code>SOFT_CHALLENGE_SCORE</code> / <code>RISK_BAN_THRESHOLD</code> /
-<code>RISK_BAN_THRESHOLD_NAT</code> / <code>RISK_DECAY_HALFLIFE_SECS</code> /
-<code>HOSTILE_BAN_SECS</code>); silent-decoy responses
-(<code>BLOCK_RESPONSE_MODE</code> = homepage | 404); a persistent raw-IP hostile
-pool; and an Ed25519-signed gateway mesh for sharing reputation between peers.</p>
+<!-- LAYER 2 -->
+<div class="layer-box">
+<h3><span class="layer-num">2</span>Honeypot Paths</h3>
+<p>
+The proxy maintains a hard-coded set of paths that legitimate users never
+intentionally visit. Any request to these paths immediately bans the source
+IP for 1 hour.
+</p>
+<pre>HONEYPOT_PATHS = {
+  "/wp-admin", "/wp-login.php", "/.env", "/.git/config",
+  "/admin-backup", "/config.php.bak", "/phpinfo.php",
+  "/xmlrpc.php", "/.aws/credentials", "/server-status",
+  "/.well-known/admin", "/admin.php", "/phpmyadmin",
+}
+
+if request.path in HONEYPOT_PATHS:
+    await ban(ip)
+    return Response(status=403, text="banned (honeypot)",
+                    headers={"X-Reason": "honeypot"})</pre>
+<p class="footer-note">
+Targets indiscriminate vulnerability scanners (nuclei, dirbuster, ffuf
+default wordlists). Real browsers never request these paths because they
+are not linked from the application HTML.
+</p>
+</div>
+
+<!-- LAYER 3 -->
+<div class="layer-box">
+<h3><span class="layer-num">3</span>User-Agent Blocklist</h3>
+<p>
+Case-insensitive substring match against a curated list of automation
+fingerprints. Detects default User-Agents from CLI tools, scripting
+libraries, headless browsers, and AI/LLM crawlers.
+</p>
+<pre>UA_BLOCKLIST = (
+  "curl/", "python-requests/", "httpx/", "go-http-client/",
+  "wget/", "scrapy/", "java/", "okhttp/",
+  "claude", "chatgpt", "gptbot", "anthropic",
+  "selenium", "headless", "puppeteer", "playwright", "phantomjs",
+)
+
+ua_lower = ua.lower()
+for blocked in UA_BLOCKLIST:
+    if blocked in ua_lower:
+        return Response(status=403,
+                        body=json.dumps({"error":"user-agent blocked",
+                                         "matched":blocked}),
+                        headers={"X-Reason":"ua-blocked"})</pre>
+</div>
+
+<!-- LAYER 4 -->
+<div class="layer-box">
+<h3><span class="layer-num">4</span>Per-IP Rate Limit (Token Bucket)</h3>
+<p>
+Each IP gets a token bucket of <code>BURST</code> capacity, refilling at
+<code>REFILL</code> tokens per second. Each successful request consumes
+one token. When the bucket is empty, the proxy returns
+<code>429 Too Many Requests</code> with a calculated <code>Retry-After</code>
+header.
+</p>
+<pre>async def take_token(ip) -> tuple[bool, float, int]:
+    s = ip_state[ip]
+    n = now()
+    elapsed = n - s.last_refill
+    s.tokens = min(BURST, s.tokens + elapsed * REFILL)
+    s.last_refill = n
+    if s.tokens >= 1.0:
+        s.tokens -= 1.0
+        return True, 0.0, int(s.tokens)
+    retry = (1.0 - s.tokens) / REFILL
+    return False, retry, 0</pre>
+
+<p>Response on rate-limit hit:</p>
+<pre>HTTP/2 429 Too Many Requests
+Retry-After: 1
+X-RateLimit-Limit: 100
+X-RateLimit-Remaining: 0
+X-Reason: rate-limit
+Content-Type: application/json
+
+{"error":"rate limit exceeded","retry_after":1}</pre>
+</div>
+
+<!-- LAYER 5 -->
+<div class="layer-box">
+<h3><span class="layer-num">5</span>Behavioral Check</h3>
+<p>
+Tracks the last 50 request timestamps per IP. Once 8 requests have been seen,
+the proxy computes the standard deviation σ and mean µ of inter-request
+intervals. If σ &lt; 10 ms <strong>and</strong> µ &lt; 1 s, the traffic is flagged
+as too regular for human origin.
+</p>
+<pre>async def behavioral_check(ip):
+    s = ip_state[ip]
+    if len(s.request_times) &lt; BEHAVIOR_MAX_REGULAR:  # 8
+        return False, ""
+    recent = list(s.request_times)[-8:]
+    intervals = [recent[i+1] - recent[i] for i in range(7)]
+    µ = mean(intervals)
+    σ = sqrt(mean((iv - µ)**2 for iv in intervals))
+    if σ &lt; 0.010 and µ &lt; 1.0:
+        return True, f"timing too regular (σ={σ*1000:.1f}ms, µ={µ*1000:.1f}ms)"
+    return False, ""</pre>
+<p class="footer-note">
+Target: scripted attackers using <code>time.sleep(constant)</code> between
+requests. Empirically, σ for human browser navigation is &gt;100 ms.
+</p>
+</div>
+
+<!-- LAYER 6 -->
+<div class="layer-box">
+<h3><span class="layer-num">6</span>Proof-of-Work</h3>
+<p>
+For state-changing methods (<code>POST/PUT/DELETE</code>) and any path in
+<code>POW_REQUIRED_PATHS</code> = {/login, /api/auth, /admin}, the proxy
+requires a valid hashcash-style PoW solution. Without one, it returns
+<code>402 Payment Required</code> with a fresh challenge.
+</p>
+
+<h4>Challenge format</h4>
+<pre>nonce | issued_ts | difficulty | HMAC-SHA256(nonce|issued_ts|difficulty, server_key)
+↓
+e31bd4c6bbaedb37 | 1777241780 | 5 | 03ca5327…0098b1b582d511e9231</pre>
+
+<h4>Solution</h4>
+<p>The client must find <code>X</code> such that:</p>
+<pre>SHA256(nonce + X) starts with N hex zeros (default N=5)</pre>
+<p>
+With N=5, finding X requires ~10⁵ hashes (≈ 0.3 s on modern CPU). The signed
+HMAC prevents challenge forgery; the 300-second TTL prevents replay over time.
+</p>
+
+<h4>Submission</h4>
+<pre>POST /login HTTP/1.1
+X-PoW-Token:    e31bd4c6…0098b1b582d511e9231
+X-PoW-Solution: 844737
+Content-Type:   application/x-www-form-urlencoded
+
+user=admin&password=…</pre>
+
+<h4>Verification</h4>
+<pre>def verify_pow(token, solution):
+    nonce, issued, diff, sig = token.split("|")
+    payload = f"{nonce}|{issued}|{diff}"
+    if not hmac.compare_digest(sig,
+        hmac.new(KEY, payload.encode(), sha256).hexdigest()):
+        return False, "bad signature"
+    if int(time.time()) - int(issued) &gt; 300:
+        return False, "expired"
+    h = sha256(f"{nonce}{solution}".encode()).hexdigest()
+    if not h.startswith("0" * int(diff)):
+        return False, f"hash {h[:8]} does not start with {diff} zeros"
+    return True, "ok"</pre>
+</div>
 
 <!-- ───────────────────────── 4. CONFIGURATION ───────────────────────── -->
 <h2>4. Configuration</h2>
-<h3>4.1 Key environment variables</h3>
+
+<h3>4.1 Environment variables</h3>
 <table>
-  <tr><th>Variable</th><th>Example</th><th>Purpose</th></tr>
-  <tr><td><code>UPSTREAM</code></td><td>https://app.example.com</td><td>Origin the gateway proxies to (required)</td></tr>
-  <tr><td><code>LISTEN_HOST</code> / <code>LISTEN_PORT</code></td><td>0.0.0.0 / 8443</td><td>Gateway bind address</td></tr>
-  <tr><td><code>TRUST_XFF</code></td><td>last</td><td>X-Forwarded-For trust topology (off / last / all / N)</td></tr>
-  <tr><td><code>JA4_TRUSTED_PEERS</code></td><td>&lt;front IP/CIDR&gt;</td><td>Source allowed to inject the JA4 header</td></tr>
-  <tr><td><code>BLOCK_RESPONSE_MODE</code></td><td>homepage</td><td>Decoy served to banned clients (homepage | 404)</td></tr>
-  <tr><td><code>SOFT_CHALLENGE_SCORE</code> / <code>RISK_BAN_THRESHOLD</code></td><td>4 / configurable</td><td>Risk bands (hot-reloadable)</td></tr>
-  <tr><td><code>POSTGRES_DSN</code></td><td>(unset = SQLite)</td><td>Enables PostgreSQL/TimescaleDB dual-write</td></tr>
-  <tr><td><code>WAF_*_ENABLED</code></td><td>1</td><td>Per-detector WAF kill-switches (default-on)</td></tr>
-  <tr><td><code>VHOST_PORT_AWARE</code></td><td>0</td><td>1.9.9 — treat the Host's port as part of the vhost identity, so <code>host:8008</code> and <code>host:8009</code> are distinct vhosts (separate upstream/policy/stats/bans). Default off (host-only). Front must forward the original <code>host:port</code>.</td></tr>
+  <tr><th>Variable</th><th>Default</th><th>Effect</th></tr>
+  <tr><td><code>UPSTREAM</code></td><td>https://target.example.com</td>
+      <td>Backend URL to forward to.</td></tr>
+  <tr><td><code>LISTEN_HOST</code></td><td>127.0.0.1</td>
+      <td>Bind address.</td></tr>
+  <tr><td><code>LISTEN_PORT</code></td><td>8443</td>
+      <td>Bind port.</td></tr>
+  <tr><td><code>BURST</code></td><td>5</td>
+      <td>Token-bucket burst capacity.</td></tr>
+  <tr><td><code>REFILL</code></td><td>1.0</td>
+      <td>Token refill rate (per second).</td></tr>
+  <tr><td><code>TRUST_XFF</code></td><td>first</td>
+      <td><code>first</code> | <code>last</code> | <code>none</code> — which X-Forwarded-For entry to honour for IP resolution.</td></tr>
 </table>
-<p>All 196 hot-reload knobs are readable / settable at runtime; trust-topology
-knobs (<code>TRUST_XFF</code>, <code>TRUSTED_PROXIES</code>) are env-pinned and
-cannot be changed from the database.</p>
 
-<h3>4.2 Operator &amp; internal endpoints</h3>
-<p>The operator console lives under <code>/antibot-appsec-gateway/secured/*</code>
-(eleven dashboards: live-feed, control-center, agents, controls, settings,
-honeypots, geo, logs, service, siem, vhost-policy). Admin endpoints are gated by
-an admin-IP allowlist plus an authenticated session; unauthenticated requests
-receive an upstream-style 404 (the route's existence is never confirmed). The
-master light/dark theme is set via <code>POST /secured/ui-theme</code> and is
-honoured by every dashboard.</p>
-
-<h3>4.3 Operator console — dashboards</h3>
-<p>The operator console comprises eleven dashboards under
-<code>/antibot-appsec-gateway/secured/*</code>. The captures below are from a
-reference instance fronting a generic upstream
-(<code>https://example.com</code>) with synthetic mixed traffic
-(legitimate browsers, blocked bots, honeypot probes, and banned scanners).</p>
-
-<figure>
-  <img class="shot" src="screenshots/control-center.png" alt="Control Center dashboard">
-  <p class="shot-cap">Control Center — post-login landing: vhost traffic summary, banned-IP count,
-  Traffic-Over-Time, and the Bot Score Distribution histogram (Soft / Ban thresholds marked).</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/live-feed.png" alt="Live Feed dashboard">
-  <p class="shot-cap">Live Feed — real-time per-request stream (Allowed / Blocked / Missed / Auth-bots / GW-mgmt),
-  with the reason-details drill-down and inline ban / unban actions.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/agents.png" alt="Stealth Agent Hunter dashboard">
-  <p class="shot-cap">Stealth Agent Hunter — identities that passed every block but show stealth signals;
-  per-identity stealth score with IP / UA / session / JA4 / timing popover and per-signal breakdown.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/controls.png" alt="Controls dashboard">
-  <p class="shot-cap">Controls — every hot-reload knob (toggles, thresholds, lists), the merged
-  Defenses &amp; scoring table, strict-PoW (Anubis) toggle, and the admin-IP allowlist.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/honeypots.png" alt="Honeypots dashboard">
-  <p class="shot-cap">Honeypots — trap-catch analytics, the Attack Playbook (catches grouped by technique,
-  scanner-tool fingerprinting, predicted next probes), and honeypot-path suggestions.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/siem.png" alt="SIEM dashboard">
-  <p class="shot-cap">SIEM — alert rules + fired-alert timeline for exporting security events.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/geo.png" alt="GeoMap dashboard">
-  <p class="shot-cap">GeoMap — world map of accesses by source country/ASN (MaxMind GeoLite2), with
-  clean / blocked / Tor-exit / hosting overlays and a Top-Countries breakdown; the reference instance
-  shows blocked probes from across the Americas, Europe, Africa, Asia, and Oceania.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/logs.png" alt="Logs dashboard">
-  <p class="shot-cap">Logs — searchable structured request log with reason / status / vhost filters and export.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/service.png" alt="Service Metrics dashboard">
-  <p class="shot-cap">Service Metrics — gateway health over time: request throughput, latency, DB size,
-  and resource counters sampled on a schedule.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/settings.png" alt="Settings dashboard">
-  <p class="shot-cap">Settings — routing (virtual hosts + discovered hosts), identity &amp; auth, mesh,
-  infrastructure integrations, and the config / backup tools.</p>
-</figure>
-<figure>
-  <img class="shot" src="screenshots/vhost-policy.png" alt="Vhost Policy dashboard">
-  <p class="shot-cap">Vhost Policy — per-virtual-host security-policy overrides layered over the global defaults.</p>
-</figure>
+<h3>4.2 Internal endpoints (bypass all checks)</h3>
+<table>
+  <tr><th>Path</th><th>Method</th><th>Purpose</th></tr>
+  <tr><td><code>/__status</code></td><td>GET</td>
+      <td>JSON snapshot of the per-IP state and config.</td></tr>
+  <tr><td><code>/__pow</code></td><td>GET</td>
+      <td>Issue a fresh PoW challenge.</td></tr>
+  <tr><td><code>/__solver</code></td><td>GET</td>
+      <td>Browser-side JavaScript PoW solver UI.</td></tr>
+  <tr><td><code>/__xff</code></td><td>GET</td>
+      <td>Debug — echoes received <code>X-Forwarded-For</code> chain and computed IP.</td></tr>
+</table>
 
 <!-- ───────────────────────── 5. TEST RESULTS ───────────────────────── -->
 <h2>5. Test Results</h2>
-<p>Validation is driven by a 20-stage release pipeline (<code>rules.md</code>).
-The 1.9.9 release record is held in <code>validation/1.9.9.md</code>.</p>
+
+<p>All six layers were validated end-to-end against the live upstream and
+through the ngrok tunnel. Results:</p>
+
 <table>
-  <tr><th>Stage</th><th>Result</th></tr>
-  <tr><td>Unit / functional / integration / component / regression</td><td><span class="badge badge-200">1184 passed</span> (SQLite gate)</td></tr>
-  <tr><td>Static analysis (Bandit / Semgrep / ruff)</td><td>0 High/Critical; lint blocking categories clean</td></tr>
-  <tr><td>Image CVE scan (Trivy ×3 arches)</td><td><span class="badge badge-200">0 CRITICAL / 0 HIGH</span></td></tr>
-  <tr><td>Dynamic security testing (DAST harness)</td><td>open-redirect, SSRF markers, CRLF/header-injection — all defended</td></tr>
-  <tr><td>Multi-arch build + registry push</td><td>amd64 · arm64 · arm/v7 manifest verified</td></tr>
-</table>
-<p>Representative request outcomes observed end-to-end against the live upstream:</p>
-<table>
-  <tr><th>Request</th><th>Layer</th><th>Result</th></tr>
-  <tr><td>Browser with valid challenge cookie</td><td>—</td><td><span class="badge badge-200">200</span> forwarded</td></tr>
-  <tr><td>UA <code>curl/8</code> / <code>python-requests</code></td><td>UA filter</td><td><span class="badge badge-403">decoy</span> ua-blocked</td></tr>
-  <tr><td>UA <code>ClaudeBot</code> / <code>GPTBot</code></td><td>UA filter</td><td><span class="badge badge-403">decoy</span> ua-blocked</td></tr>
-  <tr><td>Probe <code>/.git/HEAD</code>, <code>/.env</code></td><td>Honeypot</td><td><span class="badge badge-403">decoy</span> + risk bump</td></tr>
-  <tr><td>Burst beyond token bucket</td><td>Rate limit</td><td><span class="badge badge-429">429</span></td></tr>
-  <tr><td>PoW-required path, no token</td><td>Challenge</td><td><span class="badge badge-402">402</span> + challenge</td></tr>
-  <tr><td>XXE / prototype-pollution body</td><td>WAF</td><td><span class="badge badge-403">decoy</span> suspicious-body</td></tr>
-  <tr><td>Banned raw IP (hostile pool)</td><td>IP-ban</td><td><span class="badge badge-403">decoy</span> ip-ban (every path)</td></tr>
+  <tr><th>Test</th><th>Expected</th><th>Observed</th><th>Status</th></tr>
+  <tr><td>Browser UA <span class="pill">Mozilla/5.0…</span></td><td>200 forwarded</td>
+      <td><span class="badge badge-200">200</span></td><td>PASS</td></tr>
+  <tr><td>UA <span class="pill">curl/8.4.0</span></td><td>403 ua-blocked</td>
+      <td><span class="badge badge-403">403</span> matched=<code>curl/</code></td><td>PASS</td></tr>
+  <tr><td>UA <span class="pill">ClaudeBot</span></td><td>403 ua-blocked</td>
+      <td><span class="badge badge-403">403</span> matched=<code>claude</code></td><td>PASS</td></tr>
+  <tr><td>UA <span class="pill">python-requests</span></td><td>403 ua-blocked</td>
+      <td><span class="badge badge-403">403</span> matched=<code>python-requests/</code></td><td>PASS</td></tr>
+  <tr><td>GET <code>/wp-admin</code></td><td>403 honeypot + 1h ban</td>
+      <td><span class="badge badge-403">403</span>, then ban applied</td><td>PASS</td></tr>
+  <tr><td>Subsequent GET after ban</td><td>403 banned</td>
+      <td><span class="badge badge-403">403</span> banned for 3599s</td><td>PASS</td></tr>
+  <tr><td>Burst test (BURST=5, send 8)</td><td>1× 200, 7× 429</td>
+      <td>1× <span class="badge badge-200">200</span>, 7× <span class="badge badge-429">429</span> Retry-After=1</td><td>PASS</td></tr>
+  <tr><td>POST <code>/login</code> w/o PoW</td><td>402 + challenge</td>
+      <td><span class="badge badge-402">402</span> challenge issued</td><td>PASS</td></tr>
+  <tr><td>POST w/ invalid PoW solution</td><td>402 + reason</td>
+      <td><span class="badge badge-402">402</span> "hash X does not start with 5 zeros"</td><td>PASS</td></tr>
+  <tr><td>PoW solve (difficulty=5)</td><td>~0.3s</td>
+      <td>0.34s, 641,466 attempts</td><td>PASS</td></tr>
+  <tr><td>POST <code>/login</code> w/ valid PoW</td><td>200 forwarded</td>
+      <td><span class="badge badge-200">200</span></td><td>PASS</td></tr>
+  <tr><td>12 reqs at ~150 ms regular</td><td>req 1-7 OK, 8+ blocked</td>
+      <td>req 8+ <span class="badge badge-403">403</span> σ=1.7 ms, µ=152 ms</td><td>PASS</td></tr>
 </table>
 
-<!-- ───────────────────────── 6. BYPASS SURFACE ───────────────────────── -->
-<h2>6. Bypass Surface &amp; Residual Risk</h2>
-<p>The accepted-risk register (re-confirmed each release in
-<code>validation/&lt;version&gt;.md</code> §11b) records design trade-offs that
-are not defects but carry residual exposure:</p>
+<!-- ───────────────────────── 6. BYPASS ANALYSIS ───────────────────────── -->
+<h2>6. Bypass Surface</h2>
+
+<p>
+By design, every layer has a known weakness so the proxy can be used as a
+testing harness. Each weakness reflects a real-world failure mode.
+</p>
+
 <table>
-  <tr><th>ID</th><th>Residual risk</th><th>Mitigation</th></tr>
-  <tr><td>R1</td><td><code>agw_csrf</code> cookie is JS-readable (HttpOnly off)</td><td>Double-submit token + <code>SameSite=Strict</code></td></tr>
-  <tr><td>R2</td><td><code>ALLOW_PRIVATE_UPSTREAM</code> default-allow (SSRF reach)</td><td>Operator-scoped; SSRF guard on outbound URLs; env-pinnable</td></tr>
-  <tr><td>R3</td><td>Admin surface hidden behind a decoy-404</td><td>Admin-IP allowlist is the real gate (obscurity is a layer, not the control)</td></tr>
+  <tr><th>Layer</th><th>Weakness</th><th>Bypass technique</th><th>Severity</th></tr>
+  <tr>
+    <td>UA blocklist</td>
+    <td>Substring match on client-controlled header</td>
+    <td>Set <code>User-Agent: Mozilla/5.0…</code></td>
+    <td>Trivial</td>
+  </tr>
+  <tr>
+    <td>Honeypot</td>
+    <td>Hard-coded path list, IP-keyed ban</td>
+    <td>Avoid the paths; rotate IPs to escape ban</td>
+    <td>Trivial</td>
+  </tr>
+  <tr>
+    <td>Rate limit</td>
+    <td>Bucket keyed on client-controlled IP (XFF)</td>
+    <td>Spoof <code>X-Forwarded-For</code> per request</td>
+    <td>High</td>
+  </tr>
+  <tr>
+    <td>Behavioral</td>
+    <td>Window of only 8 requests, σ threshold 10 ms</td>
+    <td>Inject jitter <code>sleep(uniform(0.05, 0.4))</code></td>
+    <td>Trivial</td>
+  </tr>
+  <tr>
+    <td>PoW</td>
+    <td>Constant difficulty, replay window 5 min</td>
+    <td>Single solve serves multiple requests within 5 min</td>
+    <td>Medium</td>
+  </tr>
+  <tr>
+    <td>Internal endpoints</td>
+    <td><code>/__*</code> paths bypass every check</td>
+    <td>Probe <code>/__status</code> to enumerate state</td>
+    <td>Medium</td>
+  </tr>
 </table>
+
 <div class="alert">
-  <strong>Front-of-proxy trust boundary:</strong> the gateway's source-IP and JA4
-  guarantees depend on the front. It must terminate TLS, inject a trustworthy
-  JA4, and overwrite (not append) the client-supplied <code>X-Forwarded-For</code>.
-  A front that passes through client-controlled XFF undermines per-IP bans and
-  geo/reputation lookups; pin the trusted front via <code>TRUST_XFF</code> +
-  <code>JA4_TRUSTED_PEERS</code>.
+<strong>Key finding — ngrok-free trust boundary:</strong>
+ngrok's free tier <em>passes through</em> the client-supplied
+<code>X-Forwarded-For</code> header without sanitisation. Setting
+<code>TRUST_XFF=last</code> does not prevent spoofing because the proxy
+sees only the value the client provided. Production deployments need a tier
+that overwrites or appends-only XFF (paid ngrok, Cloudflare Tunnel, or a
+trusted L7 LB with <code>X-Forwarded-For</code> normalisation).
 </div>
 
 <!-- ───────────────────────── 7. RECOMMENDATIONS ───────────────────────── -->
 <h2>7. Recommendations</h2>
+
+<p>The proxy demonstrates the techniques but should be hardened before any
+production-style use:</p>
+
 <ol>
-  <li>Deploy behind a JA4-injecting, XFF-overwriting front (Cloudflare Tunnel or
-      an nginx JA4 build) and pin it with <code>TRUST_XFF=last</code> +
-      <code>JA4_TRUSTED_PEERS</code>.</li>
-  <li>Keep the WAF kill-switches default-on; disable a layer only per-vhost when a
-      legitimate client trips it, and re-enable after tuning.</li>
-  <li>Enable PostgreSQL/TimescaleDB for multi-replica or long-retention
-      deployments; SQLite is sufficient for single-instance.</li>
-  <li>Configure reputation feeds (AbuseIPDB / CrowdSec) and the C2/malware feeds
-      for environments exposed to broad internet scanning.</li>
-  <li>Set <code>LOG_RETENTION</code> / DLP redaction in line with the privacy
-      posture — IP addresses are PII; prune the events store on schedule.</li>
-  <li>For mesh deployments, upgrade all peers together (the Ed25519 model is not
-      compatible with the legacy symmetric keys) and rotate keypairs.</li>
+  <li><strong>IP resolution:</strong> Replace <code>X-Forwarded-For</code>
+  parsing with a trusted-proxy-aware resolver
+  (<code>aiohttp_remotes.XForwardedStrict</code>) or terminate TLS behind a
+  trusted edge that overwrites the chain.</li>
+
+  <li><strong>PoW replay protection:</strong> Track used <code>(token,
+  solution)</code> pairs server-side; bind challenges to method+path so a
+  solved <code>/login</code> challenge can't authorise <code>/admin</code>.</li>
+
+  <li><strong>Adaptive PoW difficulty:</strong> Increase difficulty
+  exponentially under sustained load per IP (e.g. 5 → 6 → 7 zeros).</li>
+
+  <li><strong>Behavioral signals:</strong> Move beyond timing; check for
+  realistic HTTP/2 fingerprints, TLS JA4, accept-language presence,
+  static-asset fetch sequences.</li>
+
+  <li><strong>Persistent state:</strong> Move <code>ip_state</code> from
+  in-process dict to Redis or DragonflyDB so restarts don't reset bans and
+  multiple instances share state.</li>
+
+  <li><strong>Honeypot expansion:</strong> Generate honeypots dynamically
+  (random unique paths injected into HTML as zero-size links); attackers can
+  no longer pre-list and avoid them.</li>
+
+  <li><strong>Edge integration:</strong> For real protection, place
+  Cloudflare Turnstile or hCaptcha in front of <code>POST</code> endpoints
+  rather than relying on PoW alone — Turnstile in invisible mode adds
+  bot-detection signals server-side PoW cannot reach.</li>
 </ol>
 
 <!-- ───────────────────────── 8. APPENDIX ───────────────────────── -->
 <h2>8. Appendix</h2>
 
-<h3>8.1 Run</h3>
-<pre>cd /opt/antibot-gw
-
-# Container (recommended) — multi-arch image from your registry
-podman run -d --name antibot-gw \
-  -e UPSTREAM=https://app.example.com \
-  -e TRUST_XFF=last \
-  -p 8443:8443 \
-  &lt;your-registry&gt;/antibotappsecgw:1.9.9
-
-# Front the listener with a TLS tunnel that injects JA4 (e.g. cloudflared)
-cloudflared tunnel --url http://127.0.0.1:8443</pre>
-
-<h3>8.2 Selected file inventory</h3>
+<h3>8.1 File inventory</h3>
 <table>
-  <tr><th>Path</th><th>Role</th></tr>
-  <tr><td><code>proxy.py</code></td><td>Application entrypoint + route table + startup/rehydrate</td></tr>
-  <tr><td><code>core/proxy_handler.py</code></td><td><code>protect()</code> middleware, detection + WAF wiring, silent-decoy, dashboards data</td></tr>
-  <tr><td><code>config.py</code></td><td>Environment variables, knob defaults, version string</td></tr>
-  <tr><td><code>vhost.py</code></td><td>Per-vhost effective-config accessor (<code>vc()</code>) + coercion</td></tr>
-  <tr><td><code>scoring.py</code> / <code>identity.py</code></td><td>Risk model, ban/unban, identity + session fingerprinting</td></tr>
-  <tr><td><code>detection/</code> · <code>reputation/</code> · <code>integrations/</code></td><td>Signal families, feeds, JA4/Redis/JWT integrations</td></tr>
-  <tr><td><code>db/sqlite.py</code> · <code>db/postgres.py</code></td><td>Dual-backend persistence + dual-write</td></tr>
-  <tr><td><code>admin/</code> · <code>dashboards/</code></td><td>Auth, mesh, settings + the eleven operator dashboards</td></tr>
+  <tr><th>File</th><th>Purpose</th><th>LOC</th></tr>
+  <tr><td><code>proxy.py</code></td><td>Main reverse proxy with all 6 layers</td><td>~290</td></tr>
+  <tr><td><code>mock_upstream.py</code></td><td>Echo backend on :9090 for isolated tests</td><td>~5</td></tr>
+  <tr><td><code>test_final.py</code></td><td>End-to-end integration test</td><td>~70</td></tr>
+  <tr><td><code>test_behavior.py</code></td><td>Behavioral-check timing test</td><td>~30</td></tr>
+  <tr><td><code>README.md</code></td><td>Usage and bypass documentation</td><td>~190</td></tr>
 </table>
 
-<h3>8.3 Verdict</h3>
-<p>AntiBot/WAF&nbsp;GW&nbsp;1.9.9 implements a defense-in-depth stack — bot/agent
-detection, a request-time WAF, reputation intelligence, and a decay-aware risk
-model — with a clean CVE posture and a complete, version-controlled validation
-record. The dominant residual risk is the trust boundary at the front of the
-proxy; the documented deployment guidance closes it.</p>
+<h3>8.2 Run</h3>
+<pre>cd /opt/anti-bot-proxy/
 
-<p class="footer-note">Author: Pedro Tarrinho · AntiBot/WAF GW 1.9.9 ·
-Document version 2.0 · 2026-06-27. Targets and hostnames in this document are
-illustrative.</p>
+# Default (in front of target.example.com, BURST=5, REFILL=1/s)
+python3 proxy.py
+
+# Custom config
+TRUST_XFF=last BURST=100 REFILL=10.0 python3 proxy.py
+
+# Public exposure via ngrok
+ngrok http 8443</pre>
+
+<h3>8.3 Wire example — full PoW exchange</h3>
+<pre># 1. Client posts without PoW headers
+$ curl -X POST -H 'User-Agent: Mozilla/5.0' \
+       -d 'user=admin' https://&lt;tunnel&gt;/login
+
+HTTP/2 402 Payment Required
+X-Reason: pow-required
+X-PoW-Challenge: e31b…|1777241780|5|03ca…
+X-PoW-Difficulty: 5
+Content-Type: application/json
+
+{"error":"Proof-of-Work required",
+ "challenge":"e31b…|1777241780|5|03ca…",
+ "difficulty":5}
+
+# 2. Client solves
+nonce = "e31b…"
+for i in range(10**8):
+    if sha256(f"{nonce}{i}".encode()).hexdigest().startswith("00000"):
+        solution = str(i)
+        break
+
+# 3. Client retries with PoW headers
+$ curl -X POST -H 'User-Agent: Mozilla/5.0' \
+       -H 'X-PoW-Token: e31b…|1777241780|5|03ca…' \
+       -H 'X-PoW-Solution: 844737' \
+       -d 'user=admin' https://&lt;tunnel&gt;/login
+
+HTTP/2 200 OK
+... (forwarded upstream response)</pre>
+
+<h3>8.4 State snapshot</h3>
+<pre>$ curl -s http://127.0.0.1:8443/__status | jq
+{
+  "clients": {
+    "203.0.113.1": {
+      "tokens": 100,
+      "request_count": 7,
+      "banned_until": 0,
+      "first_seen_secs_ago": 12.4
+    }
+  },
+  "config": {
+    "burst": 100,
+    "refill_per_sec": 10.0,
+    "pow_difficulty": 5,
+    "honeypot_ban_secs": 3600
+  }
+}</pre>
+
+<p style="margin-top: 36px; padding-top: 12px; border-top: 1px solid #d4dce3; font-size: 9pt; color: #888; text-align: center;">
+End of report — AntiBot-GW/1.0 Implementation Report — Pedro Tarrinho — 2026-04-26
+</p>
 
 </body>
 </html>

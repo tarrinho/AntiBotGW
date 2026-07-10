@@ -166,40 +166,6 @@ MAX_KEYS = ("procs", "open_fds", "db_db", "db_wal", "db_shm", "db_total",
 SUM_KEYS = ("net_rx_bps", "net_tx_bps")
 
 
-from contextlib import contextmanager as _contextmanager
-
-
-@_contextmanager
-def _route_svc_db_history_to(db_path: str):
-    """Force _svc_db_history's connection to the given temp SQLite file.
-
-    CONTRACT CHANGE (1.9.1 iter-18, aligned 2026-06): _svc_db_history no longer
-    does a bare `sqlite3.connect(_DATA_PATH)` — it routes the read through
-    `db.open_conn()` so the Service-page history works in PG-only mode
-    (svc_metrics IS PG-mirrored). Patching `_DATA_PATH` is therefore a dead
-    seam under APPSECGW_TEST_PG=1: the read targets Postgres, not the test's
-    temp file, so the seeded sample is invisible and every aggregation reads 0.
-
-    This helper patches the real seam (`db.open_conn`) to hand back a SQLite
-    connection to the test fixture, keeping the test backend-agnostic AND
-    isolated from the shared Postgres (no cross-agent flake). The aggregation
-    logic under test (bucketing, zero-fill, AVG/MAX) is exercised unchanged.
-    """
-    import importlib
-    _db = importlib.import_module("db")
-    _orig = getattr(_db, "open_conn", None)
-
-    def _fake_open_conn(*_a, **_k):
-        return sqlite3.connect(db_path)
-
-    _db.open_conn = _fake_open_conn
-    try:
-        yield
-    finally:
-        if _orig is not None:
-            _db.open_conn = _orig
-
-
 def _import_svc_db_history(db_path: str):
     """Import _svc_db_history with _DATA_PATH patched to db_path."""
     import importlib, importlib.util
@@ -297,8 +263,7 @@ class TestB_SvcDbHistory:
         orig = sm._DATA_PATH
         sm._DATA_PATH = db
         try:
-            with _route_svc_db_history_to(db):
-                result = sm._svc_db_history(now_b, now_b + 300, 300, AVG_KEYS, MAX_KEYS, SUM_KEYS)
+            result = sm._svc_db_history(now_b, now_b + 300, 300, AVG_KEYS, MAX_KEYS, SUM_KEYS)
         finally:
             sm._DATA_PATH = orig
 
@@ -338,8 +303,7 @@ class TestB_SvcDbHistory:
         orig = sm._DATA_PATH
         sm._DATA_PATH = db
         try:
-            with _route_svc_db_history_to(db):
-                result = sm._svc_db_history(base, base + 3 * 3600, 3600, AVG_KEYS, MAX_KEYS, SUM_KEYS)
+            result = sm._svc_db_history(base, base + 3 * 3600, 3600, AVG_KEYS, MAX_KEYS, SUM_KEYS)
         finally:
             sm._DATA_PATH = orig
 
@@ -424,32 +388,17 @@ class TestC_EndpointRouting:
 # ─── S. Additional static QA ──────────────────────────────────────────────────
 
 class TestS_StaticQA:
-    @staticmethod
-    def _svc_db_history_body(src: str) -> str:
-        """Return the full _svc_db_history function body.
-
-        The function grew a long docstring + comment block (1.9.1 iter-18:
-        routed through db.open_conn for PG-only mode), pushing conn.close()
-        and the except clause past the old fixed 2000-char window. Slice to
-        the next top-level def instead so the structural guard still anchors
-        on the function's real extent.
-        """
-        fn_start = src.find("def _svc_db_history(")
-        nxt = src.find("\ndef ", fn_start + 1)
-        nxt2 = src.find("\nasync def ", fn_start + 1)
-        ends = [e for e in (nxt, nxt2) if e != -1]
-        fn_end = min(ends) if ends else fn_start + 4000
-        return src[fn_start:fn_end]
-
     def test_s1_svc_db_history_closes_connection(self):
         src = _svc_src()
-        fn_body = self._svc_db_history_body(src)
+        fn_start = src.find("def _svc_db_history(")
+        fn_body = src[fn_start:fn_start + 2000]
         assert "conn.close()" in fn_body, \
             "_svc_db_history must call conn.close() after query"
 
     def test_s2_svc_db_history_has_try_except(self):
         src = _svc_src()
-        fn_body = self._svc_db_history_body(src)
+        fn_start = src.find("def _svc_db_history(")
+        fn_body = src[fn_start:fn_start + 2000]
         assert "except Exception" in fn_body, \
             "_svc_db_history must catch Exception to survive DB errors"
 

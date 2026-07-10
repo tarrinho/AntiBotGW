@@ -1,16 +1,16 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
-<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
+<script>(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AntiBotWaf_GW_1.9.9 · GeoMap</title>
+<title>AntiBotWaf_GW_1.9.10 · GeoMap</title>
 <link rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
       crossorigin=""/>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--orange:#ff7b3a;
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--orange:#ff7b3a;
       --purple:#bc8cff;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
@@ -88,7 +88,7 @@ h2{font-size:13px;font-weight:600;color:var(--dim);text-transform:uppercase;lett
 .ctrl{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:inherit;line-height:1.4}
 .ctrl:hover:not(:disabled){border-color:var(--blue);color:var(--blue)}
 .ctrl:disabled{opacity:.4;cursor:not-allowed}
-.ctrl-now{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:var(--blue)}
+.ctrl-now{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue)}
 .toggle{display:inline-flex;gap:4px;align-items:center;font-size:11px;color:var(--dim);cursor:pointer;user-select:none}
 .toggle input{margin:0}
 .toggle.on{color:var(--blue)}
@@ -154,11 +154,11 @@ html[data-theme="light"] .notice{background:#fff8c5;border-color:#d4a72c;color:#
 /* 1.8.0 — vhost selector pill strip */
 #vhost-bar{display:none;gap:6px;margin:0 0 10px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;scrollbar-width:thin;padding-bottom:2px}
 #vhost-bar-label{font-size:11px;color:var(--dim);margin-right:2px}
-.vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #79c0ff;color:#79c0ff;
+.vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #58a6ff;color:#58a6ff;
   background:transparent;cursor:pointer;font-size:12px;font-weight:600;
   transition:background .15s,color .15s;line-height:1.6;max-width:220px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.vhost-pill.active{background:#79c0ff;color:var(--bg-deep)}
+.vhost-pill.active{background:#58a6ff;color:var(--bg-deep)}
 
 #load-status{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;
   padding:3px 10px;border-radius:10px;letter-spacing:.3px;transition:background .3s,color .3s,border-color .3s;
@@ -192,7 +192,7 @@ html[data-theme="light"] .notice{background:#fff8c5;border-color:#d4a72c;color:#
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-      <div id="sidebar-brand-ver">1.9.9</div>
+      <div id="sidebar-brand-ver">1.9.10</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -480,7 +480,7 @@ function buildOverlayMarker(lat, lng, count, kind){
 // 1.6.4 — pin-type colours (border on circles when filter mode active)
 const PIN_COLORS = {
   'bot-ai':     '#f85149',
-  'high-risk':  '#79c0ff',
+  'high-risk':  '#58a6ff',
   'fp-suspect': '#d29922',
   'normal':     '#3fb950',
 };
@@ -988,7 +988,7 @@ function renderMethods(){
   if (!entries.length){ div.innerHTML = '<div class="dim">no blocks in window</div>'; return; }
   const max = Math.max(...entries.map(([_,v]) => v));
   const COL = {
-    ua:'#f85149', body:'#ff7b3a', intel:'#79c0ff', behavior:'#bc8cff',
+    ua:'#f85149', body:'#ff7b3a', intel:'#58a6ff', behavior:'#bc8cff',
     cookie:'#d29922', tls:'#79c0ff', canary:'#3fb950',
     operator:'#bc8cff', honeypot:'#ff7b3a', other:'#8b949e',
   };
@@ -1076,7 +1076,7 @@ window.addEventListener('pagehide', () => _timers.forEach(clearInterval)); // FE
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
 #gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #79c0ff}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -1325,7 +1325,7 @@ window.addEventListener('pagehide', () => _timers.forEach(clearInterval)); // FE
 </div><!-- /page-content -->
 </div><!-- /main-area -->
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

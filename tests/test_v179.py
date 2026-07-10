@@ -76,34 +76,21 @@ ADMIN_NS = "/antibot-appsec-gateway"
 
 
 def _seed_events(proxy_module, rows):
-    """Insert raw event rows into the active-backend events table.
+    """Insert raw event rows into the test SQLite DB.
     Each row: (ts, ip, ua, path, xff, status, reason)
-
-    The gwmgmt-timeline endpoint reads events from the active backend, so under
-    the PG-mode test harness (POSTGRES_DSN set) these rows must land in
-    Postgres. db.conn.conn() targets the active backend (rewrites `?` → `%s` on
-    PG). The events table already exists on both backends; the CREATE only runs
-    on the SQLite path for the legacy standalone-DB case.
     """
-    from db.conn import active_backend
-    if active_backend() == "postgres":
-        # PG events.ts is timestamptz; reuse pg_insert_event (to_timestamp).
-        # Row tuple: (ts, ip, ua, path, status, reason)
-        from db.postgres import pg_insert_event
-        for ts, ip, ua, path, status, reason in rows:
-            pg_insert_event(ts, ip, ua, path, int(status), reason)
-    else:
-        from db.conn import conn as _backend_conn
-        with _backend_conn(timeout=10) as conn:
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS events "
-                "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
-                "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
-            )
-            conn.executemany(
-                "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
-                rows,
-            )
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS events "
+        "(id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL, ip TEXT, ua TEXT, "
+        "path TEXT, xff TEXT DEFAULT '', status INTEGER DEFAULT 200, reason TEXT DEFAULT '')"
+    )
+    conn.executemany(
+        "INSERT INTO events (ts, ip, ua, path, status, reason) VALUES (?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
 
 
 # ── 1. agents-timeline gwmgmt field shape ────────────────────────────────

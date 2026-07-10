@@ -989,14 +989,7 @@ async def test_d36_invalid_default_role_falls_back_to_viewer():
             mock_conn = MagicMock()
 
             def _capture(sql, params=()):
-                # Backend-aware: the provisioning DML differs by backend —
-                # SQLite uses "INSERT OR IGNORE INTO users …" while PG uses
-                # "INSERT INTO users … ON CONFLICT (username) DO NOTHING".
-                # Both pass the role as params[1]; match either shape so the
-                # PG-mode test harness captures the provisioned role.
-                _norm = sql.upper()
-                if "INSERT" in _norm and "USERS" in _norm and (
-                        "OR IGNORE" in _norm or "ON CONFLICT" in _norm):
+                if "INSERT OR IGNORE" in sql:
                     provisioned_role.append(params[1])
                 return MagicMock()
             mock_conn.execute = _capture

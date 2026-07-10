@@ -361,29 +361,29 @@ def test_risk_does_not_carry_across_vhosts():
     """CORE isolation guarantee: an identity hammered to a ban on vhost A is
     NOT banned on vhost B after a few LIGHT hits whose per-vhost score stays
     below threshold — even though the global score is far above threshold."""
-    SITE_A, PT4 = "site-a.test", "pt4.test"
-    # 8x suspicious-path(50) → site-a banned, global score huge.
-    # 3x behavior(8)=24 on pt4 → below the 50 threshold for pt4 alone.
+    FOO, BAR = "foo.test", "bar.test"
+    # 8x suspicious-path(50) → foo banned, global score huge.
+    # 3x behavior(8)=24 on bar → below the 50 threshold for bar alone.
     s = _run_scoped_risk(
-        [(SITE_A, "suspicious-path")] * 8 + [(PT4, "behavior")] * 3
+        [(FOO, "suspicious-path")] * 8 + [(BAR, "behavior")] * 3
     )
-    assert s.banned_until_by_vhost.get(SITE_A, 0.0) > 0, "site-a must be banned"
+    assert s.banned_until_by_vhost.get(FOO, 0.0) > 0, "foo must be banned"
     assert s.risk_score >= 50, "global score should be well above threshold"
-    assert s.risk_by_vhost.get(PT4, 0.0) < 50, "pt4 per-vhost score must stay low"
-    assert s.banned_until_by_vhost.get(PT4, 0.0) == 0.0, (
-        "pt4 must NOT be banned: risk earned on site-a must not carry over"
+    assert s.risk_by_vhost.get(BAR, 0.0) < 50, "bar per-vhost score must stay low"
+    assert s.banned_until_by_vhost.get(BAR, 0.0) == 0.0, (
+        "bar must NOT be banned: risk earned on foo must not carry over"
     )
 
 
 def test_per_vhost_detection_still_bans_on_own_crossing():
     """Inverse guard: isolation must not blind a vhost — once a vhost's OWN
     per-vhost score crosses the threshold it bans normally."""
-    SITE_A, PT4 = "site-a.test", "pt4.test"
-    # 7x behavior(8)=56 on pt4 ≥ 50 → pt4 bans on its own merit.
+    FOO, BAR = "foo.test", "bar.test"
+    # 7x behavior(8)=56 on bar ≥ 50 → bar bans on its own merit.
     s = _run_scoped_risk(
-        [(SITE_A, "suspicious-path")] * 8 + [(PT4, "behavior")] * 7
+        [(FOO, "suspicious-path")] * 8 + [(BAR, "behavior")] * 7
     )
-    assert s.risk_by_vhost.get(PT4, 0.0) >= 50
-    assert s.banned_until_by_vhost.get(PT4, 0.0) > 0, (
-        "pt4 must ban when its own per-vhost score crosses the threshold"
+    assert s.risk_by_vhost.get(BAR, 0.0) >= 50
+    assert s.banned_until_by_vhost.get(BAR, 0.0) > 0, (
+        "bar must ban when its own per-vhost score crosses the threshold"
     )

@@ -5,16 +5,21 @@
 .git*
 !.gitignore
 !.github/
+# `.git*` above also swallows .gitleaks.toml — it MUST be committed: the
+# secret-scan workflow auto-loads it from the repo root, and without it gitleaks
+# runs stock rules and reports the known false positives on every run.
+!.gitleaks.toml
 
 # Helper scripts and local secrets — never committed
 copy-to-github.sh
 publish.sh
 tag-versions.sh
 .env
-
-# publish.sh writes this on successful push (rules.md §13c freshness marker).
-# Contains repo HEADs + remote URLs — keep local only.
-.last-publish.json
+# Internal release-pipeline doc: carries live hostnames, admin-key reads and
+# local paths. It is in copy-to-github.sh _BLOCKLIST so it is never *copied* —
+# but the copy is overwrite-in-place, so a stale rules.md left in a destination
+# repo would still be swept up by `git add -A`. Ignore it there too.
+rules.md
 
 # GeoLite2 DBs — size + MaxMind licensing; provided at runtime, never committed
 _seed/

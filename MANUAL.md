@@ -1,6 +1,6 @@
 # AntiBot/WAF GW — Operational Runbook
 
-**Version**: 1.9.9  
+**Version**: 1.9.10  
 **Author**: Pedro Tarrinho
 
 ---
@@ -67,7 +67,7 @@ docker run -d \
   -e UPSTREAM=http://your-app:3000 \
   -e APPSECGW_KEY_DIR=/data \
   -v /srv/appsecgw-data:/data \
-  appsec-antibot-gw:1.9.9
+  appsec-antibot-gw:1.9.10
 ```
 
 `UPSTREAM` is the only required variable. Keys are auto-generated under `/data` on first boot.
@@ -94,7 +94,7 @@ The directory must be writable by the container user (UID 65532). If using a hos
 
 ```bash
 docker logs appsecgw | head -40
-# Expect: [keys] loaded … [db] sqlite WAL … [start] AntiBotWaf_GW_1.9.9 listening on :8080
+# Expect: [keys] loaded … [db] sqlite WAL … [start] AntiBotWaf_GW_1.9.10 listening on :8080
 curl -s http://localhost:8080/antibot-appsec-gateway/live
 # Returns: ok  (plain text — loopback-only; no JSON)
 ```
@@ -629,7 +629,7 @@ Pass a JSON object in `VHOSTS`:
 ```bash
 docker run ... \
   -e VHOSTS='{"shop.example.com":{"UPSTREAM":"https://shop-backend.example.com","UA_FILTER_ENABLED":true},"api.example.com":{"UPSTREAM":"https://api-backend.example.com","RATE_LIMIT_BURST":200}}' \
-  appsec-antibot-gw:1.9.9
+  appsec-antibot-gw:1.9.10
 ```
 
 ### Manage at runtime (Settings UI)
@@ -687,37 +687,6 @@ All endpoints require an authenticated admin session cookie.
 ### SSRF protection
 
 The `UPSTREAM` value is DNS-resolved at configuration time. Any address resolving to RFC-1918, loopback (127.x/::1), link-local (169.254.x/fe80::), CGNAT (100.64/10), multicast, or other reserved ranges is rejected with an error. This prevents the gateway from being turned into an SSRF pivot via operator-controlled vhost configuration.
-
-### Port-aware vhosts — `VHOST_PORT_AWARE` (v1.9.8)
-
-By default the vhost identity is the **hostname only** — the port in the inbound `Host` header is stripped, so `challenges.site.com:8008` and `challenges.site.com:8009` are the *same* vhost. Set **`VHOST_PORT_AWARE=1`** to make the **`host:port`** the vhost key, so each port is a **distinct vhost** with its own upstream, policy, statistics, and ban scope.
-
-**Why it exists:** CTFd serves *dynamic challenges* as separate instances on the **same hostname but different ports** (`challenges.site.com:8008`, `:8009`, …). With host-only keying every challenge collapses into one vhost, so you can't give each challenge instance its own upstream / per-vhost policy / ban scope. Port-aware keying is what lets a single gateway front per-instance CTFd dynamic challenges.
-
-```bash
-docker run ... \
-  -e VHOST_PORT_AWARE=1 \
-  -e VHOSTS='{
-    "challenges.site.com:8008": {"UPSTREAM":"http://chal-a:80"},
-    "challenges.site.com:8009": {"UPSTREAM":"http://chal-b:80"},
-    "challenges.site.com":      {"UPSTREAM":"http://default:80", "BAN_SCOPE":"vhost"}
-  }' \
-  appsec-antibot-gw:1.9.9
-```
-
-**Lookup precedence** (most → least specific):
-
-1. **exact `host:port`** — e.g. `challenges.site.com:8008`
-2. **portless `host`** — an *all-ports fallback* (`challenges.site.com` serves any port that has no exact `host:port` entry)
-3. **`*.parent` wildcards** — `*.site.com:8008` (port-specific) then `*.site.com` (all ports)
-
-**Behaviour notes:**
-
-- **Opt-in / backward-compatible.** Default `0` = exactly the historical host-only behaviour; existing vhost configs are unaffected. Hot-reloadable via **Settings → Controls** or `POST /secured/config` `{"VHOST_PORT_AWARE": true}` — no restart.
-- **Stats & bans are port-distinct.** `events.vhost`, the dashboard vhost selectors, the per-vhost RPS windows, and `BAN_SCOPE=vhost` bans all key on the full `host:port` when this is on.
-- **The `host:port` form is accepted** by the `VHOSTS` env, the Settings → Virtual Hosts add form, and the `/secured/vhosts` API only when `VHOST_PORT_AWARE` is on (the hostname validator otherwise rejects a port).
-
-> **Deployment requirement:** the gateway binds a **single** `LISTEN_PORT`; it distinguishes the ports purely from the inbound **`Host` header**. The front (Cloudflare/nginx/reverse proxy, or a client connecting directly) **must forward the original `host:port`** in the `Host` header (or `X-Forwarded-Host`). A CDN that normalises the `Host` and drops the port will collapse the vhosts back together.
 
 ---
 

@@ -270,6 +270,7 @@ async def test_live_probe(gw_client):
 @pytest.mark.asyncio
 async def test_config_post_persists(gw_client):
     """POST /antibot-appsec-gateway/secured/config writes to config_kv table."""
+    import sqlite3
     _ck = _admin_cookie()
     resp = await gw_client.post(
         "/antibot-appsec-gateway/secured/config",
@@ -280,19 +281,11 @@ async def test_config_post_persists(gw_client):
     body = await resp.json()
     assert resp.status == 200
     assert body["applied"] == {"RISK_BAN_THRESHOLD": 42, "ENUM_THRESHOLD": 250}
-    # Backend-aware read: in PG-only mode the writer loop persists config_kv to
-    # Postgres and never touches SQLite, so a raw sqlite3.connect(DB_PATH) read
-    # would be empty. db.conn.conn() targets the active backend. The PG mirror
-    # runs off-loop (asyncio.to_thread), so poll briefly for the drain instead
-    # of a single fixed sleep.
-    from db.conn import conn as _backend_conn
-    rows = {}
-    for _ in range(40):  # up to ~4s
-        await asyncio.sleep(0.1)
-        with _backend_conn(timeout=10) as _c:
-            rows = dict(_c.execute("SELECT key, value FROM config_kv").fetchall())
-        if "RISK_BAN_THRESHOLD" in rows and "ENUM_THRESHOLD" in rows:
-            break
+    # Allow the async db_writer to drain
+    await asyncio.sleep(0.1)
+    conn = sqlite3.connect(proxy.DB_PATH)
+    rows = dict(conn.execute("SELECT key, value FROM config_kv").fetchall())
+    conn.close()
     assert json.loads(rows["RISK_BAN_THRESHOLD"]) == 42
     assert json.loads(rows["ENUM_THRESHOLD"]) == 250
 
@@ -454,14 +447,6 @@ def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
     os.environ["DB_PATH"] = db
     os.environ["UPSTREAM"] = "http://127.0.0.1:1"
     os.environ["ABUSEIPDB_KEY"] = "fake-test-key-12345"
-    # This test exercises the SQLite config_kv read path with a temp DB_PATH.
-    # db_load_config() is backend-aware (db.conn.active_backend()), so under the
-    # PG-mode test harness (POSTGRES_DSN set) it would read PG and ignore this
-    # temp SQLite file. Pin config.POSTGRES_DSN empty for the duration so the
-    # SQLite path under test actually runs — restored in finally.
-    import config as _cfg
-    _orig_pg_dsn = _cfg.POSTGRES_DSN
-    _cfg.POSTGRES_DSN = ""
     try:
         proxy_path = os.path.join(os.path.dirname(__file__), "..", "proxy.py")
         spec = importlib.util.spec_from_file_location("_test_proxy_abuseipdb2", proxy_path)
@@ -479,7 +464,6 @@ def test_db_load_config_accepts_abuseipdb_enabled_with_key(tmp_path):
             "ABUSEIPDB_ENABLED should be applied when ABUSEIPDB_KEY is present."
         )
     finally:
-        _cfg.POSTGRES_DSN = _orig_pg_dsn
         os.environ.pop("ABUSEIPDB_KEY", None)
         if _orig_db_path is not None:
             os.environ["DB_PATH"] = _orig_db_path

@@ -120,11 +120,10 @@ class TestSessionAbsoluteTimeout:
         fake_row = mock.MagicMock()
         fake_row.__getitem__ = lambda self, k: row_data[k]
         fake_row.keys = lambda: list(row_data)
-        # _session_cache_load reads via the backend-aware open_conn() (so it
-        # works in PG-only mode), not a bare sqlite3.connect — patch that.
-        with mock.patch("admin.users.open_conn") as mock_open:
+        with mock.patch("admin.users.sqlite3") as mock_sqlite:
             conn = mock.MagicMock()
-            mock_open.return_value = conn
+            mock_sqlite.connect.return_value = conn
+            conn.row_factory = mock.ANY
             conn.execute.return_value.fetchall.return_value = [fake_row]
             users_mod._session_cache_load()
         cached = users_mod._SESSION_CACHE.get("xyzxyzxyzxyzxyz0", {})

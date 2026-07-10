@@ -94,17 +94,12 @@ _EVENTS_DDL = (
 )
 
 
-# vhost_stats / vhost-breakdown read events from the active backend, so under
-# the PG-mode test harness (POSTGRES_DSN set) these helpers must read/write the
-# Postgres events table. db.conn.conn() targets the active backend (rewrites
-# `?` → `%s` on PG). The CREATE-IF-NOT-EXISTS only runs on SQLite — on PG the
-# events table is created at startup and the SQLite DDL is incompatible.
 def _wipe_events(proxy_module):
-    from db.conn import conn as _backend_conn, active_backend
-    with _backend_conn(timeout=10) as conn:
-        if active_backend() != "postgres":
-            conn.execute(_EVENTS_DDL)   # self-sufficient when schema not yet init'd
-        conn.execute("DELETE FROM events")
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(_EVENTS_DDL)   # self-sufficient: schema may not be init'd yet in isolation
+    conn.execute("DELETE FROM events")
+    conn.commit()
+    conn.close()
     import state as _st
     _st.ip_state.clear()
     _st.events.clear()
@@ -112,24 +107,15 @@ def _wipe_events(proxy_module):
 
 def _seed_events(proxy_module, rows):
     """Insert (ts, ip, ua, path, method, status, reason, vhost) rows."""
-    from db.conn import active_backend
-    if active_backend() == "postgres":
-        # PG events.ts is timestamptz; reuse pg_insert_event (to_timestamp) so
-        # the conversion + column set match production. Row tuple:
-        # (ts, ip, ua, path, method, status, reason, vhost)
-        from db.postgres import pg_insert_event
-        for ts, ip, ua, path, method, status, reason, vhost in rows:
-            pg_insert_event(ts, ip, ua, path, int(status), reason,
-                            method=method or "", vhost=vhost or "")
-    else:
-        from db.conn import conn as _backend_conn
-        with _backend_conn(timeout=10) as conn:
-            conn.execute(_EVENTS_DDL)   # ensure table exists before seeding
-            conn.executemany(
-                "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
-                "VALUES (?,?,?,?,?,?,?,?)",
-                rows,
-            )
+    conn = sqlite3.connect(proxy_module.DB_PATH)
+    conn.execute(_EVENTS_DDL)   # ensure table exists before seeding
+    conn.executemany(
+        "INSERT INTO events (ts, ip, ua, path, method, status, reason, vhost) "
+        "VALUES (?,?,?,?,?,?,?,?)",
+        rows,
+    )
+    conn.commit()
+    conn.close()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1143,15 +1129,12 @@ class TestD1RecordMethodField:
                     _cph.get_ip.__globals__["TRUST_XFF"] = old_xff
                     _cph.get_ip.__globals__["TRUSTED_PROXIES_NETS"] = old_nets
 
-            # Backend-aware read: the proxy's writer persists events to the
-            # active backend (Postgres under the PG-mode harness), so a raw
-            # sqlite3.connect(DB_PATH) read would be empty.
-            from db.conn import conn as _backend_conn
-            with _backend_conn(timeout=10) as conn:
-                rows = conn.execute(
-                    "SELECT method FROM events WHERE ip=? AND path LIKE '/db-method%'",
-                    (ip,),
-                ).fetchall()
+            conn = sqlite3.connect(proxy_module.DB_PATH)
+            rows = conn.execute(
+                "SELECT method FROM events WHERE ip=? AND path LIKE '/db-method%'",
+                (ip,),
+            ).fetchall()
+            conn.close()
 
             assert rows, f"No DB event found for ip {ip} on /db-method-test"
             methods = [r[0] for r in rows]

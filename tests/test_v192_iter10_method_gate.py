@@ -1,7 +1,7 @@
 """
 1.9.1 iter-10 — method allowlist hoisted ahead of the JS-challenge gate.
 
-DAST §15g surfaced: with JS_CHALLENGE on (production default),
+DAST §15g surfaced: with JS_CHALLENGE on (production / example.com default),
 a cookieless TRACE/CONNECT hit the JS-challenge gate in `protect()` and
 got a 200 challenge page BEFORE the method-allowlist check in `proxy()`
 (the catch-all handler) could return 405. So dangerous verbs bypassed

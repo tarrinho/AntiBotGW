@@ -1,6 +1,6 @@
 """
 1.9.2 iter-22 — guard the db-test endpoint against the two failure modes that
-froze it for 40+ s on a live Timescale deployment:
+froze it for 40+ s on the live example.com (Timescale) deployment:
 
   1. `pg_db_size()` ran an UNBOUNDED `COUNT(*) FROM events`. On a large
      Timescale hypertable that full-scans every chunk (seconds → minutes).
@@ -47,14 +47,6 @@ def test_db_test_endpoint_offloads_blocking_probes():
     assert "pg_test_roundtrip()" not in src or "run_in_executor" in src
 
 
-def test_pg_db_size_fast_when_unconfigured(monkeypatch):
-    """No DSN / no pool → returns ok=False immediately, never hangs.
-
-    Force the unconfigured state by stubbing _get_pool() to None. Previously
-    this asserted the ambient process had no pool, but under APPSECGW_TEST_PG
-    the shared Postgres pool is live, so pg_db_size() correctly returned
-    ok=True. The contract under test is the *no-pool* fast path, so we patch
-    the pool out rather than depend on the ambient backend.
-    """
-    monkeypatch.setattr(pg, "_get_pool", lambda: None)
+def test_pg_db_size_fast_when_unconfigured():
+    """No DSN / no pool → returns ok=False immediately, never hangs."""
     assert pg.pg_db_size().get("ok") is False

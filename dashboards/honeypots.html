@@ -1,12 +1,12 @@
 <!doctype html>
 <html lang="en"><head><link rel="shortcut icon" type="image/x-icon" href="/antibot-appsec-gateway/favicon.ico"><link rel="apple-touch-icon" href="/antibot-appsec-gateway/apple-touch-icon.png"><meta charset="utf-8">
 <!-- 1.9.2 iter-22 UX — honor prefers-color-scheme before first paint -->
-<script>(function(){try{var h=document.documentElement;var t=localStorage.getItem('agw-theme');if(t){h.setAttribute('data-theme',t)}else if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
+<script>(function(){try{var h=document.documentElement;if(!h.getAttribute('data-theme')&&window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches){h.setAttribute('data-theme','light')}}catch(e){}})()</script>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>AntiBotWaf_GW_1.9.9 · Honeypots</title>
+<title>AntiBotWaf_GW_1.9.10 · Honeypots</title>
 <style>
 :root{--bg:#0d1117;--card:#161b22;--line:#30363d;--fg:#c9d1d9;--dim:#8b949e;
-      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#79c0ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
+      --green:#3fb950;--red:#f85149;--yellow:#d29922;--blue:#58a6ff;--purple:#bc8cff;--orange:#ff7b3a;--bg-deep:#0a0f16;--bg-hover:#1f2730;--bg-inset:#0a0e13;--bg-elevated:#21262d;--bg-panel:#1c2128;--bright:#ffffff;}
 html[data-theme="light"]{--bg:#f6f8fa;--card:#ffffff;--line:#d0d7de;--fg:#1f2328;--dim:#636e7b;--bg-deep:#f0f2f4;--bg-hover:#dde1e6;--bg-inset:#eaeef2;--bg-elevated:#eaeef2;--bg-panel:#f0f2f4;--bright:var(--fg);}
 html[data-theme="light"] #sidebar{background:#f0f2f4}
 html[data-theme="light"] #topbar{background:#f0f2f4}
@@ -60,8 +60,8 @@ table tr:last-child td{border-bottom:0}
 table tbody tr:hover{background:rgba(255,255,255,.03)}
 /* ── Buttons ── */
 .btn{background:var(--bg-elevated);color:var(--fg);border:1px solid var(--line);border-radius:5px;padding:4px 10px;font-size:11px;cursor:pointer;font-family:inherit;transition:background .1s,border-color .1s}
-.btn:hover{background:#2d333b;border-color:#79c0ff;color:var(--bright)}
-.btn.active{background:rgba(121,192,255,.15);border-color:rgba(121,192,255,.5);color:var(--blue);font-weight:600}
+.btn:hover{background:#2d333b;border-color:#58a6ff;color:var(--bright)}
+.btn.active{background:rgba(88,166,255,.15);border-color:rgba(88,166,255,.5);color:var(--blue);font-weight:600}
 .btn-sm{font-size:10px;padding:2px 8px}
 /* ── Portal footer ── */
 .portal-footer{margin-top:24px;padding:16px 24px;border-top:1px solid var(--line);text-align:center;font:400 12px/1.5 -apple-system,'SF Pro',ui-sans-serif,sans-serif;color:var(--dim)}
@@ -108,7 +108,7 @@ html[data-theme="light"] .btn:hover{background:var(--bg-hover);border-color:var(
 .hp-tab:hover{color:var(--fg)}
 .hp-tab.active{color:var(--bright);border-bottom-color:var(--blue)}
 .hp-tab .cnt{font-size:10px;background:var(--bg-elevated);color:var(--dim);border-radius:8px;padding:0 6px;font-weight:700;min-width:18px;text-align:center}
-.hp-tab.active .cnt{background:rgba(121,192,255,.15);color:var(--blue)}
+.hp-tab.active .cnt{background:rgba(88,166,255,.15);color:var(--blue)}
 .hp-section{display:none}
 .hp-section.active{display:block}
 /* ── Trap effectiveness bars ── */
@@ -126,7 +126,7 @@ html[data-theme="light"] .btn:hover{background:var(--bg-hover);border-color:var(
 .story.open .story-caret{transform:rotate(90deg)}
 .story-ip{font-family:ui-monospace,Menlo,monospace;font-weight:700;color:var(--fg);font-size:12px}
 .story-meta{margin-left:auto;display:flex;gap:8px;align-items:center;font-size:10px;color:var(--dim)}
-.story-scan{background:#1f4e79;color:#79c0ff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}
+.story-scan{background:#1f4e79;color:#58a6ff;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;white-space:nowrap}
 html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 .story-steps{padding:6px 12px 10px;display:none}
 .story.open .story-steps{display:block}
@@ -152,11 +152,11 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
 /* ── Vhost selector bar (1.8.0) ── */
 #vhost-bar{display:none;gap:6px;margin:0 0 6px;flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;align-items:center;scrollbar-width:thin;padding-bottom:2px}
 #vhost-bar-label{font-size:11px;color:var(--dim);margin-right:2px}
-.vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #79c0ff;color:#79c0ff;
+.vhost-pill{padding:3px 13px;border-radius:14px;border:1.5px solid #58a6ff;color:#58a6ff;
   background:transparent;cursor:pointer;font-size:12px;font-weight:600;
   transition:background .15s,color .15s;line-height:1.6;max-width:220px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.vhost-pill.active{background:#79c0ff;color:var(--bg-deep)}
+.vhost-pill.active{background:#58a6ff;color:var(--bg-deep)}
 </style>
 </head>
 <body>
@@ -169,7 +169,7 @@ html[data-theme="light"] .story-scan{background:#ddf4ff;color:#0969da}
   <div id="sidebar-brand">
     <div>
       <div id="sidebar-brand-name">AntiBot/WAF GW</div>
-      <div id="sidebar-brand-ver">1.9.9</div>
+      <div id="sidebar-brand-ver">1.9.10</div>
     </div>
     <button id="sidebar-toggle" onclick="_sbToggle()" title="Hide menu" aria-label="Hide menu">‹</button>
   </div>
@@ -869,13 +869,13 @@ function classifyIntent(steps){
   if(has(['/shell','/cmd','cgi-bin','/upload','etc/passwd','proc/self']))
     return {label:'Remote Code Execution',color:'#f85149',icon:'💥'};
   if(has(['graphql','swagger','api-docs']))
-    return {label:'API Enumeration',color:'#79c0ff',icon:'🔍'};
+    return {label:'API Enumeration',color:'#58a6ff',icon:'🔍'};
   if(has(['/login','/signin','/auth']))
     return {label:'Credential Brute-Force',color:'#d29922',icon:'🔨'};
   if(hasR('honey-cred')||hasR('bot-trap'))
     return {label:'Automated Form-Filling',color:'#bc8cff',icon:'🤖'};
   if(steps.length>=6)
-    return {label:'Path Enumeration',color:'#79c0ff',icon:'🔎'};
+    return {label:'Path Enumeration',color:'#58a6ff',icon:'🔎'};
   return {label:'Reconnaissance',color:'#8b949e',icon:'👁️'};
 }
 
@@ -888,7 +888,7 @@ function killChainPhase(step){
     return {phase:'Access',color:'#d29922'};
   if(['actuator','swagger','graphql','api-docs','server-status','server-info','robots','sitemap','config','metrics','health','/api/'].some(function(k){return p.indexOf(k)!==-1;}))
     return {phase:'Discovery',color:'#bc8cff'};
-  return {phase:'Recon',color:'#79c0ff'};
+  return {phase:'Recon',color:'#58a6ff'};
 }
 
 // ── Goal narrative synthesis ───────────────────────────────────────────────
@@ -1045,7 +1045,7 @@ _timers.push(setInterval(loadSuggest, 120000));
 #gw-loglvl-wrap label{color:#8b949e;text-transform:uppercase;letter-spacing:.4px;font-weight:700;font-size:9.5px}
 #gw-loglvl{background:var(--bg);color:#c9d1d9;border:1px solid var(--line);
   border-radius:4px;padding:1px 6px;font-size:11px;font-family:ui-monospace,monospace;cursor:pointer}
-#gw-loglvl:focus{outline:1px solid #79c0ff}
+#gw-loglvl:focus{outline:1px solid #58a6ff}
 .gw-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.65);
   display:none;align-items:flex-start;justify-content:center;z-index:2200;
   padding:60px 20px 20px}
@@ -1295,7 +1295,7 @@ _timers.push(setInterval(loadSuggest, 120000));
 })();
 </script>
 <script>
-window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);try{localStorage.setItem('agw-theme',next)}catch(e){}var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
+window._toggleTheme=function(){var h=document.documentElement,cur=h.getAttribute('data-theme')||'dark',next=cur==='light'?'dark':'light';h.setAttribute('data-theme',next);var btn=document.getElementById('theme-toggle');if(btn)btn.textContent=next==='light'?'☀':'🌙';
 var _dp={'#0d1117':'#f6f8fa','#161b22':'#ffffff','#0a0f16':'#f0f2f4','#21262d':'#eaeef2','#1f2730':'#dde1e6','#0a0e13':'#f0f2f4','#0a1628':'#f0f2f4','#0a0e14':'#f0f2f4','#1a2733':'#e8f4fd','#1c2333':'#f0f6ff','#1a2540':'#dbeafe','#241a0a':'#fffbeb','#1f3a4f':'#dbeafe','#1f4830':'#dcfce7','#1a3a4a':'#dbeafe','#3d1a1a':'#fde8e8','#3f1a1a':'#fde8e8','#3d2a1a':'#fef3c7','#0e3320':'#f0fdf4','#1e1e2e':'var(--card)','#1a1a2a':'#f0f0ff','#152015':'#f0fdf4','#251515':'#fef2f2','#0e2c4a':'#dbeafe'};
 if(next==='light'){window._tIM=[];document.querySelectorAll('[style]').forEach(function(el){var s=el.getAttribute('style')||'',o=s,m=false;Object.keys(_dp).forEach(function(k){if(s.toLowerCase().indexOf(k)!==-1){s=s.replace(new RegExp(k,'gi'),_dp[k]);m=true;}});if(m){window._tIM.push({el:el,o:o});el.setAttribute('style',s);}});}else{if(window._tIM){window._tIM.forEach(function(i){i.el.setAttribute('style',i.o);});window._tIM=null;}}
 if(typeof Chart!=='undefined'&&Chart.instances)Object.values(Chart.instances).forEach(function(c){window._applyChartColorsToInstance(c,next);});

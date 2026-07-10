@@ -235,11 +235,7 @@ class TestGeoDataConfigGuard:
         """
         src = _ph_src()
         fn_start = src.index("async def geo_data_endpoint")
-        # Widened window (was 4000): the active_backend import/branch sits at
-        # ~offset 4011 in 1.9.2+, just past the old window. The endpoint also
-        # imports active_backend under an alias (from db import active_backend
-        # as _active_geo), so the literal "active_backend" still appears.
-        fn_body = src[fn_start:fn_start + 6000]
+        fn_body = src[fn_start:fn_start + 4000]
         assert "open_conn()" in fn_body, \
             "geo_data_endpoint must open the active backend via open_conn()"
         assert "active_backend" in fn_body and "to_timestamp" in fn_body, \
