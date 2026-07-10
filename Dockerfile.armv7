@@ -12,7 +12,7 @@
 # against). Same functional result as the Debian build.
 
 # ─── Stage 1: build psycopg C extension + install pure-Python deps ───
-FROM python:3.13-alpine AS builder
+FROM python:3.14-alpine AS builder
 
 RUN apk add --no-cache \
         build-base \
@@ -31,7 +31,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
 USER nobody
 
 # ─── Stage 2: runtime — minimal Alpine + libpq shared lib ─────────────
-FROM python:3.13-alpine
+FROM python:3.14-alpine
 
 RUN apk add --no-cache libpq \
  && apk upgrade --no-cache xz-libs \
