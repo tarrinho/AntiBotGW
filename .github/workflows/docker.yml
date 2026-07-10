@@ -153,7 +153,7 @@ jobs:
       - name: Trivy vulnerability scan (filesystem)
         # Pinned to release tag (was @master — mutable branch, supply-chain risk).
         # Update deliberately per release; SHA-pin at next hardening pass.
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -174,7 +174,7 @@ jobs:
         # Pinned to release tag (was @master — mutable branch, supply-chain risk).
         # Scans the ghcr image because ghcr is unauthenticated for public
         # pulls; Harbor may not be reachable from public runners.
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ needs.build-scan.outputs.ghcr_image }}@${{ needs.build-scan.outputs.digest }}
           severity: CRITICAL,HIGH,MEDIUM
