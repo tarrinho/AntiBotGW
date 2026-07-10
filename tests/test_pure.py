@@ -757,6 +757,26 @@ def test_no_stale_sidebar_brand_ver_in_dashboards():
     assert not stale, "Stale sidebar version(s):\n" + "\n".join(stale)
 
 
+def test_readme_consistency_gate():
+    """rules.md §13c — README.md must pass scripts/check_readme_consistency.py
+    on every release. Catches the audit findings that surfaced during the
+    1.9.10 manual review (stale versions, contradictory test counts, missing
+    arch entries, sensitive-data leaks, layer-taxonomy drift) automatically
+    from now on. See scripts/check_readme_consistency.py for the six rules."""
+    import subprocess, pathlib, sys as _sys
+    root = pathlib.Path(__file__).resolve().parent.parent
+    script = root / "scripts" / "check_readme_consistency.py"
+    assert script.exists(), f"missing gate script: {script}"
+    r = subprocess.run(
+        [_sys.executable, str(script)],
+        cwd=str(root), capture_output=True, text=True, timeout=30,
+    )
+    assert r.returncode == 0, (
+        "README.md failed check_readme_consistency.py — fix findings below "
+        "then re-run:\n" + r.stdout + r.stderr
+    )
+
+
 def test_to_host_set_strips_scheme_and_path():
     """_to_host_set must normalise full URLs to bare hostnames so operators can
     supply 'https://example.com/' and have it match the Host header 'example.com'.
