@@ -9,6 +9,7 @@
 [![license](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 [![dependabot](https://img.shields.io/badge/dependabot-enabled-025E8C?logo=dependabot&logoColor=white)](.github/dependabot.yml)
 [![cosign](https://img.shields.io/badge/cosign-keyless%20signed-2496ED?logo=sigstore&logoColor=white)](https://github.com/tarrinho/AntiBotGW/pkgs/container/antibotgw)
+[![AI-assisted](https://img.shields.io/badge/AI--assisted-Claude-8A2BE2?logo=anthropic&logoColor=white)](https://claude.com/claude-code)
 
 <!-- Per-control status from the aggregated CI workflow, published to the `badges` branch. -->
 [![CI](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml/badge.svg)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
@@ -1337,6 +1338,16 @@ Largest single files: `test_pure.py` (938), `test_live_gw.py` (244), `test_v1811
 
 Run the full suite with `pytest tests/ -q`. See **[GW-Tests-Full.md](GW-Tests-Full.md)**
 for the per-file breakdown.
+
+---
+
+## Development
+
+This project was built with AI assistance (Claude Code). All code is
+human-reviewed and gated by an extensive CI pipeline that runs on every push:
+8,400+ tests, `ruff` / `semgrep` / `bandit` static analysis, `gitleaks` +
+`trufflehog` secret scanning, Trivy CVE scans (filesystem + image), and cosign
+image signing.
 
 ---
 

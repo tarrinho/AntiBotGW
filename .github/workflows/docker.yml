@@ -10,7 +10,10 @@ name: build · test · scan · push
 on:
   push:
     branches: [main]
-    tags:     ['v*.*.*']
+    # Tag trigger deliberately removed — the `release` job at the bottom of
+    # this workflow reads GW_VERSION from config.py, and if the derived tag
+    # doesn't exist yet, it creates the git tag + GitHub Release from THIS
+    # same run. That way one push produces one run, not two.
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -87,6 +90,24 @@ jobs:
           # owner/repo runs this workflow); a lowercase owner/repo is unchanged.
           echo "image=${GHCR_HOST}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Read app version from config.py
+        id: appver
+        # Single source of truth — GW_VERSION in config.py drives the image
+        # tag AND (below) the git tag / GitHub Release. No git tag needed at
+        # push time; the release job creates it if missing.
+        run: |
+          set -euo pipefail
+          v=$(awk -F'"' '/^GW_VERSION *=/{print $2}' config.py | sed 's/AntiBotWaf_GW_//')
+          if [[ -z "$v" ]]; then
+            echo "::error::could not read GW_VERSION from config.py"
+            exit 1
+          fi
+          # extract major.minor for the aliased tag
+          mm=$(echo "$v" | awk -F. '{print $1"."$2}')
+          echo "version=$v"  >> "$GITHUB_OUTPUT"
+          echo "major_minor=$mm" >> "$GITHUB_OUTPUT"
+          echo "tag=v$v"     >> "$GITHUB_OUTPUT"
+
       - name: Compose image targets
         id: images
         # Build the metadata-action `images:` list in shell so the Harbor line
@@ -118,9 +139,9 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern=latest
+            type=raw,value=${{ steps.appver.outputs.version }}
+            type=raw,value=${{ steps.appver.outputs.major_minor }}
+            type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
 
       - name: Login to Harbor
@@ -509,3 +530,72 @@ jobs:
         run: |
           echo "::notice title=Image digest::${{ needs.build-scan.outputs.digest }}"
           echo "::notice title=Tags::${{ needs.build-scan.outputs.tags }}"
+
+  # ─── 7. Tag + GitHub Release (only when this main-branch commit bumps the ─
+  # GW_VERSION and the derived tag doesn't already exist). This absorbs what
+  # used to be a separate tag-triggered run — the workflow now emits one run
+  # per push, and tags/releases itself when a bump is detected.
+  release:
+    name: tag + release (if version bumped)
+    needs: [tests, build-scan, trivy-fs, sign, gitleaks, trufflehog, lint, bandit, pip-audit]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # create the tag + release
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0   # need full history so `gh release create` can attach the tag
+
+      - name: Read app version
+        id: v
+        run: |
+          set -euo pipefail
+          v=$(awk -F'"' '/^GW_VERSION *=/{print $2}' config.py | sed 's/AntiBotWaf_GW_//')
+          [[ -n "$v" ]] || { echo "::error::no GW_VERSION"; exit 1; }
+          echo "tag=v$v" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if release already exists
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.v.outputs.tag }}" \
+               -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::release ${{ steps.v.outputs.tag }} already exists — skipping"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Extract CHANGELOG section
+        if: steps.exists.outputs.skip != '1'
+        run: |
+          set -euo pipefail
+          v="${{ steps.v.outputs.tag }}"; v="${v#v}"
+          # Literal-string match — semver is safe today, but any non-semver tag
+          # with a regex metachar would break a regex-based awk pattern.
+          awk -v hdr="## [$v]" '
+            $0 == hdr {p=1; next}
+            p && /^## \[/ {exit}
+            p {print}
+          ' CHANGELOG.md > RELEASE_NOTES.md
+          if [[ ! -s RELEASE_NOTES.md ]]; then
+            echo "Release ${{ steps.v.outputs.tag }}." > RELEASE_NOTES.md
+          fi
+          {
+            echo ""
+            echo "---"
+            echo "**Container image:** \`docker pull ghcr.io/${GITHUB_REPOSITORY,,}:${{ steps.v.outputs.tag }}\`  (amd64 · arm64)"
+          } >> RELEASE_NOTES.md
+
+      - name: Create tag + GitHub Release
+        if: steps.exists.outputs.skip != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # --target pins the tag to THIS commit so a later merge to main
+          # doesn't drift the tag from the SHA that CI actually validated.
+          gh release create "${{ steps.v.outputs.tag }}" \
+            --target "${{ github.sha }}" \
+            --title "AntiBotWaf_GW ${{ steps.v.outputs.tag }}" \
+            --notes-file RELEASE_NOTES.md
