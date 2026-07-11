@@ -6,6 +6,86 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — CI single-pipeline · auto-release · cache-invalidation fixes · mermaid diagrams
+
+Post-1.9.11 consolidation. Collapses the CI to one workflow file that also
+tags/releases itself, fixes cross-test cache leaks that flaked CI on `main`,
+and swaps the ASCII architecture diagrams for mermaid so future updates are
+in-place text edits.
+
+### Changed (CI / supply chain)
+
+- **Single-pipeline `docker.yml`.** Folded the former `secret-scan.yml` +
+  `security.yml` into `docker.yml` as inline jobs (gitleaks · trufflehog · ruff/
+  semgrep/mypy/vulture · bandit · pip-audit). Legacy workflow files deleted
+  from mirrors. One run per push instead of four.
+- **Auto-release job.** `docker.yml` now reads `GW_VERSION` from `config.py`
+  in the last job and, if the derived `v<version>` tag doesn't already exist,
+  creates the git tag + GitHub Release from within the same run. Tag trigger
+  (`tags: ['v*.*.*']`) removed — no more double-fire per publish.
+- **`publish.sh`** stops pushing a separate release tag; the workflow tags
+  itself. `release_one()` kept as manual fallback.
+- **Node-24 SHA-pin sweep.** Bumped `actions/checkout` v4.3.1 → v7.0.0,
+  `setup-python` v5.6.0 → v6.3.0, `docker/setup-qemu-action` v3.7.0 → v4.2.0,
+  `setup-buildx-action` v3.12.0 → v4.2.0, `metadata-action` v5.10.0 → v6.2.0,
+  `codeql-action/upload-sarif` v3.37.0 → v4.37.0. Kills Node-20 deprecation
+  warnings across `docker.yml`, `security.yml`, `secret-scan.yml`.
+- **Shell-computed metadata images list.** `metadata-action` v6 stopped
+  short-circuiting empty `enable=` refs — empty `HARBOR_*` vars collapsed to
+  `//` and produced invalid `//:<tag>` refs that aborted buildx. Replaced the
+  `name=…,enable=…` inline form with a `Compose image targets` shell step that
+  emits the images list conditionally.
+- **SARIF upload guard.** Both Trivy SARIF uploads now gated by
+  `hashFiles('trivy-*.sarif') != ''` — a Trivy scan that aborts before writing
+  output no longer masks itself as an upload failure.
+- **Dockerfile runtime pin.** `redis==5.3.1` → `redis==8.0.1` — closes drift
+  between `requirements.txt` (bumped in 1.9.11) and the runtime image pip
+  install (still on 5.x, unnoticed by the requirements-driven test suite).
+
+### Fixed (test cross-contamination — CI flakes on main)
+
+- **`_VHOST_STATS_CACHE` (15 s TTL) leaks across tests.** 4 failing tests in
+  `test_code_review_fixes.py` / `test_control_center.py` — test A seeded
+  `alpha.test` events into the cache, tests B-D wiped `events` but read
+  `alpha.test` back from the cache. Extended `_wipe_events` + `test_d05`
+  helper to invalidate `admin.settings._VHOST_STATS_CACHE`.
+- **`_ban_cache` / `_ban_cache_vhost` (1.9.5 perf #3) leak across tests.** 4
+  failing tests in `test_control_regressions.py` — `127.0.0.1` banned by an
+  earlier test survived the fixture's `DELETE FROM ip_bans` because
+  `check_ip_ban_cached` still had the positive result in the module-level
+  dict. Cleared both dicts in `_spin_proxy` setup.
+- **`test_service_data_auth_guard` — `"db"` substring flake.** Decoy body
+  `{"path": "/__appsecgw-probe-<16-byte hex>"}` — the random hex contained
+  `db` ~12 % of runs, tripping the naïve substring guard. Tightened to the
+  JSON-key form `'"db":'` — stricter, not looser (matches an actual leak of
+  the authenticated payload).
+
+### Fixed (build / publish gates)
+
+- **`_seed/` shim.** Dockerfile L48 `COPY _seed/ …` fails on the public mirror
+  because the GeoLite2 mmdbs are blocklisted per MaxMind EULA. Added an empty
+  `_seed/.gitkeep` shim, a `.gitignore` negation to allow it in tracked
+  content, and a whitelist entry in `publish.sh`'s staged-index blocklist.
+  `copy-to-github.sh` writes the shim into each DEST on every publish
+  (idempotent) + `tests/golden/*.json` added to the MANIFEST glob.
+- **CHANGELOG awk fragility.** Regex form `$0 ~ "^## \\[" ver "\\]"` swapped
+  for literal `$0 == hdr` — semver is safe today, but a future non-semver tag
+  with a regex metachar would break the old form.
+
+### Changed (docs)
+
+- **`README.md` architecture diagrams → mermaid.** All five ASCII blocks
+  (main architecture · cookie-gate decision tree · MaxMind self-maintenance
+  chain · risk-score lifecycle · Docker Compose network topology) rewritten
+  as `\`\`\`mermaid` fences. GitHub renders them inline, so updates are
+  text-source edits, no image export.
+- **`rules.md` §13a expanded.** Per-diagram trigger table: each mermaid
+  block is now paired with a "update when …" condition (new detection layer,
+  new Compose service, threshold or ban-class change, etc.). Stale diagrams
+  are treated as correctness bugs in the docs.
+
+---
+
 ## [1.9.11] — 2026-07-10 — Dependabot round-up + README badges + full SHA-pin sweep
 
 Absorbs the 11 Dependabot PRs the new `dependabot.yml` (1.9.10) opened, adds

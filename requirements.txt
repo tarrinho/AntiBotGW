@@ -12,6 +12,14 @@ pytest>=9.0.3,<10  # CVE-2025-71176 fix (8.x affected)
 pytest-asyncio>=1.4.0,<2   # 1.9.11: bump from 0.23 — check tests/conftest.py sets asyncio_mode="auto"
 pytest-aiohttp>=1.1.1,<2
 fakeredis>=2.36.2,<3
+# 1.9.12 — coverage measurement (non-blocking initially; threshold ratcheted up
+# release-over-release once baseline is established). Runtime unaffected.
+pytest-cov>=6.0,<8
+# 1.9.12 — flaky-test detection. Not enabled globally; individual tests opt in
+# via @pytest.mark.flaky(reruns=N) so real regressions still fail loudly. CI
+# tests job passes --reruns 1 as a global safety net for transient network
+# / clock-skew flakes.
+pytest-rerunfailures>=15,<16
 
 # 1.6.7 — runtime deps the Dockerfile installs separately. Listed here
 # so CI's `pip install -r requirements.txt` exercises the same import
