@@ -181,8 +181,11 @@ jobs:
           output: trivy-fs.sarif
 
       - name: Upload SARIF (filesystem)
-        if: always()
-        uses: github/codeql-action/upload-sarif@02c5e83432fe5497fd85b873b6c9f16a8578e1d9 # v3.37.0
+        # Skip when Trivy produced no file (e.g. it errored before writing
+        # output). Uploading a missing SARIF hard-fails the job in the
+        # codeql-action, masking the real Trivy failure upstream.
+        if: always() && hashFiles('trivy-fs.sarif') != ''
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: trivy-fs.sarif
           category: trivy-fs
@@ -201,8 +204,11 @@ jobs:
           output: trivy-image.sarif
 
       - name: Upload SARIF (image)
-        if: always()
-        uses: github/codeql-action/upload-sarif@02c5e83432fe5497fd85b873b6c9f16a8578e1d9 # v3.37.0
+        # Same skip-if-missing guard — the image scan is likely to have no
+        # output when the upstream build-scan failed and left the image ref /
+        # digest empty (Trivy exits before writing SARIF).
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
         with:
           sarif_file: trivy-image.sarif
           category: trivy-image
