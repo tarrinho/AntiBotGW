@@ -1,0 +1,53 @@
+name: Scorecard supply-chain security
+
+# OpenSSF Scorecard scores this repo's security posture — branch protection,
+# code scanning, SHA-pinned actions, signed releases, a SECURITY.md, dependency
+# updates, and more — and publishes the result so the README badge can read it.
+#
+# This is the one intentional exception to the single `docker.yml` pipeline:
+# Scorecard needs its own schedule and elevated token permissions (id-token
+# to publish results), and it only makes sense on the PUBLIC mirror. It is
+# synced to the personal repo only (copy-to-github.sh WORKFLOW_ALLOWLIST), not
+# to the private corporate mirror where `publish_results` cannot work.
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '32 6 * * 1'   # weekly — Monday 06:32 UTC
+  push:
+    branches: [main]
+
+permissions: read-all
+
+jobs:
+  analysis:
+    name: Scorecard analysis
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # upload the SARIF to GitHub code scanning
+      id-token: write          # publish results to the OpenSSF API (for the badge)
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Run Scorecard
+        uses: ossf/scorecard-action@f49aabe0b5af0936a0987cfb85d86b75731b0186 # v2.4.1
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Publishes to the OpenSSF API so scorecard.dev / the README badge can
+          # read it. Requires a public repo (true here).
+          publish_results: true
+
+      - name: Upload SARIF artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard-sarif
+          path: results.sarif
+          retention-days: 5
+
+      - name: Upload SARIF to code scanning
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: results.sarif

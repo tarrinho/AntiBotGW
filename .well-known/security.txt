@@ -14,5 +14,3 @@ Canonical: https://raw.githubusercontent.com/tarrinho/AntiBotGW/main/.well-known
 # RFC 9116 requires an expiry; refresh before this date.
 Expires: 2027-07-11T00:00:00.000Z
 
-# Encryption: add a PGP key URL here if you publish one, e.g.
-# Encryption: https://keys.openpgp.org/vks/v1/by-fingerprint/<FINGERPRINT>
