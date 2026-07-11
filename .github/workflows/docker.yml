@@ -684,29 +684,18 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $code
 
-  # ─── GitHub-native SAST — feeds Code scanning alerts alongside Trivy /
-  # gitleaks SARIF. CodeQL's Python queries complement bandit + semgrep;
-  # findings appear under the same Security → Code scanning tab.
-  codeql:
-    name: CodeQL (Python)
-    runs-on: ubuntu-latest
-    permissions:
-      security-events: write
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
-        with:
-          languages: python
-          # Use the `security-extended` suite — more queries, higher-latency
-          # runs are OK for a single-language codebase.
-          queries: security-extended
-      - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
-        with:
-          category: codeql-python
+  # ─── CodeQL is deliberately NOT run here — the repo has Code scanning
+  # "Default setup" enabled, which schedules CodeQL for you (own runner,
+  # own SARIF upload). An advanced-configuration CodeQL job would collide
+  # with this ("CodeQL analyses from advanced configurations cannot be
+  # processed when the default setup is enabled").
+  # To take control back, switch Code scanning to Advanced in
+  # Settings → Code security → Code scanning → CodeQL analysis, then
+  # re-add a job like:
+  #   uses: github/codeql-action/init@<SHA>   (languages: python)
+  #   uses: github/codeql-action/analyze@<SHA>
+  # Trivy and gitleaks SARIF uploads below do NOT conflict — they're
+  # different `category` tags in the same Code scanning alerts tab.
 
   # ─── Dependency review — blocks PRs that introduce a dep with a known
   # vulnerability OR an incompatible license. Runs only on PRs (the
