@@ -179,6 +179,12 @@ jobs:
           exit-code: '1'
           format: sarif
           output: trivy-fs.sarif
+          # .gitleaks.toml is the gitleaks allowlist — it necessarily contains
+          # secret-SHAPED fixtures, so Trivy's secret scanner flags them (a fake
+          # Slack token) as real. Skip that one file; it holds no credentials.
+          # (Mirrors the --skip-files in security.yml's Trivy step.)
+          skip-files: .gitleaks.toml
+          trivyignores: .trivyignore
 
       - name: Upload SARIF (filesystem)
         # Skip when Trivy produced no file (e.g. it errored before writing
