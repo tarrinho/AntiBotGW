@@ -87,22 +87,34 @@ jobs:
           # owner/repo runs this workflow); a lowercase owner/repo is unchanged.
           echo "image=${GHCR_HOST}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
+      - name: Compose image targets
+        id: images
+        # Build the metadata-action `images:` list in shell so the Harbor line
+        # only appears when all three HARBOR_* vars are set. The previous
+        # `name=…,enable=…` inline form relied on metadata-action short-
+        # circuiting empty refs, which v6 no longer does — empty vars collapsed
+        # to `//` and produced invalid `//:<tag>` refs that aborted buildx.
+        run: |
+          set -euo pipefail
+          imgs="${{ steps.ghcr.outputs.image }}"
+          if [[ -n "${HARBOR_HOST:-}" && -n "${HARBOR_PROJECT:-}" && -n "${HARBOR_IMAGE:-}" ]]; then
+            imgs="${HARBOR_HOST}/${HARBOR_PROJECT}/${HARBOR_IMAGE}"$'\n'"$imgs"
+          fi
+          {
+            echo "list<<EOF"
+            echo "$imgs"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Compute image tags + labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          # Publish under BOTH registries with the same tag set. When Harbor
-          # credentials aren't configured (e.g. personal mirror without a
-          # Harbor account), the Harbor push silently fails but ghcr still
-          # succeeds — treat ghcr as the always-on public registry.
-          # The Harbor image is generated ONLY when all three Harbor vars are
-          # set (repo variables). Without the enable= gate, empty vars collapse
-          # to `//` and metadata-action emits invalid `//:<tag>` refs that fail
-          # the build — which is exactly what happens on the personal ghcr-only
-          # mirror where Harbor isn't configured.
-          images: |
-            name=${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.HARBOR_IMAGE }},enable=${{ env.HARBOR_HOST != '' && env.HARBOR_PROJECT != '' && env.HARBOR_IMAGE != '' }}
-            ${{ steps.ghcr.outputs.image }}
+          # Publish under both registries with the same tag set. Harbor line is
+          # inserted by the previous step only when HARBOR_HOST/PROJECT/IMAGE
+          # are all populated (repo variables on the corporate mirror); on the
+          # personal ghcr-only mirror the list is just the ghcr image.
+          images: ${{ steps.images.outputs.list }}
           tags: |
             type=ref,event=branch
             type=ref,event=pr

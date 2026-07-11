@@ -11,7 +11,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
        'aiohttp==3.14.1' \
        'maxminddb==2.8.2' \
        'psycopg[binary]==3.3.4' \
-       'redis==5.3.1' \
+       'redis==8.0.1' \
        'pyotp>=2.9.0' \
        'qrcode>=7.0' \
        'cryptography>=46.0.5' \

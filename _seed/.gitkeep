@@ -1,1 +1,6 @@
-GeoLite2 mmdbs excluded per MaxMind EULA — dir kept so Dockerfile COPY works; runtime falls back to MAXMIND_LICENSE_KEY / manual /data drop.
+# GeoLite2 mmdb files (GeoLite2-ASN.mmdb, GeoLite2-City.mmdb) are excluded from
+# this public mirror per MaxMind's EULA. The Dockerfile COPY of this directory
+# still succeeds (empty dir is valid), and the gateway boots without them —
+# the GeoMap dashboard degrades gracefully. Populate at runtime by either:
+#   • dropping fresh mmdbs into the /data volume, or
+#   • setting MAXMIND_LICENSE_KEY so the container auto-refreshes on start.

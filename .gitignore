@@ -21,8 +21,11 @@ tag-versions.sh
 # repo would still be swept up by `git add -A`. Ignore it there too.
 rules.md
 
-# GeoLite2 DBs — size + MaxMind licensing; provided at runtime, never committed
-_seed/
+# GeoLite2 DBs — size + MaxMind licensing; provided at runtime, never committed.
+# The empty _seed/.gitkeep shim IS tracked so Dockerfile L48 `COPY _seed/ …`
+# doesn't fail on the public mirror where the mmdbs are excluded per EULA.
+_seed/*
+!_seed/.gitkeep
 
 # ── Runtime state (live container DB + secrets) ─────────────────────────
 antibot.db
