@@ -38,74 +38,40 @@ the upstream is supplied exclusively via the `UPSTREAM` environment variable.
 
 ## Architecture (1.9.11)
 
-```
-                                ┌─────────────────────┐
-   client ──── HTTP(S) ────────▶│  AntiBot/WAF GW           │
-                                │  ───────────────────│
-                                │  middleware chain:  │
-                                │   1. cost_meter     │  ← per-request wall-time
-                                │   2. session cookie │
-                                │   3. protect():     │
-                                │      L0  TLS / JA4 fingerprint deny-list
-                                │      L0.4 custom rules engine (allow/block/challenge/tag)
-                                │      L1  rate-limit: socket-IP + per-identity tokens
-                                │      L1.5 host-not-allowed gate (multi-vhost)
-                                │      L2  honeypot paths (silent decoy)
-                                │      L2.5 suspicious-path / SQLi / XSS / LFI / path traversal
-                                │      L2.6 path-sweep (1.7.3 — content-discovery post-challenge)
-                                │      L2.7 GraphQL introspection / batch / depth (1.8.5)
-                                │      L3  AI probe + AI-headers + AI-enumeration
-                                │      L3.2 browser-automation probe (1.7.1 — webdriver / CDP)
-                                │      L3.4 LLM no-subresource heuristic (1.7.3)
-                                │      L3.5 UA filter (empty / curl / GPTBot / mismatch)
-                                │      L3.6 sec-fetch-nav-absent signal (1.8.14)
-                                │      L3.7 header completeness, accept:*/*, Origin (eTLD+1 1.8.14)
-                                │      L4  bot-trap form fields, body-pattern match
-                                │      L4.2 honey-cred semantic injection (1.7.3 P1)
-                                │      L4.5 canary echo (R7 — token planted in HTML)
-                                │      L4.7 redirect-maze trap (1.8.x)
-                                │      L5  behavioural (no-static-fetch / churn / 404 burst)
-                                │      L5.2 cookie-lifecycle (1.7.2 — `agw_lc` HMAC 1.8.14)
-                                │      L5.4 referer-chain (1.7.2 — ghost / loop signals)
-                                │      L5.6 impossible-travel (1.7.2 — geo / time-velocity)
-                                │      L5.7 client-side interaction probe (1.8.6 — entropy)
-                                │      L5.8 canvas / WebGL fp enrichment (1.7.2)
-                                │      L6  external intel: AbuseIPDB · CrowdSec · MaxMind ASN
-                                │      L7  cookie gate: JS_CHALLENGE / Turnstile / Anubis-mode PoW
-                                │      L8  risk-score model (decay + NAT threshold + soft-tier)
-                                │      ↓
-                                │      decision = deny | challenged | soft-challenge | allow
-                                │   4. forward to UPSTREAM if allowed
-                                │   5. record() → SQLite (events, timeline, clients, bans)
-                                │      └─ timeline[bucket]["challenged"] incremented at issue
-                                └─────────────┬───────┘
-                                              │
-                          ┌───────────────────┼─────────────────────┐
-                          ▼                   ▼                     ▼
-                  ┌──────────────┐  ┌──────────────────┐   ┌─────────────────┐
-                  │   /data      │  │  Redis (opt'l)   │   │  External APIs  │
-                  │   antibot.db │  │  shared bans /   │   │ AbuseIPDB v2    │
-                  │   (SQLite    │  │  canary tokens   │   │ CrowdSec LAPI   │
-                  │   WAL)       │  │  for fleet mode  │   │ Turnstile sv    │
-                  │   .pow_key   │  └──────────────────┘   │ MaxMind .mmdb   │
-                  │   .session_… │                         │ (offline)       │
-                  │   .admin_key │                         └─────────────────┘
-                  │   GeoLite2-* │
-                  │   vhosts.json│  ← per-vhost config overrides (1.8.0)
-                  └──────────────┘
+```mermaid
+flowchart TB
+    C(("client")) -->|"HTTP(S)"| GW
 
-  operator browser ──▶  /antibot-appsec-gateway/secured/control-center   ─┐
-                        /antibot-appsec-gateway/secured/center-control     │  12 dashboards;
-                        /antibot-appsec-gateway/secured/live-feed          │  hot-tunable knobs
-                        /antibot-appsec-gateway/secured/agents             │  via /secured/config;
-                        /antibot-appsec-gateway/secured/service            │  click reasons →
-                        /antibot-appsec-gateway/secured/controls           │  drill-down;
-                        /antibot-appsec-gateway/secured/geo                │  threshold sliders
-                        /antibot-appsec-gateway/secured/logs               │  rewire risk model
-                        /antibot-appsec-gateway/secured/settings           │  live.
-                        /antibot-appsec-gateway/secured/siem               │  (1.8.4)
-                        /antibot-appsec-gateway/secured/honeypots          │  (1.8.12)
-                        /antibot-appsec-gateway/secured/vhost-policy  ─────┘
+    subgraph GW["AntiBot/WAF GW — middleware chain"]
+        direction TB
+        M1["1&nbsp;cost_meter — per-request wall-time"]
+        M2["2&nbsp;session cookie"]
+        subgraph P["3&nbsp;protect() — layered detection"]
+            direction TB
+            L0["<b>L0</b> TLS · JA4 deny-list · custom rules engine (L0.4)"]
+            L1["<b>L1</b> rate-limit (socket-IP + per-identity)<br/>L1.5 host-not-allowed (multi-vhost)"]
+            L2["<b>L2</b> honeypot paths · L2.5 suspicious-path (SQLi/XSS/LFI/traversal)<br/>L2.6 path-sweep · L2.7 GraphQL introspection/batch/depth"]
+            L3["<b>L3</b> AI-probe · AI-headers · AI-enumeration<br/>L3.2 browser-automation (webdriver/CDP) · L3.4 LLM no-subresource<br/>L3.5 UA filter · L3.6 sec-fetch-nav · L3.7 header completeness"]
+            L4["<b>L4</b> bot-trap · body-pattern match<br/>L4.2 honey-cred · L4.5 canary echo · L4.7 redirect-maze"]
+            L5["<b>L5</b> behavioural (no-static-fetch / churn / 404 burst)<br/>L5.2 cookie-lifecycle · L5.4 referer-chain · L5.6 impossible-travel<br/>L5.7 interaction probe · L5.8 canvas/WebGL fp"]
+            L6["<b>L6</b> external intel — AbuseIPDB · CrowdSec · MaxMind ASN"]
+            L7["<b>L7</b> cookie gate — JS_CHALLENGE · Turnstile · Anubis PoW"]
+            L8["<b>L8</b> risk-score model (decay · NAT threshold · soft-tier)"]
+            L0 --> L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7 --> L8
+        end
+        DEC{{"decision = deny · challenged · soft-challenge · allow"}}
+        M4["4&nbsp;forward to UPSTREAM if allowed"]
+        M5["5&nbsp;record() → events · timeline · clients · bans"]
+        M1 --> M2 --> P --> DEC --> M4 & M5
+    end
+
+    M4 -->|"UPSTREAM env"| UP["your application"]
+    GW --> DB[("<b>/data</b><br/>antibot.db (SQLite WAL)<br/>.pow_key · .session_key · .admin_key<br/>GeoLite2-*.mmdb · vhosts.json")]
+    GW -.optional.-> RD[("<b>Redis</b><br/>shared bans · canary tokens<br/>fleet mode")]
+    GW -.best-effort.-> EX[("<b>External APIs</b><br/>AbuseIPDB v2 · CrowdSec LAPI<br/>Turnstile siteverify · MaxMind mmdb")]
+
+    OP(("operator<br/>browser")) -.->|"/secured/*"| DASH["12 dashboards:<br/>control-center · center-control · live-feed · agents<br/>service · controls · geo · logs · settings · siem<br/>honeypots · vhost-policy"]
+    DASH -.->|"/secured/config (hot-reload)"| GW
 ```
 
 The gateway is a single Python process. Persistent state (event log,
@@ -121,46 +87,18 @@ detectors are sufficient on their own.
 `JS_CHALLENGE=1` engages the cookie gate.  How a fresh client gets a
 chal cookie depends on which extras are configured:
 
-```
-                    request without chal cookie
-                              │
-                ┌─────────────┼─────────────┐
-                ▼             ▼             ▼
-          path is in    path ends in     everything else
-       JS_CHAL_OPEN_     static-asset
-            PATHS         suffix
-            │                 │              │
-            │                 │              ▼
-            │                 │       ┌──────────────┐
-            │                 │       │ TURNSTILE_   │
-            │                 │       │ ENABLED &&   │
-            │                 │       │ identity     │
-            │                 │       │ risk ≥       │
-            │                 │       │ TURNSTILE_   │
-            │                 │       │ RISK_THRESH  │
-            │                 │       └──┬───────────┘
-            │                 │          │ yes
-            │                 │          ▼
-            │                 │       Turnstile widget HTML
-            │                 │       → siteverify
-            │                 │       → mint chal cookie
-            │                 │
-            │                 │       no  ─▶  ANUBIS_ENABLED?
-            │                 │                  │ yes
-            │                 │                  ▼
-            │                 │              PoW page (boosted
-            │                 │              difficulty) → mint
-            │                 │                  │ no
-            │                 │                  ▼
-            │                 │              HTML GET + Accept:
-            │                 │              text/html?
-            │                 │                  │ yes ─▶ heuristic auto-mint
-            │                 │                  │ no  ─▶ silent decoy
-            ▼                 ▼
-      bypass cookie     bypass cookie
-      gate (still       gate (still
-      runs UA / risk    runs UA / risk
-      detectors)        detectors)
+```mermaid
+flowchart TD
+    R["request without chal cookie"] --> D{"path check"}
+    D -->|"path ∈ JS_CHAL_OPEN_PATHS"| B1["bypass cookie gate<br/><i>UA / risk detectors still run</i>"]
+    D -->|"ends in static-asset suffix"| B2["bypass cookie gate<br/><i>UA / risk detectors still run</i>"]
+    D -->|"everything else"| T{"TURNSTILE_ENABLED &&<br/>identity risk ≥ TURNSTILE_RISK_THRESHOLD"}
+    T -->|yes| TW["Turnstile widget HTML<br/>→ siteverify → mint chal cookie"]
+    T -->|no| AN{"ANUBIS_ENABLED?"}
+    AN -->|yes| POW["PoW page (boosted difficulty)<br/>→ mint chal cookie"]
+    AN -->|no| HT{"HTML GET + Accept: text/html?"}
+    HT -->|yes| AM["heuristic auto-mint chal cookie"]
+    HT -->|no| SD["silent decoy"]
 ```
 
 The strictest configuration is **Turnstile + Anubis-mode + JS_CHAL_OPEN_PATHS = []**.  The most permissive is **JS_CHALLENGE=0** (gate disabled, downstream detectors only).
@@ -169,28 +107,15 @@ The strictest configuration is **Turnstile + Anubis-mode + JS_CHAL_OPEN_PATHS = 
 
 In 1.5.5 the gateway maintains its own GeoLite2 mmdbs end-to-end:
 
-```
-docker build → COPY _seed/*.mmdb → /usr/local/share/maxmind/   (image-baked)
-                          │
-                          ▼
-container start →  _maxmind_seed_from_image()  ──▶ if /data empty → copy
-                          │
-                          ▼
-                  _maxmind_auto_fetch()
-                  needs MAXMIND_LICENSE_KEY?
-                          │ yes
-                          ▼
-                  https://download.maxmind.com → /data/GeoLite2-{ASN,City}.mmdb
-                          │
-                          ▼
-                  _maxmind_refresh_loop() — every 24h, re-fetch if mmdb >30d old
-                          │
-                          └─── operator pushes "Fix now" on /secured/geo  ─┐
-                                                                        ▼
-                                                       POST /secured/maxmind-fetch
-                                                                     │
-                                                       runs seed + auto_fetch then
-                                                       reopens reader handles
+```mermaid
+flowchart TD
+    A["<b>docker build</b><br/>COPY _seed/*.mmdb → /usr/local/share/maxmind/<br/><i>image-baked</i>"] --> B{"container start"}
+    B --> C["_maxmind_seed_from_image()<br/>if /data empty → copy from image"]
+    C --> D{"MAXMIND_LICENSE_KEY set?"}
+    D -->|yes| E["download.maxmind.com<br/>→ /data/GeoLite2-{ASN,City}.mmdb"]
+    D -->|no| Z["/data seed only — no auto-refresh"]
+    E --> F["_maxmind_refresh_loop()<br/>every 24 h, refresh if mmdb > 30 d old"]
+    G["operator: 'Fix now' on /secured/geo<br/>POST /secured/maxmind-fetch"] -.->|"runs seed + auto_fetch<br/>+ reopens reader handles"| C
 ```
 
 The image always ships seed mmdbs so a brand-new deploy works offline; `MAXMIND_LICENSE_KEY` enables fresh downloads + monthly self-refresh; the `/secured/maxmind-fetch` endpoint and the GeoMap "Fix now" button are operator-on-demand triggers.
@@ -199,34 +124,16 @@ The image always ships seed mmdbs so a brand-new deploy works offline; `MAXMIND_
 
 Every detector that fires writes a weighted contribution into the per-identity `risk_score`.  The score then drives a three-tier decision model:
 
-```
-detectors fire ─▶ risk_score += RISK_WEIGHTS[reason]
-                            │
-                            ├─ score < SOFT_CHALLENGE_SCORE        ─▶ green (allowed)
-                            │
-                            ├─ SOFT ≤ score < BAN                  ─▶ orange "missed"
-                            │     ├─ allowed but counted on the timeline
-                            │     ├─ open-path bypass REVOKED — chal-required
-                            │     └─ Turnstile widget shown if score ≥
-                            │       TURNSTILE_RISK_THRESHOLD (default = mid-orange)
-                            │
-                            └─ score ≥ BAN  ─▶ red (banned-silent)
-                                  │
-                                  ├─ AI-flagged reasons → 24h hostile pool
-                                  │   (HOSTILE_BAN_SECS, default 86400)
-                                  │
-                                  └─ Other reasons → standard ban duration
-                                      (RISK_BAN_DURATION_SECS)
-
-                  (continuously decayed)
-                  score *= 0.5 every RISK_DECAY_HALFLIFE_SECS (1h)
-                  per-reason contributions decay in lockstep so the
-                  /secured/agents popover always shows the live breakdown.
-
-NAT awareness:  if ≥ NAT_IDENTITIES_THRESHOLD (default 3) "legitimate-
-looking" identities (≥1 static fetch AND ≥3 allowed reqs) are seen on
-the same IP within 1h, the BAN threshold doubles (50 → 100) so a
-shared-NAT office isn't carpet-banned by one bad apple.
+```mermaid
+flowchart TD
+    A["detectors fire<br/>risk_score += RISK_WEIGHTS[reason]"] --> B{"threshold check"}
+    B -->|"score < SOFT_CHALLENGE_SCORE"| G["🟢 <b>green</b> — allowed"]
+    B -->|"SOFT ≤ score < BAN"| O["🟠 <b>orange</b> — 'missed'<br/>allowed but counted on timeline<br/>open-path bypass revoked (chal-required)<br/>Turnstile shown if score ≥ TURNSTILE_RISK_THRESHOLD"]
+    B -->|"score ≥ BAN"| R{"reason type"}
+    R -->|"AI-flagged"| H["🔴 24 h hostile pool<br/>HOSTILE_BAN_SECS = 86400"]
+    R -->|"other"| S["🔴 standard ban<br/>RISK_BAN_DURATION_SECS"]
+    A -.->|"decay: score *= 0.5 every RISK_DECAY_HALFLIFE_SECS (1 h)<br/>per-reason contributions decay in lockstep"| A
+    N["<b>NAT awareness</b><br/>≥ NAT_IDENTITIES_THRESHOLD (default 3) 'legitimate-looking'<br/>identities on same IP within 1 h<br/>→ BAN threshold doubles (50 → 100)"] -.-> B
 ```
 
 The thresholds (`SOFT_CHALLENGE_SCORE`, `RISK_BAN_THRESHOLD`, `RISK_BAN_THRESHOLD_NAT`, `RISK_DECAY_HALFLIFE_SECS`, `HOSTILE_BAN_SECS`, `TURNSTILE_RISK_THRESHOLD`) are all hot-reloadable via `/secured/config` and live-tunable on `/secured/live-feed` (defense-thresholds slider) and `/secured/controls`.
@@ -288,24 +195,20 @@ authentication within that network as defence-in-depth.
 
 ### Network topology
 
-```
-Internet / reverse-proxy
-        │
-        ▼  :8443
-┌───────────────────────────────────────────────────────┐
-│  Docker network: antibot-net                          │
-│                                                       │
-│  ┌─────────────────────┐                              │
-│  │  appsec-antibot-gw  │                              │
-│  │  (gateway)          │─────── Redis ban sync ──────▶│appsecgw-redis│
-│  │                     │─── CrowdSec blocklist ──────▶│crowdsec      │
-│  │                     │─── Postgres events ─────────▶│appsec-       │
-│  │                     │    (when DB_BACKEND=postgres) │timescaledb   │
-│  └─────────────────────┘                              │              │
-│           │                                           └──────────────┘
-│           ▼ UPSTREAM (env var)
-│    your application
-└───────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    I["Internet / reverse-proxy"] -->|":8443<br/><i>only port exposed to host</i>"| GW
+    subgraph N["Docker network: antibot-net"]
+        direction TB
+        GW["<b>appsec-antibot-gw</b><br/><i>gateway</i>"]
+        RD["<b>appsecgw-redis</b>"]
+        CS["<b>crowdsec</b>"]
+        PG["<b>appsec-timescaledb</b>"]
+        GW -->|"Redis ban sync"| RD
+        GW -->|"CrowdSec blocklist"| CS
+        GW -.->|"Postgres events<br/>(DB_BACKEND=postgres)"| PG
+    end
+    GW -->|"UPSTREAM env"| APP["your application"]
 ```
 
 ### Pre-requisites
