@@ -752,7 +752,7 @@ jobs:
 
   badges:
     name: publish status badges
-    needs: [tests, build-scan, trivy-fs, gitleaks, trufflehog, lint, bandit, pip-audit, codeql]
+    needs: [tests, build-scan, trivy-fs, gitleaks, trufflehog, lint, bandit, pip-audit]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
@@ -768,7 +768,6 @@ jobs:
           R_LINT:       ${{ needs.lint.result }}
           R_BANDIT:     ${{ needs.bandit.result }}
           R_PIPAUDIT:   ${{ needs.pip-audit.result }}
-          R_CODEQL:     ${{ needs.codeql.result }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -807,7 +806,6 @@ jobs:
           mk tests       tests       "$R_TESTS"
           mk trivy-fs    trivy-fs    "$R_TRIVY"
           mk build-scan  build-scan  "$R_BUILD"
-          mk codeql      codeql      "$R_CODEQL"
           git init -q
           git checkout -q -b badges
           git config user.name  "github-actions[bot]"
