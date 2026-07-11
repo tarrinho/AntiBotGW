@@ -122,6 +122,16 @@ async def _spin_proxy(proxy_module, upstream_url, **mod_overrides):
             _c_cr.execute("DELETE FROM ip_bans")
     except Exception:
         pass
+    # 1.9.5 perf #3 introduced a TTL-cached IP-ban lookup — the DELETE above
+    # clears the row but NOT the in-memory `_ban_cache` / `_ban_cache_vhost`
+    # dicts in db/sqlite.py, so a prior test's ban survives cross-test and
+    # returns a stale positive here, triggering `reason='ip-ban'` 404 decoys.
+    try:
+        from db import sqlite as _dbs
+        _dbs._ban_cache.clear()
+        _dbs._ban_cache_vhost.clear()
+    except Exception:
+        pass
     try:
         yield client
     finally:

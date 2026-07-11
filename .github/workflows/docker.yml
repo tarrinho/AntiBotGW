@@ -1,11 +1,11 @@
 name: build · test · scan · push
 
-# Aggregates the release-gate controls so the Actions page shows ONE run per
-# push, and so a single `badges` job at the end can publish per-control status
+# THE single pipeline: tests · build · trivy (fs+image) · secret scan (gitleaks
+# + trufflehog) · lint/SAST/deps (ruff/semgrep/mypy/vulture + bandit + pip-audit)
+# · sign. One run per push, and a final `badges` job publishes per-control status
 # JSONs to an orphan `badges` branch (README reads those via shields endpoint).
-# The `secret-scan` and `security` badges are aggregated from the parallel
-# `.github/workflows/{secret-scan,security}.yml` runs on the same SHA (via
-# gh api) — those workflows remain the source of truth for those controls.
+# All badges are computed from THIS workflow's own job results — there are no
+# sibling workflows to aggregate anymore.
 
 on:
   push:
@@ -266,39 +266,204 @@ jobs:
             ${{ env.HARBOR_HOST }}/${{ env.HARBOR_PROJECT }}/${{ env.HARBOR_IMAGE }}@${{ needs.build-scan.outputs.digest }}
         continue-on-error: true
 
-  # ─── 5. Publish per-control status badges to `badges` branch ─────────────
-  # Mirrors the ai_monitoring pattern (single force-push, no history churn) so
-  # the README endpoint badges (secret-scan, lint, tests, trivy-fs, build-scan)
-  # render a live per-control state. `secret-scan` and `lint` conclusions come
-  # from the parallel workflows (secret-scan.yml + security.yml) on the same
-  # HEAD SHA via gh api; the other three come from this workflow's own jobs.
+  # ─── Secret + SAST/dep scans (folded in from the former secret-scan.yml
+  # and security.yml so there is ONE pipeline; their badges are computed
+  # by the `badges` job below from these jobs' results). ───────────────
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Run Gitleaks
+        run: |
+          set +e
+          docker run --rm -e NO_COLOR=1 -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            detect --source=/repo --redact \
+            --report-format=json --report-path=/repo/gitleaks-report.json --exit-code=1
+          code=$?
+          set -e
+          {
+            echo "### Gitleaks"
+            if [ "$code" -eq 0 ]; then
+              echo "No secrets found."
+            else
+              echo "$(jq length gitleaks-report.json) secret(s) found:"
+              echo ""
+              echo "| File | Line | Rule |"
+              echo "|------|------|------|"
+              jq -r '.[] | "| \(.File) | \(.StartLine) | \(.RuleID) |"' gitleaks-report.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f gitleaks-report.json
+          exit $code
+
+  trufflehog:
+    name: TruffleHog
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog
+        run: |
+          set +e
+          report=$(docker run --rm -v "${{ github.workspace }}:/repo" \
+            trufflesecurity/trufflehog:latest \
+            git file:///repo --only-verified --json --fail 2>/dev/null)
+          code=$?
+          set -e
+          {
+            echo "### TruffleHog"
+            if [ "$code" -eq 0 ]; then
+              echo "No verified secrets found."
+            else
+              findings=$(echo "$report" | grep '^{')
+              echo "$(echo "$findings" | grep -c '^{') verified secret(s) found:"
+              echo ""
+              echo "| Detector | File | Line |"
+              echo "|----------|------|------|"
+              echo "$findings" | jq -r '"| \(.DetectorName) | \(.SourceMetadata.Data.Git.file // "-") | \(.SourceMetadata.Data.Git.line // "-") |"'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
+  lint:
+    name: Lint & type (ruff / semgrep / mypy / vulture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - run: pip install ruff semgrep mypy vulture
+      # ruff — HARD gate, but only the zero-tolerance codes. The full rules.md
+      # §11 review deliberately accepts a large ruff baseline (E701, C901, S608,
+      # F811, …) as non-blocking, so a plain `ruff check` would fail on code the
+      # project treats as clean. Enforce just the must-be-0 set here; the broad
+      # review stays a manual rules.md step.
+      - name: ruff (zero-tolerance — F841 / S314 / B904)
+        run: |
+          ruff check proxy.py core/ db/ scoring.py identity.py helpers.py admin/ \
+            --select F841,S314,B904
+      # semgrep — HARD gate. OSS registry ruleset only; NEVER --config=auto and
+      # NEVER set SEMGREP_APP_TOKEN (rules.md §9).
+      - name: semgrep (OSS p/python — no token, no auto)
+        run: semgrep scan --config p/python proxy.py core/ dashboards/*.py --error --quiet
+      # mypy — INFORMATIONAL. The source carries an accepted no-redef baseline
+      # (conditional re-defs behind import guards), so this surfaces regressions
+      # without failing the build.
+      - name: mypy (informational)
+        continue-on-error: true
+        run: mypy proxy.py core/ scoring.py identity.py helpers.py --ignore-missing-imports --no-error-summary
+      # vulture — INFORMATIONAL dead-code sweep (≥90% confidence).
+      - name: vulture (informational)
+        continue-on-error: true
+        run: vulture proxy.py core/ db/ scoring.py identity.py helpers.py admin/ --min-confidence 90
+
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - run: pip install bandit
+      - name: Run Bandit
+        run: |
+          set +e
+          bandit -r . -x ./tests,./mutants \
+            --severity-level high --confidence-level medium \
+            -f json -o bandit-report.json
+          code=$?
+          set -e
+          {
+            echo "### Bandit"
+            if [ "$code" -eq 0 ]; then
+              echo "No HIGH severity findings."
+            else
+              echo "$(jq '[.results[] | select(.issue_severity=="HIGH")] | length' bandit-report.json) HIGH severity finding(s):"
+              echo ""
+              echo "| File | Line | Test | Confidence |"
+              echo "|------|------|------|------------|"
+              jq -r '.results[] | select(.issue_severity=="HIGH") | "| \(.filename) | \(.line_number) | \(.test_id) \(.test_name) | \(.issue_confidence) |"' bandit-report.json
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          rm -f bandit-report.json
+          exit $code
+
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.13'
+      - run: pip install pip-audit
+      - name: Audit requirements
+        run: |
+          set +e
+          out=$(pip-audit -r requirements.txt 2>&1)
+          code=$?
+          set -e
+          {
+            echo "### pip-audit"
+            if [ "$code" -eq 0 ]; then
+              echo "No known vulnerabilities."
+            else
+              echo "Vulnerabilities found:"
+              echo '```'
+              echo "$out" | sed -r 's/\x1b\[[0-9;]*m//g'
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $code
+
   badges:
     name: publish status badges
-    needs: [tests, build-scan, trivy-fs]
+    needs: [tests, build-scan, trivy-fs, gitleaks, trufflehog, lint, bandit, pip-audit]
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      actions:  read
     steps:
       - name: Aggregate + write badge JSONs, force-push to `badges` branch
         env:
-          R_TESTS:  ${{ needs.tests.result }}
-          R_BUILD:  ${{ needs.build-scan.result }}
-          R_TRIVY:  ${{ needs.trivy-fs.result }}
+          R_TESTS:      ${{ needs.tests.result }}
+          R_BUILD:      ${{ needs.build-scan.result }}
+          R_TRIVY:      ${{ needs.trivy-fs.result }}
+          R_GITLEAKS:   ${{ needs.gitleaks.result }}
+          R_TRUFFLEHOG: ${{ needs.trufflehog.result }}
+          R_LINT:       ${{ needs.lint.result }}
+          R_BANDIT:     ${{ needs.bandit.result }}
+          R_PIPAUDIT:   ${{ needs.pip-audit.result }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # Cross-workflow: pull secret-scan.yml + security.yml conclusions for
-          # this SHA. If a sibling hasn't finished yet the query returns null →
-          # we mark it "pending" (yellow) rather than blowing up.
-          sha="${GITHUB_SHA}"
-          fetch(){ # $1 = workflow name
-            gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${sha}" \
-              --jq "([.workflow_runs[] | select(.name==\"$1\")] | .[0].conclusion) // \"pending\""
+          # Worst-case aggregation across a control's jobs: failure > cancelled
+          # > skipped > success.
+          agg() {
+            local worst=success r
+            for r in "$@"; do
+              case "$r" in
+                failure)   echo failure; return;;
+                cancelled) worst=cancelled;;
+                skipped)   [ "$worst" = success ] && worst=skipped;;
+              esac
+            done
+            echo "$worst"
           }
-          R_SECRET="$(fetch secret-scan)"
-          R_LINT="$(fetch security)"          # security.yml runs bandit (SAST) + pip-audit + trivy — closest signal for "lint"
+          # Badge filenames are UNCHANGED (README shields endpoints depend on them):
+          #   secret-scan = gitleaks + trufflehog
+          #   lint        = ruff/semgrep/mypy/vulture + bandit + pip-audit
+          R_SECRET="$(agg "$R_GITLEAKS" "$R_TRUFFLEHOG")"
+          R_LINTAGG="$(agg "$R_LINT" "$R_BANDIT" "$R_PIPAUDIT")"
           mkdir out && cd out
           mk() {   # <file> <label> <result>
             case "$3" in
@@ -306,14 +471,13 @@ jobs:
               failure)   msg=failing;   col=red;;
               cancelled) msg=cancelled; col=inactive;;
               skipped)   msg=skipped;   col=lightgrey;;
-              pending)   msg=pending;   col=yellow;;
               *)         msg="$3";      col=yellow;;
             esac
             printf '{"schemaVersion":1,"label":"%s","message":"%s","color":"%s"}\n' \
               "$2" "$msg" "$col" > "$1.json"
           }
           mk secret-scan secret-scan "$R_SECRET"
-          mk lint        lint        "$R_LINT"
+          mk lint        lint        "$R_LINTAGG"
           mk tests       tests       "$R_TESTS"
           mk trivy-fs    trivy-fs    "$R_TRIVY"
           mk build-scan  build-scan  "$R_BUILD"
