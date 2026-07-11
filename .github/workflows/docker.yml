@@ -274,15 +274,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
 
       - name: Run Gitleaks
         run: |
           set +e
+          # `dir` mode scans the WORKING TREE (what's shippable now), matching the
+          # publish-time pre-push gate — an actionable check. Git-HISTORY secrets
+          # in old commits can't be code-fixed (they need filter-repo + rotation),
+          # so they don't gate CI here; trufflehog (--only-verified) still flags
+          # any LIVE secret exposed in history.
+          # Load .gitleaks.toml so the synthetic DLP fixtures in tests/ and the
+          # dashboard localStorage keys don't false-positive (same file the
+          # pre-push gate uses).
+          cfg=""
+          [ -f .gitleaks.toml ] && cfg="--config=/repo/.gitleaks.toml"
           docker run --rm -e NO_COLOR=1 -v "${{ github.workspace }}:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
-            detect --source=/repo --redact \
+            dir /repo $cfg --redact \
             --report-format=json --report-path=/repo/gitleaks-report.json --exit-code=1
           code=$?
           set -e

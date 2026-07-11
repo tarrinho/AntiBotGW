@@ -249,7 +249,13 @@ def test_service_data_auth_guard(proxy_module):
             async with _spin_proxy(proxy_module, up) as c:
                 r = await c.get(NS + "/service-data")
                 text = await r.text()
-                assert r.status != 200 or "db" not in text
+                # Match the JSON-key form `"db":`, not the bare substring
+                # `db`. The internal-probe decoy body is
+                #   {"path": "/__appsecgw-probe-<16-byte hex>"}
+                # and the random hex pair `db` appears ~12% of runs — flaky.
+                # A real leak of the authenticated payload would carry the
+                # `"db":` key literally, so this is stricter, not looser.
+                assert r.status != 200 or '"db":' not in text
     _run(go())
 
 
