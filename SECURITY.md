@@ -48,13 +48,13 @@ This is a maintainer-driven open-source project, handled on a best-effort basis:
 
 | Stage                         | Target                                   |
 |-------------------------------|------------------------------------------|
-| Acknowledge your report       | within 3 business days                   |
-| Initial severity assessment   | within 7 business days                   |
+| Acknowledge your report       | within 9 business days                   |
+| Initial severity assessment   | within 21 business days                  |
 | Fix or mitigation plan        | depends on severity; Critical/High first |
 | Coordinated public disclosure | after a fix is released, by agreement    |
 
 We will keep you informed through triage, fix, and release. If you do not hear
-back within a week, please re-send — a message may have been missed.
+back within two weeks, please re-send — a message may have been missed.
 
 ## Coordinated disclosure & credit
 

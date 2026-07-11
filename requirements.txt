@@ -20,6 +20,9 @@ pytest-cov>=6.0,<8
 # tests job passes --reruns 1 as a global safety net for transient network
 # / clock-skew flakes.
 pytest-rerunfailures>=15,<16
+# 1.9.11 — property-based / fuzz testing (test_v1911_property_redaction.py fuzzes
+# the admin-key / session-cookie redaction helpers). Pure-Python, test-only.
+hypothesis>=6.100,<7
 
 # 1.6.7 — runtime deps the Dockerfile installs separately. Listed here
 # so CI's `pip install -r requirements.txt` exercises the same import

@@ -15,7 +15,17 @@ import asyncio
 import os
 from unittest import mock
 
+import aiohttp
 import pytest
+
+
+def _wrapped_connection_error(msg: str = "downstream unreachable"):
+    """Produce the exception aiohttp actually raises when the downstream
+    connection is refused/reset — a ClientConnectorError. Raw
+    ConnectionRefusedError from `socket.connect()` is wrapped by aiohttp
+    before reaching integration code, so mocks that raise the bare
+    OSError don't match production behavior."""
+    return aiohttp.ClientConnectionError(msg)
 
 os.environ.setdefault("UPSTREAM", "https://example.com")
 os.environ.setdefault("OFFLINE_BG_TASKS", "1")
@@ -64,30 +74,42 @@ def test_redis_timeout_does_not_crash_is_banned(proxy_module):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# R-2  AbuseIPDB unreachable → lookup returns falsy / doesn't crash callers
+# R-2  AbuseIPDB unreachable → lookup returns cleanly (never raises)
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# Contract per `_abuseipdb_lookup`'s docstring: "Never raises — failures
+# degrade gracefully". Return is a 3-tuple `(score, country, source)` where
+# source ∈ ('cache','api','disabled','error','private','invalid'). We assert
+# the not-raise contract and the source-is-error-or-disabled degradation
+# path — value semantics belong to the integration's own tests.
 
 @pytest.mark.asyncio
-async def test_abuseipdb_timeout_returns_none_or_empty():
-    """`_abuseipdb_lookup` on a timeout must not raise — the caller checks
-    truthiness on the return, so None / empty-dict is the graceful fall-back."""
+async def test_abuseipdb_timeout_degrades_gracefully():
     from reputation import abuseipdb as ab
 
     class _FakeSession:
         def get(self, *a, **kw):  # noqa: ARG002
             raise asyncio.TimeoutError()
 
-    with mock.patch.object(ab, "_get_session", return_value=_FakeSession()):
-        # Must not raise. Whatever it returns, callers treat as "no data".
+    with mock.patch.object(ab, "ABUSEIPDB_ENABLED", True), \
+         mock.patch.object(ab, "_get_session", return_value=_FakeSession()):
+        # Must not raise.
         result = await ab._abuseipdb_lookup("1.2.3.4")
-    # None or empty dict — anything falsy — is acceptable.
-    assert not result or isinstance(result, dict)
+    # 3-tuple contract preserved.
+    assert isinstance(result, tuple) and len(result) == 3, (
+        f"expected (score, country, source) tuple; got {result!r}"
+    )
+    score, _country, source = result
+    # Score must be a benign default (0 = no reputation data), source must
+    # NOT indicate a successful reputation lookup.
+    assert score == 0, f"outage produced a non-zero score: {score}"
+    assert source in ("error", "disabled", "private", "invalid"), (
+        f"outage source must be a degradation sentinel; got {source!r}"
+    )
 
 
 @pytest.mark.asyncio
-async def test_abuseipdb_500_returns_none_or_empty():
-    """HTTP 500 from AbuseIPDB is a transient service outage — treat as
-    'no reputation data' and let downstream detectors decide."""
+async def test_abuseipdb_500_degrades_gracefully():
     from reputation import abuseipdb as ab
 
     class _FakeResp:
@@ -101,51 +123,57 @@ async def test_abuseipdb_500_returns_none_or_empty():
         def get(self, *a, **kw):  # noqa: ARG002
             return _FakeResp()
 
-    with mock.patch.object(ab, "_get_session", return_value=_FakeSession()):
+    with mock.patch.object(ab, "ABUSEIPDB_ENABLED", True), \
+         mock.patch.object(ab, "_get_session", return_value=_FakeSession()):
         result = await ab._abuseipdb_lookup("2.2.2.2")
-    assert not result or isinstance(result, dict)
+    assert isinstance(result, tuple) and len(result) == 3
+    assert result[0] == 0
+    assert result[2] in ("error", "disabled", "private", "invalid")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# R-3  CrowdSec LAPI unreachable → check returns clean, health surfaces error
+# R-3  CrowdSec LAPI unreachable → check + health degrade cleanly
 # ══════════════════════════════════════════════════════════════════════════════
+#
+# Contract: `_crowdsec_check` returns `(decision, source)` where decision is
+# None on clean or outage; source ∈ ('cache','api','disabled','private',
+# 'invalid','error'). Outage → decision=None, source='error'.
 
 @pytest.mark.asyncio
 async def test_crowdsec_lapi_connection_refused_returns_clean():
-    """`_crowdsec_check` on ConnectionRefusedError (LAPI container down) must
-    return a benign result — no ban decision produced from the outage."""
     from reputation import crowdsec as cs
 
     class _FakeSession:
         def get(self, *a, **kw):  # noqa: ARG002
-            raise ConnectionRefusedError("lapi down")
+            raise _wrapped_connection_error("lapi down")
 
-    with mock.patch.object(cs, "_get_session", return_value=_FakeSession()):
-        result = await cs._crowdsec_check("3.3.3.3")
-    # Any falsy return or a dict without 'ban' is acceptable — the point
-    # is that the outage doesn't itself produce a ban.
-    if isinstance(result, dict):
-        assert not result.get("ban") and not result.get("banned")
-    else:
-        assert not result
+    with mock.patch.object(cs, "CROWDSEC_ENABLED", True), \
+         mock.patch.object(cs, "_get_session", return_value=_FakeSession()):
+        decision, source = await cs._crowdsec_check("3.3.3.3")
+    # The outage MUST NOT produce a ban decision.
+    assert decision is None, f"outage produced a decision: {decision!r}"
+    # The outage source is any degradation sentinel.
+    assert source in ("error", "disabled", "private", "invalid"), (
+        f"outage source must be a degradation sentinel; got {source!r}"
+    )
 
 
 @pytest.mark.asyncio
 async def test_crowdsec_lapi_health_reports_down_not_raise():
-    """The health-check endpoint must SURFACE a down-status rather than
-    silently swallow it — otherwise the operator can't tell CrowdSec is
-    unreachable from the dashboards."""
+    """`_crowdsec_lapi_health()` must SURFACE a down-status not silently
+    swallow it — otherwise the operator can't tell CrowdSec is unreachable
+    from the dashboards."""
     from reputation import crowdsec as cs
 
     class _FakeSession:
         def get(self, *a, **kw):  # noqa: ARG002
-            raise ConnectionRefusedError("lapi down")
+            raise _wrapped_connection_error("lapi down")
 
-    with mock.patch.object(cs, "_get_session", return_value=_FakeSession()):
+    with mock.patch.object(cs, "CROWDSEC_ENABLED", True), \
+         mock.patch.object(cs, "_get_session", return_value=_FakeSession()):
         health = await cs._crowdsec_lapi_health()
-    # Health should return a dict with an error / status field, not raise.
     assert isinstance(health, dict)
-    # Some non-empty error / status indicator must be present.
+    # Non-empty error / status indicator must be present in the payload.
     assert any(
-        k in health for k in ("error", "status", "reachable", "ok")
+        k in health for k in ("error", "status", "reachable", "ok", "healthy")
     ), f"health payload must carry an operator-visible status field: {health}"

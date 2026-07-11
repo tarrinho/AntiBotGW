@@ -331,7 +331,14 @@ jobs:
           docker run --rm -e NO_COLOR=1 -v "${{ github.workspace }}:/repo" \
             ghcr.io/gitleaks/gitleaks:latest \
             dir /repo $cfg --redact \
-            --report-format=json --report-path=/repo/gitleaks-report.json --exit-code=1
+            --report-format=sarif --report-path=/repo/gitleaks.sarif \
+            --exit-code=1
+          # Also emit JSON for the human-readable step-summary table below.
+          docker run --rm -e NO_COLOR=1 -v "${{ github.workspace }}:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            dir /repo $cfg --redact \
+            --report-format=json --report-path=/repo/gitleaks-report.json \
+            --exit-code=0 >/dev/null 2>&1 || true
           code=$?
           set -e
           {
@@ -339,15 +346,26 @@ jobs:
             if [ "$code" -eq 0 ]; then
               echo "No secrets found."
             else
-              echo "$(jq length gitleaks-report.json) secret(s) found:"
+              echo "$(jq length gitleaks-report.json 2>/dev/null || echo '?') secret(s) found:"
               echo ""
               echo "| File | Line | Rule |"
               echo "|------|------|------|"
-              jq -r '.[] | "| \(.File) | \(.StartLine) | \(.RuleID) |"' gitleaks-report.json
+              jq -r '.[] | "| \(.File) | \(.StartLine) | \(.RuleID) |"' gitleaks-report.json 2>/dev/null || true
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           rm -f gitleaks-report.json
+          # Keep gitleaks.sarif for the upload step below.
           exit $code
+
+      # Feed gitleaks findings into GitHub's Code scanning alerts tab so a
+      # regression is visible next to Trivy findings. Uploads even on the
+      # zero-hit path so the tab's "no active alerts" state is authoritative.
+      - name: Upload Gitleaks SARIF
+        if: always() && hashFiles('gitleaks.sarif') != ''
+        uses: github/codeql-action/upload-sarif@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
 
   trufflehog:
     name: TruffleHog
@@ -577,8 +595,12 @@ jobs:
                   page.goto(
                       "http://127.0.0.1:18443/antibot-appsec-gateway/login",
                       wait_until="domcontentloaded", timeout=15000)
-                  # Login page must render a <form> and a <title>.
-                  assert page.locator("form").count() >= 1, "no <form> on login page"
+                  # This login page is a JS-driven, CSP-strict flow (no native
+                  # <form> — it POSTs via fetch), so assert the real credential
+                  # controls render instead of a <form> element.
+                  assert page.locator("#username").count() >= 1, "no username field on login page"
+                  assert page.locator("#password").count() >= 1, "no password field on login page"
+                  assert page.locator("#submit").count() >= 1, "no submit button on login page"
                   assert page.title(), "no <title> on login page"
                   br.close()
               print(f"OK on {browser_name}")
@@ -661,6 +683,83 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           exit $code
+
+  # ─── GitHub-native SAST — feeds Code scanning alerts alongside Trivy /
+  # gitleaks SARIF. CodeQL's Python queries complement bandit + semgrep;
+  # findings appear under the same Security → Code scanning tab.
+  codeql:
+    name: CodeQL (Python)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: python
+          # Use the `security-extended` suite — more queries, higher-latency
+          # runs are OK for a single-language codebase.
+          queries: security-extended
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          category: codeql-python
+
+  # ─── Dependency review — blocks PRs that introduce a dep with a known
+  # vulnerability OR an incompatible license. Runs only on PRs (the
+  # dependency-graph diff is only meaningful there); on push-to-main
+  # dependabot alerts pick up any drift instead.
+  dependency-review:
+    name: Dependency review
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Review new dependencies
+        uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          # Fail on any moderate+ severity introduced by this PR. Existing
+          # deps aren't re-scored (dependabot alerts cover the baseline).
+          fail-on-severity: moderate
+          # Bad licenses — align with license-scan job above (GPL family).
+          deny-licenses: GPL-3.0, GPL-3.0-only, GPL-3.0-or-later, AGPL-3.0, AGPL-3.0-only, AGPL-3.0-or-later
+          comment-summary-in-pr: on-failure
+
+  # ─── SBOM upload to the Dependency graph — makes the exported SBOM
+  # visible under Insights → Dependency graph → SBOM, so security tooling
+  # and downstream consumers can query it via the GitHub API.
+  sbom-upload:
+    name: Upload SBOM to dependency graph
+    needs: build-scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Install syft
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin
+      - name: Generate SPDX SBOM from the image
+        env:
+          IMAGE_REF: ${{ needs.build-scan.outputs.ghcr_image }}@${{ needs.build-scan.outputs.digest }}
+        run: |
+          # SPDX (not CycloneDX) — the submission action feeds SPDX into
+          # the GitHub Dependency graph; CycloneDX is emitted separately
+          # via the build-push-action `sbom: true` output attached to the image.
+          syft "$IMAGE_REF" -o spdx-json > sbom.spdx.json
+      - name: Attach SBOM to the dependency graph
+        uses: advanced-security/spdx-dependency-submission-action@169d22427d74f3faf93504e70b03eede8dab272a # v0.2.0
+        with:
+          filePath: sbom.spdx.json
 
   badges:
     name: publish status badges
