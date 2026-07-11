@@ -1,0 +1,1 @@
+GeoLite2 mmdbs excluded per MaxMind EULA — dir kept so Dockerfile COPY works; runtime falls back to MAXMIND_LICENSE_KEY / manual /data drop.
