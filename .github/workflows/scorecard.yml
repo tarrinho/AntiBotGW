@@ -16,6 +16,7 @@ on:
     - cron: '32 6 * * 1'   # weekly — Monday 06:32 UTC
   push:
     branches: [main]
+  workflow_dispatch:        # manual re-scan: gh workflow run scorecard.yml
 
 permissions: read-all
 
