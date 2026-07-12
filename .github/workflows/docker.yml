@@ -53,10 +53,9 @@ jobs:
           python-version: '3.13'
           cache: 'pip'
 
-      - name: Install deps
+      - name: Install deps (hash-pinned)
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install --require-hashes -r requirements.lock
 
       - name: Run tests
         env:
@@ -80,7 +79,7 @@ jobs:
 
       - name: Upload coverage report
         if: always() && hashFiles('coverage.xml') != ''
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: coverage-xml
           path: coverage.xml
@@ -417,7 +416,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
-      - run: pip install ruff semgrep mypy vulture
+      - name: Install lint tools (hash-pinned)
+        run: pip install --require-hashes -r requirements-tools.lock
       # ruff — HARD gate, but only the zero-tolerance codes. The full rules.md
       # §11 review deliberately accepts a large ruff baseline (E701, C901, S608,
       # F811, …) as non-blocking, so a plain `ruff check` would fail on code the
@@ -450,7 +450,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
-      - run: pip install bandit
+      - name: Install bandit (hash-pinned)
+        run: pip install --require-hashes -r requirements-tools.lock
       - name: Run Bandit
         run: |
           set +e
@@ -489,10 +490,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: '3.13' }
-      - name: Install deps + pip-licenses
+      - name: Install deps + pip-licenses (hash-pinned)
         run: |
-          pip install -r requirements.txt
-          pip install pip-licenses
+          pip install --require-hashes -r requirements.lock
+          pip install --require-hashes -r requirements-tools.lock
       - name: Scan (fail on GPL family)
         run: |
           set +e
@@ -564,10 +565,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with: { python-version: '3.13' }
-      - name: Install Playwright
+      - name: Install Playwright (hash-pinned)
         run: |
-          pip install -r requirements.txt
-          pip install playwright pytest-playwright
+          pip install --require-hashes -r requirements.lock
+          pip install --require-hashes -r requirements-tools.lock
           python -m playwright install --with-deps ${{ matrix.browser }}
       - name: Smoke test — login page renders
         env:
@@ -675,7 +676,8 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
           python-version: '3.13'
-      - run: pip install pip-audit
+      - name: Install pip-audit (hash-pinned)
+        run: pip install --require-hashes -r requirements-tools.lock
       - name: Audit requirements
         run: |
           set +e
@@ -744,18 +746,16 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-      - name: Install syft
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
-            | sh -s -- -b /usr/local/bin
+      # 1.9.13 — SHA-pinned syft via anchore/sbom-action (replaces the
+      # `curl … | sh` install flagged by scorecard's Pinned-Dependencies check).
       - name: Generate SPDX SBOM from the image
-        env:
-          IMAGE_REF: ${{ needs.build-scan.outputs.ghcr_image }}@${{ needs.build-scan.outputs.digest }}
-        run: |
-          # SPDX (not CycloneDX) — the submission action feeds SPDX into
-          # the GitHub Dependency graph; CycloneDX is emitted separately
-          # via the build-push-action `sbom: true` output attached to the image.
-          syft "$IMAGE_REF" -o spdx-json > sbom.spdx.json
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          image: ${{ needs.build-scan.outputs.ghcr_image }}@${{ needs.build-scan.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
       - name: Attach SBOM to the dependency graph
         uses: advanced-security/spdx-dependency-submission-action@169d22427d74f3faf93504e70b03eede8dab272a # v0.2.0
         with:

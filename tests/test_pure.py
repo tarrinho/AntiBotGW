@@ -2709,29 +2709,66 @@ def test_agents_tooltip_callback_formats_date():
 
 # ── Dockerfile: pip version pinning + builder USER drop ──────────────────
 
+def _assert_runtime_lock_is_pinned_and_hashed(lock_path):
+    """Lock file must be exact-pinned + hash-pinned end-to-end."""
+    src = lock_path.read_text()
+    # Every non-comment package line must use `==`, never a range.
+    for line in src.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or line.startswith("--hash"):
+            continue
+        # `pip-compile` emits `pkg==ver \` for pinned lines and indented
+        # `--hash=sha256:...` continuations.
+        if line.endswith("\\"):
+            line = line[:-1].strip()
+        if "==" in line:
+            continue
+        raise AssertionError(
+            f"{lock_path.name}: non-pinned line detected: {line!r}"
+        )
+    # Every dep line has at least one --hash=sha256: continuation.
+    assert "--hash=sha256:" in src, (
+        f"{lock_path.name} must be generated with `pip-compile --generate-hashes`"
+    )
+
+
 def test_dockerfile_pip_deps_use_exact_pins():
-    """Dockerfile must pin all pip deps to exact ==x.y.z versions (DL3013 / Aikido supply-chain)."""
+    """Dockerfile must install runtime deps via a hash-pinned lock (DL3013 / scorecard Pinned-Dependencies)."""
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
-    # Find the pip install RUN instruction
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "Dockerfile").read_text()
+    # Prefer hash-pinned install: `pip install --require-hashes -r <lock>`.
+    if "--require-hashes" in src:
+        assert "requirements-runtime.lock" in src, (
+            "Dockerfile --require-hashes install must reference "
+            "requirements-runtime.lock"
+        )
+        _assert_runtime_lock_is_pinned_and_hashed(root / "requirements-runtime.lock")
+        return
+    # Fallback (legacy pin style) — every inline pip install arg must be ==.
     pip_block = src[src.find("pip install"):src.find("pip install") + 400]
-    # No range specifiers allowed
     for bad in (">=", "<=", ">", "<", "~="):
-        # allow < inside version strings only — simplest check: no bare range after package name
         assert f"'{bad}" not in pip_block and f'"{bad}' not in pip_block, (
             f"Dockerfile pip install must use exact ==x.y.z pins, not range "
             f"specifier {bad!r} — Aikido DL3013 / supply-chain finding"
         )
-    # Must have exact pins
     assert "==" in pip_block, (
         "Dockerfile pip install must use exact ==x.y.z version pins"
     )
 
 
 def test_dockerfile_armv7_pip_deps_use_exact_pins():
-    """Dockerfile.armv7 must pin all pip deps to exact ==x.y.z versions."""
+    """Dockerfile.armv7 must install runtime deps via a hash-pinned lock."""
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "Dockerfile.armv7").read_text()
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "Dockerfile.armv7").read_text()
+    if "--require-hashes" in src:
+        assert "requirements-runtime-armv7.lock" in src, (
+            "Dockerfile.armv7 --require-hashes install must reference "
+            "requirements-runtime-armv7.lock"
+        )
+        _assert_runtime_lock_is_pinned_and_hashed(root / "requirements-runtime-armv7.lock")
+        return
     pip_block = src[src.find("pip install"):src.find("pip install") + 400]
     for bad in (">=", "<=", "~="):
         assert f"'{bad}" not in pip_block and f'"{bad}' not in pip_block, (
@@ -11464,13 +11501,21 @@ def test_gw_actor_uses_username():
         "admin/mesh.py: _gw_actor must call _request_username() for attribution"
 
 
-# F-15: PyJWT in Dockerfile
+# F-15: PyJWT in Dockerfile (directly, or transitively via the hash-locked
+#       runtime requirements the Dockerfile installs from).
 def test_dockerfile_has_pyjwt():
-    """Dockerfile must install PyJWT>=2.8.0 for OIDC id_token verification."""
+    """Runtime image must install PyJWT>=2.8.0 for OIDC id_token verification."""
     from pathlib import Path
-    src = (Path(__file__).resolve().parent.parent / "Dockerfile").read_text()
-    assert "PyJWT" in src, \
-        "Dockerfile must include PyJWT>=2.8.0 in pip install for OIDC support"
+    root = Path(__file__).resolve().parent.parent
+    dockerfile = (root / "Dockerfile").read_text()
+    if "PyJWT" in dockerfile:
+        return
+    # 1.9.13: Dockerfile switched to `pip install --require-hashes -r
+    # requirements-runtime.lock` — PyJWT now lives in the lock instead.
+    lock = (root / "requirements-runtime.lock").read_text()
+    assert "pyjwt==" in lock.lower() or "pyjwt[" in lock.lower(), (
+        "requirements-runtime.lock must include a pinned pyjwt for OIDC support"
+    )
 
 
 # F-16: no key prefix in startup banner

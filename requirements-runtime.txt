@@ -1,0 +1,24 @@
+# Runtime-only dependency set (subset of requirements.txt).
+#
+# Used by:
+#   - `Dockerfile` / `Dockerfile.armv7` build stages (via `pip install
+#     --require-hashes -r requirements-runtime.lock`), so the production image
+#     never carries pytest / hypothesis / fakeredis.
+#   - Anyone who wants to bootstrap the gateway outside a container.
+#
+# Test-only deps (pytest, pytest-*, hypothesis, fakeredis) stay in
+# requirements.txt and go into the CI test job's separate install step.
+#
+# Keep exact-pinned (`==`). Regenerate the companion `requirements-runtime.lock`
+# after any edit here:
+#   pip-compile --generate-hashes --output-file=requirements-runtime.lock \
+#               requirements-runtime.txt
+
+aiohttp==3.14.1
+redis==8.0.1
+maxminddb==3.1.1
+psycopg[binary]==3.3.4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
+PyJWT[crypto]==2.13.0
+cryptography==48.0.1
+pyotp==2.10.0
+qrcode==7.4.2

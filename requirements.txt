@@ -1,46 +1,66 @@
-# Runtime dependency (matches Dockerfile pin).
-# REVIEW-L4: pin exact version so dev/CI matches the container image.
+# Runtime + test dependencies.
+#
+# All pins are EXACT (`==`) — required for:
+#   1. Reproducible builds (dev/CI/prod match).
+#   2. OpenSSF Scorecard's Vulnerabilities check — it treats `>=X,<Y`
+#      ranges as "any version" and flags historical CVEs on older releases
+#      that would never actually be installed.
+#   3. Hash-pinning via `requirements.lock` (pip-compile --generate-hashes).
+#
+# Bump policy: refresh at each release; run `pip-audit -r requirements.txt`
+# to confirm clean; keep in sync with `Dockerfile` and `Dockerfile.armv7`
+# manual `pip install` lines.
+
+# Runtime — matches Dockerfile pin.
 aiohttp==3.14.1
 
-# Optional — used only when REDIS_URL is set at runtime (1.5.0 shared-state
-# mode for multi-instance deployments). Image pre-installs it so an operator
-# can flip the env without rebuilding.
-redis>=8.0.1,<9   # 1.9.11: bump from 5.x — audited: only async client + basic get/set/expire, no cluster API surface used
+# Optional runtime — active only when REDIS_URL is set (1.5.0 shared-state
+# mode for multi-instance deployments). Pre-installed so operators can flip
+# the env without rebuilding.
+redis==8.0.1   # 1.9.11: bump from 5.x — async client + basic get/set/expire; no cluster API used
 
-# Test-only dependencies. Used by GitHub Actions and `pytest tests/`.
-pytest>=9.0.3,<10  # CVE-2025-71176 fix (8.x affected)
-pytest-asyncio>=1.4.0,<2   # 1.9.11: bump from 0.23 — check tests/conftest.py sets asyncio_mode="auto"
-pytest-aiohttp>=1.1.1,<2
-fakeredis>=2.36.2,<3
-# 1.9.12 — coverage measurement (non-blocking initially; threshold ratcheted up
-# release-over-release once baseline is established). Runtime unaffected.
-pytest-cov>=6.0,<8
+# Test-only — used by GitHub Actions and `pytest tests/`.
+pytest==9.1.1   # CVE-2025-71176 fix (8.x affected; 9.0.3+ safe)
+pytest-asyncio==1.4.0   # 1.9.11: bump from 0.23 — check tests/conftest.py sets asyncio_mode="auto"
+pytest-aiohttp==1.1.1
+fakeredis==2.36.2
+# 1.9.12 — coverage measurement (non-blocking initially; threshold ratcheted
+# up release-over-release once baseline is established). Runtime unaffected.
+pytest-cov==7.1.0
 # 1.9.12 — flaky-test detection. Not enabled globally; individual tests opt in
 # via @pytest.mark.flaky(reruns=N) so real regressions still fail loudly. CI
 # tests job passes --reruns 1 as a global safety net for transient network
 # / clock-skew flakes.
-pytest-rerunfailures>=15,<16
+pytest-rerunfailures==15.1
 # 1.9.11 — property-based / fuzz testing (test_v1911_property_redaction.py fuzzes
 # the admin-key / session-cookie redaction helpers). Pure-Python, test-only.
-hypothesis>=6.100,<7
+hypothesis==6.156.6
 
 # 1.6.7 — runtime deps the Dockerfile installs separately. Listed here
 # so CI's `pip install -r requirements.txt` exercises the same import
 # paths that production runs (test_functional.py touches GeoLite2 +
 # Postgres conditionally; without these wheels available, lazy imports
 # fail and several tests skip silently).
-maxminddb>=3.1.1,<4   # 1.9.11: bump from 2.x — reader.metadata() API compatible; iteration semantics validated
+maxminddb==3.1.1   # 1.9.11: bump from 2.x — reader.metadata() API compatible; iteration semantics validated
 # `psycopg[binary]` ships C-extension wheels only for amd64 / arm64 /
 # ppc64le / s390x. armv7l / armv6l Raspberry Pi OS hosts have to either
 # (a) leave Postgres support out (DB_BACKEND=sqlite, lazy-import becomes
-# a no-op), or (b) `apt install libpq5 libpq-dev` and use plain
-# `psycopg` (without [binary]) which builds the C extension on demand.
-# The marker below skips this line on armv7 / armv6 wheels-only installs.
-psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
+# a no-op), or (b) `apk add postgresql-dev libpq` and use `psycopg[c]`
+# (Dockerfile.armv7 does this).
+psycopg[binary]==3.3.4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
 
 # OIDC / SSO id-token verification (admin/oidc.py). proxy.py imports admin.oidc
 # unconditionally and admin/oidc.py imports `jwt` at module load, so PyJWT is
-# effectively required for the package to import at all — declare it. [crypto]
-# pulls in `cryptography`, needed for RS256/ES256 id-tokens (the common case).
-PyJWT[crypto]>=2.13.0,<3   # floor at 2.13.0 — fixes 6 CVEs (key-confusion, crit-header,
-                           # PyJWKClient scheme-allowlist/unbounded-fetch, HMAC-JWK confusion)
+# effectively required for the package to import at all. [crypto] pulls in
+# `cryptography`, needed for RS256/ES256 id-tokens (the common case).
+# 2.13.0 fixes 6 CVEs (key-confusion, crit-header, PyJWKClient
+# scheme-allowlist/unbounded-fetch, HMAC-JWK confusion).
+PyJWT[crypto]==2.13.0
+# 48.0.1 fixes 5 CVEs (bundled-OpenSSL, DNS name-constraint enforcement,
+# non-contiguous-buffer overflow). Bumped from 46.0.5 for scorecard clean-run.
+cryptography==48.0.1
+
+# 1.9.11+ — 2FA (pyotp) and QR-code emit (qrcode) for admin bootstrapping.
+# Pinned here so the wheel set is uniform across dev/CI/prod.
+pyotp==2.10.0
+qrcode==7.4.2

@@ -30,13 +30,11 @@ RUN apk add --no-cache \
         postgresql-dev \
         libffi-dev
 
+# Hash-pinned runtime deps (see requirements-runtime-armv7.lock).
+COPY requirements-runtime-armv7.txt requirements-runtime-armv7.lock /tmp/
 RUN python3 -m pip install --no-cache-dir --upgrade pip \
- && python3 -m pip install --no-cache-dir --target /pydeps \
-        'aiohttp==3.14.1' \
-        'maxminddb==3.1.1' \
-        'redis==8.0.1' \
-        'psycopg[c]==3.3.4' \
-        'pyjwt==2.13.0'
+ && python3 -m pip install --no-cache-dir --require-hashes --target /pydeps \
+        -r /tmp/requirements-runtime-armv7.lock
 
 USER nobody
 

@@ -6,6 +6,69 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — OpenSSF Scorecard hardening · hash-pinned deps · atheris fuzz
+
+Scorecard baseline for `github.com/tarrinho/AntiBotGW` was **5.3 / 10** (2026-07-12).
+This drop lifts every code-side check to 10; the remaining lift comes from three
+repo-settings actions the owner must apply (see `SCORECARD.md`). Target after
+settings changes: **~8.5 / 10**.
+
+### Changed (supply chain — scorecard code fixes)
+
+- **Vulnerabilities → 10/10.** All 7 CVEs flagged by scorecard (6 pyjwt, 1
+  pytest) resolved by switching `requirements.txt` from `>=X,<Y` ranges to
+  exact `==` pins — osv-scanner mis-reads range lowerbounds and flags historical
+  CVEs on versions that would never be installed. Bumped `cryptography` 46.0.5
+  → 48.0.1 (closes GHSA-537c-gmf6-5ccf, GHSA-m959-cc7f-wv43, GHSA-p423-j2cm-9vmq,
+  PYSEC-2026-35, PYSEC-2026-36) and `maxminddb` 2.8.2 → 3.1.1 (Dockerfile drift
+  from requirements.txt).
+- **Pinned-Dependencies → 10/10.** Generated hash-pinned lock files via
+  `pip-compile --generate-hashes`:
+  - `requirements.lock` — test + runtime (used by CI).
+  - `requirements-runtime.lock` — runtime only (used by amd64/arm64 Dockerfile).
+  - `requirements-runtime-armv7.lock` — armv7 uses `psycopg[c]` (source build,
+    no cryptography wheels available).
+  - `requirements-tools.lock` — CI linters/scanners (ruff/semgrep/bandit/…).
+
+  Every `pip install` in `Dockerfile`, `Dockerfile.armv7`, and `docker.yml`
+  now uses `pip install --require-hashes -r <lock>` — a MITM'd mirror aborts
+  the build.
+- **Pinned-Dependencies (downloadThenRun).** Replaced the `curl -sSfL … syft
+  install.sh | sh` line in the `sbom-upload` job with SHA-pinned
+  `anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610` (v0.24.0),
+  which invokes syft under the hood.
+- **Fuzzing → 10/10.** Added `tests/fuzz/atheris_helpers.py` — atheris
+  coverage-guided fuzz of `helpers._strip_admin_key_from_qs` and
+  `helpers._strip_own_session_cookie` (credential-leak invariants).
+  New `.github/workflows/fuzz.yml` runs the harness daily (`17 4 * * *`),
+  on any push to `helpers.py`/`tests/fuzz/`, and via `workflow_dispatch`.
+  Bounded via libFuzzer `-max_total_time`; crash inputs upload as artifacts.
+
+### Added
+
+- **`SCORECARD.md`** — one-shot hardening checklist. Lists the three remaining
+  repo-settings actions the owner must apply (Branch Protection on `main`,
+  CodeQL Default Setup, OpenSSF Best Practices badge) with click-by-click
+  instructions.
+- **`requirements-runtime.txt`** — split of `requirements.txt` carrying only the
+  packages the production image needs; `pip-compile` reads it to emit the
+  runtime lock. Test-only deps (pytest, hypothesis, fakeredis) stay in the
+  full `requirements.txt`.
+- **`requirements-tools.txt`** — CI-only tools (ruff, mypy, vulture, bandit,
+  semgrep, pip-audit, pip-licenses, playwright, pytest-playwright); never
+  installed into the runtime image.
+
+### Tests
+
+- **`test_dockerfile_pip_deps_use_exact_pins`** + armv7 counterpart: extended
+  to accept the new `--require-hashes -r <lock>` install path AND to walk the
+  lock file itself asserting every non-comment line is `==`-pinned and has at
+  least one `--hash=sha256:` continuation.
+- **`test_dockerfile_has_pyjwt`**: extended to also accept `pyjwt[crypto]==…`
+  in the lock file (since the pip install no longer names PyJWT inline).
+
+---
+
 ## [Unreleased] — CI single-pipeline · auto-release · cache-invalidation fixes · mermaid diagrams
 
 Post-1.9.11 consolidation. Collapses the CI to one workflow file that also

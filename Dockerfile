@@ -6,16 +6,15 @@ FROM cgr.dev/chainguard/python:latest-dev@sha256:727c118ee34aab194fa2b25c0116f66
 USER root
 WORKDIR /tmp
 
+# Hash-pinned runtime deps. Every wheel is verified against the SHA-256 in
+# requirements-runtime.lock — man-in-the-middle a mirror and the build
+# aborts. Regenerate the lock with:
+#   pip-compile --generate-hashes --output-file=requirements-runtime.lock \
+#               requirements-runtime.txt
+COPY requirements-runtime.txt requirements-runtime.lock /tmp/
 RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
- && python3 -m pip install --no-cache-dir --target /pydeps \
-       'aiohttp==3.14.1' \
-       'maxminddb==2.8.2' \
-       'psycopg[binary]==3.3.4' \
-       'redis==8.0.1' \
-       'pyotp>=2.9.0' \
-       'qrcode>=7.0' \
-       'cryptography>=46.0.5' \
-       'PyJWT>=2.13.0'
+ && python3 -m pip install --no-cache-dir --require-hashes --target /pydeps \
+       -r /tmp/requirements-runtime.lock
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime
 # has no shell or coreutils so we can't mkdir/ln there.

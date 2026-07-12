@@ -1,0 +1,23 @@
+# CI-only tools (linters, scanners, docs, browser drivers).
+#
+# Never installed into the runtime image — only into ephemeral CI runners.
+# Kept out of requirements.txt so runtime `pip install` does not pull them.
+#
+# Regenerate the lock:
+#   pip-compile --generate-hashes --output-file=requirements-tools.lock \
+#               requirements-tools.txt
+
+# Linting & static analysis.
+ruff==0.15.21
+mypy==2.2.0
+vulture==2.16
+bandit==1.9.4
+semgrep==1.169.0
+
+# Supply-chain / dependency scans.
+pip-audit==2.10.1
+pip-licenses==5.5.5
+
+# Browser-based dashboard tests.
+playwright==1.61.0
+pytest-playwright==0.8.0

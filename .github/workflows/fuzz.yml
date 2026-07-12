@@ -1,0 +1,65 @@
+name: fuzz (atheris)
+
+on:
+  # Run daily so drift in the redaction helpers is caught early. Also run
+  # on any change to helpers.py or the harness itself.
+  schedule:
+    - cron: '17 4 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'helpers.py'
+      - 'tests/fuzz/**'
+      - '.github/workflows/fuzz.yml'
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Fuzz duration per target (seconds)'
+        required: false
+        default: '120'
+
+permissions:
+  contents: read
+
+jobs:
+  atheris:
+    name: atheris — redaction helpers
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: '3.11'   # atheris ships wheels for 3.11 only as of 2026-07
+      - name: Install atheris + gateway runtime
+        run: |
+          pip install atheris==2.3.0
+          pip install --require-hashes -r requirements-runtime.lock
+
+      - name: Self-test corpus (fixed inputs — fails fast on regressions)
+        env:
+          UPSTREAM: https://example.com
+          ADMIN_KEY: FUZZ-ADMIN-KEY-DO-NOT-USE
+        run: python3 tests/fuzz/atheris_helpers.py --test
+
+      - name: Coverage-guided fuzz (bounded)
+        env:
+          UPSTREAM: https://example.com
+          ADMIN_KEY: FUZZ-ADMIN-KEY-DO-NOT-USE
+        run: |
+          # libFuzzer flags: max_total_time bounds wall-clock; artifact_prefix
+          # so crash inputs land in a directory we can upload on failure.
+          mkdir -p fuzz-artifacts
+          timeout 240 python3 tests/fuzz/atheris_helpers.py \
+            -max_total_time=${{ github.event.inputs.seconds || '120' }} \
+            -artifact_prefix=fuzz-artifacts/ \
+            || true   # atheris exits non-zero on any assert; artifact upload picks up the reproducer.
+
+      - name: Upload crash inputs (if any)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: atheris-artifacts
+          path: fuzz-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
