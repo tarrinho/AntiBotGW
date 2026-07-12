@@ -16,7 +16,7 @@
 <!-- Per-control status from the aggregated CI workflow, published to the `badges` branch. -->
 [![CI](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml/badge.svg)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
 [![secret-scan](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/secret-scan.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
-[![codeql](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/codeql.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
+[![CodeQL](https://github.com/tarrinho/AntiBotGW/actions/workflows/github-code-scanning/codeql/badge.svg)](https://github.com/tarrinho/AntiBotGW/security/code-scanning)
 [![lint](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/lint.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
 [![tests](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/tests.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
 [![trivy-fs](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/tarrinho/AntiBotGW/badges/trivy-fs.json)](https://github.com/tarrinho/AntiBotGW/actions/workflows/docker.yml)
