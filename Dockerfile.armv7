@@ -19,7 +19,7 @@
 # against). Same functional result as the Debian build.
 
 # ─── Stage 1: build psycopg C extension + install pure-Python deps ───
-FROM python:3.13-alpine3.20 AS builder
+FROM python:3.13-alpine3.20@sha256:40a4559d3d6b2117b1fbe426f17d55b9100fa40609733a1d0c3f39e2151d4b33 AS builder
 
 # 1.9.11 — dl-cdn.alpinelinux.org negotiates TLS unreliably under QEMU armv7;
 # fall back to the Fastly CDN mirror which serves the same repos with a
@@ -41,7 +41,7 @@ RUN python3 -m pip install --no-cache-dir --upgrade pip \
 USER nobody
 
 # ─── Stage 2: runtime — minimal Alpine + libpq shared lib ─────────────
-FROM python:3.13-alpine3.20
+FROM python:3.13-alpine3.20@sha256:40a4559d3d6b2117b1fbe426f17d55b9100fa40609733a1d0c3f39e2151d4b33
 
 RUN apk add --no-cache libpq \
  && apk upgrade --no-cache \

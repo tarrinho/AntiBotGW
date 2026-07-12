@@ -42,4 +42,5 @@ psycopg[binary]>=3.1,<4 ; platform_machine != "armv7l" and platform_machine != "
 # unconditionally and admin/oidc.py imports `jwt` at module load, so PyJWT is
 # effectively required for the package to import at all — declare it. [crypto]
 # pulls in `cryptography`, needed for RS256/ES256 id-tokens (the common case).
-PyJWT[crypto]>=2,<3
+PyJWT[crypto]>=2.13.0,<3   # floor at 2.13.0 — fixes 6 CVEs (key-confusion, crit-header,
+                           # PyJWKClient scheme-allowlist/unbounded-fetch, HMAC-JWK confusion)

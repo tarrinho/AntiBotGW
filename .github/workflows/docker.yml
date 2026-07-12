@@ -33,11 +33,12 @@ env:
   HARBOR_IMAGE:   ${{ vars.HARBOR_IMAGE }}
   GHCR_HOST: ghcr.io
 
+# Least privilege (OpenSSF Scorecard Token-Permissions): the default token is
+# READ-ONLY for every job. The jobs that need to write — push images, upload
+# SARIF, push the badges branch, sign, cut a release — request exactly that scope
+# at the JOB level below.
 permissions:
   contents: read
-  packages: write
-  security-events: write   # for CodeQL / Trivy SARIF upload
-  actions: read            # badges job reads sibling workflow conclusions
 
 jobs:
   # ─── 1. Run the unit + integration tests ─────────────────────────────────
@@ -90,6 +91,10 @@ jobs:
     name: docker build (linux/amd64,linux/arm64)
     needs: tests
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # push image to ghcr
+      id-token: write   # provenance / SBOM attestations (keyless)
     outputs:
       digest:      ${{ steps.build.outputs.digest }}
       version:     ${{ steps.meta.outputs.version }}
@@ -204,6 +209,9 @@ jobs:
     name: trivy CVE scan
     needs: build-scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload Trivy SARIF to code scanning
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
@@ -312,6 +320,9 @@ jobs:
   gitleaks:
     name: Gitleaks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload gitleaks SARIF to code scanning
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
