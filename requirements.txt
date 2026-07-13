@@ -58,7 +58,7 @@ psycopg[binary]==3.3.4 ; platform_machine != "armv7l" and platform_machine != "a
 PyJWT[crypto]==2.13.0
 # 48.0.1 fixes 5 CVEs (bundled-OpenSSL, DNS name-constraint enforcement,
 # non-contiguous-buffer overflow). Bumped from 46.0.5 for scorecard clean-run.
-cryptography==48.0.1
+cryptography==49.0.0
 
 # 1.9.11+ — 2FA (pyotp) and QR-code emit (qrcode) for admin bootstrapping.
 # Pinned here so the wheel set is uniform across dev/CI/prod.
