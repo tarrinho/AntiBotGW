@@ -190,7 +190,7 @@ recommended way to run AntiBot/WAF GW in production.
 | `appsec-antibot-gw` | `appsec-antibot-gw:1.9.12` | The gateway itself — proxies traffic, runs all detectors, serves operator dashboards | **8443** (only port exposed to host) |
 | `appsec-timescaledb` | `timescale/timescaledb:latest-pg16` | Postgres 16 + TimescaleDB — optional persistent event store; switch from SQLite in one click via `/secured/controls` | none (internal only) |
 | `appsecgw-redis` | `redis:7-alpine` | Shared ban store for fleet-mode (multi-replica) deployments; also backs canary token propagation | none (internal only) |
-| `crowdsec` | `crowdsecurity/crowdsec:latest` | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
+| `crowdsec` | `ghcr.io/tarrinho/crowdsec-cached:latest` (see [CrowdSec sidecar](#crowdsec-sidecar-build-or-pull)) | CrowdSec LAPI — subscribes to the community blocklist; gateway uses it as an external intel source | none (internal only) |
 
 Only the gateway exposes a port to the host. TimescaleDB, Redis, and CrowdSec are
 reachable only from the internal Docker network `antibot-net`, and each enforces
@@ -213,6 +213,60 @@ flowchart TB
     end
     GW -->|"UPSTREAM env"| APP["your application"]
 ```
+
+### CrowdSec sidecar (build or pull)
+
+The `crowdsec` service is a **thin wrapper** around `crowdsecurity/crowdsec:latest`
+that adds a daily-cache shim to `cscli hub update` — without it, every container
+restart re-downloads the hub index and any recently-touched whitelists (~5-10 s
+of startup slowdown). The wrapper turns that per-start network hit into a
+per-day one. See [`crowdsec/README.md`](crowdsec/README.md) for the mechanics.
+
+Two ways to use it — pick whichever fits your deployment:
+
+**Option A — pull the pre-built image (recommended)**
+
+Published on every push to `main` by `docker.yml`, multi-arch
+(amd64 · arm64 · armv7 — matches the upstream CrowdSec tag set),
+cosign-signed keyless via Fulcio OIDC.
+
+```yaml
+# docker-compose.yml
+crowdsec:
+  image: ghcr.io/tarrinho/crowdsec-cached:latest
+  # …rest of the service block unchanged
+```
+
+Confirm it's the right image before running:
+
+```bash
+docker pull ghcr.io/tarrinho/crowdsec-cached:latest
+docker inspect ghcr.io/tarrinho/crowdsec-cached:latest \
+  --format '{{ index .Config.Labels "org.opencontainers.image.base.name" }}'
+# → docker.io/crowdsecurity/crowdsec:latest   (upstream MIT source)
+```
+
+**Option B — build locally**
+
+The `./crowdsec/` directory ships in the repo. Use the `build:` block already
+in the bundled `docker-compose.yml`:
+
+```yaml
+crowdsec:
+  build:
+    context: ./crowdsec
+    dockerfile: Dockerfile.crowdsec-cached
+```
+
+Then `docker compose build crowdsec` (or `docker compose up` which builds
+on-demand). Build takes ~30 s on amd64 native, 2-3 min under QEMU for
+cross-arch.
+
+**Licensing / attribution.** The image is a **derivative work** of the
+official `crowdsecurity/crowdsec` (MIT-licensed).
+It is **NOT an official CrowdSec release** and is not affiliated with or
+endorsed by CrowdSec SAS.
+Upstream: <https://github.com/crowdsecurity/crowdsec>.
 
 ### Pre-requisites
 

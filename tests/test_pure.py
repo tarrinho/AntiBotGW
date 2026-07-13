@@ -11826,6 +11826,29 @@ def test_crowdsec_cached_publish_job_wired():
     )
 
 
+def test_readme_documents_crowdsec_cached_pull_option():
+    """README.md must document both ways to use the crowdsec sidecar (build
+    OR pull from ghcr). Downstream users read the README first — if it only
+    mentions the local build, they'll never discover the pre-built image and
+    will keep asking `can you publish this to a registry?`. Anchor: the
+    'CrowdSec sidecar' heading + the ghcr image ref must both be present."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "README.md").read_text()
+    assert "CrowdSec sidecar" in src, (
+        "README.md must have a 'CrowdSec sidecar' section documenting the "
+        "build vs pull choice"
+    )
+    assert "ghcr.io/tarrinho/crowdsec-cached" in src, (
+        "README.md must reference the ghcr.io/tarrinho/crowdsec-cached image "
+        "so downstream users find the pull option"
+    )
+    assert "NOT an official CrowdSec release" in src, (
+        "README.md's crowdsec section must state 'NOT an official CrowdSec "
+        "release' (attribution + trademark hygiene)"
+    )
+
+
 def test_crowdsec_cached_dockerfile_has_oci_attribution_labels():
     """crowdsec/Dockerfile.crowdsec-cached must carry OCI attribution labels
     that make the derivative-work status explicit (title / description /

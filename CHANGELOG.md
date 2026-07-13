@@ -40,7 +40,11 @@ improved.
   `./crowdsec/` build context (missed by MANIFEST for 4+ releases) also now
   ships to the public mirror. OCI attribution labels + README blockquote
   make the derivative-work status of the wrapper explicit (MIT + trademark
-  hygiene — not affiliated with CrowdSec SAS).
+  hygiene — not affiliated with CrowdSec SAS). **`README.md` § Docker
+  Compose deployment** now has a "CrowdSec sidecar (build or pull)"
+  subsection documenting both options with confirm-command + attribution;
+  service-table row for `crowdsec` links there. Guarded by
+  `test_readme_documents_crowdsec_cached_pull_option`.
 
 ### CI single-pipeline consolidation
 
