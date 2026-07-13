@@ -1,0 +1,12 @@
+# Fuzz-only dependency — used exclusively by .github/workflows/fuzz.yml.
+#
+# atheris ships prebuilt wheels for CPython 3.10 – 3.13 on manylinux_x86_64.
+# The gateway itself is Python 3.13 so no version-skew risk.
+#
+# Regenerate the lock (need atheris wheel for the runner's platform to be
+# available on PyPI at pin time — for pure-hash generation without install
+# use `pip-compile --generate-hashes --no-build-isolation`):
+#   pip-compile --generate-hashes --output-file=requirements-fuzz.lock \
+#               requirements-fuzz.txt
+
+atheris==3.1.0

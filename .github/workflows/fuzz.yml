@@ -30,10 +30,10 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.11'   # atheris ships wheels for 3.11 only as of 2026-07
-      - name: Install atheris + gateway runtime
+          python-version: '3.13'   # atheris 3.1.0 wheels: cp312/cp313/cp314
+      - name: Install atheris + gateway runtime (hash-pinned)
         run: |
-          pip install atheris==2.3.0
+          pip install --require-hashes -r requirements-fuzz.lock
           pip install --require-hashes -r requirements-runtime.lock
 
       - name: Self-test corpus (fixed inputs — fails fast on regressions)

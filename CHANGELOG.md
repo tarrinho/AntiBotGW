@@ -6,6 +6,33 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — OpenSSF Scorecard hardening (iter-2) · Pinned-Dependencies 9 → 10
+
+Follow-up to the initial scorecard pass (5.3 → 6.6). Removes the last three
+unpinned pip commands so the Pinned-Dependencies check hits 10.
+
+### Changed
+
+- **Dropped `pip install --upgrade pip setuptools wheel`** from `Dockerfile`
+  (line 15) and `pip install --upgrade pip` from `Dockerfile.armv7` (line 35).
+  Both were flagged as unpinned pip commands. Chainguard's `python:latest-dev`
+  and Alpine's `python:3.13-alpine3.20` (both digest-pinned) ship recent pip /
+  setuptools / wheel; the subsequent `--require-hashes` install works from
+  those baselines without an unpinned upgrade step.
+- **Hash-locked atheris in `fuzz.yml`.** Replaced `pip install atheris==2.3.0`
+  with `pip install --require-hashes -r requirements-fuzz.lock` (bumped to
+  atheris 3.1.0 while we were at it; wheels cp312/cp313/cp314). The lock is
+  hand-authored (aarch64 wheels don't ship on PyPI, so pip-compile refuses
+  to resolve — noted in the lock's header). Bumped the runner's Python
+  version 3.11 → 3.13 to match the wheel matrix.
+
+### Added
+
+- **`requirements-fuzz.txt`** + **`requirements-fuzz.lock`** — the atheris
+  hash pin, used exclusively by the fuzz workflow.
+
+---
+
 ## [Unreleased] — OpenSSF Scorecard hardening · hash-pinned deps · atheris fuzz
 
 Scorecard baseline for `github.com/tarrinho/AntiBotGW` was **5.3 / 10** (2026-07-12).

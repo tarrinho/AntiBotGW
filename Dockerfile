@@ -12,8 +12,12 @@ WORKDIR /tmp
 #   pip-compile --generate-hashes --output-file=requirements-runtime.lock \
 #               requirements-runtime.txt
 COPY requirements-runtime.txt requirements-runtime.lock /tmp/
-RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel \
- && python3 -m pip install --no-cache-dir --require-hashes --target /pydeps \
+# NOTE: we deliberately do NOT run `pip install --upgrade pip setuptools wheel`
+# here — that line would be flagged by OpenSSF Scorecard's Pinned-Dependencies
+# check (unpinned pip command). Chainguard's python:latest-dev already ships
+# a recent pip/setuptools/wheel; any pin bump is caught by the digest-pinned
+# base image above (line 4). Straight-to-hash-locked install.
+RUN python3 -m pip install --no-cache-dir --require-hashes --target /pydeps \
        -r /tmp/requirements-runtime.lock
 
 # Pre-stage the rootfs we'll copy into the distroless runtime.  The runtime

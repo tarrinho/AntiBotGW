@@ -1,6 +1,8 @@
 # OpenSSF Scorecard — hardening checklist
 
 Baseline scan (2026-07-12, commit `8f7bba1…`): **5.3 / 10**.
+After iter-1 (2026-07-13, commit `9058c03…`): **6.6 / 10**.
+Target after iter-2 (this commit) + settings changes: **~8.5 / 10**.
 
 This document lists every check that scored below 10 and the exact action
 that lifts it. Items marked "code" are already applied on `main`; items
@@ -14,7 +16,7 @@ Code cannot flip these — GitHub access is unauthenticated only).
 | Check | Before | After | Fix |
 |-------|--------|-------|-----|
 | Vulnerabilities | 3 | **10** | Exact-pinned `PyJWT==2.13.0`, `pytest==9.1.1`, bumped `cryptography` 46.0.5 → 48.0.1 (5 CVEs), `maxminddb` 2.8.2 → 3.1.1 (Dockerfile drift). Osv-scanner mis-reads `>=X` ranges — `==` pins force it to see the fixed version. |
-| Pinned-Dependencies | 5 | **10** | Generated hash-pinned lock files (`pip-compile --generate-hashes`): `requirements.lock` (all deps), `requirements-runtime.lock` (image amd64/arm64), `requirements-runtime-armv7.lock`, `requirements-tools.lock` (CI linters/scanners). Every `pip install` in Dockerfiles + workflows now uses `--require-hashes -r <lock>`. Replaced `syft` `curl … \| sh` install with SHA-pinned `anchore/sbom-action@e22c389…` (v0.24.0). |
+| Pinned-Dependencies | 5 | **10** | Generated hash-pinned lock files (`pip-compile --generate-hashes`): `requirements.lock` (all deps), `requirements-runtime.lock` (image amd64/arm64), `requirements-runtime-armv7.lock`, `requirements-tools.lock` (CI linters/scanners), `requirements-fuzz.lock` (atheris — hand-authored, aarch64 wheel gap). Every `pip install` in Dockerfiles + workflows now uses `--require-hashes -r <lock>`. Dropped `pip install --upgrade pip setuptools wheel` bootstrap lines (unpinned; not needed — base image ships recent tooling). Replaced `syft` `curl … \| sh` install with SHA-pinned `anchore/sbom-action@e22c389…` (v0.24.0). |
 | Fuzzing | 0 | **10** | Added `tests/fuzz/atheris_helpers.py` — atheris-based coverage-guided fuzz of `_strip_admin_key_from_qs` and `_strip_own_session_cookie` (credential-leak invariants). New `.github/workflows/fuzz.yml` runs daily + on `helpers.py` changes. Scorecard's Fuzzing check greps for `import atheris` — the harness satisfies detection AND is executed. |
 
 ## Settings changes — repo owner must apply

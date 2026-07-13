@@ -31,9 +31,12 @@ RUN apk add --no-cache \
         libffi-dev
 
 # Hash-pinned runtime deps (see requirements-runtime-armv7.lock).
+# NOTE: we deliberately do NOT run `pip install --upgrade pip` here — that
+# line would be flagged by OpenSSF Scorecard's Pinned-Dependencies check
+# (unpinned pip command). Alpine's python:3.13-alpine3.20 ships a recent pip;
+# any pin bump is caught by the digest-pinned base image above.
 COPY requirements-runtime-armv7.txt requirements-runtime-armv7.lock /tmp/
-RUN python3 -m pip install --no-cache-dir --upgrade pip \
- && python3 -m pip install --no-cache-dir --require-hashes --target /pydeps \
+RUN python3 -m pip install --no-cache-dir --require-hashes --target /pydeps \
         -r /tmp/requirements-runtime-armv7.lock
 
 USER nobody
