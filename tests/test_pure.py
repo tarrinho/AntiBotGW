@@ -11794,6 +11794,67 @@ def test_scorecard_scripts_target_correct_owner():
         )
 
 
+def test_crowdsec_cached_publish_job_wired():
+    """docker.yml must have a `crowdsec-cached` job that:
+      - builds from the actual `./crowdsec` context (not a stale path),
+      - references the real Dockerfile filename,
+      - pushes to a ghcr `crowdsec-cached` image,
+      - signs the pushed image with cosign,
+      - includes armv7 in the platforms list (matches upstream CrowdSec).
+    Any of these regressing silently would mean the wrapper image stops
+    reaching consumers, and downstream users would fall back to the
+    `build: context: ./crowdsec` path (which only works with the repo
+    cloned)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    wf = (root / ".github/workflows/docker.yml").read_text()
+    assert "crowdsec-cached:" in wf, "crowdsec-cached job missing from docker.yml"
+    assert "context: ./crowdsec" in wf, (
+        "crowdsec-cached job must set `context: ./crowdsec`"
+    )
+    assert "file: ./crowdsec/Dockerfile.crowdsec-cached" in wf, (
+        "crowdsec-cached job must reference the actual Dockerfile filename"
+    )
+    assert "crowdsec-cached" in wf and "ghcr" in wf.lower(), (
+        "crowdsec-cached job must publish to ghcr (a `ghcr.io/<owner>/crowdsec-cached` image)"
+    )
+    assert "cosign sign" in wf, (
+        "crowdsec-cached job must sign the pushed image with cosign (keyless)"
+    )
+    assert "linux/arm/v7" in wf, (
+        "crowdsec-cached platforms list must include armv7 to match upstream CrowdSec"
+    )
+
+
+def test_crowdsec_cached_dockerfile_has_oci_attribution_labels():
+    """crowdsec/Dockerfile.crowdsec-cached must carry OCI attribution labels
+    that make the derivative-work status explicit (title / description /
+    licenses / vendor / source / base.name). Missing labels would let the
+    image ship without machine-readable attribution — the MIT licence
+    permits redistribution but preserving attribution is our contract."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "crowdsec/Dockerfile.crowdsec-cached").read_text()
+    for label_key in (
+        "org.opencontainers.image.title",
+        "org.opencontainers.image.description",
+        "org.opencontainers.image.source",
+        "org.opencontainers.image.base.name",
+        "org.opencontainers.image.licenses",
+        "org.opencontainers.image.vendor",
+    ):
+        assert f'LABEL {label_key}=' in src, (
+            f"crowdsec Dockerfile missing OCI label: {label_key}"
+        )
+    # Explicit "NOT an official CrowdSec build" phrasing — MIT compliance +
+    # trademark hygiene. Downstream users must not be able to mistake this
+    # image for an official CrowdSec release.
+    assert "NOT an official CrowdSec build" in src, (
+        "crowdsec Dockerfile must explicitly state it is NOT an official "
+        "CrowdSec build (trademark hygiene)"
+    )
+
+
 def test_scorecard_md_references_docs_scorecard_playbook():
     """Top-level SCORECARD.md must point readers at docs/scorecard/ so the
     playbook is discoverable — else the pre-filled answers / rules.json /

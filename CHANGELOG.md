@@ -6,6 +6,66 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — CI job publishes `crowdsec-cached` to ghcr on every push
+
+Follow-up to the previous entry (which shipped the `./crowdsec/` build
+context to the public mirror). Downstream users can now skip the local
+build entirely and pull the pre-built image from
+`ghcr.io/tarrinho/crowdsec-cached`.
+
+### Added
+
+- **`docker.yml` job `crowdsec-cached`** — runs in parallel with the main
+  `build-scan` job (both `needs: tests`). Multi-arch build (amd64 + arm64 +
+  armv7 to match upstream CrowdSec's tag set), pushes to
+  `ghcr.io/<owner>/crowdsec-cached` with tags `latest`,
+  `<GW_VERSION>`, and `sha-<short>`. Cosign-signs the pushed image with
+  the same keyless (Fulcio OIDC) flow as the main image. On PR builds
+  the build runs but no push happens (parity with `build-scan`).
+
+### Tests (2 new, all pass)
+
+- `test_crowdsec_cached_publish_job_wired` — asserts the job exists in
+  docker.yml and points at the real context (`./crowdsec`), Dockerfile,
+  ghcr image, cosign sign step, and includes armv7 in `platforms:`.
+- `test_crowdsec_cached_dockerfile_has_oci_attribution_labels` — the 6
+  OCI labels stay attached (title, description, source, base.name,
+  licenses, vendor) and the "NOT an official CrowdSec build" phrasing
+  stays in the Dockerfile (trademark hygiene).
+
+### Docs
+
+- `docker-compose.yml` `crowdsec:` service now has TWO options:
+  1. **Local build** (current default) — `build: context: ./crowdsec` still
+     works.
+  2. **Pull pre-built** — swap the `build:` block for
+     `image: ghcr.io/tarrinho/crowdsec-cached:latest`; no rebuild needed.
+
+---
+
+## [Unreleased] — Ship the `crowdsec/` build context to the public mirror
+
+Reported downstream: `docker-compose.yml` references `crowdsec: build:
+context: ./crowdsec` but the 3 files that make up that context
+(`Dockerfile.crowdsec-cached`, `cscli-shim.sh`, `README.md`) were absent
+from `copy-to-github.sh` MANIFEST, so `docker compose up` on the public
+mirror failed with "no build context". Added the 3 files to MANIFEST.
+
+Also added attribution + licensing metadata so downstream users can
+verify the derivative-work status at a glance:
+
+- `Dockerfile.crowdsec-cached` — 7 OCI image labels
+  (`org.opencontainers.image.{title,description,source,base.name,licenses,vendor,documentation}`)
+  making explicit that this is a **derivative** of the MIT-licensed
+  `crowdsecurity/crowdsec` and not affiliated with CrowdSec SAS.
+- `crowdsec/README.md` — attribution blockquote at the top of the file
+  pointing to upstream + reiterating "NOT an official CrowdSec release".
+
+Verified by rebuilding the image and dumping labels via `docker inspect`.
+Zero runtime behaviour change.
+
+---
+
 ## [Unreleased] — Scorecard playbook artifacts + rules.md §13e + 6 QA tests
 
 Ships the owner-side artifacts that lift the remaining red scorecard checks.

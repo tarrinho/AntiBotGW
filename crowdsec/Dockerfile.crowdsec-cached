@@ -1,0 +1,56 @@
+# Thin wrapper image that adds a daily-cache shim to `cscli`.
+# Result: `cscli hub update` / `cscli hub upgrade` runs at most once per UTC day.
+# The official upstream entrypoint logic is otherwise unchanged.
+#
+# Build (single-arch local):
+#   docker build -f Dockerfile.crowdsec-cached -t crowdsec-cached:latest .
+#
+# Multi-arch (matches CrowdSec official tags amd64/arm64/armv7):
+#   docker buildx build \
+#     --platform linux/amd64,linux/arm64,linux/arm/v7 \
+#     -f Dockerfile.crowdsec-cached \
+#     -t harbor.example/crowdsec-cached:latest --push .
+#
+# To force a fresh hub update on next start (clears the daily stamp):
+#   docker exec crowdsec rm -f /var/lib/crowdsec/data/.hub_update_stamp
+FROM crowdsecurity/crowdsec:latest
+
+# OCI image labels — attribution + explicit separation from the official
+# CrowdSec build. This image is a DERIVATIVE WORK: the upstream
+# `crowdsecurity/crowdsec` is MIT-licensed (see
+# https://github.com/crowdsecurity/crowdsec/blob/master/LICENSE); the
+# `cscli-shim.sh` script in this repo is also MIT under the AntiBotGW
+# project's Apache-2.0-compatible re-license.
+LABEL org.opencontainers.image.title="crowdsec-cached"
+LABEL org.opencontainers.image.description="Thin wrapper around crowdsecurity/crowdsec:latest that caches `cscli hub update` to at-most-once-per-day. NOT an official CrowdSec build."
+LABEL org.opencontainers.image.source="https://github.com/tarrinho/AntiBotGW"
+LABEL org.opencontainers.image.base.name="docker.io/crowdsecurity/crowdsec:latest"
+LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.vendor="tarrinho — derivative work; not affiliated with or endorsed by CrowdSec SAS"
+LABEL org.opencontainers.image.documentation="https://github.com/tarrinho/AntiBotGW/blob/main/crowdsec/README.md"
+
+# Resolve real cscli location at build time so the shim doesn't have to.
+# Some image tags ship cscli at /usr/local/bin/cscli, others at /usr/bin/cscli;
+# detect dynamically and freeze the path into an env var the shim reads.
+COPY cscli-shim.sh /usr/local/bin/cscli-shim
+RUN set -eu \
+ && CSCLI_PATH="$(command -v cscli)" \
+ && echo "[build] real cscli is at $CSCLI_PATH — moving aside for shim" \
+ && mv "$CSCLI_PATH" "${CSCLI_PATH}.real" \
+ && install -m 0755 /usr/local/bin/cscli-shim "$CSCLI_PATH" \
+ && rm /usr/local/bin/cscli-shim \
+ && printf 'CSCLI_REAL=%s\n' "${CSCLI_PATH}.real" > /etc/cscli-shim.env \
+ # Make CSCLI_REAL available to every shell that runs cscli, including the
+ # crowdsec daemon's internal subprocess invocations.
+ && echo "export CSCLI_REAL=${CSCLI_PATH}.real" >> /etc/profile.d/cscli-shim.sh \
+ && chmod 0644 /etc/profile.d/cscli-shim.sh
+
+# `cscli --version` invocation as a build-time sanity check — proves the
+# shim's passthrough path works against the bundled real binary.
+RUN CSCLI_REAL=$(grep '^CSCLI_REAL=' /etc/cscli-shim.env | cut -d= -f2) \
+ && CSCLI_REAL="$CSCLI_REAL" cscli version >/dev/null \
+ && echo "[build] cscli shim passthrough OK"
+
+# Inject CSCLI_REAL into the runtime environment via ENV so child processes
+# inherit it (e.g. when crowdsec daemon spawns cscli internally).
+ENV CSCLI_REAL=/usr/local/bin/cscli.real
