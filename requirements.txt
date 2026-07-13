@@ -31,7 +31,7 @@ pytest-cov==7.1.0
 # via @pytest.mark.flaky(reruns=N) so real regressions still fail loudly. CI
 # tests job passes --reruns 1 as a global safety net for transient network
 # / clock-skew flakes.
-pytest-rerunfailures==15.1
+pytest-rerunfailures==16.4
 # 1.9.11 — property-based / fuzz testing (test_v1911_property_redaction.py fuzzes
 # the admin-key / session-cookie redaction helpers). Pure-Python, test-only.
 hypothesis==6.156.6
