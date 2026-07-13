@@ -19,6 +19,6 @@ redis==8.0.1
 maxminddb==3.1.1
 psycopg[binary]==3.3.4 ; platform_machine != "armv7l" and platform_machine != "armv6l"
 PyJWT[crypto]==2.13.0
-cryptography==48.0.1
+cryptography==49.0.0
 pyotp==2.10.0
-qrcode==7.4.2
+qrcode==8.2

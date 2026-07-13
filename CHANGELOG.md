@@ -6,6 +6,30 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — Dependabot bump sweep (6 PRs closed inline)
+
+Applied all six of the currently-open Dependabot PRs (#18–#23) in a single
+local commit so we can push through the private mirror pipeline rather than
+merging each PR individually on the public mirror:
+
+- **GitHub Actions** (SHA-repinned to new tags)
+  - `ossf/scorecard-action` v2.4.1 → **v2.4.3** (`4eaacf0…`)
+  - `sigstore/cosign-installer` v3.10.1 → **v4.1.2** (`6f9f177…`) — Node-24
+  - `actions/upload-artifact` v4.6.2/v5.0.0 → **v7.0.1** (`043fb46…`) — 3 files updated (docker.yml, scorecard.yml, fuzz.yml)
+
+- **Python deps** (exact-pinned in `requirements.txt` + `requirements-runtime.txt`, locks regenerated)
+  - `cryptography` 48.0.1 → **49.0.0** — closes the drift with `requirements-tools.lock` which already forced 49.0.0
+  - `qrcode` 7.4.2 → **8.2** — API compat verified: `QRCode`, `add_data`, `make`, `make_image(image_factory=SvgPathImage)`, `qrcode.constants.ERROR_CORRECT_M` all still work (used by `admin/users.py::totp_setup_endpoint`)
+  - `pytest-rerunfailures` 15.1 → **16.4** — 16.x drops py3.8, adds py3.14; marker API stable
+
+### Verified
+
+- `pip-audit -r requirements.txt` → 0 vulns.
+- Fresh venv, hash-locked install of `requirements.lock` → all imports OK.
+- `pytest tests/test_pure.py` → 938 passed (+1 pre-existing unrelated UI failure).
+
+---
+
 ## [Unreleased] — OpenSSF Scorecard hardening (iter-2) · Pinned-Dependencies 9 → 10
 
 Follow-up to the initial scorecard pass (5.3 → 6.6). Removes the last three
