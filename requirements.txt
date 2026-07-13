@@ -63,4 +63,4 @@ cryptography==48.0.1
 # 1.9.11+ — 2FA (pyotp) and QR-code emit (qrcode) for admin bootstrapping.
 # Pinned here so the wheel set is uniform across dev/CI/prod.
 pyotp==2.10.0
-qrcode==7.4.2
+qrcode==8.2
