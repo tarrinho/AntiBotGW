@@ -3,6 +3,7 @@
 Baseline scan (2026-07-12, commit `8f7bba1…`): **5.3 / 10**.
 After iter-1 (2026-07-13, commit `9058c03…`): **6.6 / 10**.
 After iter-2 (Pinned-Deps 9 → 10, unpinned pip cleanup): **6.7 / 10**.
+Shipped in **1.9.12** (2026-07-13): all iter-1 + iter-2 code fixes, projected **~7.0 / 10**.
 Target after settings + questionnaire in [`docs/scorecard/`](docs/scorecard/): **~8.5-9.0 / 10**.
 
 ## Playbook — see `docs/scorecard/`

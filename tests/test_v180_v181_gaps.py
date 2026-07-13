@@ -296,8 +296,8 @@ class TestControlCenterPage:
 
     def test_version_string_in_title(self):
         src = _dash("control_center.html")
-        assert "AntiBotWaf_GW_1.9.11" in src, (
-            "control_center.html: version string AntiBotWaf_GW_1.9.11 missing from <title>"
+        assert "AntiBotWaf_GW_1.9.12" in src, (
+            "control_center.html: version string AntiBotWaf_GW_1.9.12 missing from <title>"
         )
 
     def test_active_nav_link_is_control_center(self):

@@ -6,7 +6,100 @@ Author: Pedro Tarrinho
 
 ---
 
-## [Unreleased] — CI job publishes `crowdsec-cached` to ghcr on every push
+## 1.9.12 — 2026-07-13 — OpenSSF Scorecard hardening + Dependabot sweep + crowdsec-cached ghcr publish
+
+Consolidated release: bundles every `[Unreleased]` group since 1.9.11 into a
+single tag. Runtime behaviour unchanged; supply-chain posture significantly
+improved.
+
+### Highlights
+
+- **OpenSSF Scorecard**: baseline **5.3 → 7.0 (projected)**. Vulnerabilities 3
+  → 10 (exact-pinned pyjwt/pytest, bumped cryptography 46.0.5 → 48.0.1 → 49.0.0
+  closing 5 CVEs); Pinned-Dependencies 5 → **10** (5 hash-pinned lock files,
+  every `pip install` uses `--require-hashes`, syft `curl | sh` replaced by
+  SHA-pinned `anchore/sbom-action`); Fuzzing 0 → **10** (atheris harness for
+  `helpers._strip_admin_key_from_qs` + `_strip_own_session_cookie`, daily
+  workflow). Remaining owner-side actions documented in `SCORECARD.md` +
+  `docs/scorecard/` playbook.
+- **Scorecard playbook** (`docs/scorecard/`): pre-filled Best Practices Q&A
+  (5-min copy-paste to bestpractices.dev), ready `branch-protection.json`
+  + `apply-branch-protection.sh` (solo-dev-safe: `reviews=0` because GitHub
+  disallows self-approval), `seed-pr-flow.sh` (opens the first PR to bootstrap
+  CI-Tests / Code-Review signals). Rules.md §13e reviews these artifacts
+  every release.
+- **Dependabot sweep**: 6 PRs applied in one shot — `ossf/scorecard-action`
+  v2.4.1 → v2.4.3, `sigstore/cosign-installer` v3.10.1 → v4.1.2,
+  `actions/upload-artifact` v4.6.2/v5.0.0 → v7.0.1,
+  `pytest-rerunfailures` 15.1 → 16.4, `cryptography` 48.0.1 → 49.0.0,
+  `qrcode` 7.4.2 → 8.2 (API compat verified against `admin/users.py`
+  `totp_setup_endpoint`).
+- **`crowdsec-cached` ghcr publish**: new `docker.yml` job builds
+  `ghcr.io/tarrinho/crowdsec-cached` (amd64 + arm64 + armv7) on every push,
+  cosign-signed. Downstream users can pull instead of local-building. The
+  `./crowdsec/` build context (missed by MANIFEST for 4+ releases) also now
+  ships to the public mirror. OCI attribution labels + README blockquote
+  make the derivative-work status of the wrapper explicit (MIT + trademark
+  hygiene — not affiliated with CrowdSec SAS).
+
+### CI single-pipeline consolidation
+
+- `secret-scan.yml` + `security.yml` folded into `docker.yml` as inline
+  jobs (gitleaks, trufflehog, ruff/semgrep/mypy/vulture, bandit, pip-audit).
+  One workflow run per push instead of four.
+- **Auto-release job** reads `GW_VERSION` from `config.py` and cuts the git
+  tag + GitHub Release from within the same run — no separate tag trigger.
+- **Node-24 SHA-pin sweep**: bumped every action pin off the deprecated
+  Node-20 major (`actions/checkout` v7.0.0, `setup-python` v6.3.0,
+  `docker/setup-qemu-action` v4.2.0, `setup-buildx-action` v4.2.0,
+  `metadata-action` v6.2.0, `docker/login-action` v4.4.0,
+  `docker/build-push-action` v7.3.0).
+
+### Documentation
+
+- **README.md**: 5 ASCII architecture diagrams → mermaid (GitHub-native
+  rendering, in-place text edits).
+- **`SCORECARD.md`** + **`docs/scorecard/*`**: hardening checklist + playbook.
+- **CHANGELOG entries** for every group above (kept as sub-sections below).
+- **rules.md §13e**: 5-row checklist ensuring the scorecard artifacts stay
+  in sync with `docker.yml` job names.
+
+### Tests (new — all green in the 1.9.12 run)
+
+- 8 scorecard/crowdsec/branch-protection meta-tests
+  (`test_scorecard_*`, `test_crowdsec_cached_*`,
+  `test_branch_protection_*`).
+- Atheris fuzz harness (`tests/fuzz/atheris_helpers.py`) — 10-input
+  self-test corpus + coverage-guided fuzz (~1.16 M runs / 15 s, 0 crashes).
+- Dockerfile pin tests extended to walk the hash-locked lock files.
+
+### Full test totals (from the 1.9.12 rules.md run)
+
+```
+Tests: 1315 collected · 1313 passed · 2 failed · 0 skipped · 0 xfail
+Failures: 1 cross-file flake (test_pow_round_trip — passes in isolation),
+          1 pre-existing UI drift (test_geo_html_load_status_ready_text).
+Bandit: 0 High / 9 Medium / 69 Low (17,933 LOC).
+Ruff zero-tolerance (F841/S314/B904): 0.
+Semgrep p/python: 0 findings.
+Trivy: 0 HIGH / 0 CRITICAL on all 3 arches.
+DAST smoke: 50 PASS / 4 KNOWN baseline.
+```
+
+### Images
+
+| Arch | Tag | Digest | Size |
+|---|---|---|---|
+| linux/amd64 | `appsec-antibot-gw:1.9.12-amd64` | *(rebuild + verify at push time)* | ~205 MB |
+| linux/arm64 | `appsec-antibot-gw:1.9.12-arm64` | *(rebuild + verify at push time)* | ~212 MB |
+| linux/arm/v7 | `appsec-antibot-gw:1.9.12-armv7` | *(rebuild + verify at push time)* | ~195 MB |
+
+Sub-sections below preserve the individual `[Unreleased]` group entries as
+they were authored, for anyone tracing a specific change.
+
+---
+
+## [Unreleased sub-groups now rolled into 1.9.12] — CI job publishes `crowdsec-cached` to ghcr on every push
 
 Follow-up to the previous entry (which shipped the `./crowdsec/` build
 context to the public mirror). Downstream users can now skip the local

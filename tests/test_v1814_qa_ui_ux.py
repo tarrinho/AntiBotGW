@@ -37,7 +37,7 @@ class TestVhostPolicyVersion:
 
     def test_title_shows_1814(self):
         src = _read("vhost_policy.html")
-        assert "AntiBotWaf_GW_1.9.11" in src, "Page title must contain AntiBotWaf_GW_1.9.11"
+        assert "AntiBotWaf_GW_1.9.12" in src, "Page title must contain AntiBotWaf_GW_1.9.12"
 
     def test_sidebar_brand_ver_shows_1814(self):
         import config as _cfg
@@ -321,7 +321,7 @@ class TestAgentsVersion:
 
     def test_title_shows_1814(self):
         src = _read("agents.html")
-        assert "AntiBotWaf_GW_1.9.11" in src
+        assert "AntiBotWaf_GW_1.9.12" in src
 
     def test_sidebar_brand_ver_shows_1814(self):
         import config as _cfg
@@ -371,7 +371,7 @@ class TestCrossDashboardVersion:
         # config.GW_VERSION instead of a hardcoded literal, so this test
         # tracks every bump automatically and never goes stale again.
         import config as _cfg
-        _ver = _cfg.GW_VERSION.rsplit("_", 1)[1]   # "AntiBotWaf_GW_1.9.11" → "1.9.4"
+        _ver = _cfg.GW_VERSION.rsplit("_", 1)[1]   # "AntiBotWaf_GW_1.9.12" → "1.9.4"
         src = _read(dashboard)
         assert re.search(
             r'id="sidebar-brand-ver"[^>]*>\s*' + re.escape(_ver) + r'\s*<', src), \

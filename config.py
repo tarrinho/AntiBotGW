@@ -22,7 +22,7 @@ from typing import Dict
 import aiohttp
 from aiohttp import web, ClientSession, ClientTimeout
 
-GW_VERSION = "AntiBotWaf_GW_1.9.11"
+GW_VERSION = "AntiBotWaf_GW_1.9.12"
 
 # ── Configuration ──────────────────────────────────────────────────────────
 import os
