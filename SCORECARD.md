@@ -2,7 +2,32 @@
 
 Baseline scan (2026-07-12, commit `8f7bba1…`): **5.3 / 10**.
 After iter-1 (2026-07-13, commit `9058c03…`): **6.6 / 10**.
-Target after iter-2 (this commit) + settings changes: **~8.5 / 10**.
+After iter-2 (Pinned-Deps 9 → 10, unpinned pip cleanup): **6.7 / 10**.
+Target after settings + questionnaire in [`docs/scorecard/`](docs/scorecard/): **~8.5-9.0 / 10**.
+
+## Playbook — see `docs/scorecard/`
+
+The owner-side actions below are backed by machine-checkable artifacts under
+`docs/scorecard/`:
+
+- **`docs/scorecard/bestpractices-answers.md`** — every OpenSSF Best Practices
+  criterion pre-filled with the project's evidence. Copy-paste into
+  <https://www.bestpractices.dev/> to earn the badge in ~5 min instead of 20.
+- **`docs/scorecard/branch-protection.json`** + **`apply-branch-protection.sh`** —
+  the exact `PUT /repos/.../branches/main/protection` body plus a `gh api`
+  wrapper. Idempotent; a repeat run overwrites the same rules.
+  **Solo-dev config**: `required_approving_review_count: 0` — GitHub
+  disallows self-approval, so a ≥ 1 setting would lock the sole maintainer
+  out. PR-flow, status checks, force-push block, deletion block, and
+  admin-enforcement all remain active. Bump the count only when a second
+  maintainer joins.
+- **`docs/scorecard/seed-pr-flow.sh`** — opens the first PR (`chore: seed
+  PR flow`), waits for CI, merges. Seeds `CI-Tests` / `Code-Review` /
+  `Signed-Releases` scorecard signals which are currently `-1` / `0` because
+  no PRs have ever landed.
+
+QA tests in `tests/test_pure.py` (`test_scorecard_artifacts_*`) keep these
+in sync with `docker.yml`'s job names and the publish manifest.
 
 This document lists every check that scored below 10 and the exact action
 that lifts it. Items marked "code" are already applied on `main`; items

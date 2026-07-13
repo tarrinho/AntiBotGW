@@ -11663,3 +11663,145 @@ def test_login_html_has_escapehtml():
         "§17a requires every dashboard to define it so future edits cannot "
         "accidentally introduce an unescaped innerHTML sink."
     )
+
+
+# ── §13e: OpenSSF Scorecard artifacts (docs/scorecard/) ────────────────────
+#
+# These tests keep the hand-authored scorecard playbook in sync with the
+# actual pipeline. If any assertion here fires, the scorecard artifacts have
+# drifted from reality — fix the artifact, not the test.
+
+_SCORECARD_DIR = "docs/scorecard"
+_SCORECARD_FILES = {
+    "bestpractices-answers.md": {"executable": False},
+    "branch-protection.json":   {"executable": False},
+    "apply-branch-protection.sh": {"executable": True},
+    "seed-pr-flow.sh":           {"executable": True},
+}
+
+
+def test_scorecard_artifacts_all_present_and_executable():
+    """Every file rules.md §13e names under docs/scorecard/ must exist,
+    and the two shell scripts must be executable."""
+    import os as _os
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for name, meta in _SCORECARD_FILES.items():
+        p = root / _SCORECARD_DIR / name
+        assert p.exists(), f"missing scorecard artifact: {p}"
+        if meta["executable"]:
+            assert _os.access(p, _os.X_OK), (
+                f"scorecard script must be executable (chmod +x): {p}"
+            )
+
+
+def test_scorecard_artifacts_in_publish_manifest():
+    """copy-to-github.sh MANIFEST must include every docs/scorecard/ artifact,
+    else `publish.sh` silently strips the playbook from the public mirror."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    manifest = (root / "copy-to-github.sh").read_text()
+    for name in _SCORECARD_FILES:
+        needle = f'"{_SCORECARD_DIR}/{name}"'
+        assert needle in manifest, (
+            f"copy-to-github.sh MANIFEST missing entry for {_SCORECARD_DIR}/{name}"
+        )
+
+
+def test_branch_protection_contexts_match_docker_yml():
+    """branch-protection.json's required_status_checks.contexts must be a
+    subset of the actual `name:` fields on jobs in docker.yml. Otherwise
+    `apply-branch-protection.sh` sets a rule that can never be satisfied —
+    every PR sits forever waiting on a check that never runs."""
+    import json
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    rules = json.loads((root / _SCORECARD_DIR / "branch-protection.json").read_text())
+    contexts = set(rules["required_status_checks"]["contexts"])
+    docker_yml = (root / ".github/workflows/docker.yml").read_text()
+    # Job `name:` fields — collected as strings from workflow lines like
+    #   `    name: pytest (3 layers · 68 tests)`.
+    names = set(
+        m.group(1).strip()
+        for m in re.finditer(r"^\s+name:\s+(.+?)$", docker_yml, flags=re.MULTILINE)
+    )
+    missing = contexts - names
+    assert not missing, (
+        "branch-protection.json requires status contexts that no docker.yml "
+        f"job emits (rule cannot be satisfied): {sorted(missing)}"
+    )
+
+
+def test_branch_protection_json_has_least_privilege_shape():
+    """branch-protection.json must keep the safety invariants:
+    - block force-push
+    - block deletion
+    - admins are NOT exempt from PR / status-check flow (enforce_admins: true)
+    - stale reviews auto-dismiss (if reviews are required at all)
+
+    NOTE — `required_approving_review_count` is deliberately allowed to be 0
+    because this is a solo-dev project: GitHub does not allow authors to
+    approve their own PRs, so requiring ≥ 1 review would lock the maintainer
+    out. Scorecard's Branch-Protection score caps ~6/10 as a result, but
+    that's a hard product-of-solo-authorship, not a config bug. Bump the
+    minimum here if a second maintainer joins."""
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    rules = json.loads((root / _SCORECARD_DIR / "branch-protection.json").read_text())
+    assert rules["allow_force_pushes"] is False, (
+        "branch-protection.json must not allow force-pushes"
+    )
+    assert rules["allow_deletions"] is False, (
+        "branch-protection.json must not allow branch deletion"
+    )
+    assert rules["enforce_admins"] is True, (
+        "branch-protection.json must enforce PR-flow for admins too "
+        "(so status checks still run; scorecard downgrades otherwise)"
+    )
+    reviews = rules["required_pull_request_reviews"]
+    assert reviews["required_approving_review_count"] >= 0, (
+        "required_approving_review_count must be a non-negative integer"
+    )
+    # Solo-dev sanity: if reviews > 0 we would lock the sole maintainer out.
+    # Keep this at 0 until a second reviewer joins the project.
+    assert reviews["required_approving_review_count"] == 0, (
+        "solo-dev config: required_approving_review_count must be 0 "
+        "(GitHub disallows self-approval; > 0 would block every PR). "
+        "Raise this only after adding a second maintainer."
+    )
+    assert reviews["dismiss_stale_reviews"] is True, (
+        "dismiss_stale_reviews must stay true so a re-push invalidates old "
+        "approvals — no effect at count=0, but survives the day a second "
+        "reviewer is added."
+    )
+
+
+def test_scorecard_scripts_target_correct_owner():
+    """apply-branch-protection.sh and seed-pr-flow.sh must default to
+    tarrinho/AntiBotGW — a silent typo in the OWNER/REPO defaults would
+    otherwise open PRs / write protection rules against the wrong repo."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for name in ("apply-branch-protection.sh", "seed-pr-flow.sh"):
+        src = (root / _SCORECARD_DIR / name).read_text()
+        assert 'OWNER="${OWNER:-tarrinho}"' in src, (
+            f"{name}: OWNER default must be 'tarrinho'"
+        )
+        assert 'REPO="${REPO:-AntiBotGW}"' in src, (
+            f"{name}: REPO default must be 'AntiBotGW'"
+        )
+
+
+def test_scorecard_md_references_docs_scorecard_playbook():
+    """Top-level SCORECARD.md must point readers at docs/scorecard/ so the
+    playbook is discoverable — else the pre-filled answers / rules.json /
+    seed script rot in isolation."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    src = (root / "SCORECARD.md").read_text()
+    assert "docs/scorecard" in src or "bestpractices-answers" in src, (
+        "SCORECARD.md must reference the docs/scorecard/ playbook so operators "
+        "find bestpractices-answers.md / branch-protection.json / seed-pr-flow.sh"
+    )

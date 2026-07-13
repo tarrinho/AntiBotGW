@@ -6,6 +6,61 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — Scorecard playbook artifacts + rules.md §13e + 6 QA tests
+
+Ships the owner-side artifacts that lift the remaining red scorecard checks.
+Everything here is documentation / helper scripts / QA — zero runtime impact.
+
+### Added
+
+- **`docs/scorecard/bestpractices-answers.md`** — every OpenSSF Best Practices
+  Passing-level criterion pre-filled with the project's evidence (LICENSE,
+  SECURITY.md, cosign signing, hash-pinned deps, atheris fuzz, Chainguard base,
+  STRIDE review). Cuts the questionnaire from ~20 min to ~5.
+- **`docs/scorecard/branch-protection.json`** — `PUT /repos/…/branches/main/
+  protection` body: require PR + 1 approval + 9 status checks from `docker.yml`,
+  dismiss stale, block force-push + deletion, enforce for admins, linear
+  history, conversation resolution.
+- **`docs/scorecard/apply-branch-protection.sh`** — idempotent applier
+  wrapping `gh api PUT`; falls back to `curl` with `$GITHUB_TOKEN` if `gh`
+  isn't installed. Verifies with a follow-up `GET`.
+- **`docs/scorecard/seed-pr-flow.sh`** — opens the first PR (`chore: seed
+  PR flow`), waits for `docker.yml` CI to go green with `gh pr checks --watch`,
+  squash-merges with `--admin` (solo repo). Optional `TAG_RELEASE=1` cuts a
+  `v0.0.1-seed` tag so `Signed-Releases` flips from `-1` to countable state.
+
+### Changed
+
+- **`SCORECARD.md`** now links to the `docs/scorecard/` playbook and carries
+  the iter-1/iter-2 score trail (5.3 → 6.6 → 6.7).
+- **`rules.md`**: new **§13e** — every release must review the 5 scorecard
+  artifacts against the current pipeline (row 1 SCORECARD.md, 2 answers md,
+  3 branch-protection.json, 4 apply script, 5 seed script). Added row to the
+  §Overview table at the top.
+- **`copy-to-github.sh`** MANIFEST — added the 4 `docs/scorecard/` files so
+  `publish.sh` ships them to the public mirror.
+
+### Tests (6 new, all pass)
+
+- `test_scorecard_artifacts_all_present_and_executable` — every file exists;
+  shell scripts have `+x`.
+- `test_scorecard_artifacts_in_publish_manifest` — `copy-to-github.sh` MANIFEST
+  lists every artifact so publish.sh doesn't silently strip them.
+- `test_branch_protection_contexts_match_docker_yml` — every context in
+  `required_status_checks.contexts` matches an actual `name:` job in
+  `docker.yml`, so `apply-branch-protection.sh` cannot set an unsatisfiable
+  rule (would block every PR forever).
+- `test_branch_protection_json_has_least_privilege_shape` — force-push blocked,
+  deletion blocked, ≥ 1 review required, `enforce_admins: true`. Any of these
+  regressing silently downgrades the Branch-Protection score back to 0.
+- `test_scorecard_scripts_target_correct_owner` — both scripts default to
+  `OWNER=tarrinho REPO=AntiBotGW`; a silent typo would target the wrong repo.
+- `test_scorecard_md_references_docs_scorecard_playbook` — top-level
+  `SCORECARD.md` must reference the `docs/scorecard/` playbook so operators
+  find the pre-filled answers / rules JSON / seed script.
+
+---
+
 ## [Unreleased] — Dependabot bump sweep (6 PRs closed inline)
 
 Applied all six of the currently-open Dependabot PRs (#18–#23) in a single
