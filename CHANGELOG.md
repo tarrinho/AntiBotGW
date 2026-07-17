@@ -8,9 +8,11 @@ Author: Pedro Tarrinho
 
 ## 1.9.12 — 2026-07-13 — OpenSSF Scorecard hardening + Dependabot sweep + crowdsec-cached ghcr publish
 
-Consolidated release: bundles every `[Unreleased]` group since 1.9.11 into a
-single tag. Runtime behaviour unchanged; supply-chain posture significantly
-improved.
+Consolidated release: bundles the OpenSSF Scorecard hardening, Dependabot
+sweep, and `crowdsec-cached` work into a single tag. The CI single-pipeline /
+auto-release / mermaid / Node-24 follow-on is grouped under **[1.9.11]** below
+(theme-split — authored post-1.9.11). Runtime behaviour unchanged; supply-chain
+posture significantly improved.
 
 ### Highlights
 
@@ -47,6 +49,8 @@ improved.
   `test_readme_documents_crowdsec_cached_pull_option`.
 
 ### CI single-pipeline consolidation
+
+_Detailed sub-section grouped under [1.9.11] below (theme-split)._
 
 - `secret-scan.yml` + `security.yml` folded into `docker.yml` as inline
   jobs (gitleaks, trufflehog, ruff/semgrep/mypy/vulture, bandit, pip-audit).
@@ -98,19 +102,20 @@ DAST smoke: 50 PASS / 4 KNOWN baseline.
 | linux/arm64 | `appsec-antibot-gw:1.9.12-arm64` | *(rebuild + verify at push time)* | ~212 MB |
 | linux/arm/v7 | `appsec-antibot-gw:1.9.12-armv7` | *(rebuild + verify at push time)* | ~195 MB |
 
-Sub-sections below preserve the individual `[Unreleased]` group entries as
-they were authored, for anyone tracing a specific change.
+Sub-sections below preserve the individual group entries (1.9.12 detail).
+The CI single-pipeline / auto-release / mermaid / Node-24 follow-on is grouped
+under **[1.9.11]** below (per theme, though authored post-1.9.11).
 
 ---
 
-## [Unreleased sub-groups now rolled into 1.9.12] — CI job publishes `crowdsec-cached` to ghcr on every push
+### CI job publishes `crowdsec-cached` to ghcr on every push
 
 Follow-up to the previous entry (which shipped the `./crowdsec/` build
 context to the public mirror). Downstream users can now skip the local
 build entirely and pull the pre-built image from
 `ghcr.io/tarrinho/crowdsec-cached`.
 
-### Added
+#### Added
 
 - **`docker.yml` job `crowdsec-cached`** — runs in parallel with the main
   `build-scan` job (both `needs: tests`). Multi-arch build (amd64 + arm64 +
@@ -120,7 +125,7 @@ build entirely and pull the pre-built image from
   the same keyless (Fulcio OIDC) flow as the main image. On PR builds
   the build runs but no push happens (parity with `build-scan`).
 
-### Tests (2 new, all pass)
+#### Tests (2 new, all pass)
 
 - `test_crowdsec_cached_publish_job_wired` — asserts the job exists in
   docker.yml and points at the real context (`./crowdsec`), Dockerfile,
@@ -130,7 +135,7 @@ build entirely and pull the pre-built image from
   licenses, vendor) and the "NOT an official CrowdSec build" phrasing
   stays in the Dockerfile (trademark hygiene).
 
-### Docs
+#### Docs
 
 - `docker-compose.yml` `crowdsec:` service now has TWO options:
   1. **Local build** (current default) — `build: context: ./crowdsec` still
@@ -138,9 +143,7 @@ build entirely and pull the pre-built image from
   2. **Pull pre-built** — swap the `build:` block for
      `image: ghcr.io/tarrinho/crowdsec-cached:latest`; no rebuild needed.
 
----
-
-## [Unreleased] — Ship the `crowdsec/` build context to the public mirror
+### Ship the `crowdsec/` build context to the public mirror
 
 Reported downstream: `docker-compose.yml` references `crowdsec: build:
 context: ./crowdsec` but the 3 files that make up that context
@@ -161,14 +164,12 @@ verify the derivative-work status at a glance:
 Verified by rebuilding the image and dumping labels via `docker inspect`.
 Zero runtime behaviour change.
 
----
-
-## [Unreleased] — Scorecard playbook artifacts + rules.md §13e + 6 QA tests
+### Scorecard playbook artifacts + rules.md §13e + 6 QA tests
 
 Ships the owner-side artifacts that lift the remaining red scorecard checks.
 Everything here is documentation / helper scripts / QA — zero runtime impact.
 
-### Added
+#### Added
 
 - **`docs/scorecard/bestpractices-answers.md`** — every OpenSSF Best Practices
   Passing-level criterion pre-filled with the project's evidence (LICENSE,
@@ -186,7 +187,7 @@ Everything here is documentation / helper scripts / QA — zero runtime impact.
   squash-merges with `--admin` (solo repo). Optional `TAG_RELEASE=1` cuts a
   `v0.0.1-seed` tag so `Signed-Releases` flips from `-1` to countable state.
 
-### Changed
+#### Changed
 
 - **`SCORECARD.md`** now links to the `docs/scorecard/` playbook and carries
   the iter-1/iter-2 score trail (5.3 → 6.6 → 6.7).
@@ -197,7 +198,7 @@ Everything here is documentation / helper scripts / QA — zero runtime impact.
 - **`copy-to-github.sh`** MANIFEST — added the 4 `docs/scorecard/` files so
   `publish.sh` ships them to the public mirror.
 
-### Tests (6 new, all pass)
+#### Tests (6 new, all pass)
 
 - `test_scorecard_artifacts_all_present_and_executable` — every file exists;
   shell scripts have `+x`.
@@ -216,9 +217,7 @@ Everything here is documentation / helper scripts / QA — zero runtime impact.
   `SCORECARD.md` must reference the `docs/scorecard/` playbook so operators
   find the pre-filled answers / rules JSON / seed script.
 
----
-
-## [Unreleased] — Dependabot bump sweep (6 PRs closed inline)
+### Dependabot bump sweep (6 PRs closed inline)
 
 Applied all six of the currently-open Dependabot PRs (#18–#23) in a single
 local commit so we can push through the private mirror pipeline rather than
@@ -234,20 +233,18 @@ merging each PR individually on the public mirror:
   - `qrcode` 7.4.2 → **8.2** — API compat verified: `QRCode`, `add_data`, `make`, `make_image(image_factory=SvgPathImage)`, `qrcode.constants.ERROR_CORRECT_M` all still work (used by `admin/users.py::totp_setup_endpoint`)
   - `pytest-rerunfailures` 15.1 → **16.4** — 16.x drops py3.8, adds py3.14; marker API stable
 
-### Verified
+#### Verified
 
 - `pip-audit -r requirements.txt` → 0 vulns.
 - Fresh venv, hash-locked install of `requirements.lock` → all imports OK.
 - `pytest tests/test_pure.py` → 938 passed (+1 pre-existing unrelated UI failure).
 
----
-
-## [Unreleased] — OpenSSF Scorecard hardening (iter-2) · Pinned-Dependencies 9 → 10
+### OpenSSF Scorecard hardening (iter-2) · Pinned-Dependencies 9 → 10
 
 Follow-up to the initial scorecard pass (5.3 → 6.6). Removes the last three
 unpinned pip commands so the Pinned-Dependencies check hits 10.
 
-### Changed
+#### Changed
 
 - **Dropped `pip install --upgrade pip setuptools wheel`** from `Dockerfile`
   (line 15) and `pip install --upgrade pip` from `Dockerfile.armv7` (line 35).
@@ -262,21 +259,19 @@ unpinned pip commands so the Pinned-Dependencies check hits 10.
   to resolve — noted in the lock's header). Bumped the runner's Python
   version 3.11 → 3.13 to match the wheel matrix.
 
-### Added
+#### Added
 
 - **`requirements-fuzz.txt`** + **`requirements-fuzz.lock`** — the atheris
   hash pin, used exclusively by the fuzz workflow.
 
----
-
-## [Unreleased] — OpenSSF Scorecard hardening · hash-pinned deps · atheris fuzz
+### OpenSSF Scorecard hardening · hash-pinned deps · atheris fuzz
 
 Scorecard baseline for `github.com/tarrinho/AntiBotGW` was **5.3 / 10** (2026-07-12).
 This drop lifts every code-side check to 10; the remaining lift comes from three
 repo-settings actions the owner must apply (see `SCORECARD.md`). Target after
 settings changes: **~8.5 / 10**.
 
-### Changed (supply chain — scorecard code fixes)
+#### Changed (supply chain — scorecard code fixes)
 
 - **Vulnerabilities → 10/10.** All 7 CVEs flagged by scorecard (6 pyjwt, 1
   pytest) resolved by switching `requirements.txt` from `>=X,<Y` ranges to
@@ -307,7 +302,7 @@ settings changes: **~8.5 / 10**.
   on any push to `helpers.py`/`tests/fuzz/`, and via `workflow_dispatch`.
   Bounded via libFuzzer `-max_total_time`; crash inputs upload as artifacts.
 
-### Added
+#### Added
 
 - **`SCORECARD.md`** — one-shot hardening checklist. Lists the three remaining
   repo-settings actions the owner must apply (Branch Protection on `main`,
@@ -321,7 +316,7 @@ settings changes: **~8.5 / 10**.
   semgrep, pip-audit, pip-licenses, playwright, pytest-playwright); never
   installed into the runtime image.
 
-### Tests
+#### Tests
 
 - **`test_dockerfile_pip_deps_use_exact_pins`** + armv7 counterpart: extended
   to accept the new `--require-hashes -r <lock>` install path AND to walk the
@@ -330,16 +325,20 @@ settings changes: **~8.5 / 10**.
 - **`test_dockerfile_has_pyjwt`**: extended to also accept `pyjwt[crypto]==…`
   in the lock file (since the pip install no longer names PyJWT inline).
 
----
+## [1.9.11] — 2026-07-10 — Dependabot round-up + README badges + full SHA-pin sweep
 
-## [Unreleased] — CI single-pipeline · auto-release · cache-invalidation fixes · mermaid diagrams
+Absorbs the 11 Dependabot PRs the new `dependabot.yml` (1.9.10) opened, adds
+the AI-Monitoring-style README badge row, and turns `docker.yml` into an
+aggregated CI + badges publisher that also pushes/signs a ghcr.io image.
+
+### CI single-pipeline · auto-release · cache-invalidation fixes · mermaid diagrams — post-1.9.11 follow-on
 
 Post-1.9.11 consolidation. Collapses the CI to one workflow file that also
 tags/releases itself, fixes cross-test cache leaks that flaked CI on `main`,
 and swaps the ASCII architecture diagrams for mermaid so future updates are
 in-place text edits.
 
-### Changed (CI / supply chain)
+#### Changed (CI / supply chain)
 
 - **Single-pipeline `docker.yml`.** Folded the former `secret-scan.yml` +
   `security.yml` into `docker.yml` as inline jobs (gitleaks · trufflehog · ruff/
@@ -368,7 +367,7 @@ in-place text edits.
   between `requirements.txt` (bumped in 1.9.11) and the runtime image pip
   install (still on 5.x, unnoticed by the requirements-driven test suite).
 
-### Fixed (test cross-contamination — CI flakes on main)
+#### Fixed (test cross-contamination — CI flakes on main)
 
 - **`_VHOST_STATS_CACHE` (15 s TTL) leaks across tests.** 4 failing tests in
   `test_code_review_fixes.py` / `test_control_center.py` — test A seeded
@@ -386,7 +385,7 @@ in-place text edits.
   JSON-key form `'"db":'` — stricter, not looser (matches an actual leak of
   the authenticated payload).
 
-### Fixed (build / publish gates)
+#### Fixed (build / publish gates)
 
 - **`_seed/` shim.** Dockerfile L48 `COPY _seed/ …` fails on the public mirror
   because the GeoLite2 mmdbs are blocklisted per MaxMind EULA. Added an empty
@@ -398,7 +397,7 @@ in-place text edits.
   for literal `$0 == hdr` — semver is safe today, but a future non-semver tag
   with a regex metachar would break the old form.
 
-### Changed (docs)
+#### Changed (docs)
 
 - **`README.md` architecture diagrams → mermaid.** All five ASCII blocks
   (main architecture · cookie-gate decision tree · MaxMind self-maintenance
@@ -409,14 +408,6 @@ in-place text edits.
   block is now paired with a "update when …" condition (new detection layer,
   new Compose service, threshold or ban-class change, etc.). Stale diagrams
   are treated as correctness bugs in the docs.
-
----
-
-## [1.9.11] — 2026-07-10 — Dependabot round-up + README badges + full SHA-pin sweep
-
-Absorbs the 11 Dependabot PRs the new `dependabot.yml` (1.9.10) opened, adds
-the AI-Monitoring-style README badge row, and turns `docker.yml` into an
-aggregated CI + badges publisher that also pushes/signs a ghcr.io image.
 
 ### Changed (dependencies)
 

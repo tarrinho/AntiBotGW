@@ -143,6 +143,61 @@ The thresholds (`SOFT_CHALLENGE_SCORE`, `RISK_BAN_THRESHOLD`, `RISK_BAN_THRESHOL
 
 ---
 
+## Build a specific image (the easy way)
+
+Three architectures share one repo. **Pick your target — only the build command changes.**
+
+| Your machine / target | Build command |
+|---|---|
+| **amd64** (Intel/AMD PC, most cloud VMs) | `docker build --platform linux/amd64 -t appsec-antibot-gw:1.9.12 .` |
+| **arm64** (Apple Silicon, Raspberry Pi 64-bit, AWS Graviton) | `docker build --platform linux/arm64 -t appsec-antibot-gw:1.9.12 .` |
+| **armv7** (Raspberry Pi 32-bit OS) | `docker build --platform linux/arm/v7 -f Dockerfile.armv7 -t appsec-antibot-gw:1.9.12 .` |
+
+> ⚠️ On an arm64 host, **leaving out `--platform` silently builds an arm64 image** — even with `Dockerfile.armv7`. Always pass the flag for the arch you actually want.
+
+**Don't want to build?** Pull the pre-built, cosign-signed image instead:
+
+```bash
+docker pull ghcr.io/tarrinho/antibotgw:1.9.12
+```
+
+### Start it (minimal)
+
+```bash
+KEY="$(openssl rand -base64 24 | tr '+/' '-_' | tr -d '=')"
+
+docker run -d --name antibotgw -p 8443:8443 \
+  -e UPSTREAM="https://your-app.example.com" \
+  -e ADMIN_KEY="$KEY" \
+  -e ADMIN_ALLOWED_IPS="127.0.0.1" \
+  -v antibot-data:/data \
+  appsec-antibot-gw:1.9.12
+
+echo "admin key: $KEY"
+```
+
+`UPSTREAM` (the app you're protecting) is the **only required** variable. The named
+volume `antibot-data` is created automatically and holds the signing keys + SQLite DB.
+
+### Verify it's up
+
+```bash
+docker ps --filter name=antibotgw --format '{{.Status}}'   # → "Up … (healthy)" after ~15s
+curl -sI http://127.0.0.1:8443/ | head -1                  # proxy answers (challenge or upstream)
+```
+
+> The internal `/…/live` healthcheck is **loopback-only** (runs inside the container), so
+> check liveness with `docker ps` health — a host `curl` to `/live` returns 404 by design.
+
+Operator dashboard → **http://127.0.0.1:8443/secured/control-center**
+(open it from an IP listed in `ADMIN_ALLOWED_IPS`, and authenticate with the printed admin key).
+
+Put TLS in front in production (`nginx`, `caddy`, `cloudflared`) — the proxy is HTTP-only on `:8443`.
+For the **hardened** run (read-only rootfs, `--cap-drop ALL`, memory/pid caps) see the Quick start
+below; for the **full stack** (Redis + CrowdSec + Postgres) jump to Docker Compose.
+
+---
+
 ## Quick start
 
 ```bash
@@ -485,6 +540,16 @@ Plus protocol-level support:
 - **Edge-injected security response headers** on HTML (XFO, nosniff, HSTS, COOP, CORP, Permissions-Policy with explicit Privacy-Sandbox opt-out, …)
 
 ### External integrations (1.5.4)
+
+![Cloudflare Turnstile](https://img.shields.io/badge/Cloudflare-Turnstile-F38020?logo=cloudflare&logoColor=white)
+![AbuseIPDB](https://img.shields.io/badge/AbuseIPDB-IP%20reputation-1A73E8)
+![CrowdSec](https://img.shields.io/badge/CrowdSec-LAPI%20blocklist-3B49DF?logo=crowdsec&logoColor=white)
+![MaxMind](https://img.shields.io/badge/MaxMind-GeoLite2-0B3D91)
+![Tor](https://img.shields.io/badge/Tor-exit%20nodes-7D4698?logo=torproject&logoColor=white)
+![Redis](https://img.shields.io/badge/Redis-shared%20state-FF4438?logo=redis&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-TimescaleDB-4169E1?logo=postgresql&logoColor=white)
+
+<sub>Optional, opt-in providers — the gateway runs standalone without any of them. Details below.</sub>
 
 | Integration | Purpose | Effective weight |
 |---|---|---|
