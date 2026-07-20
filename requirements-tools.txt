@@ -8,7 +8,7 @@
 #               requirements-tools.txt
 
 # Linting & static analysis.
-ruff==0.15.21
+ruff==0.15.22
 mypy==2.2.0
 vulture==2.16
 bandit==1.9.4
