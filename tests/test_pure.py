@@ -11826,6 +11826,38 @@ def test_crowdsec_cached_publish_job_wired():
     )
 
 
+def test_docker_yml_pr_builds_single_arch_when_load_true():
+    """docker.yml build-push-action steps that set `load: true` on PRs must
+    also restrict `platforms` to a single arch. Multi-arch + load fails at
+    build time with `docker exporter does not currently support exporting
+    manifest lists` — because `docker load` (the Docker daemon's local image
+    ingest) does not understand OCI manifest lists. The workflow uses a
+    ternary on `github.event_name == 'pull_request'` to switch to single-arch
+    on PR builds; regressing that (e.g. hardcoding multi-arch again) would
+    break every PR CI run."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    wf = (root / ".github/workflows/docker.yml").read_text()
+    # Every occurrence of `load: ${{ github.event_name == 'pull_request' }}`
+    # (there are two — main image + crowdsec-cached) must have a matching
+    # ternary on `platforms:` that yields a single arch for the PR branch.
+    load_lines = [i for i, ln in enumerate(wf.splitlines())
+                  if "load: ${{ github.event_name == 'pull_request' }}" in ln]
+    assert load_lines, (
+        "expected at least one `load: ${{ github.event_name == 'pull_request' }}` "
+        "in docker.yml — has the CI flow been rewritten?"
+    )
+    lines = wf.splitlines()
+    for i in load_lines:
+        # look at the surrounding block (± 8 lines) for the platforms ternary
+        block = "\n".join(lines[max(0, i - 8): i + 2])
+        assert "github.event_name == 'pull_request' && 'linux/amd64'" in block, (
+            f"docker.yml line {i + 1}: `load: true` on PR without a matching "
+            "single-arch `platforms:` ternary — multi-arch + load fails at "
+            "build time. See test docstring."
+        )
+
+
 def test_readme_documents_crowdsec_cached_pull_option():
     """README.md must document both ways to use the crowdsec sidecar (build
     OR pull from ghcr). Downstream users read the README first — if it only

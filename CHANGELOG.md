@@ -6,6 +6,40 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — CI fix: PR builds are single-arch when `load: true`
+
+**Bug fixed.** `docker.yml`'s build-push-action steps used `load: true` on
+PRs so downstream jobs (trivy image scan, DAST smoke) could read the
+just-built image from the runner's Docker daemon. Together with
+`platforms: linux/amd64,linux/arm64` (and armv7 for the crowdsec-cached
+job), buildx failed at build time with:
+
+```
+ERROR: failed to build: docker exporter does not currently support
+       exporting manifest lists
+```
+
+Root cause: `docker load` (the local daemon's image ingest) does not
+understand OCI manifest lists — you can only load a single-arch image.
+
+**Fix.** Both `platforms:` fields (main image + `crowdsec-cached`) now
+switch on `github.event_name`:
+
+- **PR builds** — `linux/amd64` only. `load: true` succeeds; downstream
+  scans / smoke tests can read the loaded image.
+- **push / release builds** — `linux/amd64,linux/arm64` (main image) and
+  `linux/amd64,linux/arm64,linux/arm/v7` (crowdsec-cached). No `load`,
+  straight push to ghcr.
+
+**Guard.** New pure-Python test
+`test_docker_yml_pr_builds_single_arch_when_load_true` scans docker.yml,
+finds every `load: ${{ github.event_name == 'pull_request' }}` line, and
+asserts the surrounding block contains the matching single-arch ternary
+on `platforms:`. Prevents a future edit from silently regressing to the
+multi-arch + load state that crashed builds today.
+
+---
+
 ## 1.9.12 — 2026-07-13 — OpenSSF Scorecard hardening + Dependabot sweep + crowdsec-cached ghcr publish
 
 Consolidated release: bundles the OpenSSF Scorecard hardening, Dependabot
