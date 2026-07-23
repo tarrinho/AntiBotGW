@@ -11826,6 +11826,33 @@ def test_crowdsec_cached_publish_job_wired():
     )
 
 
+def test_dockerfile_base_images_are_digest_pinned():
+    """Every `FROM` line in Dockerfile / Dockerfile.armv7 must carry a
+    `@sha256:...` digest pin. `FROM foo:tag` alone is a mutable reference
+    — Chainguard rebuilds `:latest` continuously (that's the point), so
+    the build is only reproducible when the digest is pinned. Also, the
+    Trivy image scan is only meaningful if we rebuild from a digest that
+    matches what we scanned; a bare `:latest` scan a day later hits a
+    different image, and a HIGH may slip in overnight without warning."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent
+    for name in ("Dockerfile", "Dockerfile.armv7"):
+        src = (root / name).read_text()
+        for i, line in enumerate(src.splitlines(), start=1):
+            stripped = line.strip()
+            if not stripped.startswith("FROM"):
+                continue
+            # Ignore FROM <local-stage-alias>; only care about registry refs.
+            after_from = stripped[len("FROM"):].strip().split()[0]
+            if "/" not in after_from and ":" not in after_from:
+                continue
+            assert "@sha256:" in after_from, (
+                f"{name}:{i}: FROM line is not digest-pinned — {stripped!r}. "
+                "Every base image must use `image:tag@sha256:<64-hex>` so "
+                "rebuilds are reproducible and Trivy scans stay meaningful."
+            )
+
+
 def test_docker_yml_pr_builds_single_arch_when_load_true():
     """docker.yml build-push-action steps that set `load: true` on PRs must
     also restrict `platforms` to a single arch. Multi-arch + load fails at

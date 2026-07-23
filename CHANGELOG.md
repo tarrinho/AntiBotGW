@@ -6,6 +6,37 @@ Author: Pedro Tarrinho
 
 ---
 
+## [Unreleased] — Base-image CVE fix (CVE-2026-11940) + digest-pin guard
+
+**Trivy image scan** on the published `ghcr.io/tarrinho/antibotgw` flagged
+1 HIGH:
+
+- **CVE-2026-11940** (Python 3.14.6-r1 in Chainguard's Wolfi base) — fixed
+  in 3.14.6-r3. Advisory:
+  `tarfile.extractall()` with the `data`/`tar` filter could be bypassed.
+
+The vuln lives entirely in the base image — none of the gateway's own
+Python code went near it. Fix is to bump the Chainguard digest pin.
+
+### Changed
+
+- **`Dockerfile`**: bumped Chainguard base digests.
+  - `cgr.dev/chainguard/python:latest-dev@sha256:727c118e…` → `@sha256:31d31817…`
+  - `cgr.dev/chainguard/python:latest@sha256:48b99516…` → `@sha256:2c6a2e8b…`
+- Rebuilt the arm64 image with the new base — local `trivy image --severity
+  HIGH,CRITICAL` returns 0 findings.
+
+### Added — regression guard
+
+- **`test_dockerfile_base_images_are_digest_pinned`** — every `FROM
+  <registry>/<image>:<tag>` line in `Dockerfile` and `Dockerfile.armv7`
+  must carry a `@sha256:<hex>` digest. A bare `:latest` (or any tag
+  without a pin) fails the test. Without the pin, Chainguard's continuous
+  rebuild silently changes what we ship AND breaks the meaning of the
+  Trivy scan (rebuild-a-day-later hits a different image).
+
+---
+
 ## [Unreleased] — CI fix: PR builds are single-arch when `load: true`
 
 **Bug fixed.** `docker.yml`'s build-push-action steps used `load: true` on
