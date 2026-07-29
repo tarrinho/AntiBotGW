@@ -6,7 +6,114 @@ Author: Pedro Tarrinho
 
 ---
 
-## [Unreleased] — Base-image CVE fix (CVE-2026-11940) + digest-pin guard
+## [1.9.12] — 2026-07-28 — event-loop blocking fix · CSP allowlist cleanup · base-image CVE · CI single-arch PR builds
+
+Three previously separate `[Unreleased]` blocks are folded here — all three
+landed on 1.9.12 (version held per version-bump discipline: a bugfix/hardening
+iteration rebuilds the same tag).
+
+### Part 1 — Event-loop blocking fix + CSP allowlist cleanup + repo hygiene
+
+Findings from the 1.9.12 architecture review (`ARCH_REVIEW_1.9.12.md`,
+items T1-2 / T1-3 step 1 / T3-4). No behavioural change to detection,
+scoring, or the proxy data path.
+
+### Fixed
+
+- **Admin/dashboard endpoints no longer block the event loop.** 32 handlers
+  across `core/proxy_handler.py`, `dashboards/{analytics,agents,siem}.py` and
+  `admin/{users,mesh}.py` opened a DB connection and ran the query directly on
+  the single event loop. Because the gateway runs one process with one loop
+  (`web.run_app`), a synchronous `SELECT … GROUP BY` over the events table
+  stalled **every in-flight proxied request** for its full duration —
+  `top_attackers_endpoint` alone issued three such queries. Effects: latency
+  spikes on production traffic whenever an operator opened a dashboard, and a
+  heavy aggregate could stall the loopback `/live` healthcheck (3 s timeout)
+  into an orchestrator restart. In practice the admin UI was a DoS vector
+  against the site the gateway protects.
+
+  New `db.conn.aquery(fn)` helper runs a unit of DB work on a worker thread
+  with a backend-aware connection and closes it there. Only the query moves;
+  every mutation of in-process state (`ip_state`, counters, caches) stays on
+  the event loop after the await, so no new races are introduced.
+
+  `logs_export_endpoint` needed a different shape: it interleaves `resp.write()`
+  with cursor iteration, and a `sqlite3` connection is thread-affine
+  (`check_same_thread` defaults to `True`), so it cannot hop between arbitrary
+  `asyncio.to_thread` workers. It now uses a per-request `max_workers=1`
+  executor, which pins the connection to one thread and preserves the original
+  chunked-cursor streaming (no `fetchall` of up to 100 k rows into RAM).
+
+  `proxy.on_startup` is intentionally exempt — it runs before the server
+  accepts traffic.
+
+### Fixed — release-blocking test failures
+
+- **`db.sqlite.inject_theme` implemented; 7 dashboards wired through it.** The
+  1.9.6 "per-dashboard theme bake" was specified as tests and documented in
+  `GW-Tests-Full.md` as shipped, but **the function never existed** — the
+  identifier appeared only inside the test that imported it, so
+  `test_v196_dashboard_theme_injection.py` failed 3/3 with `ImportError`.
+  Five dashboards already inlined the same `.replace('<html lang="en">', …
+  data-theme=…)` pattern against `get_ui_theme()`; six served their HTML
+  constant raw, so their `<head>` init script fell back to the OS
+  `prefers-color-scheme` and the theme flipped dark↔light when navigating
+  between pages.
+
+  Added the shared helper next to `get_ui_theme` in `db/sqlite.py`, exported it
+  via `db/__init__.py`, and routed `dashboard`, `control_center`, `geo`, `logs`
+  (in `core/proxy_handler.py`), `agents`, and `siem` through it. Also converted
+  `honeypots.py`, whose inline version was correct but split across two lines
+  and therefore invisible to the guard's per-line regex.
+
+- **`controls.html` done-state pill text: "Loading Ready" → "Ready".** 1.9.5
+  identified this string as a typo and fixed it in `geo.html`, but the same
+  literal in `controls.html` was missed by that sweep.
+
+- **Removed the stale `test_geo_html_load_status_ready_text`** (added 1.7.7).
+  It asserted `"Loading Ready" in geo.html` while three 1.9.5 tests
+  (`test_v195_geo_loading_pill.py:17`, `test_geo_dashboard.py:152,185`) assert
+  the string is **absent** — the suite simultaneously required the text to be
+  present and absent. 1.9.5 is the later decision and the one with coverage, so
+  the 1.7.7 test is the stale side and was dropped.
+
+### Security
+
+- **Removed `https://cdn.jsdelivr.net` from all 7 dashboard CSP policies.**
+  Zero references remained in any of the 15 dashboard HTML files — Chart.js is
+  vendored at `/antibot-appsec-gateway/assets/chart.umd.min.js`. The entry was
+  a `script-src` permission granted to an origin the product no longer uses.
+  `unpkg.com` is retained on the geo dashboard only, where Leaflet is still
+  loaded (SRI-pinned, with an on-page fallback banner).
+
+  Note: `'unsafe-inline'` remains in `script-src` on the dashboards and is
+  **not** addressed here. Moving to a nonce CSP (the pattern already proven by
+  `admin/users.py` for the login page) additionally requires refactoring 272
+  inline `on*=` handler attributes, which nonces cannot cover. Tracked as
+  T1-3 steps 2–3 in `ARCH_REVIEW_1.9.12.md`.
+
+### Tests
+
+- `tests/test_pure.py::test_no_blocking_db_calls_in_async_endpoints` — AST
+  guard that walks `proxy.py` plus `core/`, `dashboards/`, `admin/`, `db/`,
+  `reputation/`, `integrations/`, `detection/`, `challenge/` and fails if any
+  `async def` reaches `open_conn()` / `sqlite3.connect()` outside a nested sync
+  function. Prevents regressions as new dashboard endpoints are added.
+
+### Housekeeping
+
+- Moved 16 superseded working-tree artifacts (~650 KB) into git-ignored
+  `_attic/`, taking the repo root from 90 entries to 79: `*.orig` shadow copies
+  (`config.py.orig`, `proxy.py.orig`, `vhost.py.orig`, `dashboards/siem.py.orig`
+  — these polluted grep results and the 65 source-inspection tests), one-shot
+  `fix_theme_v{2,3,4}.py` migration scripts, `*-199.log` build logs,
+  `analysis.result.md`, `report-1.2.html`, empty `gw.db` / `gw.sqlite`, and a
+  stray `Users/` tree. The live `antibot.db` (16 MB) was deliberately left in
+  place. Nothing published changed — `copy-to-github.sh` uses an allow-list
+  MANIFEST and already excluded all of these (`antibot.db` is explicitly
+  blocked at line 608).
+
+### Part 2 — Base-image CVE fix (CVE-2026-11940) + digest-pin guard
 
 **Trivy image scan** on the published `ghcr.io/tarrinho/antibotgw` flagged
 1 HIGH:
@@ -20,11 +127,32 @@ Python code went near it. Fix is to bump the Chainguard digest pin.
 
 ### Changed
 
-- **`Dockerfile`**: bumped Chainguard base digests.
-  - `cgr.dev/chainguard/python:latest-dev@sha256:727c118e…` → `@sha256:31d31817…`
-  - `cgr.dev/chainguard/python:latest@sha256:48b99516…` → `@sha256:2c6a2e8b…`
-- Rebuilt the arm64 image with the new base — local `trivy image --severity
-  HIGH,CRITICAL` returns 0 findings.
+- **`Dockerfile`**: bumped Chainguard base digests — **twice**, see below.
+  - First bump (closing CVE-2026-11940, python 3.14.6-r1 → r3):
+    - `python:latest-dev@sha256:727c118e…` → `@sha256:31d31817…`
+    - `python:latest@sha256:48b99516…` → `@sha256:2c6a2e8b…`
+  - Second bump (2026-07-28, closing CVE-2026-15308, python 3.14.6-r3 → r4):
+    - `python:latest-dev@sha256:31d31817…` → `@sha256:3be081f6…`
+    - `python:latest@sha256:2c6a2e8b…` → `@sha256:b3d3fbb8…`
+
+**Why a second bump.** The validation scan for this release found the first
+bump's claim ("0 findings") had gone stale: an arm64 image built from the
+`31d31817…`/`2c6a2e8b…` pins scanned **2 HIGH — CVE-2026-15308** (CPU denial of
+service in CPython's HTML parser via repeated unterminated input; python
+3.14.6-r3, fixed in r4). CVE-2026-11940 *was* confirmed closed by that first
+bump — the built image ships 3.14.6-r3 and Trivy no longer reports it — but
+Chainguard's continuously-rebuilt base had picked up a new advisory in the
+interim.
+
+This is the digest-pin treadmill the `test_dockerfile_base_images_are_digest_pinned`
+guard is designed to make visible: pinning keeps the build reproducible, but the
+pin must be re-scanned and refreshed each release rather than trusted from the
+last one. Verified before rebuilding — `trivy image cgr.dev/chainguard/python:latest`
+on the new digest reports 0 vulnerabilities.
+
+Rebuilt arm64 on the refreshed pins: **`trivy image --severity CRITICAL,HIGH`
+→ 0 findings, exit 0.** amd64 and armv7 not rebuilt (see `validation/1.9.12.md`
+Step 14).
 
 ### Added — regression guard
 
@@ -35,9 +163,7 @@ Python code went near it. Fix is to bump the Chainguard digest pin.
   rebuild silently changes what we ship AND breaks the meaning of the
   Trivy scan (rebuild-a-day-later hits a different image).
 
----
-
-## [Unreleased] — CI fix: PR builds are single-arch when `load: true`
+### Part 3 — CI fix: PR builds are single-arch when `load: true`
 
 **Bug fixed.** `docker.yml`'s build-push-action steps used `load: true` on
 PRs so downstream jobs (trivy image scan, DAST smoke) could read the

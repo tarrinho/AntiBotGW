@@ -17,6 +17,7 @@ Extracted from proxy.py (Phase 9).  Contains:
 """
 
 import asyncio
+import concurrent.futures as _cf
 import json
 import os
 import re
@@ -1659,9 +1660,8 @@ async def external_endpoint(request: web.Request):
     sqlite_rows = 0
     try:
         if os.path.exists(DB_PATH):
-            _c = open_conn()
-            sqlite_rows = int(_c.execute("SELECT COUNT(*) FROM events").fetchone()[0])
-            _c.close()
+            sqlite_rows = int((await aquery(
+                lambda c: c.execute("SELECT COUNT(*) FROM events").fetchone()))[0])
     except Exception:
         pass
     integrations.append({
@@ -1900,12 +1900,10 @@ async def signal_orders_endpoint(request: web.Request):
     gw_id = _gw_local_id()
     if request.method == "GET":
         try:
-            conn = open_conn()
-            rows = conn.execute(
+            rows = await aquery(lambda c: c.execute(
                 "SELECT signal, activation_order, updated_ts, updated_by "
                 "FROM signal_orders WHERE gw_id = ?", (gw_id,)
-            ).fetchall()
-            conn.close()
+            ).fetchall())
         except Exception:
             rows = []
         orders = {sig: {"order": n, "updated_ts": ts, "updated_by": by}
@@ -4827,12 +4825,18 @@ async def db_vacuum_history_endpoint(request):
         return web.json_response({"history": [], "reason": "active backend is not SQLite"},
                                  headers={"Cache-Control": "no-store"})
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        rows = conn.execute(
-            "SELECT ts, actor, details FROM gw_audit "
-            "WHERE action='db_vacuum' ORDER BY ts DESC LIMIT 5"
-        ).fetchall()
-        conn.close()
+        # SQLite-only by design (guarded above) — but still offloaded so the
+        # read cannot stall the event loop. See db.conn.aquery.
+        def _q_vac_hist():
+            conn = sqlite3.connect(DB_PATH, timeout=5)
+            try:
+                return conn.execute(
+                    "SELECT ts, actor, details FROM gw_audit "
+                    "WHERE action='db_vacuum' ORDER BY ts DESC LIMIT 5"
+                ).fetchall()
+            finally:
+                conn.close()
+        rows = await asyncio.to_thread(_q_vac_hist)
         history = []
         for ts, actor, details in rows:
             try:
@@ -4862,12 +4866,10 @@ async def db_migration_status_endpoint(request: web.Request):
         return denied
     payload = {"running": False, "marker": None}
     try:
-        conn = open_conn()
-        row = conn.execute(
+        row = await aquery(lambda c: c.execute(
             "SELECT value FROM config_kv WHERE key = ?",
             ("pending_bg_migration",)
-        ).fetchone()
-        conn.close()
+        ).fetchone())
         if row:
             raw = row[0] if not hasattr(row, "keys") else row["value"]
             if raw:
@@ -4957,10 +4959,8 @@ async def db_test_endpoint(request: web.Request):
             if os.path.exists(wal):
                 sqlite_info["wal_size_bytes"] = os.path.getsize(wal)
             try:
-                conn = open_conn()
-                cur = conn.execute("SELECT COUNT(*) FROM events")
-                sqlite_info["events_rows"] = int(cur.fetchone()[0])
-                conn.close()
+                sqlite_info["events_rows"] = int((await aquery(
+                    lambda c: c.execute("SELECT COUNT(*) FROM events").fetchone()))[0])
             except Exception as e:
                 sqlite_info["events_rows_error"] = str(e)[:120]
     except Exception as e:
@@ -5347,21 +5347,17 @@ async def health_score_endpoint(request: web.Request):
     blocked = clean = 0
     try:
         cutoff = _t.time() - 3600
-        conn = open_conn()
         # events.ts is timestamptz on Postgres but an epoch REAL on SQLite, so
         # the cutoff comparison must go through to_timestamp() on PG (a raw
         # float vs timestamptz raises "operator does not exist"); SQLite has no
         # to_timestamp() and compares the float directly.
         if active_backend() == "postgres":
-            rows = conn.execute(
-                "SELECT reason, COUNT(*) FROM events "
-                "WHERE ts >= to_timestamp(?) GROUP BY reason",
-                (cutoff,)).fetchall()
+            _sql_hs = ("SELECT reason, COUNT(*) FROM events "
+                       "WHERE ts >= to_timestamp(?) GROUP BY reason")
         else:
-            rows = conn.execute(
-                "SELECT reason, COUNT(*) FROM events WHERE ts >= ? GROUP BY reason",
-                (cutoff,)).fetchall()
-        conn.close()
+            _sql_hs = ("SELECT reason, COUNT(*) FROM events "
+                       "WHERE ts >= ? GROUP BY reason")
+        rows = await aquery(lambda c: c.execute(_sql_hs, (cutoff,)).fetchall())
         for reason, count in rows:
             if reason and reason != "OK":
                 blocked += count
@@ -5631,8 +5627,6 @@ async def metrics_endpoint(request: web.Request):
                             "bypass-path", "authorized-robot", "operator-allowed"}
             _admin_pfx   = ADMIN_NS.lower()
             try:
-                conn = open_conn()
-                conn.row_factory = sqlite3.Row
                 # 1.9.5 fix — events.ts is timestamptz on Postgres but a REAL
                 # epoch on SQLite. PG can't compare timestamptz to a raw
                 # epoch int / float ("operator does not exist") and also
@@ -5657,12 +5651,14 @@ async def metrics_endpoint(request: web.Request):
                 if _vhost_filter:
                     _where_parts.append("vhost = ?")
                     _params.append(_vhost_filter)
-                rows = conn.execute(  # nosec B608 — where parts are hardcoded strings; values parameterized
-                    f"SELECT {_ts_col}, path, reason FROM events WHERE "
-                    + " AND ".join(_where_parts) + " ORDER BY ts",
-                    _params,
-                ).fetchall()
-                conn.close()
+                def _q_filtered(conn):
+                    conn.row_factory = sqlite3.Row
+                    return conn.execute(  # nosec B608 — where parts are hardcoded strings; values parameterized
+                        f"SELECT {_ts_col}, path, reason FROM events WHERE "
+                        + " AND ".join(_where_parts) + " ORDER BY ts",
+                        _params,
+                    ).fetchall()
+                rows = await aquery(_q_filtered)
                 # Also scan in-memory events (recent, not yet flushed to DB)
                 from state import events as _mem_events
                 mem_rows = [
@@ -5704,15 +5700,15 @@ async def metrics_endpoint(request: web.Request):
             db_buckets = {}
             if start_b < in_mem_oldest:
                 try:
-                    conn = open_conn()
-                    conn.row_factory = sqlite3.Row
-                    for row in conn.execute(
-                        "SELECT bucket_minute, total, allowed, blocked, missed, by_reason FROM timeline "
-                        "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
-                        (start_b, end_b + 60)
-                    ):
+                    def _q_tl(conn):
+                        conn.row_factory = sqlite3.Row
+                        return conn.execute(
+                            "SELECT bucket_minute, total, allowed, blocked, missed, by_reason FROM timeline "
+                            "WHERE bucket_minute >= ? AND bucket_minute <= ? ORDER BY bucket_minute",
+                            (start_b, end_b + 60)
+                        ).fetchall()
+                    for row in await aquery(_q_tl):
                         db_buckets[row["bucket_minute"]] = row
-                    conn.close()
                 except Exception:
                     pass
 
@@ -5862,7 +5858,7 @@ async def metrics_endpoint(request: web.Request):
 
 async def dashboard_endpoint(request: web.Request):
     """HTML dashboard page (auto-refreshes every 2s via fetch /__metrics)."""
-    body = DASHBOARD_HTML
+    body = inject_theme(DASHBOARD_HTML, DB_PATH)
     return web.Response(
         text=body,
         content_type="text/html",
@@ -5873,7 +5869,7 @@ async def dashboard_endpoint(request: web.Request):
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 "default-src 'self'; "
-                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "
@@ -5889,7 +5885,7 @@ CONTROL_CENTER_HTML    = (_DASHBOARDS_DIR / "control_center.html").read_text(enc
 async def control_center_endpoint(request: web.Request):
     """Control Center — landing page after login; shows vhost traffic summary."""
     return web.Response(
-        text=CONTROL_CENTER_HTML,
+        text=inject_theme(CONTROL_CENTER_HTML, DB_PATH),
         content_type="text/html",
         headers={
             "Cache-Control": "no-store",
@@ -5978,8 +5974,9 @@ async def unban_endpoint(request: web.Request):
                 s.last_risk_update = n
                 cleared += 1
         # Also clear DB bans table + ip_bans for matched IPs (best-effort).
-        try:
-            conn = open_conn()
+        # 1.9.12 — the in-memory ip_state clearing above already ran under
+        # state_lock on the event loop; only the DB writes are offloaded.
+        def _q_unban(conn):
             if do_all:
                 conn.execute("DELETE FROM bans")
                 conn.execute("DELETE FROM ip_bans")
@@ -6006,7 +6003,9 @@ async def unban_endpoint(request: web.Request):
             except Exception:
                 pass  # nosec B110 — table may not exist on a pre-1.9.2 DB
             conn.commit()
-            conn.close()
+
+        try:
+            await aquery(_q_unban)
         except Exception as e:
             print(f"[unban] db error: {e}")
     _scope = ("all" if do_all
@@ -6173,8 +6172,9 @@ async def bulk_unban_endpoint(request: web.Request):
 
     # Best-effort DB cleanup (bans + ip_bans)
     if matched_ips or reason_glob:
-        try:
-            conn = open_conn()
+        # 1.9.12 — ip_state was already updated under state_lock above; this
+        # offloads only the DB cleanup.
+        def _q_bulk_unban(conn):
             if reason_glob and not matched_ips:
                 all_bans = conn.execute(
                     "SELECT ip, reason FROM bans"
@@ -6205,7 +6205,9 @@ async def bulk_unban_endpoint(request: web.Request):
                         (ip,),
                     )
             conn.commit()
-            conn.close()
+
+        try:
+            await aquery(_q_bulk_unban)
         except Exception as _e:
             print(f"[bulk_unban] db error: {_e}")
 
@@ -6804,10 +6806,15 @@ async def geo_data_endpoint(request: web.Request):
         {"ts": start_epoch + (i + 1) * _anim_step, "points": {}}
         for i in range(N_ANIM)
     ]
-    try:
-        conn = open_conn()
+    def _q_geo(conn):
+        # 1.9.12 — the whole scan runs on a worker thread: the cursor walk, the
+        # MaxMind city/ASN lookups (mmap reads, also blocking) and the local
+        # aggregation. Every structure written here is function-local to
+        # geo_data_endpoint; shared state (ip_state) is read later, on the loop,
+        # under state_lock.
+        nonlocal skipped_no_geo, _sample_seen
         conn.row_factory = sqlite3.Row
-        try:
+        if True:
             # Cursor iteration (no fetchall) — avoids loading all rows into RAM for
             # large windows (e.g. 30 days). ORDER BY omitted: rebuildBuckets() bins
             # by ts value directly so sort order doesn't matter for correctness.
@@ -6920,8 +6927,9 @@ async def geo_data_endpoint(request: web.Request):
                     j = _random.randint(0, _sample_seen - 1)
                     if j < _SCRUBBER_CAP:
                         events_sample[j] = [float(r["ts"]), lat, lng, kind]
-        finally:
-            conn.close()
+
+    try:
+        await aquery(_q_geo)
     except Exception as e:
         return web.json_response(
             {"error": f"db: {e}", "points": []}, status=500,
@@ -7105,8 +7113,6 @@ async def geo_drill_endpoint(request: web.Request):
     from db import active_backend as _active_geom
     _be_geom = _active_geom()
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
         if _be_geom == "postgres":
             _sql_geom = (
                 "SELECT ip, ua, path, reason, EXTRACT(EPOCH FROM ts) AS ts FROM events "
@@ -7117,8 +7123,10 @@ async def geo_drill_endpoint(request: web.Request):
                 "SELECT ip, ua, path, reason, ts FROM events "
                 "WHERE ts >= ? AND ts <= ? LIMIT 200000"
             )
-        rows = conn.execute(_sql_geom, (start_epoch, end_epoch)).fetchall()
-        conn.close()
+        def _q_geom(conn):
+            conn.row_factory = sqlite3.Row
+            return conn.execute(_sql_geom, (start_epoch, end_epoch)).fetchall()
+        rows = await aquery(_q_geom)
     except Exception as e:
         return web.json_response(
             {"error": f"db: {e}"}, status=500,
@@ -7189,7 +7197,7 @@ async def geo_drill_endpoint(request: web.Request):
 
 async def geo_dashboard_endpoint(request: web.Request):
     """HTML dashboard rendering the world-map geo view."""
-    body = GEO_DASHBOARD_HTML
+    body = inject_theme(GEO_DASHBOARD_HTML, DB_PATH)
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -7199,7 +7207,7 @@ async def geo_dashboard_endpoint(request: web.Request):
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 "default-src 'self'; "
-                "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com 'unsafe-inline'; "
+                "script-src 'self' https://unpkg.com 'unsafe-inline'; "
                 "style-src 'self' https://unpkg.com 'unsafe-inline'; "
                 "img-src 'self' data: https://*.basemaps.cartocdn.com; "
                 "connect-src 'self'; "
@@ -7242,24 +7250,23 @@ async def logs_data_endpoint(request: web.Request):
         iptype_filter = (request.query.get("ip_type", "all") or "all").lower()
         vhost_filter  = (request.query.get("vhost", "") or "").strip().lower()
         try:
-            conn = open_conn()
-            conn.row_factory = sqlite3.Row
             # 1.6.5 — pull more rows than `limit` so we can post-filter
             # (method/ip_type) without paginating multiple SQL queries.
             sql_cap = max(limit * 4, 1000) if (method_filter != "all" or
                                                  iptype_filter != "all") else limit
-            if vhost_filter:
-                rows = conn.execute(  # nosec B608 — vhost_filter value is parameterized
-                    "SELECT id, ts, ip, ua, path, status, reason FROM events "
-                    "WHERE vhost = ? ORDER BY id DESC LIMIT ?",
-                    (vhost_filter, sql_cap),
-                ).fetchall()
-            else:
-                rows = conn.execute(
+            def _q_reqlogs(conn):
+                conn.row_factory = sqlite3.Row
+                if vhost_filter:
+                    return conn.execute(  # nosec B608 — vhost_filter value is parameterized
+                        "SELECT id, ts, ip, ua, path, status, reason FROM events "
+                        "WHERE vhost = ? ORDER BY id DESC LIMIT ?",
+                        (vhost_filter, sql_cap),
+                    ).fetchall()
+                return conn.execute(
                     "SELECT id, ts, ip, ua, path, status, reason FROM events "
                     "ORDER BY id DESC LIMIT ?", (sql_cap,)
                 ).fetchall()
-            conn.close()
+            rows = await aquery(_q_reqlogs)
         except Exception as e:
             return web.json_response({"error": f"db: {e}"}, status=500,
                                       headers={"Cache-Control":"no-store"})
@@ -7347,59 +7354,87 @@ async def logs_export_endpoint(request: web.Request):
     await resp.prepare(request)
     await resp.write(b"id,ts,iso_ts,ip,ua,path,status,reason,method,ip_type\r\n")
     written = 0
+
+    # CSV escape: wrap in double-quotes if needed, double up internal quotes
+    def esc(v):
+        s = "" if v is None else str(v)
+        if any(c in s for c in ',"\r\n'):
+            return '"' + s.replace('"', '""') + '"'
+        return s
+
+    def _format_row(r):
+        """Filter + CSV-encode one row. Returns None when the row is filtered
+        out. Runs on the worker thread (it calls _asn_lookup, an mmap read)."""
+        reason = (r["reason"] or "")
+        row_level = "warn" if (reason and reason != "OK") else "info"
+        if _LOG_LEVELS[row_level] < level_n:
+            return None
+        if method_filter != "all" and _reason_method(reason) != method_filter:
+            return None
+        ip_v = r["ip"] or ""
+        ip_type = "residential"
+        if ip_v in _tor_exits:
+            ip_type = "tor"
+        elif MAXMIND_ENABLED:
+            _, _, _is_hosting, _ = _asn_lookup(ip_v)
+            if _is_hosting: ip_type = "dc"
+        if iptype_filter != "all" and ip_type != iptype_filter:
+            return None
+        blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
+        if q and q not in blob:
+            return None
+        iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["ts"]))
+        return (",".join([
+            esc(r["id"]), esc(round(r["ts"], 3)), iso,
+            esc(r["ip"]), esc((r["ua"] or "")[:200]),
+            esc(r["path"]), esc(r["status"]),
+            esc(reason), esc(_reason_method(reason)), ip_type,
+        ]) + "\r\n").encode("utf-8")
+
+    # 1.9.12 — the cursor walk must not block the event loop, but a sqlite3
+    # connection is thread-affine (check_same_thread defaults to True), so it
+    # cannot hop between arbitrary asyncio.to_thread workers. A dedicated
+    # max_workers=1 executor pins every call for this request to one thread,
+    # which keeps the original chunked-cursor streaming (no fetchall of up to
+    # 100 k rows into RAM) while moving all DB + MaxMind work off the loop.
+    _ex = _cf.ThreadPoolExecutor(max_workers=1, thread_name_prefix="logs-export")
+    _loop = asyncio.get_running_loop()
+    _BATCH = 500
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
-        # Stream from the cursor — don't load everything in memory.
-        for r in conn.execute(
-            "SELECT id, ts, ip, ua, path, status, reason FROM events "
-            "ORDER BY id DESC LIMIT ?", (cap * 2,)
-        ):
-            reason = (r["reason"] or "")
-            row_level = "warn" if (reason and reason != "OK") else "info"
-            if _LOG_LEVELS[row_level] < level_n:
-                continue
-            if method_filter != "all" and _reason_method(reason) != method_filter:
-                continue
-            ip_v = r["ip"] or ""
-            ip_type = "residential"
-            if ip_v in _tor_exits:
-                ip_type = "tor"
-            elif MAXMIND_ENABLED:
-                _, _, _is_hosting, _ = _asn_lookup(ip_v)
-                if _is_hosting: ip_type = "dc"
-            if iptype_filter != "all" and ip_type != iptype_filter:
-                continue
-            blob = f"{r['ip']} {r['ua']} {r['path']} {r['status']} {reason}".lower()
-            if q and q not in blob:
-                continue
-            iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(r["ts"]))
-            # CSV escape: wrap in double-quotes if needed, double up internal quotes
-            def esc(v):
-                s = "" if v is None else str(v)
-                if any(c in s for c in ',"\r\n'):
-                    return '"' + s.replace('"', '""') + '"'
-                return s
-            line = ",".join([
-                esc(r["id"]), esc(round(r["ts"], 3)), iso,
-                esc(r["ip"]), esc((r["ua"] or "")[:200]),
-                esc(r["path"]), esc(r["status"]),
-                esc(reason), esc(_reason_method(reason)), ip_type,
-            ]) + "\r\n"
-            await resp.write(line.encode("utf-8"))
-            written += 1
-            if written >= cap:
-                break
-        conn.close()
+        def _open_cursor():
+            c = open_conn()
+            c.row_factory = sqlite3.Row
+            return c, c.execute(
+                "SELECT id, ts, ip, ua, path, status, reason FROM events "
+                "ORDER BY id DESC LIMIT ?", (cap * 2,))
+        conn, cursor = await _loop.run_in_executor(_ex, _open_cursor)
+        try:
+            while written < cap:
+                def _next_batch():
+                    rows = cursor.fetchmany(_BATCH)
+                    return [ln for ln in (_format_row(r) for r in rows)
+                            if ln is not None], len(rows)
+                lines, fetched = await _loop.run_in_executor(_ex, _next_batch)
+                for line in lines:
+                    await resp.write(line)
+                    written += 1
+                    if written >= cap:
+                        break
+                if fetched < _BATCH:
+                    break  # cursor exhausted
+        finally:
+            await _loop.run_in_executor(_ex, conn.close)
     except Exception as e:
         await resp.write(f"# error: {e}\r\n".encode("utf-8"))
+    finally:
+        _ex.shutdown(wait=False)
     await resp.write_eof()
     return resp
 
 
 async def logs_dashboard_endpoint(request: web.Request):
     """HTML dashboard for the Logs viewer (request log + GW log + level toggle)."""
-    body = LOGS_DASHBOARD_HTML
+    body = inject_theme(LOGS_DASHBOARD_HTML, DB_PATH)
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -7567,8 +7602,7 @@ async def agents_bucket_detail_endpoint(request: web.Request):
     _ts_ag = ("ts >= to_timestamp(?) AND ts < to_timestamp(?)"
               if _be_ag == "postgres" else "ts >= ? AND ts < ?")
     detected_set, clean_set = {}, {}
-    try:
-        conn = open_conn()
+    def _q_agents_1(conn):
         conn.row_factory = sqlite3.Row
         if all_blocks:
             block_rows = conn.execute(
@@ -7608,14 +7642,15 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             })
             entry["count"] += 1
             entry["last_path"] = r["path"] or entry["last_path"]
-        conn.close()
+
+    try:
+        await aquery(_q_agents_1)
     except Exception as e:
         return web.json_response({"error": f"db: {e}"}, status=500)
 
     # authorized-robot events (passthrough bots, not blocked, not clean)
     auth_robot_set = {}
-    try:
-        conn2 = open_conn()
+    def _q_agents_2(conn2):
         conn2.row_factory = sqlite3.Row
         for r in conn2.execute(
             f"SELECT ip, ua, path FROM events "  # nosec B608
@@ -7631,7 +7666,9 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             })
             entry["count"] += 1
             entry["last_path"] = r["path"] or entry["last_path"]
-        conn2.close()
+
+    try:
+        await aquery(_q_agents_2)
     except Exception:
         pass
 
@@ -7670,8 +7707,7 @@ async def agents_bucket_detail_endpoint(request: web.Request):
                 })
 
     gwmgmt_set: dict = {}
-    try:
-        conn3 = open_conn()
+    def _q_agents_3(conn3):
         conn3.row_factory = sqlite3.Row
         # 1.9.1 iter-17: reuse the _ts_ag template above.
         for r in conn3.execute(
@@ -7688,7 +7724,9 @@ async def agents_bucket_detail_endpoint(request: web.Request):
             })
             entry["count"] += 1
             entry["last_path"] = r["path"] or entry["last_path"]
-        conn3.close()
+
+    try:
+        await aquery(_q_agents_3)
     except Exception:
         pass
 

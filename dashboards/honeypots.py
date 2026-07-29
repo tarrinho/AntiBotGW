@@ -8,7 +8,7 @@ from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog  # noqa: F401
 from aiohttp import web
-from db import db_read_events, db_read_events_async  # noqa: F401
+from db import db_read_events, db_read_events_async, inject_theme  # noqa: F401
 _PLAYBOOK_REASONS = [
     "honeypot", "honeypot-silent", "bot-trap",
     "honey-cred", "canary-echo", "canary-probe-miss",
@@ -192,11 +192,7 @@ HONEYPOTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "honeypots.html").read_text(encodi
 
 
 async def honeypots_dashboard_endpoint(request: web.Request):
-    from db.sqlite import get_ui_theme as _get_theme
-    _theme = _get_theme(DB_PATH)
-    body = HONEYPOTS_DASHBOARD_HTML.replace(
-        '<html lang="en">', f'<html lang="en" data-theme="{_theme}">', 1
-    )
+    body = inject_theme(HONEYPOTS_DASHBOARD_HTML, DB_PATH)
     return web.Response(
         text=body,
         content_type="text/html",
@@ -207,7 +203,7 @@ async def honeypots_dashboard_endpoint(request: web.Request):
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 "default-src 'self'; "
-                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "

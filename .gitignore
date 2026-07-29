@@ -95,3 +95,6 @@ mutants/
 *.mmdb
 data/
 gwdata/
+
+# local-only attic for superseded artifacts (never published)
+_attic/

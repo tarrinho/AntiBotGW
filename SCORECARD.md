@@ -37,7 +37,7 @@ Code cannot flip these — GitHub access is unauthenticated only).
 
 ---
 
-## Code changes (shipped in 1.9.13)
+## Code changes (shipped in 1.9.12)
 
 | Check | Before | After | Fix |
 |-------|--------|-------|-----|

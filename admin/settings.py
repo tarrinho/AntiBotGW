@@ -28,7 +28,7 @@ async def settings_dashboard_endpoint(request: web.Request):
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 "default-src 'self'; "
-                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "

@@ -14,7 +14,7 @@ import time as _t
 from collections import defaultdict, deque
 
 from config import *   # noqa: F401,F403
-from db import open_conn
+from db import aquery
 from config import _DATA_PATH  # noqa: F401
 from state import *    # noqa: F401,F403
 from helpers import now  # noqa: F401
@@ -144,13 +144,14 @@ async def traffic_pipeline_endpoint(request: web.Request):
         # Fill DB data for older ranges not in memory
         if start_b < in_mem_oldest:
             try:
-                conn = open_conn()
-                conn.row_factory = sqlite3.Row
-                for row in conn.execute(
-                    "SELECT bucket_minute, total, allowed, blocked, missed "
-                    "FROM timeline WHERE bucket_minute >= ? AND bucket_minute < ?",
-                    (start_b, in_mem_oldest),
-                ):
+                def _q_timeline(conn):
+                    conn.row_factory = sqlite3.Row
+                    return conn.execute(
+                        "SELECT bucket_minute, total, allowed, blocked, missed "
+                        "FROM timeline WHERE bucket_minute >= ? AND bucket_minute < ?",
+                        (start_b, in_mem_oldest),
+                    ).fetchall()
+                for row in await aquery(_q_timeline):
                     m = int(row["bucket_minute"])
                     slot = _get_slot(m)
                     if slot not in agg:
@@ -158,7 +159,6 @@ async def traffic_pipeline_endpoint(request: web.Request):
                     agg[slot]["allowed"]  += int(row["allowed"] or 0)
                     agg[slot]["blocked"]  += int(row["blocked"] or 0)
                     agg[slot]["bypassed"] += int(row["missed"]  or 0)
-                conn.close()
             except Exception:
                 pass  # DB unavailable — use memory-only data
 
@@ -232,9 +232,6 @@ async def vhost_heatmap_endpoint(request: web.Request):
         from db import active_backend as _active_vh
         _be_vh = _active_vh()
         try:
-            conn = open_conn()
-            conn.row_factory = sqlite3.Row
-
             _PASSTHROUGH = {"", "ok", "operator-passthrough", "bypass-path",
                             "authorized-robot", "bypass-mode"}
             if _be_vh == "postgres":
@@ -263,11 +260,13 @@ async def vhost_heatmap_endpoint(request: web.Request):
                     "WHERE ts >= ? AND ts <= ? AND vhost != '' "
                     "GROUP BY vhost, slot"
                 )
-            rows = conn.execute(
-                _sql_vh,
-                (bucket_secs, bucket_secs, start_b, end_b + bucket_secs),
-            ).fetchall()
-            conn.close()
+            def _q_vh(conn):
+                conn.row_factory = sqlite3.Row
+                return conn.execute(
+                    _sql_vh,
+                    (bucket_secs, bucket_secs, start_b, end_b + bucket_secs),
+                ).fetchall()
+            rows = await aquery(_q_vh)
 
             for row in rows:
                 vh   = row["vhost"] or ""
@@ -430,8 +429,6 @@ async def security_incidents_endpoint(request: web.Request):
         _be_inc = _active_inc()
         events_out: list = []
         try:
-            conn = open_conn()
-            conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(_INCIDENT_ALL))
             if _be_inc == "postgres":
                 _sql_inc = (
@@ -447,8 +444,10 @@ async def security_incidents_endpoint(request: web.Request):
                     f"WHERE ts >= ? AND reason IN ({placeholders}) "
                     f"ORDER BY ts DESC LIMIT ?"
                 )
-            rows = conn.execute(_sql_inc, (since, *_INCIDENT_ALL, limit)).fetchall()
-            conn.close()
+            def _q_inc(conn):
+                conn.row_factory = sqlite3.Row
+                return conn.execute(_sql_inc, (since, *_INCIDENT_ALL, limit)).fetchall()
+            rows = await aquery(_q_inc)
 
             for row in rows:
                 ip = row["ip"] or ""
@@ -656,8 +655,6 @@ async def ban_events_endpoint(request: web.Request):
             from db import active_backend as _active_bt
             _be_bt = _active_bt()
             try:
-                conn = open_conn()
-                conn.row_factory = sqlite3.Row
                 placeholders = ",".join("?" * len(_ALL_BAN_EVENT_REASONS))
                 if _be_bt == "postgres":
                     _sql_bt = (
@@ -670,11 +667,13 @@ async def ban_events_endpoint(request: web.Request):
                         f"SELECT ts, reason FROM events "
                         f"WHERE ts >= ? AND ts < ? AND reason IN ({placeholders})"
                     )
-                rows = conn.execute(
-                    _sql_bt,
-                    (start_b, in_mem_oldest, *_ALL_BAN_EVENT_REASONS),
-                ).fetchall()
-                conn.close()
+                def _q_bt(conn):
+                    conn.row_factory = sqlite3.Row
+                    return conn.execute(
+                        _sql_bt,
+                        (start_b, in_mem_oldest, *_ALL_BAN_EVENT_REASONS),
+                    ).fetchall()
+                rows = await aquery(_q_bt)
                 for row in rows:
                     slot = _slot(int(row["ts"]))
                     if slot < start_b or slot > end_b:
@@ -826,15 +825,15 @@ async def top_attackers_endpoint(request: web.Request):
         ip_list = [r["ip"] for r in top_ips]
         abuse_scores: dict = {}
         try:
-            conn = open_conn()
-            conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(ip_list))
-            for row in conn.execute(
-                f"SELECT ip, score FROM abuseipdb_cache WHERE ip IN ({placeholders})",
-                ip_list,
-            ).fetchall():
+            def _q_abuse(conn):
+                conn.row_factory = sqlite3.Row
+                return conn.execute(
+                    f"SELECT ip, score FROM abuseipdb_cache WHERE ip IN ({placeholders})",
+                    ip_list,
+                ).fetchall()
+            for row in await aquery(_q_abuse):
                 abuse_scores[row["ip"]] = int(row["score"])
-            conn.close()
         except Exception:
             pass
 
@@ -855,11 +854,6 @@ async def top_attackers_endpoint(request: web.Request):
         except Exception:
             _be = "sqlite"
         try:
-            conn = open_conn()
-            # Cross-backend: assigning sqlite3.Row makes the PG wrapper
-            # switch its cursor to psycopg.dict_row so `row["ip"]` keeps
-            # working on both backends without separate read paths.
-            conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(ip_list))
             if _be == "postgres":
                 sql = (
@@ -871,8 +865,13 @@ async def top_attackers_endpoint(request: web.Request):
                     f"SELECT ip, ts FROM events "
                     f"WHERE ts >= ? AND ip IN ({placeholders})"
                 )
-            rows = conn.execute(sql, (sparkline_start, *ip_list)).fetchall()
-            conn.close()
+            def _q_spark(conn):
+                # Cross-backend: assigning sqlite3.Row makes the PG wrapper
+                # switch its cursor to psycopg.dict_row so `row["ip"]` keeps
+                # working on both backends without separate read paths.
+                conn.row_factory = sqlite3.Row
+                return conn.execute(sql, (sparkline_start, *ip_list)).fetchall()
+            rows = await aquery(_q_spark)
             # PG dict_row → dict; SQLite Row → mapping. Both support [...].
             for row in rows:
                 ip = row["ip"]
@@ -886,19 +885,19 @@ async def top_attackers_endpoint(request: web.Request):
 
         ban_expiry: dict = {}
         try:
-            conn = open_conn()
-            conn.row_factory = sqlite3.Row
             placeholders = ",".join("?" * len(ip_list))
-            for row in conn.execute(
-                f"SELECT ip, banned_until, reason FROM bans "
-                f"WHERE ip IN ({placeholders}) AND banned_until > ?",
-                (*ip_list, now_epoch),
-            ).fetchall():
+            def _q_bans(conn):
+                conn.row_factory = sqlite3.Row
+                return conn.execute(
+                    f"SELECT ip, banned_until, reason FROM bans "
+                    f"WHERE ip IN ({placeholders}) AND banned_until > ?",
+                    (*ip_list, now_epoch),
+                ).fetchall()
+            for row in await aquery(_q_bans):
                 ban_expiry[row["ip"]] = {
                     "until":  float(row["banned_until"]),
                     "reason": row["reason"] or "",
                 }
-            conn.close()
         except Exception:
             pass
 

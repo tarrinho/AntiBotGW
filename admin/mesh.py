@@ -3,7 +3,7 @@
 import base64 as _b64  # noqa: F401
 import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
-from db import open_conn
+from db import open_conn, aquery
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
 from admin.auth import _internal_authed, _request_username, _role_denied, _require_csrf  # noqa: F401
@@ -784,11 +784,11 @@ async def gw_registry_audit_log_endpoint(request: web.Request):
            f"ORDER BY ts DESC LIMIT ? OFFSET ?")
     args.extend([limit, offset])
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, args).fetchall()
-        total = conn.execute("SELECT COUNT(*) FROM gw_audit").fetchone()[0]
-        conn.close()
+        def _q_gw_audit(conn):
+            conn.row_factory = sqlite3.Row
+            return (conn.execute(sql, args).fetchall(),
+                    conn.execute("SELECT COUNT(*) FROM gw_audit").fetchone()[0])
+        rows, total = await aquery(_q_gw_audit)
     except Exception as e:
         slog("gw_audit_query_failed", level="error", err=str(e)[:200])
         return web.json_response({"error": "audit query failed"}, status=500,
@@ -1035,12 +1035,12 @@ async def mesh_sync_confirm_endpoint(request: web.Request):
     # Fetch the row so we can apply the actual value (not echoed in the
     # listing endpoint to avoid casual leaks).
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT id, source_gw_id, key_name, value, status "
-            "FROM gw_sync_pending WHERE id = ?", (pid,)).fetchone()
-        conn.close()
+        def _q_pending(conn):
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                "SELECT id, source_gw_id, key_name, value, status "
+                "FROM gw_sync_pending WHERE id = ?", (pid,)).fetchone()
+        row = await aquery(_q_pending)
     except Exception:
         row = None
     if row is None:
@@ -1082,12 +1082,12 @@ async def mesh_sync_reject_endpoint(request: web.Request):
         return web.json_response({"error": "bad id"}, status=400,
                                   headers={"Cache-Control": "no-store"})
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            "SELECT key_name, source_gw_id, status FROM gw_sync_pending "
-            "WHERE id = ?", (pid,)).fetchone()
-        conn.close()
+        def _q_pending_reject(conn):
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                "SELECT key_name, source_gw_id, status FROM gw_sync_pending "
+                "WHERE id = ?", (pid,)).fetchone()
+        row = await aquery(_q_pending_reject)
     except Exception:
         row = None
     if row is None:
@@ -1152,12 +1152,12 @@ async def _mesh_sync_loop():
                 # SQLite round-trip per peer-key inside the inner loop.
                 trust_map: dict = {}   # peer_gw -> auto-apply allowed?
                 try:
-                    conn = open_conn()
-                    for r in conn.execute(
+                    def _q_trust(conn):
+                        return conn.execute(
                             "SELECT gw_id, status, auto_apply "
-                            "FROM gw_registry WHERE is_local = 0"):
+                            "FROM gw_registry WHERE is_local = 0").fetchall()
+                    for r in await aquery(_q_trust):
                         trust_map[r[0]] = (r[1] == "active" and r[2] == 1)
-                    conn.close()
                 except Exception:
                     pass
                 # 3. scrape peers

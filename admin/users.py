@@ -3,7 +3,7 @@
 import base64 as _b64  # noqa: F401
 import time as _t  # noqa: F401
 from config import *   # noqa: F401,F403
-from db import open_conn
+from db import open_conn, aquery
 from config import _DASHBOARDS_DIR  # noqa: F401 — underscore not exported by *
 from state import *    # noqa: F401,F403
 from helpers import slog, now, get_ip  # noqa: F401
@@ -634,22 +634,24 @@ async def ip_intel_endpoint(request: web.Request):
     last_path = None
     blocks_by_reason: dict = {}
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
-        b = conn.execute(
-            "SELECT banned_until, reason FROM bans WHERE ip = ?",
-            (ip,)).fetchone()
+        def _q_intel(conn):
+            conn.row_factory = sqlite3.Row
+            return (
+                conn.execute("SELECT banned_until, reason FROM bans WHERE ip = ?",
+                             (ip,)).fetchone(),
+                conn.execute(
+                    "SELECT allowed_count, blocked_count, "
+                    "       first_seen, last_seen, "
+                    "       last_path, blocks_by_reason "
+                    "FROM clients WHERE ip = ? "
+                    "ORDER BY last_seen DESC LIMIT 1",
+                    (ip,)).fetchone(),
+            )
+        b, c = await aquery(_q_intel)
         if b and (b["banned_until"] or 0) > n:
             banned_until = b["banned_until"]
             ban_reason   = b["reason"]
         # Activity from clients table (column names: first_seen / last_seen).
-        c = conn.execute(
-            "SELECT allowed_count, blocked_count, "
-            "       first_seen, last_seen, "
-            "       last_path, blocks_by_reason "
-            "FROM clients WHERE ip = ? "
-            "ORDER BY last_seen DESC LIMIT 1",
-            (ip,)).fetchone()
         if c:
             allowed_24h   = int(c["allowed_count"] or 0)
             blocked_24h   = int(c["blocked_count"] or 0)
@@ -661,7 +663,6 @@ async def ip_intel_endpoint(request: web.Request):
                 blocks_by_reason = json.loads(c["blocks_by_reason"] or "{}")
             except (ValueError, TypeError):
                 blocks_by_reason = {}
-        conn.close()
     except Exception as _e:
         slog("ip_intel_internal_failed", level="warn", err=str(_e)[:200])
 
@@ -985,15 +986,15 @@ async def user_sessions_list_endpoint(request: web.Request):
         return web.json_response({"error": "not found"}, status=404,
                                   headers={"Cache-Control": "no-store"})
     try:
-        conn = open_conn()
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT sid, username, ip, user_agent, created_ts, last_seen_ts, "
-            "expires_ts, status, revoked_ts, revoked_by "
-            "FROM user_sessions WHERE username = ? "
-            "ORDER BY (status='active') DESC, created_ts DESC LIMIT 200",
-            (username,)).fetchall()
-        conn.close()
+        def _q_sessions(conn):
+            conn.row_factory = sqlite3.Row
+            return conn.execute(
+                "SELECT sid, username, ip, user_agent, created_ts, last_seen_ts, "
+                "expires_ts, status, revoked_ts, revoked_by "
+                "FROM user_sessions WHERE username = ? "
+                "ORDER BY (status='active') DESC, created_ts DESC LIMIT 200",
+                (username,)).fetchall()
+        rows = await aquery(_q_sessions)
     except Exception as e:
         slog("user_sessions_query_failed", level="error", err=str(e)[:200])
         return web.json_response({"error": "session query failed"}, status=500,

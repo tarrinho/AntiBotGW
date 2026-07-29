@@ -29,7 +29,7 @@ into the justification field.
 | `sites_https` | Met | `github.com` is HTTPS; any demo instance operators stand up is intended to be HTTPS-only with HSTS (see `manual/README.md` TLS section). |
 | `discussion` | Met | GitHub Discussions is enabled on `tarrinho/AntiBotGW`. |
 | `english` | Met | All committed docs, code comments, commit messages, and CHANGELOG entries are in English (enforced by `rules.md` §feedback-docs-english-only). |
-| `maintenance_or_update` | Met | Semantic-versioned releases published via `docker.yml` auto-release; CHANGELOG.md shows continuous updates through 1.9.13. |
+| `maintenance_or_update` | Met | Semantic-versioned releases published via `docker.yml` auto-release; CHANGELOG.md shows continuous updates through 1.9.12. |
 
 ## Change Control
 
@@ -43,7 +43,7 @@ into the justification field.
 | `version_semver` | Met | Follows Semantic Versioning (major.minor.patch). |
 | `version_tags` | Met | Every release is a signed git tag `vX.Y.Z` (auto-created by `docker.yml` when `config.py` version bumps). |
 | `release_notes` | Met | `CHANGELOG.md` — grouped `[Unreleased]` + per-version entries with `Added / Changed / Security / Tests`. |
-| `release_notes_vulns` | Met | Security-relevant CHANGELOG lines carry the CVE / GHSA / PYSEC id (see 1.9.13 pyjwt/cryptography entries). |
+| `release_notes_vulns` | Met | Security-relevant CHANGELOG lines carry the CVE / GHSA / PYSEC id (see 1.9.12 pyjwt/cryptography entries). |
 
 ## Reporting
 
@@ -97,7 +97,7 @@ into the justification field.
 | `crypto_random` | Met | `secrets.token_urlsafe()` (Python's CSPRNG) for admin/session/PoW keys. |
 | `delivery_mitm` | Met | Images published to `ghcr.io/tarrinho/antibotgw` are cosign-signed (keyless via Fulcio OIDC — see `docker.yml` sign job) and shipped over HTTPS. |
 | `delivery_unsigned_email` | N/A | We do not use email delivery. |
-| `vulnerabilities_fixed_60_days` | Met | Recent example — pyjwt CVEs closed in `1.9.13` within 24h of scorecard flagging. |
+| `vulnerabilities_fixed_60_days` | Met | Recent example — pyjwt CVEs closed in `1.9.12` within 24h of scorecard flagging. |
 | `vulnerabilities_critical_fixed` | Met | Same. |
 
 ## Analysis

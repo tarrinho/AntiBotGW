@@ -234,9 +234,20 @@ class TestRowFactorySubstitution:
 # ── 5. Writer-loop branch selection ─────────────────────────────────────────
 
 class TestWriterLoopBranchSelection:
-    """db_writer_loop must take the PG-primary branch when POSTGRES_DSN
-    is set at writer-start time. We verify by patching the inner mirror
-    function + the queue and observing which dispatch fires."""
+    """db_writer_loop must take the PG-primary branch when the operator has
+    selected Postgres. We verify by patching the inner mirror function + the
+    queue and observing which dispatch fires.
+
+    1.9.12: these tests previously set only POSTGRES_DSN, matching the original
+    `if POSTGRES_DSN:` fork. iter-6 deliberately changed that fork to
+    `if DB_BACKEND == "postgres" and POSTGRES_DSN:` — forking on the presence of
+    a DSN alone meant that after an operator switched PG → SQLite via
+    /__db-switch (which persists DB_BACKEND="sqlite" but intentionally keeps the
+    encrypted DSN so they can switch back), the next boot re-bound POSTGRES_DSN
+    and silently routed every event to Postgres. Operators saw it as "events
+    aren't persisted after gw upgrades". The tests were never updated, so all
+    three asserted the pre-iter-6 contract and failed with calls=[]. They now
+    set DB_BACKEND as well; the product code is unchanged."""
 
     def test_pg_branch_dispatches_via_pg_mirror_kv(self, monkeypatch):
         """Put one op on the queue, run the loop briefly with POSTGRES_DSN
@@ -246,8 +257,10 @@ class TestWriterLoopBranchSelection:
         import db.postgres as _db_pg
         import state as _state
 
-        # 1) Force POSTGRES_DSN at module level so the writer's
-        #    `if POSTGRES_DSN:` branch fires.
+        # 1) Force BOTH the operator-selected backend and the DSN at module
+        #    level so the writer's
+        #    `if DB_BACKEND == "postgres" and POSTGRES_DSN:` branch fires.
+        monkeypatch.setattr(_db_sqlite, "DB_BACKEND", "postgres")
         monkeypatch.setattr(_db_sqlite, "POSTGRES_DSN", "postgresql://x/y")
 
         # 2) Spy on _pg_mirror_kv. The writer imports it locally, so
@@ -301,6 +314,7 @@ class TestWriterLoopBranchSelection:
         import db.postgres as _db_pg
         import state as _state
 
+        monkeypatch.setattr(_db_sqlite, "DB_BACKEND", "postgres")
         monkeypatch.setattr(_db_sqlite, "POSTGRES_DSN", "postgresql://x/y")
         calls = []
         monkeypatch.setattr(_db_pg, "_pg_mirror_kv",
@@ -342,6 +356,7 @@ class TestWriterLoopBranchSelection:
         import db.postgres as _db_pg
         import state as _state
 
+        monkeypatch.setattr(_db_sqlite, "DB_BACKEND", "postgres")
         monkeypatch.setattr(_db_sqlite, "POSTGRES_DSN", "postgresql://x/y")
         recorded = {}
         def _spy_event(ts, ip, ua, path, status, reason, **kw):

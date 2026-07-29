@@ -4887,14 +4887,20 @@ def test_maxmind_cache_evicts_oldest_at_max():
     assert "192.168.1.1" in cache, "new entry not inserted after eviction"
 
 
-# ── geo.html load-status pill text (1.7.7) ───────────────────────────────────
-
-def test_geo_html_load_status_ready_text():
-    """geo.html load-status pill must flip to 'Loading Ready' (not just 'Ready')."""
-    src = _dash("geo.html")
-    assert "Loading Ready" in src, (
-        "geo.html load-status pill text must be 'Loading Ready', not just 'Ready'"
-    )
+# ── geo.html load-status pill text ───────────────────────────────────────────
+# REMOVED in 1.9.12 — `test_geo_html_load_status_ready_text` (added 1.7.7)
+# asserted `"Loading Ready" in geo.html`. That string was a typo: the done-state
+# pill rendered "Loading Ready" instead of "Ready". 1.9.5 fixed geo.html and
+# added tests asserting the corrected text, but this test was never deleted, so
+# the suite simultaneously required the string to be present AND absent:
+#
+#   tests/test_v195_geo_loading_pill.py:17  assert "Loading Ready" not in _HTML
+#   tests/test_geo_dashboard.py:152,185     assert "Loading Ready" not in ...
+#   tests/test_pure.py (this test)          assert "Loading Ready" in src
+#
+# The 1.9.5 tests encode the intended behaviour, so this one is the stale side
+# of the contradiction and is dropped. See also the matching typo fix in
+# dashboards/controls.html, which the 1.9.5 sweep missed.
 
 
 # ── logs.html category filter pills (1.7.7) ──────────────────────────────────
@@ -11510,7 +11516,7 @@ def test_dockerfile_has_pyjwt():
     dockerfile = (root / "Dockerfile").read_text()
     if "PyJWT" in dockerfile:
         return
-    # 1.9.13: Dockerfile switched to `pip install --require-hashes -r
+    # 1.9.12: Dockerfile switched to `pip install --require-hashes -r
     # requirements-runtime.lock` — PyJWT now lives in the lock instead.
     lock = (root / "requirements-runtime.lock").read_text()
     assert "pyjwt==" in lock.lower() or "pyjwt[" in lock.lower(), (
@@ -11947,4 +11953,79 @@ def test_scorecard_md_references_docs_scorecard_playbook():
     assert "docs/scorecard" in src or "bestpractices-answers" in src, (
         "SCORECARD.md must reference the docs/scorecard/ playbook so operators "
         "find bestpractices-answers.md / branch-protection.json / seed-pr-flow.sh"
+    )
+
+
+# ── 1.9.12 — event-loop blocking guard (T1-2) ──────────────────────────────
+
+def test_no_blocking_db_calls_in_async_endpoints():
+    """No `async def` may open a DB connection directly on the event loop.
+
+    The gateway runs one process with one event loop (`web.run_app`), so a
+    synchronous `SELECT ... GROUP BY` over the events table blocks *every*
+    in-flight proxied request for its full duration. Opening a dashboard used
+    to add latency spikes to production traffic, and a heavy aggregate could
+    stall the `/live` healthcheck into an orchestrator restart — i.e. the admin
+    UI was a DoS vector against the protected site.
+
+    Rule: `open_conn()` / `sqlite3.connect()` must be reached from a *nested
+    sync function* (which `db.conn.aquery`, `asyncio.to_thread` or
+    `run_in_executor` then offloads), never straight from the `async def` body.
+
+    Adding a new dashboard/admin endpoint that queries the DB inline will fail
+    here. The fix is to wrap the query:
+
+        rows = await aquery(lambda c: c.execute(SQL, params).fetchall())
+
+    Keep mutations of in-process state (`ip_state`, counters, caches) on the
+    event loop, after the await — moving them into the worker thread would
+    introduce races that do not exist today.
+    """
+    import ast
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    scan_dirs = ["core", "dashboards", "admin", "db", "reputation",
+                 "integrations", "detection", "challenge"]
+    targets = [root / "proxy.py"]
+    for d in scan_dirs:
+        targets.extend(sorted((root / d).glob("*.py")))
+
+    # proxy.on_startup runs once at boot, before the server accepts traffic —
+    # blocking there is intentional (schema init must complete first).
+    ALLOWED = {("proxy.py", "on_startup")}
+
+    offenders = []
+    for path in targets:
+        if path.name.endswith(".orig") or not path.exists():
+            continue
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:  # pragma: no cover — parse errors surface elsewhere
+            continue
+        rel = str(path.relative_to(root))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            if (path.name, node.name) in ALLOWED or (rel, node.name) in ALLOWED:
+                continue
+            nested = set()
+            for child in ast.walk(node):
+                if isinstance(child, ast.FunctionDef):
+                    for sub in ast.walk(child):
+                        nested.add(id(sub))
+            for child in ast.walk(node):
+                if not isinstance(child, ast.Call):
+                    continue
+                try:
+                    fname = ast.unparse(child.func)
+                except Exception:  # pragma: no cover
+                    continue
+                if fname in ("open_conn", "sqlite3.connect") and id(child) not in nested:
+                    offenders.append(f"{rel}:{child.lineno} in async {node.name}()")
+
+    assert not offenders, (
+        "Blocking DB call(s) on the event loop — wrap the query in a nested "
+        "sync function and offload with `await aquery(...)`:\n  "
+        + "\n  ".join(offenders)
     )

@@ -2,7 +2,7 @@
 # Extracted from proxy.py lines 10853–11150
 import time as _t       # noqa: F401
 from config import *   # noqa: F401,F403
-from db import open_conn
+from db import aquery, inject_theme
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
@@ -141,8 +141,10 @@ async def agents_timeline_endpoint(request: web.Request):
         _bucket_expr = f"(CAST(ts/{bucket_secs} AS INTEGER)*{bucket_secs})"
         _ts_lb = "ts >= ?"
         _ts_ub = "ts <= ?"
-    try:
-        conn = open_conn()
+    def _q_timeline(conn):
+        # 1.9.12 — all five bucketed reads share one connection and run on a
+        # worker thread; `detected`/`missed`/… are function-local dicts, so
+        # filling them here is safe (no shared in-process state is touched).
         conn.row_factory = sqlite3.Row
         agent_q = ",".join("?" * len(AGENT_BLOCK_REASONS))
         for r in conn.execute(
@@ -191,7 +193,9 @@ async def agents_timeline_endpoint(request: web.Request):
             (start_b, end_b + bucket_secs, ADMIN_NS + "%", *_vc[1]),
         ):
             gwmgmt[int(r["b"])] = r["n"]
-        conn.close()
+
+    try:
+        await aquery(_q_timeline)
     except Exception as e:
         # 1.9.2 iter-20 — operator-visible diagnostic. Previously this used
         # `print()` so the failure only showed in docker logs (not in the
@@ -372,7 +376,7 @@ AGENTS_DASHBOARD_HTML = (_DASHBOARDS_DIR / "agents.html").read_text(encoding="ut
 
 
 async def agents_dashboard_endpoint(request: web.Request):
-    body = AGENTS_DASHBOARD_HTML
+    body = inject_theme(AGENTS_DASHBOARD_HTML, DB_PATH)
     return web.Response(
         text=body, content_type="text/html",
         headers={
@@ -382,7 +386,7 @@ async def agents_dashboard_endpoint(request: web.Request):
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 "default-src 'self'; "
-                "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline'; "
                 "style-src 'self' 'unsafe-inline'; "
                 "img-src 'self' data:; "
                 "connect-src 'self'; "

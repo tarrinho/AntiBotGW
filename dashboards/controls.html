@@ -2379,7 +2379,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const s = document.getElementById('load-status');
         if (s && !s.classList.contains('ready')) {
           s.classList.add('ready');
-          s.innerHTML = '<span class="dot"></span>Loading Ready';
+          s.innerHTML = '<span class="dot"></span>Ready';
         }
       }));
     } catch(e) { showToast('External integrations load failed: ' + e.message, 'err'); }

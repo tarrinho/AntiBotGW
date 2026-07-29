@@ -18,13 +18,13 @@ __all__ = [
     "_apply_sqlite_migrations", "_refresh_integration_state",
     "check_ip_ban", "check_ip_ban_vhost",
     "check_ip_ban_cached", "check_ip_ban_vhost_cached",
-    "prune_ip_bans", "prune_old_events",
+    "prune_ip_bans", "prune_old_events", "inject_theme",
     # postgres
     "db_init_postgres", "pg_insert_event", "pg_db_size", "pg_test_roundtrip",
     "_pg_mirror_kv", "_migrate_recent_events", "_apply_pg_migrations",
     "_postgres_load_module",
     # conn helper
-    "open_conn", "active_backend", "PgUnavailableError",
+    "open_conn", "active_backend", "PgUnavailableError", "aquery",
     # local module-level functions
     "db_read_events", "db_read_events_async", "db_health_snapshot",
 ]
@@ -45,6 +45,7 @@ from db.sqlite import (
     check_ip_ban_vhost_cached,
     prune_ip_bans,
     prune_old_events,
+    inject_theme,
 )
 from db.postgres import (
     db_init_postgres,
@@ -63,7 +64,7 @@ from db.postgres import (
 # `from db.conn import conn` for the context manager. The non-collision
 # names (open_conn, active_backend, PgUnavailableError) are still
 # re-exported for ergonomic access via `db.open_conn(...)`.
-from db.conn import open_conn, active_backend, PgUnavailableError  # noqa: F401
+from db.conn import open_conn, active_backend, PgUnavailableError, aquery  # noqa: F401
 
 
 # 1.8.8 — Backend-aware event reader. Dispatches to sqlite or postgres

@@ -1,7 +1,7 @@
 # dashboards/siem.py — SIEM Security Event Center (1.8.4)
 from collections import defaultdict
 from config import *   # noqa: F401,F403
-from db import open_conn
+from db import open_conn, aquery, inject_theme
 from config import _DASHBOARDS_DIR  # noqa: F401 — leading-underscore not in *
 from state import *    # noqa: F401,F403
 from helpers import slog, now  # noqa: F401
@@ -241,15 +241,15 @@ async def audit_log_export_endpoint(request: web.Request) -> web.Response:
     params.append(limit)
 
     try:
-        conn = open_conn()
-        conn.row_factory = _sqlite3.Row
-        rows = conn.execute(
-            "SELECT id, ts, event_type, actor, target, ip, detail, session_id, severity "  # nosec B608
-            f"FROM audit_events WHERE {' AND '.join(where_clauses)} "
-            "ORDER BY ts DESC LIMIT ?",
-            params,
-        ).fetchall()
-        conn.close()
+        def _q_audit(conn):
+            conn.row_factory = _sqlite3.Row
+            return conn.execute(
+                "SELECT id, ts, event_type, actor, target, ip, detail, session_id, severity "  # nosec B608
+                f"FROM audit_events WHERE {' AND '.join(where_clauses)} "
+                "ORDER BY ts DESC LIMIT ?",
+                params,
+            ).fetchall()
+        rows = await aquery(_q_audit)
     except Exception as e:
         return web.json_response({"error": str(e)[:200]}, status=500,
                                   headers={"Cache-Control": "no-store"})
@@ -546,7 +546,7 @@ SIEM_DASHBOARD_HTML = (_DASHBOARDS_DIR / "siem.html").read_text(encoding="utf-8"
 async def siem_dashboard_endpoint(request: web.Request) -> web.Response:
     """Serve the SIEM Security Event Center dashboard."""
     return web.Response(
-        text=SIEM_DASHBOARD_HTML,
+        text=inject_theme(SIEM_DASHBOARD_HTML, DB_PATH),
         content_type="text/html",
         headers={
             "Cache-Control":        "no-store",

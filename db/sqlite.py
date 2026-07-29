@@ -1696,6 +1696,23 @@ def get_ui_theme(db_path: str) -> str:
     return "dark"
 
 
+def inject_theme(html: str, db_path: str) -> str:
+    """1.9.12 — bake the persisted UI theme into a dashboard's `<html>` tag.
+
+    Five dashboards already did this inline; the other six served their HTML
+    constant raw, so their `<head>` init script fell back to the OS
+    `prefers-color-scheme` and the theme flipped dark↔light when navigating
+    between pages. This is the shared helper those six now route through.
+
+    No-ops when the document has no `<html lang="en">` opener, so it is safe to
+    call on any string. Falls back to `get_ui_theme`'s own 'dark' default when
+    the DB is missing or unreadable.
+    """
+    theme = get_ui_theme(db_path)
+    return html.replace(
+        '<html lang="en">', f'<html lang="en" data-theme="{theme}">', 1)
+
+
 def db_load_state() -> None:
     """Load saved state at startup. Populates state-module objects
     (ip_state, metrics, events, timeline, SERVICE_METRICS_HISTORY)

@@ -22,6 +22,7 @@ Caveats:
 
 from __future__ import annotations
 
+import asyncio
 import sqlite3
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
@@ -424,3 +425,44 @@ def conn(timeout: float = 10) -> Iterator[Any]:
             raise
         finally:
             c.close()
+
+
+async def aquery(fn: Any, timeout: float = 10) -> Any:
+    """1.9.12 — run a blocking DB unit-of-work on a worker thread.
+
+    `fn` receives an open, backend-aware connection and returns whatever the
+    caller needs (rows, a scalar, a dict). The connection is closed on the
+    worker thread when `fn` returns, so nothing DB-bound touches the event
+    loop.
+
+    Why this exists
+    ---------------
+    The gateway runs a single process with a single event loop (see
+    `web.run_app` in proxy.py). A synchronous `SELECT ... GROUP BY` over the
+    events table blocks *every* in-flight proxied request for its full
+    duration — so opening a dashboard added latency spikes to production
+    traffic, and a heavy aggregate could stall the `/live` healthcheck into a
+    restart. Read-only admin/dashboard queries must therefore be offloaded.
+
+    Contract for callers
+    --------------------
+    Put ONLY the DB work inside `fn`. Mutations of in-process state
+    (`ip_state`, metrics counters, caches) must stay on the event loop after
+    the await — moving them into the worker thread would introduce races that
+    do not exist today.
+
+        rows = await aquery(lambda c: c.execute(SQL, params).fetchall())
+
+    Exceptions propagate to the caller, matching the inline behaviour that
+    each call site already wraps in its own try/except.
+    """
+    def _run():
+        c = open_conn(timeout)
+        try:
+            return fn(c)
+        finally:
+            try:
+                c.close()
+            except Exception:
+                pass  # nosec B110 — best-effort close; the result is already computed
+    return await asyncio.to_thread(_run)

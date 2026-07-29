@@ -1002,7 +1002,7 @@ async def on_cleanup(app):
 # ── Application factory ───────────────────────────────────────────────────────
 
 def make_app() -> web.Application:
-    app = web.Application(middlewares=[cost_meter, session_cookie_finalizer, protect])
+    app = web.Application(middlewares=[server_header_override, cost_meter, session_cookie_finalizer, protect])
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 

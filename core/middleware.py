@@ -189,3 +189,39 @@ async def cost_meter(request: web.Request, handler):
             _cost_bump(elapsed_ms)
         except Exception:
             pass
+
+
+# ── Server-header override: outermost middleware. ─────────────────────────
+@web.middleware
+async def server_header_override(request: web.Request, handler):
+    """Replace aiohttp's default `Server` banner on every response.
+
+    1.9.12 — `SEC_SERVER_OVERRIDE` has existed in `config.py` since the
+    security-header work (defaulting to "AntiBot/WAF GW"), was registered as a
+    hot-reload knob, and was asserted by tests — but **nothing ever applied
+    it**, so every response still advertised
+    `Server: Python/3.14 aiohttp/3.14.1`.
+
+    That is a fingerprinting leak at odds with the rest of the design: the
+    gateway mirrors upstream 404s as silent decoys, keeps `/live` loopback-only
+    and byte-normalises decoy bodies, then names its exact framework and Python
+    version in every response header. It was also the sole cause of two
+    dynamic-suite failures (`dast-smoke.sh` "Server header discloses aiohttp"
+    and cat-18 `HP-2 decoy fidelity`).
+
+    Set `SEC_SERVER_OVERRIDE=""` to restore aiohttp's default.
+
+    Read at request time (not import time) so the hot-reload knob takes effect
+    without a restart. Already-prepared `StreamResponse`s have their headers on
+    the wire, so they are skipped — mirroring how `session_cookie_finalizer`
+    tolerates streaming responses.
+    """
+    response = await handler(request)
+    try:
+        import config as _cfg
+        override = getattr(_cfg, "SEC_SERVER_OVERRIDE", "")
+        if override and not getattr(response, "prepared", False):
+            response.headers["Server"] = override
+    except Exception:
+        pass  # nosec B110 — header cosmetics must never break a response
+    return response
